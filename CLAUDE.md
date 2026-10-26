@@ -149,6 +149,9 @@ host and run each check twice. Use these rules instead.
 
 - Ticket ids: `FD-NN`, matching the board.
 - Branches: `feature/FD-NN-<slug>`, cut from `main`.
+- **`main` only changes through a merged PR.** GitHub can't protect a private repo on this plan,
+  so `.githooks/pre-push` refuses any push to `main`; `npm install` turns it on through the
+  `prepare` script. Never bypass it with `--no-verify`.
 - Commit and PR titles: conventional, ending with the ticket id, for example
   `feat(engine): start tmux sessions (FD-03)`.
 - Code explains itself: no comments that restate the code, and no ticket ids in code.
