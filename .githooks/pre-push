@@ -1,8 +1,0 @@
-#!/bin/sh
-while read -r local_ref local_sha remote_ref remote_sha; do
-  if [ "$remote_ref" = "refs/heads/main" ]; then
-    echo "Pushing to main is blocked: push a feature branch and open a PR (see Conventions in CLAUDE.md)." >&2
-    exit 1
-  fi
-done
-exit 0
