@@ -41,6 +41,7 @@ set up.
 | All unit and integration tests                  | `npm test`                                     |
 | A single test file                              | `npx vitest run <file>`                        |
 | Live tests (start real Claude Code, cost money) | `FLOWDECK_LIVE=1 npx vitest run <file>`        |
+| Run the CLI                                     | `npx tsx src/cli/main.ts <args>`               |
 | Drive the app (from FD-18)                      | `npm run drive -- <steps.json>`                |
 
 `npm test` never runs live tests. CI runs `npm run check` on every PR.

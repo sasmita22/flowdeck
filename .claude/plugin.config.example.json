@@ -1,0 +1,10 @@
+{
+  "autoPush": true,
+  "createReadyPR": false,
+  "parentBranch": "main",
+  "openPlanInBrowser": true,
+  "autoFixPrReviews": false,
+  "e2e": {
+    "enabled": false
+  }
+}
