@@ -1,0 +1,91 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {}
+      }
+    },
+    {
+      "id": "retry",
+      "label": "Retry",
+      "type": "loop",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "condition": "tests pass",
+        "onCap": "fail"
+      }
+    },
+    {
+      "id": "attempt",
+      "label": "Attempt",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "parent": "retry",
+      "settings": {
+        "instructions": "Do the work."
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "attempt",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "attempt",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}
