@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {}
+      }
+    },
+    {
+      "id": "review",
+      "label": "Review until green",
+      "type": "loop",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "condition": "tests pass",
+        "cap": 3,
+        "onCap": "ask"
+      }
+    },
+    {
+      "id": "fix",
+      "label": "Fix",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 160
+      },
+      "parent": "review",
+      "settings": {
+        "instructions": "Fix the failing tests."
+      }
+    },
+    {
+      "id": "check",
+      "label": "Run tests",
+      "type": "script",
+      "position": {
+        "x": 480,
+        "y": 160
+      },
+      "parent": "review",
+      "settings": {
+        "command": "npm",
+        "args": ["test"]
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "fix",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "fix",
+        "port": "out"
+      },
+      "to": {
+        "node": "check",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "check",
+        "port": "out"
+      },
+      "to": {
+        "node": "fix",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "check",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}
