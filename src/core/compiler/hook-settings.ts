@@ -1,5 +1,12 @@
+type HookEntry = { hooks: { type: "command"; command: string }[] }[];
+
 export type HookSettings = {
-  hooks: { Stop: { hooks: { type: "command"; command: string }[] }[] };
+  hooks: {
+    Stop: HookEntry;
+    PreToolUse: HookEntry;
+    PostToolUse: HookEntry;
+    SubagentStop: HookEntry;
+  };
 };
 
 export function shellQuote(value: string): string {
@@ -8,5 +15,6 @@ export function shellQuote(value: string): string {
 
 export function hookSettings(options: { nodePath: string; hookScriptPath: string }): HookSettings {
   const command = `${shellQuote(options.nodePath)} ${shellQuote(options.hookScriptPath)}`;
-  return { hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } };
+  const entry: HookEntry = [{ hooks: [{ type: "command", command }] }];
+  return { hooks: { Stop: entry, PreToolUse: entry, PostToolUse: entry, SubagentStop: entry } };
 }
