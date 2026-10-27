@@ -42,7 +42,8 @@ https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W: collection `tickets`, one doc
 
 1. Append a dated note to every ticket worked on: what was done, the branch, commits, whether
    they are pushed, open PRs, what is still open, and the exact next step.
-2. Set the ticket's `status` to match.
+2. Set the ticket's `status` to match. A ticket is `done` only once its PR is merged into
+   `main`; until then it stays `doing`.
 3. Audit the notes on every `done` and `doing` ticket for stale claims. Never rewrite an old
    note; append one that names what is stale and what is true now.
 4. Read the notes back to confirm they landed.
