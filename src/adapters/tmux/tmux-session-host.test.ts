@@ -47,6 +47,22 @@ async function waitForFile(path: string): Promise<string> {
   throw new Error(`${path} never appeared`);
 }
 
+async function waitForPane(
+  host: SessionHost,
+  name: string,
+  done: (pane: string) => boolean,
+): Promise<string> {
+  let pane = await host.capture(name);
+  for (let elapsed = 0; elapsed < 5000 && !done(pane); elapsed += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    pane = await host.capture(name);
+  }
+  return pane;
+}
+
+const linesEqualTo = (pane: string, line: string) =>
+  pane.split("\n").filter((candidate) => candidate === line).length;
+
 describe("TmuxSessionHost", () => {
   let host: SessionHost;
   let tmp: string;
@@ -167,6 +183,45 @@ describe("TmuxSessionHost", () => {
 
     expect(names).toContain(`${prefix}a`);
     expect(names.every((name) => name.startsWith("fd-"))).toBe(true);
+  });
+
+  it("types text literally and presses Enter after it", { timeout: 10_000 }, async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "cat");
+
+    await host.sendText(name, "fd-echo-check");
+
+    const pane = await waitForPane(host, name, (p) => linesEqualTo(p, "fd-echo-check") >= 2);
+    expect(linesEqualTo(pane, "fd-echo-check")).toBe(2);
+  });
+
+  it("presses keys by name, not as text", { timeout: 10_000 }, async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "cat");
+
+    await host.sendKey(name, "Down");
+    await host.sendKey(name, "Enter");
+
+    const pane = await waitForPane(host, name, (p) => p.includes("^["));
+    expect(pane.split("\n").some((line) => line.startsWith("^["))).toBe(true);
+    expect(pane).not.toContain("Down");
+  });
+
+  it.each(["fd-x.y", "fd-x:y", "other"])(
+    "rejects input and capture for the invalid name %s",
+    async (name) => {
+      await expect(host.sendText(name, "hi")).rejects.toThrow(invalidName(name));
+      await expect(host.sendKey(name, "Enter")).rejects.toThrow(invalidName(name));
+      await expect(host.capture(name)).rejects.toThrow(invalidName(name));
+    },
+  );
+
+  it("rejects input and capture for a session that does not exist", async () => {
+    const missing = `Session "${prefix}none" does not exist`;
+
+    await expect(host.sendText(`${prefix}none`, "hi")).rejects.toThrow(missing);
+    await expect(host.sendKey(`${prefix}none`, "Enter")).rejects.toThrow(missing);
+    await expect(host.capture(`${prefix}none`)).rejects.toThrow(missing);
   });
 
   it("reports nothing when no tmux server is running", async () => {

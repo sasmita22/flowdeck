@@ -61,4 +61,65 @@ describe("FakeSessionHost", () => {
   it("starts with no sessions", async () => {
     expect(await new FakeSessionHost().list()).toEqual([]);
   });
+
+  it("records text and keys in the order they were sent", async () => {
+    const host = new FakeSessionHost();
+    await host.start("fd-a", "/work", "bash");
+
+    await host.sendKey("fd-a", "Down");
+    await host.sendText("fd-a", "hello");
+    await host.sendKey("fd-a", "Enter");
+
+    expect(host.inputs("fd-a")).toEqual([{ key: "Down" }, { text: "hello" }, { key: "Enter" }]);
+  });
+
+  it("captures an empty pane until one is set", async () => {
+    const host = new FakeSessionHost();
+    await host.start("fd-a", "/work", "bash");
+
+    expect(await host.capture("fd-a")).toBe("");
+
+    host.setPane("fd-a", "❯ ready");
+
+    expect(await host.capture("fd-a")).toBe("❯ ready");
+  });
+
+  it("tells a listener about each input after recording it", async () => {
+    const host = new FakeSessionHost();
+    await host.start("fd-a", "/work", "bash");
+    const seen: unknown[] = [];
+    host.onInput("fd-a", (input) => {
+      seen.push([input, host.inputs("fd-a").length]);
+      if ("key" in input && input.key === "Enter") host.setPane("fd-a", "after enter");
+    });
+
+    await host.sendText("fd-a", "hi");
+    await host.sendKey("fd-a", "Enter");
+
+    expect(seen).toEqual([
+      [{ text: "hi" }, 1],
+      [{ key: "Enter" }, 2],
+    ]);
+    expect(await host.capture("fd-a")).toBe("after enter");
+  });
+
+  it.each(["fd-x.y", "fd-x:y", "other"])(
+    "rejects input and capture for the invalid name %s",
+    async (name) => {
+      const host = new FakeSessionHost();
+
+      await expect(host.sendText(name, "hi")).rejects.toThrow(invalidName(name));
+      await expect(host.sendKey(name, "Enter")).rejects.toThrow(invalidName(name));
+      await expect(host.capture(name)).rejects.toThrow(invalidName(name));
+    },
+  );
+
+  it("rejects input and capture for a session it does not hold", async () => {
+    const host = new FakeSessionHost();
+    const missing = 'Session "fd-none" does not exist';
+
+    await expect(host.sendText("fd-none", "hi")).rejects.toThrow(missing);
+    await expect(host.sendKey("fd-none", "Enter")).rejects.toThrow(missing);
+    await expect(host.capture("fd-none")).rejects.toThrow(missing);
+  });
 });
