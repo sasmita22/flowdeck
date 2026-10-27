@@ -1,0 +1,243 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {
+          "dryRun": false
+        }
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Write a plan for the ticket."
+      }
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "type": "agent",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "role": "implementer",
+        "instructions": "Implement the plan.",
+        "model": "sonnet",
+        "tools": ["Read", "Edit"],
+        "given": ["plan.md"],
+        "writes": ["implementation.md"]
+      }
+    },
+    {
+      "id": "lint",
+      "label": "Lint",
+      "type": "script",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "command": "npm",
+        "args": ["run", "lint"]
+      }
+    },
+    {
+      "id": "approve",
+      "label": "Approve",
+      "type": "gate",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "settings": {
+        "shown": "plan.md",
+        "skippable": false
+      }
+    },
+    {
+      "id": "choose",
+      "label": "Choose",
+      "type": "ask",
+      "position": {
+        "x": 1200,
+        "y": 0
+      },
+      "settings": {
+        "question": "Ship it?",
+        "options": ["yes", "no"]
+      }
+    },
+    {
+      "id": "stop",
+      "label": "Stop on failure",
+      "type": "hardstop",
+      "position": {
+        "x": 1440,
+        "y": 0
+      },
+      "settings": {
+        "condition": "tests fail",
+        "shown": "test report",
+        "locked": true,
+        "enabled": true
+      }
+    },
+    {
+      "id": "retry",
+      "label": "Retry",
+      "type": "loop",
+      "position": {
+        "x": 1680,
+        "y": 0
+      },
+      "settings": {
+        "condition": "tests pass",
+        "cap": 2,
+        "onCap": "fail"
+      }
+    },
+    {
+      "id": "attempt",
+      "label": "Attempt",
+      "type": "prompt",
+      "position": {
+        "x": 1680,
+        "y": 160
+      },
+      "parent": "retry",
+      "settings": {
+        "instructions": "Make the tests pass."
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 1920,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "plan",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "plan",
+        "port": "out"
+      },
+      "to": {
+        "node": "build",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "build",
+        "port": "out"
+      },
+      "to": {
+        "node": "lint",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "lint",
+        "port": "out"
+      },
+      "to": {
+        "node": "approve",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "approve",
+        "port": "out"
+      },
+      "to": {
+        "node": "choose",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "choose",
+        "port": "out"
+      },
+      "to": {
+        "node": "stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "stop",
+        "port": "out"
+      },
+      "to": {
+        "node": "attempt",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "attempt",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}
