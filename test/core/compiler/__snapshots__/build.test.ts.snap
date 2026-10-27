@@ -1,0 +1,131 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`build > writes the same bytes as the recorded build 1`] = `
+{
+  "agents/a.md": "---
+name: "a"
+description: "implementer"
+tools: "Grep"
+model: "sonnet"
+---
+Implement the plan.
+",
+  "commands/p.md": "---
+description: "p"
+---
+Do the work.
+",
+  "hooks/hooks.json": "{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
+",
+  "manifest.json": "{
+  "hash": "060b82e0c71482abcc5a5f7a8331dd3f81840676bf75f68e4ad2b80ecc75395b",
+  "nodes": [
+    {
+      "file": "commands/p.md",
+      "id": "p",
+      "label": "p",
+      "settings": {
+        "instructions": "Do the work."
+      },
+      "type": "prompt"
+    },
+    {
+      "file": "agents/a.md",
+      "id": "a",
+      "label": "a",
+      "settings": {
+        "instructions": "Implement the plan.",
+        "model": "sonnet",
+        "role": "implementer",
+        "tools": [
+          "Grep"
+        ]
+      },
+      "type": "agent"
+    }
+  ],
+  "session": {
+    "allowedTools": [
+      "Read",
+      "Edit"
+    ],
+    "connectors": [],
+    "model": "sonnet",
+    "name": "main",
+    "permissionMode": "default",
+    "workingFolder": {
+      "branch": "main",
+      "kind": "worktree"
+    }
+  },
+  "version": 1,
+  "wires": [
+    {
+      "from": {
+        "node": "p",
+        "port": "out"
+      },
+      "kind": "then",
+      "to": {
+        "node": "a",
+        "port": "in"
+      }
+    }
+  ]
+}
+",
+  "settings.json": "{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit"
+    ],
+    "defaultMode": "default"
+  }
+}
+",
+}
+`;
