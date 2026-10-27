@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
@@ -70,6 +71,20 @@ describe("build", () => {
     const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`));
     expect(manifest.hash).toBe(result.hash);
     expect(hashBuild(await readBack(fs, result.dir))).toBe(result.hash);
+  });
+
+  it("records a sha256 of every other written file in the manifest", async () => {
+    const fs = new FakeFileSystem();
+
+    const { dir } = succeeded(await run(fs));
+
+    const manifest = JSON.parse(await fs.readFile(`${dir}/manifest.json`));
+    const expected = Object.fromEntries(
+      (await readBack(fs, dir))
+        .filter(({ path }) => path !== "manifest.json")
+        .map(({ path, content }) => [path, createHash("sha256").update(content).digest("hex")]),
+    );
+    expect(manifest.files).toStrictEqual(expected);
   });
 
   it("reuses the folder for the same flow without writing again", async () => {

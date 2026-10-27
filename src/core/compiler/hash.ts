@@ -9,6 +9,10 @@ const withoutHash = (file: BuildFile): string => {
   return canonicalJson(manifest);
 };
 
+export function sha256Hex(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 export function hashBuild(files: readonly BuildFile[]): string {
   const sha = createHash("sha256");
   const sorted = [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

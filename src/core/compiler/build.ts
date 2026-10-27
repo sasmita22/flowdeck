@@ -2,7 +2,7 @@ import type { Flow } from "../flow/schema.js";
 import { canonicalJson } from "./canonical-json.js";
 import { emit } from "./emit.js";
 import { hashBuild } from "./hash.js";
-import { lower } from "./lower.js";
+import { lower, type Manifest } from "./lower.js";
 import { validate, type ValidationError } from "./validate.js";
 
 export type BuildFileSystem = {
@@ -29,9 +29,12 @@ export async function build(
   const hash = hashBuild(files);
   const dir = `${deps.home}/builds/${hash}`;
   if (await deps.fs.exists(`${dir}/manifest.json`)) return { ok: true, hash, dir, reused: true };
+  let emittedManifest = "";
   for (const file of files) {
-    if (file.path !== "manifest.json") await deps.fs.writeFile(`${dir}/${file.path}`, file.content);
+    if (file.path === "manifest.json") emittedManifest = file.content;
+    else await deps.fs.writeFile(`${dir}/${file.path}`, file.content);
   }
-  await deps.fs.writeFile(`${dir}/manifest.json`, canonicalJson({ ...lowered.manifest, hash }));
+  const manifest = JSON.parse(emittedManifest) as Manifest;
+  await deps.fs.writeFile(`${dir}/manifest.json`, canonicalJson({ ...manifest, hash }));
   return { ok: true, hash, dir, reused: false };
 }

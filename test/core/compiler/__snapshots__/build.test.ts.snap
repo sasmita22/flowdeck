@@ -61,7 +61,13 @@ Do the work.
 }
 ",
   "manifest.json": "{
-  "hash": "060b82e0c71482abcc5a5f7a8331dd3f81840676bf75f68e4ad2b80ecc75395b",
+  "files": {
+    "agents/a.md": "238d61888f0612fd74e1d6f0a26245167e3dee8bf3564cd6bcdfaa126fd7c95b",
+    "commands/p.md": "703684da25d686d4bda63b4abfc34d8e50f6ed561e3702f6f463da3dd9cf42f1",
+    "hooks/hooks.json": "0e949888955f94c521d8aa606bf17171efd01866c1b0ec5fe3a849e271b252c9",
+    "settings.json": "49a144a48736cdc6813ad746092c2c5f949092d3bfee8b489af474c71ed2f473"
+  },
+  "hash": "6c8394376d7ec541675ef9a52ea74105abad069a5f3f74871c5acce6aaeb887f",
   "nodes": [
     {
       "file": "commands/p.md",
