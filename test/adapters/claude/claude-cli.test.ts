@@ -39,6 +39,20 @@ describe("claudeCommand", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain("--settings");
   });
 
+  it("loads the plugin folder, quoted like the settings path", () => {
+    expect(
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/tmp/fd home/builds/abc"),
+    ).toMatch(
+      / --settings '\/tmp\/fd home\/sessions\/s1\/settings\.json' --plugin-dir '\/tmp\/fd home\/builds\/abc'$/,
+    );
+  });
+
+  it("loads no plugin folder without one", () => {
+    expect(claudeCommand({ sessionId, model: "haiku" }, settingsPath)).not.toContain(
+      "--plugin-dir",
+    );
+  });
+
   it("keeps the user's telemetry setting", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain(
       "CLAUDE_CODE_ENABLE_TELEMETRY",
@@ -89,6 +103,20 @@ describe("ClaudeCli", () => {
     expect(sessions.get("fd-b")?.command).toContain(
       "--settings '/tmp/fd home/sessions/s1/settings.json'",
     );
+  });
+
+  it("starts claude with the build folder as its plugin folder", async () => {
+    await cli.start(
+      "fd-b",
+      "/repo",
+      { sessionId, model: "haiku" },
+      { settingsPath, pluginDir: "/fd/builds/abc" },
+    );
+
+    expect(sessions.get("fd-b")?.command).toBe(
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/fd/builds/abc"),
+    );
+    expect(sessions.get("fd-b")?.command).toContain("--plugin-dir '/fd/builds/abc'");
   });
 
   it("is ready without sending anything when the input box is showing", async () => {
@@ -205,18 +233,10 @@ describe("ClaudeCli", () => {
     expect(sessions.inputs("fd-a")).toEqual([]);
   });
 
-  it("types the prompt once claude is ready", async () => {
-    sessions.setPane("fd-a", readyPane);
-    await cli.waitUntilReady("fd-a");
-
-    await cli.sendPrompt("fd-a", "hello");
-
-    expect(sessions.inputs("fd-a")).toEqual([{ text: "hello" }]);
-  });
-
-  describe("confirming the prompt was submitted", () => {
+  describe("sending a prompt", () => {
     const boxPane = (...box: string[]) =>
       ["╭─ Claude Code ─╮", rule, ...box, rule, "  ? for shortcuts"].join("\n");
+    const placeholderPane = boxPane('❯ Try "fix lint errors"');
 
     async function readyCli(options: { submitRetryMs: number; readyTimeoutMs?: number }) {
       const ready = new ClaudeCli({
@@ -231,91 +251,117 @@ describe("ClaudeCli", () => {
       return ready;
     }
 
-    function holdPromptUntilEnter(box: string[], emptyAfterEnters: number) {
+    function claudeBox(options: {
+      box?: string[];
+      showAfterMs?: number;
+      emptyAfterEnters: number;
+    }) {
       let enters = 0;
       sessions.onInput("fd-a", (input) => {
-        if ("text" in input) sessions.setPane("fd-a", boxPane(...box));
-        if ("key" in input && input.key === "Enter" && ++enters === emptyAfterEnters) {
+        if ("typed" in input) {
+          const show = () =>
+            sessions.setPane("fd-a", boxPane(...(options.box ?? [`❯ ${input.typed}`])));
+          if (options.showAfterMs === undefined) show();
+          else setTimeout(show, options.showAfterMs);
+        }
+        if ("key" in input && input.key === "Enter" && ++enters === options.emptyAfterEnters) {
           sessions.setPane("fd-a", readyPane);
         }
       });
     }
 
-    it("returns only once the input box has emptied, without pressing Enter again", async () => {
+    it("types the prompt without Enter, then presses Enter once it shows in the box", async () => {
       const ready = await readyCli({ submitRetryMs: 1000 });
-      sessions.onInput("fd-a", () => {
-        sessions.setPane("fd-a", boxPane("❯ hello"));
-        setTimeout(() => sessions.setPane("fd-a", readyPane), 20);
-      });
+      claudeBox({ emptyAfterEnters: 1 });
 
       await ready.sendPrompt("fd-a", "hello");
 
-      expect(await sessions.capture("fd-a")).toBe(readyPane);
-      expect(sessions.inputs("fd-a")).toEqual([{ text: "hello" }]);
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: "hello" }, { key: "Enter" }]);
+    });
+
+    it.each([
+      ["an empty box", readyPane],
+      ["the placeholder", placeholderPane],
+    ])("waits out %s shown before the typed prompt renders", async (_, before) => {
+      const ready = await readyCli({ submitRetryMs: 1000 });
+      sessions.setPane("fd-a", before);
+      claudeBox({ showAfterMs: 30, emptyAfterEnters: 1 });
+
+      await ready.sendPrompt("fd-a", "hello");
+
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: "hello" }, { key: "Enter" }]);
     });
 
     it("presses Enter again while the box still holds the prompt", async () => {
       const ready = await readyCli({ submitRetryMs: 10 });
-      holdPromptUntilEnter(["❯ hello"], 2);
+      claudeBox({ emptyAfterEnters: 3 });
 
       await ready.sendPrompt("fd-a", "hello");
 
       expect(sessions.inputs("fd-a")).toEqual([
-        { text: "hello" },
+        { typed: "hello" },
+        { key: "Enter" },
         { key: "Enter" },
         { key: "Enter" },
       ]);
     });
 
-    it("sees a prompt wrapped over several box lines as still held", async () => {
-      const ready = await readyCli({ submitRetryMs: 10 });
-      holdPromptUntilEnter(
-        ["❯ Use the Write tool to create a.txt", "  containing exactly: 123"],
-        1,
-      );
+    it("sees a prompt wrapped over several box lines as held", async () => {
+      const ready = await readyCli({ submitRetryMs: 1000 });
+      claudeBox({
+        box: ["❯ Use the Write tool to create a.txt", "  containing exactly: 123"],
+        emptyAfterEnters: 1,
+      });
 
       await ready.sendPrompt("fd-a", "Use the Write tool to create a.txt containing exactly: 123");
 
-      expect(sessions.inputs("fd-a")).toHaveLength(2);
-      expect(sessions.inputs("fd-a")[1]).toEqual({ key: "Enter" });
+      expect(sessions.inputs("fd-a")).toEqual([
+        { typed: "Use the Write tool to create a.txt containing exactly: 123" },
+        { key: "Enter" },
+      ]);
     });
 
-    it("takes the box's placeholder suggestion for an empty box", async () => {
-      const ready = await readyCli({ submitRetryMs: 10 });
-      sessions.onInput("fd-a", () => sessions.setPane("fd-a", boxPane('❯ Try "fix lint errors"')));
+    it("never presses Enter when the prompt never shows in the box", async () => {
+      const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
+      sessions.setPane("fd-a", placeholderPane);
 
-      await ready.sendPrompt("fd-a", "hello");
+      await expect(ready.sendPrompt("fd-a", "hello")).rejects.toThrow(
+        'Claude in session "fd-a" did not show the prompt in its input box within 100 ms',
+      );
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: "hello" }]);
+    });
 
-      expect(sessions.inputs("fd-a")).toEqual([{ text: "hello" }]);
+    it("does not take the same prompt echoed above an empty box as typed", async () => {
+      const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
+      sessions.setPane("fd-a", ["❯ hello", "", "⏺ Hi there", rule, "❯ ", rule].join("\n"));
+
+      await expect(ready.sendPrompt("fd-a", "hello")).rejects.toThrow(
+        'Claude in session "fd-a" did not show the prompt in its input box within 100 ms',
+      );
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: "hello" }]);
     });
 
     it("gives up naming the session when the box never empties", async () => {
       const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
-      holdPromptUntilEnter(["❯ hello"], Infinity);
+      claudeBox({ emptyAfterEnters: Infinity });
 
       await expect(ready.sendPrompt("fd-a", "hello")).rejects.toThrow(
         'Claude in session "fd-a" did not submit the prompt within 100 ms',
       );
     });
 
-    it("ignores the submitted prompt echoed above the empty input box", async () => {
-      const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
-      const submitted = [
-        "╭─ Claude Code ─╮",
-        "",
-        "❯ hello",
-        "",
-        "⏺ Hi there",
-        "",
-        rule,
-        "❯ ",
-        rule,
-      ];
-      sessions.onInput("fd-a", () => sessions.setPane("fd-a", submitted.join("\n")));
+    it("returns once the box empties with the submitted prompt echoed above it", async () => {
+      const ready = await readyCli({ submitRetryMs: 1000 });
+      sessions.onInput("fd-a", (input) => {
+        if ("typed" in input) sessions.setPane("fd-a", boxPane("❯ hello"));
+        if ("key" in input) {
+          sessions.setPane("fd-a", ["❯ hello", "", "⏺ Hi there", rule, "❯ ", rule].join("\n"));
+        }
+      });
 
       await ready.sendPrompt("fd-a", "hello");
 
-      expect(sessions.inputs("fd-a")).toEqual([{ text: "hello" }]);
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: "hello" }, { key: "Enter" }]);
     });
 
     it.each(["", "  \n "])("refuses the empty prompt %j without typing it", async (prompt) => {
