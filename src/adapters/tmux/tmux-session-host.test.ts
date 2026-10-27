@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -249,6 +249,62 @@ describe("TmuxSessionHost", () => {
     await expect(host.sendText(`${prefix}none`, "hi")).rejects.toThrow(missing);
     await expect(host.sendKey(`${prefix}none`, "Enter")).rejects.toThrow(missing);
     await expect(host.capture(`${prefix}none`)).rejects.toThrow(missing);
+  });
+
+  describe("on its own tmux socket", () => {
+    const socketName = `${prefix}own`;
+    const own = new TmuxSessionHost({ socketName });
+    const socketPathOf = async () =>
+      (await tmux("-L", socketName, "display-message", "-p", "#{socket_path}")).trim();
+    const exists = (path: string) =>
+      stat(path).then(
+        () => true,
+        () => false,
+      );
+
+    afterEach(async () => {
+      for (const name of await own.list()) await own.stop(name);
+    });
+
+    it("removes the socket file when its last session stops", async () => {
+      await own.start(`${prefix}a`, tmp, "bash");
+      const socketPath = await socketPathOf();
+
+      await own.stop(`${prefix}a`);
+
+      expect(await exists(socketPath)).toBe(false);
+    });
+
+    it("keeps the socket file while another session still runs", async () => {
+      await own.start(`${prefix}a`, tmp, "bash");
+      await own.start(`${prefix}b`, tmp, "bash");
+      const socketPath = await socketPathOf();
+
+      await own.stop(`${prefix}a`);
+
+      expect(await exists(socketPath)).toBe(true);
+      await own.stop(`${prefix}b`);
+      expect(await exists(socketPath)).toBe(false);
+    });
+  });
+
+  it("never removes the default server's socket file", async () => {
+    const tmuxTmpdir = process.env["TMUX_TMPDIR"];
+    const outerTmux = process.env["TMUX"];
+    process.env["TMUX_TMPDIR"] = await realpath(tmp);
+    delete process.env["TMUX"];
+    try {
+      await host.start(`${prefix}a`, tmp, "bash");
+      const socketPath = (await tmux("display-message", "-p", "#{socket_path}")).trim();
+
+      await host.stop(`${prefix}a`);
+
+      expect(await stat(socketPath).then(() => true)).toBe(true);
+    } finally {
+      if (tmuxTmpdir === undefined) delete process.env["TMUX_TMPDIR"];
+      else process.env["TMUX_TMPDIR"] = tmuxTmpdir;
+      if (outerTmux !== undefined) process.env["TMUX"] = outerTmux;
+    }
   });
 
   it("reports nothing when no tmux server is running", async () => {

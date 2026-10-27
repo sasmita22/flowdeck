@@ -39,6 +39,23 @@ function showsInputBox(pane: string): boolean {
   );
 }
 
+function inputBox(pane: string): string | undefined {
+  const lines = pane.split("\n");
+  const start = lines.findLastIndex(
+    (line, i) => line.startsWith("❯") && lines[i - 1]?.startsWith(rule),
+  );
+  const end = lines.findIndex((line, i) => i > start && line.startsWith(rule));
+  if (start === -1 || end === -1) return undefined;
+  return lines.slice(start, end).join(" ").slice(1);
+}
+
+const squash = (text: string) => text.replace(/\s+/g, "");
+
+function boxHolds(pane: string, prompt: string): boolean {
+  const box = inputBox(pane);
+  return box !== undefined && squash(box).includes(squash(prompt).slice(0, 40));
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function hasCode(error: unknown, ...codes: (string | number)[]): boolean {
@@ -51,6 +68,7 @@ export class ClaudeCli {
   private readonly pollIntervalMs: number;
   private readonly readyTimeoutMs: number;
   private readonly dialogSettleMs: number;
+  private readonly submitRetryMs: number;
   private readonly ready = new Set<string>();
 
   constructor(options: {
@@ -59,12 +77,14 @@ export class ClaudeCli {
     pollIntervalMs?: number;
     readyTimeoutMs?: number;
     dialogSettleMs?: number;
+    submitRetryMs?: number;
   }) {
     this.sessions = options.sessions;
     this.homeDir = options.homeDir ?? homedir();
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30_000;
     this.dialogSettleMs = options.dialogSettleMs ?? 1000;
+    this.submitRetryMs = options.submitRetryMs ?? 1000;
   }
 
   async start(
@@ -104,10 +124,26 @@ export class ClaudeCli {
   }
 
   async sendPrompt(name: string, text: string): Promise<void> {
+    if (text.trim() === "")
+      throw new Error(`Claude in session "${name}" was given an empty prompt`);
     if (!this.ready.has(name)) {
       throw new Error(`Claude in session "${name}" is not ready for a prompt`);
     }
     await this.sessions.sendText(name, text);
+    const deadline = Date.now() + this.readyTimeoutMs;
+    let lastEnter = Date.now();
+    while (boxHolds(await this.sessions.capture(name), text)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Claude in session "${name}" did not submit the prompt within ${this.readyTimeoutMs} ms`,
+        );
+      }
+      if (Date.now() - lastEnter >= this.submitRetryMs) {
+        await this.sessions.sendKey(name, "Enter");
+        lastEnter = Date.now();
+      }
+      await sleep(this.pollIntervalMs);
+    }
   }
 
   async findTranscript(sessionId: string): Promise<string | undefined> {

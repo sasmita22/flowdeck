@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { SessionHost, SessionKey } from "../../ports/session-host.js";
 
@@ -56,7 +56,22 @@ export class TmuxSessionHost implements SessionHost {
 
   async stop(name: string): Promise<void> {
     if (!(await this.has(name))) throw new Error(`Session "${name}" does not exist`);
+    const socketPath = this.options.socketName
+      ? (await this.tmux("display-message", "-p", "#{socket_path}")).trim()
+      : undefined;
     await this.tmux("kill-session", "-t", `=${name}`);
+    if (socketPath !== undefined && !(await this.serverRunning()))
+      await rm(socketPath, { force: true });
+  }
+
+  private async serverRunning(): Promise<boolean> {
+    try {
+      await this.tmux("list-sessions");
+      return true;
+    } catch (error) {
+      if (noServer.test(stderrOf(error))) return false;
+      throw error;
+    }
   }
 
   async list(): Promise<string[]> {
