@@ -1,0 +1,9 @@
+{
+  "session_id": "c5d6e7f8-9a0b-4c1d-8e2f-3a4b5c6d7e8f",
+  "transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/c5d6e7f8-9a0b-4c1d-8e2f-3a4b5c6d7e8f.jsonl",
+  "cwd": "/tmp/fd-fixture",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_response": { "stdout": "README.md\n", "stderr": "", "interrupted": false },
+  "duration_ms": 42
+}

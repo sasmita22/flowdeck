@@ -1,0 +1,10 @@
+{
+  "session_id": "e1f2a3b4-c5d6-4e7f-9a8b-0c1d2e3f4a5b",
+  "transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/e1f2a3b4-c5d6-4e7f-9a8b-0c1d2e3f4a5b.jsonl",
+  "cwd": "/tmp/fd-fixture",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "agent_id": "agent-fixture-1",
+  "agent_transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/agent-fixture-1.jsonl",
+  "agent_type": "general-purpose"
+}

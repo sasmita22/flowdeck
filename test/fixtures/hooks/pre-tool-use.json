@@ -1,0 +1,10 @@
+{
+  "session_id": "8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d.jsonl",
+  "cwd": "/tmp/fd-fixture",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "ls", "description": "List files" },
+  "tool_use_id": "toolu_01FixturePreToolUse"
+}
