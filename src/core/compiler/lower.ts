@@ -14,7 +14,13 @@ export type ManifestNode = {
   file?: string;
 };
 
-export type Manifest = { version: 1; session: Session; nodes: ManifestNode[]; wires: Wire[] };
+export type Manifest = {
+  version: 1;
+  session: Session;
+  nodes: ManifestNode[];
+  wires: Wire[];
+  files: Record<string, string>;
+};
 
 const compile = (node: Node): BuildFile | undefined => {
   switch (node.type) {
@@ -27,7 +33,7 @@ const compile = (node: Node): BuildFile | undefined => {
   }
 };
 
-export function lower(flow: Flow): { manifest: Manifest; nodeFiles: BuildFile[] } {
+export function lower(flow: Flow): { manifest: Omit<Manifest, "files">; nodeFiles: BuildFile[] } {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
   const compiled = nodes.map((node) => ({ node, file: compile(node) }));
