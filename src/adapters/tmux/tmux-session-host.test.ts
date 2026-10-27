@@ -27,6 +27,17 @@ async function rawSessions(): Promise<string[]> {
   }
 }
 
+async function showEnvironment(name: string, variable: string): Promise<string> {
+  try {
+    return await tmux("show-environment", "-t", `=${name}:`, variable);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === 1 && "stderr" in error) {
+      return String(error.stderr);
+    }
+    throw error;
+  }
+}
+
 async function rawHas(name: string): Promise<boolean> {
   try {
     await tmux("has-session", "-t", `=${name}`);
@@ -84,6 +95,22 @@ describe("TmuxSessionHost", () => {
 
     expect(await host.has(`${prefix}a`)).toBe(true);
     expect(await rawSessions()).toContain(`${prefix}a`);
+  });
+
+  it("sets the given environment in the session, keeping spaces", async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "bash", { FLOWDECK_SOCK: "/tmp/fd sock/hook.sock" });
+
+    expect(await showEnvironment(name, "FLOWDECK_SOCK")).toBe(
+      "FLOWDECK_SOCK=/tmp/fd sock/hook.sock\n",
+    );
+  });
+
+  it("sets no FLOWDECK_SOCK in a session started without environment", async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "bash");
+
+    expect(await showEnvironment(name, "FLOWDECK_SOCK")).toBe("unknown variable: FLOWDECK_SOCK\n");
   });
 
   it("stops the session completely", async () => {

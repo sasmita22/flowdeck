@@ -2,10 +2,11 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClaudeCli, claudeCommand, replyLine } from "../../../src/adapters/claude/claude-cli.js";
+import { ClaudeCli, claudeCommand } from "../../../src/adapters/claude/claude-cli.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
 
 const sessionId = "0b7c2f4e-1d2a-4c3b-9e8f-5a6b7c8d9e0f";
+const settingsPath = "/tmp/fd home/sessions/s1/settings.json";
 const rule = "─".repeat(40);
 const readyPane = ["╭─ Claude Code ─╮", rule, "❯ ", rule, "  ? for shortcuts"].join("\n");
 const dialog = (cursorOnYes: boolean) =>
@@ -24,33 +25,24 @@ const dialogOnYes = dialog(true);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("claudeCommand", () => {
-  it("strips the parent session's variables and starts claude with the session id and model", () => {
-    expect(claudeCommand({ sessionId, model: "haiku" })).toBe(
+  it("strips the parent session's variables and starts claude with the session id, model and settings", () => {
+    expect(claudeCommand({ sessionId, model: "haiku" }, settingsPath)).toBe(
       "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION" +
         " -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET" +
         " -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID" +
-        ` -u CLAUDE_EFFORT claude --session-id ${sessionId} --model haiku`,
+        ` -u CLAUDE_EFFORT claude --session-id ${sessionId} --model haiku` +
+        " --settings '/tmp/fd home/sessions/s1/settings.json'",
     );
+  });
+
+  it("adds no settings without a settings path", () => {
+    expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain("--settings");
   });
 
   it("keeps the user's telemetry setting", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain(
       "CLAUDE_CODE_ENABLE_TELEMETRY",
     );
-  });
-});
-
-describe("replyLine", () => {
-  it("does not match the echoed prompt", () => {
-    expect(replyLine("FD-PONG").test("❯ Reply with exactly: FD-PONG")).toBe(false);
-  });
-
-  it("matches claude's reply line", () => {
-    expect(replyLine("FD-PONG").test("❯ Reply with exactly: FD-PONG\n\n⏺ FD-PONG\n")).toBe(true);
-  });
-
-  it("does not match a reply with another token", () => {
-    expect(replyLine("FD-PONG").test("⏺ FD-PING")).toBe(false);
   });
 });
 
@@ -83,6 +75,20 @@ describe("ClaudeCli", () => {
       cwd: "/repo",
       command: claudeCommand({ sessionId, model: "haiku" }),
     });
+  });
+
+  it("starts claude with the settings file and the session environment", async () => {
+    await cli.start(
+      "fd-b",
+      "/repo",
+      { sessionId, model: "haiku" },
+      { settingsPath, env: { FLOWDECK_SOCK: "/s" } },
+    );
+
+    expect(sessions.get("fd-b")?.env).toEqual({ FLOWDECK_SOCK: "/s" });
+    expect(sessions.get("fd-b")?.command).toContain(
+      "--settings '/tmp/fd home/sessions/s1/settings.json'",
+    );
   });
 
   it("is ready without sending anything when the input box is showing", async () => {
@@ -217,27 +223,6 @@ describe("ClaudeCli", () => {
 
     await expect(cli.sendPrompt("fd-b", "hello")).rejects.toThrow(
       'Claude in session "fd-b" is not ready for a prompt',
-    );
-  });
-
-  it("resolves with the pane once the reply appears", async () => {
-    sessions.setPane("fd-a", readyPane);
-    sessions.onInput("fd-a", (input) => {
-      if ("text" in input) sessions.setPane("fd-a", `❯ ${input.text}\n\n⏺ FD-PONG\n${readyPane}`);
-    });
-    await cli.waitUntilReady("fd-a");
-    await cli.sendPrompt("fd-a", "Reply with exactly: FD-PONG");
-
-    const pane = await cli.waitForReply("fd-a", replyLine("FD-PONG"), 100);
-
-    expect(pane).toContain("⏺ FD-PONG");
-  });
-
-  it("gives up when the reply never appears", async () => {
-    sessions.setPane("fd-a", `❯ Reply with exactly: FD-PONG\n${readyPane}`);
-
-    await expect(cli.waitForReply("fd-a", replyLine("FD-PONG"), 50)).rejects.toThrow(
-      'No reply in session "fd-a" within 50 ms',
     );
   });
 

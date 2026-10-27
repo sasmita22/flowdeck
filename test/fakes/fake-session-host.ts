@@ -6,6 +6,7 @@ export type SessionInput = { text: string } | { key: SessionKey };
 type FakeSession = {
   cwd: string;
   command: string;
+  env: Record<string, string> | undefined;
   inputs: SessionInput[];
   pane: string;
   listeners: ((input: SessionInput) => void)[];
@@ -14,10 +15,15 @@ type FakeSession = {
 export class FakeSessionHost implements SessionHost {
   private readonly sessions = new Map<string, FakeSession>();
 
-  async start(name: string, cwd: string, command: string): Promise<void> {
+  async start(
+    name: string,
+    cwd: string,
+    command: string,
+    env?: Record<string, string>,
+  ): Promise<void> {
     assertSessionName(name);
     if (this.sessions.has(name)) throw new Error(`Session "${name}" already exists`);
-    this.sessions.set(name, { cwd, command, inputs: [], pane: "", listeners: [] });
+    this.sessions.set(name, { cwd, command, env, inputs: [], pane: "", listeners: [] });
   }
 
   async has(name: string): Promise<boolean> {
@@ -34,9 +40,11 @@ export class FakeSessionHost implements SessionHost {
     return [...this.sessions.keys()];
   }
 
-  get(name: string): { cwd: string; command: string } | undefined {
+  get(
+    name: string,
+  ): { cwd: string; command: string; env: Record<string, string> | undefined } | undefined {
     const session = this.sessions.get(name);
-    return session && { cwd: session.cwd, command: session.command };
+    return session && { cwd: session.cwd, command: session.command, env: session.env };
   }
 
   async sendText(name: string, text: string): Promise<void> {

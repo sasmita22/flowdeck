@@ -24,11 +24,17 @@ function exitedWithOne(error: unknown): boolean {
 export class TmuxSessionHost implements SessionHost {
   constructor(private readonly options: { socketName?: string } = {}) {}
 
-  async start(name: string, cwd: string, command: string): Promise<void> {
+  async start(
+    name: string,
+    cwd: string,
+    command: string,
+    env: Record<string, string> = {},
+  ): Promise<void> {
     assertSessionName(name);
     if (!(await this.isFolder(cwd))) throw new Error(`Working folder "${cwd}" is not a folder`);
+    const variables = Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
     try {
-      await this.tmux("new-session", "-d", "-s", name, "-c", cwd, command);
+      await this.tmux("new-session", "-d", "-s", name, "-c", cwd, ...variables, command);
     } catch (error) {
       if (stderrOf(error).includes("duplicate session")) {
         throw new Error(`Session "${name}" already exists`, { cause: error });
