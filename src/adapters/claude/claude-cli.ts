@@ -1,6 +1,7 @@
 import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { shellQuote } from "../../core/compiler/hook-settings.js";
 import type { SessionHost } from "../../ports/session-host.js";
 
 export const PARENT_SESSION_VARS = [
@@ -22,13 +23,12 @@ const rule = "────";
 
 export type ClaudeSession = { sessionId: string; model: string };
 
-export function claudeCommand({ sessionId, model }: ClaudeSession): string {
-  const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
-  return `env ${unset} claude --session-id ${sessionId} --model ${model}`;
-}
+export type ClaudeStartOptions = { settingsPath?: string; env?: Record<string, string> };
 
-export function replyLine(token: string): RegExp {
-  return new RegExp(`^⏺ ${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m");
+export function claudeCommand({ sessionId, model }: ClaudeSession, settingsPath?: string): string {
+  const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
+  const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
+  return `env ${unset} claude --session-id ${sessionId} --model ${model}${settings}`;
 }
 
 function showsInputBox(pane: string): boolean {
@@ -67,9 +67,14 @@ export class ClaudeCli {
     this.dialogSettleMs = options.dialogSettleMs ?? 1000;
   }
 
-  async start(name: string, cwd: string, session: ClaudeSession): Promise<void> {
+  async start(
+    name: string,
+    cwd: string,
+    session: ClaudeSession,
+    { settingsPath, env }: ClaudeStartOptions = {},
+  ): Promise<void> {
     this.ready.delete(name);
-    await this.sessions.start(name, cwd, claudeCommand(session));
+    await this.sessions.start(name, cwd, claudeCommand(session, settingsPath), env);
   }
 
   async waitUntilReady(name: string): Promise<void> {
@@ -105,12 +110,6 @@ export class ClaudeCli {
     await this.sessions.sendText(name, text);
   }
 
-  async waitForReply(name: string, matcher: RegExp, timeoutMs: number): Promise<string> {
-    const pane = await this.poll(name, timeoutMs, async (pane) => matcher.test(pane));
-    if (pane === undefined) throw new Error(`No reply in session "${name}" within ${timeoutMs} ms`);
-    return pane;
-  }
-
   async findTranscript(sessionId: string): Promise<string | undefined> {
     const projects = join(this.homeDir, ".claude", "projects");
     let folders: string[];
@@ -143,19 +142,5 @@ export class ClaudeCli {
       await sleep(this.pollIntervalMs);
     }
     await this.sessions.sendKey(name, "Enter");
-  }
-
-  private async poll(
-    name: string,
-    timeoutMs: number,
-    done: (pane: string) => Promise<boolean>,
-  ): Promise<string | undefined> {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const pane = await this.sessions.capture(name);
-      if (await done(pane)) return pane;
-      if (Date.now() >= deadline) return undefined;
-      await sleep(this.pollIntervalMs);
-    }
   }
 }

@@ -15,6 +15,16 @@ describe("FakeSessionHost", () => {
     expect(host.get("fd-a")).toEqual({ cwd: "/work", command: "bash" });
   });
 
+  it("records the environment a session was started with", async () => {
+    const host = new FakeSessionHost();
+
+    await host.start("fd-x", "/work", "bash", { FLOWDECK_SOCK: "/s" });
+    await host.start("fd-y", "/work", "bash");
+
+    expect(host.get("fd-x")?.env).toEqual({ FLOWDECK_SOCK: "/s" });
+    expect(host.get("fd-y")?.env).toBeUndefined();
+  });
+
   it("forgets a stopped session", async () => {
     const host = new FakeSessionHost();
     await host.start("fd-a", "/work", "bash");
