@@ -30,6 +30,29 @@ weaken verification:
 FD-01 and FD-02 are done directly, not through the workflow, because the workflow needs what they
 set up.
 
+## Session handoff
+
+Work carries between sessions through the board's ticket notes, not chat or git history. They
+live in the board artifact's shared database: collection `tickets`, one document per ticket
+(`t03` for FD-03), with `status` (`todo`, `doing`, `done`) and `notes`, a list of
+`{ date, text }`.
+
+**When the user asks to end the session:**
+
+1. Append a dated note to every ticket worked on: what was done, the branch, commits, whether
+   they are pushed, open PRs, what is still open, and the exact next step.
+2. Set the ticket's `status` to match.
+3. Audit the notes on every `done` and `doing` ticket for stale claims. Never rewrite an old
+   note; append one that names what is stale and what is true now.
+4. Read the notes back to confirm they landed.
+
+**When a new session starts and the user says "continue":**
+
+1. Read the notes of the latest `doing` ticket, or the latest `done` one if none is in progress.
+2. Take the next step from those notes. A ticket's commit on `main` doesn't make it done; its
+   `status` and notes decide.
+3. If the next ticket depends on one still `doing`, say so before starting it.
+
 ## Gates
 
 | Gate                                            | Command                                        |
