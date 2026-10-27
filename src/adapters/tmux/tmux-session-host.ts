@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { SessionHost } from "../../ports/session-host.js";
+import type { SessionHost, SessionKey } from "../../ports/session-host.js";
 
 const run = promisify(execFile);
 const sessionName = /^fd-[A-Za-z0-9_-]+$/;
@@ -61,6 +61,26 @@ export class TmuxSessionHost implements SessionHost {
       if (noServer.test(stderrOf(error))) return [];
       throw error;
     }
+  }
+
+  async sendText(name: string, text: string): Promise<void> {
+    await this.assertExists(name);
+    await this.tmux("send-keys", "-l", "-t", `=${name}:`, text);
+    await this.tmux("send-keys", "-t", `=${name}:`, "Enter");
+  }
+
+  async sendKey(name: string, key: SessionKey): Promise<void> {
+    await this.assertExists(name);
+    await this.tmux("send-keys", "-t", `=${name}:`, key);
+  }
+
+  async capture(name: string): Promise<string> {
+    await this.assertExists(name);
+    return this.tmux("capture-pane", "-p", "-t", `=${name}:`);
+  }
+
+  private async assertExists(name: string): Promise<void> {
+    if (!(await this.has(name))) throw new Error(`Session "${name}" does not exist`);
   }
 
   private async isFolder(path: string): Promise<boolean> {
