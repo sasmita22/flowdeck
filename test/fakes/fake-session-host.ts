@@ -1,7 +1,7 @@
 import { assertSessionName } from "../../src/adapters/tmux/tmux-session-host.js";
 import type { SessionHost, SessionKey } from "../../src/ports/session-host.js";
 
-export type SessionInput = { text: string } | { key: SessionKey };
+export type SessionInput = { text: string } | { typed: string } | { key: SessionKey };
 
 type FakeSession = {
   cwd: string;
@@ -49,6 +49,10 @@ export class FakeSessionHost implements SessionHost {
 
   async sendText(name: string, text: string): Promise<void> {
     this.record(name, { text });
+  }
+
+  async typeText(name: string, text: string): Promise<void> {
+    this.record(name, { typed: text });
   }
 
   async sendKey(name: string, key: SessionKey): Promise<void> {

@@ -14,6 +14,11 @@ import { FakeSessionHost } from "../fakes/fake-session-host.js";
 
 const rule = "─".repeat(40);
 const readyPane = ["╭─ Claude Code ─╮", rule, "❯ ", rule, "  ? for shortcuts"].join("\n");
+const echoBox = (host: FakeSessionHost, name: string) =>
+  host.onInput(name, (input) => {
+    if ("typed" in input) host.setPane(name, [rule, `❯ ${input.typed}`, rule].join("\n"));
+    if ("key" in input && input.key === "Enter") host.setPane(name, readyPane);
+  });
 const flushTasks = () => new Promise((resolve) => setImmediate(resolve));
 const stop = (sessionId: string, turn: string): HookEvent => ({
   kind: "Stop",
@@ -60,12 +65,13 @@ describe("sendTwoTurns", () => {
   let host: FakeSessionHost;
   let claude: ClaudeCli;
   let events: FakeEventSource;
-  const texts = () => host.inputs(name).flatMap((input) => ("text" in input ? [input.text] : []));
+  const texts = () => host.inputs(name).flatMap((input) => ("typed" in input ? [input.typed] : []));
 
   beforeEach(async () => {
     host = new FakeSessionHost();
     await host.start(name, "/work", "claude");
     host.setPane(name, readyPane);
+    echoBox(host, name);
     claude = new ClaudeCli({ sessions: host, pollIntervalMs: 2 });
     await claude.waitUntilReady(name);
     events = new FakeEventSource();
@@ -105,8 +111,8 @@ describe("sendTwoTurns", () => {
     const stopA = stop(sessionId, "a");
     const stopB = stop(sessionId, "b");
     host.onInput(name, (input) => {
-      if ("text" in input && input.text === prompts.a) events.publish(stopA);
-      if ("text" in input && input.text === prompts.b) events.publish(stopB);
+      if ("typed" in input && input.typed === prompts.a) events.publish(stopA);
+      if ("typed" in input && input.typed === prompts.b) events.publish(stopB);
     });
 
     const turns = sendTwoTurns({ claude, events, name, sessionId, prompts, turnTimeoutMs: 50 });
@@ -135,6 +141,7 @@ class ReadyHost extends FakeSessionHost {
   ): Promise<void> {
     await super.start(name, cwd, command, env);
     this.setPane(name, readyPane);
+    echoBox(this, name);
     this.onStarted(name);
   }
 }
@@ -154,9 +161,9 @@ describe("driveTwoTurns", () => {
     const seen: { text: string; session: ReturnType<FakeSessionHost["get"]> }[] = [];
     const host: ReadyHost = new ReadyHost((name) =>
       host.onInput(name, (input) => {
-        if (!("text" in input)) return;
-        seen.push({ text: input.text, session: host.get(name) });
-        events.publish(stop(sessionId, input.text));
+        if (!("typed" in input)) return;
+        seen.push({ text: input.typed, session: host.get(name) });
+        events.publish(stop(sessionId, input.typed));
       }),
     );
     return { host, seen };

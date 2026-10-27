@@ -83,6 +83,19 @@ describe("FakeSessionHost", () => {
     expect(host.inputs("fd-a")).toEqual([{ key: "Down" }, { text: "hello" }, { key: "Enter" }]);
   });
 
+  it("records typed text apart from text sent with Enter", async () => {
+    const host = new FakeSessionHost();
+    await host.start("fd-a", "/work", "bash");
+    const seen: unknown[] = [];
+    host.onInput("fd-a", (input) => seen.push(input));
+
+    await host.typeText("fd-a", "draft");
+    await host.sendText("fd-a", "sent");
+
+    expect(host.inputs("fd-a")).toEqual([{ typed: "draft" }, { text: "sent" }]);
+    expect(seen).toEqual([{ typed: "draft" }, { text: "sent" }]);
+  });
+
   it("captures an empty pane until one is set", async () => {
     const host = new FakeSessionHost();
     await host.start("fd-a", "/work", "bash");
@@ -119,6 +132,7 @@ describe("FakeSessionHost", () => {
       const host = new FakeSessionHost();
 
       await expect(host.sendText(name, "hi")).rejects.toThrow(invalidName(name));
+      await expect(host.typeText(name, "hi")).rejects.toThrow(invalidName(name));
       await expect(host.sendKey(name, "Enter")).rejects.toThrow(invalidName(name));
       await expect(host.capture(name)).rejects.toThrow(invalidName(name));
     },
@@ -129,6 +143,7 @@ describe("FakeSessionHost", () => {
     const missing = 'Session "fd-none" does not exist';
 
     await expect(host.sendText("fd-none", "hi")).rejects.toThrow(missing);
+    await expect(host.typeText("fd-none", "hi")).rejects.toThrow(missing);
     await expect(host.sendKey("fd-none", "Enter")).rejects.toThrow(missing);
     await expect(host.capture("fd-none")).rejects.toThrow(missing);
   });

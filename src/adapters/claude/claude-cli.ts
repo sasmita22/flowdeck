@@ -23,12 +23,21 @@ const rule = "────";
 
 export type ClaudeSession = { sessionId: string; model: string };
 
-export type ClaudeStartOptions = { settingsPath?: string; env?: Record<string, string> };
+export type ClaudeStartOptions = {
+  settingsPath?: string;
+  pluginDir?: string;
+  env?: Record<string, string>;
+};
 
-export function claudeCommand({ sessionId, model }: ClaudeSession, settingsPath?: string): string {
+export function claudeCommand(
+  { sessionId, model }: ClaudeSession,
+  settingsPath?: string,
+  pluginDir?: string,
+): string {
   const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
   const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
-  return `env ${unset} claude --session-id ${sessionId} --model ${model}${settings}`;
+  const plugin = pluginDir === undefined ? "" : ` --plugin-dir ${shellQuote(pluginDir)}`;
+  return `env ${unset} claude --session-id ${sessionId} --model ${model}${settings}${plugin}`;
 }
 
 function showsInputBox(pane: string): boolean {
@@ -91,10 +100,10 @@ export class ClaudeCli {
     name: string,
     cwd: string,
     session: ClaudeSession,
-    { settingsPath, env }: ClaudeStartOptions = {},
+    { settingsPath, pluginDir, env }: ClaudeStartOptions = {},
   ): Promise<void> {
     this.ready.delete(name);
-    await this.sessions.start(name, cwd, claudeCommand(session, settingsPath), env);
+    await this.sessions.start(name, cwd, claudeCommand(session, settingsPath, pluginDir), env);
   }
 
   async waitUntilReady(name: string): Promise<void> {
@@ -129,8 +138,17 @@ export class ClaudeCli {
     if (!this.ready.has(name)) {
       throw new Error(`Claude in session "${name}" is not ready for a prompt`);
     }
-    await this.sessions.sendText(name, text);
+    await this.sessions.typeText(name, text);
     const deadline = Date.now() + this.readyTimeoutMs;
+    while (!boxHolds(await this.sessions.capture(name), text)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Claude in session "${name}" did not show the prompt in its input box within ${this.readyTimeoutMs} ms`,
+        );
+      }
+      await sleep(this.pollIntervalMs);
+    }
+    await this.sessions.sendKey(name, "Enter");
     let lastEnter = Date.now();
     while (boxHolds(await this.sessions.capture(name), text)) {
       if (Date.now() >= deadline) {

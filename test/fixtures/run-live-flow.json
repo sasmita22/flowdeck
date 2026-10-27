@@ -1,0 +1,123 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {}
+      }
+    },
+    {
+      "id": "p1",
+      "label": "Plan",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Reply with the single word ONE."
+      }
+    },
+    {
+      "id": "p2",
+      "label": "Build",
+      "type": "prompt",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Reply with the single word TWO."
+      }
+    },
+    {
+      "id": "p3",
+      "label": "Summarise",
+      "type": "prompt",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Use the Write tool to create {{repo}}/ok.txt containing exactly: ok"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "p1",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p1",
+        "port": "out"
+      },
+      "to": {
+        "node": "p2",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p2",
+        "port": "out"
+      },
+      "to": {
+        "node": "p3",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p3",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "haiku",
+    "allowedTools": [],
+    "permissionMode": "acceptEdits",
+    "connectors": []
+  }
+}

@@ -90,6 +90,11 @@ export class TmuxSessionHost implements SessionHost {
     await this.tmux("send-keys", "-t", `=${name}:`, "Enter");
   }
 
+  async typeText(name: string, text: string): Promise<void> {
+    await this.assertExists(name);
+    await this.tmux("send-keys", "-l", "-t", `=${name}:`, text);
+  }
+
   async sendKey(name: string, key: SessionKey): Promise<void> {
     await this.assertExists(name);
     await this.tmux("send-keys", "-t", `=${name}:`, key);

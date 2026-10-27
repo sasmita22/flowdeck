@@ -222,6 +222,20 @@ describe("TmuxSessionHost", () => {
     expect(linesEqualTo(pane, "fd-echo-check")).toBe(2);
   });
 
+  it("types text literally without pressing Enter", { timeout: 10_000 }, async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "cat");
+
+    await host.typeText(name, "fd-typed-check");
+    await waitForPane(host, name, (p) => linesEqualTo(p, "fd-typed-check") >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(linesEqualTo(await host.capture(name), "fd-typed-check")).toBe(1);
+    await host.sendKey(name, "Enter");
+    const pane = await waitForPane(host, name, (p) => linesEqualTo(p, "fd-typed-check") >= 2);
+    expect(linesEqualTo(pane, "fd-typed-check")).toBe(2);
+  });
+
   it("presses keys by name, not as text", { timeout: 10_000 }, async () => {
     const name = `${prefix}a`;
     await host.start(name, tmp, "cat");
@@ -238,6 +252,7 @@ describe("TmuxSessionHost", () => {
     "rejects input and capture for the invalid name %s",
     async (name) => {
       await expect(host.sendText(name, "hi")).rejects.toThrow(invalidName(name));
+      await expect(host.typeText(name, "hi")).rejects.toThrow(invalidName(name));
       await expect(host.sendKey(name, "Enter")).rejects.toThrow(invalidName(name));
       await expect(host.capture(name)).rejects.toThrow(invalidName(name));
     },
@@ -247,6 +262,7 @@ describe("TmuxSessionHost", () => {
     const missing = `Session "${prefix}none" does not exist`;
 
     await expect(host.sendText(`${prefix}none`, "hi")).rejects.toThrow(missing);
+    await expect(host.typeText(`${prefix}none`, "hi")).rejects.toThrow(missing);
     await expect(host.sendKey(`${prefix}none`, "Enter")).rejects.toThrow(missing);
     await expect(host.capture(`${prefix}none`)).rejects.toThrow(missing);
   });
