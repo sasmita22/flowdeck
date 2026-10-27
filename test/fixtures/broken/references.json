@@ -1,0 +1,88 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {}
+      }
+    },
+    {
+      "id": "work",
+      "label": "Work",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Do the work."
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "work",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "work",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "work",
+        "port": "out"
+      },
+      "to": {
+        "node": "ghost",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}
