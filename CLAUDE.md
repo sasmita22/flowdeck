@@ -33,7 +33,8 @@ set up.
 ## Session handoff
 
 Work carries between sessions through the board's ticket notes, not chat or git history. They
-live in the board artifact's shared database: collection `tickets`, one document per ticket
+live in the shared database of the board artifact,
+https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W: collection `tickets`, one document per ticket
 (`t03` for FD-03), with `status` (`todo`, `doing`, `done`) and `notes`, a list of
 `{ date, text }`.
 
