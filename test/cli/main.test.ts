@@ -5,14 +5,18 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
+import { SessionGoneError } from "../../src/cli/claude-session.js";
 import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import type { Flow } from "../../src/core/flow/schema.js";
+import type { TranscriptTurn } from "../../src/core/run/resume.js";
+import type { RunEvent } from "../../src/core/run/run-events.js";
 import type { ProcessResult } from "../../src/ports/process-runner.js";
 import type { WaitReply } from "../../src/ports/waiter.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
 import { FakeFileSystem } from "../fakes/fake-file-system.js";
 import { FakeProcessRunner } from "../fakes/fake-process-runner.js";
+import { FakeStore } from "../fakes/fake-store.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import {
   agent,
@@ -43,6 +47,8 @@ type Recorded = {
   eventStops: number;
   stdout: string[];
   stderr: string[];
+  storePaths: string[];
+  order: string[];
 };
 
 function stubDeps(
@@ -52,9 +58,12 @@ function stubDeps(
     results?: ProcessResult[];
     subagents?: string[];
     waiter?: FakeWaiter;
+    turns?: TranscriptTurn[];
+    sessionGone?: boolean;
   } = {},
 ) {
   const source = new FakeEventSource();
+  const store = new FakeStore();
   const scripts = new FakeProcessRunner(options.results ?? []);
   const recorded: Recorded = {
     startEvents: [],
@@ -64,6 +73,8 @@ function stubDeps(
     eventStops: 0,
     stdout: [],
     stderr: [],
+    storePaths: [],
+    order: [],
   };
   const deps: CliDeps = {
     env: options.env ?? { FLOWDECK_HOME: home },
@@ -72,8 +83,17 @@ function stubDeps(
     fs,
     scripts,
     waiter: options.waiter ?? new FakeWaiter([]),
+    openStore: (path) => {
+      recorded.storePaths.push(path);
+      return store;
+    },
+    transcriptTurns: async (claudeSessionId) => {
+      recorded.order.push(`transcript ${claudeSessionId}`);
+      return options.turns ?? [];
+    },
     startEvents: async (socketPath) => {
       recorded.startEvents.push(socketPath);
+      recorded.order.push("listen");
       return {
         events: source,
         stop: async () => {
@@ -83,6 +103,9 @@ function stubDeps(
     },
     openSession: async (session) => {
       recorded.openSession.push(session);
+      if (session.attach === true && options.sessionGone === true) {
+        throw new SessionGoneError(session.sessionName);
+      }
       return {
         sessionId,
         session: { ensureStarted: async () => undefined },
@@ -107,7 +130,7 @@ function stubDeps(
       };
     },
   };
-  return { deps, recorded, scripts };
+  return { deps, recorded, scripts, store, source };
 }
 
 async function built(fs: FakeFileSystem, input: Flow): Promise<{ dir: string; hash: string }> {
@@ -367,6 +390,7 @@ describe("runCli run", () => {
         model: "sonnet",
         socketPath: "/fd-home/sockets/fd-a.sock",
         cwd: repo,
+        claudeSessionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
     ]);
     expect(recorded.sends).toEqual([`/${hash}:p1`]);
@@ -432,9 +456,12 @@ describe("runCli interrupted", () => {
     const { dir } = await built(fs, input);
     const log: string[] = [];
     const start = deferred<undefined>();
+    const store = new FakeStore();
     let interrupt: (code: number) => void = () => undefined;
     const deps: CliDeps = {
       env: { FLOWDECK_HOME: home },
+      openStore: () => store,
+      transcriptTurns: async () => [],
       stdout: (line) => {
         log.push(`line ${line}`);
       },
@@ -478,7 +505,7 @@ describe("runCli interrupted", () => {
         return () => (interrupt = () => undefined);
       },
     };
-    return { deps, dir, log, start };
+    return { deps, dir, log, start, store };
   }
 
   it("never starts Claude for a prompt reached after the run was stopped", async () => {
@@ -523,6 +550,42 @@ describe("runCli interrupted", () => {
     expect(log.slice(log.indexOf("started"))).toContain("session stopped");
     expect(log.filter((entry) => entry.startsWith("send"))).toEqual([]);
   });
+
+  it("records the run as stopped when interrupted", async () => {
+    const blocked = deferred<ProcessResult>();
+    const { deps, dir, store } = await interruptibleDeps(
+      flow([shScript("s1"), shScript("s2")], [thenWire("s1", "s2")]),
+      blocked.promise,
+    );
+
+    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(130);
+    blocked.resolve(ok);
+    await settle();
+
+    expect(store.runs[0]?.status).toBe("stopped");
+  });
+
+  it("stops the attached session when a resume is interrupted", async () => {
+    const { deps, dir, log, store, start } = await interruptibleDeps(
+      flow([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")]),
+      Promise.resolve(ok),
+    );
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: { cwd: repo },
+      nodeIds: ["p1", "p2"],
+      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
+    });
+    store.append(id, "p1", { kind: "sent" });
+
+    expect(await runCli(["resume", id], deps)).toBe(130);
+    start.resolve(undefined);
+    await settle();
+
+    expect(log).toContain("session stopped");
+    expect(log.filter((entry) => entry.startsWith("send"))).toEqual([]);
+    expect(store.runs[0]?.status).toBe("stopped");
+  });
 });
 
 describe("runCli build", () => {
@@ -560,5 +623,307 @@ describe("runCli build", () => {
     expect(recorded.stderr.length).toBeGreaterThan(0);
     expect(recorded.stderr.join("\n")).toContain("references");
     expect(recorded.stdout).toEqual([]);
+  });
+});
+
+describe("runCli run state", () => {
+  let fs: FakeFileSystem;
+  let dir: string;
+
+  beforeEach(async () => {
+    fs = new FakeFileSystem();
+    ({ dir } = await built(fs, promptThenScript()));
+  });
+
+  it("prints the run id first on stderr and stores the run, its session and its build", async () => {
+    const { deps, recorded, store } = stubDeps(fs, { results: [ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo, "--session", "fd-a"], deps)).toBe(0);
+
+    const [run] = store.runs;
+    expect(store.runs).toHaveLength(1);
+    expect(recorded.stderr[0]).toBe(`run ${run?.id}`);
+    expect(recorded.stdout).toEqual(["p1 started", "p1 done", "s1 started", "s1 done"]);
+    expect(run).toMatchObject({
+      buildDir: dir,
+      status: "done",
+      session: {
+        tmuxName: "fd-a",
+        cwd: repo,
+        claudeSessionId: recorded.openSession[0]?.claudeSessionId,
+      },
+    });
+    expect(store.nodes.map((node) => node.nodeId)).toEqual(["p1", "s1"]);
+  });
+
+  it("opens the store at FLOWDECK_HOME/flowdeck.db", async () => {
+    const { deps, recorded } = stubDeps(fs, { results: [ok] });
+
+    await runCli(["run", dir, "--cwd", repo], deps);
+
+    expect(recorded.storePaths).toEqual(["/fd-home/flowdeck.db"]);
+  });
+
+  it("records a run that ends at a failed node as failed", async () => {
+    const { deps, store } = stubDeps(fs, { results: [{ code: 1, stdout: "", stderr: "" }] });
+
+    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(1);
+    expect(store.runs[0]?.status).toBe("failed");
+  });
+});
+
+describe("runCli resume", () => {
+  let fs: FakeFileSystem;
+  let dir: string;
+  let hash: string;
+  const nodeIds = ["p1", "p2", "p3"];
+
+  beforeEach(async () => {
+    fs = new FakeFileSystem();
+    ({ dir, hash } = await built(
+      fs,
+      flow(
+        [prompt("p1"), prompt("p2"), prompt("p3")],
+        [thenWire("p1", "p2"), thenWire("p2", "p3")],
+      ),
+    ));
+  });
+
+  const turn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
+    userText: `<command-name>/${hash}:${id}</command-name>`,
+    ended,
+    ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
+  });
+
+  function seed(store: FakeStore, events: [string, RunEvent][], ids = nodeIds, buildDir = dir) {
+    const { id } = store.createRun({
+      buildDir,
+      inputs: { cwd: repo, session: "fd-a" },
+      nodeIds: ids,
+      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
+    });
+    for (const [nodeId, event] of events) store.append(id, nodeId, event);
+    return id;
+  }
+
+  const killedAtP2: [string, RunEvent][] = [
+    ["p1", { kind: "sent" }],
+    ["p1", { kind: "done" }],
+    ["p2", { kind: "sent" }],
+  ];
+
+  it("refuses an unknown run id without touching tmux", async () => {
+    const { deps, recorded, scripts } = stubDeps(fs);
+
+    expect(await runCli(["resume", "nope"], deps)).toBe(1);
+    expect(recorded.stderr).toEqual(["no run nope"]);
+    nothingStarted(recorded, scripts);
+  });
+
+  it("sends nothing for a run that already finished", async () => {
+    const { deps, recorded, store, scripts } = stubDeps(fs);
+    const id = seed(store, []);
+    store.finishRun(id, "done");
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+    expect(recorded.stderr).toEqual([`run ${id} already done`]);
+    expect(recorded.sends).toEqual([]);
+    expect(store.events(id)).toEqual([]);
+    nothingStarted(recorded, scripts);
+  });
+
+  it("exits 1 naming the session when its tmux session is gone, starting and sending nothing", async () => {
+    const { deps, recorded, store } = stubDeps(fs, { sessionGone: true });
+    const id = seed(store, killedAtP2);
+
+    expect(await runCli(["resume", id], deps)).toBe(1);
+    expect(recorded.stderr.join("\n")).toContain('"fd-a" is gone');
+    expect(recorded.startEvents).toEqual([]);
+    expect(recorded.sends).toEqual([]);
+    expect(store.events(id)).toHaveLength(killedAtP2.length);
+  });
+
+  it("listens before reading the transcript, completes node 2 without sending it and sends node 3 once", async () => {
+    const { deps, recorded, store } = stubDeps(fs, {
+      turns: [turn("p1", true, "A"), turn("p2", true, "X")],
+    });
+    const id = seed(store, killedAtP2);
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(recorded.order).toEqual(["listen", "transcript c1"]);
+    expect(recorded.openSession).toEqual([
+      {
+        sessionName: "fd-a",
+        buildDir: dir,
+        model: "sonnet",
+        socketPath: "/fd-home/sockets/fd-a.sock",
+        cwd: repo,
+        claudeSessionId: "c1",
+        attach: true,
+      },
+    ]);
+    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
+      { kind: "sent" },
+      { kind: "done", payload: { stopMessage: "X" } },
+    ]);
+    expect(store.findRun(id)?.status).toBe("done");
+    expect(recorded.sessionStops).toBe(1);
+    expect(recorded.eventStops).toBe(1);
+  });
+
+  it("reads the transcript again when node 2's Stop arrives during the read, completing it without a send", async () => {
+    const { deps, recorded, store, source } = stubDeps(fs);
+    const id = seed(store, killedAtP2);
+    const reads = [
+      () => {
+        source.publish({ kind: "Stop", sessionId, payload: {} });
+        return [turn("p1", true, "A"), turn("p2", false)];
+      },
+      () => [turn("p1", true, "A"), turn("p2", true, "X")],
+    ];
+    let read = 0;
+    deps.transcriptTurns = async () => reads[read++]?.() ?? [];
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(read).toBe(2);
+    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
+      { kind: "sent" },
+      { kind: "done", payload: { stopMessage: "X" } },
+    ]);
+  });
+
+  it("does not settle node 3 with node 2's Stop arriving after the read showed node 2 ended", async () => {
+    const { deps, recorded, store, source } = stubDeps(fs);
+    const id = seed(store, killedAtP2);
+    let clock = 1;
+    deps.now = () => clock;
+    deps.transcriptTurns = async () => {
+      const hookAt = clock;
+      setTimeout(() => {
+        source.publish({
+          kind: "Stop",
+          sessionId,
+          payload: { last_assistant_message: "X", flowdeck_hook_at: hookAt },
+        });
+      }, 0);
+      clock = 2;
+      return [turn("p1", true, "A"), turn("p2", true, "X")];
+    };
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(store.events(id).filter((event) => event.nodeId === "p3")).not.toContainEqual(
+      expect.objectContaining({ kind: "done", payload: { stopMessage: "X" } }),
+    );
+  });
+
+  it("completes node 2 with the Stop seen during the first read when the re-read still shows it mid-turn", async () => {
+    const { deps, recorded, store, source } = stubDeps(fs);
+    const id = seed(store, killedAtP2);
+    const reads = [
+      () => {
+        source.publish({ kind: "Stop", sessionId, payload: { last_assistant_message: "X" } });
+        return [turn("p1", true, "A"), turn("p2", false)];
+      },
+      () => [turn("p1", true, "A"), turn("p2", false)],
+    ];
+    let read = 0;
+    deps.transcriptTurns = async () => reads[read++]?.() ?? [];
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
+      { kind: "sent" },
+      { kind: "done", payload: { stopMessage: "X" } },
+    ]);
+  });
+
+  it("completes node 2 with its own Stop stamped before the wait was armed", async () => {
+    const { deps, recorded, store, source } = stubDeps(fs);
+    const id = seed(store, killedAtP2);
+    let clock = 1;
+    deps.now = () => clock;
+    deps.transcriptTurns = async () => {
+      const hookAt = clock;
+      setTimeout(() => {
+        source.publish({
+          kind: "Stop",
+          sessionId,
+          payload: { last_assistant_message: "X", flowdeck_hook_at: hookAt },
+        });
+      }, 0);
+      clock = 2;
+      return [turn("p1", true, "A"), turn("p2", false)];
+    };
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
+      { kind: "sent" },
+      { kind: "done", payload: { stopMessage: "X" } },
+    ]);
+  });
+
+  it("opens a new session lazily when the run never sent a Claude turn", async () => {
+    const { deps, recorded, store } = stubDeps(fs);
+    const id = seed(store, []);
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(recorded.openSession[0]?.attach).toBeUndefined();
+    expect(recorded.sends).toEqual([`/${hash}:p1`, `/${hash}:p2`, `/${hash}:p3`]);
+    expect(store.findRun(id)?.status).toBe("done");
+  });
+
+  it("exits 1 with nothing sent when the transcript disagrees with the stored events", async () => {
+    const { deps, recorded, store } = stubDeps(fs, {
+      turns: [turn("p2", true, "X"), turn("p2", true, "Y")],
+    });
+    const id = seed(store, killedAtP2);
+
+    expect(await runCli(["resume", id], deps)).toBe(1);
+    expect(recorded.stderr.join("\n")).toContain("cannot resume p2");
+    expect(recorded.sends).toEqual([]);
+    expect(store.findRun(id)?.status).toBe("failed");
+  });
+
+  it("passes --auto to the resumed run, so a skippable Gate is skipped without asking", async () => {
+    const other = new FakeFileSystem();
+    const { dir: gateDir } = await built(
+      other,
+      flow(
+        [script("s1"), gate("g1", { settings: { skippable: true } }), script("s2")],
+        [thenWire("s1", "g1"), thenWire("g1", "s2")],
+      ),
+    );
+    const waiter = new FakeWaiter([]);
+    const { deps, recorded, store } = stubDeps(other, { results: [ok], waiter });
+    const id = seed(
+      store,
+      [
+        ["s1", { kind: "running" }],
+        ["s1", { kind: "done" }],
+      ],
+      ["s1", "g1", "s2"],
+      gateDir,
+    );
+
+    expect(await runCli(["resume", id, "--auto"], deps)).toBe(0);
+    expect(recorded.stdout).toEqual(["g1 skipped", "s2 started", "s2 done"]);
+    expect(waiter.calls).toEqual([]);
+  });
+
+  it("shows resume in the usage", async () => {
+    const { deps, recorded } = stubDeps(fs);
+
+    expect(await runCli(["resume"], deps)).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("flowdeck resume <id> [--auto]");
   });
 });

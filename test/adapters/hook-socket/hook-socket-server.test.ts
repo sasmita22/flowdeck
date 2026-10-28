@@ -96,7 +96,7 @@ describe("HookSocketServer", () => {
 
     expect(stops).toHaveLength(1);
     expect(stops[0]?.sessionId).toBe(stop.session_id);
-    expect(stops[0]?.payload).toEqual(stop);
+    expect(stops[0]?.payload).toEqual({ ...stop, flowdeck_hook_at: expect.any(Number) });
     expect(rejected).not.toHaveBeenCalled();
   });
 
@@ -113,7 +113,11 @@ describe("HookSocketServer", () => {
     );
 
     expect(events).toEqual([
-      { kind: sample["hook_event_name"], sessionId: sample.session_id, payload: sample },
+      {
+        kind: sample["hook_event_name"],
+        sessionId: sample.session_id,
+        payload: { ...sample, flowdeck_hook_at: expect.any(Number) },
+      },
     ]);
   });
 
@@ -141,7 +145,12 @@ describe("HookSocketServer", () => {
     expect(runs.every((run) => run.code === 0)).toBe(true);
     expect(events).toHaveLength(50);
     expect(new Set(events.map((event) => event.sessionId)).size).toBe(50);
-    for (const event of events) expect(event.payload).toEqual(sent.get(event.sessionId));
+    for (const event of events) {
+      expect(event.payload).toEqual({
+        ...sent.get(event.sessionId),
+        flowdeck_hook_at: expect.any(Number),
+      });
+    }
     expect(rejected).not.toHaveBeenCalled();
   }, 10_000);
 
