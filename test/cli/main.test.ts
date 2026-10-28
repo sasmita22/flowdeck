@@ -11,7 +11,15 @@ import type { ProcessResult } from "../../src/ports/process-runner.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
 import { FakeFileSystem } from "../fakes/fake-file-system.js";
 import { FakeProcessRunner } from "../fakes/fake-process-runner.js";
-import { agent, flow, prompt, script, thenWire } from "../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../fixtures/flow-builders.js";
 
 const shScript = (id: string) => script(id, { settings: { command: "sh" } });
 
@@ -33,7 +41,7 @@ type Recorded = {
 
 function stubDeps(
   fs: CliDeps["fs"],
-  options: { env?: Record<string, string>; results?: ProcessResult[] } = {},
+  options: { env?: Record<string, string>; results?: ProcessResult[]; subagents?: string[] } = {},
 ) {
   const source = new FakeEventSource();
   const scripts = new FakeProcessRunner(options.results ?? []);
@@ -69,7 +77,16 @@ function stubDeps(
         prompts: {
           sendPrompt: async (text) => {
             recorded.sends.push(text);
-            setTimeout(() => source.publish({ kind: "Stop", sessionId, payload: {} }), 0);
+            setTimeout(() => {
+              for (const agentType of options.subagents ?? []) {
+                source.publish({
+                  kind: "SubagentStop",
+                  sessionId,
+                  payload: { agent_type: agentType },
+                });
+              }
+              source.publish({ kind: "Stop", sessionId, payload: {} });
+            }, 0);
           },
         },
         stop: async () => {
@@ -175,15 +192,32 @@ describe("runCli run", () => {
 
   it("refuses unsupported node types in one error before starting anything", async () => {
     const other = new FakeFileSystem();
-    const { dir: agentDir } = await built(
-      other,
-      flow([prompt("p1"), agent("a1")], [thenWire("p1", "a1")]),
-    );
+    const gate = {
+      id: "g1",
+      label: "g1",
+      position: { x: 0, y: 0 },
+      type: "gate",
+      settings: { shown: "plan", skippable: false },
+    };
+    const { dir: gateDir } = await built(other, flow([prompt("p1"), gate], [thenWire("p1", "g1")]));
     const { deps, recorded, scripts } = stubDeps(other);
 
-    expect(await runCli(["run", agentDir, "--cwd", repo], deps)).toBe(2);
-    expect(recorded.stderr.join("\n")).toContain("a1 (agent)");
+    expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("g1 (gate)");
     nothingStarted(recorded, scripts);
+  });
+
+  it("starts Claude and runs an agent-only build", async () => {
+    const other = new FakeFileSystem();
+    const { dir: agentDir, hash: agentHash } = await built(
+      other,
+      flow([trigger("t"), agent("a1"), output("o")], [thenWire("t", "a1"), thenWire("a1", "o")]),
+    );
+    const { deps, recorded } = stubDeps(other, { subagents: [`${agentHash}:a1`] });
+
+    expect(await runCli(["run", agentDir, "--cwd", repo, "--session", "fd-a"], deps)).toBe(0);
+    expect(recorded.openSession).toHaveLength(1);
+    expect(recorded.stdout).toEqual(["a1 started", "a1 done"]);
   });
 
   it("runs the build, exits 0 and passes the build, model and socket to the session", async () => {

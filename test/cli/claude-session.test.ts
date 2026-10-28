@@ -49,7 +49,10 @@ describe("openClaudeSession", () => {
     await opened.session.ensureStarted();
 
     expect(sessions.get("fd-run")?.command).toContain("--plugin-dir '/fd/builds/abc'");
-    expect(sessions.get("fd-run")?.env).toEqual({ FLOWDECK_SOCK: "/fd/sockets/fd-run.sock" });
+    expect(sessions.get("fd-run")?.env).toEqual({
+      FLOWDECK_SOCK: "/fd/sockets/fd-run.sock",
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    });
     await opened.stop();
     expect(await sessions.list()).toEqual([]);
   });
