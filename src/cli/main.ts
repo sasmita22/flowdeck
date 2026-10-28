@@ -15,7 +15,7 @@ import { build } from "../core/compiler/build.js";
 import type { Manifest } from "../core/compiler/lower.js";
 import { verify } from "../core/compiler/verify.js";
 import { FlowParseError, parseFlow } from "../core/flow/schema.js";
-import { Runner, unsupportedNodes, UnsupportedNodesError } from "../core/run/runner.js";
+import { Runner, StructureError, structureProblems } from "../core/run/runner.js";
 import type { TurnEvents } from "../core/run/turns.js";
 import type { FileSystem } from "../ports/file-system.js";
 import type { ProcessRunner } from "../ports/process-runner.js";
@@ -141,9 +141,9 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
   ) as Manifest & {
     hash: string;
   };
-  const unsupported = unsupportedNodes(manifest.nodes);
-  if (unsupported.length > 0) {
-    deps.stderr(new UnsupportedNodesError(unsupported).message);
+  const problems = structureProblems(manifest.nodes);
+  if (problems.length > 0) {
+    deps.stderr(new StructureError(problems).message);
     return 2;
   }
   const needsClaude = manifest.nodes.some(

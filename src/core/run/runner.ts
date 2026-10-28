@@ -8,9 +8,21 @@ import {
 } from "../nodes/ask/execute.js";
 import { gateOutcome, gateRequest, gateSkips } from "../nodes/gate/execute.js";
 import { hardstopOutcome, hardstopRequest } from "../nodes/hardstop/execute.js";
+import {
+  agentVerdictTurnText,
+  capAnswer,
+  capRequest,
+  malformedAnswer,
+  malformedRequest,
+  nextStep,
+  verdictRequest,
+  type LoopAnswer,
+  type LoopStep,
+} from "../nodes/loop/execute.js";
 import { scriptOutcome } from "../nodes/script/execute.js";
 import { move, type NodeState } from "./state.js";
-import { waitForTurnEnd, type TurnEvents } from "./turns.js";
+import { waitForTurnEnd, type TurnEndEvent, type TurnEvents } from "./turns.js";
+import { parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
 export type RunnableManifest = Pick<Manifest, "nodes"> & { hash: string };
@@ -41,6 +53,17 @@ type ScriptSettings = { command: string; args?: string[] };
 type GateSettings = Parameters<typeof gateRequest>[1];
 type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
+type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
+
+type Failure = { nodeId: string; reason: string };
+type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
+type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
+type RunContext = {
+  hash: string;
+  nodes: readonly ManifestNode[];
+  states: Record<string, NodeState>;
+  ensureStarted: () => Promise<void>;
+};
 
 const defaultTurnTimeoutMs = 600_000;
 const runnable = new Set<ManifestNode["type"]>([
@@ -50,17 +73,36 @@ const runnable = new Set<ManifestNode["type"]>([
   "gate",
   "ask",
   "hardstop",
+  "loop",
 ]);
-const skipped = new Set<ManifestNode["type"]>(["trigger", "output"]);
 
-export function unsupportedNodes(nodes: readonly ManifestNode[]): ManifestNode[] {
-  return nodes.filter((node) => !runnable.has(node.type) && !skipped.has(node.type));
+export function structureProblems(nodes: readonly ManifestNode[]): string[] {
+  const loops = new Set(nodes.filter((node) => node.type === "loop").map((node) => node.id));
+  return nodes.flatMap((node) => {
+    const problems: string[] = [];
+    if (node.type === "loop") {
+      const hasTurn = nodes.some(
+        (child) => child.parent === node.id && (child.type === "prompt" || child.type === "agent"),
+      );
+      if (!hasTurn) problems.push(`${node.id} (loop) has no prompt or agent in its body`);
+      if (node.parent !== undefined && loops.has(node.parent)) {
+        problems.push(`${node.id} (loop) is inside loop ${node.parent}`);
+      }
+    }
+    if (node.parent !== undefined && !loops.has(node.parent)) {
+      problems.push(`${node.id} (${node.type}) has parent ${node.parent}, which is not a loop`);
+    }
+    return problems;
+  });
 }
 
-export class UnsupportedNodesError extends Error {
-  constructor(nodes: readonly ManifestNode[]) {
-    super(`Unsupported node types: ${nodes.map((node) => `${node.id} (${node.type})`).join(", ")}`);
-    this.name = "UnsupportedNodesError";
+export class StructureError extends Error {
+  readonly problems: string[];
+
+  constructor(problems: string[]) {
+    super(`cannot run this build: ${problems.join("; ")}`);
+    this.name = "StructureError";
+    this.problems = problems;
   }
 }
 
@@ -73,6 +115,11 @@ const outputLines = (text: string) =>
         .replace(/\n$/, "")
         .split("\n")
         .map((line) => `  ${line}`);
+
+const lastMessage = (event: TurnEndEvent) => {
+  const message = event.payload["last_assistant_message"];
+  return typeof message === "string" ? message : undefined;
+};
 
 const exitReason = (code: number | null) =>
   code === null ? "killed by a signal" : `exit code ${code}`;
@@ -107,8 +154,8 @@ export class Runner {
   }
 
   async run(manifest: RunnableManifest): Promise<RunResult> {
-    const unsupported = unsupportedNodes(manifest.nodes);
-    if (unsupported.length > 0) throw new UnsupportedNodesError(unsupported);
+    const problems = structureProblems(manifest.nodes);
+    if (problems.length > 0) throw new StructureError(problems);
     this.decisions = [];
     this.pendingAnswers = [];
     const nodes = manifest.nodes.filter((node) => runnable.has(node.type));
@@ -121,28 +168,123 @@ export class Runner {
       await this.deps.session.ensureStarted();
       started = true;
     };
-    for (const node of nodes) {
-      let failure: string | undefined;
-      let doneLine = "done";
-      if (node.type === "prompt") {
-        failure = await this.runPrompt(node, manifest.hash, states, ensureStarted);
-      } else if (node.type === "agent") {
-        failure = await this.runAgent(node, manifest.hash, states, ensureStarted);
-      } else if (node.type === "script") {
-        failure = await this.runScript(node, states);
-      } else {
-        const outcome = await this.runHuman(node, states);
-        if (outcome.status === "failed") failure = outcome.reason;
-        else doneLine = outcome.line;
-      }
+    const context: RunContext = { hash: manifest.hash, nodes, states, ensureStarted };
+    for (const node of nodes.filter((node) => node.parent === undefined)) {
+      const { failure } = await this.runStep(node, context);
       if (failure !== undefined) {
-        states[node.id] = move(states[node.id] ?? "waiting", "failed");
-        this.emit(`${node.id} failed: ${failure}`);
-        return { outcome: "failed", failedNode: node.id, states, decisions: this.decisions };
+        states[failure.nodeId] = move(states[failure.nodeId] ?? "waiting", "failed");
+        this.emit(`${failure.nodeId} failed: ${failure.reason}`);
+        return {
+          outcome: "failed",
+          failedNode: failure.nodeId,
+          states,
+          decisions: this.decisions,
+        };
       }
-      this.emit(`${node.id} ${doneLine}`);
     }
     return { outcome: "done", states, decisions: this.decisions };
+  }
+
+  private async runStep(
+    node: ManifestNode,
+    context: RunContext,
+    condition?: string,
+  ): Promise<StepResult> {
+    const { hash, states, ensureStarted } = context;
+    let failure: string | undefined;
+    let reply: string | undefined;
+    let doneLine = "done";
+    if (node.type === "loop") {
+      const result = await this.runLoop(node, context);
+      if (result.failure !== undefined) return result;
+    } else if (node.type === "prompt" || node.type === "agent") {
+      const turn =
+        node.type === "prompt"
+          ? await this.runPrompt(node, hash, states, ensureStarted, condition)
+          : await this.runAgent(node, hash, states, ensureStarted, condition);
+      if (turn.failure === undefined) reply = turn.reply;
+      else failure = turn.failure;
+    } else if (node.type === "script") {
+      failure = await this.runScript(node, states);
+    } else {
+      const outcome = await this.runHuman(node, states);
+      if (outcome.status === "failed") failure = outcome.reason;
+      else doneLine = outcome.line;
+    }
+    if (failure !== undefined) return { failure: { nodeId: node.id, reason: failure } };
+    this.emit(`${node.id} ${doneLine}`);
+    return { reply };
+  }
+
+  private async runLoop(loop: ManifestNode, context: RunContext): Promise<StepResult> {
+    const { states } = context;
+    const { condition, cap, onCap } = loop.settings as LoopSettings;
+    const body = context.nodes.filter((node) => node.parent === loop.id);
+    const verdictTurn = body.findLast((node) => node.type === "prompt" || node.type === "agent");
+    const fail = (reason: string): StepResult => ({ failure: { nodeId: loop.id, reason } });
+    states[loop.id] = move("waiting", "running");
+    for (let round = 1; ;) {
+      this.emit(`${loop.id} round ${round}`);
+      let reply: string | undefined;
+      for (const node of body) {
+        if (round > 1) states[node.id] = move(states[node.id] ?? "waiting", "waiting");
+        const isVerdictTurn = node === verdictTurn;
+        const result = await this.runStep(node, context, isVerdictTurn ? condition : undefined);
+        if (result.failure !== undefined) {
+          states[loop.id] = move("running", "failed");
+          return result;
+        }
+        if (isVerdictTurn) reply = result.reply;
+      }
+      const verdict = parseVerdict(reply);
+      let step: LoopStep;
+      if (verdict.kind === "verdict") {
+        step = nextStep(round, cap, verdict.done);
+      } else {
+        const answer = await this.askLoop(
+          loop,
+          states,
+          malformedRequest(loop.id, round, verdict.reason),
+          (r) => malformedAnswer(loop.id, round, r),
+        );
+        if (answer.choice === "fail") return fail(answer.reason);
+        if (answer.choice === "again") states[loop.id] = move("needs-you", "running");
+        step = answer.choice === "done" ? { kind: "exit" } : nextStep(round, cap, false);
+      }
+      if (step.kind === "round") {
+        round = step.round;
+        continue;
+      }
+      if (step.kind === "cap") {
+        if (onCap === "fail") return fail(`cap reached after ${cap} rounds`);
+        const answer = await this.askLoop(loop, states, capRequest(loop.id, cap), (r) =>
+          capAnswer(loop.id, cap, r),
+        );
+        if (answer.choice === "fail") return fail(answer.reason);
+      }
+      states[loop.id] = move(states[loop.id] ?? "running", "done");
+      return {};
+    }
+  }
+
+  private async askLoop(
+    loop: ManifestNode,
+    states: Record<string, NodeState>,
+    request: WaitRequest,
+    toAnswer: (reply: WaitReply) => LoopAnswer,
+  ): Promise<LoopAnswer> {
+    states[loop.id] = move("running", "needs-you");
+    let answer: LoopAnswer;
+    try {
+      answer = toAnswer(await this.deps.waiter.wait(request));
+    } catch (error) {
+      return { choice: "fail", reason: messageOf(error) };
+    }
+    if (answer.decision?.decision === "answered") {
+      this.decisions.push(answer.decision);
+      this.emit(`${loop.id} answered: ${answer.decision.answer}`);
+    }
+    return answer;
   }
 
   private async runPrompt(
@@ -150,9 +292,11 @@ export class Runner {
     hash: string,
     states: Record<string, NodeState>,
     ensureStarted: () => Promise<void>,
-  ): Promise<string | undefined> {
+    condition?: string,
+  ): Promise<TurnResult> {
     states[node.id] = move("waiting", "sent");
     this.emit(`${node.id} started`);
+    let end: TurnEndEvent;
     try {
       await ensureStarted();
       const turnEnd = waitForTurnEnd(
@@ -161,15 +305,16 @@ export class Runner {
         this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs,
       );
       turnEnd.catch(() => undefined);
+      const command = withPromptContext(`/${hash}:${node.id}`, this.takeAnswers());
       await this.deps.prompts.sendPrompt(
-        withPromptContext(`/${hash}:${node.id}`, this.takeAnswers()),
+        condition === undefined ? command : `${command} ${verdictRequest(condition)}`,
       );
-      await turnEnd;
+      end = await turnEnd;
     } catch (error) {
-      return messageOf(error);
+      return { failure: messageOf(error) };
     }
     states[node.id] = move("sent", "done");
-    return undefined;
+    return { reply: condition === undefined ? undefined : lastMessage(end) };
   }
 
   private async runAgent(
@@ -177,10 +322,12 @@ export class Runner {
     hash: string,
     states: Record<string, NodeState>,
     ensureStarted: () => Promise<void>,
-  ): Promise<string | undefined> {
+    condition?: string,
+  ): Promise<TurnResult> {
     states[node.id] = move("waiting", "sent");
     this.emit(`${node.id} started`);
     let subagents: SubagentStops | undefined;
+    let end: TurnEndEvent;
     try {
       await ensureStarted();
       subagents = recordSubagentStopsUntilStop(this.deps.events, this.deps.sessionId);
@@ -190,20 +337,22 @@ export class Runner {
         this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs,
       );
       turnEnd.catch(() => undefined);
-      await this.deps.prompts.sendPrompt(
-        withAgentContext(agentTurnText(hash, node.id), this.takeAnswers()),
-      );
-      await turnEnd;
+      const turnText =
+        condition === undefined
+          ? agentTurnText(hash, node.id)
+          : agentVerdictTurnText(hash, node.id, condition);
+      await this.deps.prompts.sendPrompt(withAgentContext(turnText, this.takeAnswers()));
+      end = await turnEnd;
     } catch (error) {
-      return messageOf(error);
+      return { failure: messageOf(error) };
     } finally {
       subagents?.unsubscribe();
     }
     if (agentOutcome(subagents.seen, hash, node.id) === "failed") {
-      return `no SubagentStop for ${agentType(hash, node.id)}`;
+      return { failure: `no SubagentStop for ${agentType(hash, node.id)}` };
     }
     states[node.id] = move("sent", "done");
-    return undefined;
+    return { reply: condition === undefined ? undefined : lastMessage(end) };
   }
 
   private takeAnswers(): string[] {
