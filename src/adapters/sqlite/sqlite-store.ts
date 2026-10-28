@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RunEvent } from "../../core/run/run-events.js";
 import type {
   EventEntry,
@@ -12,7 +13,7 @@ import type {
   StoredEvent,
 } from "../../ports/store.js";
 
-export type SqliteStoreOptions = { path: string; now?: () => Date };
+export type SqliteStoreOptions = { path: string; now?: () => Date; migrationsDir?: string };
 
 type RunRow = {
   id: string;
@@ -31,8 +32,6 @@ type EventRow = {
   payload: string | null;
   time: string;
 };
-
-const migrationsFolder = new URL("./migrations/", import.meta.url);
 
 const nodeUpdates: Partial<Record<RunEvent["kind"], string>> = {
   sent: "started_at = coalesce(started_at, @time)",
@@ -53,7 +52,7 @@ export class SqliteStore implements Store {
     this.db = new Database(options.path);
     this.now = options.now ?? (() => new Date());
     this.db.pragma("foreign_keys = ON");
-    this.migrate();
+    this.migrate(options.migrationsDir ?? fileURLToPath(new URL("./migrations/", import.meta.url)));
   }
 
   createRun(run: NewRun): RunRecord {
@@ -164,7 +163,7 @@ export class SqliteStore implements Store {
     return this.now().toISOString();
   }
 
-  private migrate(): void {
+  private migrate(migrationsDir: string): void {
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
     );
@@ -173,11 +172,11 @@ export class SqliteStore implements Store {
         (row) => row.name,
       ),
     );
-    const pending = readdirSync(migrationsFolder)
+    const pending = readdirSync(migrationsDir)
       .filter((name) => name.endsWith(".sql") && !applied.has(name))
       .sort();
     for (const name of pending) {
-      const sql = readFileSync(new URL(name, migrationsFolder), "utf8");
+      const sql = readFileSync(join(migrationsDir, name), "utf8");
       this.db.transaction(() => {
         this.db.exec(sql);
         this.db
