@@ -45,6 +45,18 @@ describe("parseFlow", () => {
     expect(parseFlow(flow)).toEqual(flow);
   });
 
+  it("caps a loop at 3 rounds when it names no cap", () => {
+    const loop = {
+      id: "l",
+      label: "L",
+      position: { x: 0, y: 0 },
+      type: "loop",
+      settings: { condition: "tests pass", onCap: "fail" },
+    };
+    const parsed = parseFlow(flowWith({ nodes: [promptNode, loop] }));
+    expect(parsed.nodes[1]?.settings).toEqual({ condition: "tests pass", cap: 3, onCap: "fail" });
+  });
+
   it("names the field path of a bad loop cap", () => {
     const loop = {
       id: "l",

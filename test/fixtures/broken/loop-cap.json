@@ -23,6 +23,7 @@
       },
       "settings": {
         "condition": "tests pass",
+        "cap": 0,
         "onCap": "fail"
       }
     },

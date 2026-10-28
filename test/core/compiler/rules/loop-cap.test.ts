@@ -8,10 +8,6 @@ const fieldsOf = (settings: Record<string, unknown>) =>
     .map(({ rule, node, field }) => ({ rule, node, field }));
 
 describe("loop-cap", () => {
-  it("reports a loop with no cap", () => {
-    expect(fieldsOf({ cap: undefined })).toEqual([{ rule: "loop-cap", node: "L", field: "cap" }]);
-  });
-
   it.each([2.5, 0])("reports a loop whose cap is %s", (cap) => {
     expect(fieldsOf({ cap })).toEqual([{ rule: "loop-cap", node: "L", field: "cap" }]);
   });
@@ -22,8 +18,8 @@ describe("loop-cap", () => {
     ]);
   });
 
-  it("reports a missing cap and a missing onCap separately", () => {
-    expect(fieldsOf({ cap: undefined, onCap: undefined })).toEqual([
+  it("reports a bad cap and a missing onCap separately", () => {
+    expect(fieldsOf({ cap: 0, onCap: undefined })).toEqual([
       { rule: "loop-cap", node: "L", field: "cap" },
       { rule: "loop-cap", node: "L", field: "onCap" },
     ]);
