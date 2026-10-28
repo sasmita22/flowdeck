@@ -7,6 +7,7 @@ import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js"
 import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
+import { FakeStore } from "../fakes/fake-store.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { flow, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -43,10 +44,11 @@ describe("a script-only run", () => {
     let openSessionCalls = 0;
     let eventStops = 0;
     const lines: string[] = [];
+    const errors: string[] = [];
     const deps: CliDeps = {
       env: { FLOWDECK_HOME: home },
       stdout: (line) => lines.push(line),
-      stderr: (line) => lines.push(line),
+      stderr: (line) => errors.push(line),
       fs,
       scripts: new NodeProcessRunner(),
       waiter: new FakeWaiter([]),
@@ -56,6 +58,8 @@ describe("a script-only run", () => {
           eventStops++;
         },
       }),
+      openStore: () => new FakeStore(),
+      transcriptTurns: async () => [],
       openSession: async () => {
         openSessionCalls++;
         throw new Error("Claude must not start for a script-only flow");
@@ -67,5 +71,6 @@ describe("a script-only run", () => {
     expect(openSessionCalls).toBe(0);
     expect(eventStops).toBe(1);
     expect(lines).toEqual(["write started", "write done", "check started", "check done"]);
+    expect(errors).toEqual(["run run-1"]);
   });
 });

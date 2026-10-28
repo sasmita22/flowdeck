@@ -106,6 +106,40 @@ describe("waitForTurnEnd", () => {
     expect((outcome.error as Error).message).toContain(String(timeoutMs));
   });
 
+  describe("armed at a time", () => {
+    const armedAt = 1000;
+    const stampedStop = (hookAt?: number): HookEvent => {
+      const stop = hookEvent("Stop", ours);
+      return hookAt === undefined
+        ? stop
+        : { ...stop, payload: { ...stop.payload, flowdeck_hook_at: hookAt } };
+    };
+
+    it("ignores a Stop stamped before it was armed", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs, armedAt));
+
+      source.publish(stampedStop(armedAt - 1));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("pending");
+    });
+
+    it.each([
+      { name: "at the arm time", hookAt: armedAt },
+      { name: "after the arm time", hookAt: armedAt + 1 },
+      { name: "with no stamp", hookAt: undefined },
+    ])("resolves on a Stop stamped $name", async ({ hookAt }) => {
+      const stop = stampedStop(hookAt);
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs, armedAt));
+
+      source.publish(stop);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("resolved");
+      expect(outcome.value?.payload).toBe(stop.payload);
+    });
+  });
+
   it("releases its subscription and its timer once resolved", async () => {
     track(waitForTurnEnd(events, ours, timeoutMs));
 

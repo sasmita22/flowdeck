@@ -1,0 +1,189 @@
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import type { RunEvent } from "../../core/run/run-events.js";
+import type {
+  EventEntry,
+  NewRun,
+  RunRecord,
+  RunStatus,
+  Store,
+  StoredEvent,
+} from "../../ports/store.js";
+
+export type SqliteStoreOptions = { path: string; now?: () => Date };
+
+type RunRow = {
+  id: string;
+  build_dir: string;
+  inputs: string;
+  status: RunStatus;
+  tmux_name: string;
+  cwd: string;
+  claude_session_id: string;
+};
+
+type EventRow = {
+  seq: number;
+  node_id: string;
+  kind: string;
+  payload: string | null;
+  time: string;
+};
+
+const migrationsFolder = new URL("./migrations/", import.meta.url);
+
+const nodeUpdates: Partial<Record<RunEvent["kind"], string>> = {
+  sent: "started_at = coalesce(started_at, @time)",
+  running: "started_at = coalesce(started_at, @time)",
+  done: "finished_at = @time",
+  failed: "finished_at = @time",
+  skipped: "finished_at = @time",
+  retry: "retries = retries + 1",
+  reset: "finished_at = NULL",
+};
+
+export class SqliteStore implements Store {
+  private readonly db: Database.Database;
+  private readonly now: () => Date;
+
+  constructor(options: SqliteStoreOptions) {
+    mkdirSync(dirname(options.path), { recursive: true });
+    this.db = new Database(options.path);
+    this.now = options.now ?? (() => new Date());
+    this.db.pragma("foreign_keys = ON");
+    this.migrate();
+  }
+
+  createRun(run: NewRun): RunRecord {
+    const id = randomUUID();
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          "INSERT INTO runs (id, build_dir, inputs, status, created_at) VALUES (?, ?, ?, 'running', ?)",
+        )
+        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time());
+      const session = this.db
+        .prepare(
+          "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
+        )
+        .run(id, run.session.tmuxName, run.session.cwd, run.session.claudeSessionId);
+      const insertNode = this.db.prepare(
+        "INSERT INTO run_nodes (run_id, node_id, session_id) VALUES (?, ?, ?)",
+      );
+      for (const nodeId of run.nodeIds) insertNode.run(id, nodeId, session.lastInsertRowid);
+    })();
+    return { ...run, id, status: "running" };
+  }
+
+  findRun(id: string): RunRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT runs.id, runs.build_dir, runs.inputs, runs.status,
+                run_sessions.tmux_name, run_sessions.cwd, run_sessions.claude_session_id
+           FROM runs JOIN run_sessions ON run_sessions.run_id = runs.id
+          WHERE runs.id = ? ORDER BY run_sessions.id LIMIT 1`,
+      )
+      .get(id) as RunRow | undefined;
+    if (row === undefined) return undefined;
+    const nodeIds = (
+      this.db.prepare("SELECT node_id FROM run_nodes WHERE run_id = ? ORDER BY rowid").all(id) as {
+        node_id: string;
+      }[]
+    ).map((node) => node.node_id);
+    return {
+      id: row.id,
+      buildDir: row.build_dir,
+      inputs: JSON.parse(row.inputs) as Record<string, unknown>,
+      nodeIds,
+      session: { tmuxName: row.tmux_name, cwd: row.cwd, claudeSessionId: row.claude_session_id },
+      status: row.status,
+    };
+  }
+
+  append(runId: string, nodeId: string, event: RunEvent): void {
+    this.appendAll(runId, [{ nodeId, event }]);
+  }
+
+  appendAll(runId: string, entries: readonly EventEntry[]): void {
+    const time = this.time();
+    this.db.transaction(() => {
+      for (const { nodeId, event } of entries) {
+        this.db
+          .prepare(
+            "INSERT INTO events (run_id, node_id, kind, payload, time) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            runId,
+            nodeId,
+            event.kind,
+            "payload" in event && event.payload !== undefined
+              ? JSON.stringify(event.payload)
+              : null,
+            time,
+          );
+        const update = nodeUpdates[event.kind];
+        if (update !== undefined) {
+          this.db
+            .prepare(`UPDATE run_nodes SET ${update} WHERE run_id = @runId AND node_id = @nodeId`)
+            .run({ runId, nodeId, time });
+        }
+      }
+    })();
+  }
+
+  events(runId: string): StoredEvent[] {
+    const rows = this.db
+      .prepare("SELECT seq, node_id, kind, payload, time FROM events WHERE run_id = ? ORDER BY seq")
+      .all(runId) as EventRow[];
+    return rows.map(
+      (row) =>
+        ({
+          kind: row.kind,
+          ...(row.payload === null ? {} : { payload: JSON.parse(row.payload) as unknown }),
+          nodeId: row.node_id,
+          seq: row.seq,
+          time: row.time,
+        }) as StoredEvent,
+    );
+  }
+
+  finishRun(runId: string, status: Exclude<RunStatus, "running">): void {
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE runs SET status = ? WHERE id = ?").run(status, runId);
+      this.db.prepare("UPDATE run_sessions SET status = 'closed' WHERE run_id = ?").run(runId);
+    })();
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  private time(): string {
+    return this.now().toISOString();
+  }
+
+  private migrate(): void {
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+    );
+    const applied = new Set(
+      (this.db.prepare("SELECT name FROM migrations").all() as { name: string }[]).map(
+        (row) => row.name,
+      ),
+    );
+    const pending = readdirSync(migrationsFolder)
+      .filter((name) => name.endsWith(".sql") && !applied.has(name))
+      .sort();
+    for (const name of pending) {
+      const sql = readFileSync(new URL(name, migrationsFolder), "utf8");
+      this.db.transaction(() => {
+        this.db.exec(sql);
+        this.db
+          .prepare("INSERT INTO migrations (name, applied_at) VALUES (?, ?)")
+          .run(name, this.time());
+      })();
+    }
+  }
+}

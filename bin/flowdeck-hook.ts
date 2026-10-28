@@ -12,9 +12,14 @@ function forward(input: string): void {
   socket.end(toLine(input), () => process.exit(0));
 }
 
+const stamped = (value: unknown): unknown =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...value, flowdeck_hook_at: Date.now() }
+    : value;
+
 function toLine(input: string): string {
   try {
-    return JSON.stringify(JSON.parse(input)) + "\n";
+    return JSON.stringify(stamped(JSON.parse(input))) + "\n";
   } catch {
     return input.replace(/[\r\n]/g, " ") + "\n";
   }

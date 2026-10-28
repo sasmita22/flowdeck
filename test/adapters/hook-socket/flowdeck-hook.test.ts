@@ -83,19 +83,37 @@ describe("flowdeck-hook", () => {
 
     const { connections } = await sendAndWait(fixture);
 
-    expect(connections).toEqual([JSON.stringify(JSON.parse(fixture)) + "\n"]);
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toMatch(/^[^\n]*\n$/);
+    expect(JSON.parse(connections[0] ?? "")).toEqual({
+      ...(JSON.parse(fixture) as object),
+      flowdeck_hook_at: expect.any(Number),
+    });
   });
 
   it("does not add a hook_event_name the input lacks", async () => {
     const { connections } = await sendAndWait('{"session_id":"x"}');
 
-    expect(connections).toEqual(['{"session_id":"x"}\n']);
+    expect(JSON.parse(connections[0] ?? "")).toEqual({
+      session_id: "x",
+      flowdeck_hook_at: expect.any(Number),
+    });
   });
 
   it("keeps the sample's own hook_event_name", async () => {
     const { connections } = await sendAndWait(await readFixture("pre-tool-use"));
 
     expect(JSON.parse(connections[0] ?? "")).toHaveProperty("hook_event_name", "PreToolUse");
+  });
+
+  it("stamps valid JSON with the time the hook ran, in epoch milliseconds", async () => {
+    const before = Date.now();
+    const { connections } = await sendAndWait('{"session_id":"x"}');
+    const after = Date.now();
+
+    const forwarded = JSON.parse(connections[0] ?? "") as Record<string, unknown>;
+    expect(forwarded["flowdeck_hook_at"]).toBeGreaterThanOrEqual(before);
+    expect(forwarded["flowdeck_hook_at"]).toBeLessThanOrEqual(after);
   });
 
   it("forwards invalid JSON as one line with its line breaks replaced by spaces", async () => {
