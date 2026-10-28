@@ -27,7 +27,7 @@ describe("validate", () => {
     const input = flow(
       [
         trigger("start"),
-        loop("retry", { settings: { cap: undefined, onCap: "fail" } }),
+        loop("retry", { settings: { cap: 0, onCap: "fail" } }),
         agent("build", { settings: { instructions: "   " } }),
         prompt("stray"),
       ],

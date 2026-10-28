@@ -148,8 +148,11 @@ describe("required and lenient settings", () => {
     expect(result.error?.issues[0]?.path).toEqual(["command"]);
   });
 
-  it("accepts a loop without cap or onCap", () => {
-    expect(loopSettings.safeParse({ condition: "tests pass" }).success).toBe(true);
+  it("accepts a loop without cap or onCap, capping it at 3", () => {
+    expect(loopSettings.parse({ condition: "tests pass" })).toEqual({
+      condition: "tests pass",
+      cap: 3,
+    });
   });
 
   it("rejects an unknown loop onCap", () => {
