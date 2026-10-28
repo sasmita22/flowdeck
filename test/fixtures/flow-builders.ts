@@ -23,6 +23,8 @@ export const agent = node("agent", {
   model: "sonnet",
   tools: [],
 });
+export const gate = node("gate", { shown: "Check the plan", skippable: false });
+export const ask = node("ask", { question: "Pick a colour", options: ["red", "blue", "green"] });
 export const loop = node("loop", { condition: "done", cap: 3, onCap: "fail" });
 export const hardstop = node("hardstop", {
   condition: "tests fail",

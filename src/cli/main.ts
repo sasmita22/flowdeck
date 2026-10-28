@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeCli } from "../adapters/claude/claude-cli.js";
+import { CliWaiter, stdinLines } from "./cli-waiter.js";
 import { openClaudeSession } from "./claude-session.js";
 import { HookSocketServer } from "../adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../adapters/node-fs/node-file-system.js";
@@ -18,6 +19,7 @@ import { Runner, unsupportedNodes, UnsupportedNodesError } from "../core/run/run
 import type { TurnEvents } from "../core/run/turns.js";
 import type { FileSystem } from "../ports/file-system.js";
 import type { ProcessRunner } from "../ports/process-runner.js";
+import type { Waiter } from "../ports/waiter.js";
 
 export type OpenSessionOptions = {
   sessionName: string;
@@ -40,6 +42,7 @@ export type CliDeps = {
   stderr(line: string): void;
   fs: FileSystem;
   scripts: ProcessRunner;
+  waiter: Waiter;
   startEvents(socketPath: string): Promise<{ events: TurnEvents; stop(): Promise<void> }>;
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   onInterrupt?(handler: (exitCode: number) => void): () => void;
@@ -48,7 +51,7 @@ export type CliDeps = {
 const usage = [
   "Usage:",
   "  flowdeck build <flow.json>",
-  "  flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>]",
+  "  flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
 ];
 const maxSocketPath = 104;
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -109,6 +112,7 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
       cwd: { type: "string" },
       session: { type: "string" },
       model: { type: "string" },
+      auto: { type: "boolean" },
     },
   });
   const [buildArg, ...rest] = positionals;
@@ -195,6 +199,8 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
       scripts: {
         run: (command, args, cwd) => whileRunning(() => deps.scripts.run(command, args, cwd)),
       },
+      waiter: deps.waiter,
+      auto: values.auto ?? false,
       onChange: (line) => deps.stdout(line),
       cwd,
       sessionId: opened.sessionId,
@@ -231,6 +237,10 @@ export function realDeps(): CliDeps {
     stderr: (line) => process.stderr.write(`${line}\n`),
     fs: new NodeFileSystem(),
     scripts: new NodeProcessRunner(),
+    waiter: new CliWaiter({
+      readLine: stdinLines(process.stdin),
+      write: (text) => process.stdout.write(text),
+    }),
     onInterrupt: (handler) => {
       const onSigint = () => handler(130);
       const onSigterm = () => handler(143);

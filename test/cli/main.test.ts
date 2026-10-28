@@ -8,12 +8,17 @@ import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import type { Flow } from "../../src/core/flow/schema.js";
 import type { ProcessResult } from "../../src/ports/process-runner.js";
+import type { WaitReply } from "../../src/ports/waiter.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
 import { FakeFileSystem } from "../fakes/fake-file-system.js";
 import { FakeProcessRunner } from "../fakes/fake-process-runner.js";
+import { FakeWaiter } from "../fakes/fake-waiter.js";
 import {
   agent,
+  ask,
   flow,
+  gate,
+  loop,
   output,
   prompt,
   script,
@@ -41,7 +46,12 @@ type Recorded = {
 
 function stubDeps(
   fs: CliDeps["fs"],
-  options: { env?: Record<string, string>; results?: ProcessResult[]; subagents?: string[] } = {},
+  options: {
+    env?: Record<string, string>;
+    results?: ProcessResult[];
+    subagents?: string[];
+    waiter?: FakeWaiter;
+  } = {},
 ) {
   const source = new FakeEventSource();
   const scripts = new FakeProcessRunner(options.results ?? []);
@@ -60,6 +70,7 @@ function stubDeps(
     stderr: (line) => recorded.stderr.push(line),
     fs,
     scripts,
+    waiter: options.waiter ?? new FakeWaiter([]),
     startEvents: async (socketPath) => {
       recorded.startEvents.push(socketPath);
       return {
@@ -192,19 +203,109 @@ describe("runCli run", () => {
 
   it("refuses unsupported node types in one error before starting anything", async () => {
     const other = new FakeFileSystem();
-    const gate = {
-      id: "g1",
-      label: "g1",
-      position: { x: 0, y: 0 },
-      type: "gate",
-      settings: { shown: "plan", skippable: false },
-    };
-    const { dir: gateDir } = await built(other, flow([prompt("p1"), gate], [thenWire("p1", "g1")]));
+    const { dir: loopDir } = await built(
+      other,
+      flow([prompt("p1"), loop("l1")], [thenWire("p1", "l1")]),
+    );
     const { deps, recorded, scripts } = stubDeps(other);
 
-    expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(2);
-    expect(recorded.stderr.join("\n")).toContain("g1 (gate)");
+    expect(await runCli(["run", loopDir, "--cwd", repo], deps)).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("l1 (loop)");
     nothingStarted(recorded, scripts);
+  });
+
+  describe("gates and asks", () => {
+    const echoed = (text: string): ProcessResult => ({ code: 0, stdout: `${text}\n`, stderr: "" });
+    const approve: WaitReply = { decision: "approve" };
+
+    async function gateBuild(skippable = false) {
+      const other = new FakeFileSystem();
+      const { dir: gateDir } = await built(
+        other,
+        flow(
+          [script("s1"), gate("g1", { settings: { skippable } }), script("s2")],
+          [thenWire("s1", "g1"), thenWire("g1", "s2")],
+        ),
+      );
+      return { other, gateDir };
+    }
+
+    it("runs past an approved Gate without starting Claude", async () => {
+      const { other, gateDir } = await gateBuild();
+      const { deps, recorded } = stubDeps(other, {
+        results: [echoed("one"), echoed("two")],
+        waiter: new FakeWaiter([approve]),
+      });
+
+      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(0);
+      expect(recorded.stdout).toEqual([
+        "s1 started",
+        "  one",
+        "s1 done",
+        "g1 approved",
+        "s2 started",
+        "  two",
+        "s2 done",
+      ]);
+      expect(recorded.openSession).toEqual([]);
+    });
+
+    it("exits 1 at a rejected Gate, printing the reason, and runs nothing after it", async () => {
+      const { other, gateDir } = await gateBuild();
+      const { deps, recorded, scripts } = stubDeps(other, {
+        results: [echoed("one"), echoed("two")],
+        waiter: new FakeWaiter([{ decision: "reject", reason: "wrong scope" }]),
+      });
+
+      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(1);
+      expect(recorded.stdout.at(-1)).toBe("g1 failed: rejected: wrong scope");
+      expect(scripts.calls).toHaveLength(1);
+    });
+
+    it("passes --auto to the run, so a skippable Gate is skipped without asking", async () => {
+      const { other, gateDir } = await gateBuild(true);
+      const waiter = new FakeWaiter([]);
+      const { deps, recorded } = stubDeps(other, { results: [ok, ok], waiter });
+
+      expect(await runCli(["run", gateDir, "--cwd", repo, "--auto"], deps)).toBe(0);
+      expect(recorded.stdout).toContain("g1 skipped");
+      expect(waiter.calls).toEqual([]);
+    });
+
+    it("asks at a skippable Gate without --auto", async () => {
+      const { other, gateDir } = await gateBuild(true);
+      const waiter = new FakeWaiter([approve]);
+      const { deps } = stubDeps(other, { results: [ok, ok], waiter });
+
+      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(0);
+      expect(waiter.calls).toHaveLength(1);
+    });
+
+    it("answers an Ask before a Script without starting Claude", async () => {
+      const other = new FakeFileSystem();
+      const { dir: askDir } = await built(
+        other,
+        flow([ask("q1"), script("s1")], [thenWire("q1", "s1")]),
+      );
+      const { deps, recorded } = stubDeps(other, {
+        results: [ok],
+        waiter: new FakeWaiter([{ decision: "answer", answer: "blue" }]),
+      });
+
+      expect(await runCli(["run", askDir, "--cwd", repo], deps)).toBe(0);
+      expect(recorded.stdout).toEqual(["q1 answered: blue", "s1 started", "s1 done"]);
+      expect(recorded.openSession).toEqual([]);
+    });
+
+    it("shows --auto in the run usage", async () => {
+      const { deps, recorded } = stubDeps(fs);
+
+      await runCli(["run"], deps);
+
+      expect(recorded.stderr.join("\n")).toContain(
+        "flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
+      );
+    });
   });
 
   it("starts Claude and runs an agent-only build", async () => {
@@ -304,6 +405,7 @@ describe("runCli interrupted", () => {
       },
       stderr: () => undefined,
       fs,
+      waiter: new FakeWaiter([]),
       scripts: {
         run: () => {
           log.push("script run");

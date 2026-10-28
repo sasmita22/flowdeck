@@ -7,6 +7,7 @@ import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js"
 import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
+import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { flow, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -48,6 +49,7 @@ describe("a script-only run", () => {
       stderr: (line) => lines.push(line),
       fs,
       scripts: new NodeProcessRunner(),
+      waiter: new FakeWaiter([]),
       startEvents: async () => ({
         events: new FakeEventSource(),
         stop: async () => {

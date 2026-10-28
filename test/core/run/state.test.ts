@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { IllegalMoveError, move, type NodeState } from "../../../src/core/run/state.js";
 
-const states: NodeState[] = ["waiting", "sent", "running", "needs-you", "failed", "done"];
+const states: NodeState[] = [
+  "waiting",
+  "sent",
+  "running",
+  "needs-you",
+  "skipped",
+  "failed",
+  "done",
+];
 
 const legal: [NodeState, NodeState][] = [
   ["waiting", "sent"],
@@ -11,6 +19,10 @@ const legal: [NodeState, NodeState][] = [
   ["running", "done"],
   ["running", "failed"],
   ["running", "waiting"],
+  ["waiting", "needs-you"],
+  ["waiting", "skipped"],
+  ["needs-you", "done"],
+  ["needs-you", "failed"],
 ];
 
 const isLegal = (from: NodeState, to: NodeState) => legal.some(([a, b]) => a === from && b === to);
@@ -39,11 +51,17 @@ describe("move", () => {
     expect(() => move(from, to)).toThrow(`${to}`);
   });
 
-  it("allows no move into or out of needs-you", () => {
-    const touchingNeedsYou = illegal.filter(
-      ([from, to]) => from === "needs-you" || to === "needs-you",
-    );
+  it("enters needs-you only from waiting and leaves it only to done or failed", () => {
+    const intoNeedsYou = legal.filter(([, to]) => to === "needs-you").map(([from]) => from);
+    const outOfNeedsYou = legal.filter(([from]) => from === "needs-you").map(([, to]) => to);
 
-    expect(touchingNeedsYou).toHaveLength(states.length * 2 - 1);
+    expect(intoNeedsYou).toEqual(["waiting"]);
+    expect(outOfNeedsYou).toEqual(["done", "failed"]);
+    for (const state of states.filter((s) => s !== "waiting")) {
+      expect(() => move(state, "needs-you")).toThrow(IllegalMoveError);
+    }
+    for (const state of states.filter((s) => s !== "done" && s !== "failed")) {
+      expect(() => move("needs-you", state)).toThrow(IllegalMoveError);
+    }
   });
 });
