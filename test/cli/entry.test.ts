@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { build } from "../../src/core/compiler/build.js";
-import { flow, script } from "../fixtures/flow-builders.js";
+import { ask, flow, gate, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -23,6 +23,7 @@ function runEntry(
     env: NodeJS.ProcessEnv;
     imports?: string[];
     signal?: { after: string; send: NodeJS.Signals };
+    stdin?: string;
   },
 ): Promise<Exit> {
   return new Promise((resolve, reject) => {
@@ -34,6 +35,7 @@ function runEntry(
       cwd: root,
       env: options.env,
     });
+    if (options.stdin !== undefined) child.stdin.end(options.stdin);
     let stdout = "";
     let exitedByItself = true;
     let signalled = false;
@@ -72,18 +74,79 @@ describe("the flowdeck entry", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  async function buildScript(args: string[]) {
-    const built = await build(
-      flow([script("s", { settings: { command: args[0], args: args.slice(1) } })], []),
-      {
-        fs: new NodeFileSystem(),
-        home,
-        hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
-      },
-    );
+  async function buildFlow(nodes: unknown[], wires: unknown[]) {
+    const built = await build(flow(nodes, wires), {
+      fs: new NodeFileSystem(),
+      home,
+      hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
+    });
     if (!built.ok) throw new Error("build failed");
     return built.dir;
   }
+
+  const buildScript = (args: string[]) =>
+    buildFlow([script("s", { settings: { command: args[0], args: args.slice(1) } })], []);
+
+  const gateThenScript = () =>
+    buildFlow(
+      [gate("g1"), script("s1", { settings: { command: "echo", args: ["after"] } })],
+      [thenWire("g1", "s1")],
+    );
+
+  it(
+    "reads a Gate's and an Ask's answers from one piped write",
+    { timeout: exitWithinMs + 10_000 },
+    async () => {
+      const dir = await buildFlow(
+        [gate("g1"), ask("q1"), script("s1", { settings: { command: "echo", args: ["after"] } })],
+        [thenWire("g1", "q1"), thenWire("q1", "s1")],
+      );
+
+      const exit = await runEntry(["run", dir, "--cwd", repo.path], {
+        env: { ...process.env, FLOWDECK_HOME: home },
+        stdin: "approve\n2\n",
+      });
+
+      expect(exit.exitedByItself).toBe(true);
+      expect(exit.code).toBe(0);
+      expect(exit.stdout).toContain("g1 approved\n");
+      expect(exit.stdout).toContain("q1 answered: blue\n");
+    },
+  );
+
+  it(
+    "fails a Gate whose stdin closed before it asked, exiting 1",
+    { timeout: exitWithinMs + 10_000 },
+    async () => {
+      const dir = await gateThenScript();
+
+      const exit = await runEntry(["run", dir, "--cwd", repo.path], {
+        env: { ...process.env, FLOWDECK_HOME: home },
+        stdin: "",
+      });
+
+      expect(exit.exitedByItself).toBe(true);
+      expect(exit.code).toBe(1);
+      expect(exit.stdout).toContain("g1 failed: no answer: input closed\n");
+    },
+  );
+
+  it(
+    "on SIGINT while a Gate waits for an answer exits 130",
+    { timeout: exitWithinMs + 10_000 },
+    async () => {
+      const dir = await gateThenScript();
+
+      const exit = await runEntry(["run", dir, "--cwd", repo.path, "--session", "fd-wait"], {
+        env: { ...process.env, FLOWDECK_HOME: home },
+        signal: { after: "approve, or reject <reason>: ", send: "SIGINT" },
+      });
+
+      expect(exit.exitedByItself).toBe(true);
+      expect(exit.code).toBe(130);
+      expect(await readdir(join(home, "sockets"))).toEqual([]);
+    },
+  );
 
   it(
     "exits with the run's code even while a timer is still armed",
