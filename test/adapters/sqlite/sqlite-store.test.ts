@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -52,6 +52,26 @@ describe("SqliteStore", () => {
     open();
 
     await expect(access(path)).resolves.toBeUndefined();
+  });
+
+  it("runs no migrations from an empty migrations folder, so the first write finds no table", async () => {
+    const migrationsDir = join(folder, "no-migrations");
+    await mkdir(migrationsDir);
+    const store = new SqliteStore({ path, migrationsDir });
+    opened.push(store);
+
+    expect(() => store.createRun(newRun())).toThrow(/no such table/);
+  });
+
+  it("migrates from the migrations folder it is given", async () => {
+    const migrationsDir = join(folder, "copied-migrations");
+    await cp(new URL("../../../src/adapters/sqlite/migrations/", import.meta.url), migrationsDir, {
+      recursive: true,
+    });
+    const store = new SqliteStore({ path, migrationsDir });
+    opened.push(store);
+
+    expect(store.createRun(newRun()).status).toBe("running");
   });
 
   it("migrates a fresh database once and reopens it without migrating again or losing rows", () => {
