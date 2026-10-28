@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ManifestNode } from "../../../src/core/compiler/lower.js";
+import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import {
   Runner,
   UnsupportedNodesError,
@@ -57,6 +58,45 @@ function harness(options: { results?: (ProcessResult | Error)[]; stop?: StopTimi
     turnTimeoutMs: 1000,
   };
   return { deps, events, scripts, calls, lines };
+}
+
+type Emitted = { kind: "Stop" } | { kind: "SubagentStop"; agentType: string };
+
+const stopped: Emitted = { kind: "Stop" };
+const subagentStopped = (agentType: string): Emitted => ({ kind: "SubagentStop", agentType });
+const agent = (id: string) => node(id, "agent", { instructions: "Write notes.md." });
+
+function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000) {
+  const events = new FakeEventSource();
+  const calls: string[] = [];
+  const lines: string[] = [];
+  let sent = 0;
+  const deps: RunnerDeps = {
+    prompts: {
+      sendPrompt: async (text) => {
+        calls.push(`send ${text}`);
+        for (const event of turns[sent++] ?? []) {
+          events.publish({
+            kind: event.kind,
+            sessionId,
+            payload: event.kind === "SubagentStop" ? { agent_type: event.agentType } : {},
+          });
+        }
+      },
+    },
+    session: {
+      ensureStarted: async () => {
+        calls.push("start");
+      },
+    },
+    events,
+    scripts: new FakeProcessRunner([]),
+    onChange: (line) => lines.push(line),
+    cwd,
+    sessionId,
+    turnTimeoutMs,
+  };
+  return { deps, calls, lines };
 }
 
 describe("Runner", () => {
@@ -170,7 +210,114 @@ describe("Runner", () => {
     });
   });
 
-  it.each(["agent", "gate", "ask", "hardstop", "loop"] as const)(
+  describe("agent nodes", () => {
+    const a1Type = `${hash}:a1`;
+
+    it("is done when its SubagentStop and then Stop arrive during the send", async () => {
+      const { deps, calls, lines } = turnHarness([[subagentStopped(a1Type), stopped]]);
+
+      const result = await new Runner(deps).run(manifest(agent("a1")));
+
+      expect(result).toEqual({ outcome: "done", states: { a1: "done" } });
+      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+      expect(lines).toEqual(["a1 started", "a1 done"]);
+    });
+
+    it("fails when the turn ends with no SubagentStop and sends nothing after it", async () => {
+      const { deps, calls, lines } = turnHarness([[stopped], [stopped]]);
+
+      const result = await new Runner(deps).run(manifest(agent("a1"), prompt("p2")));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "a1" });
+      expect(result.states).toEqual({ a1: "failed", p2: "waiting" });
+      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+      expect(lines).toEqual(["a1 started", `a1 failed: no SubagentStop for ${a1Type}`]);
+    });
+
+    it("is not done on a SubagentStop alone; the turn times out", async () => {
+      const { deps, lines } = turnHarness([[subagentStopped(a1Type)]], 20);
+
+      const result = await new Runner(deps).run(manifest(agent("a1")));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "a1" });
+      expect(lines.at(-1)).toMatch(/^a1 failed: .*no Stop for session s1 within 20 ms/);
+    });
+
+    it.each(["general-purpose", `${hash}:other`])(
+      "fails when only a SubagentStop for %s arrives before Stop",
+      async (otherType) => {
+        const { deps, lines } = turnHarness([[subagentStopped(otherType), stopped]]);
+
+        const result = await new Runner(deps).run(manifest(agent("a1")));
+
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "a1" });
+        expect(lines.at(-1)).toBe(`a1 failed: no SubagentStop for ${a1Type}`);
+      },
+    );
+
+    it("fails when its SubagentStop arrives only after Stop", async () => {
+      const { deps, lines } = turnHarness([[stopped, subagentStopped(a1Type)]]);
+
+      const result = await new Runner(deps).run(manifest(agent("a1")));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "a1" });
+      expect(lines.at(-1)).toBe(`a1 failed: no SubagentStop for ${a1Type}`);
+    });
+
+    it("does not carry a SubagentStop seen in one agent's turn into the next", async () => {
+      const { deps, lines } = turnHarness([
+        [subagentStopped(a1Type), subagentStopped(`${hash}:a2`), stopped],
+        [subagentStopped(a1Type), stopped],
+      ]);
+
+      const result = await new Runner(deps).run(manifest(agent("a1"), agent("a2")));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "a2" });
+      expect(result.states).toEqual({ a1: "done", a2: "failed" });
+      expect(lines).toEqual([
+        "a1 started",
+        "a1 done",
+        "a2 started",
+        `a2 failed: no SubagentStop for ${hash}:a2`,
+      ]);
+    });
+
+    it("runs Prompt, Agent, Prompt in order, one turn each, starting Claude once", async () => {
+      const { deps, calls, lines } = turnHarness([
+        [stopped],
+        [subagentStopped(a1Type), stopped],
+        [stopped],
+      ]);
+
+      const result = await new Runner(deps).run(manifest(prompt("p1"), agent("a1"), prompt("p2")));
+
+      expect(result.outcome).toBe("done");
+      expect(calls).toEqual([
+        "start",
+        `send /${hash}:p1`,
+        `send ${agentTurnText(hash, "a1")}`,
+        `send /${hash}:p2`,
+      ]);
+      expect(lines).toEqual([
+        "p1 started",
+        "p1 done",
+        "a1 started",
+        "a1 done",
+        "p2 started",
+        "p2 done",
+      ]);
+    });
+
+    it("starts Claude once, before the send, for an agent-only manifest", async () => {
+      const { deps, calls } = turnHarness([[subagentStopped(a1Type), stopped]]);
+
+      await new Runner(deps).run(manifest(node("t", "trigger"), agent("a1"), node("o", "output")));
+
+      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+    });
+  });
+
+  it.each(["gate", "ask", "hardstop", "loop"] as const)(
     "refuses a manifest with a %s node before doing anything",
     async (type) => {
       const { deps, calls, lines, scripts } = harness({ results: [exit(0)] });
@@ -188,9 +335,9 @@ describe("Runner", () => {
     const nodes = [node("a1", "agent"), prompt("p"), node("g1", "gate"), node("l1", "loop")];
     const { deps } = harness();
 
-    expect(unsupportedNodes(nodes).map((n) => n.id)).toEqual(["a1", "g1", "l1"]);
+    expect(unsupportedNodes(nodes).map((n) => n.id)).toEqual(["g1", "l1"]);
     await expect(new Runner(deps).run(manifest(...nodes))).rejects.toThrow(
-      "a1 (agent), g1 (gate), l1 (loop)",
+      /: g1 \(gate\), l1 \(loop\)$/,
     );
   });
 

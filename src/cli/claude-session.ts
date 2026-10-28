@@ -25,7 +25,7 @@ export function openClaudeSession(
             {
               settingsPath: join(buildDir, "settings.json"),
               pluginDir: buildDir,
-              env: { FLOWDECK_SOCK: socketPath },
+              env: { FLOWDECK_SOCK: socketPath, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
             },
           )
           .then(() => {

@@ -1,4 +1,5 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
+import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
 import { scriptOutcome } from "../nodes/script/execute.js";
 import { move, type NodeState } from "./state.js";
 import { waitForTurnEnd, type TurnEvents } from "./turns.js";
@@ -27,7 +28,7 @@ export type RunResult = {
 type ScriptSettings = { command: string; args?: string[] };
 
 const defaultTurnTimeoutMs = 600_000;
-const runnable = new Set<ManifestNode["type"]>(["prompt", "script"]);
+const runnable = new Set<ManifestNode["type"]>(["prompt", "agent", "script"]);
 const skipped = new Set<ManifestNode["type"]>(["trigger", "output"]);
 
 export function unsupportedNodes(nodes: readonly ManifestNode[]): ManifestNode[] {
@@ -53,6 +54,24 @@ const outputLines = (text: string) =>
 
 const exitReason = (code: number | null) =>
   code === null ? "killed by a signal" : `exit code ${code}`;
+
+type SubagentStops = { seen: string[]; unsubscribe: () => void };
+
+function recordSubagentStopsUntilStop(events: TurnEvents, sessionId: string): SubagentStops {
+  const seen: string[] = [];
+  const stopRecording = events.subscribe("SubagentStop", sessionId, (event) => {
+    const type = event.payload["agent_type"];
+    if (typeof type === "string") seen.push(type);
+  });
+  const stopWatching = events.subscribe("Stop", sessionId, stopRecording);
+  return {
+    seen,
+    unsubscribe: () => {
+      stopRecording();
+      stopWatching();
+    },
+  };
+}
 
 export class Runner {
   private readonly deps: RunnerDeps;
@@ -80,7 +99,9 @@ export class Runner {
       const failure =
         node.type === "prompt"
           ? await this.runPrompt(node, manifest.hash, states, ensureStarted)
-          : await this.runScript(node, states);
+          : node.type === "agent"
+            ? await this.runAgent(node, manifest.hash, states, ensureStarted)
+            : await this.runScript(node, states);
       if (failure !== undefined) {
         states[node.id] = move(states[node.id] ?? "waiting", "failed");
         this.emit(`${node.id} failed: ${failure}`);
@@ -111,6 +132,38 @@ export class Runner {
       await turnEnd;
     } catch (error) {
       return messageOf(error);
+    }
+    states[node.id] = move("sent", "done");
+    return undefined;
+  }
+
+  private async runAgent(
+    node: ManifestNode,
+    hash: string,
+    states: Record<string, NodeState>,
+    ensureStarted: () => Promise<void>,
+  ): Promise<string | undefined> {
+    states[node.id] = move("waiting", "sent");
+    this.emit(`${node.id} started`);
+    let subagents: SubagentStops | undefined;
+    try {
+      await ensureStarted();
+      subagents = recordSubagentStopsUntilStop(this.deps.events, this.deps.sessionId);
+      const turnEnd = waitForTurnEnd(
+        this.deps.events,
+        this.deps.sessionId,
+        this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs,
+      );
+      turnEnd.catch(() => undefined);
+      await this.deps.prompts.sendPrompt(agentTurnText(hash, node.id));
+      await turnEnd;
+    } catch (error) {
+      return messageOf(error);
+    } finally {
+      subagents?.unsubscribe();
+    }
+    if (agentOutcome(subagents.seen, hash, node.id) === "failed") {
+      return `no SubagentStop for ${agentType(hash, node.id)}`;
     }
     states[node.id] = move("sent", "done");
     return undefined;

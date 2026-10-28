@@ -142,7 +142,9 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     deps.stderr(new UnsupportedNodesError(unsupported).message);
     return 2;
   }
-  const needsClaude = manifest.nodes.some((node) => node.type === "prompt");
+  const needsClaude = manifest.nodes.some(
+    (node) => node.type === "prompt" || node.type === "agent",
+  );
   const events = await deps.startEvents(socketPath);
   let opened: OpenedSession | undefined;
   let stopping: Promise<void> | undefined;

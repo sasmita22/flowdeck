@@ -1,7 +1,11 @@
 export type TurnEndEvent = { sessionId: string; payload: Record<string, unknown> };
 
 export type TurnEvents = {
-  subscribe(kind: "Stop", sessionId: string, handler: (event: TurnEndEvent) => void): () => void;
+  subscribe(
+    kind: "Stop" | "SubagentStop",
+    sessionId: string,
+    handler: (event: TurnEndEvent) => void,
+  ): () => void;
 };
 
 export function waitForTurnEnd(
