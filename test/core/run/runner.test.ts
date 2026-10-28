@@ -2,9 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { ManifestNode } from "../../../src/core/compiler/lower.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import {
+  agentVerdictTurnText,
+  capRequest,
+  malformedRequest,
+  verdictRequest,
+} from "../../../src/core/nodes/loop/execute.js";
+import {
   Runner,
-  UnsupportedNodesError,
-  unsupportedNodes,
+  StructureError,
+  structureProblems,
   type RunnerDeps,
   type RunnableManifest,
 } from "../../../src/core/run/runner.js";
@@ -38,6 +44,7 @@ function harness(
     stop?: StopTiming;
     waiter?: FakeWaiter;
     auto?: boolean;
+    replies?: (string | undefined)[];
   } = {},
 ) {
   const events = new FakeEventSource();
@@ -45,7 +52,15 @@ function harness(
   const calls: string[] = [];
   const lines: string[] = [];
   const stop = options.stop ?? "after-send";
-  const publishStop = () => events.publish({ kind: "Stop", sessionId, payload: {} });
+  let stops = 0;
+  const publishStop = () => {
+    const reply = options.replies?.[stops++];
+    events.publish({
+      kind: "Stop",
+      sessionId,
+      payload: typeof reply === "string" ? { last_assistant_message: reply } : {},
+    });
+  };
   const deps: RunnerDeps = {
     prompts: {
       sendPrompt: async (text) => {
@@ -71,7 +86,8 @@ function harness(
   return { deps, events, scripts, calls, lines };
 }
 
-type Emitted = { kind: "Stop" } | { kind: "SubagentStop"; agentType: string };
+type Emitted =
+  { kind: "Stop"; reply?: string } | { kind: "SubagentStop"; agentType: string; reply?: string };
 
 const stopped: Emitted = { kind: "Stop" };
 const subagentStopped = (agentType: string): Emitted => ({ kind: "SubagentStop", agentType });
@@ -90,7 +106,10 @@ function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000, waiter = new Fake
           events.publish({
             kind: event.kind,
             sessionId,
-            payload: event.kind === "SubagentStop" ? { agent_type: event.agentType } : {},
+            payload: {
+              ...(event.kind === "SubagentStop" ? { agent_type: event.agentType } : {}),
+              ...(event.reply === undefined ? {} : { last_assistant_message: event.reply }),
+            },
           });
         }
       },
@@ -567,26 +586,398 @@ describe("Runner", () => {
     });
   });
 
-  it.each(["loop"] as const)(
-    "refuses a manifest with a %s node before doing anything",
-    async (type) => {
-      const { deps, calls, lines, scripts } = harness({ results: [exit(0)] });
+  describe("loop nodes", () => {
+    const fence = "```";
+    const verdict = (done: boolean) => `ok\n${fence}json\n{"done": ${done}}\n${fence}`;
+    const condition = "no issues left";
+    const loop = (id: string, settings: Record<string, unknown> = {}) =>
+      node(id, "loop", { condition, cap: 3, onCap: "fail", ...settings });
+    const inLoop = (child: ManifestNode, parent = "l1"): ManifestNode => ({ ...child, parent });
+    const reviewFix = (settings: Record<string, unknown> = {}) =>
+      manifest(loop("l1", settings), inLoop(prompt("r1")), inLoop(prompt("f1")), prompt("p9"));
+    const replies = (...verdicts: boolean[]) =>
+      verdicts.flatMap((done) => ["review", verdict(done)]);
+    const answer = (text: string): WaitReply => ({ decision: "answer", answer: text });
+    const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+    const rounds = (lines: string[]) => lines.filter((line) => /^l1 round \d+$/.test(line));
+    const sendR1 = `send /${hash}:r1`;
+    const sendF1 = `send /${hash}:f1 ${verdictRequest(condition)}`;
+    const sendP9 = `send /${hash}:p9`;
 
-      await expect(
-        new Runner(deps).run(manifest(script("s"), prompt("p"), node("x", type))),
-      ).rejects.toThrow(UnsupportedNodesError);
-      expect(calls).toEqual([]);
-      expect(scripts.calls).toEqual([]);
-      expect(lines).toEqual([]);
-    },
-  );
+    it("stops after exactly cap rounds that are never done and fails on cap fail", async () => {
+      const waiter = new FakeWaiter([]);
+      const { deps, calls, lines } = harness({ waiter, replies: replies(false, false, false) });
 
-  it("lists every unsupported node in one error", async () => {
-    const nodes = [node("a1", "agent"), prompt("p"), node("g1", "gate"), node("l1", "loop")];
-    const { deps } = harness();
+      const result = await new Runner(deps).run(reviewFix());
 
-    expect(unsupportedNodes(nodes).map((n) => n.id)).toEqual(["l1"]);
-    await expect(new Runner(deps).run(manifest(...nodes))).rejects.toThrow(/: l1 \(loop\)$/);
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendR1, sendF1, sendR1, sendF1]);
+      expect(lines).toEqual([
+        ...[1, 2, 3].flatMap((round) => [
+          `l1 round ${round}`,
+          "r1 started",
+          "r1 done",
+          "f1 started",
+          "f1 done",
+        ]),
+        "l1 failed: cap reached after 3 rounds",
+      ]);
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "l1" });
+      expect(result.states["l1"]).toBe("failed");
+      expect(waiter.calls).toEqual([]);
+    });
+
+    it("asks once at the cap on cap ask and goes on after the loop on continue", async () => {
+      const waiter = new FakeWaiter([answer("continue")]);
+      const { deps, calls, lines } = harness({ waiter, replies: replies(false, false, false) });
+
+      const result = await new Runner(deps).run(reviewFix({ onCap: "ask" }));
+
+      expect(rounds(lines)).toEqual(["l1 round 1", "l1 round 2", "l1 round 3"]);
+      expect(waiter.calls).toEqual([capRequest("l1", 3)]);
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendR1, sendF1, sendR1, sendF1, sendP9]);
+      expect(lines.slice(-4)).toEqual([
+        "l1 answered: continue",
+        "l1 done",
+        "p9 started",
+        "p9 done",
+      ]);
+      expect(result.outcome).toBe("done");
+      expect(result.decisions).toEqual([
+        { nodeId: "l1", decision: "answered", answer: "continue" },
+      ]);
+    });
+
+    it("fails at the cap on cap ask answered fail", async () => {
+      const waiter = new FakeWaiter([answer("fail")]);
+      const { deps, calls, lines } = harness({ waiter, replies: replies(false, false, false) });
+
+      const result = await new Runner(deps).run(reviewFix({ onCap: "ask" }));
+
+      expect(lines.at(-1)).toBe("l1 failed: cap reached after 3 rounds");
+      expect(sends(calls)).not.toContain(sendP9);
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "l1" });
+    });
+
+    it("asks at the cap on cap ask even under auto", async () => {
+      const waiter = new FakeWaiter([answer("continue")]);
+      const { deps } = harness({ waiter, auto: true, replies: replies(false, false, false) });
+
+      await new Runner(deps).run(reviewFix({ onCap: "ask" }));
+
+      expect(waiter.calls).toHaveLength(1);
+    });
+
+    it("runs exactly two rounds when the verdict is done in round 2", async () => {
+      const waiter = new FakeWaiter([]);
+      const { deps, calls, lines } = harness({ waiter, replies: replies(false, true) });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendR1, sendF1, sendP9]);
+      expect(rounds(lines)).toEqual(["l1 round 1", "l1 round 2"]);
+      expect(lines.slice(-3)).toEqual(["l1 done", "p9 started", "p9 done"]);
+      expect(waiter.calls).toEqual([]);
+      expect(result.outcome).toBe("done");
+    });
+
+    it("leaves the loop and its body done after the last round", async () => {
+      const { deps } = harness({ replies: replies(false, true) });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(result.states).toMatchObject({ l1: "done", r1: "done", f1: "done", p9: "done" });
+    });
+
+    it("exits normally when the verdict is done on the last round", async () => {
+      const waiter = new FakeWaiter([]);
+      const { deps, lines } = harness({ waiter, replies: replies(false, false, true) });
+
+      const result = await new Runner(deps).run(reviewFix({ onCap: "ask" }));
+
+      expect(rounds(lines)).toHaveLength(3);
+      expect(waiter.calls).toEqual([]);
+      expect(lines).toContain("l1 done");
+      expect(result.outcome).toBe("done");
+    });
+
+    it("runs one round when the verdict is done in round 1", async () => {
+      const { deps, calls, lines } = harness({ replies: replies(true) });
+
+      await new Runner(deps).run(reviewFix());
+
+      expect(rounds(lines)).toEqual(["l1 round 1"]);
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendP9]);
+    });
+
+    it("pauses on a reply with no verdict until the answer, running nothing more", async () => {
+      let resolve: (reply: WaitReply) => void = () => undefined;
+      const waiter = new FakeWaiter([new Promise<WaitReply>((r) => (resolve = r))]);
+      const { deps, calls, lines } = harness({ waiter, replies: ["review", "no verdict here"] });
+
+      const running = new Runner(deps).run(reviewFix());
+      await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
+
+      expect(sends(calls)).toEqual([sendR1, sendF1]);
+      expect(waiter.calls).toEqual([malformedRequest("l1", 1, "no json block")]);
+      expect(lines).not.toContain("l1 done");
+      expect(lines).not.toContain("l1 round 2");
+      resolve(answer("done"));
+      const result = await running;
+
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendP9]);
+      expect(lines.slice(-5)).toEqual([
+        "f1 done",
+        "l1 answered: done",
+        "l1 done",
+        "p9 started",
+        "p9 done",
+      ]);
+      expect(result.decisions).toEqual([{ nodeId: "l1", decision: "answered", answer: "done" }]);
+    });
+
+    it("asks with the reason no reply when the verdict turn's Stop has no message", async () => {
+      const waiter = new FakeWaiter([answer("done")]);
+      const { deps } = harness({ waiter, replies: ["review"] });
+
+      await new Runner(deps).run(reviewFix());
+
+      expect(waiter.calls).toEqual([malformedRequest("l1", 1, "no reply")]);
+    });
+
+    it("runs another round on again", async () => {
+      const waiter = new FakeWaiter([answer("again")]);
+      const { deps, calls, lines } = harness({
+        waiter,
+        replies: ["review", "no verdict here", "review", verdict(true)],
+      });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(rounds(lines)).toEqual(["l1 round 1", "l1 round 2"]);
+      expect(sends(calls)).toEqual([sendR1, sendF1, sendR1, sendF1, sendP9]);
+      expect(lines).toContain("l1 done");
+      expect(result.outcome).toBe("done");
+    });
+
+    it("counts again toward the cap", async () => {
+      const waiter = new FakeWaiter([answer("again")]);
+      const { deps, calls, lines } = harness({ waiter, replies: ["review", "no verdict here"] });
+
+      await new Runner(deps).run(reviewFix({ cap: 1 }));
+
+      expect(rounds(lines)).toEqual(["l1 round 1"]);
+      expect(sends(calls)).toEqual([sendR1, sendF1]);
+      expect(lines.at(-1)).toBe("l1 failed: cap reached after 1 rounds");
+    });
+
+    it("fails the loop on fail after a reply with no verdict", async () => {
+      const waiter = new FakeWaiter([answer("fail")]);
+      const { deps, calls, lines } = harness({ waiter, replies: ["review", "no verdict here"] });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(lines.at(-1)).toBe("l1 failed: no verdict in round 1");
+      expect(sends(calls)).not.toContain(sendP9);
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "l1" });
+    });
+
+    it("asks after a reply with no verdict even under auto", async () => {
+      const waiter = new FakeWaiter([answer("done")]);
+      const { deps, lines } = harness({
+        waiter,
+        auto: true,
+        replies: ["review", "no verdict here"],
+      });
+
+      await new Runner(deps).run(reviewFix());
+
+      expect(waiter.calls).toHaveLength(1);
+      expect(lines).toContain("l1 done");
+    });
+
+    it("fails the loop when the input closes while it asks", async () => {
+      const waiter = new FakeWaiter([{ decision: "closed" }]);
+      const { deps, lines } = harness({ waiter, replies: ["review", "no verdict here"] });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(lines.at(-1)).toBe("l1 failed: no answer: input closed");
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "l1" });
+    });
+
+    it("fails the loop with the waiter's error when the waiter throws", async () => {
+      const { deps, calls, lines } = harness({
+        waiter: new FakeWaiter([]),
+        replies: ["review", "no verdict here"],
+      });
+
+      const result = await new Runner(deps).run(reviewFix());
+
+      expect(lines.at(-1)).toBe("l1 failed: FakeWaiter: no scripted reply for l1");
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "l1" });
+      expect(result.states["l1"]).toBe("failed");
+      expect(sends(calls)).not.toContain(sendP9);
+    });
+
+    it("sends the verdict request on the verdict turn only", async () => {
+      const { deps, calls } = harness({ replies: replies(true) });
+
+      await new Runner(deps).run(reviewFix());
+
+      expect(sends(calls)).toEqual([
+        `send /${hash}:r1`,
+        `send /${hash}:f1 ${verdictRequest(condition)}`,
+        `send /${hash}:p9`,
+      ]);
+      expect(sends(calls)[1]).toContain(`Condition: ${condition}`);
+    });
+
+    it("puts the verdict request after an Ask's answer on the verdict turn", async () => {
+      const waiter = new FakeWaiter([answer("blue")]);
+      const { deps, calls } = harness({ waiter, replies: [verdict(true)] });
+      const ask = node("q1", "ask", { question: "Pick a colour", options: ["red", "blue"] });
+
+      await new Runner(deps).run(
+        manifest(loop("l1"), inLoop(ask), inLoop(prompt("f1")), prompt("p9")),
+      );
+
+      expect(sends(calls)[0]).toBe(
+        `send /${hash}:f1 The user answered: blue ${verdictRequest(condition)}`,
+      );
+    });
+
+    it("makes the last Prompt the verdict turn even with a Script after it", async () => {
+      const { deps, calls, lines, scripts } = harness({
+        results: [exit(0), exit(0)],
+        replies: [verdict(false), verdict(true)],
+      });
+
+      const result = await new Runner(deps).run(
+        manifest(loop("l1"), inLoop(prompt("f1")), inLoop(script("s1")), prompt("p9")),
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(sends(calls)).toEqual([sendF1, sendF1, sendP9]);
+      expect(scripts.calls).toHaveLength(2);
+      expect(lines).toEqual([
+        ...[1, 2].flatMap((round) => [
+          `l1 round ${round}`,
+          "f1 started",
+          "f1 done",
+          "s1 started",
+          "s1 done",
+        ]),
+        "l1 done",
+        "p9 started",
+        "p9 done",
+      ]);
+    });
+
+    it("asks an Agent verdict turn for the verdict and reads it from the main Stop", async () => {
+      const { deps, calls, lines } = turnHarness([
+        [
+          { kind: "SubagentStop", agentType: `${hash}:a1`, reply: verdict(true) },
+          { kind: "Stop", reply: verdict(false) },
+        ],
+      ]);
+
+      await new Runner(deps).run(manifest(loop("l1", { cap: 1 }), inLoop(agent("a1"))));
+
+      expect(calls).toEqual(["start", `send ${agentVerdictTurnText(hash, "a1", condition)}`]);
+      expect(calls[1]).not.toContain("Then reply DONE.");
+      expect(calls[1]?.endsWith(`Condition: ${condition}`)).toBe(true);
+      expect(lines.at(-1)).toBe("l1 failed: cap reached after 1 rounds");
+    });
+
+    it("runs a body Gate skipped under auto again in every round", async () => {
+      const waiter = new FakeWaiter([]);
+      const { deps, lines } = harness({
+        waiter,
+        auto: true,
+        replies: [verdict(false), verdict(true)],
+      });
+      const gate = node("g1", "gate", { shown: "Check the plan", skippable: true });
+
+      const result = await new Runner(deps).run(
+        manifest(loop("l1"), inLoop(gate), inLoop(prompt("f1")), prompt("p9")),
+      );
+
+      expect(lines.filter((line) => line === "g1 skipped")).toHaveLength(2);
+      expect(rounds(lines)).toHaveLength(2);
+      expect(result.outcome).toBe("done");
+    });
+
+    it("fails the run at a failing body Script", async () => {
+      const { deps, calls, lines } = harness({
+        results: [exit(1)],
+        replies: [verdict(false)],
+      });
+
+      const result = await new Runner(deps).run(
+        manifest(loop("l1"), inLoop(prompt("f1")), inLoop(script("s1")), prompt("p9")),
+      );
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "s1" });
+      expect(result.states).toMatchObject({ l1: "failed", s1: "failed", p9: "waiting" });
+      expect(lines).not.toContain("l1 round 2");
+      expect(lines.at(-1)).toBe("s1 failed: exit code 1");
+      expect(sends(calls)).not.toContain(sendP9);
+    });
+
+    describe("structure check", () => {
+      const refuses = async (nodes: ManifestNode[]) => {
+        const { deps, calls, lines, scripts } = harness({ results: [exit(0)] });
+        const error = await new Runner(deps).run(manifest(...nodes)).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(StructureError);
+        expect(calls).toEqual([]);
+        expect(scripts.calls).toEqual([]);
+        expect(lines).toEqual([]);
+        return error as StructureError;
+      };
+
+      it.each([
+        ["no body", [loop("l1"), prompt("p9")]],
+        ["a Script-only body", [loop("l1"), inLoop(script("s1")), prompt("p9")]],
+      ])("refuses a loop with %s", async (_name, nodes) => {
+        const error = await refuses(nodes);
+
+        expect(error.message).toBe(
+          "cannot run this build: l1 (loop) has no prompt or agent in its body",
+        );
+        expect(error.problems).toEqual(["l1 (loop) has no prompt or agent in its body"]);
+      });
+
+      it("refuses a loop inside a loop", async () => {
+        const error = await refuses([
+          loop("l1"),
+          inLoop(prompt("p1")),
+          inLoop(loop("l2")),
+          inLoop(prompt("p2"), "l2"),
+        ]);
+
+        expect(error.problems).toContain("l2 (loop) is inside loop l1");
+      });
+
+      it("refuses a node whose parent is not a loop", async () => {
+        const error = await refuses([script("s1"), inLoop(prompt("p1"), "s1")]);
+
+        expect(error.problems).toEqual(["p1 (prompt) has parent s1, which is not a loop"]);
+      });
+
+      it("lists every problem in one error, in manifest order", async () => {
+        const error = await refuses([loop("l1"), script("s1"), inLoop(prompt("p1"), "s1")]);
+
+        expect(error.problems).toEqual([
+          "l1 (loop) has no prompt or agent in its body",
+          "p1 (prompt) has parent s1, which is not a loop",
+        ]);
+        expect(error.message).toBe(`cannot run this build: ${error.problems.join("; ")}`);
+      });
+
+      it("finds no problem in a loop with a Prompt in its body", () => {
+        expect(structureProblems(reviewFix().nodes)).toEqual([]);
+      });
+    });
   });
 
   it("skips trigger and output nodes without a line or a call", async () => {

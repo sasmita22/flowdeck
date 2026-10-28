@@ -23,6 +23,10 @@ const legal: [NodeState, NodeState][] = [
   ["waiting", "skipped"],
   ["needs-you", "done"],
   ["needs-you", "failed"],
+  ["done", "waiting"],
+  ["skipped", "waiting"],
+  ["running", "needs-you"],
+  ["needs-you", "running"],
 ];
 
 const isLegal = (from: NodeState, to: NodeState) => legal.some(([a, b]) => a === from && b === to);
@@ -51,16 +55,18 @@ describe("move", () => {
     expect(() => move(from, to)).toThrow(`${to}`);
   });
 
-  it("enters needs-you only from waiting and leaves it only to done or failed", () => {
+  it("enters needs-you only from waiting or running and leaves it only to running, done or failed", () => {
     const intoNeedsYou = legal.filter(([, to]) => to === "needs-you").map(([from]) => from);
     const outOfNeedsYou = legal.filter(([from]) => from === "needs-you").map(([, to]) => to);
+    const into = ["waiting", "running"];
+    const outOf = ["running", "done", "failed"];
 
-    expect(intoNeedsYou).toEqual(["waiting"]);
-    expect(outOfNeedsYou).toEqual(["done", "failed"]);
-    for (const state of states.filter((s) => s !== "waiting")) {
+    expect([...intoNeedsYou].sort()).toEqual([...into].sort());
+    expect([...outOfNeedsYou].sort()).toEqual([...outOf].sort());
+    for (const state of states.filter((s) => !into.includes(s))) {
       expect(() => move(state, "needs-you")).toThrow(IllegalMoveError);
     }
-    for (const state of states.filter((s) => s !== "done" && s !== "failed")) {
+    for (const state of states.filter((s) => !outOf.includes(s))) {
       expect(() => move("needs-you", state)).toThrow(IllegalMoveError);
     }
   });
