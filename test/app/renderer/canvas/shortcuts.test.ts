@@ -19,4 +19,15 @@ describe("shortcutFor", () => {
     expect(shortcutFor({ key, metaKey: true, shiftKey: false })).toBeNull();
     expect(shortcutFor({ key, metaKey: true, shiftKey: true })).toBeNull();
   });
+
+  it.each(["s", "S"])("maps Cmd+%s to save", (key) => {
+    expect(shortcutFor({ key, metaKey: true, shiftKey: false })).toBe("save");
+  });
+
+  it("maps S without Cmd, and Shift+Cmd+S, to something other than save", () => {
+    expect(shortcutFor({ key: "s", metaKey: false, shiftKey: false })).not.toBe("save");
+    expect(shortcutFor({ key: "S", metaKey: false, shiftKey: true })).not.toBe("save");
+    expect(shortcutFor({ key: "s", metaKey: true, shiftKey: true })).not.toBe("save");
+    expect(shortcutFor({ key: "S", metaKey: true, shiftKey: true })).not.toBe("save");
+  });
 });

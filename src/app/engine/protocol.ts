@@ -1,4 +1,8 @@
-export type EngineRequest = { id: number; type: "version" | "store-status" };
+export type EngineRequest = {
+  id: number;
+  type: "version" | "store-status" | "save-flow" | "load-latest-flow";
+  payload?: unknown;
+};
 
 export type EngineResponse =
   { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string };

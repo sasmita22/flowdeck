@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createCanvasStore,
+  newCanvasFlow,
   nextNodeId,
+  selectDirty,
   type CanvasNodeType,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type Flow } from "../../../../src/core/flow/schema.js";
-import { flow, prompt } from "../../../fixtures/flow-builders.js";
+import { flow, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -66,6 +68,14 @@ describe("createCanvasStore", () => {
     expect(state.redoStack).toEqual([]);
     expect(state.dragPositions).toEqual({});
     expectValid(state.flow);
+  });
+
+  it("is ready by default, with the starting flow as the saved flow and clean", () => {
+    const state = createCanvasStore().getState();
+
+    expect(state.ready).toBe(true);
+    expect(state.saved).toEqual(newCanvasFlow());
+    expect(selectDirty(state)).toBe(false);
   });
 });
 
@@ -420,5 +430,200 @@ describe("node ids", () => {
     dropFour(store);
 
     for (const node of store.getState().flow.nodes) expect(node.id).toMatch(nodeIdRule);
+  });
+});
+
+const savedFlow = () =>
+  flow(
+    [
+      { ...prompt("prompt-1"), position: { x: 10, y: 20 } },
+      { ...script("script-1"), position: { x: 300, y: 20 } },
+    ],
+    [thenWire("prompt-1", "script-1")],
+  );
+
+describe("edit gate", () => {
+  it("is not ready when created with ready false", () => {
+    expect(createCanvasStore({ ready: false }).getState().ready).toBe(false);
+  });
+
+  const gated: [string, (state: ReturnType<Store["getState"]>) => unknown][] = [
+    ["drop", (s) => s.drop("prompt", { x: 0, y: 0 })],
+    ["connect", (s) => s.connect(end("prompt-1", "out"), end("script-1", "in"))],
+    ["deleteNodes", (s) => s.deleteNodes(["prompt-1"])],
+    ["dragTo", (s) => s.dragTo("prompt-1", { x: 50, y: 50 })],
+    ["endDrag", (s) => s.endDrag(["prompt-1"])],
+    ["undo", (s) => s.undo()],
+    ["redo", (s) => s.redo()],
+  ];
+
+  const seededNotReady = () => {
+    const source = createCanvasStore();
+    act(source, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(source, (s) => s.drop("script", { x: 200, y: 0 }));
+    act(source, (s) => s.drop("prompt", { x: 400, y: 0 }));
+    act(source, (s) => s.undo());
+    const { flow: seeded, undoStack, redoStack } = source.getState();
+    const store = createCanvasStore({ ready: false });
+    store.setState({
+      flow: seeded,
+      undoStack,
+      redoStack,
+      dragPositions: { "prompt-1": { x: 50, y: 50 } },
+    });
+    return store;
+  };
+
+  it.each(gated)("ignores %s until ready", (_name, action) => {
+    const store = seededNotReady();
+    const before = store.getState();
+
+    action(store.getState());
+
+    expect(store.getState()).toBe(before);
+    expect(store.getState().flow).toBe(before.flow);
+    expect(store.getState().undoStack).toBe(before.undoStack);
+  });
+
+  it("records nothing on a fresh store that is not ready", () => {
+    const store = createCanvasStore({ ready: false });
+
+    store.getState().drop("prompt", { x: 0, y: 0 });
+
+    expect(store.getState().flow).toEqual(newCanvasFlow());
+    expect(store.getState().undoStack).toEqual([]);
+  });
+});
+
+describe("load", () => {
+  it("sets the flow and the saved flow and makes the store ready", () => {
+    const store = createCanvasStore({ ready: false });
+    const loaded = savedFlow();
+
+    store.getState().load(loaded);
+
+    const state = store.getState();
+    expect(state.ready).toBe(true);
+    expect(state.flow).toEqual(loaded);
+    expect(state.saved).toEqual(loaded);
+    expectValid(state.flow);
+  });
+
+  it("runs parseFlow, so a loop saved without a cap gets the default cap", () => {
+    const store = createCanvasStore({ ready: false });
+    const input = {
+      ...newCanvasFlow(),
+      nodes: [
+        {
+          id: "loop-1",
+          type: "loop",
+          label: "Loop",
+          position: { x: 0, y: 0 },
+          settings: { condition: "done" },
+        },
+      ],
+    };
+
+    store.getState().load(input);
+
+    expect(store.getState().flow.nodes[0]?.settings).toEqual({ condition: "done", cap: 3 });
+  });
+
+  it("clears undo, redo, selection and drag positions", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("prompt", { x: 100, y: 0 }));
+    act(store, (s) => s.undo());
+    act(store, (s) => s.select(["prompt-1"]));
+    act(store, (s) => s.dragTo("prompt-1", { x: 40, y: 40 }));
+
+    store.getState().load(savedFlow());
+
+    const state = store.getState();
+    expect(state.undoStack).toEqual([]);
+    expect(state.redoStack).toEqual([]);
+    expect(state.selection).toEqual([]);
+    expect(state.dragPositions).toEqual({});
+  });
+
+  it("throws on an input that is not a flow and leaves the store not ready and unchanged", () => {
+    const store = createCanvasStore({ ready: false });
+    const before = store.getState();
+
+    expect(() => store.getState().load({ nodes: "none" })).toThrow();
+
+    expect(store.getState()).toBe(before);
+    expect(store.getState().ready).toBe(false);
+  });
+
+  it("accepts edits once loaded", () => {
+    const store = createCanvasStore({ ready: false });
+    store.getState().load(savedFlow());
+
+    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+
+    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual([
+      "prompt-1",
+      "script-1",
+      "prompt-2",
+    ]);
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+});
+
+describe("selectDirty", () => {
+  const loadedStore = () => {
+    const store = createCanvasStore({ ready: false });
+    store.getState().load(savedFlow());
+    return store;
+  };
+
+  it("is clean right after a load", () => {
+    expect(selectDirty(loadedStore().getState())).toBe(false);
+  });
+
+  it("is dirty after a drop and clean again after undo back to the loaded flow", () => {
+    const store = loadedStore();
+
+    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+    expect(selectDirty(store.getState())).toBe(true);
+
+    act(store, (s) => s.undo());
+    expect(selectDirty(store.getState())).toBe(false);
+  });
+
+  it("stays clean when only the selection changes", () => {
+    const store = loadedStore();
+
+    act(store, (s) => s.select(["prompt-1", "script-1"]));
+    act(store, (s) => s.select([]));
+
+    expect(selectDirty(store.getState())).toBe(false);
+  });
+});
+
+describe("markSaved", () => {
+  it("sets the saved flow, so the current flow reads clean", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    const snapshot = store.getState().flow;
+    expect(selectDirty(store.getState())).toBe(true);
+
+    store.getState().markSaved(snapshot);
+
+    expect(store.getState().saved).toEqual(snapshot);
+    expect(selectDirty(store.getState())).toBe(false);
+  });
+
+  it("stays dirty when an edit happened after the snapshot was taken", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    const snapshot = store.getState().flow;
+    act(store, (s) => s.drop("script", { x: 200, y: 0 }));
+
+    store.getState().markSaved(snapshot);
+
+    expect(store.getState().saved).toEqual(snapshot);
+    expect(selectDirty(store.getState())).toBe(true);
   });
 });

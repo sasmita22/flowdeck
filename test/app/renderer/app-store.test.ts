@@ -1,11 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge, StoreStatus } from "../../../src/app/preload/bridge.js";
 import { createAppStore } from "../../../src/app/renderer/app-store.js";
 
 const bridge = (
   version: () => Promise<string>,
   storeStatus: () => Promise<StoreStatus>,
-): FlowdeckBridge => ({ version, storeStatus });
+): FlowdeckBridge => ({
+  version,
+  storeStatus,
+  saveFlow: vi.fn(),
+  loadLatestFlow: vi.fn(),
+  setDirty: vi.fn(),
+  onCloseRequest: vi.fn(() => () => {}),
+  answerClose: vi.fn(),
+});
 
 describe("createAppStore", () => {
   it("starts with no version, no error and a loading status", () => {

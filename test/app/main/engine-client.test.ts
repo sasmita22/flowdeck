@@ -56,6 +56,26 @@ describe("EngineClient", () => {
     await expect(version).resolves.toBe("0.0.0");
   });
 
+  it("posts the payload with the request and resolves with the matching reply", async () => {
+    const flow = { nodes: [], wires: [], session: { name: "main" } };
+    const saved = client.request("save-flow", flow);
+
+    expect(port.posted).toEqual([{ id: expect.any(Number), type: "save-flow", payload: flow }]);
+    port.reply({
+      id: port.postedId(0),
+      ok: true,
+      value: { kind: "saved", flowId: "flow-a", version: 1 },
+    });
+    await expect(saved).resolves.toEqual({ kind: "saved", flowId: "flow-a", version: 1 });
+  });
+
+  it("posts a request made without a payload with no payload key", () => {
+    void client.request("store-status");
+
+    expect(port.posted).toHaveLength(1);
+    expect(Object.hasOwn(port.posted[0] ?? {}, "payload")).toBe(false);
+  });
+
   it("matches two concurrent requests to their own replies by id", async () => {
     const version = client.request("version");
     const status = client.request("store-status");

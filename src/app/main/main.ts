@@ -1,13 +1,20 @@
 import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
 import type { EngineResponse, StoreOpenResult } from "../engine/protocol.js";
-import { bridgeChannels, type StoreStatus } from "../preload/bridge.js";
+import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
+import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 
 const toStoreStatus = (result: StoreOpenResult): StoreStatus =>
   result.kind === "ready" ? { kind: "ready" } : { kind: "error", message: result.message };
+
+const toLoadedFlow = (result: LoadLatestFlowResult): unknown => {
+  if (result.kind === "error") throw new Error(result.message);
+  return result.kind === "loaded" ? result.flow : null;
+};
 
 function startEngine(home: string) {
   const engine = utilityProcess.fork(join(__dirname, "engine.cjs"), [], {
@@ -41,6 +48,21 @@ function openWindow() {
   } else {
     void window.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
   }
+  return window;
+}
+
+function guardClose(window: BrowserWindow) {
+  const guard = createCloseGuard({
+    requestClose: () => window.webContents.send(bridgeChannels.closeRequest),
+    closeWindow: () => window.close(),
+  });
+  ipcMain.on(bridgeChannels.setDirty, (_event, dirty: boolean) => guard.setDirty(dirty));
+  ipcMain.on(bridgeChannels.closeAnswer, (_event, answer: CloseAnswer) => guard.answer(answer));
+  window.on("close", (event) => guard.onClose(event));
+  window.webContents.on("did-start-navigation", ({ isMainFrame, isSameDocument }) => {
+    if (isMainFrame && !isSameDocument) guard.reset();
+  });
+  window.webContents.on("render-process-gone", () => guard.reset());
 }
 
 void app.whenReady().then(() => {
@@ -49,8 +71,14 @@ void app.whenReady().then(() => {
   ipcMain.handle(bridgeChannels.storeStatus, async () =>
     toStoreStatus((await client.request("store-status")) as StoreOpenResult),
   );
+  ipcMain.handle(bridgeChannels.saveFlow, (_event, flow: unknown) =>
+    client.request("save-flow", flow),
+  );
+  ipcMain.handle(bridgeChannels.loadLatestFlow, async () =>
+    toLoadedFlow((await client.request("load-latest-flow")) as LoadLatestFlowResult),
+  );
   app.on("will-quit", () => engine.kill());
-  openWindow();
+  guardClose(openWindow());
 });
 
 app.on("window-all-closed", () => app.quit());
