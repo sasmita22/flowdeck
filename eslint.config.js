@@ -70,6 +70,7 @@ export default tseslint.config(
               from: { element: { type: "app-renderer" } },
               allow: [
                 { to: { element: { type: "app-renderer" } } },
+                { to: { element: { type: "core" } } },
                 { to: { element: { type: "app-preload" } }, dependency: { kind: "type" } },
               ],
             },

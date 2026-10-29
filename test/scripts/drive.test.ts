@@ -10,6 +10,7 @@ import {
   drive,
   launchApp,
   parseSteps,
+  playwrightPage,
   runSteps,
   type DriveApp,
   type DrivePage,
@@ -35,6 +36,15 @@ class FakeDrivePage implements DrivePage {
 
   waitForText(text: string, timeoutMs: number): Promise<void> {
     return this.act(`wait ${text} ${timeoutMs}`);
+  }
+
+  drag(from: string, to: string, toPosition?: { x: number; y: number }): Promise<void> {
+    const at = toPosition === undefined ? "centre" : `${toPosition.x},${toPosition.y}`;
+    return this.act(`drag ${from} ${to} ${at}`);
+  }
+
+  press(key: string): Promise<void> {
+    return this.act(`press ${key}`);
   }
 
   async screenshot(path: string): Promise<void> {
@@ -98,6 +108,33 @@ describe("parseSteps", () => {
   it("names a click step that has no testid", () => {
     expect(() => parseSteps('[{"type":"click"}]')).toThrow("step 1 (click)");
   });
+
+  it("accepts drag steps with and without a drop position, and press steps", () => {
+    const steps = [
+      { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 200, y: 150 } },
+      { type: "drag", from: "prompt-1-out", to: "script-1-in" },
+      { type: "press", key: "Meta+z" },
+    ];
+
+    expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+  });
+
+  it.each([
+    ["a drag without to", { type: "drag", from: "palette-prompt" }, "drag", "→ at to"],
+    [
+      "a drag with a non-numeric toPosition",
+      { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: "200", y: 150 } },
+      "drag",
+      "→ at toPosition.x",
+    ],
+    ["a press without key", { type: "press" }, "press", "→ at key"],
+  ])("rejects %s, naming the step and the field", (_, step, type, field) => {
+    const parse = () => parseSteps(JSON.stringify([{ type: "screenshot" }, step]));
+
+    expect(parse).toThrow(`step 2 (${type})`);
+    expect(parse).toThrow(field);
+    expect(parse).not.toThrow("unknown step type");
+  });
 });
 
 describe("runSteps", () => {
@@ -131,6 +168,59 @@ describe("runSteps", () => {
       "wait Flowdeck 10000",
       "wait ready 250",
     ]);
+  });
+
+  it("dispatches drag and press to the page in step order", async () => {
+    await runSteps(
+      [
+        { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 200, y: 150 } },
+        { type: "click", testid: "canvas-undo" },
+        { type: "drag", from: "prompt-1-out", to: "script-1-in" },
+        { type: "press", key: "Meta+z" },
+        { type: "press", key: "Shift+Meta+z" },
+      ],
+      page,
+      { outDir },
+    );
+
+    expect(page.calls).toEqual([
+      "drag palette-prompt canvas 200,150",
+      "click canvas-undo",
+      "drag prompt-1-out script-1-in centre",
+      "press Meta+z",
+      "press Shift+Meta+z",
+    ]);
+  });
+
+  it("saves evidence only for screenshot steps when drag and press steps run", async () => {
+    await runSteps(
+      [
+        { type: "drag", from: "palette-script", to: "canvas", toPosition: { x: 10, y: 20 } },
+        { type: "press", key: "Delete" },
+        { type: "screenshot" },
+      ],
+      page,
+      { outDir },
+    );
+
+    expect(page.calls).toEqual(["drag palette-script canvas 10,20", "press Delete", "screenshot"]);
+    expect((await readdir(outDir)).sort()).toEqual(["step-3.aria.yml", "step-3.png"]);
+  });
+
+  it("stops at a failing drag and names it by index and type", async () => {
+    page.failOn = "drag palette-prompt nowhere centre";
+
+    await expect(
+      runSteps(
+        [
+          { type: "drag", from: "palette-prompt", to: "nowhere" },
+          { type: "press", key: "Meta+z" },
+        ],
+        page,
+        { outDir },
+      ),
+    ).rejects.toThrow("step 1 (drag)");
+    expect(page.calls).not.toContain("press Meta+z");
   });
 
   it("writes exactly one png and one aria snapshot per screenshot step, named by step", async () => {
@@ -173,6 +263,100 @@ describe("runSteps", () => {
       ),
     ).rejects.toThrow("step 1 (wait-for-text)");
     expect(page.calls).not.toContain("click after");
+  });
+});
+
+type Box = { x: number; y: number; width: number; height: number };
+
+class FakePlaywrightPage {
+  readonly calls: string[] = [];
+  scrollY = 0;
+
+  constructor(
+    private readonly boxes: Record<string, Box | null>,
+    private readonly viewportHeight: number,
+  ) {}
+
+  readonly mouse = {
+    move: (x: number, y: number, options?: { steps?: number }) => {
+      this.calls.push(
+        `move ${x},${y}${options?.steps === undefined ? "" : ` steps ${options.steps}`}`,
+      );
+      return Promise.resolve();
+    },
+    down: () => {
+      this.calls.push("down");
+      return Promise.resolve();
+    },
+    up: () => {
+      this.calls.push("up");
+      return Promise.resolve();
+    },
+  };
+
+  readonly keyboard = {
+    press: (key: string) => {
+      this.calls.push(`press ${key}`);
+      return Promise.resolve();
+    },
+  };
+
+  getByTestId(testid: string) {
+    const box = this.boxes[testid] ?? null;
+    return {
+      scrollIntoViewIfNeeded: () => {
+        if (box !== null && box.y + box.height > this.scrollY + this.viewportHeight) {
+          this.scrollY = Math.floor(box.y);
+        }
+        return Promise.resolve();
+      },
+      boundingBox: () => Promise.resolve(box === null ? null : { ...box, y: box.y - this.scrollY }),
+    };
+  }
+
+  asPage(): Page {
+    return this as unknown as Page;
+  }
+}
+
+describe("playwrightPage", () => {
+  const layout = () => ({
+    "palette-prompt": { x: 0, y: 700, width: 80, height: 40 },
+    canvas: { x: 120.25, y: 600.625, width: 800, height: 600 },
+  });
+
+  it("scrolls both ends into view before measuring, then drops on the whole pixel at the offset", async () => {
+    const page = new FakePlaywrightPage(layout(), 900);
+
+    await playwrightPage(page.asPage()).drag("palette-prompt", "canvas", { x: 40, y: 30 });
+
+    expect(page.scrollY).toBe(600);
+    expect(page.calls).toEqual(["move 40,120", "down", "move 160,31 steps 10", "up"]);
+  });
+
+  it("drops on the centre of the target when no offset is given", async () => {
+    const page = new FakePlaywrightPage(layout(), 2000);
+
+    await playwrightPage(page.asPage()).drag("palette-prompt", "canvas");
+
+    expect(page.calls).toEqual(["move 40,720", "down", "move 520.25,900.625 steps 10", "up"]);
+  });
+
+  it("names an element that has no box and presses nothing", async () => {
+    const page = new FakePlaywrightPage({ ...layout(), canvas: null }, 2000);
+
+    await expect(playwrightPage(page.asPage()).drag("palette-prompt", "canvas")).rejects.toThrow(
+      "canvas is not visible",
+    );
+    expect(page.calls).toEqual([]);
+  });
+
+  it("sends a press step to the keyboard unchanged", async () => {
+    const page = new FakePlaywrightPage(layout(), 2000);
+
+    await playwrightPage(page.asPage()).press("Meta+Shift+z");
+
+    expect(page.calls).toEqual(["press Meta+Shift+z"]);
   });
 });
 

@@ -17,7 +17,16 @@ const stepSchemas = {
     timeoutMs: z.number().int().positive().optional(),
   }),
   screenshot: z.object({ type: z.literal("screenshot") }),
+  drag: z.object({
+    type: z.literal("drag"),
+    from: z.string().min(1),
+    to: z.string().min(1),
+    toPosition: z.object({ x: z.number(), y: z.number() }).optional(),
+  }),
+  press: z.object({ type: z.literal("press"), key: z.string().min(1) }),
 };
+
+type Point = { x: number; y: number };
 
 export type Step = z.infer<(typeof stepSchemas)[keyof typeof stepSchemas]>;
 
@@ -25,6 +34,8 @@ export interface DrivePage {
   click(testid: string): Promise<void>;
   type(testid: string, text: string): Promise<void>;
   waitForText(text: string, timeoutMs: number): Promise<void>;
+  drag(from: string, to: string, toPosition?: Point): Promise<void>;
+  press(key: string): Promise<void>;
   screenshot(path: string): Promise<void>;
   ariaSnapshot(): Promise<string>;
 }
@@ -66,6 +77,10 @@ async function runStep(step: Step, index: number, page: DrivePage, outDir: strin
       return page.type(step.testid, step.text);
     case "wait-for-text":
       return page.waitForText(step.text, step.timeoutMs ?? defaultWaitMs);
+    case "drag":
+      return page.drag(step.from, step.to, step.toPosition);
+    case "press":
+      return page.press(step.key);
     case "screenshot": {
       const name = `step-${index + 1}`;
       await page.screenshot(join(outDir, `${name}.png`));
@@ -89,11 +104,32 @@ export async function runSteps(
   }
 }
 
+async function boxOf(page: Page, testid: string) {
+  const box = await page.getByTestId(testid).boundingBox();
+  if (box === null) throw new Error(`${testid} is not visible`);
+  return box;
+}
+
 export function playwrightPage(page: Page): DrivePage {
   return {
     click: (testid) => page.getByTestId(testid).click(),
     type: (testid, text) => page.getByTestId(testid).fill(text),
     waitForText: (text, timeoutMs) => page.getByText(text).first().waitFor({ timeout: timeoutMs }),
+    drag: async (from, to, toPosition) => {
+      await page.getByTestId(from).scrollIntoViewIfNeeded();
+      await page.getByTestId(to).scrollIntoViewIfNeeded();
+      const start = await boxOf(page, from);
+      const end = await boxOf(page, to);
+      const target =
+        toPosition === undefined
+          ? { x: end.x + end.width / 2, y: end.y + end.height / 2 }
+          : { x: Math.round(end.x + toPosition.x), y: Math.round(end.y + toPosition.y) };
+      await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(target.x, target.y, { steps: 10 });
+      await page.mouse.up();
+    },
+    press: (key) => page.keyboard.press(key),
     screenshot: async (path) => {
       await page.screenshot({ path });
     },
