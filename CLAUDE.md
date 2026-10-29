@@ -37,13 +37,13 @@ flow.
 
 ### Layers
 
-| Folder          | Holds                                                                                                             | May import                                            |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                    | `core` only                                           |
-| `src/ports/`    | Interfaces only: SessionHost, EventSource, Waiter, Store, ProcessRunner, Clock, FileSystem                        | `core`                                                |
-| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                | `core`, `ports`                                       |
-| `src/cli/`      | The `flowdeck` command and its composition root                                                                   | all of the above                                      |
-| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React) | all of the above; the renderer only through `preload` |
+| Folder          | Holds                                                                                                             | May import                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                    | `core` only                                                                                                                     |
+| `src/ports/`    | Interfaces only: SessionHost, EventSource, Waiter, Store, ProcessRunner, Clock, FileSystem                        | `core`                                                                                                                          |
+| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                | `core`, `ports`                                                                                                                 |
+| `src/cli/`      | The `flowdeck` command and its composition root                                                                   | all of the above                                                                                                                |
+| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React) | all of the above; the renderer only `core`, and `preload` for types, never `ports`, `adapters`, `cli`, `main`, `engine` or Node |
 
 `test/` may import any layer. The layer rule is enforced by ESLint (`eslint-plugin-boundaries`,
 with `eslint-import-resolver-typescript` so `.js` import paths resolve to `.ts` files; without the
