@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "agent-workflow": {
+      "source": {
+        "source": "github",
+        "repo": "carousell/agent-workflows-plugin"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "workflows@agent-workflow": true
+  }
+}
