@@ -3,57 +3,16 @@
 A Mac app for building and running multi-step Claude Code work by drawing it: nodes, flows and
 session containers on a canvas, compiled into a build and run turn by turn.
 
-- Design and architecture: https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W (see `#arch`)
-- Work board, one page per ticket: https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W#board
+Design and architecture: https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W (see `#arch`).
 
-These rules are this repo's engineering standards. The workflows plugin reads them before its own
-defaults.
+These rules are this repo's engineering standards.
 
-## Agent rules
+## Development
 
-Every ticket from FD-03 on runs through `/workflows:feature` with these flags, and no others that
-weaken verification:
-
-```
-/workflows:feature "<ticket text from the board>" --no-e2e --manual-test
-```
-
-1. **E2E is always off.** Pass `--no-e2e`. `e2e.enabled` is `false` in the plugin config. The
-   Carousell test repos, BrowserStack and TCM don't apply to this repo.
-2. **Unit tests are always written first (TDD).** Each failing test is seen failing before the code
-   that makes it pass. Never pass `--no-tdd` or `--no-unit-tests`.
-3. **Manual test is always on, driven by the AI.** Pass `--manual-test` and follow
-   [Manual test rules](#manual-test-rules).
-4. **One ticket, one branch, one PR.** Scope is the ticket's page on the board. Anything worth
-   doing outside it is raised, not folded in.
-
-FD-01 and FD-02 are done directly, not through the workflow, because the workflow needs what they
-set up.
-
-## Session handoff
-
-Work carries between sessions through the board's ticket notes, not chat or git history. They
-live in the shared database of the board artifact,
-https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W: collection `tickets`, one document per ticket
-(`t03` for FD-03), with `status` (`todo`, `doing`, `done`) and `notes`, a list of
-`{ date, text }`.
-
-**When the user asks to end the session:**
-
-1. Append a dated note to every ticket worked on: what was done, the branch, commits, whether
-   they are pushed, open PRs, what is still open, and the exact next step.
-2. Set the ticket's `status` to match. A ticket is `done` only once its PR is merged into
-   `main`; until then it stays `doing`.
-3. Audit the notes on every `done` and `doing` ticket for stale claims. Never rewrite an old
-   note; append one that names what is stale and what is true now.
-4. Read the notes back to confirm they landed.
-
-**When a new session starts and the user says "continue":**
-
-1. Read the notes of the latest `doing` ticket, or the latest `done` one if none is in progress.
-2. Take the next step from those notes. A ticket's commit on `main` doesn't make it done; its
-   `status` and notes decide.
-3. If the next ticket depends on one still `doing`, say so before starting it.
+Development runs through the workflows plugin (`carousell/agent-workflows-plugin`); install it
+before starting work. `.claude/settings.json` enables it, so Claude Code offers to install it when
+the folder is first trusted. Otherwise run `/plugin marketplace add carousell/agent-workflows-plugin`
+and `/plugin install workflows@agent-workflow`. How tickets run through it is in `.claude/rules/`.
 
 ## Gates
 
@@ -67,7 +26,7 @@ https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W: collection `tickets`, one doc
 | A single test file                              | `npx vitest run <file>`                        |
 | Live tests (start real Claude Code, cost money) | `FLOWDECK_LIVE=1 npx vitest run <file>`        |
 | Run the CLI                                     | `npx tsx src/cli/main.ts <args>`               |
-| Drive the app (from FD-18)                      | `npm run drive -- <steps.json>`                |
+| Drive the app                                   | `npm run drive -- <steps.json>`                |
 
 `npm test` never runs live tests. CI runs `npm run check` on every PR.
 
@@ -135,40 +94,7 @@ better-sqlite3 and node-pty match Electron.
 - A test that cannot fail is not a test. When adding a check, make it fail once on purpose and
   watch it fail.
 - Live tests use the smallest model and the shortest prompt that proves the point.
-
-## Manual test rules
-
-The plugin's manual test knows Android, iOS and mobile web. **None of those apply here**: the
-repo has a root `package.json`, so the plugin would otherwise guess mobile web, look for its dev
-host and run each check twice. Use these rules instead.
-
-### How to drive each part
-
-| What changed             | How to drive it                                                                                                                                          | Evidence to save and read back                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Engine and CLI           | Run the `flowdeck` command against a throwaway repo created by `test/fixtures/tmp-repo.ts`                                                               | The command's output, `tmux capture-pane -p -t <session>`, and the files or database rows the check names |
-| App screens (from FD-18) | `npm run drive -- <steps.json>`: launches the app with Playwright for Electron and runs click, type, wait-for-text and screenshot steps by `data-testid` | A screenshot and an accessibility snapshot per step, plus the app log                                     |
-| The terminal pane        | Open it through the drive script                                                                                                                         | The screenshot, checked against `tmux capture-pane` of the same session                                   |
-
-### Rules
-
-1. **Never real data.** Set `FLOWDECK_HOME` to a fresh temporary folder for every manual test.
-   Name tmux sessions `fd-mt-*`.
-2. **Every check can fail.** Each check has a `Fails if:` line. It passes only when the saved
-   evidence, read back, shows the expected result. Running the steps is not a pass.
-3. **Check every claim in two places.** A claim about the screen is confirmed in a second place:
-   a node shown as done also has its `run_nodes` row marked done.
-4. **Once, on the desktop app.** Each check runs once. Never mobile and desktop viewports.
-5. **Keep live checks cheap.** Checks that start real Claude Code use the smallest model and the
-   shortest prompt that proves the point.
-6. **Leave nothing behind.** Afterwards, stop every `fd-mt-*` tmux session, delete the temporary
-   `FLOWDECK_HOME` and any worktree the test made, and quit the app. Report anything that could
-   not be cleaned up.
-7. **No native dialogs.** Playwright can't click macOS file pickers or menus. Every v1 flow has an
-   in-app way to do the same thing; manual checks use it.
-8. **Where results go.** One row per check in the run's `implementation.md` (check id, what was
-   driven, result, evidence file, one-line note), and a summary in the PR body. There is no Jira
-   ticket to post to.
+- Manual tests follow [`.claude/rules/manual-test.md`](.claude/rules/manual-test.md).
 
 ## Conventions
 
@@ -178,9 +104,3 @@ host and run each check twice. Use these rules instead.
 - Commit and PR titles: conventional, ending with the ticket id, for example
   `feat(engine): start tmux sessions (FD-03)`.
 - Code explains itself: no comments that restate the code, and no ticket ids in code.
-- The plugin's run files stay out of git: `.claude/local/` and `.plugin-state/` are ignored.
-
-## Plugin config
-
-Copy `.claude/plugin.config.example.json` to `.claude/local/plugin.config.json` on each machine.
-It sets `parentBranch` to `main` and turns E2E off.

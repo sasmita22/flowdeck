@@ -13,8 +13,9 @@ showing every question and approval in the app.
 
 - macOS
 - Node 24 (see `.nvmrc`)
-- [Claude Code](https://claude.com/claude-code), from the engine tickets on
-- tmux (`brew install tmux`), from the engine tickets on
+- [Claude Code](https://claude.com/claude-code)
+- tmux (`brew install tmux`)
+- GitHub CLI (`brew install gh`), for ticket work
 
 ## Getting started
 
@@ -53,4 +54,4 @@ stack and the rules are in [CLAUDE.md](CLAUDE.md).
 
 Work is split into small tickets (`FD-01`, `FD-02`, …), each with its own steps and acceptance
 tests. From FD-03 on, each ticket runs through `/workflows:feature` with E2E off, tests written
-first, and an AI-driven manual test. See [CLAUDE.md](CLAUDE.md) for the agent rules.
+first, and an AI-driven manual test. The agent rules are in [`.claude/rules/`](.claude/rules/).
