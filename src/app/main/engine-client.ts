@@ -31,7 +31,7 @@ export class EngineClient {
     });
   }
 
-  request(type: EngineRequest["type"]): Promise<unknown> {
+  request(type: EngineRequest["type"], payload?: unknown): Promise<unknown> {
     if (this.exited) return Promise.reject(new Error("engine exited"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -40,7 +40,7 @@ export class EngineClient {
         reject(new Error(`engine did not answer ${type} within ${this.timeoutMs} ms`));
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.port.postMessage({ id, type });
+      this.port.postMessage(payload === undefined ? { id, type } : { id, type, payload });
     });
   }
 

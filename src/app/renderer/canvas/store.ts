@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { validate } from "../../../core/compiler/validate.js";
-import type { Flow, Node, Wire } from "../../../core/flow/schema.js";
+import { flowsEqual } from "../../../core/flow/equal.js";
+import { parseFlow, type Flow, type Node, type Wire } from "../../../core/flow/schema.js";
 import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
 import * as scriptDefaults from "../../../core/nodes/script/defaults.js";
 import {
@@ -20,6 +21,8 @@ type Position = { x: number; y: number };
 
 export interface CanvasState {
   flow: Flow;
+  saved: Flow;
+  ready: boolean;
   selection: string[];
   undoStack: Command[];
   redoStack: Command[];
@@ -33,6 +36,8 @@ export interface CanvasState {
   endDrag(ids: readonly string[]): void;
   undo(): void;
   redo(): void;
+  load(input: unknown): void;
+  markSaved(flow: Flow): void;
 }
 
 export const newCanvasFlow = (): Flow => ({
@@ -81,12 +86,17 @@ const kept = (selection: readonly string[], flow: Flow) => {
 
 const samePosition = (a: Position, b: Position) => a.x === b.x && a.y === b.y;
 
+export const selectDirty = (state: Pick<CanvasState, "flow" | "saved">): boolean =>
+  !flowsEqual(state.flow, state.saved);
+
 export function createCanvasStore(
-  deps: { nextId?: (type: CanvasNodeType, flow: Flow) => string } = {},
+  deps: { nextId?: (type: CanvasNodeType, flow: Flow) => string; ready?: boolean } = {},
 ): StoreApi<CanvasState> {
   const nextId = deps.nextId ?? nextNodeId;
 
   return createStore<CanvasState>()((set, get) => {
+    const ready = () => get().ready;
+
     const run = (command: Command, selection = get().selection) => {
       const { flow, undoStack } = get();
       const next = command.do(flow);
@@ -99,22 +109,28 @@ export function createCanvasStore(
     };
 
     const deleteNodes = (ids: readonly string[]) => {
-      if (ids.length > 0) run(deleteNodesCommand(get().flow, ids));
+      if (ready() && ids.length > 0) run(deleteNodesCommand(get().flow, ids));
     };
 
+    const start = newCanvasFlow();
+
     return {
-      flow: newCanvasFlow(),
+      flow: start,
+      saved: start,
+      ready: deps.ready ?? true,
       selection: [],
       undoStack: [],
       redoStack: [],
       dragPositions: {},
 
       drop: (type, position) => {
+        if (!ready()) return;
         const id = nextId(type, get().flow);
         run(addNode(newNode(type, id, position)), [id]);
       },
 
       connect: (from, to) => {
+        if (!ready()) return false;
         const { flow } = get();
         if (flow.wires.some((wire) => sameEnd(wire.from, from) && sameEnd(wire.to, to))) {
           return false;
@@ -131,10 +147,13 @@ export function createCanvasStore(
 
       select: (ids) => set({ selection: [...ids] }),
 
-      dragTo: (id, { x, y }) =>
-        set(({ dragPositions }) => ({ dragPositions: { ...dragPositions, [id]: { x, y } } })),
+      dragTo: (id, { x, y }) => {
+        if (!ready()) return;
+        set(({ dragPositions }) => ({ dragPositions: { ...dragPositions, [id]: { x, y } } }));
+      },
 
       endDrag: (ids) => {
+        if (!ready()) return;
         const { flow, dragPositions } = get();
         const moves = ids.flatMap((id): Move[] => {
           const to = dragPositions[id];
@@ -148,6 +167,7 @@ export function createCanvasStore(
       },
 
       undo: () => {
+        if (!ready()) return;
         const { flow, undoStack, redoStack, selection } = get();
         const command = undoStack.at(-1);
         if (command === undefined) return;
@@ -161,6 +181,7 @@ export function createCanvasStore(
       },
 
       redo: () => {
+        if (!ready()) return;
         const { flow, undoStack, redoStack, selection } = get();
         const command = redoStack.at(-1);
         if (command === undefined) return;
@@ -172,6 +193,21 @@ export function createCanvasStore(
           selection: kept(selection, next),
         });
       },
+
+      load: (input) => {
+        const flow = parseFlow(input);
+        set({
+          flow,
+          saved: flow,
+          ready: true,
+          selection: [],
+          undoStack: [],
+          redoStack: [],
+          dragPositions: {},
+        });
+      },
+
+      markSaved: (flow) => set({ saved: flow }),
     };
   });
 }

@@ -1,10 +1,12 @@
 import { _electron, type Page } from "@playwright/test";
+import type * as Electron from "electron";
 import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
@@ -24,6 +26,8 @@ const stepSchemas = {
     toPosition: z.object({ x: z.number(), y: z.number() }).optional(),
   }),
   press: z.object({ type: z.literal("press"), key: z.string().min(1) }),
+  "close-window": z.strictObject({ type: z.literal("close-window") }),
+  relaunch: z.strictObject({ type: z.literal("relaunch") }),
 };
 
 type Point = { x: number; y: number };
@@ -69,7 +73,14 @@ export function parseSteps(text: string): Step[] {
   });
 }
 
-async function runStep(step: Step, index: number, page: DrivePage, outDir: string) {
+export interface DriveSession {
+  closeWindow(): Promise<boolean>;
+  relaunch(): Promise<DrivePage>;
+}
+
+type PageStep = Exclude<Step, { type: "close-window" | "relaunch" }>;
+
+async function runPageStep(step: PageStep, index: number, page: DrivePage, outDir: string) {
   switch (step.type) {
     case "click":
       return page.click(step.testid);
@@ -90,14 +101,29 @@ async function runStep(step: Step, index: number, page: DrivePage, outDir: strin
   }
 }
 
+const noSession = (type: string) =>
+  new Error(`a ${type} step needs an app to drive, and none was given`);
+
 export async function runSteps(
   steps: readonly Step[],
   page: DrivePage,
-  options: { outDir: string },
+  options: { outDir: string; app?: DriveSession },
 ): Promise<void> {
+  let current: DrivePage | undefined = page;
   for (const [index, step] of steps.entries()) {
     try {
-      await runStep(step, index, page, options.outDir);
+      if (step.type === "close-window") {
+        if (options.app === undefined) throw noSession(step.type);
+        if (await options.app.closeWindow()) current = undefined;
+      } else if (step.type === "relaunch") {
+        if (options.app === undefined) throw noSession(step.type);
+        current = await options.app.relaunch();
+      } else {
+        if (current === undefined) {
+          throw new Error("the window was closed; add a relaunch step before this one");
+        }
+        await runPageStep(step, index, current, options.outDir);
+      }
     } catch (error) {
       throw new Error(`${stepLabel(index, step.type)}: ${messageOf(error)}`, { cause: error });
     }
@@ -138,14 +164,19 @@ export function playwrightPage(page: Page): DrivePage {
   };
 }
 
+export interface DriveProcess {
+  readonly pid?: number | undefined;
+  readonly stdout: Readable | null;
+  readonly stderr: Readable | null;
+  readonly exitCode: number | null;
+  readonly signalCode: string | null;
+  once(event: "exit", listener: () => void): unknown;
+}
+
 export interface DriveApp {
-  process(): {
-    readonly pid?: number | undefined;
-    readonly stdout: Readable | null;
-    readonly stderr: Readable | null;
-  };
+  process(): DriveProcess;
   firstWindow(): Promise<Page>;
-  close(): Promise<void>;
+  evaluate<R>(fn: (electron: typeof Electron) => R | Promise<R>): Promise<R>;
 }
 
 export type Launch = (home: string) => Promise<DriveApp>;
@@ -156,6 +187,77 @@ export interface LaunchedApp {
   close(): Promise<void>;
 }
 
+const hasExited = (proc: DriveProcess) => proc.exitCode !== null || proc.signalCode !== null;
+
+const isRunning = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+};
+
+const pollMs = 25;
+const defaultExitGraceMs = 10_000;
+
+async function waitUntil(done: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!done()) {
+    if (Date.now() >= deadline) return false;
+    await sleep(pollMs);
+  }
+  return true;
+}
+
+export async function forceExit(app: DriveApp, options: { timeoutMs?: number } = {}) {
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const proc = app.process();
+  if (hasExited(proc)) return;
+  let exited = false;
+  proc.once("exit", () => {
+    exited = true;
+  });
+  let pids: number[];
+  try {
+    pids = await app.evaluate(({ app: electronApp }) => {
+      const engines = electronApp
+        .getAppMetrics()
+        .filter(
+          (metric) => metric.type === "Utility" && metric.serviceName === "node.mojom.NodeService",
+        )
+        .map((metric) => metric.pid);
+      setImmediate(() => {
+        try {
+          for (const pid of engines) {
+            try {
+              process.kill(pid);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            }
+          }
+        } catch (error) {
+          console.error(error);
+        } finally {
+          electronApp.exit(0);
+        }
+      });
+      return engines;
+    });
+  } catch (error) {
+    if (await waitUntil(() => exited || hasExited(proc), Math.min(timeoutMs, 1000))) return;
+    throw error;
+  }
+  if (!(await waitUntil(() => exited || hasExited(proc), timeoutMs))) {
+    throw new Error(`the app did not exit within ${timeoutMs} ms`);
+  }
+  const survivors = () => pids.filter(isRunning);
+  if (!(await waitUntil(() => survivors().length === 0, timeoutMs))) {
+    throw new Error(`engine process ${survivors().join(", ")} outlived the app`);
+  }
+}
+
 const launchElectron: Launch = (home) =>
   _electron.launch({ args: ["."], cwd: repoRoot, env: { ...process.env, FLOWDECK_HOME: home } });
 
@@ -164,13 +266,19 @@ export async function launchApp(options: {
   logPath: string;
   launch?: Launch;
 }): Promise<LaunchedApp> {
-  const app = await (options.launch ?? launchElectron)(options.home);
-  const log = createWriteStream(options.logPath);
-  app.process().stdout?.pipe(log, { end: false });
-  app.process().stderr?.pipe(log, { end: false });
+  const launched = await (options.launch ?? launchElectron)(options.home);
+  const proc = launched.process();
+  const app: DriveApp = {
+    process: () => proc,
+    firstWindow: () => launched.firstWindow(),
+    evaluate: (fn) => launched.evaluate(fn),
+  };
+  const log = createWriteStream(options.logPath, { flags: "a" });
+  proc.stdout?.pipe(log, { end: false });
+  proc.stderr?.pipe(log, { end: false });
   const close = async () => {
     try {
-      await app.close();
+      await forceExit(app);
     } finally {
       log.end();
       await finished(log);
@@ -184,26 +292,79 @@ export async function launchApp(options: {
   }
 }
 
+export async function resolveHome(
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<{ home: string; keep: boolean }> {
+  const own = env.FLOWDECK_HOME;
+  if (own !== undefined && own !== "") return { home: own, keep: true };
+  return { home: await mkdtemp(join(tmpdir(), "fd-drive-home-")), keep: false };
+}
+
 export async function drive(
   steps: readonly Step[],
-  options: { outDir: string; home: string; launch?: Launch },
+  options: {
+    outDir: string;
+    home: string;
+    launch?: Launch;
+    keepHome?: boolean;
+    exitGraceMs?: number;
+  },
 ): Promise<void> {
   let launched: LaunchedApp | undefined;
-  const cleanUp = async () => {
-    try {
-      await launched?.close();
-    } finally {
-      await rm(options.home, { recursive: true, force: true });
+  let closeRequested = false;
+  const shutDown = async (app: LaunchedApp | undefined) => {
+    if (app === undefined) return;
+    if (closeRequested) {
+      const proc = app.app.process();
+      await waitUntil(() => hasExited(proc), options.exitGraceMs ?? defaultExitGraceMs);
     }
+    await app.close();
   };
-  try {
+  const launch = async () => {
+    closeRequested = false;
     launched = await launchApp({
       home: options.home,
       logPath: join(options.outDir, "app.log"),
       ...(options.launch && { launch: options.launch }),
     });
     process.stdout.write(`app pid: ${launched.app.process().pid}\n`);
-    await runSteps(steps, playwrightPage(launched.window), { outDir: options.outDir });
+    return launched;
+  };
+  const session: DriveSession = {
+    closeWindow: async () => {
+      closeRequested = true;
+      return (
+        (await launched?.app.evaluate(
+          ({ BrowserWindow }) =>
+            new Promise<boolean>((resolve) => {
+              const window = BrowserWindow.getAllWindows()[0];
+              if (window === undefined || window.isDestroyed()) {
+                resolve(true);
+                return;
+              }
+              window.once("close", (event) => resolve(!event.defaultPrevented));
+              window.close();
+            }),
+        )) ?? true
+      );
+    },
+    relaunch: async () => {
+      const previous = launched;
+      launched = undefined;
+      await shutDown(previous);
+      return playwrightPage((await launch()).window);
+    },
+  };
+  const cleanUp = async () => {
+    try {
+      await shutDown(launched);
+    } finally {
+      if (options.keepHome !== true) await rm(options.home, { recursive: true, force: true });
+    }
+  };
+  try {
+    const first = await launch();
+    await runSteps(steps, playwrightPage(first.window), { outDir: options.outDir, app: session });
   } catch (error) {
     await cleanUp().catch(() => undefined);
     throw error;
@@ -223,14 +384,22 @@ async function main(): Promise<void> {
   const steps = parseSteps(await readFile(stepsPath, "utf8"));
   const outDir = outArg ?? (await mkdtemp(join(tmpdir(), "fd-drive-")));
   await mkdir(outDir, { recursive: true });
-  const home = await mkdtemp(join(tmpdir(), "fd-drive-home-"));
+  const { home, keep } = await resolveHome(process.env);
   process.stdout.write(`evidence: ${outDir}\nhome: ${home}\n`);
-  await drive(steps, { outDir, home });
+  await drive(steps, { outDir, home, keepHome: keep });
+}
+
+export function reportFailure(
+  error: unknown,
+  io: { write(text: string): unknown; exit(code: number): unknown } = {
+    write: (text) => process.stderr.write(text),
+    exit: (code) => process.exit(code),
+  },
+): void {
+  io.write(`drive failed: ${messageOf(error)}\n`);
+  io.exit(1);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`drive failed: ${messageOf(error)}\n`);
-    process.exitCode = 1;
-  });
+  main().catch((error: unknown) => reportFailure(error));
 }

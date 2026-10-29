@@ -1,27 +1,37 @@
 import type { Page } from "@playwright/test";
+import type * as Electron from "electron";
+import { spawn } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   drive,
+  forceExit,
   launchApp,
   parseSteps,
   playwrightPage,
+  reportFailure,
+  resolveHome,
   runSteps,
   type DriveApp,
   type DrivePage,
 } from "../../scripts/drive.js";
 
 class FakeDrivePage implements DrivePage {
-  readonly calls: string[] = [];
   failOn: string | undefined;
 
+  constructor(
+    readonly calls: string[] = [],
+    private readonly prefix = "",
+  ) {}
+
   private act(call: string): Promise<void> {
-    this.calls.push(call);
+    this.calls.push(`${this.prefix}${call}`);
     if (call === this.failOn) return Promise.reject(new Error(`${call} failed`));
     return Promise.resolve();
   }
@@ -61,15 +71,43 @@ const windowThatNeverShowsText = {
   getByText: () => ({ first: () => ({ waitFor: () => Promise.reject(new Error("never shown")) }) }),
 } as unknown as Page;
 
+class FakeProcess extends EventEmitter {
+  readonly pid = 4242;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+
+  constructor(
+    readonly stdout: PassThrough,
+    readonly stderr: PassThrough,
+  ) {
+    super();
+  }
+}
+
 class FakeApp implements DriveApp {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  readonly proc = new FakeProcess(this.stdout, this.stderr);
   closeCalls = 0;
+  evaluateCalls = 0;
+  enginePids: number[] = [];
   windowError: Error | undefined;
   closeError: Error | undefined;
+  evaluateError: Error | undefined;
 
   process() {
-    return { pid: 4242, stdout: this.stdout, stderr: this.stderr };
+    return this.proc;
+  }
+
+  evaluate<R>(): Promise<R> {
+    this.evaluateCalls += 1;
+    if (this.evaluateError) return Promise.reject(this.evaluateError);
+    setTimeout(() => {
+      if (this.proc.exitCode !== null) return;
+      this.proc.exitCode = 0;
+      this.proc.emit("exit", 0, null);
+    }, 0);
+    return Promise.resolve(this.enginePids as R);
   }
 
   firstWindow(): Promise<Page> {
@@ -133,6 +171,32 @@ describe("parseSteps", () => {
 
     expect(parse).toThrow(`step 2 (${type})`);
     expect(parse).toThrow(field);
+    expect(parse).not.toThrow("unknown step type");
+  });
+
+  it("accepts close-window and relaunch steps alongside the other step types", () => {
+    const steps = [
+      { type: "drag", from: "palette-prompt", to: "canvas" },
+      { type: "close-window" },
+      { type: "click", testid: "close-save" },
+      { type: "relaunch" },
+      { type: "wait-for-text", text: "Untitled" },
+      { type: "press", key: "Meta+s" },
+      { type: "type", testid: "b", text: "hi" },
+      { type: "screenshot" },
+    ];
+
+    expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+  });
+
+  it.each([
+    ["close-window", "testid"],
+    ["relaunch", "home"],
+  ])("rejects an extra key on a %s step, naming the step and the key", (type, key) => {
+    const parse = () => parseSteps(JSON.stringify([{ type: "screenshot" }, { type, [key]: "x" }]));
+
+    expect(parse).toThrow(`step 2 (${type})`);
+    expect(parse).toThrow(key);
     expect(parse).not.toThrow("unknown step type");
   });
 });
@@ -264,6 +328,94 @@ describe("runSteps", () => {
     ).rejects.toThrow("step 1 (wait-for-text)");
     expect(page.calls).not.toContain("click after");
   });
+
+  describe("close-window and relaunch", () => {
+    let calls: string[];
+    let relaunched: FakeDrivePage;
+    let relaunchError: Error | undefined;
+    let windowCloses: boolean;
+    const app = {
+      closeWindow: () => {
+        calls.push("close-window");
+        return Promise.resolve(windowCloses);
+      },
+      relaunch: () => {
+        calls.push("relaunch");
+        if (relaunchError) return Promise.reject(relaunchError);
+        return Promise.resolve<DrivePage>(relaunched);
+      },
+    };
+
+    beforeEach(() => {
+      calls = [];
+      page = new FakeDrivePage(calls);
+      relaunched = new FakeDrivePage(calls, "2:");
+      relaunchError = undefined;
+      windowCloses = true;
+    });
+
+    it("a click after close-window works while the window is still open", async () => {
+      windowCloses = false;
+
+      await runSteps(
+        [{ type: "close-window" }, { type: "screenshot" }, { type: "click", testid: "close-save" }],
+        page,
+        { outDir, app },
+      );
+
+      expect(calls).toEqual(["close-window", "screenshot", "click close-save"]);
+      expect((await readdir(outDir)).sort()).toEqual(["step-2.aria.yml", "step-2.png"]);
+    });
+
+    it("dispatches them to the app in step order and runs later steps on the new window", async () => {
+      await runSteps(
+        [
+          { type: "click", testid: "a" },
+          { type: "close-window" },
+          { type: "relaunch" },
+          { type: "click", testid: "b" },
+          { type: "screenshot" },
+        ],
+        page,
+        { outDir, app },
+      );
+
+      expect(calls).toEqual(["click a", "close-window", "relaunch", "2:click b", "2:screenshot"]);
+      expect((await readdir(outDir)).sort()).toEqual(["step-5.aria.yml", "step-5.png"]);
+    });
+
+    it.each([
+      ["click", { type: "click", testid: "x" } as const, "click x"],
+      ["screenshot", { type: "screenshot" } as const, "screenshot"],
+    ])(
+      "fails a %s step after close-window closed the window and no relaunch followed, naming the step",
+      async (type, step, call) => {
+        const run = runSteps([{ type: "close-window" }, step], page, { outDir, app });
+
+        await expect(run).rejects.toThrow(`step 2 (${type})`);
+        await expect(run).rejects.toThrow("relaunch");
+        expect(calls).not.toContain(call);
+        expect(await readdir(outDir)).toEqual([]);
+      },
+    );
+
+    it("names a relaunch that fails and runs nothing after it", async () => {
+      relaunchError = new Error("launch failed");
+
+      await expect(
+        runSteps([{ type: "relaunch" }, { type: "click", testid: "b" }], page, { outDir, app }),
+      ).rejects.toThrow("step 1 (relaunch): launch failed");
+      expect(calls).toEqual(["relaunch"]);
+    });
+
+    it.each([["close-window"], ["relaunch"]] as const)(
+      "fails a %s step when no app is given, naming the step",
+      async (type) => {
+        await expect(runSteps([{ type }], page, { outDir })).rejects.toThrow(`step 1 (${type})`);
+        expect(calls).toEqual([]);
+      },
+    );
+  });
 });
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -360,6 +512,175 @@ describe("playwrightPage", () => {
   });
 });
 
+describe("forceExit", () => {
+  it("exits the app through evaluate, never close(), and waits for the exit event", async () => {
+    const app = new FakeApp();
+
+    await forceExit(app);
+
+    expect(app.evaluateCalls).toBe(1);
+    expect(app.closeCalls).toBe(0);
+    expect(app.proc.exitCode).toBe(0);
+  });
+
+  it.each([
+    ["an exit code", { exitCode: 0, signalCode: null }],
+    ["a signal", { exitCode: null, signalCode: "SIGTERM" as const }],
+  ])("returns at once when the app has already exited with %s", async (_, exited) => {
+    const app = new FakeApp();
+    Object.assign(app.proc, exited);
+
+    await forceExit(app);
+
+    expect(app.evaluateCalls).toBe(0);
+    expect(app.closeCalls).toBe(0);
+  });
+
+  it("passes when every engine pid it was given has exited", async () => {
+    const child = spawn(process.execPath, ["-e", ""]);
+    await once(child, "exit");
+    const app = new FakeApp();
+    app.enginePids = [child.pid ?? -1];
+
+    await expect(forceExit(app, { timeoutMs: 200 })).resolves.toBeUndefined();
+  });
+
+  it("throws when an engine process outlives the app", async () => {
+    const app = new FakeApp();
+    app.enginePids = [process.pid];
+
+    await expect(forceExit(app, { timeoutMs: 50 })).rejects.toThrow(
+      `engine process ${process.pid} outlived the app`,
+    );
+  });
+
+  it("throws when the app does not exit within the timeout", async () => {
+    class StuckApp extends FakeApp {
+      override evaluate<R>(): Promise<R> {
+        this.evaluateCalls += 1;
+        return Promise.resolve([] as R);
+      }
+    }
+
+    await expect(forceExit(new StuckApp(), { timeoutMs: 50 })).rejects.toThrow(
+      "the app did not exit within 50 ms",
+    );
+  });
+
+  it("returns quietly when evaluate fails because the app exited meanwhile", async () => {
+    const app = new FakeApp();
+    app.evaluateError = new Error("target closed");
+    setTimeout(() => {
+      app.proc.exitCode = 0;
+      app.proc.emit("exit", 0, null);
+    }, 0);
+
+    await expect(forceExit(app)).resolves.toBeUndefined();
+  });
+
+  describe("the snippet evaluated in main", () => {
+    class ElectronFakeApp extends FakeApp {
+      exitCalls = 0;
+
+      override evaluate<R>(fn?: (electron: typeof Electron) => R | Promise<R>): Promise<R> {
+        this.evaluateCalls += 1;
+        const electron = {
+          app: {
+            getAppMetrics: () =>
+              this.enginePids.map((pid) => ({
+                type: "Utility",
+                serviceName: "node.mojom.NodeService",
+                pid,
+              })),
+            exit: () => {
+              this.exitCalls += 1;
+              this.proc.exitCode = 0;
+              this.proc.emit("exit", 0, null);
+            },
+          },
+        } as unknown as typeof Electron;
+        return Promise.resolve(fn?.(electron) as R);
+      }
+    }
+
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+
+    beforeEach(() => {
+      uncaught.length = 0;
+      process.prependListener("uncaughtException", onUncaught);
+    });
+
+    afterEach(() => {
+      process.removeListener("uncaughtException", onUncaught);
+      vi.restoreAllMocks();
+    });
+
+    it("still exits the app when an engine pid is already gone", async () => {
+      const child = spawn(process.execPath, ["-e", ""]);
+      await once(child, "exit");
+      const app = new ElectronFakeApp();
+      app.enginePids = [child.pid ?? -1];
+
+      await expect(forceExit(app, { timeoutMs: 200 })).resolves.toBeUndefined();
+      expect(app.exitCalls).toBe(1);
+      expect(uncaught).toEqual([]);
+    });
+
+    it("lets no kill error escape and still exits, leaving the engine to the survivor check", async () => {
+      const enginePid = 999_999;
+      const kill = process.kill.bind(process);
+      vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid !== enginePid) return kill(pid, signal);
+        if (signal === 0) return true;
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      });
+      const app = new ElectronFakeApp();
+      app.enginePids = [enginePid];
+
+      await expect(forceExit(app, { timeoutMs: 50 })).rejects.toThrow(
+        `engine process ${enginePid} outlived the app`,
+      );
+      expect(app.exitCalls).toBe(1);
+      expect(uncaught).toEqual([]);
+    });
+  });
+
+  it("reports an evaluate error instead of swallowing it", async () => {
+    const app = new FakeApp();
+    app.evaluateError = new Error("target closed");
+
+    await expect(forceExit(app)).rejects.toThrow("target closed");
+  });
+});
+
+describe("resolveHome", () => {
+  const made: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it("uses FLOWDECK_HOME from the environment and keeps it", async () => {
+    const own = await mkdtemp(join(tmpdir(), "fd-drive-own-"));
+    made.push(own);
+
+    expect(await resolveHome({ FLOWDECK_HOME: own })).toEqual({ home: own, keep: true });
+  });
+
+  it.each([
+    ["unset", {}],
+    ["empty", { FLOWDECK_HOME: "" }],
+  ])("makes a fresh temporary home it does not keep when FLOWDECK_HOME is %s", async (_, env) => {
+    const resolved = await resolveHome(env);
+    made.push(resolved.home);
+
+    expect(resolved.keep).toBe(false);
+    expect(resolved.home.startsWith(join(tmpdir(), "fd-drive-home-"))).toBe(true);
+    expect(existsSync(resolved.home)).toBe(true);
+  });
+});
+
 describe("drive cleanup", () => {
   let outDir: string;
   let home: string;
@@ -381,24 +702,157 @@ describe("drive cleanup", () => {
     app.windowError = new Error("no window");
 
     await expect(drive([], { outDir, home, launch })).rejects.toThrow("no window");
-    expect(app.closeCalls).toBe(1);
+    expect(app.evaluateCalls).toBe(1);
+    expect(app.closeCalls).toBe(0);
     expect(existsSync(home)).toBe(false);
   });
 
-  it("removes its home and reports the close error when closing the app fails", async () => {
-    app.closeError = new Error("close failed");
+  it("removes its home and reports the forceExit error when force-exiting the app fails", async () => {
+    app.evaluateError = new Error("exit failed");
 
-    await expect(drive([], { outDir, home, launch })).rejects.toThrow("close failed");
+    await expect(drive([], { outDir, home, launch })).rejects.toThrow("exit failed");
     expect(existsSync(home)).toBe(false);
   });
 
-  it("reports the failing step, not the close error, when both fail", async () => {
-    app.closeError = new Error("close failed");
+  it("reports the failing step, not the forceExit error, when both fail", async () => {
+    app.evaluateError = new Error("exit failed");
 
     await expect(
       drive([{ type: "wait-for-text", text: "never", timeoutMs: 1 }], { outDir, home, launch }),
     ).rejects.toThrow("step 1 (wait-for-text): never shown");
     expect(existsSync(home)).toBe(false);
+  });
+
+  it("tears down through forceExit, never close()", async () => {
+    await drive([], { outDir, home, launch });
+
+    expect(app.evaluateCalls).toBe(1);
+    expect(app.closeCalls).toBe(0);
+    expect(app.proc.exitCode).toBe(0);
+  });
+
+  it.each([
+    ["the run passes", undefined],
+    ["the first window never opens", new Error("no window")],
+  ])("keeps its home when keepHome is set and %s", async (_, windowError) => {
+    app.windowError = windowError;
+
+    const run = drive([], { outDir, home, launch, keepHome: true });
+
+    if (windowError) await expect(run).rejects.toThrow("no window");
+    else await run;
+    expect(app.proc.exitCode).toBe(0);
+    expect(existsSync(home)).toBe(true);
+  });
+
+  it("relaunches on the same home after close-window and force-exits the new app at the end", async () => {
+    const apps: FakeApp[] = [];
+    const homes: string[] = [];
+    const launchEach = (at: string) => {
+      homes.push(at);
+      const next = new FakeApp();
+      apps.push(next);
+      return Promise.resolve(next);
+    };
+
+    await drive([{ type: "close-window" }, { type: "relaunch" }], {
+      outDir,
+      home,
+      launch: launchEach,
+    });
+
+    expect(homes).toEqual([home, home]);
+    expect(apps.map((each) => each.proc.exitCode)).toEqual([0, 0]);
+    expect(apps.map((each) => each.closeCalls)).toEqual([0, 0]);
+    expect(apps[1]?.evaluateCalls).toBe(1);
+    expect(existsSync(home)).toBe(false);
+  });
+
+  describe("after close-window", () => {
+    class ClosingApp extends FakeApp {
+      constructor(private readonly exitsAfterMs: number | undefined) {
+        super();
+      }
+
+      override evaluate<R>(): Promise<R> {
+        if (this.evaluateCalls > 0) return super.evaluate<R>();
+        this.evaluateCalls += 1;
+        if (this.exitsAfterMs !== undefined) {
+          setTimeout(() => {
+            this.proc.exitCode = 0;
+            this.proc.emit("exit", 0, null);
+          }, this.exitsAfterMs);
+        }
+        return Promise.resolve(false as R);
+      }
+    }
+
+    it("lets an app that exits by itself finish, without force-exiting it, then relaunches", async () => {
+      const first = new ClosingApp(100);
+      const second = new FakeApp();
+      const queue: FakeApp[] = [first, second];
+      const launchEach = () => Promise.resolve(queue.shift() as FakeApp);
+
+      await drive([{ type: "close-window" }, { type: "relaunch" }], {
+        outDir,
+        home,
+        launch: launchEach,
+        exitGraceMs: 2000,
+      });
+
+      expect(first.evaluateCalls).toBe(1);
+      expect(first.proc.exitCode).toBe(0);
+      expect(queue).toEqual([]);
+      expect(second.evaluateCalls).toBe(1);
+    });
+
+    it("force-exits an app that is still alive once the grace period ends", async () => {
+      const held = new ClosingApp(undefined);
+      const started = Date.now();
+
+      await drive([{ type: "close-window" }], {
+        outDir,
+        home,
+        launch: () => Promise.resolve(held),
+        exitGraceMs: 200,
+      });
+
+      expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+      expect(held.evaluateCalls).toBe(2);
+      expect(held.proc.exitCode).toBe(0);
+      expect(existsSync(home)).toBe(false);
+    });
+
+    it("force-exits at once when no close-window came before the relaunch", async () => {
+      const first = new FakeApp();
+      const queue: FakeApp[] = [first, new FakeApp()];
+      const started = Date.now();
+
+      await drive([{ type: "relaunch" }], {
+        outDir,
+        home,
+        launch: () => Promise.resolve(queue.shift() as FakeApp),
+        exitGraceMs: 5000,
+      });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(first.proc.exitCode).toBe(0);
+    });
+  });
+});
+
+describe("reportFailure", () => {
+  it("writes the error and ends the process with exit code 1, so open app handles cannot keep it alive", () => {
+    const written: string[] = [];
+    const exits: number[] = [];
+
+    reportFailure(new Error("the app did not exit within 5000 ms"), {
+      write: (text) => written.push(text),
+      exit: (code) => exits.push(code),
+    });
+
+    expect(written).toEqual(["drive failed: the app did not exit within 5000 ms\n"]);
+    expect(exits).toEqual([1]);
   });
 });
 

@@ -1,8 +1,5 @@
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { RunEvent } from "../../core/run/run-events.js";
 import type {
   EventEntry,
@@ -12,8 +9,11 @@ import type {
   Store,
   StoredEvent,
 } from "../../ports/store.js";
+import { openDatabase } from "./open-database.js";
 
-export type SqliteStoreOptions = { path: string; now?: () => Date; migrationsDir?: string };
+export type SqliteStoreOptions =
+  | { db: Database.Database; now?: () => Date }
+  | { path: string; now?: () => Date; migrationsDir?: string };
 
 type RunRow = {
   id: string;
@@ -48,11 +48,8 @@ export class SqliteStore implements Store {
   private readonly now: () => Date;
 
   constructor(options: SqliteStoreOptions) {
-    mkdirSync(dirname(options.path), { recursive: true });
-    this.db = new Database(options.path);
     this.now = options.now ?? (() => new Date());
-    this.db.pragma("foreign_keys = ON");
-    this.migrate(options.migrationsDir ?? fileURLToPath(new URL("./migrations/", import.meta.url)));
+    this.db = "db" in options ? options.db : openDatabase({ ...options, now: this.now });
   }
 
   createRun(run: NewRun): RunRecord {
@@ -161,28 +158,5 @@ export class SqliteStore implements Store {
 
   private time(): string {
     return this.now().toISOString();
-  }
-
-  private migrate(migrationsDir: string): void {
-    this.db.exec(
-      "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
-    );
-    const applied = new Set(
-      (this.db.prepare("SELECT name FROM migrations").all() as { name: string }[]).map(
-        (row) => row.name,
-      ),
-    );
-    const pending = readdirSync(migrationsDir)
-      .filter((name) => name.endsWith(".sql") && !applied.has(name))
-      .sort();
-    for (const name of pending) {
-      const sql = readFileSync(join(migrationsDir, name), "utf8");
-      this.db.transaction(() => {
-        this.db.exec(sql);
-        this.db
-          .prepare("INSERT INTO migrations (name, applied_at) VALUES (?, ?)")
-          .run(name, this.time());
-      })();
-    }
   }
 }

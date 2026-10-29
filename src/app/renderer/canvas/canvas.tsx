@@ -131,17 +131,18 @@ function Readout({ store }: { store: StoreApi<CanvasState> }) {
   );
 }
 
-export function Canvas({ store }: { store: StoreApi<CanvasState> }) {
+export function Canvas({ store, onSave }: { store: StoreApi<CanvasState>; onSave: () => void }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const shortcut = shortcutFor(event);
       if (shortcut === null) return;
       event.preventDefault();
-      store.getState()[shortcut]();
+      if (shortcut === "save") onSave();
+      else store.getState()[shortcut]();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [store]);
+  }, [store, onSave]);
 
   return (
     <ReactFlowProvider>

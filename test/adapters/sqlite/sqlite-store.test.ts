@@ -92,9 +92,12 @@ describe("SqliteStore", () => {
     open();
 
     expect(tables).toEqual(expect.arrayContaining(["runs", "run_sessions", "run_nodes", "events"]));
-    expect(db.prepare("SELECT name FROM migrations").all()).toEqual([{ name: "001_runs.sql" }]);
+    expect(db.prepare("SELECT name FROM migrations ORDER BY name").all()).toEqual([
+      { name: "001_runs.sql" },
+      { name: "002_flows.sql" },
+    ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 1]);
+    expect(before).toEqual([1, 1, 3, 1, 2]);
   });
 
   it("writes one run, one session and one row per node", () => {

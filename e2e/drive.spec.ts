@@ -82,3 +82,54 @@ test("fails on a missing control, names the step, closes the app and removes its
   expect(isRunning(Number(printed(result.stdout, "app pid")))).toBe(false);
   expect(existsSync(printed(result.stdout, "home"))).toBe(false);
 });
+
+test("a clean close-window lets the app quit, and drive tears down promptly with no app left", async () => {
+  const started = Date.now();
+  const { result } = await drive([
+    { type: "wait-for-text", text: "Save" },
+    { type: "close-window" },
+  ]);
+
+  expect(result.code, result.stderr).toBe(0);
+  expect(Date.now() - started).toBeLessThan(20_000);
+  expect(isRunning(Number(printed(result.stdout, "app pid")))).toBe(false);
+  expect(existsSync(printed(result.stdout, "home"))).toBe(false);
+});
+
+test("a close-window held by the unsaved prompt keeps driving the same window", async () => {
+  const { outDir, result } = await drive([
+    { type: "wait-for-text", text: "Save" },
+    { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 150, y: 150 } },
+    { type: "close-window" },
+    { type: "screenshot" },
+    { type: "click", testid: "close-cancel" },
+    { type: "screenshot" },
+  ]);
+
+  expect(result.code, result.stderr).toBe(0);
+  expect(await readFile(join(outDir, "step-4.aria.yml"), "utf8")).toContain(
+    "Save changes before closing?",
+  );
+  expect(await readFile(join(outDir, "step-6.aria.yml"), "utf8")).not.toContain(
+    "Save changes before closing?",
+  );
+  expect(isRunning(Number(printed(result.stdout, "app pid")))).toBe(false);
+});
+
+test("Save in the close prompt finishes before relaunch, and the relaunch reopens the saved node", async () => {
+  const { outDir, result } = await drive([
+    { type: "wait-for-text", text: "Save" },
+    { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 150, y: 150 } },
+    { type: "close-window" },
+    { type: "click", testid: "close-save" },
+    { type: "relaunch" },
+    { type: "wait-for-text", text: "Save" },
+    { type: "screenshot" },
+  ]);
+
+  expect(result.code, result.stderr).toBe(0);
+  const reopened = await readFile(join(outDir, "step-7.aria.yml"), "utf8");
+  expect(reopened).toContain('\\"id\\":\\"prompt-1\\"');
+  expect(reopened).not.toContain("Unsaved");
+  expect(await readFile(join(outDir, "app.log"), "utf8")).not.toContain("engine exited");
+});
