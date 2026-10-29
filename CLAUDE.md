@@ -7,6 +7,13 @@ Design and architecture: https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W (see 
 
 These rules are this repo's engineering standards.
 
+## Development
+
+Development runs through the workflows plugin (`carousell/agent-workflows-plugin`); install it
+before starting work. `.claude/settings.json` enables it, so Claude Code offers to install it when
+the folder is first trusted. Otherwise run `/plugin marketplace add carousell/agent-workflows-plugin`
+and `/plugin install workflows@agent-workflow`. How tickets run through it is in `.claude/rules/`.
+
 ## Gates
 
 | Gate                                            | Command                                        |
