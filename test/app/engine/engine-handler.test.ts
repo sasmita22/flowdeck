@@ -30,8 +30,9 @@ const failingOpen = () => {
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
-const runEnvironment = (fs: NodeFileSystem) => ({
+const runEnvironment = (fs: NodeFileSystem, now: () => number = Date.now) => ({
   fs,
+  now,
   scripts: new NodeProcessRunner(),
   waiter: new FakeWaiter([]),
   startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
@@ -626,6 +627,78 @@ describe("createEngineHandler", async () => {
       await untilFinished(runId);
 
       expect(sessionPushes()).toEqual([]);
+    });
+
+    const startActivityRun = async () => {
+      let clock = 1000;
+      const source = new FakeEventSource();
+      let claudeSessionId = "";
+      const hook = (kind: "PreToolUse" | "Stop", sessionId: string, at: number) =>
+        source.publish({
+          kind,
+          sessionId,
+          payload: {
+            hook_event_name: kind,
+            session_id: sessionId,
+            flowdeck_hook_at: at,
+            ...(kind === "PreToolUse"
+              ? { tool_name: "Bash", tool_input: { command: "ls" } }
+              : { last_assistant_message: "OK" }),
+          },
+        });
+      handler = handlerWith({
+        newSessionName: () => "fd-run-test",
+        run: {
+          ...runEnvironment(new NodeFileSystem(), () => clock),
+          startEvents: async () => ({ events: source, stop: async () => undefined }),
+          openSession: async (opening) => {
+            claudeSessionId = opening.claudeSessionId;
+            return {
+              sessionId: claudeSessionId,
+              session: { ensureStarted: async () => undefined },
+              prompts: {
+                sendPrompt: async () => {
+                  clock = 1500;
+                  hook("PreToolUse", claudeSessionId, 1200);
+                  hook("PreToolUse", "another-session", 1300);
+                  hook("Stop", claudeSessionId, 1500);
+                },
+              },
+              stop: async () => undefined,
+            };
+          },
+        },
+      });
+      flows.save(promptFlow());
+
+      const runId = await startedRunId();
+      await untilFinished(runId);
+      return { runId, claudeSessionId, hook };
+    };
+
+    const activityPushes = () => pushes.filter((push) => push.push === "activity");
+
+    it("pushes one activity entry for a tool call of the run's Claude session stamped inside the node's turn", async () => {
+      const { runId, claudeSessionId } = await startActivityRun();
+
+      expect(claudeSessionId).toBe(runs.runs[0]?.session.claudeSessionId);
+      expect(activityPushes()).toEqual([
+        {
+          push: "activity",
+          value: {
+            runId,
+            entry: { id: 1, nodeId: "plan", at: 1200, kind: "tool", tool: "Bash", summary: "ls" },
+          },
+        },
+      ]);
+    });
+
+    it("pushes no activity for a tool call that arrives after the run has finished", async () => {
+      const { claudeSessionId, hook } = await startActivityRun();
+
+      hook("PreToolUse", claudeSessionId, 1200);
+
+      expect(activityPushes()).toHaveLength(1);
     });
 
     it("leaves no unhandled rejection when reading the final status throws too", async () => {

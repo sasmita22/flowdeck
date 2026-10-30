@@ -20,6 +20,8 @@ export type FlowdeckBridge = {
   closeTerminal(): void;
   onTerminalStatus(listener: (status: unknown) => void): () => void;
   onTerminalData(listener: (data: unknown) => void): () => void;
+  getActivity(): Promise<unknown>;
+  onActivity(listener: (update: unknown) => void): () => void;
 };
 
 export const bridgeChannels = {
@@ -40,4 +42,6 @@ export const bridgeChannels = {
   closeTerminal: "flowdeck:close-terminal",
   terminalStatus: "flowdeck:terminal-status",
   terminalData: "flowdeck:terminal-data",
+  getActivity: "flowdeck:get-activity",
+  activity: "flowdeck:activity",
 } as const;

@@ -20,26 +20,26 @@ const thenBetween = (from: string, fromPort: string, to: string, toPort: string)
 
 describe("toViewNodes", () => {
   it("maps each node to id, type, position, selected and label, in flow order", () => {
-    expect(toViewNodes(twoNodes(), [], {})).toEqual([
+    expect(toViewNodes(twoNodes(), [], {}, null)).toEqual([
       {
         id: "prompt-1",
         type: "prompt",
         position: { x: 120, y: 80 },
         selected: false,
-        data: { label: "Prompt" },
+        data: { label: "Prompt", highlighted: false },
       },
       {
         id: "script-1",
         type: "script",
         position: { x: 300, y: 40 },
         selected: false,
-        data: { label: "Script" },
+        data: { label: "Script", highlighted: false },
       },
     ]);
   });
 
   it("marks selected only the nodes whose ids are in the selection", () => {
-    const view = toViewNodes(twoNodes(), ["script-1"], {});
+    const view = toViewNodes(twoNodes(), ["script-1"], {}, null);
 
     expect(view.map((node) => [node.id, node.selected])).toEqual([
       ["prompt-1", false],
@@ -48,13 +48,13 @@ describe("toViewNodes", () => {
   });
 
   it("ignores selection ids that are not in the flow", () => {
-    const view = toViewNodes(twoNodes(), ["gone-1"], {});
+    const view = toViewNodes(twoNodes(), ["gone-1"], {}, null);
 
     expect(view.map((node) => node.selected)).toEqual([false, false]);
   });
 
   it("takes the drag position when one is held, else the flow position", () => {
-    const view = toViewNodes(twoNodes(), [], { "prompt-1": { x: 500, y: 600 } });
+    const view = toViewNodes(twoNodes(), [], { "prompt-1": { x: 500, y: 600 } }, null);
 
     expect(view.map((node) => [node.id, node.position])).toEqual([
       ["prompt-1", { x: 500, y: 600 }],
@@ -62,8 +62,23 @@ describe("toViewNodes", () => {
     ]);
   });
 
+  it("marks highlighted only the node whose id is given, without selecting any node", () => {
+    const view = toViewNodes(twoNodes(), [], {}, "script-1");
+
+    expect(view.map((node) => [node.id, node.data.highlighted, node.selected])).toEqual([
+      ["prompt-1", false, false],
+      ["script-1", true, false],
+    ]);
+  });
+
+  it("highlights no node when given null", () => {
+    const view = toViewNodes(twoNodes(), [], {}, null);
+
+    expect(view.map((node) => node.data.highlighted)).toEqual([false, false]);
+  });
+
   it("returns no entries for an empty flow", () => {
-    expect(toViewNodes(flow([], []), [], {})).toEqual([]);
+    expect(toViewNodes(flow([], []), [], {}, null)).toEqual([]);
   });
 });
 

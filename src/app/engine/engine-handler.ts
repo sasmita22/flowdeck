@@ -14,6 +14,7 @@ import {
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import type { FlowStore, LoadLatestFlowResult, SaveFlowResult } from "../../ports/flow-store.js";
 import type { Store } from "../../ports/store.js";
+import { createActivityTracker } from "./activity-tracker.js";
 import type { HooksResult } from "./hooks.js";
 import type { EnginePush, EngineRequest, EngineResponse, StoreOpenResult } from "./protocol.js";
 import { createPublishingStore } from "./publishing-store.js";
@@ -28,7 +29,7 @@ export type EngineHandlerOptions = {
   prepareHooks: () => HooksResult;
   isFolder: (path: string) => boolean;
   fs: BuildFileSystem & VerifyFileSystem;
-  run: RunEnvironment;
+  run: RunEnvironment & { now: () => number };
   newSessionName?: () => string;
 };
 
@@ -178,8 +179,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         push: "run-state",
         value: runSnapshot({ runId, status: "running", nodeIds, events: [] }),
       });
+      const tracker = createActivityTracker({
+        runId,
+        now: options.run.now,
+        publish: options.publish,
+        log: (line) => console.log(`engine: activity ${line}`),
+      });
       const store = createPublishingStore({
-        store: runs,
+        store: tracker.store(runs),
         runId,
         nodeIds,
         publish: options.publish,
@@ -189,6 +196,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         {
           ...options.run,
           store,
+          startEvents: async (path) => {
+            const started = await options.run.startEvents(path);
+            const unwatch = tracker.watch(started.events, claudeSessionId);
+            return {
+              events: started.events,
+              stop: async () => {
+                unwatch();
+                await started.stop();
+              },
+            };
+          },
           onChange: (line) => console.log(`engine: ${line}`),
           onInterrupt: (handler) => {
             run.interrupt = handler;

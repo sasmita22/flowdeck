@@ -108,4 +108,11 @@ test("Open terminal stays disabled through a script-only run, and no pane appear
   });
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
   await expect(window.getByTestId("terminal-view")).toHaveCount(0);
+
+  const session = window.getByTestId("inspector-session");
+  await expect(session).toContainText("main");
+  await expect(session).toHaveAttribute("data-status", "done");
+  await expect(window.getByTestId("inspector-node-s1")).toHaveAttribute("data-status", "done");
+  await expect(window.getByTestId("inspector-node-s2")).toHaveAttribute("data-status", "done");
+  await expect(window.getByTestId("activity-empty")).toBeVisible();
 });

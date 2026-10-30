@@ -1,3 +1,4 @@
+import type { ActivityEntry } from "../../core/run/activity.js";
 import type { RunSnapshot } from "../../core/run/snapshot.js";
 
 export type EngineRequest = {
@@ -10,7 +11,9 @@ export type EngineResponse =
   { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string };
 
 export type EnginePush =
-  { push: "run-state"; value: RunSnapshot } | { push: "session"; value: string | null };
+  | { push: "run-state"; value: RunSnapshot }
+  | { push: "session"; value: string | null }
+  | { push: "activity"; value: { runId: string; entry: ActivityEntry } };
 
 export type EngineMessage = EngineResponse | EnginePush;
 

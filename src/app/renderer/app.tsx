@@ -6,6 +6,8 @@ import { Canvas } from "./canvas/canvas.js";
 import { selectDirty, type CanvasState } from "./canvas/store.js";
 import { RunStoreContext } from "./canvas/status.js";
 import { ClosePrompt } from "./close-prompt.js";
+import { Inspector } from "./inspector/inspector.js";
+import type { InspectorState } from "./inspector/store.js";
 import { selectRunDisabled, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import { selectOpenDisabled, type TerminalState } from "./terminal/store.js";
@@ -87,12 +89,14 @@ export function App({
   save,
   run,
   terminal,
+  inspector,
 }: {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
   run: StoreApi<RunState>;
   terminal: StoreApi<TerminalState>;
+  inspector: StoreApi<InspectorState>;
 }) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
@@ -105,9 +109,14 @@ export function App({
       <p data-testid="app-version">{version}</p>
       <p data-testid="store-status">{status}</p>
       <TitleStrip canvas={canvas} save={save} run={run} terminal={terminal} />
-      <RunStoreContext.Provider value={run}>
-        {ready && <Canvas store={canvas} onSave={onSave} />}
-      </RunStoreContext.Provider>
+      <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <RunStoreContext.Provider value={run}>
+            {ready && <Canvas store={canvas} onSave={onSave} />}
+          </RunStoreContext.Provider>
+        </div>
+        {ready && <Inspector inspector={inspector} run={run} canvas={canvas} />}
+      </div>
       {terminalVisible && <TerminalPane store={terminal} />}
       <ClosePrompt store={save} />
     </main>

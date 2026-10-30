@@ -47,9 +47,10 @@ function Board({ store }: { store: StoreApi<CanvasState> }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
   const dragPositions = useStore(store, (state) => state.dragPositions);
+  const highlighted = useStore(store, (state) => state.highlighted);
   const nodes = useMemo(
-    () => toViewNodes(flow, selection, dragPositions),
-    [flow, selection, dragPositions],
+    () => toViewNodes(flow, selection, dragPositions, highlighted),
+    [flow, selection, dragPositions, highlighted],
   );
   const edges = useMemo(() => toViewEdges(flow), [flow]);
   const { screenToFlowPosition } = useReactFlow();
