@@ -1,0 +1,53 @@
+.fd-node {
+  --panel: #ffffff;
+  --fg: #151a22;
+  --muted: #5d6675;
+  --line: #d8dde5;
+  --c-flow: #6b4fd8;
+  --c-work: #2c6bd1;
+  --c-ctrl: #a86a12;
+  --c-human: #c2415d;
+  --c-hub: #22855a;
+  --c-io: #5b6474;
+  --term-bg: #1c222c;
+  --term-fg: #dfe6ef;
+  --term-sub: #93a0b2;
+  --ring: #f59e0b;
+  --select: #2f6fed;
+  --f-body: "Instrument Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fd-node {
+    --panel: #161a21;
+    --fg: #e6e9ee;
+    --muted: #98a1af;
+    --line: #2a303a;
+    --c-flow: #a593ff;
+    --c-work: #7aa8ff;
+    --c-ctrl: #e6b45e;
+    --c-human: #f08aa0;
+    --c-hub: #6fd39c;
+    --c-io: #a7b0bf;
+    --term-bg: #05070a;
+    --term-fg: #dfe6ef;
+    --term-sub: #8792a3;
+  }
+}
+
+.react-flow .react-flow__node-output,
+.react-flow .react-flow__node-output.selectable:hover,
+.react-flow .react-flow__node-output.selectable.selected,
+.react-flow .react-flow__node-output.selectable:focus,
+.react-flow .react-flow__node-output.selectable:focus-visible {
+  padding: 0;
+  width: auto;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  text-align: inherit;
+  box-shadow: none;
+}

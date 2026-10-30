@@ -9,7 +9,8 @@ import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, type DragEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { nodeTypes } from "./nodes.js";
+import { nodeTypes } from "../nodes/node-types.js";
+import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
 import { wrappableIds, type CanvasNodeType, type CanvasState } from "./store.js";
@@ -28,6 +29,7 @@ function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
   const canRedo = useStore(store, (state) => state.redoStack.length > 0);
   const canDelete = useStore(store, (state) => state.selection.length > 0);
   const canWrap = useStore(store, (state) => wrappableIds(state.flow, state.selection).length > 0);
+  const message = useStore(store, (state) => state.message);
   const { undo, redo, deleteSelection, wrapSelection } = store.getState();
   return (
     <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -43,6 +45,7 @@ function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
       <button data-testid="canvas-wrap" disabled={!canWrap} onClick={wrapSelection}>
         Wrap in session
       </button>
+      {message !== null && <span data-testid="canvas-message">{message}</span>}
     </div>
   );
 }
@@ -103,19 +106,26 @@ function Board({ store }: { store: StoreApi<CanvasState> }) {
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          colorMode="system"
           defaultViewport={startViewport}
           deleteKeyCode={deleteKeys}
           proOptions={proOptions}
           onNodesChange={onNodesChange}
           onNodeDragStop={(_, __, dragged) => store.getState().endDrag(dragged.map((n) => n.id))}
-          onBeforeDelete={async ({ nodes: removed }) => {
-            store.getState().deleteNodes(removed.map((n) => n.id));
+          onBeforeDelete={async () => {
+            store.getState().deleteSelection();
             return false;
           }}
+          onNodeContextMenu={(event, node) => {
+            event.preventDefault();
+            store.getState().openNodeMenu(node.id, { x: event.clientX, y: event.clientY });
+          }}
+          onPaneClick={() => store.getState().closeNodeMenu()}
           onConnect={onConnect}
           onDragOver={onDragOver}
           onDrop={onDrop}
         />
+        <NodeMenu store={store} />
       </div>
     </div>
   );
@@ -142,8 +152,10 @@ export function Canvas({ store, onSave }: { store: StoreApi<CanvasState>; onSave
       const shortcut = shortcutFor(event);
       if (shortcut === null) return;
       event.preventDefault();
+      const state = store.getState();
       if (shortcut === "save") onSave();
-      else store.getState()[shortcut]();
+      else if (shortcut === "selectAll") state.select(state.flow.nodes.map((node) => node.id));
+      else state[shortcut]();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

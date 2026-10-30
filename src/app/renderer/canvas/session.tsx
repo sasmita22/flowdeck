@@ -1,30 +1,31 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import type { CSSProperties } from "react";
+import { FrameRect } from "../nodes/shape.js";
 
 type FrameNode = Node<{ name: string }>;
 
-const frameStyle: CSSProperties = {
-  boxSizing: "border-box",
-  border: "1.5px dashed #6b7280",
-  borderRadius: 8,
-  background: "rgba(107, 114, 128, 0.06)",
-  pointerEvents: "none",
-};
+const color = "var(--c-hub)";
 
 const labelStyle: CSSProperties = {
   position: "absolute",
-  top: -18,
-  left: 0,
-  fontFamily: "system-ui, sans-serif",
-  fontSize: 11,
-  color: "#4b5563",
+  top: 6,
+  left: 12,
+  color,
+  font: "600 11px var(--f-mono)",
+  letterSpacing: "0.04em",
+  whiteSpace: "nowrap",
 };
 
 export function SessionFrame({ data, width, height }: NodeProps<FrameNode>) {
   return (
-    <div data-testid="session-frame" style={{ ...frameStyle, width, height }}>
-      <span data-testid="session-frame-name" style={labelStyle}>
-        {data.name}
+    <div
+      className="fd-node"
+      data-testid="session-frame"
+      style={{ position: "relative", width, height, pointerEvents: "none" }}
+    >
+      <FrameRect width={width} height={height} color={color} dashed={false} />
+      <span style={labelStyle}>
+        SESS · <span data-testid="session-frame-name">{data.name}</span>
       </span>
     </div>
   );
