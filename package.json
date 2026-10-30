@@ -5,7 +5,7 @@
   "main": ".vite/build/main.cjs",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc && tsc -p tsconfig.renderer.json",
+    "typecheck": "tsc && tsc -p tsconfig.renderer.json && tsc -p tsconfig.e2e.json",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

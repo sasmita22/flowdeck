@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
@@ -8,6 +9,9 @@ import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { createRunRelay, stopEngine } from "./run.js";
+import { createWindowGuard, type WindowGuard } from "./window-guard.js";
+
+const rendererIndexPath = join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
 
 const toStoreStatus = (result: StoreOpenResult): StoreStatus =>
   result.kind === "ready" ? { kind: "ready" } : { kind: "error", message: result.message };
@@ -34,7 +38,7 @@ function startEngine(home: string) {
   return { engine, client, exited };
 }
 
-function openWindow() {
+function openWindow(windowGuard: WindowGuard) {
   const window = new BrowserWindow({
     title: "Flowdeck",
     webPreferences: {
@@ -47,46 +51,73 @@ function openWindow() {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
     void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    void window.loadFile(join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+    void window.loadFile(rendererIndexPath);
   }
+  window.webContents.setWindowOpenHandler(() => windowGuard.denyWindowOpen());
+  window.webContents.on("will-navigate", (event) => {
+    if (!windowGuard.allowsNavigation(event.url)) event.preventDefault();
+  });
   return window;
 }
 
-function guardClose(window: BrowserWindow) {
+function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
   const guard = createCloseGuard({
     requestClose: () => window.webContents.send(bridgeChannels.closeRequest),
     closeWindow: () => window.close(),
   });
-  ipcMain.on(bridgeChannels.setDirty, (_event, dirty: boolean) => guard.setDirty(dirty));
-  ipcMain.on(bridgeChannels.closeAnswer, (_event, answer: CloseAnswer) => guard.answer(answer));
+  ipcMain.on(
+    bridgeChannels.setDirty,
+    windowGuard.listen((dirty: boolean) => guard.setDirty(dirty)),
+  );
+  ipcMain.on(
+    bridgeChannels.closeAnswer,
+    windowGuard.listen((answer: CloseAnswer) => guard.answer(answer)),
+  );
   window.on("close", (event) => guard.onClose(event));
-  window.webContents.on("did-start-navigation", ({ isMainFrame, isSameDocument }) => {
-    if (isMainFrame && !isSameDocument) guard.reset();
-  });
+  window.webContents.on("did-navigate", () => guard.reset());
   window.webContents.on("render-process-gone", () => guard.reset());
 }
 
 void app.whenReady().then(() => {
   const { engine, client, exited } = startEngine(resolveFlowdeckHome(process.env, homedir()));
-  ipcMain.handle(bridgeChannels.version, () => client.request("version"));
-  ipcMain.handle(bridgeChannels.storeStatus, async () =>
-    toStoreStatus((await client.request("store-status")) as StoreOpenResult),
+  const windowGuard = createWindowGuard({
+    appUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL ?? pathToFileURL(rendererIndexPath).href,
+  });
+  ipcMain.handle(
+    bridgeChannels.version,
+    windowGuard.handle(() => client.request("version")),
   );
-  ipcMain.handle(bridgeChannels.saveFlow, (_event, flow: unknown) =>
-    client.request("save-flow", flow),
+  ipcMain.handle(
+    bridgeChannels.storeStatus,
+    windowGuard.handle(async () =>
+      toStoreStatus((await client.request("store-status")) as StoreOpenResult),
+    ),
   );
-  ipcMain.handle(bridgeChannels.loadLatestFlow, async () =>
-    toLoadedFlow((await client.request("load-latest-flow")) as LoadLatestFlowResult),
+  ipcMain.handle(
+    bridgeChannels.saveFlow,
+    windowGuard.handle((flow: unknown) => client.request("save-flow", flow)),
   );
-  const window = openWindow();
+  ipcMain.handle(
+    bridgeChannels.loadLatestFlow,
+    windowGuard.handle(async () =>
+      toLoadedFlow((await client.request("load-latest-flow")) as LoadLatestFlowResult),
+    ),
+  );
+  const window = openWindow(windowGuard);
   const relay = createRunRelay({
     send: (snapshot) => {
       if (!window.isDestroyed()) window.webContents.send(bridgeChannels.runState, snapshot);
     },
   });
   client.onPush(relay.onPush);
-  ipcMain.handle(bridgeChannels.startRun, () => client.request("start-run"));
-  ipcMain.handle(bridgeChannels.getRunState, () => relay.latest());
+  ipcMain.handle(
+    bridgeChannels.startRun,
+    windowGuard.handle(() => client.request("start-run")),
+  );
+  ipcMain.handle(
+    bridgeChannels.getRunState,
+    windowGuard.handle(() => relay.latest()),
+  );
   let quitting = false;
   app.on("will-quit", (event) => {
     if (quitting) return;
@@ -97,7 +128,7 @@ void app.whenReady().then(() => {
       app.exit(0);
     });
   });
-  guardClose(window);
+  guardClose(window, windowGuard);
 });
 
 app.on("window-all-closed", () => app.quit());

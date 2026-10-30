@@ -177,6 +177,10 @@ export interface DriveApp {
   process(): DriveProcess;
   firstWindow(): Promise<Page>;
   evaluate<R>(fn: (electron: typeof Electron) => R | Promise<R>): Promise<R>;
+  evaluate<R, Arg>(
+    fn: (electron: typeof Electron, arg: Arg) => R | Promise<R>,
+    arg: Arg,
+  ): Promise<R>;
 }
 
 export type Launch = (home: string) => Promise<DriveApp>;
@@ -281,7 +285,8 @@ export async function launchApp(options: {
   const app: DriveApp = {
     process: () => proc,
     firstWindow: () => launched.firstWindow(),
-    evaluate: (fn) => launched.evaluate(fn),
+    evaluate: <R, Arg>(fn: (electron: typeof Electron, arg: Arg) => R | Promise<R>, arg?: Arg) =>
+      launched.evaluate(fn, arg as Arg),
   };
   const log = createWriteStream(options.logPath, { flags: "a" });
   proc.stdout?.pipe(log, { end: false });
