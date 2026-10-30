@@ -10,7 +10,16 @@ import {
 import { SESSION_FRAME_ID, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
-import { flow, loop, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
+import {
+  flow,
+  hardstop,
+  loop,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../../../fixtures/flow-builders.js";
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -240,6 +249,153 @@ describe("delete", () => {
     act(store, (s) => s.deleteNodes([]));
 
     expect(store.getState().undoStack).toHaveLength(depth);
+  });
+});
+
+const locked = "Hard stop is locked";
+
+const guarded = () => {
+  const store = createCanvasStore({ ready: false });
+  store
+    .getState()
+    .load(
+      flow(
+        [trigger("T"), prompt("P"), hardstop("H"), output("O")],
+        [thenWire("T", "P"), thenWire("P", "H"), thenWire("H", "O")],
+      ),
+    );
+  return store;
+};
+
+describe("hard stop lock", () => {
+  it("starts with no message", () => {
+    expect(createCanvasStore().getState().message).toBeNull();
+  });
+
+  it("keeps a hard stop deleted by id, shows the locked message and records nothing", () => {
+    const store = guarded();
+    const before = store.getState();
+
+    act(store, (s) => s.deleteNodes(["H"]));
+
+    const after = store.getState();
+    expect(after.flow).toEqual(before.flow);
+    expect(after.message).toBe(locked);
+    expect(after.undoStack).toBe(before.undoStack);
+    expect(after.redoStack).toBe(before.redoStack);
+  });
+
+  it("deletes the rest of a mixed selection as one undoable command and keeps the hard stop", () => {
+    const store = guarded();
+    const before = store.getState().flow;
+    act(store, (s) => s.select(["P", "H"]));
+
+    act(store, (s) => s.deleteSelection());
+
+    const after = store.getState();
+    expect(after.flow.nodes.map((node) => node.id)).toEqual(["T", "H", "O"]);
+    expect(after.flow.wires).toEqual([then("H", "O")]);
+    expect(after.message).toBe(locked);
+    expect(after.undoStack).toHaveLength(1);
+
+    act(store, (s) => s.undo());
+
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("leaves only the hard stop when every node is selected and deleted", () => {
+    const store = guarded();
+    act(store, (s) => s.select(s.flow.nodes.map((node) => node.id)));
+
+    act(store, (s) => s.deleteSelection());
+
+    const after = store.getState();
+    expect(after.flow.nodes.map((node) => node.id)).toEqual(["H"]);
+    expect(after.flow.wires).toEqual([]);
+    expect(after.message).toBe(locked);
+    expect(after.undoStack).toHaveLength(1);
+  });
+
+  it("shows no message for a delete without a hard stop", () => {
+    const store = guarded();
+
+    act(store, (s) => s.deleteNodes(["P"]));
+
+    expect(store.getState().message).toBeNull();
+  });
+
+  it("clears the message on the next successful edit", () => {
+    const store = guarded();
+    act(store, (s) => s.deleteNodes(["H"]));
+
+    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+
+    expect(store.getState().message).toBeNull();
+  });
+
+  it("clears the message when the selection changes", () => {
+    const store = guarded();
+    act(store, (s) => s.deleteNodes(["H"]));
+
+    act(store, (s) => s.select(["P"]));
+
+    expect(store.getState().message).toBeNull();
+  });
+});
+
+describe("node menu", () => {
+  it("starts closed", () => {
+    expect(createCanvasStore().getState().menu).toBeNull();
+  });
+
+  it("opens on a node at a point and closes again", () => {
+    const store = guarded();
+
+    store.getState().openNodeMenu("P", { x: 10, y: 20 });
+
+    expect(store.getState().menu).toEqual({ nodeId: "P", x: 10, y: 20 });
+
+    store.getState().closeNodeMenu();
+
+    expect(store.getState().menu).toBeNull();
+  });
+
+  it("closes when the selection changes", () => {
+    const store = guarded();
+    store.getState().openNodeMenu("P", { x: 10, y: 20 });
+
+    store.getState().select(["T"]);
+
+    expect(store.getState().menu).toBeNull();
+  });
+
+  it.each([
+    ["another node", "P"],
+    ["the hard stop", "H"],
+  ])("closes when %s is deleted", (_name, id) => {
+    const store = guarded();
+    store.getState().openNodeMenu(id, { x: 10, y: 20 });
+
+    act(store, (s) => s.deleteNodes([id]));
+
+    expect(store.getState().menu).toBeNull();
+  });
+
+  it("records nothing when its Delete names a node an undo removed", () => {
+    const store = guarded();
+    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    const dropped = store.getState().flow.nodes.at(-1)?.id ?? "";
+    store.getState().openNodeMenu(dropped, { x: 10, y: 20 });
+    act(store, (s) => s.undo());
+    const { flow: before, undoStack, redoStack } = store.getState();
+
+    act(store, (s) => s.deleteNodes([dropped]));
+
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toEqual(undoStack);
+    expect(store.getState().redoStack).toEqual(redoStack);
+    expect(store.getState().redoStack).toHaveLength(1);
+    expect(store.getState().message).toBeNull();
   });
 });
 

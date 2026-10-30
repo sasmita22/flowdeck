@@ -15,7 +15,7 @@ describe("shortcutFor", () => {
     expect(shortcutFor({ key: "Z", metaKey: false, shiftKey: true })).toBeNull();
   });
 
-  it.each(["Delete", "Backspace", "y", "a"])("maps Cmd+%s to nothing", (key) => {
+  it.each(["Delete", "Backspace", "y"])("maps Cmd+%s to nothing", (key) => {
     expect(shortcutFor({ key, metaKey: true, shiftKey: false })).toBeNull();
     expect(shortcutFor({ key, metaKey: true, shiftKey: true })).toBeNull();
   });
@@ -29,5 +29,35 @@ describe("shortcutFor", () => {
     expect(shortcutFor({ key: "S", metaKey: false, shiftKey: true })).not.toBe("save");
     expect(shortcutFor({ key: "s", metaKey: true, shiftKey: true })).not.toBe("save");
     expect(shortcutFor({ key: "S", metaKey: true, shiftKey: true })).not.toBe("save");
+  });
+
+  it.each(["a", "A"])("maps Cmd+%s to select-all", (key) => {
+    expect(shortcutFor({ key, metaKey: true, shiftKey: false })).toBe("selectAll");
+  });
+
+  it.each(["a", "A"])("maps Ctrl+%s to select-all", (key) => {
+    expect(shortcutFor({ key, metaKey: false, ctrlKey: true, shiftKey: false })).toBe("selectAll");
+  });
+
+  it("maps A without Cmd or Ctrl to nothing", () => {
+    expect(shortcutFor({ key: "a", metaKey: false, ctrlKey: false, shiftKey: false })).toBeNull();
+  });
+
+  it.each([
+    ["the canvas", { tagName: "DIV", isContentEditable: false }],
+    ["the page body", { tagName: "BODY", isContentEditable: false }],
+  ])("maps Cmd+A to select-all when the target is %s", (_name, target) => {
+    expect(shortcutFor({ key: "a", metaKey: true, shiftKey: false, target })).toBe("selectAll");
+  });
+
+  it.each([
+    ["an input", { tagName: "INPUT", isContentEditable: false }],
+    ["a textarea", { tagName: "TEXTAREA", isContentEditable: false }],
+    ["a contenteditable element", { tagName: "DIV", isContentEditable: true }],
+  ])("maps Cmd+A and Ctrl+A in %s to nothing, keeping text select-all", (_name, target) => {
+    expect(shortcutFor({ key: "a", metaKey: true, shiftKey: false, target })).toBeNull();
+    expect(
+      shortcutFor({ key: "a", metaKey: false, ctrlKey: true, shiftKey: false, target }),
+    ).toBeNull();
   });
 });

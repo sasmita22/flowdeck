@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { _electron, type Page } from "@playwright/test";
 import type * as Electron from "electron";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   drive,
   forceExit,
@@ -1038,5 +1038,48 @@ describe("launchApp log", () => {
     await launched.close();
 
     expect(received[0]).toBe("canvas-save");
+  });
+});
+
+describe("launchApp colour scheme", () => {
+  let outDir: string;
+  let electronLaunch: MockInstance<typeof _electron.launch>;
+
+  beforeEach(async () => {
+    outDir = await mkdtemp(join(tmpdir(), "fd-drive-"));
+    electronLaunch = vi
+      .spyOn(_electron, "launch")
+      .mockImplementation(() => Promise.resolve(new FakeApp() as never));
+  });
+
+  afterEach(async () => {
+    electronLaunch.mockRestore();
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it.each(["dark", "light"] as const)(
+    "passes colorScheme %s to the Electron launch options",
+    async (colorScheme) => {
+      const launched = await launchApp({
+        home: outDir,
+        logPath: join(outDir, "app.log"),
+        colorScheme,
+      });
+      await launched.close();
+
+      expect(electronLaunch).toHaveBeenCalledTimes(1);
+      expect(electronLaunch.mock.calls[0]?.[0]).toMatchObject({
+        colorScheme,
+        env: expect.objectContaining({ FLOWDECK_HOME: outDir }),
+      });
+    },
+  );
+
+  it("passes no colorScheme when none is given", async () => {
+    const launched = await launchApp({ home: outDir, logPath: join(outDir, "app.log") });
+    await launched.close();
+
+    expect(electronLaunch).toHaveBeenCalledTimes(1);
+    expect(electronLaunch.mock.calls[0]?.[0]).not.toHaveProperty("colorScheme");
   });
 });

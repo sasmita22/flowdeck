@@ -30,6 +30,10 @@ export type WireEnd = { node: string; port: string };
 
 type Position = { x: number; y: number };
 
+export type NodeMenu = { nodeId: string; x: number; y: number };
+
+const lockedMessage = "Hard stop is locked";
+
 export interface CanvasState {
   flow: Flow;
   saved: Flow;
@@ -39,11 +43,15 @@ export interface CanvasState {
   undoStack: Command[];
   redoStack: Command[];
   dragPositions: Record<string, Position>;
+  message: string | null;
+  menu: NodeMenu | null;
   drop(type: CanvasNodeType, position: Position): void;
   connect(from: WireEnd, to: WireEnd): boolean;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
+  openNodeMenu(nodeId: string, at: Position): void;
+  closeNodeMenu(): void;
   highlight(id: string | null): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
@@ -124,11 +132,18 @@ export function createCanvasStore(
         undoStack: [...undoStack, command],
         redoStack: [],
         selection: kept(selection, next),
+        message: null,
       });
     };
 
     const deleteNodes = (ids: readonly string[]) => {
-      if (ready() && ids.length > 0) run(deleteNodesCommand(get().flow, ids));
+      if (!ready()) return;
+      set({ menu: null });
+      const { flow } = get();
+      const present = flow.nodes.filter((node) => ids.includes(node.id));
+      const deletable = present.filter((node) => node.type !== "hardstop").map((node) => node.id);
+      if (deletable.length > 0) run(deleteNodesCommand(flow, deletable));
+      if (deletable.length < present.length) set({ message: lockedMessage });
     };
 
     const start = newCanvasFlow();
@@ -142,6 +157,8 @@ export function createCanvasStore(
       undoStack: [],
       redoStack: [],
       dragPositions: {},
+      message: null,
+      menu: null,
 
       drop: (type, position) => {
         if (!ready()) return;
@@ -165,7 +182,11 @@ export function createCanvasStore(
 
       deleteSelection: () => deleteNodes(get().selection),
 
-      select: (ids) => set({ selection: [...ids] }),
+      select: (ids) => set({ selection: [...ids], message: null, menu: null }),
+
+      openNodeMenu: (nodeId, { x, y }) => set({ menu: { nodeId, x, y } }),
+
+      closeNodeMenu: () => set({ menu: null }),
 
       highlight: (id) => set({ highlighted: id }),
 
