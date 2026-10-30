@@ -8,6 +8,7 @@ import { RunStoreContext } from "./canvas/status.js";
 import { ClosePrompt } from "./close-prompt.js";
 import { Inspector } from "./inspector/inspector.js";
 import type { InspectorState } from "./inspector/store.js";
+import type { WaitState } from "./inspector/wait-store.js";
 import { selectRunDisabled, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import { selectOpenDisabled, type TerminalState } from "./terminal/store.js";
@@ -90,6 +91,7 @@ export function App({
   run,
   terminal,
   inspector,
+  wait,
 }: {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
@@ -97,6 +99,7 @@ export function App({
   run: StoreApi<RunState>;
   terminal: StoreApi<TerminalState>;
   inspector: StoreApi<InspectorState>;
+  wait: StoreApi<WaitState>;
 }) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
@@ -115,7 +118,7 @@ export function App({
             {ready && <Canvas store={canvas} onSave={onSave} />}
           </RunStoreContext.Provider>
         </div>
-        {ready && <Inspector inspector={inspector} run={run} canvas={canvas} />}
+        {ready && <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} />}
       </div>
       {terminalVisible && <TerminalPane store={terminal} />}
       <ClosePrompt store={save} />

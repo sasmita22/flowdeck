@@ -62,6 +62,18 @@ describe("preload run-state wiring", () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-activity");
   });
 
+  it("invokes flowdeck:get-wait for getWait and returns its answer", async () => {
+    await expect(bridge.getWait()).resolves.toBe("answer for flowdeck:get-wait");
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-wait");
+  });
+
+  it("invokes flowdeck:answer-wait with the answer for answerWait and returns its answer", async () => {
+    const answer = { waitId: "wait-1", reply: { decision: "approve" } } as const;
+
+    await expect(bridge.answerWait(answer)).resolves.toBe("answer for flowdeck:answer-wait");
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:answer-wait", answer);
+  });
+
   it("hands each flowdeck:run-state snapshot to the listener without the event", () => {
     const listener = vi.fn();
     const unsubscribe = bridge.onRunState(listener);
@@ -144,6 +156,7 @@ describe("preload terminal wiring", () => {
     ["onTerminalStatus", "flowdeck:terminal-status", { available: true, attached: false }],
     ["onTerminalData", "flowdeck:terminal-data", "output"],
     ["onActivity", "flowdeck:activity", { runId: "run-1", entry: { id: 1 } }],
+    ["onWait", "flowdeck:wait", { waitId: "wait-1", request: { nodeId: "gate" } }],
   ] as const)(
     "%s hands each %s payload to the listener without the event, and stops after unsubscribe",
     (method, channel, payload) => {

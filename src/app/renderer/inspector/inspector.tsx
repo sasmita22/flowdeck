@@ -5,7 +5,9 @@ import type { CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import { selectNodeDisplay, type RunState } from "../run-store.js";
 import { ActivityFeed } from "./activity-feed.js";
+import { Ask } from "./ask.js";
 import type { InspectorState } from "./store.js";
+import type { WaitState } from "./wait-store.js";
 
 const rowStyle: CSSProperties = {
   display: "flex",
@@ -42,10 +44,12 @@ export function Inspector({
   inspector,
   run,
   canvas,
+  wait,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunState>;
   canvas: StoreApi<CanvasState>;
+  wait: StoreApi<WaitState>;
 }) {
   const sessionName = useStore(canvas, (state) => state.flow.session.name);
   const nodes = useStore(canvas, (state) => state.flow.nodes);
@@ -79,6 +83,7 @@ export function Inspector({
           <NodeRow key={node.id} run={run} nodeId={node.id} label={node.label} />
         ))}
       </ul>
+      <Ask wait={wait} />
       <h2 style={headingStyle}>Activity</h2>
       <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto" }}>
         <ActivityFeed inspector={inspector} run={run} canvas={canvas} />
