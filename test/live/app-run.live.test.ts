@@ -9,6 +9,7 @@ import { spawn as spawnPty } from "node-pty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { openClaudeSession } from "../../src/adapters/claude/claude-session.js";
+import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
@@ -25,6 +26,7 @@ import { displayStatus, type DisplayStatus } from "../../src/core/run/display.js
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
+import { flow as buildFlow, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -180,21 +182,33 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     instructions: Record<string, string> = {},
   ): Promise<void> {
     const fixture = parseFlow(JSON.parse(await readFile(path, "utf8")));
+    await startSavedFlow(
+      {
+        ...fixture,
+        nodes: fixture.nodes.map((node) =>
+          node.type === "prompt"
+            ? {
+                ...node,
+                settings: {
+                  instructions: (instructions[node.id] ?? node.settings.instructions).replaceAll(
+                    "{{repo}}",
+                    repo.path,
+                  ),
+                },
+              }
+            : node,
+        ),
+      },
+      publish,
+    );
+  }
+
+  async function startSavedFlow(
+    fixture: Flow,
+    publish: (push: EnginePush) => void,
+  ): Promise<{ runId: string; runs: SqliteStore }> {
     const flow: Flow = {
       ...fixture,
-      nodes: fixture.nodes.map((node) =>
-        node.type === "prompt"
-          ? {
-              ...node,
-              settings: {
-                instructions: (instructions[node.id] ?? node.settings.instructions).replaceAll(
-                  "{{repo}}",
-                  repo.path,
-                ),
-              },
-            }
-          : node,
-      ),
       session: { ...fixture.session, workingFolder: { kind: "path", path: repo.path } },
     };
 
@@ -213,11 +227,14 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
       fs,
       run: liveEnvironment(fs),
+      worktree: new GitWorktree(),
       newSessionName: () => sessionName,
     });
 
     const response = await handler.handle({ id: 1, type: "start-run" });
     expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
+    const { runId } = (response as { value: { runId: string } }).value;
+    return { runId, runs: stores.runs };
   }
 
   it(
@@ -384,4 +401,38 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       );
     },
   );
+
+  it("runs Claude on the session's model", { timeout: runDeadlineMs + 30_000 }, async () => {
+    const snapshots: RunSnapshot[] = [];
+    const oneReply = buildFlow(
+      [trigger("start"), prompt("p1", { settings: { instructions: "Reply ok" } }), output("done")],
+      [thenWire("start", "p1"), thenWire("p1", "done")],
+    );
+    const { runId, runs } = await startSavedFlow(
+      { ...oneReply, session: { ...oneReply.session, model: "haiku" } },
+      (push) => {
+        if (push.push === "run-state") snapshots.push(push.value);
+      },
+    );
+    await vi.waitFor(
+      () => {
+        expect(snapshots.some((snapshot) => snapshot.status !== "running")).toBe(true);
+      },
+      { timeout: runDeadlineMs, interval: 500 },
+    );
+    expect(snapshots.at(-1)?.status).toBe("done");
+
+    const claudeSessionId = runs.findRun(runId)?.session.claudeSessionId ?? "";
+    const transcript = await new ClaudeCli({
+      sessions: new TmuxSessionHost({ socketName: sessionName }),
+    }).findTranscript(claudeSessionId);
+    expect(transcript, `transcript of ${claudeSessionId}`).toBeDefined();
+    const models = (await readFile(transcript ?? "", "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type?: string; message?: { model?: string } })
+      .filter((entry) => entry.type === "assistant")
+      .map((entry) => entry.message?.model);
+    expect(models).toContainEqual(expect.stringContaining("haiku"));
+  });
 });

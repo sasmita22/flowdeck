@@ -70,11 +70,25 @@ describe("flowsEqual", () => {
     ["a removed wire", (f) => f.wires.pop()],
     ["a session value", (f) => (f.session.model = "haiku")],
     ["a session working folder", (f) => (f.session.workingFolder = { kind: "path", path: "/x" })],
+    ["a session allowed tool", (f) => (f.session.allowedTools = ["Bash(npm test)"])],
+    ["a session frame", (f) => (f.session.frame = { nodes: ["p1"] })],
+    [
+      "a worktree repo",
+      (f) => (f.session.workingFolder = { kind: "worktree", branch: "main", repo: "/r" }),
+    ],
   ])("tells flows apart by %s", (_, edit) => {
     const other = edited(edit);
 
     expect(flowsEqual(base(), other)).toBe(false);
     expect(flowsEqual(other, base())).toBe(false);
+  });
+
+  it("tells flows apart by the members of their session frames", () => {
+    const framed = edited((f) => (f.session.frame = { nodes: ["p1", "a1"] }));
+    const fewer = edited((f) => (f.session.frame = { nodes: ["p1"] }));
+
+    expect(flowsEqual(framed, fewer)).toBe(false);
+    expect(flowsEqual(fewer, framed)).toBe(false);
   });
 
   it("tells flows apart by node order", () => {

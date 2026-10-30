@@ -42,12 +42,13 @@ export const Session = z.object({
   name: z.string(),
   workingFolder: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("path"), path: z.string() }),
-    z.object({ kind: z.literal("worktree"), branch: z.string() }),
+    z.object({ kind: z.literal("worktree"), branch: z.string(), repo: z.string().optional() }),
   ]),
   model: z.string(),
   allowedTools: z.array(z.string()),
   permissionMode: z.string(),
   connectors: z.array(z.string()),
+  frame: z.object({ nodes: z.array(z.string()) }).optional(),
 });
 
 const NodeBase = z.object({

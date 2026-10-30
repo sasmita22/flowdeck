@@ -1,7 +1,13 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { validate } from "../../../core/compiler/validate.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
-import { parseFlow, type Flow, type Node, type Wire } from "../../../core/flow/schema.js";
+import {
+  parseFlow,
+  type Flow,
+  type Node,
+  type Session,
+  type Wire,
+} from "../../../core/flow/schema.js";
 import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
 import * as scriptDefaults from "../../../core/nodes/script/defaults.js";
 import {
@@ -9,10 +15,14 @@ import {
   addWire,
   deleteNodes as deleteNodesCommand,
   moveNodes,
-  setWorkingFolder,
+  updateSession,
+  wrapInSession,
+  wrappableIds,
   type Command,
   type Move,
 } from "./commands.js";
+
+export { wrappableIds };
 
 export type CanvasNodeType = "prompt" | "script";
 
@@ -37,7 +47,8 @@ export interface CanvasState {
   highlight(id: string | null): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
-  setWorkingFolder(path: string): void;
+  wrapSelection(): void;
+  updateSession(next: Session): void;
   undo(): void;
   redo(): void;
   load(input: unknown): void;
@@ -58,7 +69,11 @@ export const newCanvasFlow = (): Flow => ({
 });
 
 export const nextNodeId = (type: CanvasNodeType, flow: Flow): string => {
-  const used = new Set(flow.nodes.map((node) => node.id.toLowerCase()));
+  const used = new Set(
+    [...flow.nodes.map((node) => node.id), ...(flow.session.frame?.nodes ?? [])].map((id) =>
+      id.toLowerCase(),
+    ),
+  );
   let n = 1;
   while (used.has(`${type}-${n}`)) n += 1;
   return `${type}-${n}`;
@@ -173,8 +188,14 @@ export function createCanvasStore(
         set({ dragPositions: {} });
       },
 
-      setWorkingFolder: (path) => {
-        if (ready()) run(setWorkingFolder(path));
+      wrapSelection: () => {
+        if (!ready()) return;
+        const ids = wrappableIds(get().flow, get().selection);
+        if (ids.length > 0) run(wrapInSession(ids));
+      },
+
+      updateSession: (next) => {
+        if (ready()) run(updateSession(next));
       },
 
       undo: () => {

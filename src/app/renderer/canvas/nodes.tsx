@@ -1,6 +1,8 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from "@xyflow/react";
 import type { CSSProperties } from "react";
+import { SessionFrame } from "./session.js";
 import { NodeStatusBadge } from "./status.js";
+import { NODE_BOX } from "./view.js";
 
 type CanvasNode = Node<{ label: string; highlighted: boolean }>;
 
@@ -10,9 +12,11 @@ const selectedOutline = (selected: boolean): CSSProperties =>
 const highlightRing = (highlighted: boolean): CSSProperties =>
   highlighted ? { boxShadow: "0 0 0 4px #f59e0b" } : {};
 
+const cardBox: CSSProperties = { ...NODE_BOX, boxSizing: "border-box" };
+
 const promptStyle: CSSProperties = {
+  ...cardBox,
   padding: "8px 14px",
-  minWidth: 120,
   background: "#ffffff",
   color: "#1d1d1f",
   border: "1.4px solid #3a3a3c",
@@ -22,8 +26,8 @@ const promptStyle: CSSProperties = {
 };
 
 const scriptStyle: CSSProperties = {
+  ...cardBox,
   padding: "8px 14px",
-  minWidth: 120,
   background: "#1e1e1e",
   color: "#e6e6e6",
   border: "1px solid #1e1e1e",
@@ -69,4 +73,8 @@ function ScriptNode({ id, data, selected }: NodeProps<CanvasNode>) {
   );
 }
 
-export const nodeTypes: NodeTypes = { prompt: PromptNode, script: ScriptNode };
+export const nodeTypes: NodeTypes = {
+  prompt: PromptNode,
+  script: ScriptNode,
+  session: SessionFrame,
+};

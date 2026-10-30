@@ -4,11 +4,13 @@ import {
   addWire,
   deleteNodes,
   moveNodes,
-  setWorkingFolder,
+  updateSession,
+  wrapInSession,
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
-import type { Flow, Node, Wire } from "../../../../src/core/flow/schema.js";
-import { flow, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
+import { flowsEqual } from "../../../../src/core/flow/equal.js";
+import type { Flow, Node, Session, Wire } from "../../../../src/core/flow/schema.js";
+import { flow, loop, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
 
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null) {
@@ -143,36 +145,86 @@ describe("moveNodes", () => {
   });
 });
 
-describe("setWorkingFolder", () => {
-  const withFolder = (source: Flow, workingFolder: Flow["session"]["workingFolder"]): Flow => ({
-    ...source,
-    session: { ...source.session, workingFolder },
-  });
+const framed = (source: Flow, nodes: string[]): Flow => ({
+  ...source,
+  session: { ...source.session, frame: { nodes } },
+});
 
-  it("sets a path working folder over a worktree and changes nothing else", () => {
+const membersOf = (source: Flow) => source.session.frame?.nodes;
+
+const loopWithBody = () =>
+  flow([loop("L"), prompt("X", { parent: "L" }), prompt("A"), script("C")], []);
+
+describe("wrapInSession", () => {
+  it("frames the ids in selection order and undo leaves no frame key behind", () => {
     const before = fourNodes();
 
-    const after = setWorkingFolder("/tmp/x").do(before);
+    const { after, restored } = roundTrip(wrapInSession(["C", "A", "D"]), before);
 
-    expect(after).toEqual(withFolder(before, { kind: "path", path: "/tmp/x" }));
+    expect(membersOf(after)).toEqual(["C", "A", "D"]);
+    expect(after.nodes).toEqual(before.nodes);
+    expect(after.wires).toEqual(before.wires);
+    expect(restored).toEqual(before);
+    expect(flowsEqual(restored, before)).toBe(true);
+    expect(Object.hasOwn(restored.session, "frame")).toBe(false);
   });
 
-  it("undo restores the worktree it replaced exactly", () => {
+  it("appends only ids that are not members yet and undo restores the previous members", () => {
+    const before = framed(fourNodes(), ["A"]);
+
+    const { after, restored } = roundTrip(wrapInSession(["B", "A", "C"]), before);
+
+    expect(membersOf(after)).toEqual(["A", "B", "C"]);
+    expect(membersOf(restored)).toEqual(["A"]);
+    expect(flowsEqual(restored, before)).toBe(true);
+  });
+
+  it("ignores loop-body ids and ids that name no node", () => {
+    const before = loopWithBody();
+
+    const after = wrapInSession(["X", "A", "ghost", "L"]).do(before);
+
+    expect(membersOf(after)).toEqual(["A", "L"]);
+  });
+
+  it("returns the flow unchanged when every id is ignored", () => {
+    const before = loopWithBody();
+
+    const { after, restored } = roundTrip(wrapInSession(["X", "ghost"]), before);
+
+    expect(flowsEqual(after, before)).toBe(true);
+    expect(Object.hasOwn(after.session, "frame")).toBe(false);
+    expect(flowsEqual(restored, before)).toBe(true);
+  });
+});
+
+describe("updateSession", () => {
+  const edited = (source: Flow): Session => ({
+    name: source.session.name,
+    workingFolder: { kind: "worktree", branch: "dev", repo: "/r" },
+    model: "haiku",
+    allowedTools: ["Read"],
+    permissionMode: source.session.permissionMode,
+    connectors: source.session.connectors,
+  });
+
+  it("sets the session to the one given and changes nothing else", () => {
     const before = fourNodes();
+    const next = edited(before);
 
-    const { restored } = roundTrip(setWorkingFolder("/tmp/x"), before);
+    const after = updateSession(next).do(before);
 
-    expect(restored).toEqual(before);
-    expect(restored.session.workingFolder).toEqual({ kind: "worktree", branch: "main" });
+    expect(after).toEqual({ ...before, session: next });
   });
 
-  it("undo restores an earlier path exactly", () => {
-    const before = withFolder(fourNodes(), { kind: "path", path: "/tmp/earlier" });
+  it("undo restores the previous session exactly, frame included", () => {
+    const before = framed(fourNodes(), ["A", "B"]);
 
-    const { after, restored } = roundTrip(setWorkingFolder("/tmp/x"), before);
+    const { after, restored } = roundTrip(updateSession(edited(before)), before);
 
-    expect(after.session.workingFolder).toEqual({ kind: "path", path: "/tmp/x" });
-    expect(restored).toEqual(before);
+    expect(Object.hasOwn(after.session, "frame")).toBe(false);
+    expect(restored.session).toEqual(before.session);
+    expect(flowsEqual(restored, before)).toBe(true);
   });
 });
 
@@ -182,7 +234,11 @@ describe("commands", () => {
     ["addWire", () => addWire(onlyWire(flow([prompt("C"), script("A")], [thenWire("C", "A")])))],
     ["deleteNodes", (before) => deleteNodes(before, ["B"])],
     ["moveNodes", () => moveNodes([{ id: "A", from: { x: 0, y: 0 }, to: { x: 3, y: 4 } }])],
-    ["setWorkingFolder", () => setWorkingFolder("/tmp/x")],
+    ["wrapInSession", () => wrapInSession(["A", "C"])],
+    [
+      "updateSession",
+      (before) => updateSession({ ...before.session, model: "haiku", allowedTools: ["Read"] }),
+    ],
   ];
 
   it.each(cases)("%s never mutates the flow it is given", (_name, make) => {

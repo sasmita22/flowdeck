@@ -12,7 +12,7 @@ import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "./nodes.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
-import type { CanvasNodeType, CanvasState } from "./store.js";
+import { wrappableIds, type CanvasNodeType, type CanvasState } from "./store.js";
 import { toViewEdges, toViewNodes } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
@@ -27,7 +27,8 @@ function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
   const canUndo = useStore(store, (state) => state.undoStack.length > 0);
   const canRedo = useStore(store, (state) => state.redoStack.length > 0);
   const canDelete = useStore(store, (state) => state.selection.length > 0);
-  const { undo, redo, deleteSelection } = store.getState();
+  const canWrap = useStore(store, (state) => wrappableIds(state.flow, state.selection).length > 0);
+  const { undo, redo, deleteSelection, wrapSelection } = store.getState();
   return (
     <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
       <button data-testid="canvas-undo" disabled={!canUndo} onClick={undo}>
@@ -38,6 +39,9 @@ function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
       </button>
       <button data-testid="canvas-delete" disabled={!canDelete} onClick={deleteSelection}>
         Delete
+      </button>
+      <button data-testid="canvas-wrap" disabled={!canWrap} onClick={wrapSelection}>
+        Wrap in session
       </button>
     </div>
   );

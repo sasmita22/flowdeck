@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { build, type BuildFileSystem } from "../../core/compiler/build.js";
 import type { VerifyFileSystem } from "../../core/compiler/verify.js";
 import { parseFlow } from "../../core/flow/schema.js";
@@ -15,6 +16,7 @@ import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema } from "../../core/run/wait.js";
 import type { FlowStore, LoadLatestFlowResult, SaveFlowResult } from "../../ports/flow-store.js";
 import type { Store } from "../../ports/store.js";
+import type { Worktree } from "../../ports/worktree.js";
 import { createActivityTracker } from "./activity-tracker.js";
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult } from "./hooks.js";
@@ -34,6 +36,7 @@ export type EngineHandlerOptions = {
   run: RunEnvironment & { now: () => number };
   newSessionName?: () => string;
   waits?: Pick<AppWaiter, "answer" | "drop">;
+  worktree: Worktree;
 };
 
 export type EngineHandler = {
@@ -144,11 +147,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       const { flow } = latest;
       const folder = flow.session.workingFolder;
       if (folder.kind === "worktree") {
-        return failure(
-          "Set a working folder before running (worktree folders are not supported yet)",
-        );
-      }
-      if (!options.isFolder(folder.path)) {
+        if (!folder.repo) {
+          return failure("Set the session's repository before running a fresh worktree");
+        }
+      } else if (!options.isFolder(folder.path)) {
         return failure(`Working folder not found: ${folder.path}`);
       }
       const hooks = options.prepareHooks();
@@ -168,8 +170,21 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       const sessionName = newSessionName();
       const socket = runSocketPath(options.home, sessionName);
       if (socket.kind === "error") return failure(socket.message);
-      const cwd = folder.path;
       const claudeSessionId = randomUUID();
+      let cwd: string;
+      if (folder.kind === "worktree") {
+        const id8 = claudeSessionId.slice(0, 8);
+        cwd = join(options.home, "worktrees", id8);
+        await options.worktree.add({
+          repo: folder.repo ?? "",
+          base: folder.branch,
+          branch: `flowdeck/${id8}`,
+          path: cwd,
+        });
+        if (!options.isFolder(cwd)) return failure(`Working folder not found: ${cwd}`);
+      } else {
+        cwd = folder.path;
+      }
       const nodeIds = manifest.nodes.map((node) => node.id);
       const { id: runId } = runs.createRun({
         buildDir: built.dir,

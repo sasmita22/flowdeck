@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { edgeId, toViewEdges, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
-import type { Wire } from "../../../../src/core/flow/schema.js";
-import { flow, prompt, script, thenWire, wire } from "../../../fixtures/flow-builders.js";
+import {
+  edgeId,
+  FRAME_PADDING,
+  NODE_BOX,
+  SESSION_FRAME_ID,
+  toViewEdges,
+  toViewNodes,
+} from "../../../../src/app/renderer/canvas/view.js";
+import type { Flow, Wire } from "../../../../src/core/flow/schema.js";
+import { flow, loop, prompt, script, thenWire, wire } from "../../../fixtures/flow-builders.js";
 
 const twoNodes = () =>
   flow(
@@ -79,6 +86,91 @@ describe("toViewNodes", () => {
 
   it("returns no entries for an empty flow", () => {
     expect(toViewNodes(flow([], []), [], {}, null)).toEqual([]);
+  });
+});
+
+const framed = (source: Flow, nodes: string[]): Flow => ({
+  ...source,
+  session: { ...source.session, name: "build", frame: { nodes } },
+});
+
+const threeApart = () =>
+  flow(
+    [
+      { ...prompt("A"), position: { x: 100, y: 50 } },
+      { ...script("B"), position: { x: 400, y: 300 } },
+      { ...prompt("C"), position: { x: 900, y: 900 } },
+    ],
+    [],
+  );
+
+const enclosing = (positions: { x: number; y: number }[]) => {
+  const left = Math.min(...positions.map((p) => p.x)) - FRAME_PADDING;
+  const top = Math.min(...positions.map((p) => p.y)) - FRAME_PADDING;
+  const right = Math.max(...positions.map((p) => p.x)) + NODE_BOX.width + FRAME_PADDING;
+  const bottom = Math.max(...positions.map((p) => p.y)) + NODE_BOX.height + FRAME_PADDING;
+  return { position: { x: left, y: top }, width: right - left, height: bottom - top };
+};
+
+describe("toViewNodes with a session frame", () => {
+  it("emits no frame view-node when the session has no frame", () => {
+    expect(toViewNodes(threeApart(), [], {}, null).map((node) => node.id)).toEqual(["A", "B", "C"]);
+  });
+
+  it("emits the frame first, fixed in place, enclosing only its members with padding", () => {
+    const source = framed(threeApart(), ["A", "B"]);
+
+    const [frame, ...rest] = toViewNodes(source, [], {}, null);
+
+    expect(frame).toMatchObject({
+      id: SESSION_FRAME_ID,
+      type: "session",
+      selectable: false,
+      draggable: false,
+      deletable: false,
+      data: { name: "build" },
+      ...enclosing([
+        { x: 100, y: 50 },
+        { x: 400, y: 300 },
+      ]),
+    });
+    expect(rest).toEqual(toViewNodes(threeApart(), [], {}, null));
+    expect(rest.some((node) => "parentId" in node)).toBe(false);
+  });
+
+  it("encloses the body of a loop that is a member", () => {
+    const source = framed(
+      flow(
+        [
+          { ...loop("L"), position: { x: 0, y: 0 } },
+          { ...prompt("X", { parent: "L" }), position: { x: 500, y: 400 } },
+        ],
+        [],
+      ),
+      ["L"],
+    );
+
+    const [frame] = toViewNodes(source, [], {}, null);
+
+    expect(frame).toMatchObject({
+      id: SESSION_FRAME_ID,
+      ...enclosing([
+        { x: 0, y: 0 },
+        { x: 500, y: 400 },
+      ]),
+    });
+  });
+
+  it("ignores member ids that name no node", () => {
+    const [frame] = toViewNodes(framed(threeApart(), ["ghost", "A"]), [], {}, null);
+
+    expect(frame).toMatchObject({ id: SESSION_FRAME_ID, ...enclosing([{ x: 100, y: 50 }]) });
+  });
+
+  it("emits no frame view-node when no member names a node", () => {
+    const view = toViewNodes(framed(threeApart(), ["ghost"]), [], {}, null);
+
+    expect(view).toEqual(toViewNodes(threeApart(), [], {}, null));
   });
 });
 

@@ -6,6 +6,7 @@ import { statusBadge } from "../canvas/status-look.js";
 import { selectNodeDisplay, type RunState } from "../run-store.js";
 import { ActivityFeed } from "./activity-feed.js";
 import { Ask } from "./ask.js";
+import { SessionSettingsSection } from "./session-settings.js";
 import type { InspectorState } from "./store.js";
 import type { WaitState } from "./wait-store.js";
 
@@ -77,6 +78,7 @@ export function Inspector({
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{sessionName}</span>
         <span>{runStatus}</span>
       </div>
+      <SessionSettingsSection canvas={canvas} />
       <h2 style={headingStyle}>Nodes</h2>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
         {nodes.map((node) => (
