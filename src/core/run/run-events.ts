@@ -6,7 +6,14 @@ export type RunEvent =
   | { kind: "done"; payload?: { stopMessage?: string } }
   | { kind: "failed"; payload: { message: string } }
   | { kind: "decided" | "answered"; payload: HumanDecision }
-  | { kind: "round"; payload: { round: number } };
+  | { kind: "round"; payload: { round: number } }
+  | {
+      kind: "budget";
+      payload:
+        | { step: "paused"; spend: number; budget: number; unconfirmed?: true }
+        | { step: "raised"; budget: number }
+        | { step: "stopped"; reason: string };
+    };
 
 const moves: Partial<Record<RunEvent["kind"], NodeState>> = {
   sent: "sent",

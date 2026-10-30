@@ -18,11 +18,15 @@ import {
 import type { ResumeActions } from "../../../src/core/run/resume.js";
 import { decisionsOf, nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import type { ProcessResult } from "../../../src/ports/process-runner.js";
-import type { WaitReply } from "../../../src/ports/waiter.js";
+import type { UsageEntry } from "../../../src/ports/usage-source.js";
+import type { WaitReply, WaitRequest } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
+import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
+import { budget as budgetWait, permission as permissionWait } from "../../fixtures/waits.js";
 
 const hash = "abc123";
 const sessionId = "s1";
@@ -63,6 +67,9 @@ function harness(
     waiter?: FakeWaiter;
     auto?: boolean;
     replies?: (string | undefined)[];
+    permissions?: FakePermissionSource;
+    usage?: FakeUsageSource;
+    budget?: number;
   } = {},
 ) {
   const events = new FakeEventSource();
@@ -97,6 +104,9 @@ function harness(
     scripts,
     waiter: options.waiter ?? new FakeWaiter([]),
     ...(options.auto === undefined ? {} : { auto: options.auto }),
+    ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
+    ...(options.usage === undefined ? {} : { usage: options.usage }),
+    ...(options.budget === undefined ? {} : { budget: options.budget }),
     onChange: (line) => lines.push(line),
     cwd,
     sessionId,
@@ -1555,5 +1565,535 @@ describe("Runner run state", () => {
       ]);
       expect(result.outcome).toBe("done");
     });
+  });
+});
+
+describe("Runner permission requests", () => {
+  const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
+  const approve: WaitReply = { decision: "approve" };
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const kindsOf = (store: FakeStore, nodeId: string) =>
+    store
+      .events(runIdOf(store))
+      .filter((event) => event.nodeId === nodeId)
+      .map((event) => event.kind);
+  const deferred = () => {
+    let resolve: (reply: WaitReply) => void = () => undefined;
+    const promise = new Promise<WaitReply>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+  const blockedScripts = () => {
+    let release: (result: ProcessResult) => void = () => undefined;
+    const blocked = new Promise<ProcessResult>((resolve) => (release = resolve));
+    let started = 0;
+    return {
+      scripts: { run: () => (started++, blocked) },
+      started: () => started,
+      release: () => release(exit(0)),
+    };
+  };
+
+  async function askDuringTurn(waiter: FakeWaiter, options: { auto?: boolean } = {}) {
+    const permissions = new FakePermissionSource();
+    const h = harness({ waiter, permissions, stop: "never", ...options });
+    const running = runOn(h.deps, manifest(prompt("n1")));
+    await vi.waitFor(() => expect(sends(h.calls)).toHaveLength(1));
+    const decision = await permissions.ask(sessionId, bash("echo hi"));
+    h.events.publish({ kind: "Stop", sessionId, payload: {} });
+    return { ...h, decision, result: await running };
+  }
+
+  it("asks the waiter for the prompt node in its turn and allows on approve", async () => {
+    const waiter = new FakeWaiter([approve]);
+
+    const { decision, result } = await askDuringTurn(waiter);
+
+    expect(waiter.calls).toEqual([permissionWait]);
+    expect(decision).toEqual({ behavior: "allow" });
+    expect(result.outcome).toBe("done");
+  });
+
+  it("denies with the reject reason", async () => {
+    const waiter = new FakeWaiter([{ decision: "reject", reason: "no" }]);
+
+    const { decision } = await askDuringTurn(waiter);
+
+    expect(decision).toEqual({ behavior: "deny", message: "no" });
+  });
+
+  it("adds no event to the node for a permission wait", async () => {
+    const { deps } = await askDuringTurn(new FakeWaiter([approve]));
+
+    expect(kindsOf(deps.store, "n1")).toEqual(["sent", "done"]);
+  });
+
+  it("still asks under auto", async () => {
+    const waiter = new FakeWaiter([approve]);
+
+    const { decision } = await askDuringTurn(waiter, { auto: true });
+
+    expect(waiter.calls).toEqual([permissionWait]);
+    expect(decision).toEqual({ behavior: "allow" });
+  });
+
+  it("denies with the waiter's error when the waiter throws", async () => {
+    const { decision, result } = await askDuringTurn(new FakeWaiter([]));
+
+    expect(decision).toEqual({
+      behavior: "deny",
+      message: "FakeWaiter: no scripted reply for n1",
+    });
+    expect(result.outcome).toBe("done");
+  });
+
+  it("asks for the agent node in its turn", async () => {
+    const waiter = new FakeWaiter([approve]);
+    const permissions = new FakePermissionSource();
+    const { deps, events, calls } = harness({ waiter, permissions, stop: "never" });
+
+    const running = runOn(deps, manifest(agent("a1")));
+    await vi.waitFor(() => expect(sends(calls)).toHaveLength(1));
+    const decision = await permissions.ask(sessionId, bash("echo hi"));
+    events.publish({ kind: "SubagentStop", sessionId, payload: { agent_type: `${hash}:a1` } });
+    events.publish({ kind: "Stop", sessionId, payload: {} });
+    const result = await running;
+
+    expect(waiter.calls).toEqual([{ ...permissionWait, nodeId: "a1" }]);
+    expect(decision).toEqual({ behavior: "allow" });
+    expect(result.outcome).toBe("done");
+  });
+
+  it.each([
+    ["before the first send", [script("s1"), prompt("n1")]],
+    ["after the turn ends", [prompt("n1"), script("s1")]],
+  ])("denies without asking while no turn is open, %s", async (_when, nodes) => {
+    const waiter = new FakeWaiter([]);
+    const permissions = new FakePermissionSource();
+    const blocked = blockedScripts();
+    const { deps } = harness({ waiter, permissions });
+
+    const running = runOn({ ...deps, scripts: blocked.scripts }, manifest(...nodes));
+    await vi.waitFor(() => expect(blocked.started()).toBe(1));
+    const decision = await permissions.ask(sessionId, bash("echo hi"));
+    blocked.release();
+    await running;
+
+    expect(decision).toEqual({ behavior: "deny", message: "No node is running" });
+    expect(waiter.calls).toEqual([]);
+  });
+
+  it("denies without asking once the run is over", async () => {
+    const waiter = new FakeWaiter([]);
+    const permissions = new FakePermissionSource();
+    const { deps } = harness({ waiter, permissions });
+    await runOn(deps, manifest(prompt("n1")));
+
+    const decision = await permissions.ask(sessionId, bash("echo hi"));
+
+    expect(decision.behavior).toBe("deny");
+    expect(waiter.calls).toEqual([]);
+  });
+
+  it("gives two concurrent asks one wait each, resolved in the waiter's reply order", async () => {
+    const first = deferred();
+    const second = deferred();
+    const waiter = new FakeWaiter([first.promise, second.promise]);
+    const permissions = new FakePermissionSource();
+    const { deps, events, calls } = harness({ waiter, permissions, stop: "never" });
+    const running = runOn(deps, manifest(prompt("n1")));
+    await vi.waitFor(() => expect(sends(calls)).toHaveLength(1));
+
+    const one = permissions.ask(sessionId, bash("echo one"));
+    const two = permissions.ask(sessionId, bash("echo two"));
+    await vi.waitFor(() => expect(waiter.calls).toHaveLength(2));
+    second.resolve({ decision: "reject", reason: "no" });
+    expect(await two).toEqual({ behavior: "deny", message: "no" });
+    first.resolve(approve);
+    expect(await one).toEqual({ behavior: "allow" });
+    events.publish({ kind: "Stop", sessionId, payload: {} });
+    await running;
+
+    expect(waiter.calls.map((call) => (call.kind === "permission" ? call.input : ""))).toEqual([
+      "echo one",
+      "echo two",
+    ]);
+  });
+
+  it("withdraws an ask whose hook went away, so the turn timeout fires again", async () => {
+    let handed: AbortSignal | undefined;
+    const waiter = {
+      wait: (_request: WaitRequest, signal?: AbortSignal) => {
+        handed = signal;
+        return new Promise<WaitReply>(() => {});
+      },
+    };
+    const permissions = new FakePermissionSource();
+    const { deps, calls } = harness({ permissions, stop: "never" });
+    const running = runOn({ ...deps, waiter, turnTimeoutMs: 50 }, manifest(prompt("n1")));
+    await vi.waitFor(() => expect(sends(calls)).toHaveLength(1));
+    const hook = new AbortController();
+
+    const asked = permissions.ask(sessionId, bash("echo hi"), hook.signal);
+    await vi.waitFor(() => expect(handed).toBeDefined());
+    hook.abort();
+
+    expect((await asked).behavior).toBe("deny");
+    expect(handed?.aborted).toBe(true);
+    expect(await running).toMatchObject({ outcome: "failed", failedNode: "n1" });
+  });
+
+  it("holds the turn timeout while an ask is open", async () => {
+    const pending = deferred();
+    const waiter = new FakeWaiter([pending.promise]);
+    const permissions = new FakePermissionSource();
+    const { deps, events, calls } = harness({ waiter, permissions, stop: "never" });
+    const running = runOn({ ...deps, turnTimeoutMs: 50 }, manifest(prompt("n1")));
+    await vi.waitFor(() => expect(sends(calls)).toHaveLength(1));
+
+    const asked = permissions.ask(sessionId, bash("echo hi"));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    events.publish({ kind: "Stop", sessionId, payload: {} });
+    pending.resolve(approve);
+    await asked;
+    const result = await running;
+
+    expect(result.outcome).toBe("done");
+    expect(result.states).toEqual({ n1: "done" });
+  });
+});
+
+describe("Runner budget", () => {
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const eventsOf = (store: FakeStore, nodeId: string) =>
+    store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+  const kindsOf = (store: FakeStore, nodeId: string) =>
+    eventsOf(store, nodeId).map((event) => event.kind);
+  const spent = (outputTokens: number): UsageEntry[] => [
+    {
+      messageId: "m1",
+      model: "claude-opus-5-5",
+      inputTokens: 0,
+      outputTokens,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      cacheReadTokens: 0,
+    },
+  ];
+  const dollars120 = 60_000;
+  const twoPrompts = manifest(prompt("n1"), prompt("n2"));
+  const stop: WaitReply = { decision: "stop", reason: "too much" };
+
+  function spendAfterFirstSend(options: { waiter: FakeWaiter; budget?: number; tokens?: number }) {
+    const usage = new FakeUsageSource();
+    const h = harness({
+      waiter: options.waiter,
+      usage,
+      ...(options.budget === undefined ? {} : { budget: options.budget }),
+    });
+    const send = h.deps.prompts.sendPrompt;
+    h.deps.prompts = {
+      sendPrompt: async (text) => {
+        await send(text);
+        usage.setEntries(sessionId, spent(options.tokens ?? dollars120));
+      },
+    };
+    return { ...h, usage };
+  }
+
+  it("asks with the spend before sending the next prompt once spend passes the budget", async () => {
+    let resolve: (reply: WaitReply) => void = () => undefined;
+    const waiter = new FakeWaiter([new Promise<WaitReply>((r) => (resolve = r))]);
+    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
+
+    const running = runOn(deps, twoPrompts);
+    await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
+
+    expect(waiter.calls).toEqual([budgetWait]);
+    expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+    expect(kindsOf(deps.store, "n2")).not.toContain("sent");
+    resolve(stop);
+    await running;
+  });
+
+  it("sends the paused node once after a raise, without restarting the run", async () => {
+    const waiter = new FakeWaiter([{ decision: "raise", budget: 2 }]);
+    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
+
+    const result = await runOn(deps, twoPrompts);
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([`send /${hash}:n1`, `send /${hash}:n2`]);
+    expect(kindsOf(deps.store, "n1").filter((kind) => kind === "sent")).toHaveLength(1);
+    expect(eventsOf(deps.store, "n2")).toMatchObject([
+      { kind: "budget", payload: { step: "paused", spend: 1.2, budget: 1 } },
+      { kind: "budget", payload: { step: "raised", budget: 2 } },
+      { kind: "sent" },
+      { kind: "done" },
+    ]);
+  });
+
+  it("pauses when the spend equals the budget", async () => {
+    const waiter = new FakeWaiter([stop]);
+    const { deps } = spendAfterFirstSend({ waiter, budget: 1, tokens: 50_000 });
+
+    await runOn(deps, twoPrompts);
+
+    expect(waiter.calls).toEqual([{ ...budgetWait, spend: 1 }]);
+  });
+
+  it("does not wait while the spend is below the budget", async () => {
+    const waiter = new FakeWaiter([]);
+    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1, tokens: 49_500 });
+
+    const result = await runOn(deps, twoPrompts);
+
+    expect(waiter.calls).toEqual([]);
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toHaveLength(2);
+  });
+
+  it("never reads usage without a budget", async () => {
+    const waiter = new FakeWaiter([]);
+    const { deps, usage } = spendAfterFirstSend({ waiter });
+
+    const result = await runOn(deps, twoPrompts);
+
+    expect(usage.calls).toEqual([]);
+    expect(result.outcome).toBe("done");
+  });
+
+  it("never checks a script node", async () => {
+    const waiter = new FakeWaiter([]);
+    const usage = new FakeUsageSource();
+    usage.setEntries(sessionId, spent(dollars120));
+    const { deps } = harness({ waiter, usage, budget: 1, results: [exit(0)] });
+
+    const result = await runOn(deps, manifest(script("s1")));
+
+    expect(waiter.calls).toEqual([]);
+    expect(result.outcome).toBe("done");
+  });
+
+  it("checks a loop body prompt before its send", async () => {
+    const waiter = new FakeWaiter([stop]);
+    const usage = new FakeUsageSource();
+    usage.setEntries(sessionId, spent(dollars120));
+    const { deps, calls } = harness({ waiter, usage, budget: 1 });
+    const loop = node("l1", "loop", { condition: "no issues left", cap: 3, onCap: "fail" });
+
+    const result = await runOn(deps, manifest(loop, { ...prompt("r1"), parent: "l1" }));
+
+    expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "r1" }]);
+    expect(sends(calls)).toEqual([]);
+    expect(result.outcome).toBe("failed");
+  });
+
+  it("still waits under auto", async () => {
+    const waiter = new FakeWaiter([stop]);
+    const usage = new FakeUsageSource();
+    usage.setEntries(sessionId, spent(dollars120));
+    const { deps } = harness({ waiter, usage, budget: 1, auto: true });
+
+    await runOn(deps, manifest(prompt("n1")));
+
+    expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "n1" }]);
+  });
+
+  it.each<WaitReply>([stop, { decision: "closed" }])(
+    "fails the run at the paused node on $decision, leaving it waiting",
+    async (reply) => {
+      const waiter = new FakeWaiter([reply]);
+      const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
+
+      const result = await runOn(deps, twoPrompts);
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
+      expect(result.states).toEqual({ n1: "done", n2: "waiting" });
+      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(eventsOf(deps.store, "n2").at(-1)).toMatchObject({
+        kind: "budget",
+        payload: { step: "stopped" },
+      });
+    },
+  );
+
+  describe("after a turn ends", () => {
+    const message = (messageId: string, outputTokens: number, text?: string): UsageEntry => ({
+      model: "claude-opus-5-5",
+      inputTokens: 0,
+      outputTokens,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      cacheReadTokens: 0,
+      messageId,
+      ...(text === undefined ? {} : { text }),
+    });
+
+    function landingLate(options: {
+      before?: UsageEntry[];
+      stale: UsageEntry[];
+      landed: UsageEntry[];
+      settleMs?: number;
+      reply?: string;
+    }) {
+      const waiter = new FakeWaiter([stop]);
+      const usage = new FakeUsageSource();
+      usage.setEntries(sessionId, options.before ?? []);
+      const replies = [options.reply ?? "OK", "DONE."];
+      const h = harness({ waiter, usage, budget: 1, replies });
+      const send = h.deps.prompts.sendPrompt;
+      let sent = 0;
+      h.deps.prompts = {
+        sendPrompt: async (text) => {
+          await send(text);
+          if (sent++ > 0) return;
+          usage.setEntries(sessionId, options.landed);
+          usage.queueReads(sessionId, options.stale);
+        },
+      };
+      if (options.settleMs !== undefined) h.deps.usageSettleMs = options.settleMs;
+      return { ...h, waiter };
+    }
+
+    it("waits for the finished turn's usage before checking the budget", async () => {
+      const { deps, calls, waiter } = landingLate({
+        stale: [],
+        landed: [message("m1", dollars120, "OK")],
+      });
+
+      await runOn(deps, twoPrompts);
+
+      expect(waiter.calls).toEqual([budgetWait]);
+      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(kindsOf(deps.store, "n2")).not.toContain("sent");
+    });
+
+    it.each([
+      { reply: "OK", text: "OK" },
+      { reply: "OK\n", text: " OK" },
+    ])(
+      "carries on once the Stop's message $reply lands below the budget as $text",
+      async ({ reply, text }) => {
+        const { deps, calls, waiter } = landingLate({
+          stale: [],
+          landed: [message("m1", 1_000, text)],
+          settleMs: 60_000,
+          reply,
+        });
+
+        const result = await runOn(deps, twoPrompts);
+
+        expect(result.outcome).toBe("done");
+        expect(waiter.calls).toEqual([]);
+        expect(sends(calls)).toHaveLength(2);
+      },
+    );
+
+    it("waits for the message the Stop names, not an earlier one of the same turn", async () => {
+      const toolUse = message("m1", 0);
+      const { deps, waiter } = landingLate({
+        stale: [toolUse],
+        landed: [toolUse, message("m2", dollars120, "OK")],
+      });
+
+      await runOn(deps, twoPrompts);
+
+      expect(waiter.calls).toEqual([budgetWait]);
+    });
+
+    it("does not take a matching message from before the send for the turn's", async () => {
+      const earlier = message("m0", 0, "OK");
+      const { deps, waiter } = landingLate({
+        before: [earlier],
+        stale: [earlier],
+        landed: [earlier, message("m1", dollars120, "OK")],
+      });
+
+      await runOn(deps, twoPrompts);
+
+      expect(waiter.calls).toEqual([budgetWait]);
+    });
+
+    it("waits for the Stop's message after resuming into a turn sent before", async () => {
+      const waiter = new FakeWaiter([stop]);
+      const usage = new FakeUsageSource();
+      usage.setEntries(sessionId, [message("m1", dollars120, "OK")]);
+      usage.queueReads(sessionId, []);
+      const { deps, calls, events } = harness({ waiter, usage, budget: 1 });
+      const { id } = deps.store.createRun(newRun(twoPrompts));
+      deps.store.append(id, "n1", { kind: "sent" });
+
+      const running = new Runner({ ...deps, runId: id }).run(twoPrompts, {
+        actions: { n1: { kind: "wait" } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      events.publish({ kind: "Stop", sessionId, payload: { last_assistant_message: "OK" } });
+      await running;
+
+      expect(waiter.calls).toEqual([budgetWait]);
+      expect(sends(calls)).toEqual([]);
+      expect(kindsOf(deps.store, "n2")).not.toContain("sent");
+    });
+
+    it("reports the budget reached when a read missing the Stop's message is already over it", async () => {
+      const toolUse = message("m1", dollars120);
+      const { deps, waiter, lines } = landingLate({
+        stale: [toolUse],
+        landed: [toolUse],
+        settleMs: 100,
+      });
+
+      await runOn(deps, twoPrompts);
+
+      expect(waiter.calls).toEqual([budgetWait]);
+      expect(eventsOf(deps.store, "n2")[0]).toEqual(
+        expect.objectContaining({
+          kind: "budget",
+          payload: { step: "paused", spend: 1.2, budget: 1 },
+        }),
+      );
+      expect(lines).toContain("n2 failed: budget reached: spent $1.20 of $1.00");
+    });
+
+    it("pauses with the spend it read when the turn's usage never lands", async () => {
+      const { deps, calls, waiter, lines } = landingLate({
+        stale: [],
+        landed: [],
+        settleMs: 100,
+      });
+
+      await runOn(deps, twoPrompts);
+
+      expect(waiter.calls).toEqual([{ ...budgetWait, spend: 0, unconfirmed: true }]);
+      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(eventsOf(deps.store, "n2")[0]).toMatchObject({
+        kind: "budget",
+        payload: { step: "paused", spend: 0, budget: 1, unconfirmed: true },
+      });
+      expect(lines).toContain("n2 paused: spend not confirmed yet, last read $0.0000 of $1.00");
+      expect(lines).toContain(
+        "n2 failed: spend not confirmed: last read $0.0000 of $1.00 when the budget was checked",
+      );
+    });
+  });
+
+  it("pauses again on resume of a run paused at its budget", async () => {
+    const waiter = new FakeWaiter([stop]);
+    const usage = new FakeUsageSource();
+    usage.setEntries(sessionId, spent(dollars120));
+    const { deps, calls } = harness({ waiter, usage, budget: 1 });
+    const { id } = deps.store.createRun(newRun(twoPrompts));
+    const paused = { kind: "budget", payload: { step: "paused", spend: 1.2, budget: 1 } };
+    deps.store.append(id, "n1", { kind: "sent" });
+    deps.store.append(id, "n1", { kind: "done" });
+    deps.store.append(id, "n2", paused as RunEvent);
+
+    const result = await new Runner({ ...deps, runId: id }).run(twoPrompts, { actions: {} });
+
+    expect(waiter.calls).toEqual([budgetWait]);
+    expect(sends(calls)).toEqual([]);
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
   });
 });

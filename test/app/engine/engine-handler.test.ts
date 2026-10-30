@@ -18,6 +18,7 @@ import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
+import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -845,6 +846,55 @@ describe("createEngineHandler", async () => {
       hook("PreToolUse", claudeSessionId, 1200);
 
       expect(activityPushes()).toHaveLength(1);
+    });
+
+    it("asks the run's waiter about a permission request from the run's Claude session", async () => {
+      let clock = 1000;
+      const source = new FakeEventSource();
+      const permissions = new FakePermissionSource();
+      const waiter = new FakeWaiter([{ decision: "approve" }]);
+      let decision: unknown;
+      handler = handlerWith({
+        run: {
+          ...runEnvironment(new NodeFileSystem(), () => clock),
+          waiter,
+          startEvents: async () => ({ events: source, permissions, stop: async () => undefined }),
+          openSession: async (opening) => ({
+            sessionId: opening.claudeSessionId,
+            session: { ensureStarted: async () => undefined },
+            prompts: {
+              sendPrompt: async () => {
+                decision = await permissions.ask(opening.claudeSessionId, {
+                  hook_event_name: "PermissionRequest",
+                  session_id: opening.claudeSessionId,
+                  tool_name: "Bash",
+                  tool_input: { command: "echo hi" },
+                });
+                clock = 1500;
+                source.publish({
+                  kind: "Stop",
+                  sessionId: opening.claudeSessionId,
+                  payload: {
+                    hook_event_name: "Stop",
+                    session_id: opening.claudeSessionId,
+                    flowdeck_hook_at: 1500,
+                    last_assistant_message: "OK",
+                  },
+                });
+              },
+            },
+            stop: async () => undefined,
+          }),
+        },
+      });
+      flows.save(promptFlow());
+
+      await untilFinished(await startedRunId());
+
+      expect(waiter.calls).toEqual([
+        { nodeId: "plan", kind: "permission", tool: "Bash", input: "echo hi" },
+      ]);
+      expect(decision).toEqual({ behavior: "allow" });
     });
 
     const gated = () =>

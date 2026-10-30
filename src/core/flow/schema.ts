@@ -49,6 +49,7 @@ export const Session = z.object({
   permissionMode: z.string(),
   connectors: z.array(z.string()),
   frame: z.object({ nodes: z.array(z.string()) }).optional(),
+  budget: z.number().positive().optional(),
 });
 
 const NodeBase = z.object({

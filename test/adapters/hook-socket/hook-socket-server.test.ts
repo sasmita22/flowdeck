@@ -4,6 +4,7 @@ import { connect, type Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HookSocketServer } from "../../../src/adapters/hook-socket/hook-socket-server.js";
 import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
+import type { PermissionDecision } from "../../../src/ports/permission-source.js";
 import {
   hasCode,
   makeSocketPath,
@@ -29,6 +30,23 @@ function sendRaw(socketPath: string, data: string | Buffer, end = true): Promise
     client.write(data);
     if (end) client.end();
   });
+}
+
+type Reply = { data: string; closed: Promise<void> };
+
+function ask(socketPath: string, line: string): Reply & { done: Promise<string> } {
+  const reply: Reply = { data: "", closed: Promise.resolve() };
+  const client = connect(socketPath);
+  client.setEncoding("utf8");
+  client.on("data", (chunk: string) => (reply.data += chunk));
+  reply.closed = new Promise<void>((resolve, reject) => {
+    client.on("error", (error) => {
+      if (!hasCode(error, "EPIPE", "ECONNRESET")) reject(error);
+    });
+    client.on("close", () => resolve());
+  });
+  client.write(line);
+  return Object.assign(reply, { done: reply.closed.then(() => reply.data) });
 }
 
 describe("HookSocketServer", () => {
@@ -153,6 +171,105 @@ describe("HookSocketServer", () => {
     }
     expect(rejected).not.toHaveBeenCalled();
   }, 10_000);
+
+  describe("permission requests", () => {
+    let request: Record<string, unknown> & { session_id: string };
+    let line: string;
+
+    beforeEach(async () => {
+      request = await parseFixture("permission-request");
+      line = JSON.stringify({ ...request, flowdeck_hook_at: 1 }) + "\n";
+    });
+
+    it("hands the request to its session's handler and replies with the decision line, then closes", async () => {
+      const server = await startServer();
+      const handled: Record<string, unknown>[] = [];
+      server.onRequest(request.session_id, async (payload) => {
+        handled.push(payload);
+        return { behavior: "allow" };
+      });
+
+      const reply = await ask(socketPath, line).done;
+
+      expect(reply).toBe('{"behavior":"allow"}\n');
+      expect(handled).toEqual([{ ...request, flowdeck_hook_at: 1 }]);
+      expect(rejected).not.toHaveBeenCalled();
+    });
+
+    it("replies deny when no run is listening for that session", async () => {
+      const server = await startServer();
+      const other = vi.fn(async (): Promise<PermissionDecision> => ({ behavior: "allow" }));
+      server.onRequest("another-session", other);
+
+      const reply = await ask(socketPath, line).done;
+
+      expect(reply.endsWith("\n")).toBe(true);
+      expect(JSON.parse(reply)).toEqual({ behavior: "deny", message: "No run is listening" });
+      expect(other).not.toHaveBeenCalled();
+    });
+
+    it("does not publish the request to event subscribers", async () => {
+      const server = await startServer();
+      const seen: HookEvent[] = [];
+      for (const kind of kinds) server.subscribe(kind, request.session_id, (e) => seen.push(e));
+      server.onRequest(request.session_id, async () => ({ behavior: "allow" }));
+
+      await ask(socketPath, line).done;
+      await expectBarrier(server);
+
+      expect(seen).toEqual([]);
+      expect(rejected).not.toHaveBeenCalled();
+    });
+
+    it("aborts the handler's signal when the client closes before an answer", async () => {
+      const server = await startServer();
+      let signal: AbortSignal | undefined;
+      server.onRequest(request.session_id, (_payload, handed) => {
+        signal = handed;
+        return new Promise<PermissionDecision>(() => {});
+      });
+      const client = connect(socketPath);
+      client.write(line);
+      await waitUntil(
+        () => signal !== undefined,
+        2000,
+        () => "expected the handler to be called",
+      );
+      expect(signal?.aborted).toBe(false);
+
+      client.destroy();
+
+      await waitUntil(
+        () => signal?.aborted === true,
+        2000,
+        () => "expected the signal to abort",
+      );
+    });
+
+    it("closes the waiting client when stopped with a handler still pending", async () => {
+      const server = await startServer();
+      let called = false;
+      server.onRequest(request.session_id, () => {
+        called = true;
+        return new Promise<PermissionDecision>(() => {});
+      });
+      const reply = ask(socketPath, line);
+      await waitUntil(
+        () => called,
+        2000,
+        () => "expected the handler to be called",
+      );
+
+      await server.stop();
+      const closed = await Promise.race([
+        reply.closed.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
+      ]);
+
+      expect(closed).toBe(true);
+      expect(reply.data).toBe("");
+    });
+  });
 
   it("rejects invalid JSON once and keeps running", async () => {
     const server = await startServer();

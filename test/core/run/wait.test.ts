@@ -6,7 +6,15 @@ import {
   type WaitReply,
   type WaitRequest,
 } from "../../../src/core/run/wait.js";
-import { free, gate, hardstop, pick } from "../../fixtures/waits.js";
+import {
+  budget,
+  free,
+  gate,
+  hardstop,
+  permission,
+  pick,
+  unconfirmedBudget,
+} from "../../fixtures/waits.js";
 
 const approve: WaitReply = { decision: "approve" };
 const reject: WaitReply = { decision: "reject", reason: "too risky" };
@@ -14,10 +22,20 @@ const proceed: WaitReply = { decision: "continue" };
 const stop: WaitReply = { decision: "stop", reason: "tests red" };
 const blue: WaitReply = { decision: "answer", answer: "blue" };
 const teal: WaitReply = { decision: "answer", answer: "teal" };
+const raise = (amount: number): WaitReply => ({ decision: "raise", budget: amount });
 
 describe("pendingWaitSchema", () => {
-  it.each([gate, hardstop, pick, free])("accepts a $kind wait for $nodeId", (request) => {
-    expect(pendingWaitSchema.safeParse({ waitId: "w1", request }).success).toBe(true);
+  it.each([gate, hardstop, pick, free, permission, budget])(
+    "accepts a $kind wait for $nodeId",
+    (request) => {
+      expect(pendingWaitSchema.safeParse({ waitId: "w1", request }).success).toBe(true);
+    },
+  );
+
+  it("keeps an unconfirmed budget wait's flag", () => {
+    const parsed = pendingWaitSchema.parse({ waitId: "w1", request: unconfirmedBudget });
+
+    expect(parsed.request).toEqual(unconfirmedBudget);
   });
 
   it("rejects a wait without a waitId", () => {
@@ -32,8 +50,15 @@ describe("pendingWaitSchema", () => {
 });
 
 describe("waitAnswerSchema", () => {
-  it.each([approve, reject, proceed, stop, blue])("accepts a $decision reply", (reply) => {
-    expect(waitAnswerSchema.safeParse({ waitId: "w1", reply }).success).toBe(true);
+  it.each([approve, reject, proceed, stop, blue, raise(2)])(
+    "accepts a $decision reply",
+    (reply) => {
+      expect(waitAnswerSchema.safeParse({ waitId: "w1", reply }).success).toBe(true);
+    },
+  );
+
+  it.each([0, -1])("rejects a raise to %s", (amount) => {
+    expect(waitAnswerSchema.safeParse({ waitId: "w1", reply: raise(amount) }).success).toBe(false);
   });
 
   it("accepts a reject with an empty reason", () => {
@@ -73,6 +98,14 @@ describe("replyFits", () => {
     ["ask without options / any text", true, free, teal],
     ["ask without options / continue", false, free, proceed],
     ["gate / closed", false, gate, { decision: "closed" }],
+    ["permission / approve", true, permission, approve],
+    ["permission / reject", true, permission, reject],
+    ["permission / answer", false, permission, blue],
+    ["budget / stop", true, budget, stop],
+    ["budget / raise above the spend", true, budget, raise(2)],
+    ["budget / raise equal to the spend", false, budget, raise(1.2)],
+    ["budget / raise below the spend", false, budget, raise(1)],
+    ["budget / approve", false, budget, approve],
   ])("%s fits: %s", (_name, fits, request, reply) => {
     expect(replyFits(request, reply)).toBe(fits);
   });

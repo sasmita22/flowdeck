@@ -9,6 +9,17 @@ export const hardstop: WaitRequest = {
   condition: "tests fail",
 };
 
+export const permission: WaitRequest = {
+  nodeId: "n1",
+  kind: "permission",
+  tool: "Bash",
+  input: "echo hi",
+};
+
+export const budget: WaitRequest = { nodeId: "n2", kind: "budget", spend: 1.2, budget: 1 };
+
+export const unconfirmedBudget: WaitRequest = { ...budget, unconfirmed: true };
+
 export const pick: WaitRequest = {
   nodeId: "q",
   kind: "ask",

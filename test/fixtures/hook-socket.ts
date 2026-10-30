@@ -28,6 +28,7 @@ export function runHook(options: {
   stdin: string | Buffer;
   env?: NodeJS.ProcessEnv;
   keepStdinOpen?: boolean;
+  args?: string[];
 }): Promise<HookRun> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env["FLOWDECK_SOCK"];
@@ -35,7 +36,10 @@ export function runHook(options: {
   Object.assign(env, options.env);
   return new Promise((resolve, reject) => {
     const started = performance.now();
-    const child = spawn(process.execPath, [hookPath], { env, stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn(process.execPath, [hookPath, ...(options.args ?? [])], {
+      env,
+      stdio: ["pipe", "pipe", "inherit"],
+    });
     let stdout = "";
     let ms = 0;
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));

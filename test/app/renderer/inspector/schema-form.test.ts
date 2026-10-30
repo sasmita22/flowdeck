@@ -43,7 +43,7 @@ const kindField = () => {
 };
 
 describe("describeFields", () => {
-  it("describes working folder kind, model and allowed tools in schema order", () => {
+  it("describes working folder kind, model, allowed tools and budget in schema order", () => {
     expect(describeFields(sessionSettingsSchema).map(summary)).toEqual([
       {
         control: "select",
@@ -53,6 +53,7 @@ describe("describeFields", () => {
       },
       { control: "text", path: ["model"], testId: "session-model" },
       { control: "list", path: ["allowedTools"], testId: "session-allowed-tools" },
+      { control: "number", path: ["budget"], testId: "session-budget" },
     ]);
   });
 
@@ -114,6 +115,32 @@ describe("applyField", () => {
     const after = applyField(worktreeSession(), ["allowedTools"], "Read\n\nBash\n");
 
     expect(after.allowedTools).toEqual(["Read", "Bash"]);
+    expectSession(after);
+  });
+
+  it("sets the budget as a number", () => {
+    const after = applyField(worktreeSession(), ["budget"], "2.5");
+
+    expect(after.budget).toBe(2.5);
+    expectSession(after);
+  });
+
+  it.each(["0", "-1"])("keeps the previous budget when the input is %j", (input) => {
+    const before = deepFreeze({ ...worktreeSession(), budget: 3 });
+
+    const after = applyField(before, ["budget"], input);
+
+    expect(after).toEqual(before);
+    expectSession(after);
+  });
+
+  it("removes the budget key when the input is empty", () => {
+    const before = deepFreeze({ ...worktreeSession(), budget: 3 });
+
+    const after = applyField(before, ["budget"], "");
+
+    expect(after).not.toHaveProperty("budget");
+    expect(after).toEqual(worktreeSession());
     expectSession(after);
   });
 

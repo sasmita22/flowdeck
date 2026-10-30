@@ -3,5 +3,5 @@ import type { WaitReply, WaitRequest } from "../core/run/wait.js";
 export type { WaitReply, WaitRequest };
 
 export interface Waiter {
-  wait(request: WaitRequest): Promise<WaitReply>;
+  wait(request: WaitRequest, signal?: AbortSignal): Promise<WaitReply>;
 }
