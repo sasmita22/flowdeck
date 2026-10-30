@@ -583,7 +583,10 @@ describe("forceExit", () => {
       exitCalls = 0;
       exitedAt: number | undefined;
 
-      override evaluate<R>(fn?: (electron: typeof Electron) => R | Promise<R>): Promise<R> {
+      override evaluate<R, Arg>(
+        fn?: (electron: typeof Electron, arg: Arg) => R | Promise<R>,
+        arg?: Arg,
+      ): Promise<R> {
         this.evaluateCalls += 1;
         const electron = {
           app: {
@@ -601,7 +604,7 @@ describe("forceExit", () => {
             },
           },
         } as unknown as typeof Electron;
-        return Promise.resolve(fn?.(electron) as R);
+        return Promise.resolve(fn?.(electron, arg as Arg) as R);
       }
     }
 
@@ -931,5 +934,25 @@ describe("launchApp log", () => {
     const log = await readFile(logPath, "utf8");
     expect(log).toContain("main: engine started");
     expect(log).toContain("engine: store ready");
+  });
+
+  it("forwards the evaluate argument to the launched app", async () => {
+    const received: unknown[] = [];
+    const app = new (class extends FakeApp {
+      override evaluate<R>(_fn?: unknown, arg?: unknown): Promise<R> {
+        received.push(arg);
+        return super.evaluate<R>();
+      }
+    })();
+    const launched = await launchApp({
+      home: outDir,
+      logPath: join(outDir, "app.log"),
+      launch: () => Promise.resolve(app),
+    });
+
+    await launched.app.evaluate((_electron, testId: string) => testId, "canvas-save");
+    await launched.close();
+
+    expect(received[0]).toBe("canvas-save");
   });
 });
