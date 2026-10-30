@@ -37,7 +37,7 @@ export function claudeCommand(
   const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
   const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
   const plugin = pluginDir === undefined ? "" : ` --plugin-dir ${shellQuote(pluginDir)}`;
-  return `env ${unset} claude --session-id ${sessionId} --model ${model}${settings}${plugin}`;
+  return `env ${unset} claude --session-id ${sessionId} --model ${shellQuote(model)}${settings}${plugin}`;
 }
 
 function showsInputBox(pane: string): boolean {

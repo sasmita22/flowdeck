@@ -30,7 +30,6 @@ function TitleStrip({
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
-  const folder = useStore(canvas, (state) => state.flow.session.workingFolder);
   const saving = useStore(save, (state) => state.saving);
   const error = useStore(save, (state) => state.error);
   const runDisabled = useStore(run, (state) => selectRunDisabled(state, { saving }));
@@ -48,17 +47,6 @@ function TitleStrip({
         >
           Save
         </button>
-      )}
-      {ready && (
-        <label>
-          Working folder{" "}
-          <input
-            data-testid="flow-folder"
-            type="text"
-            value={folder.kind === "path" ? folder.path : ""}
-            onChange={(event) => canvas.getState().setWorkingFolder(event.target.value)}
-          />
-        </label>
       )}
       {ready && (
         <button

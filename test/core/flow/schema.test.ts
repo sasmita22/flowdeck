@@ -45,6 +45,31 @@ describe("parseFlow", () => {
     expect(parseFlow(flow)).toEqual(flow);
   });
 
+  it("keeps the session frame's members", () => {
+    const flow = flowWith({
+      session: { ...session({ kind: "worktree", branch: "main" }), frame: { nodes: ["a", "b"] } },
+    });
+
+    expect(parseFlow(flow).session.frame).toEqual({ nodes: ["a", "b"] });
+  });
+
+  it.each(["/r", ""])("keeps a worktree folder's repo %j", (repo) => {
+    const flow = flowWith({ session: session({ kind: "worktree", branch: "main", repo }) });
+
+    expect(parseFlow(flow).session.workingFolder).toEqual({
+      kind: "worktree",
+      branch: "main",
+      repo,
+    });
+  });
+
+  it("adds no frame or repo key to a session that has neither", () => {
+    const parsed = parseFlow(flowWith({}));
+
+    expect(parsed.session).not.toHaveProperty("frame");
+    expect(parsed.session.workingFolder).not.toHaveProperty("repo");
+  });
+
   it("caps a loop at 3 rounds when it names no cap", () => {
     const loop = {
       id: "l",

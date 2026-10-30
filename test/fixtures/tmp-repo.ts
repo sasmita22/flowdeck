@@ -8,8 +8,24 @@ const run = promisify(execFile);
 
 export type TmpRepo = { path: string; cleanup: () => Promise<void> };
 
-export async function createTmpRepo(): Promise<TmpRepo> {
+const committer = [
+  "-c",
+  "user.name=Flowdeck Test",
+  "-c",
+  "user.email=test@flowdeck.invalid",
+  "-c",
+  "commit.gpgsign=false",
+];
+
+export async function createTmpRepo(options: { commit?: boolean } = {}): Promise<TmpRepo> {
   const path = await realpath(await mkdtemp(join(tmpdir(), "fd-repo-")));
-  await run("git", ["init", "--quiet"], { cwd: path });
+  if (options.commit) {
+    await run("git", ["init", "--quiet", "--initial-branch=main"], { cwd: path });
+    await run("git", [...committer, "commit", "--quiet", "--allow-empty", "-m", "initial"], {
+      cwd: path,
+    });
+  } else {
+    await run("git", ["init", "--quiet"], { cwd: path });
+  }
   return { path, cleanup: () => rm(path, { recursive: true, force: true }) };
 }

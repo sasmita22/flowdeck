@@ -4,11 +4,13 @@ import {
   newCanvasFlow,
   nextNodeId,
   selectDirty,
+  wrappableIds,
   type CanvasNodeType,
 } from "../../../../src/app/renderer/canvas/store.js";
+import { SESSION_FRAME_ID, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { parseFlow, type Flow } from "../../../../src/core/flow/schema.js";
-import { flow, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
+import { parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
+import { flow, loop, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -453,6 +455,8 @@ describe("edit gate", () => {
     ["deleteNodes", (s) => s.deleteNodes(["prompt-1"])],
     ["dragTo", (s) => s.dragTo("prompt-1", { x: 50, y: 50 })],
     ["endDrag", (s) => s.endDrag(["prompt-1"])],
+    ["wrapSelection", (s) => s.wrapSelection()],
+    ["updateSession", (s) => s.updateSession({ ...s.flow.session, model: "haiku" })],
     ["undo", (s) => s.undo()],
     ["redo", (s) => s.redo()],
   ];
@@ -469,6 +473,7 @@ describe("edit gate", () => {
       flow: seeded,
       undoStack,
       redoStack,
+      selection: ["prompt-1", "script-1"],
       dragPositions: { "prompt-1": { x: 50, y: 50 } },
     });
     return store;
@@ -628,37 +633,131 @@ describe("markSaved", () => {
   });
 });
 
-describe("setWorkingFolder", () => {
-  const folderOf = (store: Store) => store.getState().flow.session.workingFolder;
+const framed = (source: Flow, nodes: string[]): Flow => ({
+  ...source,
+  session: { ...source.session, frame: { nodes } },
+});
 
-  it("sets the path as an undoable edit that makes the canvas dirty", () => {
+const loopWithBody = () => flow([loop("L"), prompt("X", { parent: "L" }), prompt("A")], []);
+
+describe("wrappableIds", () => {
+  it("returns the selected top-level ids that are not members yet, in selection order", () => {
+    const source = framed(
+      flow([loop("L"), prompt("X", { parent: "L" }), prompt("A"), prompt("B")], []),
+      ["B"],
+    );
+
+    expect(wrappableIds(source, ["A", "X", "B", "ghost", "L"])).toEqual(["A", "L"]);
+  });
+
+  it("is empty for an empty selection", () => {
+    expect(wrappableIds(loopWithBody(), [])).toEqual([]);
+  });
+
+  it("is empty when only loop-body nodes are selected", () => {
+    expect(wrappableIds(loopWithBody(), ["X"])).toEqual([]);
+  });
+});
+
+describe("wrapSelection", () => {
+  it("frames the four selected nodes as one undo step and undo leaves the canvas clean", () => {
     const store = createCanvasStore();
+    const { a, b, c, d } = dropFour(store);
+    store.getState().markSaved(store.getState().flow);
+    act(store, (s) => s.select([a, b, c, d]));
+    const depth = store.getState().undoStack.length;
 
-    act(store, (s) => s.setWorkingFolder("/tmp/x"));
+    act(store, (s) => s.wrapSelection());
 
-    expect(folderOf(store)).toEqual({ kind: "path", path: "/tmp/x" });
+    expect(store.getState().flow.session.frame).toEqual({ nodes: [a, b, c, d] });
+    expect(store.getState().undoStack).toHaveLength(depth + 1);
     expect(selectDirty(store.getState())).toBe(true);
 
     act(store, (s) => s.undo());
 
-    expect(folderOf(store)).toEqual({ kind: "worktree", branch: "main" });
+    expect(Object.hasOwn(store.getState().flow.session, "frame")).toBe(false);
+    expect(selectDirty(store.getState())).toBe(false);
+  });
+
+  it("records nothing when the selection is empty", () => {
+    const store = createCanvasStore();
+    dropFour(store);
+    act(store, (s) => s.select([]));
+    const before = store.getState();
+
+    act(store, (s) => s.wrapSelection());
+
+    expect(store.getState().undoStack).toBe(before.undoStack);
+    expect(store.getState().flow).toBe(before.flow);
+  });
+
+  it("never reuses the id of a deleted frame member for a new node", () => {
+    const store = createCanvasStore();
+    const { a, b, c, d } = dropFour(store);
+    act(store, (s) => s.select([a]));
+    act(store, (s) => s.wrapSelection());
+    act(store, (s) => s.deleteNodes([a]));
+
+    act(store, (s) => s.drop("prompt", { x: 600, y: 600 }));
+
+    const { flow } = store.getState();
+    const added = flow.nodes.map((node) => node.id).filter((id) => ![b, c, d].includes(id));
+    expect(added).toHaveLength(1);
+    expect(added).not.toContain(a);
+    expect(flow.session.frame).toEqual({ nodes: [a] });
+    expect(toViewNodes(flow, [], {}, null).map((node) => node.id)).not.toContain(SESSION_FRAME_ID);
+  });
+
+  it("records nothing when only loop-body nodes are selected", () => {
+    const store = createCanvasStore({ ready: false });
+    store.getState().load(loopWithBody());
+    store.getState().select(["X"]);
+    const before = store.getState();
+
+    store.getState().wrapSelection();
+
+    expect(store.getState().undoStack).toBe(before.undoStack);
+    expect(store.getState().flow).toBe(before.flow);
+  });
+});
+
+describe("updateSession", () => {
+  const edited: Session = {
+    name: "main",
+    workingFolder: { kind: "path", path: "/tmp/x" },
+    model: "haiku",
+    allowedTools: ["Read"],
+    permissionMode: "default",
+    connectors: [],
+  };
+
+  it("replaces the session as an undoable edit that makes the canvas dirty", () => {
+    const store = createCanvasStore();
+    const start = store.getState().flow.session;
+
+    act(store, (s) => s.updateSession(edited));
+
+    expect(store.getState().flow.session).toEqual(edited);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(selectDirty(store.getState())).toBe(true);
+
+    act(store, (s) => s.undo());
+
+    expect(store.getState().flow.session).toEqual(start);
     expect(selectDirty(store.getState())).toBe(false);
 
     act(store, (s) => s.redo());
 
-    expect(folderOf(store)).toEqual({ kind: "path", path: "/tmp/x" });
-    expect(selectDirty(store.getState())).toBe(true);
+    expect(store.getState().flow.session).toEqual(edited);
   });
+});
 
-  it("is ignored while the store is not ready", () => {
-    const store = createCanvasStore({ ready: false });
-    const before = store.getState();
+describe("newCanvasFlow", () => {
+  it("defaults to a worktree folder on main and no frame", () => {
+    const { session } = newCanvasFlow();
 
-    store.getState().setWorkingFolder("/tmp/x");
-
-    expect(folderOf(store)).toEqual({ kind: "worktree", branch: "main" });
-    expect(store.getState().undoStack).toBe(before.undoStack);
-    expect(selectDirty(store.getState())).toBe(false);
+    expect(session.workingFolder).toEqual({ kind: "worktree", branch: "main" });
+    expect(Object.hasOwn(session, "frame")).toBe(false);
   });
 });
 

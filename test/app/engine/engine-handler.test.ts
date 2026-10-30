@@ -1,8 +1,11 @@
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { appendFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import {
@@ -12,11 +15,12 @@ import {
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import type { OpenedSession } from "../../../src/core/run/execute.js";
+import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
+import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   flow,
   gate,
@@ -27,6 +31,18 @@ import {
   trigger,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
+
+const git = async (repo: string, ...args: string[]): Promise<string> =>
+  (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
+
+const worktreePaths = async (repo: string): Promise<string[]> =>
+  (await git(repo, "worktree", "list", "--porcelain"))
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length));
+
+const branches = (repo: string): Promise<string> =>
+  git(repo, "branch", "--list", "--format=%(refname:short)");
 
 const stores = (flows = new FakeFlowStore()) => ({ runs: new FakeStore(), flows });
 
@@ -65,6 +81,7 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
     isFolder,
     fs,
     run: runEnvironment(fs),
+    worktree: new FakeWorktree(),
     ...overrides,
   };
 };
@@ -280,12 +297,16 @@ describe("createEngineHandler", async () => {
     const sleeper = () =>
       atRepo(flow([script("nap", { settings: { command: "sleep", args: ["3"] } })], []));
 
+    const collectInto = (sink: EnginePush[]) => (push: EnginePush) => {
+      sink.push(push);
+    };
+
     const handlerWith = (overrides: Partial<EngineHandlerOptions> = {}) =>
       createEngineHandler(
         options({
           openStores: () => ({ runs, flows }),
           home,
-          publish: (push) => pushes.push(push),
+          publish: collectInto(pushes),
           prepareHooks: () => ({
             kind: "ok",
             nodePath: process.execPath,
@@ -414,19 +435,135 @@ describe("createEngineHandler", async () => {
       await expectErrorAndNoRun("Save the flow before running it");
     });
 
-    it("refuses a worktree working folder", async () => {
-      flows.save(inFolder(twoScripts(), { kind: "worktree", branch: "main" }));
-
-      await expectErrorAndNoRun(
-        "Set a working folder before running (worktree folders are not supported yet)",
-      );
-    });
-
     it("refuses a working folder path that is not a folder", async () => {
       const missing = join(repo.path, "missing");
       flows.save(inFolder(twoScripts(), { kind: "path", path: missing }));
 
       await expectErrorAndNoRun(`Working folder not found: ${missing}`);
+    });
+
+    describe("with a fresh worktree folder", () => {
+      let source: TmpRepo;
+
+      const promptAt = (workingFolder: Flow["session"]["workingFolder"]) =>
+        inFolder(
+          flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]),
+          workingFolder,
+        );
+
+      const seenAtOpen = async (opening: OpenSessionOptions) => ({
+        cwd: opening.cwd,
+        id8: opening.claudeSessionId.slice(0, 8),
+        worktrees: await worktreePaths(source.path),
+        branches: await branches(source.path),
+      });
+
+      const withRealWorktree = (seen: Awaited<ReturnType<typeof seenAtOpen>>[]) =>
+        handlerWith({
+          worktree: new GitWorktree(),
+          run: {
+            ...runEnvironment(new NodeFileSystem()),
+            openSession: async (opening) => {
+              seen.push(await seenAtOpen(opening));
+              throw new Error("seen");
+            },
+          },
+        });
+
+      beforeEach(async () => {
+        source = await createTmpRepo({ commit: true });
+      });
+
+      afterEach(async () => {
+        await handler.stop();
+        await source.cleanup();
+      });
+
+      it("creates the worktree and its branch before node 1 and runs the session inside it", async () => {
+        const seen: Awaited<ReturnType<typeof seenAtOpen>>[] = [];
+        handler = withRealWorktree(seen);
+        flows.save(promptAt({ kind: "worktree", repo: source.path, branch: "main" }));
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+
+        const [atOpen] = seen;
+        if (atOpen === undefined) throw new Error("Claude never started");
+        const path = join(home, "worktrees", atOpen.id8);
+        expect(atOpen.worktrees).toContain(await realpath(path));
+        expect(atOpen.branches).toContain(`flowdeck/${atOpen.id8}`);
+        expect(atOpen.cwd).toBe(path);
+        expect(runs.findRun(runId)?.session.cwd).toBe(path);
+        expect((await git(path, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(
+          `flowdeck/${atOpen.id8}`,
+        );
+      });
+
+      it("gives two runs of the same flow their own branch and folder", async () => {
+        const seen: Awaited<ReturnType<typeof seenAtOpen>>[] = [];
+        handler = withRealWorktree(seen);
+        flows.save(promptAt({ kind: "worktree", repo: source.path, branch: "main" }));
+
+        await untilFinished(await startedRunId());
+        await untilFinished(await startedRunId());
+
+        const cwds = runs.runs.map((run) => run.session.cwd);
+        expect(cwds).toHaveLength(2);
+        expect(new Set(cwds).size).toBe(2);
+        expect(await worktreePaths(source.path)).toHaveLength(3);
+        expect((await branches(source.path)).match(/^flowdeck\//gm)).toHaveLength(2);
+      });
+
+      it("writes nothing from the run back into the saved flow", async () => {
+        handler = withRealWorktree([]);
+        const saved = promptAt({ kind: "worktree", repo: source.path, branch: "main" });
+        flows.save(saved);
+
+        await untilFinished(await startedRunId());
+
+        expect(flows.loadLatest()?.flow).toEqual(saved);
+      });
+
+      it("creates no worktree or branch for an existing folder, and runs in that folder", async () => {
+        const worktree = new FakeWorktree();
+        handler = handlerWith({ worktree });
+        flows.save(inFolder(twoScripts(), { kind: "path", path: source.path }));
+        const worktreesBefore = await worktreePaths(source.path);
+        const branchesBefore = await branches(source.path);
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+
+        expect(worktree.calls).toEqual([]);
+        expect(await worktreePaths(source.path)).toEqual(worktreesBefore);
+        expect(await branches(source.path)).toBe(branchesBefore);
+        expect(runs.findRun(runId)?.session.cwd).toBe(source.path);
+        expect(await stat(join(home, "worktrees")).catch(() => undefined)).toBeUndefined();
+      });
+
+      it.each<[string, Flow["session"]["workingFolder"]]>([
+        ["no repo", { kind: "worktree", branch: "main" }],
+        ["an empty repo", { kind: "worktree", branch: "main", repo: "" }],
+      ])(
+        "refuses a worktree folder with %s and never calls the worktree port",
+        async (_, folder) => {
+          const worktree = new FakeWorktree();
+          handler = handlerWith({ worktree });
+          flows.save(inFolder(twoScripts(), folder));
+
+          await expectErrorAndNoRun(/repositor/i);
+          expect(worktree.calls).toEqual([]);
+        },
+      );
+
+      it("returns the worktree port's failure and creates no run", async () => {
+        const worktree = new FakeWorktree({ failWith: "git worktree add exploded" });
+        handler = handlerWith({ worktree });
+        flows.save(inFolder(twoScripts(), { kind: "worktree", repo: source.path, branch: "main" }));
+
+        await expectErrorAndNoRun(/git worktree add exploded/);
+        expect(worktree.calls).toHaveLength(1);
+      });
     });
 
     it("returns the hook preparation error", async () => {
@@ -723,7 +860,7 @@ describe("createEngineHandler", async () => {
       );
 
     const withAppWaiter = () => {
-      const waiter = createAppWaiter({ push: (push) => pushes.push(push) });
+      const waiter = createAppWaiter({ push: collectInto(pushes) });
       return handlerWith({
         run: { ...runEnvironment(new NodeFileSystem()), waiter },
         waits: waiter,

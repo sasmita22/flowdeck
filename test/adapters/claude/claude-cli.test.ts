@@ -30,8 +30,14 @@ describe("claudeCommand", () => {
       "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION" +
         " -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET" +
         " -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID" +
-        ` -u CLAUDE_EFFORT claude --session-id ${sessionId} --model haiku` +
+        ` -u CLAUDE_EFFORT claude --session-id ${sessionId} --model 'haiku'` +
         " --settings '/tmp/fd home/sessions/s1/settings.json'",
+    );
+  });
+
+  it("quotes the model as one shell word", () => {
+    expect(claudeCommand({ sessionId, model: "claude haiku; touch x" })).toContain(
+      " --model 'claude haiku; touch x'",
     );
   });
 

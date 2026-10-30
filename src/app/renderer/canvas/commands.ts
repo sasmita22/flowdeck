@@ -1,4 +1,4 @@
-import type { Flow, Node, Wire } from "../../../core/flow/schema.js";
+import type { Flow, Node, Session, Wire } from "../../../core/flow/schema.js";
 
 export interface Command {
   do(flow: Flow): Flow;
@@ -74,20 +74,39 @@ export const moveNodes = (moves: readonly Move[]): Command => ({
   undo: placeAt(moves, (move) => move.from),
 });
 
-type WorkingFolder = Flow["session"]["workingFolder"];
+const withSession = (flow: Flow, session: Session): Flow => ({ ...flow, session });
 
-const withWorkingFolder = (flow: Flow, workingFolder: WorkingFolder): Flow => ({
-  ...flow,
-  session: { ...flow.session, workingFolder },
-});
+export const wrappableIds = (flow: Flow, ids: readonly string[]): string[] => {
+  const members = new Set(flow.session.frame?.nodes);
+  const topLevel = new Set(
+    flow.nodes.filter((node) => node.parent === undefined).map((node) => node.id),
+  );
+  return ids.filter((id) => topLevel.has(id) && !members.has(id));
+};
 
-export const setWorkingFolder = (path: string): Command => {
-  let previous: WorkingFolder | undefined;
+export const wrapInSession = (ids: readonly string[]): Command => {
+  let previous: Session | undefined;
   return {
     do: (flow) => {
-      previous = flow.session.workingFolder;
-      return withWorkingFolder(flow, { kind: "path", path });
+      const added = wrappableIds(flow, ids);
+      if (added.length === 0) return flow;
+      previous = flow.session;
+      return withSession(flow, {
+        ...flow.session,
+        frame: { nodes: [...(flow.session.frame?.nodes ?? []), ...added] },
+      });
     },
-    undo: (flow) => (previous === undefined ? flow : withWorkingFolder(flow, previous)),
+    undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
+  };
+};
+
+export const updateSession = (next: Session): Command => {
+  let previous: Session | undefined;
+  return {
+    do: (flow) => {
+      previous = flow.session;
+      return withSession(flow, next);
+    },
+    undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
   };
 };

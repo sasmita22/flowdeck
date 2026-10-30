@@ -93,6 +93,32 @@ describe("lower", () => {
     expect(manifest).not.toHaveProperty("hash");
   });
 
+  it("leaves the session frame out of the manifest", () => {
+    const input = sample();
+    const unframed = structuredClone(input.session);
+    input.session.frame = { nodes: ["p", "a"] };
+
+    expect(lower(input).manifest.session).toStrictEqual(unframed);
+  });
+
+  it("lowers flows that differ only in their session frame to the same manifest", () => {
+    const framed = sample();
+    framed.session.frame = { nodes: ["p"] };
+
+    expect(lower(framed)).toStrictEqual(lower(sample()));
+  });
+
+  it("keeps a worktree folder's repo in the manifest", () => {
+    const input = sample();
+    input.session.workingFolder = { kind: "worktree", branch: "main", repo: "/r" };
+
+    expect(lower(input).manifest.session.workingFolder).toStrictEqual({
+      kind: "worktree",
+      branch: "main",
+      repo: "/r",
+    });
+  });
+
   it("compiles one file per prompt and agent node and none for the rest", () => {
     const input = sample();
 

@@ -16,7 +16,7 @@ export type ManifestNode = {
 
 export type Manifest = {
   version: 1;
-  session: Session;
+  session: Omit<Session, "frame">;
   nodes: ManifestNode[];
   wires: Wire[];
   files: Record<string, string>;
@@ -37,10 +37,12 @@ export function lower(flow: Flow): { manifest: Omit<Manifest, "files">; nodeFile
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
   const compiled = nodes.map((node) => ({ node, file: compile(node) }));
+  const session = { ...flow.session };
+  delete session.frame;
   return {
     manifest: {
       version: 1,
-      session: flow.session,
+      session,
       nodes: compiled.map(({ node, file }) => ({
         id: node.id,
         type: node.type,
