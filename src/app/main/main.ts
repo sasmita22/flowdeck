@@ -12,6 +12,7 @@ import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { createTerminal, type Terminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
+import { answerWait, createWaitRelay } from "./wait.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
 
 const rendererIndexPath = join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
@@ -155,6 +156,12 @@ void app.whenReady().then(() => {
     },
   });
   client.onPush(activity.onPush);
+  const wait = createWaitRelay({
+    send: (value) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.wait, value);
+    },
+  });
+  client.onPush(wait.onPush);
   const terminal = wireTerminal(window, windowGuard);
   client.onPush((push) => {
     if (push.push === "session") terminal.setSession(push.value);
@@ -170,6 +177,14 @@ void app.whenReady().then(() => {
   ipcMain.handle(
     bridgeChannels.getActivity,
     windowGuard.handle(() => activity.feed()),
+  );
+  ipcMain.handle(
+    bridgeChannels.getWait,
+    windowGuard.handle(() => wait.latest()),
+  );
+  ipcMain.handle(
+    bridgeChannels.answerWait,
+    windowGuard.handle((payload: unknown) => answerWait(client, payload)),
   );
   let quitting = false;
   app.on("will-quit", (event) => {

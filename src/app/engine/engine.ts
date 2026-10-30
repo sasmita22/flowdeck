@@ -12,6 +12,7 @@ import { openDatabase } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
 import type { RunEnvironment } from "../../core/run/execute.js";
+import { createAppWaiter } from "./app-waiter.js";
 import { createEngineHandler, type EngineStores } from "./engine-handler.js";
 import { prepareHooks } from "./hooks.js";
 import type { EngineMessage, EngineRequest } from "./protocol.js";
@@ -38,11 +39,13 @@ const post = (message: EngineMessage) => process.parentPort.postMessage(message)
 
 const fs = new NodeFileSystem();
 
+const waits = createAppWaiter({ push: post });
+
 const run: RunEnvironment & { now: () => number } = {
   fs,
   now: Date.now,
   scripts: new NodeProcessRunner(),
-  waiter: { wait: () => new Promise(() => undefined) },
+  waiter: waits,
   startEvents: async (socketPath) => {
     await mkdir(dirname(socketPath), { recursive: true });
     const server = new HookSocketServer({ socketPath });
@@ -73,6 +76,7 @@ const handler = createEngineHandler({
   isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
   fs,
   run,
+  waits,
 });
 
 process.parentPort.on("message", (event: { data: EngineRequest }) => {

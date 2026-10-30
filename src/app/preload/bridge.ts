@@ -22,6 +22,9 @@ export type FlowdeckBridge = {
   onTerminalData(listener: (data: unknown) => void): () => void;
   getActivity(): Promise<unknown>;
   onActivity(listener: (update: unknown) => void): () => void;
+  getWait(): Promise<unknown>;
+  onWait(listener: (value: unknown) => void): () => void;
+  answerWait(answer: unknown): Promise<boolean>;
 };
 
 export const bridgeChannels = {
@@ -44,4 +47,7 @@ export const bridgeChannels = {
   terminalData: "flowdeck:terminal-data",
   getActivity: "flowdeck:get-activity",
   activity: "flowdeck:activity",
+  getWait: "flowdeck:get-wait",
+  wait: "flowdeck:wait",
+  answerWait: "flowdeck:answer-wait",
 } as const;

@@ -12,9 +12,11 @@ import {
   type RunEnvironment,
 } from "../../core/run/execute.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
+import { waitAnswerSchema } from "../../core/run/wait.js";
 import type { FlowStore, LoadLatestFlowResult, SaveFlowResult } from "../../ports/flow-store.js";
 import type { Store } from "../../ports/store.js";
 import { createActivityTracker } from "./activity-tracker.js";
+import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult } from "./hooks.js";
 import type { EnginePush, EngineRequest, EngineResponse, StoreOpenResult } from "./protocol.js";
 import { createPublishingStore } from "./publishing-store.js";
@@ -31,6 +33,7 @@ export type EngineHandlerOptions = {
   fs: BuildFileSystem & VerifyFileSystem;
   run: RunEnvironment & { now: () => number };
   newSessionName?: () => string;
+  waits?: Pick<AppWaiter, "answer" | "drop">;
 };
 
 export type EngineHandler = {
@@ -251,6 +254,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
         })
         .finally(() => {
+          options.waits?.drop();
           active = undefined;
           try {
             console.log(`engine: run ${runId} ${runs.findRun(runId)?.status ?? "unknown"}`);
@@ -287,6 +291,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return { id: request.id, ok: true, value: loadLatestFlow() };
         case "start-run":
           return { id: request.id, ok: true, value: await startRun() };
+        case "answer-wait": {
+          const parsed = waitAnswerSchema.safeParse(request.payload);
+          if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
+          return {
+            id: request.id,
+            ok: true,
+            value: { accepted: options.waits?.answer(parsed.data) ?? false },
+          };
+        }
       }
     },
   };

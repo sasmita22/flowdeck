@@ -9,6 +9,7 @@ import {
   createEngineHandler,
   type EngineHandlerOptions,
 } from "../../../src/app/engine/engine-handler.js";
+import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenedSession } from "../../../src/core/run/execute.js";
@@ -16,7 +17,15 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
-import { flow, loop, prompt, script, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import {
+  flow,
+  gate,
+  loop,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const stores = (flows = new FakeFlowStore()) => ({ runs: new FakeStore(), flows });
@@ -699,6 +708,139 @@ describe("createEngineHandler", async () => {
       hook("PreToolUse", claudeSessionId, 1200);
 
       expect(activityPushes()).toHaveLength(1);
+    });
+
+    const gated = () =>
+      atRepo(
+        flow(
+          [
+            script("s1", { settings: { command: "echo", args: ["one"] } }),
+            gate("g1"),
+            script("s2", { settings: { command: "echo", args: ["two"] } }),
+          ],
+          [thenWire("s1", "g1"), thenWire("g1", "s2")],
+        ),
+      );
+
+    const withAppWaiter = () => {
+      const waiter = createAppWaiter({ push: (push) => pushes.push(push) });
+      return handlerWith({
+        run: { ...runEnvironment(new NodeFileSystem()), waiter },
+        waits: waiter,
+      });
+    };
+
+    const waitPushes = () => pushes.flatMap((push) => (push.push === "wait" ? [push.value] : []));
+
+    const openedWaitId = async (nodeId: string) => {
+      await vi.waitFor(() => {
+        expect(waitPushes().at(-1)?.request.nodeId).toBe(nodeId);
+      });
+      const opened = waitPushes().at(-1);
+      if (!opened) throw new Error(`no wait open for ${nodeId}`);
+      return opened.waitId;
+    };
+
+    const answerWait = (payload: unknown) =>
+      handler.handle({ id: nextId++, type: "answer-wait", payload });
+
+    const parkedAtGate = async (runId: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(snapshotsOf(runId).at(-1)).toEqual({
+        runId,
+        status: "running",
+        nodes: { s1: "done", g1: "needs-you", s2: "waiting" },
+      });
+    };
+
+    it("resumes a run parked at a gate when the open wait is approved", async () => {
+      handler = withAppWaiter();
+      flows.save(gated());
+      const runId = await startedRunId();
+      const waitId = await openedWaitId("g1");
+
+      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toEqual({
+        id: nextId - 1,
+        ok: true,
+        value: { accepted: true },
+      });
+
+      await untilFinished(runId);
+      expect(snapshotsOf(runId).at(-1)).toEqual({
+        runId,
+        status: "done",
+        nodes: { s1: "done", g1: "done", s2: "done" },
+      });
+      expect(runs.events(runId)).toContainEqual(
+        expect.objectContaining({
+          nodeId: "g1",
+          kind: "decided",
+          payload: { nodeId: "g1", decision: "approved" },
+        }),
+      );
+    });
+
+    it.each([
+      ["a closed decision", (waitId: string) => ({ waitId, reply: { decision: "closed" } })],
+      ["a malformed payload", (waitId: string) => ({ waitId, reply: "approve" })],
+      ["a payload without a wait id", () => ({ reply: { decision: "approve" } })],
+    ])("refuses %s and leaves the run parked at the gate", async (_name, payloadFor) => {
+      handler = withAppWaiter();
+      flows.save(gated());
+      const runId = await startedRunId();
+      const waitId = await openedWaitId("g1");
+
+      expect(await answerWait(payloadFor(waitId))).toEqual({
+        id: nextId - 1,
+        ok: false,
+        error: expect.stringMatching(/\S/),
+      });
+
+      await parkedAtGate(runId);
+    });
+
+    it("does not accept an answer with a stale wait id", async () => {
+      handler = withAppWaiter();
+      flows.save(gated());
+      const runId = await startedRunId();
+      const waitId = await openedWaitId("g1");
+
+      expect(await answerWait({ waitId: `${waitId}-old`, reply: { decision: "approve" } })).toEqual(
+        { id: nextId - 1, ok: true, value: { accepted: false } },
+      );
+
+      await parkedAtGate(runId);
+    });
+
+    it("drops the open wait when the run is stopped, and a late answer adds no events", async () => {
+      handler = withAppWaiter();
+      flows.save(gated());
+      const runId = await startedRunId();
+      const waitId = await openedWaitId("g1");
+
+      await handler.stop();
+
+      expect(waitPushes().at(-1)).toBeNull();
+      expect(runs.findRun(runId)?.status).toBe("stopped");
+      const eventsAtStop = runs.events(runId);
+
+      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toEqual({
+        id: nextId - 1,
+        ok: true,
+        value: { accepted: false },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(runs.events(runId)).toEqual(eventsAtStop);
+      expect(runs.events(runId).filter((event) => event.kind === "decided")).toEqual([]);
+    });
+
+    it("does not accept an answer when the handler has no app waiter", async () => {
+      expect(await answerWait({ waitId: "w1", reply: { decision: "approve" } })).toEqual({
+        id: nextId - 1,
+        ok: true,
+        value: { accepted: false },
+      });
+      expect(pushes).toEqual([]);
     });
 
     it("leaves no unhandled rejection when reading the final status throws too", async () => {

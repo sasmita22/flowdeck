@@ -51,6 +51,15 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.activity, handler);
     };
   },
+  getWait: () => ipcRenderer.invoke(bridgeChannels.getWait),
+  onWait: (listener) => {
+    const handler = (_event: unknown, value: unknown) => listener(value);
+    ipcRenderer.on(bridgeChannels.wait, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.wait, handler);
+    };
+  },
+  answerWait: (answer) => ipcRenderer.invoke(bridgeChannels.answerWait, answer) as Promise<boolean>,
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

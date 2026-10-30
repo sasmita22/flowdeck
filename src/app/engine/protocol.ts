@@ -1,9 +1,10 @@
 import type { ActivityEntry } from "../../core/run/activity.js";
 import type { RunSnapshot } from "../../core/run/snapshot.js";
+import type { PendingWait } from "../../core/run/wait.js";
 
 export type EngineRequest = {
   id: number;
-  type: "version" | "store-status" | "save-flow" | "load-latest-flow" | "start-run";
+  type: "version" | "store-status" | "save-flow" | "load-latest-flow" | "start-run" | "answer-wait";
   payload?: unknown;
 };
 
@@ -13,7 +14,8 @@ export type EngineResponse =
 export type EnginePush =
   | { push: "run-state"; value: RunSnapshot }
   | { push: "session"; value: string | null }
-  | { push: "activity"; value: { runId: string; entry: ActivityEntry } };
+  | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
+  | { push: "wait"; value: PendingWait | null };
 
 export type EngineMessage = EngineResponse | EnginePush;
 
