@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import { usd } from "../../../core/run/budget.js";
 import type { PendingWait, WaitAnswer } from "../../../core/run/wait.js";
 import type { WaitState } from "./wait-store.js";
 
@@ -81,6 +82,66 @@ function WaitControls({ pending, answer }: { pending: PendingWait; answer(reply:
           </div>
         </>
       );
+    case "permission":
+      return (
+        <>
+          <p data-testid="wait-permission-tool" style={textStyle}>
+            Allow {request.tool}?
+          </p>
+          <pre data-testid="wait-permission-input" style={{ ...textStyle, whiteSpace: "pre-wrap" }}>
+            {request.input}
+          </pre>
+          <ReasonInput value={text} onChange={setText} />
+          <div style={rowStyle}>
+            <button data-testid="wait-approve" onClick={() => answer({ decision: "approve" })}>
+              Approve once
+            </button>
+            <button
+              data-testid="wait-reject"
+              onClick={() => answer({ decision: "reject", reason: text })}
+            >
+              Deny
+            </button>
+          </div>
+        </>
+      );
+    case "budget": {
+      const amount = Number(text);
+      const raisable = text.trim() !== "" && amount > request.spend;
+      return (
+        <>
+          <p data-testid="wait-budget-spend" style={textStyle}>
+            {request.unconfirmed === true
+              ? `Spend not confirmed yet: last read ${usd(request.spend)} of ${usd(request.budget)}`
+              : `Spent ${usd(request.spend)} of ${usd(request.budget)}`}
+          </p>
+          <div style={rowStyle}>
+            <input
+              data-testid="wait-budget-amount"
+              type="number"
+              min="0"
+              step="any"
+              placeholder="New budget (USD)"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
+            <button
+              data-testid="wait-budget-raise"
+              disabled={!raisable}
+              onClick={() => answer({ decision: "raise", budget: amount })}
+            >
+              Raise
+            </button>
+            <button
+              data-testid="wait-budget-stop"
+              onClick={() => answer({ decision: "stop", reason: "Stopped at budget" })}
+            >
+              Stop
+            </button>
+          </div>
+        </>
+      );
+    }
     case "ask":
       return (
         <>

@@ -3,7 +3,7 @@ import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { answerWait, createWaitRelay } from "../../../src/app/main/wait.js";
 import type { PendingWait } from "../../../src/core/run/wait.js";
 import { tool } from "../../fixtures/activity-entries.js";
-import { askWait, gateWait } from "../../fixtures/waits.js";
+import { askWait, budget, gateWait, permission, unconfirmedBudget } from "../../fixtures/waits.js";
 
 const wait = (value: PendingWait | null): EnginePush => ({ push: "wait", value });
 
@@ -26,6 +26,16 @@ describe("createWaitRelay", () => {
 
     expect(sent).toEqual([gateWait, askWait]);
     expect(relay.latest()).toEqual(askWait);
+  });
+
+  it.each([permission, budget, unconfirmedBudget])("sends a $kind wait unchanged", (request) => {
+    const { relay, sent } = setup();
+    const pending: PendingWait = { waitId: "wait-3", request };
+
+    relay.onPush(wait(pending));
+
+    expect(sent).toEqual([pending]);
+    expect(relay.latest()).toEqual(pending);
   });
 
   it("sends a cleared wait and forgets the latest one", () => {
@@ -80,6 +90,14 @@ describe("answerWait", () => {
       expect(engine.request).toHaveBeenCalledWith("answer-wait", answer);
     },
   );
+
+  it("forwards a raise answer", async () => {
+    const engine = client(true);
+    const answer = { waitId: "wait-3", reply: { decision: "raise", budget: 2 } };
+
+    await expect(answerWait(engine, answer)).resolves.toBe(true);
+    expect(engine.request).toHaveBeenCalledWith("answer-wait", answer);
+  });
 
   it.each([
     ["a closed decision", { waitId: "wait-1", reply: { decision: "closed" } }],

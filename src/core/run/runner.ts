@@ -20,6 +20,14 @@ import {
   type LoopStep,
 } from "../nodes/loop/execute.js";
 import { scriptOutcome } from "../nodes/script/execute.js";
+import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
+import {
+  denied,
+  permissionDecision,
+  permissionRequest,
+  type PermissionAsks,
+  type PermissionDecision,
+} from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { decisionsOf, loopRound, nodeStatus, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
@@ -46,6 +54,10 @@ export type RunnerDeps = {
   store: Store;
   runId: string;
   now?: () => number;
+  permissions?: PermissionAsks;
+  usage?: UsageReader;
+  budget?: number;
+  usageSettleMs?: number;
 };
 
 export type RunOptions = { actions?: ResumeActions };
@@ -63,7 +75,7 @@ type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 
-type Failure = { nodeId: string; reason: string };
+type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
 type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
 type RunContext = {
@@ -73,6 +85,8 @@ type RunContext = {
 };
 
 const defaultTurnTimeoutMs = 600_000;
+const defaultUsageSettleMs = 2_000;
+const usagePollMs = 50;
 const runnable = new Set<ManifestNode["type"]>([
   "prompt",
   "agent",
@@ -127,6 +141,20 @@ const lastMessage = (event: TurnEndEvent) => {
   const message = event.payload["last_assistant_message"];
   return typeof message === "string" ? message : undefined;
 };
+
+type FinishedTurn = { before: Set<string>; message: string | undefined };
+
+const hasLanded = (entries: readonly UsageEntry[], turn: FinishedTurn) =>
+  entries.some(
+    (entry) =>
+      !turn.before.has(entry.messageId) &&
+      (turn.message === undefined ||
+        (entry.text !== undefined &&
+          entry.text.trim() !== "" &&
+          turn.message.endsWith(entry.text.trim()))),
+  );
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const reasonIn = (nodeId: string, message: string) => message.replace(`${nodeId} failed: `, "");
 
@@ -183,15 +211,55 @@ export class Runner {
   private actions = new Map<string, ResumeAction>();
   private pendingAnswers: string[] = [];
   private answersSentWith = new Map<string, string[]>();
+  private budget: number | undefined;
+  private usageBeforeTurn: Set<string> | undefined;
+  private finishedTurn: FinishedTurn | undefined;
+  private inTurn: string | undefined;
+  private openAsks = 0;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
     this.emit = deps.onChange ?? (() => undefined);
+    this.budget = deps.budget;
   }
 
   async run(manifest: RunnableManifest, options: RunOptions = {}): Promise<RunResult> {
     const problems = structureProblems(manifest.nodes);
     if (problems.length > 0) throw new StructureError(problems);
+    const stopAnswering = this.deps.permissions?.onRequest(this.deps.sessionId, (payload, signal) =>
+      this.answerPermission(payload, signal),
+    );
+    try {
+      return await this.runNodes(manifest, options);
+    } finally {
+      stopAnswering?.();
+    }
+  }
+
+  private async answerPermission(
+    payload: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<PermissionDecision> {
+    if (this.inTurn === undefined) return denied("No node is running");
+    this.openAsks++;
+    try {
+      const withdrawn = new Promise<WaitReply>((resolve) =>
+        signal.addEventListener("abort", () => resolve({ decision: "closed" }), { once: true }),
+      );
+      return permissionDecision(
+        await Promise.race([
+          this.deps.waiter.wait(permissionRequest(this.inTurn, payload), signal),
+          withdrawn,
+        ]),
+      );
+    } catch (error) {
+      return denied(messageOf(error));
+    } finally {
+      this.openAsks--;
+    }
+  }
+
+  private async runNodes(manifest: RunnableManifest, options: RunOptions): Promise<RunResult> {
     const nodes = manifest.nodes.filter((node) => runnable.has(node.type));
     this.actions = new Map(Object.entries(options.actions ?? {}));
     this.replayAnswers(nodes);
@@ -206,7 +274,7 @@ export class Runner {
       const { failure } = await this.runStep(node, context);
       if (failure !== undefined) {
         const line = `${failure.nodeId} failed: ${failure.reason}`;
-        if (this.status(failure.nodeId) !== "failed") {
+        if (failure.halted !== true && this.status(failure.nodeId) !== "failed") {
           this.record(failure.nodeId, { kind: "failed", payload: { message: line } });
         }
         this.emit(line);
@@ -314,10 +382,18 @@ export class Runner {
       const result = await this.runLoop(node, context);
       if (result.failure !== undefined) return result;
     } else if (node.type === "prompt" || node.type === "agent") {
-      const turn =
-        node.type === "prompt"
-          ? await this.runPrompt(node, hash, ensureStarted, condition)
-          : await this.runAgent(node, hash, ensureStarted, condition);
+      const halted = await this.checkBudget(node.id);
+      if (halted !== undefined) return halted;
+      this.inTurn = node.id;
+      let turn: TurnResult;
+      try {
+        turn =
+          node.type === "prompt"
+            ? await this.runPrompt(node, hash, ensureStarted, condition)
+            : await this.runAgent(node, hash, ensureStarted, condition);
+      } finally {
+        this.inTurn = undefined;
+      }
       if (turn.failure === undefined) reply = turn.reply;
       else failure = turn.failure;
     } else if (node.type === "script") {
@@ -330,6 +406,75 @@ export class Runner {
     if (failure !== undefined) return { failure: { nodeId: node.id, reason: failure } };
     this.emit(`${node.id} ${doneLine}`);
     return { reply };
+  }
+
+  private async checkBudget(nodeId: string): Promise<StepResult | undefined> {
+    const { usage } = this.deps;
+    if (this.budget === undefined || usage === undefined || this.status(nodeId) !== "waiting") {
+      return undefined;
+    }
+    const budget = this.budget;
+    const { entries, landed } = await this.usageAfterTurn(usage);
+    this.usageBeforeTurn = new Set(entries.map((entry) => entry.messageId));
+    const spend = costOf(entries);
+    const reached = budgetReached(spend, budget);
+    if (landed && !reached) return undefined;
+    const confirmed = landed || reached;
+    const unconfirmed = confirmed ? {} : { unconfirmed: true as const };
+    const lastRead = `last read ${usd(spend)} of ${usd(budget)}`;
+    this.record(nodeId, {
+      kind: "budget",
+      payload: { step: "paused", spend, budget, ...unconfirmed },
+    });
+    this.emit(
+      confirmed
+        ? `${nodeId} paused: spent ${usd(spend)} of ${usd(budget)} budget`
+        : `${nodeId} paused: spend not confirmed yet, ${lastRead}`,
+    );
+    let reason: string;
+    try {
+      const reply = await this.deps.waiter.wait({
+        nodeId,
+        kind: "budget",
+        spend,
+        budget,
+        ...unconfirmed,
+      });
+      if (reply.decision === "raise") {
+        this.budget = reply.budget;
+        this.record(nodeId, { kind: "budget", payload: { step: "raised", budget: reply.budget } });
+        return undefined;
+      }
+      reason = reply.decision === "stop" ? reply.reason : reply.decision;
+    } catch (error) {
+      reason = messageOf(error);
+    }
+    this.record(nodeId, { kind: "budget", payload: { step: "stopped", reason } });
+    return {
+      failure: {
+        nodeId,
+        reason: confirmed
+          ? `budget reached: spent ${usd(spend)} of ${usd(budget)}`
+          : `spend not confirmed: ${lastRead} when the budget was checked`,
+        halted: true,
+      },
+    };
+  }
+
+  private async usageAfterTurn(
+    usage: UsageReader,
+  ): Promise<{ entries: UsageEntry[]; landed: boolean }> {
+    const turn = this.finishedTurn;
+    this.finishedTurn = undefined;
+    let entries = await usage.entries(this.deps.sessionId);
+    if (turn === undefined) return { entries, landed: true };
+    const settleMs = this.deps.usageSettleMs ?? defaultUsageSettleMs;
+    for (let waited = 0; !hasLanded(entries, turn); waited += usagePollMs) {
+      if (waited >= settleMs) return { entries, landed: false };
+      await sleep(usagePollMs);
+      entries = await usage.entries(this.deps.sessionId);
+    }
+    return { entries, landed: true };
   }
 
   private async runLoop(loop: ManifestNode, context: RunContext): Promise<StepResult> {
@@ -436,12 +581,21 @@ export class Runner {
       this.deps.sessionId,
       this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs,
       armedAt,
+      () => this.openAsks > 0,
     );
     turnEnd.catch(() => undefined);
     return turnEnd;
   }
 
   private finishTurn(nodeId: string, stopMessage: string | undefined, condition?: string) {
+    const before = this.usageBeforeTurn;
+    this.usageBeforeTurn = undefined;
+    const trimmed = stopMessage?.trim();
+    const message = trimmed === "" ? undefined : trimmed;
+    this.finishedTurn =
+      before === undefined && message === undefined
+        ? undefined
+        : { before: before ?? new Set(), message };
     this.record(
       nodeId,
       stopMessage === undefined ? { kind: "done" } : { kind: "done", payload: { stopMessage } },

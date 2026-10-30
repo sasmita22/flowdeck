@@ -106,6 +106,52 @@ describe("waitForTurnEnd", () => {
     expect((outcome.error as Error).message).toContain(String(timeoutMs));
   });
 
+  describe("held", () => {
+    const shortMs = 50;
+
+    it("keeps waiting past the timeout while held and resolves on a later Stop", async () => {
+      let held = true;
+      const outcome = track(waitForTurnEnd(events, ours, shortMs, undefined, () => held));
+
+      await vi.advanceTimersByTimeAsync(120);
+      expect(outcome.status).toBe("pending");
+
+      held = false;
+      await vi.advanceTimersByTimeAsync(25);
+      source.publish(hookEvent("Stop", ours));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("resolved");
+    });
+
+    it("rejects one full timeout after it stops being held", async () => {
+      let held = true;
+      const outcome = track(waitForTurnEnd(events, ours, shortMs, undefined, () => held));
+
+      await vi.advanceTimersByTimeAsync(120);
+      held = false;
+      await vi.advanceTimersByTimeAsync(29);
+      expect(outcome.status).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome.status).toBe("rejected");
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([
+      { name: "never held", held: () => false },
+      { name: "without a held check", held: undefined },
+    ])("rejects at the timeout when $name", async ({ held }) => {
+      const outcome = track(waitForTurnEnd(events, ours, shortMs, undefined, held));
+
+      await vi.advanceTimersByTimeAsync(shortMs - 1);
+      expect(outcome.status).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome.status).toBe("rejected");
+    });
+  });
+
   describe("armed at a time", () => {
     const armedAt = 1000;
     const stampedStop = (hookAt?: number): HookEvent => {

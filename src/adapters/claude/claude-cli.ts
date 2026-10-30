@@ -67,7 +67,7 @@ function boxHolds(pane: string, prompt: string): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function hasCode(error: unknown, ...codes: (string | number)[]): boolean {
+export function hasCode(error: unknown, ...codes: (string | number)[]): boolean {
   return error instanceof Error && "code" in error && codes.includes(error.code as string | number);
 }
 

@@ -8,15 +8,20 @@ import { build } from "../../../src/core/compiler/build.js";
 import type { Manifest } from "../../../src/core/compiler/lower.js";
 import {
   execute,
+  type LoadedBuild,
   loadBuild,
   needsClaude,
   noClaude,
   runSocketPath,
 } from "../../../src/core/run/execute.js";
 import type { ScriptResult } from "../../../src/core/run/runner.js";
+import type { PermissionDecision } from "../../../src/ports/permission-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
+import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
+import { permission as permissionWait } from "../../fixtures/waits.js";
 import { flow, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
@@ -230,5 +235,131 @@ describe("the core run path", () => {
         message: `Socket path "${longHome}/sockets/fd-run-abcd1234.sock" is longer than 104 characters`,
       });
     });
+  });
+});
+
+describe("execute wiring", () => {
+  const claudeSessionId = "c1";
+  const promptBuild = (budget?: number) =>
+    ({
+      hash: "abc123",
+      session: budget === undefined ? {} : { budget },
+      nodes: [{ id: "n1", type: "prompt", label: "n1", settings: { instructions: "Do it." } }],
+    }) as unknown as LoadedBuild;
+  const twoDollars = [
+    {
+      messageId: "m1",
+      model: "claude-opus-5-5",
+      inputTokens: 0,
+      outputTokens: 100_000,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      cacheReadTokens: 0,
+    },
+  ];
+
+  async function executeWith(options: {
+    manifest: LoadedBuild;
+    waiter: FakeWaiter;
+    usage: FakeUsageSource;
+    onSend?: (wiring: {
+      events: FakeEventSource;
+      permissions: FakePermissionSource;
+    }) => Promise<void>;
+  }) {
+    const events = new FakeEventSource();
+    const permissions = new FakePermissionSource();
+    const store = new FakeStore();
+    const sends: string[] = [];
+    const { id } = store.createRun({
+      buildDir: "/fd/builds/abc",
+      inputs: {},
+      nodeIds: options.manifest.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
+    });
+    const code = await execute(
+      {
+        fs,
+        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+        waiter: options.waiter,
+        usage: options.usage,
+        startEvents: async () => ({ events, permissions, stop: async () => undefined }),
+        openSession: async () => {
+          throw new Error("execute opens the session through the execution");
+        },
+        store,
+        onChange: () => undefined,
+      },
+      {
+        store,
+        runId: id,
+        manifest: options.manifest,
+        cwd: "/repo",
+        auto: false,
+        socketPath: "/fd/sockets/fd-run-abcd1234.sock",
+        open: async () => ({
+          sessionId: claudeSessionId,
+          session: { ensureStarted: async () => undefined },
+          prompts: {
+            sendPrompt: async (text) => {
+              sends.push(text);
+              await options.onSend?.({ events, permissions });
+              events.publish({ kind: "Stop", sessionId: claudeSessionId, payload: {} });
+            },
+          },
+          stop: async () => undefined,
+        }),
+      },
+    );
+    return { code, sends };
+  }
+
+  it("pauses at the manifest's budget before sending the first prompt", async () => {
+    const usage = new FakeUsageSource();
+    usage.setEntries(claudeSessionId, twoDollars);
+    const waiter = new FakeWaiter([{ decision: "stop", reason: "over" }]);
+
+    const { code, sends } = await executeWith({ manifest: promptBuild(1), waiter, usage });
+
+    expect(waiter.calls).toEqual([{ nodeId: "n1", kind: "budget", spend: 2, budget: 1 }]);
+    expect(sends).toEqual([]);
+    expect(code).toBe(1);
+  });
+
+  it("passes a permission request during a turn to the waiter", async () => {
+    const waiter = new FakeWaiter([{ decision: "approve" }]);
+    const decisions: PermissionDecision[] = [];
+
+    const { code } = await executeWith({
+      manifest: promptBuild(),
+      waiter,
+      usage: new FakeUsageSource(),
+      onSend: async ({ permissions }) => {
+        decisions.push(
+          await permissions.ask(claudeSessionId, {
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          }),
+        );
+      },
+    });
+
+    expect(waiter.calls).toEqual([permissionWait]);
+    expect(decisions).toEqual([{ behavior: "allow" }]);
+    expect(code).toBe(0);
+  });
+
+  it("never reads usage for a manifest without a budget", async () => {
+    const usage = new FakeUsageSource();
+    usage.setEntries(claudeSessionId, twoDollars);
+
+    const { code } = await executeWith({
+      manifest: promptBuild(),
+      waiter: new FakeWaiter([]),
+      usage,
+    });
+
+    expect(usage.calls).toEqual([]);
+    expect(code).toBe(0);
   });
 });

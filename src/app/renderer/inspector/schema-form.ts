@@ -4,7 +4,7 @@ import { Session } from "../../../core/flow/schema.js";
 type Path = readonly string[];
 
 export type FieldDescription =
-  | { control: "text" | "list"; path: Path; testId: string }
+  | { control: "text" | "list" | "number"; path: Path; testId: string }
   | {
       control: "select";
       path: Path;
@@ -19,6 +19,7 @@ export const sessionSettingsSchema = Session.pick({
   workingFolder: true,
   model: true,
   allowedTools: true,
+  budget: true,
 });
 
 const testIdOf = (path: Path) =>
@@ -79,6 +80,7 @@ const fieldsOf = (path: Path, schema: z.ZodType): FieldDescription[] => {
     return [{ control: "list", path, testId }];
   }
   if (inner instanceof z.ZodString) return [{ control: "text", path, testId }];
+  if (inner instanceof z.ZodNumber) return [{ control: "number", path, testId }];
   if (inner instanceof z.ZodObject) return objectFields(path, inner as AnyObject);
   return [];
 };
@@ -103,7 +105,10 @@ const lines = (text: string) =>
 const assign = (schema: z.ZodType, current: unknown, path: Path, value: string): unknown => {
   const inner = unwrap(schema);
   const [key, ...rest] = path;
-  if (key === undefined) return inner instanceof z.ZodArray ? lines(value) : value;
+  if (key === undefined) {
+    if (inner instanceof z.ZodNumber) return Number(value);
+    return inner instanceof z.ZodArray ? lines(value) : value;
+  }
   const record = current as Record<string, unknown>;
   if (inner instanceof z.ZodDiscriminatedUnion) {
     const discriminator = inner.def.discriminator;
@@ -112,7 +117,14 @@ const assign = (schema: z.ZodType, current: unknown, path: Path, value: string):
     return { ...record, [key]: assign(childOf(variant, key), record[key], rest, value) };
   }
   if (inner instanceof z.ZodObject) {
-    return { ...record, [key]: assign(childOf(inner as AnyObject, key), record[key], rest, value) };
+    const child = childOf(inner as AnyObject, key);
+    if (rest.length === 0 && unwrap(child) instanceof z.ZodNumber) {
+      if (value === "") {
+        return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
+      }
+      if (!child.safeParse(Number(value)).success) return record;
+    }
+    return { ...record, [key]: assign(child, record[key], rest, value) };
   }
   throw new Error(`No field ${key}`);
 };

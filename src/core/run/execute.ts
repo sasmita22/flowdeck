@@ -1,5 +1,7 @@
 import type { Manifest } from "../compiler/lower.js";
 import { verify, type VerifyFileSystem } from "../compiler/verify.js";
+import type { UsageReader } from "./budget.js";
+import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
@@ -27,12 +29,15 @@ export type ExecuteDeps = {
   fs: VerifyFileSystem;
   scripts: RunnerDeps["scripts"];
   waiter: HumanWaiter;
-  startEvents(socketPath: string): Promise<{ events: TurnEvents; stop(): Promise<void> }>;
+  startEvents(
+    socketPath: string,
+  ): Promise<{ events: TurnEvents; permissions?: PermissionAsks; stop(): Promise<void> }>;
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   store: Store;
   onChange(line: string): void;
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
+  usage?: UsageReader;
 };
 
 export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onInterrupt">;
@@ -194,6 +199,9 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       store,
       runId,
       ...(deps.now === undefined ? {} : { now: deps.now }),
+      ...(events.permissions === undefined ? {} : { permissions: events.permissions }),
+      ...(deps.usage === undefined ? {} : { usage: deps.usage }),
+      ...(manifest.session.budget === undefined ? {} : { budget: manifest.session.budget }),
     })
       .run(manifest, { actions })
       .then((result) => (result.outcome === "done" ? 0 : 1));

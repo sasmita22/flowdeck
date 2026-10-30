@@ -45,6 +45,58 @@ function listen(socketPath: string, options: { neverRead?: boolean } = {}): Prom
   });
 }
 
+type Responder = { lines: string[]; close: () => Promise<void> };
+
+function respond(
+  socketPath: string,
+  reply: (socket: Socket) => void,
+  delayMs = 0,
+): Promise<Responder> {
+  const lines: string[] = [];
+  const open = new Set<Socket>();
+  const server: Server = createServer((socket) => {
+    open.add(socket);
+    socket.on("close", () => open.delete(socket));
+    socket.on("error", () => {});
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      data += chunk;
+      const end = data.indexOf("\n");
+      if (end === -1 || lines.length > 0) return;
+      lines.push(data.slice(0, end));
+      setTimeout(() => reply(socket), delayMs);
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(socketPath, () =>
+      resolve({
+        lines,
+        close: () =>
+          new Promise<void>((done) => {
+            for (const socket of open) socket.destroy();
+            server.close(() => done());
+          }),
+      }),
+    );
+  });
+}
+
+const replyWith = (line: string) => (socket: Socket) => socket.end(line);
+
+function decisionOf(run: HookRun): unknown {
+  expect(run.code).toBe(0);
+  expect(run.stdout, "the hook printed no decision").not.toBe("");
+  const output = JSON.parse(run.stdout) as {
+    hookSpecificOutput?: { hookEventName?: unknown; decision?: unknown };
+  };
+  expect(output.hookSpecificOutput?.hookEventName).toBe("PermissionRequest");
+  return output.hookSpecificOutput?.decision;
+}
+
+const deniedWithReason = { behavior: "deny", message: expect.stringMatching(/\S/) };
+
 function expectQuiet(run: HookRun): void {
   expect(run.code).toBe(0);
   expect(run.stdout).toBe("");
@@ -76,6 +128,107 @@ describe("flowdeck-hook", () => {
     );
     return listening;
   }
+
+  describe("permission requests", () => {
+    let responder: Responder | undefined;
+    const deadline = (ms: number) => [`--permission-deadline-ms=${ms}`];
+
+    afterEach(async () => {
+      await responder?.close();
+      responder = undefined;
+    });
+
+    it("waits for the reply past the forced exit and prints the allow decision", async () => {
+      const request = await readFixture("permission-request");
+      responder = await respond(socketPath, replyWith('{"behavior":"allow"}\n'), 1500);
+
+      const run = await runHook({ socketPath, stdin: request, args: deadline(10_000) });
+
+      expect(decisionOf(run)).toEqual({ behavior: "allow" });
+      expect(run.stdout.trim()).toBe(
+        '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}',
+      );
+      expect(run.ms).toBeGreaterThan(1500);
+      expect(responder.lines).toHaveLength(1);
+      expect(JSON.parse(responder.lines[0] ?? "")).toEqual({
+        ...(JSON.parse(request) as object),
+        flowdeck_hook_at: expect.any(Number),
+      });
+    });
+
+    it("prints a deny decision with the reply's message", async () => {
+      responder = await respond(
+        socketPath,
+        replyWith('{"behavior":"deny","message":"not this one"}\n'),
+      );
+
+      const run = await runHook({
+        socketPath,
+        stdin: await readFixture("permission-request"),
+        args: deadline(10_000),
+      });
+
+      expect(decisionOf(run)).toEqual({ behavior: "deny", message: "not this one" });
+    });
+
+    it("denies when FLOWDECK_SOCK is unset", async () => {
+      const run = await runHook({
+        stdin: await readFixture("permission-request"),
+        args: deadline(10_000),
+      });
+
+      expect(decisionOf(run)).toEqual(deniedWithReason);
+    });
+
+    it("denies when the connection is refused", async () => {
+      await makeStaleSocket(socketPath);
+
+      const run = await runHook({
+        socketPath,
+        stdin: await readFixture("permission-request"),
+        args: deadline(10_000),
+      });
+
+      expect(decisionOf(run)).toEqual(deniedWithReason);
+    });
+
+    it.each([
+      ["the server closes without a reply", (socket: Socket) => socket.end()],
+      ["the reply is garbage", replyWith("not json {\n")],
+      ["the reply is an unknown behavior", replyWith('{"behavior":"maybe"}\n')],
+    ])("denies when %s", async (_name, reply) => {
+      responder = await respond(socketPath, reply);
+
+      const run = await runHook({
+        socketPath,
+        stdin: await readFixture("permission-request"),
+        args: deadline(10_000),
+      });
+
+      expect(decisionOf(run)).toEqual(deniedWithReason);
+    });
+
+    it("denies when no reply comes within the deadline", async () => {
+      responder = await respond(socketPath, () => {});
+
+      const run = await runHook({
+        socketPath,
+        stdin: await readFixture("permission-request"),
+        args: deadline(200),
+      });
+
+      expect(decisionOf(run)).toEqual(deniedWithReason);
+      expect(run.ms).toBeLessThan(1500);
+    });
+
+    it("denies without the deadline flag even when the server would allow", async () => {
+      responder = await respond(socketPath, replyWith('{"behavior":"allow"}\n'));
+
+      const run = await runHook({ socketPath, stdin: await readFixture("permission-request") });
+
+      expect(decisionOf(run)).toEqual(deniedWithReason);
+    });
+  });
 
   it.each(fixtures)("forwards the multi-line %s sample as one compact line", async (name) => {
     const fixture = await readFixture(name);

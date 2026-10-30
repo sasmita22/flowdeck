@@ -218,7 +218,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             const started = await options.run.startEvents(path);
             const unwatch = tracker.watch(started.events, claudeSessionId);
             return {
-              events: started.events,
+              ...started,
               stop: async () => {
                 unwatch();
                 await started.stop();

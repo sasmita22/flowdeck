@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeCli } from "../adapters/claude/claude-cli.js";
 import { parseTranscriptTurns } from "../adapters/claude/transcript-turns.js";
+import { TranscriptUsage } from "../adapters/claude/transcript-usage.js";
 import { CliWaiter, stdinLines } from "./cli-waiter.js";
 import { HookSocketServer } from "../adapters/hook-socket/hook-socket-server.js";
 import { openClaudeSession } from "../adapters/claude/claude-session.js";
@@ -29,6 +30,8 @@ import type { TurnEvents } from "../core/run/turns.js";
 import type { FileSystem } from "../ports/file-system.js";
 import type { ProcessRunner } from "../ports/process-runner.js";
 import type { Store } from "../ports/store.js";
+import type { PermissionSource } from "../ports/permission-source.js";
+import type { UsageSource } from "../ports/usage-source.js";
 import type { Waiter } from "../ports/waiter.js";
 
 export type CliDeps = {
@@ -38,8 +41,11 @@ export type CliDeps = {
   fs: FileSystem;
   scripts: ProcessRunner;
   waiter: Waiter;
-  startEvents(socketPath: string): Promise<{ events: TurnEvents; stop(): Promise<void> }>;
+  startEvents(
+    socketPath: string,
+  ): Promise<{ events: TurnEvents; permissions?: PermissionSource; stop(): Promise<void> }>;
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
+  usage?: UsageSource;
   openStore(path: string): Store;
   transcriptTurns(claudeSessionId: string): Promise<TranscriptTurn[]>;
   onInterrupt?(handler: (exitCode: number) => void): () => void;
@@ -263,8 +269,11 @@ export function realDeps(): CliDeps {
       await mkdir(dirname(socketPath), { recursive: true });
       const server = new HookSocketServer({ socketPath });
       await server.start();
-      return { events: server, stop: () => server.stop() };
+      return { events: server, permissions: server, stop: () => server.stop() };
     },
+    usage: new TranscriptUsage({
+      findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
+    }),
     openSession: async (options) => {
       const sessions = new TmuxSessionHost({ socketName: options.sessionName });
       return openClaudeSession(options, {

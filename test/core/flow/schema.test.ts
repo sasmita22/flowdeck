@@ -70,6 +70,24 @@ describe("parseFlow", () => {
     expect(parsed.session.workingFolder).not.toHaveProperty("repo");
   });
 
+  it("keeps a session budget", () => {
+    const flow = flowWith({ session: { ...session({ kind: "path", path: "/r" }), budget: 1 } });
+
+    expect(parseFlow(flow).session.budget).toBe(1);
+  });
+
+  it.each([0, -1, "1"])("rejects a session budget of %j at its path", (budget) => {
+    const error = parseError(
+      flowWith({ session: { ...session({ kind: "path", path: "/r" }), budget } }),
+    );
+
+    expect(error.issues.map((issue) => issue.path)).toContainEqual(["session", "budget"]);
+  });
+
+  it("adds no budget key to a session without one", () => {
+    expect(parseFlow(flowWith({})).session).not.toHaveProperty("budget");
+  });
+
   it("caps a loop at 3 rounds when it names no cap", () => {
     const loop = {
       id: "l",

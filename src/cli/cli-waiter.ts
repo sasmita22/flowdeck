@@ -1,4 +1,5 @@
 import type { Readable } from "node:stream";
+import { usd } from "../core/run/budget.js";
 import type { WaitReply, WaitRequest, Waiter } from "../ports/waiter.js";
 
 export type CliWaiterIo = {
@@ -38,6 +39,35 @@ function hardstopQuestion(nodeId: string, shown: string, condition: string): Que
   };
 }
 
+function permissionQuestion(nodeId: string, tool: string, input: string): Question {
+  return {
+    ...gateQuestion(nodeId, ""),
+    header: `${nodeId} permission: Allow ${tool}: ${input}?\n`,
+  };
+}
+
+function budgetQuestion(
+  nodeId: string,
+  spend: number,
+  budget: number,
+  unconfirmed: boolean,
+): Question {
+  const state = unconfirmed
+    ? `Spend not confirmed yet: last read ${usd(spend)} of ${usd(budget)}`
+    : `Budget reached: spent ${usd(spend)} of ${usd(budget)}`;
+  return {
+    header: `${nodeId} paused. ${state}\n`,
+    prompt: `a new budget above ${usd(spend)}, or stop <reason>: `,
+    parse: (line) => {
+      const raised = Number(line);
+      if (/^\d+(\.\d+)?$/.test(line) && raised > spend)
+        return { decision: "raise", budget: raised };
+      const reason = withReason(line, "stop");
+      return reason === undefined ? undefined : { decision: "stop", reason };
+    },
+  };
+}
+
 function askQuestion(nodeId: string, question: string, options: readonly string[]): Question {
   const header = `${nodeId} asks: ${question}\n`;
   if (options.length === 0) {
@@ -67,13 +97,31 @@ function questionFor(request: WaitRequest): Question {
       return hardstopQuestion(request.nodeId, request.shown, request.condition);
     case "ask":
       return askQuestion(request.nodeId, request.question, request.options);
+    case "permission":
+      return permissionQuestion(request.nodeId, request.tool, request.input);
+    case "budget":
+      return budgetQuestion(
+        request.nodeId,
+        request.spend,
+        request.budget,
+        request.unconfirmed === true,
+      );
   }
 }
 
 export class CliWaiter implements Waiter {
+  private turn: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly io: CliWaiterIo) {}
 
-  async wait(request: WaitRequest): Promise<WaitReply> {
+  wait(request: WaitRequest, signal?: AbortSignal): Promise<WaitReply> {
+    const reply = this.turn.then(() => this.ask(request, signal));
+    this.turn = reply;
+    return reply;
+  }
+
+  private async ask(request: WaitRequest, signal?: AbortSignal): Promise<WaitReply> {
+    if (signal?.aborted) return { decision: "closed" };
     const { header, prompt, parse } = questionFor(request);
     this.io.write(header + prompt);
     for (;;) {

@@ -1,7 +1,9 @@
 import { lstat, unlink } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { EventBus } from "../../core/event-bus.js";
+import { denied } from "../../core/run/permission.js";
 import type { EventSource, HookEvent, HookEventKind } from "../../ports/event-source.js";
+import type { PermissionDecision, PermissionSource } from "../../ports/permission-source.js";
 
 const maxLineLength = 10 * 1024 * 1024;
 
@@ -24,11 +26,19 @@ function reportToStderr(reason: string, line: string): void {
   process.stderr.write(`Rejected hook event (${reason}): ${line}\n`);
 }
 
-export class HookSocketServer implements EventSource {
+type PermissionHandler = (
+  payload: Record<string, unknown>,
+  signal: AbortSignal,
+) => Promise<PermissionDecision>;
+
+const permissionRequest = "PermissionRequest";
+
+export class HookSocketServer implements EventSource, PermissionSource {
   private readonly socketPath: string;
   private readonly onRejected: (reason: string, line: string) => void;
   private readonly bus = new EventBus<HookEvent>();
   private readonly connections = new Set<Socket>();
+  private readonly permissionHandlers = new Map<string, PermissionHandler>();
   private readonly server: Server = createServer((socket) => this.accept(socket));
 
   constructor(options: {
@@ -52,6 +62,7 @@ export class HookSocketServer implements EventSource {
 
   async stop(): Promise<void> {
     for (const socket of this.connections) socket.destroy();
+    if (!this.server.listening) return;
     await new Promise<void>((resolve, reject) =>
       this.server.close((error) => (error ? reject(error) : resolve())),
     );
@@ -63,6 +74,15 @@ export class HookSocketServer implements EventSource {
     handler: (event: HookEvent) => void,
   ): () => void {
     return this.bus.subscribe(kind, sessionId, handler);
+  }
+
+  onRequest(sessionId: string, handler: PermissionHandler): () => void {
+    this.permissionHandlers.set(sessionId, handler);
+    return () => {
+      if (this.permissionHandlers.get(sessionId) === handler) {
+        this.permissionHandlers.delete(sessionId);
+      }
+    };
   }
 
   private async removeStaleSocket(): Promise<void> {
@@ -108,7 +128,7 @@ export class HookSocketServer implements EventSource {
           if (line.length > maxLineLength) {
             this.onRejected(`line longer than ${maxLineLength} characters`, line);
           } else {
-            this.handle(line);
+            this.handle(line, socket);
           }
         }
       }
@@ -123,7 +143,7 @@ export class HookSocketServer implements EventSource {
     });
   }
 
-  private handle(line: string): void {
+  private handle(line: string, socket: Socket): void {
     let value: unknown;
     try {
       value = JSON.parse(line);
@@ -139,6 +159,10 @@ export class HookSocketServer implements EventSource {
     const payload = value as Record<string, unknown>;
     const kind = payload["hook_event_name"];
     const sessionId = payload["session_id"];
+    if (kind === permissionRequest) {
+      void this.answer(socket, payload, sessionId);
+      return;
+    }
     if (!isHookEventKind(kind)) {
       this.onRejected("unknown hook_event_name", line);
       return;
@@ -148,5 +172,27 @@ export class HookSocketServer implements EventSource {
       return;
     }
     this.bus.publish({ kind, sessionId, payload });
+  }
+
+  private async answer(
+    socket: Socket,
+    payload: Record<string, unknown>,
+    sessionId: unknown,
+  ): Promise<void> {
+    const handler =
+      typeof sessionId === "string" ? this.permissionHandlers.get(sessionId) : undefined;
+    const closed = new AbortController();
+    socket.once("close", () => closed.abort());
+    let decision: PermissionDecision;
+    try {
+      decision =
+        handler === undefined
+          ? denied("No run is listening")
+          : await handler(payload, closed.signal);
+    } catch (error) {
+      decision = denied(error instanceof Error ? error.message : String(error));
+    }
+    if (socket.destroyed || socket.writableEnded) return;
+    socket.end(JSON.stringify(decision) + "\n");
   }
 }

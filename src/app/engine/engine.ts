@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import pkg from "../../../package.json" with { type: "json" };
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
+import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
 import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
@@ -51,8 +52,11 @@ const run: RunEnvironment & { now: () => number } = {
     await mkdir(dirname(socketPath), { recursive: true });
     const server = new HookSocketServer({ socketPath });
     await server.start();
-    return { events: server, stop: () => server.stop() };
+    return { events: server, permissions: server, stop: () => server.stop() };
   },
+  usage: new TranscriptUsage({
+    findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
+  }),
   openSession: async (options) => {
     const sessions = new TmuxSessionHost({ socketName: options.sessionName });
     return openClaudeSession(options, {

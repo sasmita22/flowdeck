@@ -26,7 +26,11 @@ const valueAt = (session: Session, path: readonly string[]): unknown =>
   );
 
 const textOf = (value: unknown) =>
-  Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : "";
+  Array.isArray(value)
+    ? value.join("\n")
+    : typeof value === "string" || typeof value === "number"
+      ? String(value)
+      : "";
 
 function Field({
   field,
@@ -79,13 +83,16 @@ function Field({
       </label>
     );
   }
+  const numeric = field.control === "number";
   return (
     <label style={labelStyle}>
       {label}
       <input
         key={value}
         data-testid={field.testId}
-        type="text"
+        type={numeric ? "number" : "text"}
+        min={numeric ? "0" : undefined}
+        step={numeric ? "any" : undefined}
         defaultValue={value}
         onBlur={(event) => commitIfChanged(event.target.value)}
         onKeyDown={(event) => {
