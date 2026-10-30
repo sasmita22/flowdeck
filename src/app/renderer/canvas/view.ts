@@ -7,7 +7,7 @@ export interface ViewNode {
   type: string;
   position: Position;
   selected: boolean;
-  data: { label: string };
+  data: { label: string; highlighted: boolean };
 }
 
 export interface ViewEdge {
@@ -25,13 +25,14 @@ export const toViewNodes = (
   flow: Flow,
   selection: readonly string[],
   dragPositions: Readonly<Record<string, Position>>,
+  highlighted: string | null,
 ): ViewNode[] =>
   flow.nodes.map((node) => ({
     id: node.id,
     type: node.type,
     position: dragPositions[node.id] ?? node.position,
     selected: selection.includes(node.id),
-    data: { label: node.label },
+    data: { label: node.label, highlighted: node.id === highlighted },
   }));
 
 export const toViewEdges = (flow: Flow): ViewEdge[] =>

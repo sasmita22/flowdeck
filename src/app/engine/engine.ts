@@ -38,8 +38,9 @@ const post = (message: EngineMessage) => process.parentPort.postMessage(message)
 
 const fs = new NodeFileSystem();
 
-const run: RunEnvironment = {
+const run: RunEnvironment & { now: () => number } = {
   fs,
+  now: Date.now,
   scripts: new NodeProcessRunner(),
   waiter: { wait: () => new Promise(() => undefined) },
   startEvents: async (socketPath) => {

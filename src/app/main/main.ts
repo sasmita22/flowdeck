@@ -6,6 +6,7 @@ import { spawn } from "node-pty";
 import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
+import { createActivityRelay } from "./activity.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
@@ -148,6 +149,12 @@ void app.whenReady().then(() => {
     },
   });
   client.onPush(relay.onPush);
+  const activity = createActivityRelay({
+    send: (update) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.activity, update);
+    },
+  });
+  client.onPush(activity.onPush);
   const terminal = wireTerminal(window, windowGuard);
   client.onPush((push) => {
     if (push.push === "session") terminal.setSession(push.value);
@@ -159,6 +166,10 @@ void app.whenReady().then(() => {
   ipcMain.handle(
     bridgeChannels.getRunState,
     windowGuard.handle(() => relay.latest()),
+  );
+  ipcMain.handle(
+    bridgeChannels.getActivity,
+    windowGuard.handle(() => activity.feed()),
   );
   let quitting = false;
   app.on("will-quit", (event) => {

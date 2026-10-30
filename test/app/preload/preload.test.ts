@@ -57,6 +57,11 @@ describe("preload run-state wiring", () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-run-state");
   });
 
+  it("invokes flowdeck:get-activity for getActivity and returns its answer", async () => {
+    await expect(bridge.getActivity()).resolves.toBe("answer for flowdeck:get-activity");
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-activity");
+  });
+
   it("hands each flowdeck:run-state snapshot to the listener without the event", () => {
     const listener = vi.fn();
     const unsubscribe = bridge.onRunState(listener);
@@ -138,6 +143,7 @@ describe("preload terminal wiring", () => {
   it.each([
     ["onTerminalStatus", "flowdeck:terminal-status", { available: true, attached: false }],
     ["onTerminalData", "flowdeck:terminal-data", "output"],
+    ["onActivity", "flowdeck:activity", { runId: "run-1", entry: { id: 1 } }],
   ] as const)(
     "%s hands each %s payload to the listener without the event, and stops after unsubscribe",
     (method, channel, payload) => {

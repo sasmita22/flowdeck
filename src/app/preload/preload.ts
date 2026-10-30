@@ -43,6 +43,14 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.terminalData, handler);
     };
   },
+  getActivity: () => ipcRenderer.invoke(bridgeChannels.getActivity),
+  onActivity: (listener) => {
+    const handler = (_event: unknown, update: unknown) => listener(update);
+    ipcRenderer.on(bridgeChannels.activity, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.activity, handler);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

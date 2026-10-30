@@ -2,10 +2,13 @@ import { Handle, Position, type Node, type NodeProps, type NodeTypes } from "@xy
 import type { CSSProperties } from "react";
 import { NodeStatusBadge } from "./status.js";
 
-type CanvasNode = Node<{ label: string }>;
+type CanvasNode = Node<{ label: string; highlighted: boolean }>;
 
 const selectedOutline = (selected: boolean): CSSProperties =>
   selected ? { outline: "2px solid #2f6fed", outlineOffset: 2 } : {};
+
+const highlightRing = (highlighted: boolean): CSSProperties =>
+  highlighted ? { boxShadow: "0 0 0 4px #f59e0b" } : {};
 
 const promptStyle: CSSProperties = {
   padding: "8px 14px",
@@ -40,7 +43,11 @@ function Ports({ id }: { id: string }) {
 
 function PromptNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
-    <div data-testid={`node-${id}`} style={{ ...promptStyle, ...selectedOutline(selected) }}>
+    <div
+      data-testid={`node-${id}`}
+      data-highlighted={data.highlighted ? "true" : undefined}
+      style={{ ...promptStyle, ...selectedOutline(selected), ...highlightRing(data.highlighted) }}
+    >
       {data.label}
       <NodeStatusBadge nodeId={id} />
       <Ports id={id} />
@@ -50,7 +57,11 @@ function PromptNode({ id, data, selected }: NodeProps<CanvasNode>) {
 
 function ScriptNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
-    <div data-testid={`node-${id}`} style={{ ...scriptStyle, ...selectedOutline(selected) }}>
+    <div
+      data-testid={`node-${id}`}
+      data-highlighted={data.highlighted ? "true" : undefined}
+      style={{ ...scriptStyle, ...selectedOutline(selected), ...highlightRing(data.highlighted) }}
+    >
       {data.label}
       <NodeStatusBadge nodeId={id} />
       <Ports id={id} />

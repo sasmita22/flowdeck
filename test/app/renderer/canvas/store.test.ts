@@ -661,3 +661,39 @@ describe("setWorkingFolder", () => {
     expect(selectDirty(store.getState())).toBe(false);
   });
 });
+
+describe("highlight", () => {
+  const loadedStore = () => {
+    const store = createCanvasStore({ ready: false });
+    store.getState().load(savedFlow());
+    return store;
+  };
+
+  it("starts with nothing highlighted", () => {
+    expect(createCanvasStore().getState().highlighted).toBeNull();
+  });
+
+  it("highlights a node without selecting it, recording a command or making the canvas dirty", () => {
+    const store = loadedStore();
+    const before = store.getState();
+
+    store.getState().highlight("prompt-1");
+
+    const state = store.getState();
+    expect(state.highlighted).toBe("prompt-1");
+    expect(state.selection).toEqual([]);
+    expect(state.undoStack).toBe(before.undoStack);
+    expect(state.redoStack).toBe(before.redoStack);
+    expect(state.flow).toBe(before.flow);
+    expect(selectDirty(state)).toBe(false);
+  });
+
+  it("clears the highlight with null", () => {
+    const store = loadedStore();
+    store.getState().highlight("prompt-1");
+
+    store.getState().highlight(null);
+
+    expect(store.getState().highlighted).toBeNull();
+  });
+});

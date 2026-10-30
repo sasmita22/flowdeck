@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,6 +20,7 @@ import { createEngineHandler } from "../../src/app/engine/engine-handler.js";
 import type { EnginePush } from "../../src/app/engine/protocol.js";
 import { createTerminal, type PtySpawn, type Terminal } from "../../src/app/main/pty.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
+import type { ActivityEntry } from "../../src/core/run/activity.js";
 import { displayStatus, type DisplayStatus } from "../../src/core/run/display.js";
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { RunSnapshot } from "../../src/core/run/snapshot.js";
@@ -32,6 +33,8 @@ const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", impo
 const askFixturePath = fileURLToPath(new URL("../fixtures/prompt-then-ask.json", import.meta.url));
 const runDeadlineMs = 240_000;
 const promptIds = ["p1", "p2", "p3"];
+const activityFiles = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
+const activityPrompt = `Use the Read tool once on each of these five files, one call at a time: ${activityFiles.map((file) => `{{repo}}/${file}`).join(", ")}. Then use the Agent tool once with the prompt "Reply ok". Use no other tools. Then reply DONE.`;
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
   error instanceof Error && "code" in error && codes.includes(error.code as string | number);
@@ -81,9 +84,10 @@ async function tmuxServerAlive(socketName: string): Promise<boolean> {
   }
 }
 
-function liveEnvironment(fs: NodeFileSystem): RunEnvironment {
+function liveEnvironment(fs: NodeFileSystem): RunEnvironment & { now: () => number } {
   return {
     fs,
+    now: Date.now,
     scripts: new NodeProcessRunner(),
     waiter: { wait: () => new Promise(() => undefined) },
     startEvents: async (socketPath) => {
@@ -170,7 +174,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     }
   }, 60_000);
 
-  async function startFlow(path: string, publish: (push: EnginePush) => void): Promise<void> {
+  async function startFlow(
+    path: string,
+    publish: (push: EnginePush) => void,
+    instructions: Record<string, string> = {},
+  ): Promise<void> {
     const fixture = parseFlow(JSON.parse(await readFile(path, "utf8")));
     const flow: Flow = {
       ...fixture,
@@ -179,7 +187,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
           ? {
               ...node,
               settings: {
-                instructions: node.settings.instructions.replaceAll("{{repo}}", repo.path),
+                instructions: (instructions[node.id] ?? node.settings.instructions).replaceAll(
+                  "{{repo}}",
+                  repo.path,
+                ),
               },
             }
           : node,
@@ -241,6 +252,56 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
   );
 
   it(
+    "pushes one activity entry per tool call and subagent of the node that made them, each within 2 s of its hook",
+    { timeout: runDeadlineMs + 30_000 },
+    async () => {
+      const snapshots: RunSnapshot[] = [];
+      const arrivals: { entry: ActivityEntry; receivedAt: number }[] = [];
+      for (const file of activityFiles) await writeFile(join(repo.path, file), `${file}\n`);
+      await startFlow(
+        fixturePath,
+        (push) => {
+          if (push.push === "activity") {
+            arrivals.push({ entry: push.value.entry, receivedAt: Date.now() });
+          } else if (push.push === "run-state") snapshots.push(push.value);
+        },
+        { p2: activityPrompt },
+      );
+      await vi.waitFor(
+        () => {
+          expect(snapshots.some((snapshot) => snapshot.status !== "running")).toBe(true);
+        },
+        { timeout: runDeadlineMs, interval: 500 },
+      );
+
+      const latest = [...new Map(arrivals.map(({ entry }) => [entry.id, entry])).values()];
+      const of = (nodeId: string) => latest.filter((entry) => entry.nodeId === nodeId);
+      const shape = (entry: ActivityEntry) =>
+        entry.kind === "tool" ? `tool ${entry.tool}` : `subagent ${entry.state}`;
+
+      expect(of("p2").map(shape).sort()).toEqual([
+        "subagent finished",
+        "tool Read",
+        "tool Read",
+        "tool Read",
+        "tool Read",
+        "tool Read",
+      ]);
+      expect(of("p1")).toEqual([]);
+      const writers = latest.filter((entry) => entry.kind === "tool" && entry.tool === "Write");
+      expect(new Set(writers.map((entry) => entry.nodeId))).toEqual(new Set(["p3"]));
+
+      const firstArrival = new Map<number, { entry: ActivityEntry; receivedAt: number }>();
+      for (const arrival of arrivals) {
+        if (!firstArrival.has(arrival.entry.id)) firstArrival.set(arrival.entry.id, arrival);
+      }
+      for (const { entry, receivedAt } of firstArrival.values()) {
+        expect(receivedAt - entry.at, `delay of entry ${entry.id}`).toBeLessThanOrEqual(2000);
+      }
+    },
+  );
+
+  it(
     "attaches a terminal to the run's own session only on open, and close leaves the run going",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
@@ -262,7 +323,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       let announced = false;
       await startFlow(askFixturePath, (push) => {
         if (push.push === "run-state") snapshots.push(push.value);
-        else {
+        else if (push.push === "session") {
           announced = push.value !== null;
           live.setSession(push.value);
         }

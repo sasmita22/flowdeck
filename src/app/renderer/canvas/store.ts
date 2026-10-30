@@ -25,6 +25,7 @@ export interface CanvasState {
   saved: Flow;
   ready: boolean;
   selection: string[];
+  highlighted: string | null;
   undoStack: Command[];
   redoStack: Command[];
   dragPositions: Record<string, Position>;
@@ -33,6 +34,7 @@ export interface CanvasState {
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
+  highlight(id: string | null): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
   setWorkingFolder(path: string): void;
@@ -121,6 +123,7 @@ export function createCanvasStore(
       saved: start,
       ready: deps.ready ?? true,
       selection: [],
+      highlighted: null,
       undoStack: [],
       redoStack: [],
       dragPositions: {},
@@ -148,6 +151,8 @@ export function createCanvasStore(
       deleteSelection: () => deleteNodes(get().selection),
 
       select: (ids) => set({ selection: [...ids] }),
+
+      highlight: (id) => set({ highlighted: id }),
 
       dragTo: (id, { x, y }) => {
         if (!ready()) return;
