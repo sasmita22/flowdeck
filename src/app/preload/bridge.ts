@@ -13,6 +13,13 @@ export type FlowdeckBridge = {
   startRun(): Promise<unknown>;
   getRunState(): Promise<unknown>;
   onRunState(listener: (snapshot: unknown) => void): () => void;
+  openTerminal(size: { cols: number; rows: number }): Promise<unknown>;
+  getTerminalStatus(): Promise<unknown>;
+  writeTerminal(data: string): void;
+  resizeTerminal(size: { cols: number; rows: number }): void;
+  closeTerminal(): void;
+  onTerminalStatus(listener: (status: unknown) => void): () => void;
+  onTerminalData(listener: (data: unknown) => void): () => void;
 };
 
 export const bridgeChannels = {
@@ -26,4 +33,11 @@ export const bridgeChannels = {
   startRun: "flowdeck:start-run",
   getRunState: "flowdeck:get-run-state",
   runState: "flowdeck:run-state",
+  openTerminal: "flowdeck:open-terminal",
+  getTerminalStatus: "flowdeck:get-terminal-status",
+  terminalInput: "flowdeck:terminal-input",
+  terminalResize: "flowdeck:terminal-resize",
+  closeTerminal: "flowdeck:close-terminal",
+  terminalStatus: "flowdeck:terminal-status",
+  terminalData: "flowdeck:terminal-data",
 } as const;

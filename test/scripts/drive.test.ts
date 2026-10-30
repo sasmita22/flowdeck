@@ -199,6 +199,42 @@ describe("parseSteps", () => {
     expect(parse).toThrow(key);
     expect(parse).not.toThrow("unknown step type");
   });
+
+  it("accepts resize-window and pause steps alongside the other step types", () => {
+    const steps = [
+      { type: "click", testid: "run" },
+      { type: "resize-window", width: 1200, height: 800 },
+      { type: "pause", ms: 2000 },
+      { type: "pause", ms: 60_000 },
+      { type: "screenshot" },
+    ];
+
+    expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+  });
+
+  it.each([
+    [
+      "an extra key on resize-window",
+      { type: "resize-window", width: 1200, height: 800, x: 1 },
+      "x",
+    ],
+    ["an extra key on pause", { type: "pause", ms: 1, until: "done" }, "until"],
+    ["a zero width", { type: "resize-window", width: 0, height: 800 }, "width"],
+    ["a negative height", { type: "resize-window", width: 1200, height: -1 }, "height"],
+    ["a fractional width", { type: "resize-window", width: 1200.5, height: 800 }, "width"],
+    ["a string height", { type: "resize-window", width: 1200, height: "800" }, "height"],
+    ["a missing height", { type: "resize-window", width: 1200 }, "height"],
+    ["a pause above 60000 ms", { type: "pause", ms: 60_001 }, "ms"],
+    ["a zero pause", { type: "pause", ms: 0 }, "ms"],
+    ["a fractional pause", { type: "pause", ms: 1.5 }, "ms"],
+    ["a pause without ms", { type: "pause" }, "ms"],
+  ])("rejects %s, naming the step and the field", (_, step, field) => {
+    const parse = () => parseSteps(JSON.stringify([{ type: "screenshot" }, step]));
+
+    expect(parse).toThrow(`step 2 (${step.type})`);
+    expect(parse).toThrow(field);
+    expect(parse).not.toThrow("unknown step type");
+  });
 });
 
 describe("runSteps", () => {
@@ -329,7 +365,7 @@ describe("runSteps", () => {
     expect(page.calls).not.toContain("click after");
   });
 
-  describe("close-window and relaunch", () => {
+  describe("close-window, relaunch and resize-window", () => {
     let calls: string[];
     let relaunched: FakeDrivePage;
     let relaunchError: Error | undefined;
@@ -343,6 +379,10 @@ describe("runSteps", () => {
         calls.push("relaunch");
         if (relaunchError) return Promise.reject(relaunchError);
         return Promise.resolve<DrivePage>(relaunched);
+      },
+      resizeWindow: (width: number, height: number) => {
+        calls.push(`resize ${width}x${height}`);
+        return Promise.resolve();
       },
     };
 
@@ -415,6 +455,50 @@ describe("runSteps", () => {
         expect(calls).toEqual([]);
       },
     );
+
+    it("sends resize-window steps to the app with their size, in step order", async () => {
+      await runSteps(
+        [
+          { type: "click", testid: "a" },
+          { type: "resize-window", width: 1200, height: 800 },
+          { type: "click", testid: "b" },
+          { type: "resize-window", width: 900, height: 600 },
+        ],
+        page,
+        { outDir, app },
+      );
+
+      expect(calls).toEqual(["click a", "resize 1200x800", "click b", "resize 900x600"]);
+    });
+
+    it("fails a resize-window step when no app is given, naming the step", async () => {
+      await expect(
+        runSteps([{ type: "resize-window", width: 1200, height: 800 }], page, { outDir }),
+      ).rejects.toThrow("step 1 (resize-window)");
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it("does not run the step after a pause until its ms have elapsed", async () => {
+    const pauseMs = 200;
+    const startedAt: Record<string, number> = {};
+    page.click = (testid: string) => {
+      startedAt[testid] = performance.now();
+      return Promise.resolve();
+    };
+
+    await runSteps(
+      [
+        { type: "click", testid: "before" },
+        { type: "pause", ms: pauseMs },
+        { type: "click", testid: "after" },
+      ],
+      page,
+      { outDir },
+    );
+
+    expect(Object.keys(startedAt)).toEqual(["before", "after"]);
+    expect((startedAt.after ?? 0) - (startedAt.before ?? 0)).toBeGreaterThanOrEqual(pauseMs - 5);
   });
 });
 

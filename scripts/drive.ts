@@ -28,6 +28,12 @@ const stepSchemas = {
   press: z.object({ type: z.literal("press"), key: z.string().min(1) }),
   "close-window": z.strictObject({ type: z.literal("close-window") }),
   relaunch: z.strictObject({ type: z.literal("relaunch") }),
+  "resize-window": z.strictObject({
+    type: z.literal("resize-window"),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+  }),
+  pause: z.strictObject({ type: z.literal("pause"), ms: z.number().int().positive().max(60_000) }),
 };
 
 type Point = { x: number; y: number };
@@ -76,9 +82,10 @@ export function parseSteps(text: string): Step[] {
 export interface DriveSession {
   closeWindow(): Promise<boolean>;
   relaunch(): Promise<DrivePage>;
+  resizeWindow(width: number, height: number): Promise<void>;
 }
 
-type PageStep = Exclude<Step, { type: "close-window" | "relaunch" }>;
+type PageStep = Exclude<Step, { type: "close-window" | "relaunch" | "resize-window" | "pause" }>;
 
 async function runPageStep(step: PageStep, index: number, page: DrivePage, outDir: string) {
   switch (step.type) {
@@ -118,6 +125,11 @@ export async function runSteps(
       } else if (step.type === "relaunch") {
         if (options.app === undefined) throw noSession(step.type);
         current = await options.app.relaunch();
+      } else if (step.type === "resize-window") {
+        if (options.app === undefined) throw noSession(step.type);
+        await options.app.resizeWindow(step.width, step.height);
+      } else if (step.type === "pause") {
+        await sleep(step.ms);
       } else {
         if (current === undefined) {
           throw new Error("the window was closed; add a relaunch step before this one");
@@ -368,6 +380,14 @@ export async function drive(
       launched = undefined;
       await shutDown(previous);
       return playwrightPage((await launch()).window);
+    },
+    resizeWindow: async (width, height) => {
+      await launched?.app.evaluate(
+        ({ BrowserWindow }, size) => {
+          BrowserWindow.getAllWindows()[0]?.setContentSize(size.width, size.height);
+        },
+        { width, height },
+      );
     },
   };
   const cleanUp = async () => {

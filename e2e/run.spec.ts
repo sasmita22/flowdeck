@@ -90,3 +90,22 @@ test("Run saves the edit first, builds it, runs it and shows each node's status"
     db.close();
   }
 });
+
+test("Open terminal stays disabled through a script-only run, and no pane appears", async () => {
+  seedFlow(home, twoScripts(), folder);
+  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  const { window } = launched;
+  await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await expect(window.getByTestId("terminal-open")).toBeDisabled();
+
+  await window.getByTestId("canvas-run").click();
+
+  await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
+    timeout: 20_000,
+  });
+  await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
+    timeout: 20_000,
+  });
+  await expect(window.getByTestId("terminal-open")).toBeDisabled();
+  await expect(window.getByTestId("terminal-view")).toHaveCount(0);
+});

@@ -4,6 +4,7 @@ import { createAppStore } from "./app-store.js";
 import { createCanvasStore } from "./canvas/store.js";
 import { createRunStore } from "./run-store.js";
 import { createSaveStore } from "./save-store.js";
+import { createTerminalStore } from "./terminal/store.js";
 
 const store = createAppStore(window.flowdeck);
 void store.getState().load();
@@ -12,7 +13,11 @@ const save = createSaveStore({ bridge: window.flowdeck, canvas });
 void save.getState().open();
 const run = createRunStore({ bridge: window.flowdeck, save, canvas });
 void run.getState().connect();
+const terminal = createTerminalStore({ bridge: window.flowdeck });
+void terminal.getState().connect();
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("index.html has no #root element");
-createRoot(root).render(<App store={store} canvas={canvas} save={save} run={run} />);
+createRoot(root).render(
+  <App store={store} canvas={canvas} save={save} run={run} terminal={terminal} />,
+);

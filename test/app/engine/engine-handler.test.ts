@@ -9,8 +9,9 @@ import {
   createEngineHandler,
   type EngineHandlerOptions,
 } from "../../../src/app/engine/engine-handler.js";
+import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import type { RunSnapshot } from "../../../src/core/run/snapshot.js";
+import type { OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeStore } from "../../fakes/fake-store.js";
@@ -238,13 +239,11 @@ describe("createEngineHandler", async () => {
   });
 
   describe("start-run", () => {
-    type Push = { push: string; value: RunSnapshot };
-
     let home: string;
     let repo: TmpRepo;
     let runs: FakeStore;
     let flows: FakeFlowStore;
-    let pushes: Push[];
+    let pushes: EnginePush[];
     let handler: ReturnType<typeof createEngineHandler>;
     let nextId: number;
 
@@ -276,7 +275,7 @@ describe("createEngineHandler", async () => {
         options({
           openStores: () => ({ runs, flows }),
           home,
-          publish: (push) => pushes.push(push as Push),
+          publish: (push) => pushes.push(push),
           prepareHooks: () => ({
             kind: "ok",
             nodePath: process.execPath,
@@ -300,7 +299,11 @@ describe("createEngineHandler", async () => {
     };
 
     const snapshotsOf = (runId: string) =>
-      pushes.filter((push) => push.value.runId === runId).map((push) => push.value);
+      pushes.flatMap((push) =>
+        push.push === "run-state" && push.value.runId === runId ? [push.value] : [],
+      );
+
+    const sessionPushes = () => pushes.filter((push) => push.push === "session");
 
     const untilFinished = async (runId: string) => {
       await vi.waitFor(
@@ -553,6 +556,76 @@ describe("createEngineHandler", async () => {
       });
 
       await expect(handler.stop()).resolves.toBeUndefined();
+    });
+
+    const promptFlow = () =>
+      atRepo(flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]));
+
+    const claudeSession = (ensureStarted: () => Promise<void>): OpenedSession => ({
+      sessionId: "claude-session-1",
+      session: { ensureStarted },
+      prompts: { sendPrompt: async () => undefined },
+      stop: async () => undefined,
+    });
+
+    const withClaude = (opened: OpenedSession) =>
+      handlerWith({
+        newSessionName: () => "fd-run-test",
+        run: { ...runEnvironment(new NodeFileSystem()), openSession: async () => opened },
+      });
+
+    it("announces the session name once Claude starts, and null when the run stops", async () => {
+      handler = withClaude(claudeSession(async () => undefined));
+      flows.save(promptFlow());
+      await startedRunId();
+
+      await vi.waitFor(() => {
+        expect(sessionPushes()).toEqual([{ push: "session", value: "fd-run-test" }]);
+      });
+
+      await handler.stop();
+
+      expect(sessionPushes()).toEqual([
+        { push: "session", value: "fd-run-test" },
+        { push: "session", value: null },
+      ]);
+    });
+
+    it("announces no session while Claude is still starting", async () => {
+      let started: () => void = () => undefined;
+      let starting = false;
+      handler = withClaude(
+        claudeSession(
+          () =>
+            new Promise<void>((resolve) => {
+              starting = true;
+              started = resolve;
+            }),
+        ),
+      );
+      flows.save(promptFlow());
+      await startedRunId();
+
+      await vi.waitFor(() => {
+        expect(starting).toBe(true);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sessionPushes()).toEqual([]);
+
+      started();
+
+      await vi.waitFor(() => {
+        expect(sessionPushes()).toEqual([{ push: "session", value: "fd-run-test" }]);
+      });
+    });
+
+    it("announces no session for a script-only run", async () => {
+      flows.save(twoScripts());
+
+      const runId = await startedRunId();
+      await untilFinished(runId);
+
+      expect(sessionPushes()).toEqual([]);
     });
 
     it("leaves no unhandled rejection when reading the final status throws too", async () => {

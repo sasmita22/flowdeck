@@ -14,7 +14,7 @@
     "dev": "electron-forge start",
     "e2e": "npm run build:app && playwright test",
     "drive": "npm run build:app && tsx scripts/drive.ts",
-    "postinstall": "electron-rebuild --only better-sqlite3"
+    "postinstall": "electron-rebuild --only better-sqlite3,node-pty"
   },
   "type": "module",
   "private": true,
@@ -46,8 +46,11 @@
     "vitest": "5.0.5"
   },
   "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "@xyflow/react": "12.12.0",
     "better-sqlite3": "13.0.3",
+    "node-pty": "1.1.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "zod": "4.6.7",
