@@ -8,6 +8,7 @@ import {
   needsClaude,
   noClaude,
   runSocketPath,
+  type OpenedSession,
   type RunEnvironment,
 } from "../../core/run/execute.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
@@ -47,6 +48,29 @@ type Opened = { kind: "ready"; stores: EngineStores } | { kind: "error"; message
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+function announced(
+  opened: OpenedSession,
+  sessionName: string,
+  publish: (push: EnginePush) => void,
+): OpenedSession {
+  let isAnnounced = false;
+  return {
+    ...opened,
+    session: {
+      async ensureStarted() {
+        await opened.session.ensureStarted();
+        if (isAnnounced) return;
+        isAnnounced = true;
+        publish({ push: "session", value: sessionName });
+      },
+    },
+    async stop() {
+      if (isAnnounced) publish({ push: "session", value: null });
+      await opened.stop();
+    },
+  };
+}
 
 export function createEngineHandler(options: EngineHandlerOptions): EngineHandler {
   let opened: Opened | undefined;
@@ -183,14 +207,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           socketPath: socket.path,
           open: async () =>
             needsClaude(manifest)
-              ? options.run.openSession({
+              ? announced(
+                  await options.run.openSession({
+                    sessionName,
+                    buildDir: built.dir,
+                    model: manifest.session.model,
+                    socketPath: socket.path,
+                    cwd,
+                    claudeSessionId,
+                  }),
                   sessionName,
-                  buildDir: built.dir,
-                  model: manifest.session.model,
-                  socketPath: socket.path,
-                  cwd,
-                  claudeSessionId,
-                })
+                  options.publish,
+                )
               : noClaude,
         },
       )

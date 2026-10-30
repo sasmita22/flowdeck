@@ -28,6 +28,17 @@ describe("createRunRelay", () => {
     expect(sent).toEqual([runState("running").value, runState("done").value]);
     expect(relay.latest()).toEqual(runState("done").value);
   });
+
+  it("ignores a session push, sending nothing and keeping the latest snapshot", () => {
+    const sent: unknown[] = [];
+    const relay = createRunRelay({ send: (snapshot) => sent.push(snapshot) });
+
+    relay.onPush(runState("running"));
+    relay.onPush({ push: "session", value: "fd-run-x" });
+
+    expect(sent).toEqual([runState("running").value]);
+    expect(relay.latest()).toEqual(runState("running").value);
+  });
 });
 
 describe("stopEngine", () => {

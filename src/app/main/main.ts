@@ -2,12 +2,14 @@ import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawn } from "node-pty";
 import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
+import { createTerminal, type Terminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
 
@@ -60,6 +62,42 @@ function openWindow(windowGuard: WindowGuard) {
   return window;
 }
 
+function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard): Terminal {
+  const terminal = createTerminal({
+    spawn,
+    env: process.env,
+    sendStatus: (status) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.terminalStatus, status);
+    },
+    sendData: (data) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.terminalData, data);
+    },
+  });
+  ipcMain.handle(
+    bridgeChannels.openTerminal,
+    windowGuard.handle((size: unknown) => terminal.open(size)),
+  );
+  ipcMain.handle(
+    bridgeChannels.getTerminalStatus,
+    windowGuard.handle(() => terminal.status()),
+  );
+  ipcMain.on(
+    bridgeChannels.terminalInput,
+    windowGuard.listen((data: unknown) => terminal.write(data)),
+  );
+  ipcMain.on(
+    bridgeChannels.terminalResize,
+    windowGuard.listen((size: unknown) => terminal.resize(size)),
+  );
+  ipcMain.on(
+    bridgeChannels.closeTerminal,
+    windowGuard.listen(() => terminal.close()),
+  );
+  window.webContents.on("did-navigate", () => terminal.close());
+  window.webContents.on("render-process-gone", () => terminal.close());
+  return terminal;
+}
+
 function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
   const guard = createCloseGuard({
     requestClose: () => window.webContents.send(bridgeChannels.closeRequest),
@@ -110,6 +148,10 @@ void app.whenReady().then(() => {
     },
   });
   client.onPush(relay.onPush);
+  const terminal = wireTerminal(window, windowGuard);
+  client.onPush((push) => {
+    if (push.push === "session") terminal.setSession(push.value);
+  });
   ipcMain.handle(
     bridgeChannels.startRun,
     windowGuard.handle(() => client.request("start-run")),
@@ -123,6 +165,7 @@ void app.whenReady().then(() => {
     if (quitting) return;
     quitting = true;
     event.preventDefault();
+    terminal.dispose();
     void stopEngine({ kill: () => engine.kill(), exited, timeoutMs: 10_000 }).then((result) => {
       console.log(`main: engine stopped (${result})`);
       app.exit(0);

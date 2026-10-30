@@ -1,0 +1,41 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": { "x": 0, "y": 0 },
+      "settings": { "inputs": [], "flags": {} }
+    },
+    {
+      "id": "p1",
+      "label": "Reply",
+      "type": "prompt",
+      "position": { "x": 240, "y": 0 },
+      "settings": { "instructions": "Reply with the single word OK." }
+    },
+    {
+      "id": "q",
+      "label": "Ask",
+      "type": "ask",
+      "position": { "x": 480, "y": 0 },
+      "settings": { "question": "Continue?", "options": ["yes"] }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": { "node": "start", "port": "out" },
+      "to": { "node": "p1", "port": "in" }
+    },
+    { "kind": "then", "from": { "node": "p1", "port": "out" }, "to": { "node": "q", "port": "in" } }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": { "kind": "worktree", "branch": "main" },
+    "model": "haiku",
+    "allowedTools": [],
+    "permissionMode": "acceptEdits",
+    "connectors": []
+  }
+}

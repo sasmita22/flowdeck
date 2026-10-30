@@ -9,7 +9,8 @@ export type EngineRequest = {
 export type EngineResponse =
   { id: number; ok: true; value: unknown } | { id: number; ok: false; error: string };
 
-export type EnginePush = { push: "run-state"; value: RunSnapshot };
+export type EnginePush =
+  { push: "run-state"; value: RunSnapshot } | { push: "session"; value: string | null };
 
 export type EngineMessage = EngineResponse | EnginePush;
 

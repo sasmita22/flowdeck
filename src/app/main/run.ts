@@ -6,6 +6,7 @@ export function createRunRelay(options: { send: (snapshot: unknown) => void }): 
   let latest: unknown = null;
   return {
     onPush(push) {
+      if (push.push !== "run-state") return;
       latest = push.value;
       options.send(push.value);
     },

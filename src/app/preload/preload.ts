@@ -24,6 +24,25 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.runState, handler);
     };
   },
+  openTerminal: (size) => ipcRenderer.invoke(bridgeChannels.openTerminal, size),
+  getTerminalStatus: () => ipcRenderer.invoke(bridgeChannels.getTerminalStatus),
+  writeTerminal: (data) => ipcRenderer.send(bridgeChannels.terminalInput, data),
+  resizeTerminal: (size) => ipcRenderer.send(bridgeChannels.terminalResize, size),
+  closeTerminal: () => ipcRenderer.send(bridgeChannels.closeTerminal),
+  onTerminalStatus: (listener) => {
+    const handler = (_event: unknown, status: unknown) => listener(status);
+    ipcRenderer.on(bridgeChannels.terminalStatus, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.terminalStatus, handler);
+    };
+  },
+  onTerminalData: (listener) => {
+    const handler = (_event: unknown, data: unknown) => listener(data);
+    ipcRenderer.on(bridgeChannels.terminalData, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.terminalData, handler);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

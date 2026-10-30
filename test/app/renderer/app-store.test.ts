@@ -16,6 +16,13 @@ const bridge = (
   startRun: vi.fn(),
   getRunState: vi.fn(),
   onRunState: vi.fn(() => () => {}),
+  openTerminal: vi.fn(),
+  getTerminalStatus: vi.fn(),
+  writeTerminal: vi.fn(),
+  resizeTerminal: vi.fn(),
+  closeTerminal: vi.fn(),
+  onTerminalStatus: vi.fn(() => () => {}),
+  onTerminalData: vi.fn(() => () => {}),
 });
 
 describe("createAppStore", () => {
