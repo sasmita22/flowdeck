@@ -10,6 +10,9 @@ export type FlowdeckBridge = {
   setDirty(dirty: boolean): void;
   onCloseRequest(listener: () => void): () => void;
   answerClose(answer: CloseAnswer): void;
+  startRun(): Promise<unknown>;
+  getRunState(): Promise<unknown>;
+  onRunState(listener: (snapshot: unknown) => void): () => void;
 };
 
 export const bridgeChannels = {
@@ -20,4 +23,7 @@ export const bridgeChannels = {
   setDirty: "flowdeck:set-dirty",
   closeRequest: "flowdeck:close-request",
   closeAnswer: "flowdeck:close-answer",
+  startRun: "flowdeck:start-run",
+  getRunState: "flowdeck:get-run-state",
+  runState: "flowdeck:run-state",
 } as const;

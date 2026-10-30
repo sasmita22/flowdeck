@@ -95,6 +95,27 @@ describe("FakeStore", () => {
     expect(store.findRun(id)?.status).toBe("done");
   });
 
+  it("keeps one build per hash however often it is recorded", () => {
+    const store = new FakeStore();
+
+    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+
+    expect(store.builds()).toEqual([{ hash: "h1", dir: "/fd/builds/h1" }]);
+  });
+
+  it("keeps the build hash a run was created with, and none when it was given none", () => {
+    const store = new FakeStore();
+
+    const withBuild = store.createRun({ ...newRun(), buildHash: "h1" });
+    const withoutBuild = store.createRun(newRun());
+
+    expect(withBuild.buildHash).toBe("h1");
+    expect(store.findRun(withBuild.id)?.buildHash).toBe("h1");
+    expect(withoutBuild).not.toHaveProperty("buildHash");
+    expect(store.findRun(withoutBuild.id)).not.toHaveProperty("buildHash");
+  });
+
   it("gives no way to edit or remove an appended event through what it returns", () => {
     const store = new FakeStore();
     const { id } = store.createRun(newRun());

@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {
+      "id": "f1",
+      "label": "Fail",
+      "type": "script",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "command": "sh",
+        "args": ["-c", "exit 1"]
+      }
+    }
+  ],
+  "wires": [],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "haiku",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

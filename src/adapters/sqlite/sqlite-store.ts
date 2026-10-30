@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { RunEvent } from "../../core/run/run-events.js";
 import type {
   EventEntry,
+  NewBuild,
   NewRun,
   RunRecord,
   RunStatus,
@@ -23,6 +24,7 @@ type RunRow = {
   tmux_name: string;
   cwd: string;
   claude_session_id: string;
+  build_hash: string | null;
 };
 
 type EventRow = {
@@ -57,9 +59,9 @@ export class SqliteStore implements Store {
     this.db.transaction(() => {
       this.db
         .prepare(
-          "INSERT INTO runs (id, build_dir, inputs, status, created_at) VALUES (?, ?, ?, 'running', ?)",
+          "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash) VALUES (?, ?, ?, 'running', ?, ?)",
         )
-        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time());
+        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildHash ?? null);
       const session = this.db
         .prepare(
           "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
@@ -76,7 +78,7 @@ export class SqliteStore implements Store {
   findRun(id: string): RunRecord | undefined {
     const row = this.db
       .prepare(
-        `SELECT runs.id, runs.build_dir, runs.inputs, runs.status,
+        `SELECT runs.id, runs.build_dir, runs.inputs, runs.status, runs.build_hash,
                 run_sessions.tmux_name, run_sessions.cwd, run_sessions.claude_session_id
            FROM runs JOIN run_sessions ON run_sessions.run_id = runs.id
           WHERE runs.id = ? ORDER BY run_sessions.id LIMIT 1`,
@@ -95,6 +97,7 @@ export class SqliteStore implements Store {
       nodeIds,
       session: { tmuxName: row.tmux_name, cwd: row.cwd, claudeSessionId: row.claude_session_id },
       status: row.status,
+      ...(row.build_hash === null ? {} : { buildHash: row.build_hash }),
     };
   }
 
@@ -150,6 +153,12 @@ export class SqliteStore implements Store {
       this.db.prepare("UPDATE runs SET status = ? WHERE id = ?").run(status, runId);
       this.db.prepare("UPDATE run_sessions SET status = 'closed' WHERE run_id = ?").run(runId);
     })();
+  }
+
+  recordBuild(build: NewBuild): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO builds (hash, dir, created_at) VALUES (?, ?, ?)")
+      .run(build.hash, build.dir, this.now().getTime());
   }
 
   close(): void {

@@ -1,6 +1,7 @@
 import type { RunEvent } from "../../src/core/run/run-events.js";
 import type {
   EventEntry,
+  NewBuild,
   NewRun,
   RunRecord,
   RunStatus,
@@ -14,6 +15,7 @@ export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
+  private readonly buildRecords: NewBuild[] = [];
   private nextRun = 1;
   private nextSeq = 1;
 
@@ -57,6 +59,15 @@ export class FakeStore implements Store {
 
   events(runId: string): StoredEvent[] {
     return this.stored.filter((entry) => entry.runId === runId).map(({ event }) => copy(event));
+  }
+
+  builds(): NewBuild[] {
+    return copy(this.buildRecords);
+  }
+
+  recordBuild(build: NewBuild): void {
+    if (this.buildRecords.some((known) => known.hash === build.hash)) return;
+    this.buildRecords.push(copy(build));
   }
 
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void {

@@ -4,7 +4,9 @@ import type { StoreApi } from "zustand/vanilla";
 import type { AppState } from "./app-store.js";
 import { Canvas } from "./canvas/canvas.js";
 import { selectDirty, type CanvasState } from "./canvas/store.js";
+import { RunStoreContext } from "./canvas/status.js";
 import { ClosePrompt } from "./close-prompt.js";
+import { selectRunDisabled, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 
 const statusText = (status: AppState["status"]) =>
@@ -13,14 +15,19 @@ const statusText = (status: AppState["status"]) =>
 function TitleStrip({
   canvas,
   save,
+  run,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
+  run: StoreApi<RunState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
+  const folder = useStore(canvas, (state) => state.flow.session.workingFolder);
   const saving = useStore(save, (state) => state.saving);
   const error = useStore(save, (state) => state.error);
+  const runDisabled = useStore(run, (state) => selectRunDisabled(state, { saving }));
+  const runError = useStore(run, (state) => state.error);
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 8 }}>
       <span data-testid="flow-title">Untitled</span>
@@ -34,7 +41,28 @@ function TitleStrip({
           Save
         </button>
       )}
+      {ready && (
+        <label>
+          Working folder{" "}
+          <input
+            data-testid="flow-folder"
+            type="text"
+            value={folder.kind === "path" ? folder.path : ""}
+            onChange={(event) => canvas.getState().setWorkingFolder(event.target.value)}
+          />
+        </label>
+      )}
+      {ready && (
+        <button
+          data-testid="canvas-run"
+          disabled={runDisabled}
+          onClick={() => void run.getState().run()}
+        >
+          Run
+        </button>
+      )}
       {error !== null && <span data-testid="flow-error">{error}</span>}
+      {runError !== null && <span data-testid="run-error">{runError}</span>}
     </div>
   );
 }
@@ -43,10 +71,12 @@ export function App({
   store,
   canvas,
   save,
+  run,
 }: {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
+  run: StoreApi<RunState>;
 }) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
@@ -57,8 +87,10 @@ export function App({
       <h1 data-testid="app-title">Flowdeck</h1>
       <p data-testid="app-version">{version}</p>
       <p data-testid="store-status">{status}</p>
-      <TitleStrip canvas={canvas} save={save} />
-      {ready && <Canvas store={canvas} onSave={onSave} />}
+      <TitleStrip canvas={canvas} save={save} run={run} />
+      <RunStoreContext.Provider value={run}>
+        {ready && <Canvas store={canvas} onSave={onSave} />}
+      </RunStoreContext.Provider>
       <ClosePrompt store={save} />
     </main>
   );

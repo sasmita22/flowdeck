@@ -13,6 +13,9 @@ const bridge = (
   setDirty: vi.fn(),
   onCloseRequest: vi.fn(() => () => {}),
   answerClose: vi.fn(),
+  startRun: vi.fn(),
+  getRunState: vi.fn(),
+  onRunState: vi.fn(() => () => {}),
 });
 
 describe("createAppStore", () => {

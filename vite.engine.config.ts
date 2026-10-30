@@ -19,6 +19,13 @@ const copyMigrations = (): Plugin => ({
 });
 
 export default defineConfig({
-  build: { rollupOptions: { external: ["better-sqlite3"] } },
+  build: {
+    lib: {
+      entry: { engine: "src/app/engine/engine.ts", "flowdeck-hook": "bin/flowdeck-hook.ts" },
+      fileName: () => "[name].cjs",
+      formats: ["cjs"],
+    },
+    rollupOptions: { external: ["better-sqlite3"] },
+  },
   plugins: [copyMigrations()],
 });

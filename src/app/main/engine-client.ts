@@ -1,8 +1,13 @@
-import type { EngineRequest, EngineResponse } from "../engine/protocol.js";
+import type {
+  EngineMessage,
+  EnginePush,
+  EngineRequest,
+  EngineResponse,
+} from "../engine/protocol.js";
 
 export type EnginePort = {
   postMessage(message: EngineRequest): void;
-  onMessage(listener: (response: EngineResponse) => void): void;
+  onMessage(listener: (message: EngineMessage) => void): void;
   onExit(listener: () => void): void;
 };
 
@@ -18,17 +23,32 @@ export class EngineClient {
   private readonly port: EnginePort;
   private readonly timeoutMs: number;
   private readonly pending = new Map<number, Pending>();
+  private readonly pushListeners = new Set<(push: EnginePush) => void>();
   private nextId = 1;
   private exited = false;
 
   constructor(options: EngineClientOptions) {
     this.port = options.port;
     this.timeoutMs = options.timeoutMs;
-    this.port.onMessage((response) => this.settle(response));
+    this.port.onMessage((message) => {
+      if ("push" in message) {
+        for (const listener of [...this.pushListeners]) listener(message);
+      } else {
+        this.settle(message);
+      }
+    });
     this.port.onExit(() => {
       this.exited = true;
       this.rejectAll(new Error("engine exited"));
     });
+  }
+
+  onPush(listener: (push: EnginePush) => void): () => void {
+    const wrapped = (push: EnginePush) => listener(push);
+    this.pushListeners.add(wrapped);
+    return () => {
+      this.pushListeners.delete(wrapped);
+    };
   }
 
   request(type: EngineRequest["type"], payload?: unknown): Promise<unknown> {

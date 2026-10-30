@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "id": "s1",
+      "label": "One",
+      "type": "script",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "command": "echo",
+        "args": ["one"]
+      }
+    },
+    {
+      "id": "s2",
+      "label": "Two",
+      "type": "script",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "command": "echo",
+        "args": ["two"]
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "s1",
+        "port": "out"
+      },
+      "to": {
+        "node": "s2",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "haiku",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

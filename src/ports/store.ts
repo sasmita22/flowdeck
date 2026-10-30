@@ -1,5 +1,6 @@
 export type {
   EventEntry,
+  NewBuild,
   NewRun,
   RunRecord,
   RunStatus,

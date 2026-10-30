@@ -211,50 +211,60 @@ async function waitUntil(done: () => boolean, timeoutMs: number): Promise<boolea
   return true;
 }
 
+const defaultEngineStopMs = 10_000;
+
 export async function forceExit(app: DriveApp, options: { timeoutMs?: number } = {}) {
-  const timeoutMs = options.timeoutMs ?? 5000;
+  const timeoutMs = options.timeoutMs ?? defaultEngineStopMs;
   const proc = app.process();
   if (hasExited(proc)) return;
   let exited = false;
   proc.once("exit", () => {
     exited = true;
   });
-  let pids: number[];
-  try {
-    pids = await app.evaluate(({ app: electronApp }) => {
+  const appExited = () => exited || hasExited(proc);
+  const evaluateUnlessGone = async <R>(evaluate: () => Promise<R>): Promise<R | undefined> => {
+    try {
+      return await evaluate();
+    } catch (error) {
+      if (await waitUntil(appExited, Math.min(timeoutMs, 1000))) return undefined;
+      throw error;
+    }
+  };
+  const pids = await evaluateUnlessGone(() =>
+    app.evaluate(({ app: electronApp }) => {
       const engines = electronApp
         .getAppMetrics()
         .filter(
           (metric) => metric.type === "Utility" && metric.serviceName === "node.mojom.NodeService",
         )
         .map((metric) => metric.pid);
-      setImmediate(() => {
+      for (const pid of engines) {
         try {
-          for (const pid of engines) {
-            try {
-              process.kill(pid);
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-            }
-          }
+          process.kill(pid, "SIGTERM");
         } catch (error) {
-          console.error(error);
-        } finally {
-          electronApp.exit(0);
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") console.error(error);
         }
-      });
+      }
       return engines;
-    });
-  } catch (error) {
-    if (await waitUntil(() => exited || hasExited(proc), Math.min(timeoutMs, 1000))) return;
-    throw error;
-  }
-  if (!(await waitUntil(() => exited || hasExited(proc), timeoutMs))) {
-    throw new Error(`the app did not exit within ${timeoutMs} ms`);
-  }
+    }),
+  );
+  if (pids === undefined) return;
   const survivors = () => pids.filter(isRunning);
-  if (!(await waitUntil(() => survivors().length === 0, timeoutMs))) {
-    throw new Error(`engine process ${survivors().join(", ")} outlived the app`);
+  await waitUntil(() => survivors().length === 0, timeoutMs);
+  if (!appExited()) {
+    const asked = await evaluateUnlessGone(() =>
+      app.evaluate(({ app: electronApp }) => {
+        setImmediate(() => electronApp.exit(0));
+        return true;
+      }),
+    );
+    if (asked !== undefined && !(await waitUntil(appExited, timeoutMs))) {
+      throw new Error(`the app did not exit within ${timeoutMs} ms`);
+    }
+  }
+  const outlived = survivors();
+  if (outlived.length > 0) {
+    throw new Error(`engine process ${outlived.join(", ")} outlived the app`);
   }
 }
 

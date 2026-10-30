@@ -7,7 +7,10 @@ export type NewRun = {
   inputs: Record<string, unknown>;
   nodeIds: string[];
   session: { tmuxName: string; cwd: string; claudeSessionId: string };
+  buildHash?: string;
 };
+
+export type NewBuild = { hash: string; dir: string };
 
 export type RunRecord = NewRun & { id: string; status: RunStatus };
 
@@ -22,4 +25,5 @@ export interface Store {
   appendAll(runId: string, entries: readonly EventEntry[]): void;
   events(runId: string): StoredEvent[];
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void;
+  recordBuild(build: NewBuild): void;
 }

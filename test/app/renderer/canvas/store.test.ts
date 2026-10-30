@@ -627,3 +627,37 @@ describe("markSaved", () => {
     expect(selectDirty(store.getState())).toBe(true);
   });
 });
+
+describe("setWorkingFolder", () => {
+  const folderOf = (store: Store) => store.getState().flow.session.workingFolder;
+
+  it("sets the path as an undoable edit that makes the canvas dirty", () => {
+    const store = createCanvasStore();
+
+    act(store, (s) => s.setWorkingFolder("/tmp/x"));
+
+    expect(folderOf(store)).toEqual({ kind: "path", path: "/tmp/x" });
+    expect(selectDirty(store.getState())).toBe(true);
+
+    act(store, (s) => s.undo());
+
+    expect(folderOf(store)).toEqual({ kind: "worktree", branch: "main" });
+    expect(selectDirty(store.getState())).toBe(false);
+
+    act(store, (s) => s.redo());
+
+    expect(folderOf(store)).toEqual({ kind: "path", path: "/tmp/x" });
+    expect(selectDirty(store.getState())).toBe(true);
+  });
+
+  it("is ignored while the store is not ready", () => {
+    const store = createCanvasStore({ ready: false });
+    const before = store.getState();
+
+    store.getState().setWorkingFolder("/tmp/x");
+
+    expect(folderOf(store)).toEqual({ kind: "worktree", branch: "main" });
+    expect(store.getState().undoStack).toBe(before.undoStack);
+    expect(selectDirty(store.getState())).toBe(false);
+  });
+});

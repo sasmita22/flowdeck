@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
-import { openClaudeSession, SessionGoneError } from "../../src/cli/claude-session.js";
-import { FakeSessionHost } from "../fakes/fake-session-host.js";
+import { ClaudeCli } from "../../../src/adapters/claude/claude-cli.js";
+import {
+  openClaudeSession,
+  SessionGoneError,
+} from "../../../src/adapters/claude/claude-session.js";
+import { FakeSessionHost } from "../../fakes/fake-session-host.js";
 
 const rule = "─".repeat(40);
 const readyPane = [rule, "❯ ", rule].join("\n");
