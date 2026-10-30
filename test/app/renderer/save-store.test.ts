@@ -248,6 +248,78 @@ describe("save", () => {
   });
 });
 
+describe("hasSavedVersion", () => {
+  it("is false after open finds nothing saved", async () => {
+    const { store } = await setup({ latest: () => Promise.resolve(null) });
+
+    expect(store.getState().hasSavedVersion).toBe(false);
+  });
+
+  it("is true after open loads a saved flow", async () => {
+    const { store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+
+    expect(store.getState().hasSavedVersion).toBe(true);
+  });
+
+  it("becomes true after a successful save", async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(null) });
+    makeDirty(canvas);
+
+    await expect(store.getState().save()).resolves.toBe(true);
+
+    expect(store.getState().hasSavedVersion).toBe(true);
+  });
+});
+
+describe("forced save", () => {
+  it("sends a clean canvas that has no saved version, marks it saved and resolves true", async () => {
+    const { bridge, canvas, store } = await setup({ latest: () => Promise.resolve(null) });
+    const sent = canvas.getState().flow;
+
+    await expect(store.getState().save({ force: true })).resolves.toBe(true);
+
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(bridge.saveFlow).toHaveBeenCalledWith(sent);
+    expect(canvas.getState().saved).toEqual(sent);
+    expect(store.getState().hasSavedVersion).toBe(true);
+    expect(store.getState().error).toBeNull();
+  });
+
+  it("resolves false, holds the error and leaves hasSavedVersion false when it fails", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(null) });
+    bridge.saveFlow.mockResolvedValueOnce({ kind: "error", message: "disk full" });
+
+    await expect(store.getState().save({ force: true })).resolves.toBe(false);
+
+    expect(store.getState().error).toBe("disk full");
+    expect(store.getState().hasSavedVersion).toBe(false);
+  });
+
+  it("leaves a plain save of a clean canvas sending nothing", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(null) });
+
+    await expect(store.getState().save()).resolves.toBe(true);
+
+    expect(bridge.saveFlow).not.toHaveBeenCalled();
+    expect(store.getState().hasSavedVersion).toBe(false);
+  });
+
+  it("resolves false without an error for a save made while one is in flight", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(null) });
+    const reply = deferred<unknown>();
+    bridge.saveFlow.mockReturnValueOnce(reply.promise);
+
+    const first = store.getState().save({ force: true });
+    const second = store.getState().save({ force: true });
+    reply.resolve({ kind: "saved", flowId: "flow-1", version: 1 });
+
+    await expect(second).resolves.toBe(false);
+    await expect(first).resolves.toBe(true);
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(store.getState().error).toBeNull();
+  });
+});
+
 describe("close request", () => {
   it("shows the close prompt when main asks to close", async () => {
     const { requestClose, store } = await setup();

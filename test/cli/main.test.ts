@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
-import { SessionGoneError } from "../../src/cli/claude-session.js";
+import { SessionGoneError } from "../../src/adapters/claude/claude-session.js";
 import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import type { Flow } from "../../src/core/flow/schema.js";

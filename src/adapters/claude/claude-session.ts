@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import type { ClaudeCli } from "../adapters/claude/claude-cli.js";
-import type { SessionHost } from "../ports/session-host.js";
-import type { OpenedSession, OpenSessionOptions } from "./main.js";
+import type { ClaudeCli } from "./claude-cli.js";
+import type { SessionHost } from "../../ports/session-host.js";
+import type { OpenedSession, OpenSessionOptions } from "../../core/run/execute.js";
 
 const stopped = () => new Error("The run was stopped");
 

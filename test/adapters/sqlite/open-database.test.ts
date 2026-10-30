@@ -14,7 +14,11 @@ const newRun = (): NewRun => ({
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
 });
 
-const bothMigrations = [{ name: "001_runs.sql" }, { name: "002_flows.sql" }];
+const allMigrations = [
+  { name: "001_runs.sql" },
+  { name: "002_flows.sql" },
+  { name: "003_builds.sql" },
+];
 
 describe("openDatabase", () => {
   let folder: string;
@@ -40,8 +44,8 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies 001_runs.sql and 002_flows.sql to a new database file", () => {
-    expect(migrations(open())).toEqual(bothMigrations);
+  it("applies 001_runs.sql, 002_flows.sql and 003_builds.sql to a new database file", () => {
+    expect(migrations(open())).toEqual(allMigrations);
   });
 
   it("applies nothing new when the same file is opened again, and keeps its rows", () => {
@@ -50,7 +54,7 @@ describe("openDatabase", () => {
 
     const second = open();
 
-    expect(migrations(second)).toEqual(bothMigrations);
+    expect(migrations(second)).toEqual(allMigrations);
     expect(second.prepare("SELECT id, name FROM flows").all()).toEqual([
       { id: "f1", name: "Untitled" },
     ]);
@@ -76,6 +80,6 @@ describe("openDatabase", () => {
     const db = new Database(path);
     opened.push(db);
 
-    expect(migrations(db)).toEqual(bothMigrations);
+    expect(migrations(db)).toEqual(allMigrations);
   });
 });

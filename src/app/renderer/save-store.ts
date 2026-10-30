@@ -14,8 +14,9 @@ export type SaveState = {
   saving: boolean;
   error: string | null;
   closePrompt: boolean;
+  hasSavedVersion: boolean;
   open(): Promise<void>;
-  save(): Promise<boolean>;
+  save(options?: { force?: boolean }): Promise<boolean>;
   answerClose(answer: CloseChoice): Promise<void>;
 };
 
@@ -34,9 +35,9 @@ export const createSaveStore = ({
       return false;
     };
 
-    const save = async () => {
+    const save = async (options: { force?: boolean } = {}) => {
       if (get().saving) return false;
-      if (!selectDirty(canvas.getState())) return true;
+      if (options.force !== true && !selectDirty(canvas.getState())) return true;
       const sent = canvas.getState().flow;
       set({ saving: true, error: null });
       let reply: unknown;
@@ -49,7 +50,7 @@ export const createSaveStore = ({
       if (!result.success) return fail("unexpected save result");
       if (result.data.kind === "error") return fail(result.data.message);
       canvas.getState().markSaved(sent);
-      set({ saving: false });
+      set({ saving: false, hasSavedVersion: true });
       return true;
     };
 
@@ -57,11 +58,13 @@ export const createSaveStore = ({
       saving: false,
       error: null,
       closePrompt: false,
+      hasSavedVersion: false,
 
       open: async () => {
         try {
           const latest = await bridge.loadLatestFlow();
           canvas.getState().load(latest ?? newCanvasFlow());
+          set({ hasSavedVersion: latest !== null && latest !== undefined });
         } catch (error) {
           set({ error: messageOf(error) });
         }

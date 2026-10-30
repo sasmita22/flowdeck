@@ -91,13 +91,16 @@ describe("SqliteStore", () => {
 
     open();
 
-    expect(tables).toEqual(expect.arrayContaining(["runs", "run_sessions", "run_nodes", "events"]));
+    expect(tables).toEqual(
+      expect.arrayContaining(["runs", "run_sessions", "run_nodes", "events", "builds"]),
+    );
     expect(db.prepare("SELECT name FROM migrations ORDER BY name").all()).toEqual([
       { name: "001_runs.sql" },
       { name: "002_flows.sql" },
+      { name: "003_builds.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 2]);
+    expect(before).toEqual([1, 1, 3, 1, 3]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -252,5 +255,32 @@ describe("SqliteStore", () => {
     expect(store.findRun(id)?.status).toBe("done");
     expect(db.prepare("SELECT status FROM runs").get()).toEqual({ status: "done" });
     expect(db.prepare("SELECT status FROM run_sessions").get()).toEqual({ status: "closed" });
+  });
+
+  it("keeps one builds row per hash, stamped from now", () => {
+    const store = open(() => new Date("2026-01-01T00:00:00Z"));
+
+    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+
+    expect(raw().prepare("SELECT hash, dir, created_at FROM builds").all()).toEqual([
+      { hash: "h1", dir: "/fd/builds/h1", created_at: new Date("2026-01-01T00:00:00Z").getTime() },
+    ]);
+  });
+
+  it("stores the build a run was made from, and NULL for a run given none", () => {
+    const store = open();
+    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+
+    const withBuild = store.createRun({ ...newRun(), buildHash: "h1" });
+    const withoutBuild = store.createRun(newRun());
+
+    const buildHash = (id: string) =>
+      raw().prepare("SELECT build_hash FROM runs WHERE id = ?").get(id);
+    expect(buildHash(withBuild.id)).toEqual({ build_hash: "h1" });
+    expect(buildHash(withoutBuild.id)).toEqual({ build_hash: null });
+    expect(withBuild.buildHash).toBe("h1");
+    expect(store.findRun(withBuild.id)?.buildHash).toBe("h1");
+    expect(store.findRun(withoutBuild.id)).not.toHaveProperty("buildHash");
   });
 });

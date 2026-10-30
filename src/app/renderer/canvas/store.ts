@@ -9,6 +9,7 @@ import {
   addWire,
   deleteNodes as deleteNodesCommand,
   moveNodes,
+  setWorkingFolder,
   type Command,
   type Move,
 } from "./commands.js";
@@ -34,6 +35,7 @@ export interface CanvasState {
   select(ids: readonly string[]): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
+  setWorkingFolder(path: string): void;
   undo(): void;
   redo(): void;
   load(input: unknown): void;
@@ -164,6 +166,10 @@ export function createCanvasStore(
         });
         if (moves.length > 0) run(moveNodes(moves));
         set({ dragPositions: {} });
+      },
+
+      setWorkingFolder: (path) => {
+        if (ready()) run(setWorkingFolder(path));
       },
 
       undo: () => {

@@ -4,6 +4,7 @@ import {
   addWire,
   deleteNodes,
   moveNodes,
+  setWorkingFolder,
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
 import type { Flow, Node, Wire } from "../../../../src/core/flow/schema.js";
@@ -142,12 +143,46 @@ describe("moveNodes", () => {
   });
 });
 
+describe("setWorkingFolder", () => {
+  const withFolder = (source: Flow, workingFolder: Flow["session"]["workingFolder"]): Flow => ({
+    ...source,
+    session: { ...source.session, workingFolder },
+  });
+
+  it("sets a path working folder over a worktree and changes nothing else", () => {
+    const before = fourNodes();
+
+    const after = setWorkingFolder("/tmp/x").do(before);
+
+    expect(after).toEqual(withFolder(before, { kind: "path", path: "/tmp/x" }));
+  });
+
+  it("undo restores the worktree it replaced exactly", () => {
+    const before = fourNodes();
+
+    const { restored } = roundTrip(setWorkingFolder("/tmp/x"), before);
+
+    expect(restored).toEqual(before);
+    expect(restored.session.workingFolder).toEqual({ kind: "worktree", branch: "main" });
+  });
+
+  it("undo restores an earlier path exactly", () => {
+    const before = withFolder(fourNodes(), { kind: "path", path: "/tmp/earlier" });
+
+    const { after, restored } = roundTrip(setWorkingFolder("/tmp/x"), before);
+
+    expect(after.session.workingFolder).toEqual({ kind: "path", path: "/tmp/x" });
+    expect(restored).toEqual(before);
+  });
+});
+
 describe("commands", () => {
   const cases: [string, (before: Flow) => Command][] = [
     ["addNode", () => addNode(onlyNode(flow([script("E")], [])))],
     ["addWire", () => addWire(onlyWire(flow([prompt("C"), script("A")], [thenWire("C", "A")])))],
     ["deleteNodes", (before) => deleteNodes(before, ["B"])],
     ["moveNodes", () => moveNodes([{ id: "A", from: { x: 0, y: 0 }, to: { x: 3, y: 4 } }])],
+    ["setWorkingFolder", () => setWorkingFolder("/tmp/x")],
   ];
 
   it.each(cases)("%s never mutates the flow it is given", (_name, make) => {

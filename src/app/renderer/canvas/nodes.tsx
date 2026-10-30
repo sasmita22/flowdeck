@@ -1,5 +1,6 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from "@xyflow/react";
 import type { CSSProperties } from "react";
+import { NodeStatusBadge } from "./status.js";
 
 type CanvasNode = Node<{ label: string }>;
 
@@ -41,6 +42,7 @@ function PromptNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <div data-testid={`node-${id}`} style={{ ...promptStyle, ...selectedOutline(selected) }}>
       {data.label}
+      <NodeStatusBadge nodeId={id} />
       <Ports id={id} />
     </div>
   );
@@ -50,6 +52,7 @@ function ScriptNode({ id, data, selected }: NodeProps<CanvasNode>) {
   return (
     <div data-testid={`node-${id}`} style={{ ...scriptStyle, ...selectedOutline(selected) }}>
       {data.label}
+      <NodeStatusBadge nodeId={id} />
       <Ports id={id} />
     </div>
   );

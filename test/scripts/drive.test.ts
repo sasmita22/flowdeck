@@ -518,7 +518,7 @@ describe("forceExit", () => {
 
     await forceExit(app);
 
-    expect(app.evaluateCalls).toBe(1);
+    expect(app.evaluateCalls).toBe(2);
     expect(app.closeCalls).toBe(0);
     expect(app.proc.exitCode).toBe(0);
   });
@@ -581,6 +581,7 @@ describe("forceExit", () => {
   describe("the snippet evaluated in main", () => {
     class ElectronFakeApp extends FakeApp {
       exitCalls = 0;
+      exitedAt: number | undefined;
 
       override evaluate<R>(fn?: (electron: typeof Electron) => R | Promise<R>): Promise<R> {
         this.evaluateCalls += 1;
@@ -594,6 +595,7 @@ describe("forceExit", () => {
               })),
             exit: () => {
               this.exitCalls += 1;
+              this.exitedAt = Date.now();
               this.proc.exitCode = 0;
               this.proc.emit("exit", 0, null);
             },
@@ -625,6 +627,55 @@ describe("forceExit", () => {
       await expect(forceExit(app, { timeoutMs: 200 })).resolves.toBeUndefined();
       expect(app.exitCalls).toBe(1);
       expect(uncaught).toEqual([]);
+    });
+
+    const children: ReturnType<typeof spawn>[] = [];
+
+    const engineChild = async (onTerm: "exit-after-300ms" | "ignore") => {
+      const script =
+        onTerm === "ignore"
+          ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); console.log('ready');"
+          : "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 300)); setInterval(() => {}, 1000); console.log('ready');";
+      const child = spawn(process.execPath, ["-e", script], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      await once(child.stdout, "data");
+      let exitedAt: number | undefined;
+      child.once("exit", () => {
+        exitedAt = Date.now();
+      });
+      return { pid: child.pid ?? -1, exitedAt: () => exitedAt };
+    };
+
+    afterEach(() => {
+      for (const child of children.splice(0)) child.kill("SIGKILL");
+    });
+
+    it("exits the app only after an engine that stops on SIGTERM has exited", async () => {
+      const engine = await engineChild("exit-after-300ms");
+      const app = new ElectronFakeApp();
+      app.enginePids = [engine.pid];
+
+      await expect(forceExit(app, { timeoutMs: 5000 })).resolves.toBeUndefined();
+
+      expect(app.exitCalls).toBe(1);
+      expect(engine.exitedAt()).toBeDefined();
+      expect(app.exitedAt).toBeGreaterThanOrEqual(engine.exitedAt() ?? Infinity);
+    });
+
+    it("exits the app after timeoutMs and reports an engine that ignores SIGTERM", async () => {
+      const engine = await engineChild("ignore");
+      const app = new ElectronFakeApp();
+      app.enginePids = [engine.pid];
+      const started = Date.now();
+
+      await expect(forceExit(app, { timeoutMs: 300 })).rejects.toThrow(
+        `engine process ${engine.pid} outlived the app`,
+      );
+
+      expect(app.exitCalls).toBe(1);
+      expect((app.exitedAt ?? 0) - started).toBeGreaterThanOrEqual(300);
     });
 
     it("lets no kill error escape and still exits, leaving the engine to the survivor check", async () => {
@@ -702,7 +753,7 @@ describe("drive cleanup", () => {
     app.windowError = new Error("no window");
 
     await expect(drive([], { outDir, home, launch })).rejects.toThrow("no window");
-    expect(app.evaluateCalls).toBe(1);
+    expect(app.evaluateCalls).toBe(2);
     expect(app.closeCalls).toBe(0);
     expect(existsSync(home)).toBe(false);
   });
@@ -726,7 +777,7 @@ describe("drive cleanup", () => {
   it("tears down through forceExit, never close()", async () => {
     await drive([], { outDir, home, launch });
 
-    expect(app.evaluateCalls).toBe(1);
+    expect(app.evaluateCalls).toBe(2);
     expect(app.closeCalls).toBe(0);
     expect(app.proc.exitCode).toBe(0);
   });
@@ -764,7 +815,7 @@ describe("drive cleanup", () => {
     expect(homes).toEqual([home, home]);
     expect(apps.map((each) => each.proc.exitCode)).toEqual([0, 0]);
     expect(apps.map((each) => each.closeCalls)).toEqual([0, 0]);
-    expect(apps[1]?.evaluateCalls).toBe(1);
+    expect(apps[1]?.evaluateCalls).toBe(2);
     expect(existsSync(home)).toBe(false);
   });
 
@@ -803,7 +854,7 @@ describe("drive cleanup", () => {
       expect(first.evaluateCalls).toBe(1);
       expect(first.proc.exitCode).toBe(0);
       expect(queue).toEqual([]);
-      expect(second.evaluateCalls).toBe(1);
+      expect(second.evaluateCalls).toBe(2);
     });
 
     it("force-exits an app that is still alive once the grace period ends", async () => {
@@ -818,7 +869,7 @@ describe("drive cleanup", () => {
       });
 
       expect(Date.now() - started).toBeGreaterThanOrEqual(200);
-      expect(held.evaluateCalls).toBe(2);
+      expect(held.evaluateCalls).toBe(3);
       expect(held.proc.exitCode).toBe(0);
       expect(existsSync(home)).toBe(false);
     });

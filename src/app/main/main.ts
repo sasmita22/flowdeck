@@ -2,11 +2,12 @@ import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
-import type { EngineResponse, StoreOpenResult } from "../engine/protocol.js";
+import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
+import { createRunRelay, stopEngine } from "./run.js";
 
 const toStoreStatus = (result: StoreOpenResult): StoreStatus =>
   result.kind === "ready" ? { kind: "ready" } : { kind: "error", message: result.message };
@@ -21,16 +22,16 @@ function startEngine(home: string) {
     env: { ...process.env, FLOWDECK_HOME: home },
   });
   engine.once("spawn", () => console.log("main: engine started"));
+  const exited = new Promise<void>((resolve) => engine.once("exit", () => resolve()));
   const client = new EngineClient({
     port: {
       postMessage: (message) => engine.postMessage(message),
-      onMessage: (listener) =>
-        engine.on("message", (response: EngineResponse) => listener(response)),
+      onMessage: (listener) => engine.on("message", (message: EngineMessage) => listener(message)),
       onExit: (listener) => engine.on("exit", () => listener()),
     },
     timeoutMs: 5000,
   });
-  return { engine, client };
+  return { engine, client, exited };
 }
 
 function openWindow() {
@@ -66,7 +67,7 @@ function guardClose(window: BrowserWindow) {
 }
 
 void app.whenReady().then(() => {
-  const { engine, client } = startEngine(resolveFlowdeckHome(process.env, homedir()));
+  const { engine, client, exited } = startEngine(resolveFlowdeckHome(process.env, homedir()));
   ipcMain.handle(bridgeChannels.version, () => client.request("version"));
   ipcMain.handle(bridgeChannels.storeStatus, async () =>
     toStoreStatus((await client.request("store-status")) as StoreOpenResult),
@@ -77,8 +78,26 @@ void app.whenReady().then(() => {
   ipcMain.handle(bridgeChannels.loadLatestFlow, async () =>
     toLoadedFlow((await client.request("load-latest-flow")) as LoadLatestFlowResult),
   );
-  app.on("will-quit", () => engine.kill());
-  guardClose(openWindow());
+  const window = openWindow();
+  const relay = createRunRelay({
+    send: (snapshot) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.runState, snapshot);
+    },
+  });
+  client.onPush(relay.onPush);
+  ipcMain.handle(bridgeChannels.startRun, () => client.request("start-run"));
+  ipcMain.handle(bridgeChannels.getRunState, () => relay.latest());
+  let quitting = false;
+  app.on("will-quit", (event) => {
+    if (quitting) return;
+    quitting = true;
+    event.preventDefault();
+    void stopEngine({ kill: () => engine.kill(), exited, timeoutMs: 10_000 }).then((result) => {
+      console.log(`main: engine stopped (${result})`);
+      app.exit(0);
+    });
+  });
+  guardClose(window);
 });
 
 app.on("window-all-closed", () => app.quit());

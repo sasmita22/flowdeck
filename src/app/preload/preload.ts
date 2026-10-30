@@ -15,6 +15,15 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerClose: (answer) => ipcRenderer.send(bridgeChannels.closeAnswer, answer),
+  startRun: () => ipcRenderer.invoke(bridgeChannels.startRun),
+  getRunState: () => ipcRenderer.invoke(bridgeChannels.getRunState),
+  onRunState: (listener) => {
+    const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
+    ipcRenderer.on(bridgeChannels.runState, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.runState, handler);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

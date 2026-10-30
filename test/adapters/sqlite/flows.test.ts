@@ -332,6 +332,7 @@ describe("SqliteFlowStore", () => {
     expect(db.prepare("SELECT name FROM migrations ORDER BY name").all()).toEqual([
       { name: "001_runs.sql" },
       { name: "002_flows.sql" },
+      { name: "003_builds.sql" },
     ]);
   });
 });

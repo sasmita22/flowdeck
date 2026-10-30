@@ -73,3 +73,21 @@ export const moveNodes = (moves: readonly Move[]): Command => ({
   do: placeAt(moves, (move) => move.to),
   undo: placeAt(moves, (move) => move.from),
 });
+
+type WorkingFolder = Flow["session"]["workingFolder"];
+
+const withWorkingFolder = (flow: Flow, workingFolder: WorkingFolder): Flow => ({
+  ...flow,
+  session: { ...flow.session, workingFolder },
+});
+
+export const setWorkingFolder = (path: string): Command => {
+  let previous: WorkingFolder | undefined;
+  return {
+    do: (flow) => {
+      previous = flow.session.workingFolder;
+      return withWorkingFolder(flow, { kind: "path", path });
+    },
+    undo: (flow) => (previous === undefined ? flow : withWorkingFolder(flow, previous)),
+  };
+};
