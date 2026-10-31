@@ -1,4 +1,5 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
+import type { VerifyFileSystem } from "../compiler/verify.js";
 import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
 import {
   forkTurnText,
@@ -6,6 +7,7 @@ import {
   unlaunched,
   type ParallelSection,
 } from "../nodes/fork/execute.js";
+import { firstTurnId, listItems, listPath, withItem } from "../nodes/foreach/execute.js";
 import { joinComplete, skippedBranches, type JoinWait } from "../nodes/join/execute.js";
 import {
   askOutcome,
@@ -36,7 +38,7 @@ import {
   type PermissionDecision,
 } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
-import { decisionsOf, loopRound, nodeStatus, type RunEvent } from "./run-events.js";
+import { decisionsOf, loopRound, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import { SectionWatch } from "./section-watch.js";
 import type { EventEntry, Store, StoredEvent } from "./store.js";
@@ -55,6 +57,7 @@ export type RunnerDeps = {
   events: TurnEvents;
   scripts: { run(command: string, args: readonly string[], cwd: string): Promise<ScriptResult> };
   waiter: HumanWaiter;
+  files: Pick<VerifyFileSystem, "readFile">;
   auto?: boolean;
   onChange?: (line: string) => void;
   cwd: string;
@@ -85,6 +88,7 @@ type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait };
+type ForEachSettings = { file: string };
 
 type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
@@ -108,6 +112,7 @@ const runnable = new Set<ManifestNode["type"]>([
   "ask",
   "hardstop",
   "loop",
+  "foreach",
   "fork",
   "join",
 ]);
@@ -116,23 +121,35 @@ export function structureProblems(
   nodes: readonly ManifestNode[],
   wires: Manifest["wires"] = [],
 ): string[] {
-  const loops = new Set(nodes.filter((node) => node.type === "loop").map((node) => node.id));
+  const scopes = new Map(
+    nodes
+      .filter((node) => node.type === "loop" || node.type === "foreach")
+      .map((node) => [node.id, node.type]),
+  );
   const sectionProblems = parallelSections(nodes, wires).problems.map(
     ({ node, message }) => `${node} ${message}`,
   );
   const loopProblems = nodes.flatMap((node) => {
     const problems: string[] = [];
-    if (node.type === "loop") {
-      const hasTurn = nodes.some(
-        (child) => child.parent === node.id && (child.type === "prompt" || child.type === "agent"),
-      );
-      if (!hasTurn) problems.push(`${node.id} (loop) has no prompt or agent in its body`);
-      if (node.parent !== undefined && loops.has(node.parent)) {
-        problems.push(`${node.id} (loop) is inside loop ${node.parent}`);
+    const parentType = node.parent === undefined ? undefined : scopes.get(node.parent);
+    if (node.type === "loop" || node.type === "foreach") {
+      const body = nodes.filter((child) => child.parent === node.id);
+      const firstTurn = body.find((child) => child.id === firstTurnId(body));
+      if (firstTurn === undefined) {
+        problems.push(`${node.id} (${node.type}) has no prompt or agent in its body`);
+      } else if (node.type === "foreach" && firstTurn.type !== "prompt") {
+        problems.push(
+          `${node.id} (foreach) starts its body with ${firstTurn.id} (${firstTurn.type}); the first turn must be a prompt`,
+        );
+      }
+      if (parentType !== undefined) {
+        problems.push(`${node.id} (${node.type}) is inside ${parentType} ${node.parent}`);
       }
     }
-    if (node.parent !== undefined && !loops.has(node.parent)) {
-      problems.push(`${node.id} (${node.type}) has parent ${node.parent}, which is not a loop`);
+    if (node.parent !== undefined && parentType === undefined) {
+      problems.push(
+        `${node.id} (${node.type}) has parent ${node.parent}, which is not a loop or foreach`,
+      );
     }
     return problems;
   });
@@ -404,6 +421,9 @@ export class Runner {
     if (node.type === "loop") {
       const result = await this.runLoop(node, context);
       if (result.failure !== undefined) return result;
+    } else if (node.type === "foreach") {
+      const result = await this.runForEach(node, context);
+      if (result.failure !== undefined) return result;
     } else if (node.type === "fork") {
       const result = await this.runSection(node, context);
       if (result.failure !== undefined) return result;
@@ -417,7 +437,13 @@ export class Runner {
       try {
         turn =
           node.type === "prompt"
-            ? await this.runPrompt(node, hash, ensureStarted, condition)
+            ? await this.runPrompt(
+                node,
+                hash,
+                ensureStarted,
+                condition,
+                this.roundItem(node, context.nodes),
+              )
             : await this.runAgent(node, hash, ensureStarted, condition);
       } finally {
         this.inTurn = undefined;
@@ -559,6 +585,55 @@ export class Runner {
       this.record(loop.id, { kind: "done" });
       return {};
     }
+  }
+
+  private async runForEach(each: ManifestNode, context: RunContext): Promise<StepResult> {
+    const { file } = each.settings as ForEachSettings;
+    const body = context.nodes.filter((node) => node.parent === each.id);
+    if (this.status(each.id) === "waiting") this.record(each.id, { kind: "running" });
+    const events = this.eventsOf(each.id);
+    const recorded = loopRound(events);
+    let items = roundItems(events) ?? [];
+    if (recorded === 0) {
+      try {
+        items = listItems(await this.deps.files.readFile(listPath(this.deps.cwd, file)));
+      } catch (error) {
+        return {
+          failure: { nodeId: each.id, reason: `could not read ${file}: ${messageOf(error)}` },
+        };
+      }
+    }
+    if (items.length === 0) {
+      this.recordAll([
+        ...body.map((node): EventEntry => ({ nodeId: node.id, event: { kind: "skipped" } })),
+        { nodeId: each.id, event: { kind: "done" } },
+      ]);
+      for (const node of body) this.emit(`${node.id} skipped`);
+      return {};
+    }
+    for (let round = Math.max(recorded, 1); round <= items.length; round++) {
+      if (round > recorded)
+        this.startRound(each.id, round, body, [], round === 1 ? items : undefined);
+      for (const node of body) {
+        const result = await this.runStep(node, context);
+        if (result.failure !== undefined) {
+          const message = `${result.failure.nodeId} failed: ${result.failure.reason}`;
+          this.record(each.id, { kind: "failed", payload: { message } });
+          return result;
+        }
+      }
+    }
+    this.record(each.id, { kind: "done" });
+    return {};
+  }
+
+  private roundItem(node: ManifestNode, nodes: readonly ManifestNode[]): string | undefined {
+    const parent = nodes.find((candidate) => candidate.id === node.parent);
+    if (parent?.type !== "foreach") return undefined;
+    const body = nodes.filter((child) => child.parent === parent.id);
+    if (firstTurnId(body) !== node.id) return undefined;
+    const events = this.eventsOf(parent.id);
+    return roundItems(events)?.[loopRound(events) - 1];
   }
 
   private async runSection(fork: ManifestNode, context: RunContext): Promise<StepResult> {
@@ -709,6 +784,7 @@ export class Runner {
     round: number,
     body: readonly ManifestNode[],
     reopen: readonly EventEntry[],
+    items?: string[],
   ): void {
     const resets =
       round > 1
@@ -716,7 +792,10 @@ export class Runner {
         : [];
     this.recordAll([
       ...reopen,
-      { nodeId: loopId, event: { kind: "round", payload: { round } } },
+      {
+        nodeId: loopId,
+        event: { kind: "round", payload: items === undefined ? { round } : { round, items } },
+      },
       ...resets,
     ]);
     this.emit(`${loopId} round ${round}`);
@@ -785,6 +864,7 @@ export class Runner {
     hash: string,
     ensureStarted: () => Promise<void>,
     condition?: string,
+    item?: string,
   ): Promise<TurnResult> {
     const action = this.takeAction(node.id);
     if (action?.kind === "complete") return this.finishTurn(node.id, action.stopMessage, condition);
@@ -797,7 +877,11 @@ export class Runner {
         this.emit(`${node.id} started`);
         await ensureStarted();
         const turnEnd = this.armTurnEnd(this.deps.now?.());
-        const command = withPromptContext(`/${hash}:${node.id}`, answers);
+        const turn = `/${hash}:${node.id}`;
+        const command = withPromptContext(
+          item === undefined ? turn : withItem(turn, item),
+          answers,
+        );
         await this.deps.prompts.sendPrompt(
           condition === undefined ? command : `${command} ${verdictRequest(condition)}`,
         );

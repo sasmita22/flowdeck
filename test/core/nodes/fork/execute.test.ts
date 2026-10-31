@@ -151,6 +151,24 @@ describe("parallelSections", () => {
     ).toEqual([inLoop]);
   });
 
+  it.each(["f", "a1", "j"])("tells %s it sits inside a loop or For each", (inLoop) => {
+    const inside = (id: string) => (id === inLoop ? { parent: "L" } : {});
+    const { problems } = sectionsOf(
+      [
+        loop("L"),
+        fork("f", inside("f")),
+        agent("a1", inside("a1")),
+        agent("a2"),
+        join("j", inside("j")),
+      ],
+      around(["a1", "a2"]),
+    );
+
+    expect(problems).toEqual([
+      { node: inLoop, message: "sits inside a loop or For each; parallel sections cannot." },
+    ]);
+  });
+
   it("gives every problem a message", () => {
     const { problems } = sectionsOf([fork("f"), agent("a1"), join("j")], around(["a1"]));
 

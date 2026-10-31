@@ -17,6 +17,7 @@ const groups: Record<NodeType, string> = {
   loop: "var(--c-ctrl)",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
+  foreach: "var(--c-ctrl)",
 };
 
 const tags: Record<NodeType, string> = {
@@ -31,6 +32,7 @@ const tags: Record<NodeType, string> = {
   loop: "LOOP",
   fork: "PARALLEL START",
   join: "PARALLEL END",
+  foreach: "EACH",
 };
 
 const outlines: Record<NodeType, string> = {
@@ -45,6 +47,7 @@ const outlines: Record<NodeType, string> = {
   loop: "none",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
+  foreach: "none",
 };
 
 describe("nodeLook", () => {
@@ -77,6 +80,15 @@ describe("nodeLook", () => {
 
   it.each(["fork", "join"] as const)("boxes %s as a 28x48 bar until it spans branches", (type) => {
     expect(nodeLook(type).box).toEqual({ width: 28, height: 48 });
+  });
+
+  it("draws foreach as a control frame tagged EACH with no outline, boxed at 170x48", () => {
+    expect(nodeLook("foreach")).toMatchObject({
+      group: "var(--c-ctrl)",
+      tag: "EACH",
+      outline: "none",
+      box: { width: 170, height: 48 },
+    });
   });
 
   it("boxes ask at 170x57 so its tail fits", () => {

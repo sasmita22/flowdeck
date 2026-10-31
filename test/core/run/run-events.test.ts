@@ -3,6 +3,7 @@ import {
   decisionsOf,
   loopRound,
   nodeStatus,
+  roundItems,
   type RunEvent,
 } from "../../../src/core/run/run-events.js";
 import { IllegalMoveError } from "../../../src/core/run/state.js";
@@ -54,6 +55,28 @@ describe("loopRound", () => {
 
   it("is 0 before any round", () => {
     expect(loopRound([running])).toBe(0);
+  });
+});
+
+describe("roundItems", () => {
+  const withItems = (n: number, items: string[]): RunEvent => ({
+    kind: "round",
+    payload: { round: n, items },
+  });
+
+  it("is the items of the first round event that carries them", () => {
+    expect(roundItems([running, withItems(1, ["alpha", "bravo"]), round(2)])).toEqual([
+      "alpha",
+      "bravo",
+    ]);
+  });
+
+  it("is undefined when no round event carries items", () => {
+    expect(roundItems([running, round(1), round(2)])).toBeUndefined();
+  });
+
+  it("leaves loopRound counting rounds that carry items", () => {
+    expect(loopRound([running, withItems(1, ["alpha", "bravo"]), round(2)])).toBe(2);
   });
 });
 

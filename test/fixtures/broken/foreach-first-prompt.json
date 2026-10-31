@@ -1,0 +1,117 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {
+        "inputs": ["ticket"],
+        "flags": {}
+      }
+    },
+    {
+      "id": "each",
+      "label": "Each unit",
+      "type": "foreach",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "file": "plan.md"
+      }
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "type": "agent",
+      "position": {
+        "x": 240,
+        "y": 160
+      },
+      "parent": "each",
+      "settings": {
+        "role": "implementer",
+        "instructions": "Do the work.",
+        "model": "sonnet",
+        "tools": ["Read"]
+      }
+    },
+    {
+      "id": "note",
+      "label": "Note",
+      "type": "prompt",
+      "position": {
+        "x": 480,
+        "y": 160
+      },
+      "parent": "each",
+      "settings": {
+        "instructions": "Do the work."
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "build",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "build",
+        "port": "out"
+      },
+      "to": {
+        "node": "note",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "note",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": {
+      "kind": "worktree",
+      "branch": "main"
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

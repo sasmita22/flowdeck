@@ -1,8 +1,10 @@
 import type { NodeTypes } from "@xyflow/react";
+import { ForEachFrame } from "../canvas/foreach-frame.js";
 import { LoopFrame } from "../canvas/loop-frame.js";
 import { SessionFrame } from "../canvas/session.js";
 import { AgentNode } from "./agent.js";
 import { AskNode } from "./ask.js";
+import { ForEachNode } from "./foreach.js";
 import { ForkNode } from "./fork.js";
 import { GateNode } from "./gate.js";
 import { HardstopNode } from "./hardstop.js";
@@ -22,9 +24,11 @@ export const nodeTypes: NodeTypes = {
   hardstop: HardstopNode,
   ask: AskNode,
   loop: LoopNode,
+  foreach: ForEachNode,
   fork: ForkNode,
   join: JoinNode,
   output: OutputNode,
   session: SessionFrame,
   "loop-frame": LoopFrame,
+  "foreach-frame": ForEachFrame,
 };

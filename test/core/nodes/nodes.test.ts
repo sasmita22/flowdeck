@@ -6,6 +6,8 @@ import { ports as askPorts } from "../../../src/core/nodes/ask/ports.js";
 import { settings as askSettings } from "../../../src/core/nodes/ask/settings.js";
 import { ports as forkPorts } from "../../../src/core/nodes/fork/ports.js";
 import { settings as forkSettings } from "../../../src/core/nodes/fork/settings.js";
+import { ports as foreachPorts } from "../../../src/core/nodes/foreach/ports.js";
+import { settings as foreachSettings } from "../../../src/core/nodes/foreach/settings.js";
 import { ports as gatePorts } from "../../../src/core/nodes/gate/ports.js";
 import { settings as gateSettings } from "../../../src/core/nodes/gate/settings.js";
 import { ports as hardstopPorts } from "../../../src/core/nodes/hardstop/ports.js";
@@ -143,6 +145,15 @@ const cases: Case[] = [
     badPath: ["wait"],
     expectedPorts: [inPort, outPort],
   },
+  {
+    type: "foreach",
+    settings: foreachSettings,
+    ports: foreachPorts,
+    valid: { file: "plan.md" },
+    bad: { file: 1 },
+    badPath: ["file"],
+    expectedPorts: [inPort, outPort],
+  },
 ];
 
 describe.each(cases)("$type node", ({ settings, ports, valid, bad, badPath, expectedPorts }) => {
@@ -206,5 +217,27 @@ describe("required and lenient settings", () => {
     });
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({ enabled: false });
+  });
+});
+
+describe("foreach settings", () => {
+  it.each(["plan.md", ".claude/local/FD-1/plan.md"])("accepts the relative file %j", (file) => {
+    expect(foreachSettings.safeParse({ file }).data).toEqual({ file });
+  });
+
+  it.each(["", "/etc/plan.md", "../plan.md", "a/../plan.md"])("refuses the file %j", (file) => {
+    const result = foreachSettings.safeParse({ file });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["file"]);
+  });
+
+  it("refuses settings without a file", () => {
+    const result = foreachSettings.safeParse({});
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["file"]);
+  });
+
+  it("has the prompt node's ports", () => {
+    expect(foreachPorts).toEqual(promptPorts);
   });
 });

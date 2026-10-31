@@ -178,11 +178,36 @@
       }
     },
     {
+      "id": "e1",
+      "label": "each plan unit",
+      "type": "foreach",
+      "position": {
+        "x": 2640,
+        "y": 0
+      },
+      "settings": {
+        "file": "plan.md"
+      }
+    },
+    {
+      "id": "e1p1",
+      "label": "Build unit",
+      "type": "prompt",
+      "position": {
+        "x": 2640,
+        "y": 160
+      },
+      "parent": "e1",
+      "settings": {
+        "instructions": "Build this unit."
+      }
+    },
+    {
       "id": "done",
       "label": "Done",
       "type": "output",
       "position": {
-        "x": 2640,
+        "x": 2880,
         "y": 0
       },
       "settings": {
@@ -328,6 +353,17 @@
       "kind": "then",
       "from": {
         "node": "attempt",
+        "port": "out"
+      },
+      "to": {
+        "node": "e1p1",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "e1p1",
         "port": "out"
       },
       "to": {

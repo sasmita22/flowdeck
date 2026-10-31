@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FlowParseError, NodeType, parseFlow } from "../../../src/core/flow/schema.js";
+import { forEach } from "../../fixtures/flow-builders.js";
 
 const session = (workingFolder: Record<string, unknown>) => ({
   name: "main",
@@ -144,7 +145,23 @@ describe("parseFlow", () => {
     expect(parseFlow(flow)).toEqual(flow);
   });
 
-  it("lists the eleven node types", () => {
+  it("parses a for each with a prompt in its body", () => {
+    const flow = flowWith({ nodes: [forEach("e1"), { ...promptNode, parent: "e1" }] });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("names the field path of an absolute for each file", () => {
+    const error = parseError(flowWith({ nodes: [promptNode, forEach("e1", { file: "/abs.md" })] }));
+    expect(error.issues.map((issue) => issue.path)).toContainEqual([
+      "nodes",
+      1,
+      "settings",
+      "file",
+    ]);
+  });
+
+  it("lists the twelve node types", () => {
     expect(NodeType.options).toEqual([
       "prompt",
       "script",
@@ -157,6 +174,7 @@ describe("parseFlow", () => {
       "output",
       "fork",
       "join",
+      "foreach",
     ]);
   });
 });

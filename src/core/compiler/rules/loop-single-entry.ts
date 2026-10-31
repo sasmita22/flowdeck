@@ -31,7 +31,7 @@ export const rule: Rule = {
       (wire) => wire.kind === "then" && ids.has(wire.from.node) && ids.has(wire.to.node),
     );
     return flow.nodes.flatMap((node): ValidationError[] => {
-      if (node.type !== "loop") return [];
+      if (node.type !== "loop" && node.type !== "foreach") return [];
       const entries = new Set(
         wires
           .filter((wire) => inside(wire.to.node, node.id))
@@ -43,7 +43,10 @@ export const rule: Rule = {
         {
           rule: id,
           node: node.id,
-          message: `Loop body has ${entries.size} entries: ${[...entries].join(", ")}.`,
+          message:
+            node.type === "loop"
+              ? `Loop body has ${entries.size} entries: ${[...entries].join(", ")}.`
+              : `${node.id} (foreach) body has ${entries.size} entries: ${[...entries].join(", ")}.`,
         },
       ];
     });

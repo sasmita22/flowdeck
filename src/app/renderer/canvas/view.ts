@@ -13,7 +13,13 @@ export interface ViewNode {
   selectable?: boolean;
   draggable?: boolean;
   deletable?: boolean;
-  data: { label?: string; highlighted?: boolean; name?: string; loopId?: string };
+  data: {
+    label?: string;
+    highlighted?: boolean;
+    name?: string;
+    loopId?: string;
+    forEachId?: string;
+  };
 }
 
 export const SESSION_FRAME_ID = "session-frame";
@@ -75,8 +81,8 @@ const padded = (all: readonly Bounds[]): Bounds => ({
   bottom: Math.max(...all.map(({ bottom }) => bottom)) + FRAME_PADDING,
 });
 
-const loopFrameBounds = (flow: Flow, loop: Node): Bounds =>
-  padded([loop, ...flow.nodes.filter((node) => node.parent === loop.id)].map(boundsOf));
+const bodyFrameBounds = (flow: Flow, scope: Node): Bounds =>
+  padded([scope, ...flow.nodes.filter((node) => node.parent === scope.id)].map(boundsOf));
 
 const frameView = (
   id: string,
@@ -104,7 +110,9 @@ const frameMembers = (flow: Flow): Flow["nodes"] => {
 
 const toFrameViewNode = (flow: Flow): ViewNode[] => {
   const bounds = frameMembers(flow).map((node) =>
-    node.type === "loop" ? loopFrameBounds(flow, node) : (barBounds(flow, node) ?? boundsOf(node)),
+    node.type === "loop" || node.type === "foreach"
+      ? bodyFrameBounds(flow, node)
+      : (barBounds(flow, node) ?? boundsOf(node)),
   );
   if (bounds.length === 0) return [];
   return [frameView(SESSION_FRAME_ID, "session", padded(bounds), { name: flow.session.name })];
@@ -114,8 +122,17 @@ const toLoopFrameViewNodes = (flow: Flow): ViewNode[] =>
   flow.nodes
     .filter((node) => node.type === "loop")
     .map((loop) =>
-      frameView(`loop-frame-${loop.id}`, "loop-frame", loopFrameBounds(flow, loop), {
+      frameView(`loop-frame-${loop.id}`, "loop-frame", bodyFrameBounds(flow, loop), {
         loopId: loop.id,
+      }),
+    );
+
+const toForEachFrameViewNodes = (flow: Flow): ViewNode[] =>
+  flow.nodes
+    .filter((node) => node.type === "foreach")
+    .map((each) =>
+      frameView(`foreach-frame-${each.id}`, "foreach-frame", bodyFrameBounds(flow, each), {
+        forEachId: each.id,
       }),
     );
 
@@ -137,6 +154,7 @@ export const toViewNodes = (
 ): ViewNode[] => [
   ...toFrameViewNode(flow),
   ...toLoopFrameViewNodes(flow),
+  ...toForEachFrameViewNodes(flow),
   ...flow.nodes.map((node) => ({
     id: node.id,
     type: node.type,
