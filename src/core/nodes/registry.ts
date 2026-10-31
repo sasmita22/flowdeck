@@ -4,6 +4,8 @@ import { ports as agentPorts } from "./agent/ports.js";
 import { settings as agentSettings } from "./agent/settings.js";
 import { ports as askPorts } from "./ask/ports.js";
 import { settings as askSettings } from "./ask/settings.js";
+import { ports as foreachPorts } from "./foreach/ports.js";
+import { settings as foreachSettings } from "./foreach/settings.js";
 import { ports as forkPorts } from "./fork/ports.js";
 import { settings as forkSettings } from "./fork/settings.js";
 import { ports as gatePorts } from "./gate/ports.js";
@@ -37,4 +39,5 @@ export const registry = {
   output: { settings: outputSettings, ports: outputPorts },
   fork: { settings: forkSettings, ports: forkPorts },
   join: { settings: joinSettings, ports: joinPorts },
+  foreach: { settings: foreachSettings, ports: foreachPorts },
 } satisfies Record<NodeType, NodeDefinition>;

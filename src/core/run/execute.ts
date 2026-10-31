@@ -196,6 +196,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
         run: (command, args, cwd) => whileRunning(() => deps.scripts.run(command, args, cwd)),
       },
       waiter: deps.waiter,
+      files: deps.fs,
       auto,
       onChange: (line) => deps.onChange(line),
       cwd,

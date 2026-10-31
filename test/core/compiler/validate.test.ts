@@ -2,7 +2,15 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { rules, validate } from "../../../src/core/compiler/validate.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
-import { agent, flow, loop, prompt, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  forEach,
+  loop,
+  prompt,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 
 const brokenDir = new URL("../../fixtures/broken/", import.meta.url);
 const examplesDir = new URL("../../../examples/", import.meta.url);
@@ -30,6 +38,11 @@ describe("validate", () => {
         loop("retry", { settings: { cap: 0, onCap: "fail" } }),
         agent("build", { settings: { instructions: "   " } }),
         prompt("stray"),
+        forEach("each"),
+        agent("each-a", { parent: "each" }),
+        prompt("each-p", { parent: "each" }),
+        { ...forEach("inner"), parent: "retry" },
+        prompt("inner-p", { parent: "inner" }),
       ],
       [thenWire("stray", "start")],
     );
@@ -37,6 +50,8 @@ describe("validate", () => {
       { rule: "loop-cap", node: "retry" },
       { rule: "required-settings", node: "build" },
       { rule: "ports", node: "start" },
+      { rule: "foreach-first-prompt", node: "each" },
+      { rule: "foreach-nesting", node: "inner" },
     ]);
   });
 

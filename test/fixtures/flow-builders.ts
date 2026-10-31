@@ -33,6 +33,11 @@ export const hardstop = node("hardstop", {
   enabled: true,
 });
 export const output = node("output", { name: "result", type: "text" });
+export const forEach = (
+  id: string,
+  settings: Record<string, unknown> = { file: "plan.md" },
+  label = "each plan unit",
+) => ({ id, label, position: at, type: "foreach", settings });
 export const fork = node("fork", {});
 export const join = node("join", { wait: "all" });
 

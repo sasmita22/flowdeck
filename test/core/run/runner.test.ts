@@ -22,6 +22,7 @@ import type { ProcessResult } from "../../../src/ports/process-runner.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
 import type { WaitReply, WaitRequest } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
@@ -39,6 +40,8 @@ const node = (id: string, type: ManifestNode["type"], settings: Record<string, u
 const prompt = (id: string) => node(id, "prompt", { instructions: "Do it." });
 const script = (id: string, settings: Record<string, unknown> = { command: "npm" }) =>
   node(id, "script", settings);
+const forEach = (id: string) => node(id, "foreach", { file: "plan.md" });
+const inEach = (child: ManifestNode, parent = "e1"): ManifestNode => ({ ...child, parent });
 const manifest = (...nodes: ManifestNode[]): RunnableManifest => ({ hash, nodes });
 const exit = (code: number | null, stdout = "", stderr = ""): ProcessResult => ({
   code,
@@ -72,10 +75,12 @@ function harness(
     permissions?: FakePermissionSource;
     usage?: FakeUsageSource;
     budget?: number;
+    files?: FakeFileSystem;
   } = {},
 ) {
   const events = new FakeEventSource();
   const scripts = new FakeProcessRunner(options.results ?? []);
+  const files = options.files ?? new FakeFileSystem();
   const calls: string[] = [];
   const lines: string[] = [];
   const stop = options.stop ?? "after-send";
@@ -110,12 +115,13 @@ function harness(
     ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
     ...(options.usage === undefined ? {} : { usage: options.usage }),
     ...(options.budget === undefined ? {} : { budget: options.budget }),
+    files,
     onChange: (line) => lines.push(line),
     cwd,
     sessionId,
     turnTimeoutMs: 1000,
   };
-  return { deps, events, scripts, calls, lines };
+  return { deps, events, scripts, calls, lines, files };
 }
 
 type Emitted =
@@ -125,7 +131,12 @@ const stopped: Emitted = { kind: "Stop" };
 const subagentStopped = (agentType: string): Emitted => ({ kind: "SubagentStop", agentType });
 const agent = (id: string) => node(id, "agent", { instructions: "Write notes.md." });
 
-function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000, waiter = new FakeWaiter([])) {
+function turnHarness(
+  turns: Emitted[][],
+  turnTimeoutMs = 1000,
+  waiter = new FakeWaiter([]),
+  files = new FakeFileSystem(),
+) {
   const events = new FakeEventSource();
   const calls: string[] = [];
   const lines: string[] = [];
@@ -156,6 +167,7 @@ function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000, waiter = new Fake
     events,
     scripts: new FakeProcessRunner([]),
     waiter,
+    files,
     onChange: (line) => lines.push(line),
     cwd,
     sessionId,
@@ -1015,7 +1027,9 @@ describe("Runner", () => {
       it("refuses a node whose parent is not a loop", async () => {
         const error = await refuses([script("s1"), inLoop(prompt("p1"), "s1")]);
 
-        expect(error.problems).toEqual(["p1 (prompt) has parent s1, which is not a loop"]);
+        expect(error.problems).toEqual([
+          "p1 (prompt) has parent s1, which is not a loop or foreach",
+        ]);
       });
 
       it("lists every problem in one error, in manifest order", async () => {
@@ -1023,13 +1037,214 @@ describe("Runner", () => {
 
         expect(error.problems).toEqual([
           "l1 (loop) has no prompt or agent in its body",
-          "p1 (prompt) has parent s1, which is not a loop",
+          "p1 (prompt) has parent s1, which is not a loop or foreach",
         ]);
         expect(error.message).toBe(`cannot run this build: ${error.problems.join("; ")}`);
       });
 
       it("finds no problem in a loop with a Prompt in its body", () => {
         expect(structureProblems(reviewFix().nodes)).toEqual([]);
+      });
+
+      it("finds no problem in a For each with a Prompt first in its body", () => {
+        const nodes = [forEach("e1"), inEach(script("s1")), inEach(prompt("p1")), prompt("p9")];
+
+        expect(structureProblems(nodes)).toEqual([]);
+      });
+
+      it.each([
+        [
+          "a For each inside a loop",
+          [loop("l1"), inLoop(prompt("p0")), inLoop(forEach("e1")), inEach(prompt("p1"))],
+          "e1 (foreach) is inside loop l1",
+        ],
+        [
+          "a For each inside a For each",
+          [forEach("e1"), inEach(prompt("p1")), inEach(forEach("e2")), inEach(prompt("p2"), "e2")],
+          "e2 (foreach) is inside foreach e1",
+        ],
+        [
+          "a loop inside a For each",
+          [forEach("e1"), inEach(prompt("p1")), inEach(loop("l1")), inLoop(prompt("p2"))],
+          "l1 (loop) is inside foreach e1",
+        ],
+      ])("refuses %s", async (_name, nodes, problem) => {
+        const error = await refuses(nodes);
+
+        expect(error.problems).toContain(problem);
+      });
+
+      it("refuses a For each whose body starts with an Agent before its Prompt", async () => {
+        const error = await refuses([forEach("e1"), inEach(agent("a1")), inEach(prompt("p1"))]);
+
+        expect(error.problems).toHaveLength(1);
+        expect(error.problems[0]).toMatch(/^e1 \(foreach\) .*a1/);
+      });
+
+      it.each([
+        ["no body", [forEach("e1"), prompt("p9")]],
+        ["a Script-only body", [forEach("e1"), inEach(script("s1")), prompt("p9")]],
+      ])("refuses a For each with %s", async (_name, nodes) => {
+        const error = await refuses(nodes);
+
+        expect(error.problems).toEqual(["e1 (foreach) has no prompt or agent in its body"]);
+      });
+    });
+  });
+
+  describe("for each nodes", () => {
+    const plan = `${cwd}/plan.md`;
+    const units = "# Plan\n\nThe units to build.\n\n- alpha\n- bravo\n- charlie\n";
+    const eachUnit = manifest(
+      forEach("e1"),
+      inEach(prompt("p1")),
+      inEach(prompt("p2")),
+      prompt("after"),
+    );
+    const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+    const sendP1 = (item: string) => `send /${hash}:p1 This round's item: ${item}`;
+    const sendP2 = `send /${hash}:p2`;
+    const sendAfter = `send /${hash}:after`;
+    const allRounds = [
+      sendP1("alpha"),
+      sendP2,
+      sendP1("bravo"),
+      sendP2,
+      sendP1("charlie"),
+      sendP2,
+      sendAfter,
+    ];
+    const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+    const eventsOf = (store: FakeStore, nodeId: string) =>
+      store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+    const kindsOf = (store: FakeStore, nodeId: string) =>
+      eventsOf(store, nodeId).map((event) => event.kind);
+    const reads = (files: FakeFileSystem) => files.calls.filter((c) => c.method === "readFile");
+    const withPlan = (content = units) => new FakeFileSystem({ [plan]: content });
+
+    it("runs the body once per unit, in file order, then goes on", async () => {
+      const { deps, calls } = harness({ files: withPlan() });
+
+      const result = await runOn(deps, eachUnit);
+
+      expect(sends(calls)).toEqual(allRounds);
+      expect(result.outcome).toBe("done");
+      expect(result.states).toEqual({ e1: "done", p1: "done", p2: "done", after: "done" });
+    });
+
+    it("skips the body and goes on when the file holds no list", async () => {
+      const { deps, calls } = harness({ files: withPlan("# Plan\n") });
+
+      const result = await runOn(deps, eachUnit);
+
+      expect(sends(calls)).toEqual([sendAfter]);
+      expect(result.outcome).toBe("done");
+      expect(result.states).toEqual({ e1: "done", p1: "skipped", p2: "skipped", after: "done" });
+    });
+
+    it("fails the For each, naming the file, when the file is missing", async () => {
+      const { deps, calls, lines } = harness();
+      const message = `e1 failed: could not read plan.md: No such file: ${plan}`;
+
+      const result = await runOn(deps, eachUnit);
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "e1" });
+      expect(result.states).toMatchObject({ e1: "failed", p1: "waiting", after: "waiting" });
+      const failed = eventsOf(deps.store, "e1").filter((event) => event.kind === "failed");
+      expect(failed).toEqual([expect.objectContaining({ payload: { message } })]);
+      expect(lines.filter((line) => line.startsWith("e1 failed"))).toEqual([message]);
+      expect(sends(calls)).toEqual([]);
+    });
+
+    it("reads the file once, so a change during round 1 leaves later rounds as listed", async () => {
+      const files = withPlan();
+      const { deps, calls } = harness({ files });
+      const rewriting: TestDeps = {
+        ...deps,
+        prompts: {
+          ...deps.prompts,
+          sendPrompt: async (text) => {
+            await files.writeFile(plan, "- zulu\n");
+            await deps.prompts.sendPrompt(text);
+          },
+        },
+      };
+
+      await runOn(rewriting, eachUnit);
+
+      expect(sends(calls)).toEqual(allRounds);
+      expect(reads(files)).toEqual([{ method: "readFile", path: plan }]);
+    });
+
+    it("fails the For each at a failing body turn and runs nothing after it", async () => {
+      const { deps, calls } = turnHarness([[stopped], [stopped]], 20, undefined, withPlan());
+
+      const result = await runOn(deps, eachUnit);
+
+      expect(sends(calls)).toEqual([sendP1("alpha"), sendP2, sendP1("bravo")]);
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "p1" });
+      expect(result.states).toMatchObject({ e1: "failed", p1: "failed", after: "waiting" });
+    });
+
+    it("records the items on round 1 only and resets the body from round 2", async () => {
+      const { deps } = harness({ files: withPlan() });
+
+      await runOn(deps, eachUnit);
+
+      const rounds = eventsOf(deps.store, "e1").flatMap((event) =>
+        event.kind === "round" ? [event.payload] : [],
+      );
+      expect(rounds).toEqual([
+        { round: 1, items: ["alpha", "bravo", "charlie"] },
+        { round: 2 },
+        { round: 3 },
+      ]);
+      const perRound = ["sent", "done", "reset", "sent", "done", "reset", "sent", "done"];
+      expect(kindsOf(deps.store, "p1")).toEqual(perRound);
+      expect(kindsOf(deps.store, "p2")).toEqual(perRound);
+    });
+
+    describe("resuming", () => {
+      const throughRound2: [string, RunEvent][] = [
+        ["e1", { kind: "running" }],
+        ["e1", { kind: "round", payload: { round: 1, items: ["alpha", "bravo", "charlie"] } }],
+        ["p1", { kind: "sent" }],
+        ["p1", { kind: "done" }],
+        ["p2", { kind: "sent" }],
+        ["p2", { kind: "done" }],
+        ["e1", { kind: "round", payload: { round: 2 } }],
+        ["p1", { kind: "reset" }],
+        ["p2", { kind: "reset" }],
+      ];
+      const resumeAfter = (
+        deps: TestDeps,
+        entries: [string, RunEvent][],
+        actions: ResumeActions,
+      ) => {
+        const { id } = deps.store.createRun(newRun(eachUnit));
+        for (const [nodeId, event] of entries) deps.store.append(id, nodeId, event);
+        return new Runner({ ...deps, runId: id }).run(eachUnit, { actions });
+      };
+
+      it("goes on from round 2 with the recorded items, without reading the file", async () => {
+        const { deps, calls, files } = harness();
+
+        const result = await resumeAfter(deps, throughRound2, {});
+
+        expect(sends(calls)).toEqual(allRounds.slice(2));
+        expect(reads(files)).toEqual([]);
+        expect(kindsOf(deps.store, "e1").filter((kind) => kind === "running")).toHaveLength(1);
+        expect(result.outcome).toBe("done");
+      });
+
+      it("resends round 2's first prompt with round 2's item", async () => {
+        const { deps, calls } = harness();
+
+        await resumeAfter(deps, [...throughRound2, ["p1", { kind: "sent" }]], {
+          p1: { kind: "send" },
+        });
+
+        expect(sends(calls)[0]).toBe(sendP1("bravo"));
       });
     });
   });
@@ -2215,6 +2430,7 @@ describe("Runner parallel section", () => {
       events,
       scripts: new FakeProcessRunner([]),
       waiter: options.waiter ?? new FakeWaiter([]),
+      files: new FakeFileSystem(),
       ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
       ...(options.usage === undefined ? {} : { usage: options.usage }),
       ...(options.budget === undefined ? {} : { budget: options.budget }),

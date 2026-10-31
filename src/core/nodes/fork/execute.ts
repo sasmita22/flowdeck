@@ -26,7 +26,10 @@ export function parallelSections(
 
   for (const node of nodes) {
     if ((node.type === "fork" || node.type === "join") && node.parent !== undefined) {
-      problems.push({ node: node.id, message: "sits inside a loop; parallel sections cannot." });
+      problems.push({
+        node: node.id,
+        message: "sits inside a loop or For each; parallel sections cannot.",
+      });
     }
   }
 
@@ -50,7 +53,10 @@ export function parallelSections(
         continue;
       }
       if (node.parent !== undefined) {
-        problems.push({ node: branch, message: "sits inside a loop; parallel sections cannot." });
+        problems.push({
+          node: branch,
+          message: "sits inside a loop or For each; parallel sections cannot.",
+        });
         sound = false;
         continue;
       }

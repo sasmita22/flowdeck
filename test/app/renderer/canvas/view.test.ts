@@ -13,6 +13,7 @@ import {
   agent,
   ask,
   flow,
+  forEach,
   fork,
   gate,
   hardstop,
@@ -189,6 +190,31 @@ describe("toViewNodes with a session frame", () => {
     });
   });
 
+  it("encloses a member For each's frame plus padding, so the two frames share no edge", () => {
+    const source = framed(
+      flow(
+        [
+          { ...forEach("E"), position: { x: 0, y: 0 } },
+          { ...prompt("X", { parent: "E" }), position: { x: 500, y: 400 } },
+        ],
+        [],
+      ),
+      ["E"],
+    );
+
+    const [frame] = toViewNodes(source, [], {}, null);
+
+    expect(frame).toMatchObject({
+      id: SESSION_FRAME_ID,
+      ...grown([
+        enclosing([
+          { type: "foreach", x: 0, y: 0 },
+          { type: "prompt", x: 500, y: 400 },
+        ]),
+      ]),
+    });
+  });
+
   it("encloses a member loop's frame together with the other members", () => {
     const source = framed(
       flow(
@@ -330,6 +356,36 @@ describe("toViewNodes with a loop", () => {
       "Y",
       "A",
     ]);
+  });
+});
+
+describe("toViewNodes with a For each", () => {
+  it("emits a fixed frame enclosing the For each's own box and its body, with padding", () => {
+    const source = flow(
+      [
+        { ...forEach("E"), position: { x: 0, y: 0 } },
+        { ...prompt("X", { parent: "E" }), position: { x: 500, y: 400 } },
+        { ...script("Y", { parent: "E" }), position: { x: 200, y: 100 } },
+        { ...prompt("A"), position: { x: 900, y: 900 } },
+      ],
+      [],
+    );
+
+    const frames = toViewNodes(source, [], {}, null).filter(
+      (node) => node.type === "foreach-frame",
+    );
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      selectable: false,
+      deletable: false,
+      draggable: false,
+      ...enclosing([
+        { type: "foreach", x: 0, y: 0 },
+        { type: "prompt", x: 500, y: 400 },
+        { type: "script", x: 200, y: 100 },
+      ]),
+    });
   });
 });
 

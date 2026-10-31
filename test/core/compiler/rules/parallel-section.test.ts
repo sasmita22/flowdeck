@@ -5,6 +5,7 @@ import { parallelSections } from "../../../../src/core/nodes/fork/execute.js";
 import {
   agent,
   flow,
+  forEach,
   fork,
   join,
   loop,
@@ -94,6 +95,24 @@ describe("parallel-section", () => {
       })),
     );
     expect(errors.map((error) => error.node)).toContain(named);
+  });
+
+  it.each([
+    ["a loop", loop("S")],
+    ["a for each", forEach("S")],
+  ])("says a fork inside %s sits inside a loop or For each", (_, scope) => {
+    const errors = rule.check(
+      flow(
+        [scope, fork("f", { parent: "S" }), agent("a1"), agent("a2"), join("j")],
+        around(["a1", "a2"]),
+      ),
+    );
+
+    expect(errors).toContainEqual({
+      rule: "parallel-section",
+      node: "f",
+      message: "f sits inside a loop or For each; parallel sections cannot.",
+    });
   });
 
   it("is a rule named parallel-section with its message", () => {

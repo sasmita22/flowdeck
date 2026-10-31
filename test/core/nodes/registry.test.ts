@@ -5,6 +5,7 @@ import { z } from "zod";
 import { NodeType, Port } from "../../../src/core/flow/schema.js";
 import { settings as agent } from "../../../src/core/nodes/agent/settings.js";
 import { settings as ask } from "../../../src/core/nodes/ask/settings.js";
+import { settings as foreach } from "../../../src/core/nodes/foreach/settings.js";
 import { settings as fork } from "../../../src/core/nodes/fork/settings.js";
 import { settings as gate } from "../../../src/core/nodes/gate/settings.js";
 import { settings as hardstop } from "../../../src/core/nodes/hardstop/settings.js";
@@ -29,6 +30,7 @@ const folderSettings = {
   output,
   fork,
   join,
+  foreach,
 };
 const entries: Partial<Record<string, { settings: unknown; ports: unknown }>> = registry;
 
