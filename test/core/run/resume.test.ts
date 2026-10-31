@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ManifestNode } from "../../../src/core/compiler/lower.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
+import { forkTurnText } from "../../../src/core/nodes/fork/execute.js";
 import { decideResume, ResumeError, type TranscriptTurn } from "../../../src/core/run/resume.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
@@ -155,6 +156,78 @@ describe("decideResume", () => {
     });
     expect(decideResume({ manifest: agentManifest, events, turns: [turn(true)] })).toEqual({
       a1: { kind: "complete", stopMessage: "DONE" },
+    });
+  });
+
+  describe("a parallel section", () => {
+    const sectionManifest = {
+      hash,
+      nodes: [node("f", "fork"), node("a1", "agent"), node("a2", "agent"), node("j", "join")],
+    };
+    const interrupted = (id: string) => ({
+      kind: "fail",
+      message: `${id} failed: parallel section was interrupted; start a new run`,
+    });
+    const markerTurns: TranscriptTurn[] = [
+      {
+        userText: `${agentTurnText(hash, "a1")} ${agentTurnText(hash, "a2")}`,
+        ended: true,
+        lastAssistantText: "DONE",
+      },
+    ];
+    const transcripts: [string, TranscriptTurn[]][] = [
+      ["the fork turn", [{ userText: forkTurnText(hash, ["a1", "a2"]), ended: true }]],
+      ["a turn holding both branch markers", markerTurns],
+    ];
+
+    it.each(transcripts)(
+      "fails the fork, every sent branch and the join, and never resends or completes, with %s",
+      (_, turns) => {
+        const events = stored([
+          ["f", sent],
+          ["a1", sent],
+          ["a2", sent],
+          ["j", { kind: "running" }],
+        ]);
+
+        expect(decideResume({ manifest: sectionManifest, events, turns })).toEqual({
+          f: interrupted("f"),
+          a1: interrupted("a1"),
+          a2: interrupted("a2"),
+          j: interrupted("j"),
+        });
+      },
+    );
+
+    it("gives no action to a branch already done", () => {
+      const events = stored([
+        ["f", sent],
+        ["a1", sent],
+        ["a2", sent],
+        ["j", { kind: "running" }],
+        ["a1", { kind: "done", payload: { stopMessage: "A" } }],
+      ]);
+
+      expect(decideResume({ manifest: sectionManifest, events, turns: markerTurns })).toEqual({
+        f: interrupted("f"),
+        a2: interrupted("a2"),
+        j: interrupted("j"),
+      });
+    });
+
+    it("gives no action to a fully settled section", () => {
+      const events = stored([
+        ["f", sent],
+        ["a1", sent],
+        ["a2", sent],
+        ["j", { kind: "running" }],
+        ["a1", done],
+        ["a2", { kind: "skipped" }],
+        ["j", done],
+        ["f", done],
+      ]);
+
+      expect(decideResume({ manifest: sectionManifest, events, turns: markerTurns })).toEqual({});
     });
   });
 

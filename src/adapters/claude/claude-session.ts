@@ -50,7 +50,10 @@ export async function openClaudeSession(
         await claude.waitUntilReady(sessionName);
       },
     },
-    prompts: { sendPrompt: (text) => claude.sendPrompt(sessionName, text) },
+    prompts: {
+      sendPrompt: (text) => claude.sendPrompt(sessionName, text),
+      interrupt: () => claude.interrupt(sessionName),
+    },
     stop: async () => {
       closed = true;
       await starting?.catch(() => undefined);

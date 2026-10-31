@@ -25,7 +25,16 @@ export interface ViewEdge {
   sourceHandle: string;
   target: string;
   targetHandle: string;
+  type?: "aligned";
+  data?: { align: Align };
 }
+
+export type Align = "source" | "target";
+
+type EdgeEnds = { sourceX: number; sourceY: number; targetX: number; targetY: number };
+
+export const alignedEnds = <Ends extends EdgeEnds>(ends: Ends, align: Align): Ends =>
+  align === "target" ? { ...ends, sourceY: ends.targetY } : { ...ends, targetY: ends.sourceY };
 
 export const edgeId = ({ from, to }: Wire): string =>
   `${from.node}:${from.port}->${to.node}:${to.port}`;
@@ -35,6 +44,28 @@ type Bounds = { left: number; top: number; right: number; bottom: number };
 const boundsOf = ({ type, position: { x, y } }: Node): Bounds => {
   const { width, height } = nodeLook(type).box;
   return { left: x, top: y, right: x + width, bottom: y + height };
+};
+
+const branchesOf = (flow: Flow, bar: Node): Node[] => {
+  const ids = new Set(
+    flow.wires.flatMap(({ from, to }) => {
+      if (bar.type === "fork" && from.node === bar.id) return [to.node];
+      if (bar.type === "join" && to.node === bar.id) return [from.node];
+      return [];
+    }),
+  );
+  return flow.nodes.filter((node) => ids.has(node.id));
+};
+
+const barBounds = (flow: Flow, bar: Node, x = bar.position.x): Bounds | null => {
+  const branches = branchesOf(flow, bar).map(boundsOf);
+  if (branches.length === 0) return null;
+  return {
+    left: x,
+    top: Math.min(...branches.map(({ top }) => top)),
+    right: x + nodeLook(bar.type).box.width,
+    bottom: Math.max(...branches.map(({ bottom }) => bottom)),
+  };
 };
 
 const padded = (all: readonly Bounds[]): Bounds => ({
@@ -73,7 +104,7 @@ const frameMembers = (flow: Flow): Flow["nodes"] => {
 
 const toFrameViewNode = (flow: Flow): ViewNode[] => {
   const bounds = frameMembers(flow).map((node) =>
-    node.type === "loop" ? loopFrameBounds(flow, node) : boundsOf(node),
+    node.type === "loop" ? loopFrameBounds(flow, node) : (barBounds(flow, node) ?? boundsOf(node)),
   );
   if (bounds.length === 0) return [];
   return [frameView(SESSION_FRAME_ID, "session", padded(bounds), { name: flow.session.name })];
@@ -88,6 +119,16 @@ const toLoopFrameViewNodes = (flow: Flow): ViewNode[] =>
       }),
     );
 
+const placed = (flow: Flow, node: Node, position: Position) => {
+  const bar = barBounds(flow, node, position.x);
+  if (bar === null) return { position };
+  return {
+    position: { x: bar.left, y: bar.top },
+    width: bar.right - bar.left,
+    height: bar.bottom - bar.top,
+  };
+};
+
 export const toViewNodes = (
   flow: Flow,
   selection: readonly string[],
@@ -99,18 +140,30 @@ export const toViewNodes = (
   ...flow.nodes.map((node) => ({
     id: node.id,
     type: node.type,
-    position: dragPositions[node.id] ?? node.position,
+    ...placed(flow, node, dragPositions[node.id] ?? node.position),
     selected: selection.includes(node.id),
     ...(node.type === "hardstop" && { deletable: false }),
     data: { label: node.label, highlighted: node.id === highlighted },
   })),
 ];
 
-export const toViewEdges = (flow: Flow): ViewEdge[] =>
-  flow.wires.map((wire) => ({
-    id: edgeId(wire),
-    source: wire.from.node,
-    sourceHandle: wire.from.port,
-    target: wire.to.node,
-    targetHandle: wire.to.port,
-  }));
+const alignOf = (types: ReadonlyMap<string, Node["type"]>, wire: Wire): Align | null => {
+  if (types.get(wire.from.node) === "fork") return "target";
+  if (types.get(wire.to.node) === "join") return "source";
+  return null;
+};
+
+export const toViewEdges = (flow: Flow): ViewEdge[] => {
+  const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
+  return flow.wires.map((wire) => {
+    const align = alignOf(types, wire);
+    return {
+      id: edgeId(wire),
+      source: wire.from.node,
+      sourceHandle: wire.from.port,
+      target: wire.to.node,
+      targetHandle: wire.to.port,
+      ...(align !== null && { type: "aligned" as const, data: { align } }),
+    };
+  });
+};

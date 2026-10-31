@@ -3,7 +3,7 @@ export type NodeState =
 
 const transitions: Record<NodeState, readonly NodeState[]> = {
   waiting: ["sent", "running", "needs-you", "skipped"],
-  sent: ["done", "failed"],
+  sent: ["done", "failed", "skipped"],
   running: ["done", "failed", "waiting", "needs-you"],
   "needs-you": ["done", "failed", "running"],
   skipped: ["waiting"],

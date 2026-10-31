@@ -20,6 +20,7 @@ export const PARENT_SESSION_VARS = [
 const trustDialog = /Quick safety check|Yes, I trust this folder/;
 const cursorOnYes = /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m;
 const rule = "────";
+const busy = "esc to interrupt";
 
 export type ClaudeSession = { sessionId: string; model: string };
 
@@ -62,7 +63,7 @@ const squash = (text: string) => text.replace(/\s+/g, "");
 
 function boxHolds(pane: string, prompt: string): boolean {
   const box = inputBox(pane);
-  return box !== undefined && squash(box).includes(squash(prompt).slice(0, 40));
+  return box !== undefined && squash(box).includes(squash(prompt).slice(-40));
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -159,6 +160,19 @@ export class ClaudeCli {
       if (Date.now() - lastEnter >= this.submitRetryMs) {
         await this.sessions.sendKey(name, "Enter");
         lastEnter = Date.now();
+      }
+      await sleep(this.pollIntervalMs);
+    }
+  }
+
+  async interrupt(name: string): Promise<void> {
+    await this.sessions.sendKey(name, "Escape");
+    const deadline = Date.now() + this.readyTimeoutMs;
+    while ((await this.sessions.capture(name)).includes(busy)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Claude in session "${name}" did not stop its turn within ${this.readyTimeoutMs} ms`,
+        );
       }
       await sleep(this.pollIntervalMs);
     }

@@ -15,6 +15,7 @@ const legal: [NodeState, NodeState][] = [
   ["waiting", "sent"],
   ["sent", "done"],
   ["sent", "failed"],
+  ["sent", "skipped"],
   ["waiting", "running"],
   ["running", "done"],
   ["running", "failed"],

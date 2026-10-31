@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import { build } from "../../../src/core/compiler/build.js";
-import type { Manifest } from "../../../src/core/compiler/lower.js";
+import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
+import { emit } from "../../../src/core/compiler/emit.js";
+import { hashBuild } from "../../../src/core/compiler/hash.js";
+import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
+import { parseFlow } from "../../../src/core/flow/schema.js";
 import {
   execute,
   type LoadedBuild,
@@ -104,6 +108,34 @@ describe("the core run path", () => {
         kind: "error",
         message: `${changed}: changed`,
       });
+    });
+
+    it("refuses a build whose parallel start has one branch, with the section problem", async () => {
+      const broken = parseFlow(
+        JSON.parse(
+          await readFile(
+            new URL("../../fixtures/broken/parallel-section.json", import.meta.url),
+            "utf8",
+          ),
+        ),
+      );
+      const files = emit(lower(broken), { nodePath: process.execPath, hookScriptPath: "/h" });
+      const hash = hashBuild(files);
+      const brokenDir = join(home, "builds", hash);
+      for (const file of files) {
+        const content =
+          file.path === "manifest.json"
+            ? canonicalJson({ ...(JSON.parse(file.content) as object), hash })
+            : file.content;
+        await fs.writeFile(join(brokenDir, file.path), content);
+      }
+
+      const result = await loadBuild(brokenDir, { fs });
+
+      expect(result.kind).toBe("error");
+      expect(result.kind === "error" ? result.message : "").toMatch(
+        /^cannot run this build: .*split\b.*has 1 branches; a parallel start needs two or more\.$/,
+      );
     });
 
     it("refuses a missing build folder", async () => {
@@ -301,6 +333,7 @@ describe("execute wiring", () => {
           sessionId: claudeSessionId,
           session: { ensureStarted: async () => undefined },
           prompts: {
+            interrupt: async () => undefined,
             sendPrompt: async (text) => {
               sends.push(text);
               await options.onSend?.({ events, permissions });

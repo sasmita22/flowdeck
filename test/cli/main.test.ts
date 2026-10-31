@@ -110,6 +110,7 @@ function stubDeps(
         sessionId,
         session: { ensureStarted: async () => undefined },
         prompts: {
+          interrupt: async () => undefined,
           sendPrompt: async (text) => {
             recorded.sends.push(text);
             setTimeout(() => {
@@ -492,6 +493,7 @@ describe("runCli interrupted", () => {
           },
         },
         prompts: {
+          interrupt: async () => undefined,
           sendPrompt: async (text) => {
             log.push(`send ${text}`);
           },
