@@ -21,7 +21,7 @@ export type OpenSessionOptions = {
 export type OpenedSession = {
   sessionId: string;
   session: { ensureStarted(): Promise<void> };
-  prompts: { sendPrompt(text: string): Promise<void> };
+  prompts: RunnerDeps["prompts"];
   stop(): Promise<void>;
 };
 
@@ -67,6 +67,7 @@ export const noClaude: OpenedSession = {
   },
   prompts: {
     sendPrompt: () => Promise.reject(new Error("This build has no prompt nodes to send")),
+    interrupt: () => Promise.reject(new Error("This build has no prompt nodes to interrupt")),
   },
   stop: async () => undefined,
 };
@@ -93,7 +94,7 @@ export async function loadBuild(
     };
   }
   const manifest = JSON.parse(await deps.fs.readFile(`${buildDir}/manifest.json`)) as LoadedBuild;
-  const problems = structureProblems(manifest.nodes);
+  const problems = structureProblems(manifest.nodes, manifest.wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
   return { kind: "loaded", build: manifest };
 }
@@ -176,7 +177,10 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       return step();
     };
     const finished = new Runner({
-      prompts: { sendPrompt: (text) => whileRunning(() => session.prompts.sendPrompt(text)) },
+      prompts: {
+        sendPrompt: (text) => whileRunning(() => session.prompts.sendPrompt(text)),
+        interrupt: () => whileRunning(() => session.prompts.interrupt()),
+      },
       session: {
         ensureStarted: () =>
           whileRunning(async () => {

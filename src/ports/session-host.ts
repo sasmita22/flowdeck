@@ -1,4 +1,4 @@
-export type SessionKey = "Down" | "Enter";
+export type SessionKey = "Down" | "Enter" | "Escape";
 
 export interface SessionHost {
   start(name: string, cwd: string, command: string, env?: Record<string, string>): Promise<void>;

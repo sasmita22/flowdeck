@@ -10,6 +10,7 @@ import { useEffect, useMemo, type DragEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "../nodes/node-types.js";
+import { AlignedEdge } from "./aligned-edge.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
@@ -19,6 +20,7 @@ import { toViewEdges, toViewNodes } from "./view.js";
 const deleteKeys = ["Delete", "Backspace"];
 const startViewport = { x: 0, y: 0, zoom: 1 };
 const proOptions = { hideAttribution: true };
+const edgeTypes = { aligned: AlignedEdge };
 const readoutStyle = { margin: 0, fontFamily: "ui-monospace, monospace", fontSize: 11 };
 
 const isNodeType = (value: string): value is CanvasNodeType =>
@@ -106,6 +108,7 @@ function Board({ store }: { store: StoreApi<CanvasState> }) {
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           colorMode="system"
           defaultViewport={startViewport}
           deleteKeyCode={deleteKeys}

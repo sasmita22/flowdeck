@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentNodeId,
   agentOutcome,
   agentTurnText,
   agentType,
@@ -8,6 +9,20 @@ import {
 describe("agentType", () => {
   it("names the build's agent as <hash>:<node id>", () => {
     expect(agentType("h1", "a1")).toBe("h1:a1");
+  });
+});
+
+describe("agentNodeId", () => {
+  it("reads the node id back from an agent type", () => {
+    expect(agentNodeId(agentType("abc123", "review-a"))).toBe("review-a");
+  });
+
+  it("keeps a node id that contains a colon whole", () => {
+    expect(agentNodeId(agentType("abc123", "review:a:1"))).toBe("review:a:1");
+  });
+
+  it("gives no node id for a type with no colon", () => {
+    expect(agentNodeId("general-purpose")).toBeUndefined();
   });
 });
 

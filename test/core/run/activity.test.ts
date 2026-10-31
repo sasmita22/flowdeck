@@ -8,6 +8,7 @@ import {
   type ActivityEntry,
   type ActivityFeed,
 } from "../../../src/core/run/activity.js";
+import { agentType } from "../../../src/core/nodes/agent/execute.js";
 import { trackWindow, type NodeWindow } from "../../../src/core/run/attribution.js";
 
 type HookInput = { kind: "PreToolUse" | "SubagentStop"; payload: Record<string, unknown> };
@@ -159,6 +160,39 @@ describe("foldHookEvent", () => {
     expect(feed.entries.find((entry) => entry.kind === "subagent")).toMatchObject({
       state: "finished",
     });
+  });
+});
+
+describe("foldHookEvent in a parallel section", () => {
+  const sectionWindows = (["f", "a1", "a2"] as const).reduce<NodeWindow[]>(
+    (all, nodeId) => trackWindow(all, nodeId, "sent", 1000),
+    [],
+  );
+  const inSection = (fields: Record<string, unknown>) =>
+    foldHookEvent(emptyFeed, sectionWindows, {
+      kind: "PreToolUse",
+      payload: { ...preToolUse, flowdeck_hook_at: 1500, ...fields },
+    }).changed;
+
+  it("credits an Agent call to the branch its subagent_type names", () => {
+    expect(
+      inSection({
+        tool_name: "Agent",
+        tool_input: { subagent_type: agentType("h", "a2"), description: "Run a2", prompt: "Go" },
+      }),
+    ).toMatchObject({ kind: "subagent", nodeId: "a2", agentType: "h:a2" });
+  });
+
+  it("credits any other main-session tool to the fork", () => {
+    expect(inSection({ tool_name: "TaskStop", tool_input: {} })).toMatchObject({
+      kind: "tool",
+      tool: "TaskStop",
+      nodeId: "f",
+    });
+  });
+
+  it("still drops a tool call made inside a subagent", () => {
+    expect(inSection({ agent_id: "agent-1", tool_name: "Bash" })).toBeUndefined();
   });
 });
 

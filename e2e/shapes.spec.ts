@@ -6,12 +6,15 @@ import {
   agent,
   ask,
   flow,
+  fork,
   gate,
   hardstop,
+  join as joinNode,
   loop,
   output,
   prompt,
   script,
+  thenWire,
   trigger,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
@@ -41,6 +44,25 @@ const everyShape = () => {
   );
   return { ...seeded, session: { ...seeded.session, frame: { nodes: ["loop"] } } };
 };
+
+const parallelShapes = () =>
+  flow(
+    [
+      at(fork("fork"), 10, 10),
+      at(agent("b1"), 70, 10),
+      at(agent("b2"), 70, 90),
+      at(agent("b3"), 70, 170),
+      at(joinNode("join"), 270, 10),
+    ],
+    [
+      thenWire("fork", "b1"),
+      thenWire("fork", "b2"),
+      thenWire("fork", "b3"),
+      thenWire("b1", "join"),
+      thenWire("b2", "join"),
+      thenWire("b3", "join"),
+    ],
+  );
 
 const exact = { threshold: 0 };
 
@@ -83,5 +105,28 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect
       .soft(window.getByTestId("session-frame"))
       .toHaveScreenshot(`${colorScheme}-session.png`, exact);
+  });
+}
+
+for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
+  test(`Parallel start and end draw as tall bars in the ${colorScheme} theme`, async () => {
+    seedFlow(home, parallelShapes());
+    launched = await launchApp({ home, logPath: join(logDir, "app.log"), colorScheme });
+    const { window } = launched;
+    const bars = ["fork", "join"];
+    for (const id of bars) {
+      await expect(window.getByTestId(`node-${id}`)).toBeVisible();
+    }
+    await window.evaluate(() => document.fonts.ready);
+
+    for (const id of bars) {
+      await expect
+        .soft(window.getByTestId(`node-${id}`))
+        .toHaveScreenshot(`${colorScheme}-${id}.png`, exact);
+    }
+    for (const id of bars) {
+      const box = await window.getByTestId(`node-${id}`).boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(200);
+    }
   });
 }

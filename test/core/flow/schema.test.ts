@@ -124,7 +124,27 @@ describe("parseFlow", () => {
     expect(error.issues.map((issue) => issue.path)).toContainEqual(["wires", 0, "file"]);
   });
 
-  it("lists the nine node types", () => {
+  it("parses a fork and a join", () => {
+    const fork = {
+      id: "f",
+      label: "F",
+      position: { x: 0, y: 0 },
+      type: "fork",
+      settings: {},
+    };
+    const join = {
+      id: "j",
+      label: "J",
+      position: { x: 0, y: 0 },
+      type: "join",
+      settings: { wait: "first" },
+    };
+    const flow = flowWith({ nodes: [promptNode, fork, join] });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("lists the eleven node types", () => {
     expect(NodeType.options).toEqual([
       "prompt",
       "script",
@@ -135,6 +155,8 @@ describe("parseFlow", () => {
       "loop",
       "trigger",
       "output",
+      "fork",
+      "join",
     ]);
   });
 });

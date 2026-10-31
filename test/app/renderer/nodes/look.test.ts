@@ -15,6 +15,8 @@ const groups: Record<NodeType, string> = {
   hardstop: "var(--c-human)",
   ask: "var(--c-human)",
   loop: "var(--c-ctrl)",
+  fork: "var(--c-ctrl)",
+  join: "var(--c-ctrl)",
 };
 
 const tags: Record<NodeType, string> = {
@@ -27,6 +29,8 @@ const tags: Record<NodeType, string> = {
   hardstop: "STOP",
   ask: "ASK",
   loop: "LOOP",
+  fork: "PARALLEL START",
+  join: "PARALLEL END",
 };
 
 const outlines: Record<NodeType, string> = {
@@ -39,6 +43,8 @@ const outlines: Record<NodeType, string> = {
   gate: "var(--line)",
   script: "var(--term-bg)",
   loop: "none",
+  fork: "var(--c-ctrl)",
+  join: "var(--c-ctrl)",
 };
 
 describe("nodeLook", () => {
@@ -47,7 +53,7 @@ describe("nodeLook", () => {
   });
 
   it("has no look for a type outside the registry", () => {
-    expect(nodeLook("fork" as NodeType)).toBeUndefined();
+    expect(nodeLook("nope" as NodeType)).toBeUndefined();
   });
 
   it.each(types)("colours %s with its group token", (type) => {
@@ -62,8 +68,15 @@ describe("nodeLook", () => {
     expect(nodeLook(type).outline).toBe(outlines[type]);
   });
 
-  it.each(types.filter((type) => type !== "ask"))("boxes %s at 170x48", (type) => {
-    expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
+  it.each(types.filter((type) => !["ask", "fork", "join"].includes(type)))(
+    "boxes %s at 170x48",
+    (type) => {
+      expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
+    },
+  );
+
+  it.each(["fork", "join"] as const)("boxes %s as a 28x48 bar until it spans branches", (type) => {
+    expect(nodeLook(type).box).toEqual({ width: 28, height: 48 });
   });
 
   it("boxes ask at 170x57 so its tail fits", () => {

@@ -248,6 +248,18 @@ describe("TmuxSessionHost", () => {
     expect(pane).not.toContain("Down");
   });
 
+  it("presses Escape as the escape key", { timeout: 10_000 }, async () => {
+    const name = `${prefix}a`;
+    await host.start(name, tmp, "cat");
+
+    await host.sendKey(name, "Escape");
+    await host.sendKey(name, "Enter");
+
+    const pane = await waitForPane(host, name, (p) => p.includes("^["));
+    expect(pane.split("\n")).toContain("^[");
+    expect(pane).not.toContain("Escape");
+  });
+
   it.each(["fd-x.y", "fd-x:y", "other"])(
     "rejects input and capture for the invalid name %s",
     async (name) => {

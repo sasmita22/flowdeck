@@ -4,10 +4,14 @@ import { ports as agentPorts } from "./agent/ports.js";
 import { settings as agentSettings } from "./agent/settings.js";
 import { ports as askPorts } from "./ask/ports.js";
 import { settings as askSettings } from "./ask/settings.js";
+import { ports as forkPorts } from "./fork/ports.js";
+import { settings as forkSettings } from "./fork/settings.js";
 import { ports as gatePorts } from "./gate/ports.js";
 import { settings as gateSettings } from "./gate/settings.js";
 import { ports as hardstopPorts } from "./hardstop/ports.js";
 import { settings as hardstopSettings } from "./hardstop/settings.js";
+import { ports as joinPorts } from "./join/ports.js";
+import { settings as joinSettings } from "./join/settings.js";
 import { ports as loopPorts } from "./loop/ports.js";
 import { settings as loopSettings } from "./loop/settings.js";
 import { ports as outputPorts } from "./output/ports.js";
@@ -31,4 +35,6 @@ export const registry = {
   loop: { settings: loopSettings, ports: loopPorts },
   trigger: { settings: triggerSettings, ports: triggerPorts },
   output: { settings: outputSettings, ports: outputPorts },
+  fork: { settings: forkSettings, ports: forkPorts },
+  join: { settings: joinSettings, ports: joinPorts },
 } satisfies Record<NodeType, NodeDefinition>;

@@ -45,11 +45,63 @@
       }
     },
     {
+      "id": "split",
+      "label": "Split",
+      "type": "fork",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "review-a",
+      "label": "Review A",
+      "type": "agent",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "settings": {
+        "role": "reviewer",
+        "instructions": "Review the change for correctness.",
+        "model": "sonnet",
+        "tools": ["Read"]
+      }
+    },
+    {
+      "id": "review-b",
+      "label": "Review B",
+      "type": "agent",
+      "position": {
+        "x": 960,
+        "y": 160
+      },
+      "settings": {
+        "role": "reviewer",
+        "instructions": "Review the change for style.",
+        "model": "sonnet",
+        "tools": ["Read"]
+      }
+    },
+    {
+      "id": "merge",
+      "label": "Merge",
+      "type": "join",
+      "position": {
+        "x": 1200,
+        "y": 0
+      },
+      "settings": {
+        "wait": "all"
+      }
+    },
+    {
       "id": "lint",
       "label": "Lint",
       "type": "script",
       "position": {
-        "x": 720,
+        "x": 1440,
         "y": 0
       },
       "settings": {
@@ -62,7 +114,7 @@
       "label": "Approve",
       "type": "gate",
       "position": {
-        "x": 960,
+        "x": 1680,
         "y": 0
       },
       "settings": {
@@ -75,7 +127,7 @@
       "label": "Choose",
       "type": "ask",
       "position": {
-        "x": 1200,
+        "x": 1920,
         "y": 0
       },
       "settings": {
@@ -88,7 +140,7 @@
       "label": "Stop on failure",
       "type": "hardstop",
       "position": {
-        "x": 1440,
+        "x": 2160,
         "y": 0
       },
       "settings": {
@@ -103,7 +155,7 @@
       "label": "Retry",
       "type": "loop",
       "position": {
-        "x": 1680,
+        "x": 2400,
         "y": 0
       },
       "settings": {
@@ -117,7 +169,7 @@
       "label": "Attempt",
       "type": "prompt",
       "position": {
-        "x": 1680,
+        "x": 2400,
         "y": 160
       },
       "parent": "retry",
@@ -130,7 +182,7 @@
       "label": "Done",
       "type": "output",
       "position": {
-        "x": 1920,
+        "x": 2640,
         "y": 0
       },
       "settings": {
@@ -166,6 +218,61 @@
       "kind": "then",
       "from": {
         "node": "build",
+        "port": "out"
+      },
+      "to": {
+        "node": "split",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "split",
+        "port": "out"
+      },
+      "to": {
+        "node": "review-a",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "split",
+        "port": "out"
+      },
+      "to": {
+        "node": "review-b",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "review-a",
+        "port": "out"
+      },
+      "to": {
+        "node": "merge",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "review-b",
+        "port": "out"
+      },
+      "to": {
+        "node": "merge",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "merge",
         "port": "out"
       },
       "to": {

@@ -16,7 +16,22 @@ describe("examples", () => {
     ["loop-review.json", ["start", "review", "fix", "check", "done"]],
     [
       "all-types.json",
-      ["start", "plan", "build", "lint", "approve", "choose", "stop", "retry", "attempt", "done"],
+      [
+        "start",
+        "plan",
+        "build",
+        "split",
+        "review-a",
+        "review-b",
+        "merge",
+        "lint",
+        "approve",
+        "choose",
+        "stop",
+        "retry",
+        "attempt",
+        "done",
+      ],
     ],
   ])("orders %s", (name, expected) => {
     expect(order(parseFlow(readExample(name)))).toEqual(expected);

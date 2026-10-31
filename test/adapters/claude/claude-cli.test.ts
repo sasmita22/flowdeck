@@ -327,6 +327,35 @@ describe("ClaudeCli", () => {
       ]);
     });
 
+    it("sees a long prompt whose start has scrolled out of the box as held by its visible end", async () => {
+      const ready = await readyCli({ submitRetryMs: 1000 });
+      const key = "33f10a313e882afb5669bdb53e7dcf5bf05710bc7a69bc88e7df13bab9a7a9d6";
+      const prompt = [
+        "Start four branches in parallel. For each one, call the Agent tool with the",
+        'subagent type "general-purpose", the description "Branch", and the prompt "Go":',
+        `"${key}:a1",`,
+        `"${key}:a2",`,
+        `"${key}:a3",`,
+        `"${key}:a4". Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next.`,
+      ].join(" ");
+      claudeBox({
+        box: [
+          '❯ prompt "Go":',
+          `  "${key}:a1",`,
+          `  "${key}:a2",`,
+          `  "${key}:a3",`,
+          `  "${key}:a4". Make`,
+          "  all the Agent calls in one message, and do not wait for one agent to finish",
+          "  before starting the next.",
+        ],
+        emptyAfterEnters: 1,
+      });
+
+      await ready.sendPrompt("fd-a", prompt);
+
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: prompt }, { key: "Enter" }]);
+    });
+
     it("never presses Enter when the prompt never shows in the box", async () => {
       const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
       sessions.setPane("fd-a", placeholderPane);
@@ -377,6 +406,49 @@ describe("ClaudeCli", () => {
         'Claude in session "fd-a" was given an empty prompt',
       );
       expect(sessions.inputs("fd-a")).toEqual([]);
+    });
+  });
+
+  describe("interrupt", () => {
+    const busyPane = [
+      rule,
+      "❯ ",
+      rule,
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← 1 agent",
+    ].join("\n");
+    const interruptedPane = [
+      "  ⎿  Interrupted · What should Claude do instead?",
+      rule,
+      "❯ ",
+      rule,
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent",
+    ].join("\n");
+
+    it("presses Escape and returns only once the turn is no longer busy", async () => {
+      sessions.setPane("fd-a", busyPane);
+      sessions.onInput("fd-a", (input) => {
+        if ("key" in input && input.key === "Escape") {
+          setTimeout(() => sessions.setPane("fd-a", interruptedPane), 30);
+        }
+      });
+      let returned = false;
+
+      const interrupting = cli.interrupt("fd-a").then(() => (returned = true));
+      await sleep(10);
+      expect(returned).toBe(false);
+      await interrupting;
+
+      expect(sessions.inputs("fd-a")).toEqual([{ key: "Escape" }]);
+      expect(await sessions.capture("fd-a")).toBe(interruptedPane);
+    });
+
+    it("gives up when the turn is still busy at the timeout", async () => {
+      sessions.setPane("fd-a", busyPane);
+
+      await expect(cli.interrupt("fd-a")).rejects.toThrow(
+        'Claude in session "fd-a" did not stop its turn within 100 ms',
+      );
+      expect(sessions.inputs("fd-a")).toEqual([{ key: "Escape" }]);
     });
   });
 

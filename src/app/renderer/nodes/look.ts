@@ -23,11 +23,12 @@ const look = (
   group: string,
   outline: string,
   height = box.height,
+  width = box.width,
 ) => ({
   tag,
   group,
   outline,
-  box: { ...box, height },
+  box: { width, height },
   ports: registry[type].ports,
 });
 
@@ -41,6 +42,8 @@ const looks: Record<NodeType, NodeLook> = {
   hardstop: look("hardstop", "STOP", human, human),
   ask: look("ask", "ASK", human, human, 57),
   loop: look("loop", "LOOP", ctrl, "none"),
+  fork: look("fork", "PARALLEL START", ctrl, ctrl, box.height, 28),
+  join: look("join", "PARALLEL END", ctrl, ctrl, box.height, 28),
 };
 
 export const nodeLook = (type: NodeType): NodeLook => looks[type];

@@ -19,7 +19,7 @@ export const octagon = (w: number, h: number, c: number): string =>
 
 const tagWidth = (tag: string) => tag.length * 7 + 10;
 
-const ports = (id: string, type: NodeType) =>
+export const ports = (id: string, type: NodeType) =>
   nodeLook(type).ports.map(({ name, direction }) => (
     <Handle
       key={name}

@@ -1,6 +1,13 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
 import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
 import {
+  forkTurnText,
+  parallelSections,
+  unlaunched,
+  type ParallelSection,
+} from "../nodes/fork/execute.js";
+import { joinComplete, skippedBranches, type JoinWait } from "../nodes/join/execute.js";
+import {
   askOutcome,
   askRequest,
   withAgentContext,
@@ -31,17 +38,19 @@ import {
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { decisionsOf, loopRound, nodeStatus, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
+import { SectionWatch } from "./section-watch.js";
 import type { EventEntry, Store, StoredEvent } from "./store.js";
 import { stampedBefore, waitForTurnEnd, type TurnEndEvent, type TurnEvents } from "./turns.js";
 import { parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
-export type RunnableManifest = Pick<Manifest, "nodes"> & { hash: string };
+export type RunnableManifest = Pick<Manifest, "nodes"> &
+  Partial<Pick<Manifest, "wires">> & { hash: string };
 
 export type ScriptResult = { code: number | null; stdout: string; stderr: string };
 
 export type RunnerDeps = {
-  prompts: { sendPrompt(text: string): Promise<void> };
+  prompts: { sendPrompt(text: string): Promise<void>; interrupt(): Promise<void> };
   session: { ensureStarted(): Promise<void> };
   events: TurnEvents;
   scripts: { run(command: string, args: readonly string[], cwd: string): Promise<ScriptResult> };
@@ -58,6 +67,7 @@ export type RunnerDeps = {
   usage?: UsageReader;
   budget?: number;
   usageSettleMs?: number;
+  settleQuietMs?: number;
 };
 
 export type RunOptions = { actions?: ResumeActions };
@@ -74,6 +84,7 @@ type GateSettings = Parameters<typeof gateRequest>[1];
 type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
+type JoinSettings = { wait: JoinWait };
 
 type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
@@ -81,11 +92,13 @@ type TurnResult = { failure: string } | { failure?: never; reply: string | undef
 type RunContext = {
   hash: string;
   nodes: readonly ManifestNode[];
+  sections: readonly ParallelSection[];
   ensureStarted: () => Promise<void>;
 };
 
 const defaultTurnTimeoutMs = 600_000;
 const defaultUsageSettleMs = 2_000;
+const defaultSettleQuietMs = 5_000;
 const usagePollMs = 50;
 const runnable = new Set<ManifestNode["type"]>([
   "prompt",
@@ -95,11 +108,19 @@ const runnable = new Set<ManifestNode["type"]>([
   "ask",
   "hardstop",
   "loop",
+  "fork",
+  "join",
 ]);
 
-export function structureProblems(nodes: readonly ManifestNode[]): string[] {
+export function structureProblems(
+  nodes: readonly ManifestNode[],
+  wires: Manifest["wires"] = [],
+): string[] {
   const loops = new Set(nodes.filter((node) => node.type === "loop").map((node) => node.id));
-  return nodes.flatMap((node) => {
+  const sectionProblems = parallelSections(nodes, wires).problems.map(
+    ({ node, message }) => `${node} ${message}`,
+  );
+  const loopProblems = nodes.flatMap((node) => {
     const problems: string[] = [];
     if (node.type === "loop") {
       const hasTurn = nodes.some(
@@ -115,6 +136,7 @@ export function structureProblems(nodes: readonly ManifestNode[]): string[] {
     }
     return problems;
   });
+  return [...loopProblems, ...sectionProblems];
 }
 
 export class StructureError extends Error {
@@ -224,7 +246,7 @@ export class Runner {
   }
 
   async run(manifest: RunnableManifest, options: RunOptions = {}): Promise<RunResult> {
-    const problems = structureProblems(manifest.nodes);
+    const problems = structureProblems(manifest.nodes, manifest.wires);
     if (problems.length > 0) throw new StructureError(problems);
     const stopAnswering = this.deps.permissions?.onRequest(this.deps.sessionId, (payload, signal) =>
       this.answerPermission(payload, signal),
@@ -269,7 +291,8 @@ export class Runner {
       await this.deps.session.ensureStarted();
       started = true;
     };
-    const context: RunContext = { hash: manifest.hash, nodes, ensureStarted };
+    const { sections } = parallelSections(manifest.nodes, manifest.wires ?? []);
+    const context: RunContext = { hash: manifest.hash, nodes, sections, ensureStarted };
     for (const node of nodes.filter((node) => node.parent === undefined)) {
       const { failure } = await this.runStep(node, context);
       if (failure !== undefined) {
@@ -381,6 +404,11 @@ export class Runner {
     if (node.type === "loop") {
       const result = await this.runLoop(node, context);
       if (result.failure !== undefined) return result;
+    } else if (node.type === "fork") {
+      const result = await this.runSection(node, context);
+      if (result.failure !== undefined) return result;
+    } else if (node.type === "join") {
+      throw new Error(`${node.id} (join) was reached outside its parallel section`);
     } else if (node.type === "prompt" || node.type === "agent") {
       const halted = await this.checkBudget(node.id);
       if (halted !== undefined) return halted;
@@ -531,6 +559,149 @@ export class Runner {
       this.record(loop.id, { kind: "done" });
       return {};
     }
+  }
+
+  private async runSection(fork: ManifestNode, context: RunContext): Promise<StepResult> {
+    const action = this.takeAction(fork.id);
+    const section = context.sections.find((candidate) => candidate.fork === fork.id);
+    if (section === undefined) throw new Error(`${fork.id} (fork) has no parallel section`);
+    if (action?.kind === "fail") {
+      this.recordAll(
+        [...section.branches, section.join].flatMap((nodeId): EventEntry[] => {
+          const failed = this.takeAction(nodeId);
+          return failed?.kind === "fail"
+            ? [{ nodeId, event: { kind: "failed", payload: { message: failed.message } } }]
+            : [];
+        }),
+      );
+      return { failure: { nodeId: fork.id, reason: reasonIn(fork.id, action.message) } };
+    }
+    const join = context.nodes.find((node) => node.id === section.join);
+    const { wait } = join?.settings as JoinSettings;
+    const halted = await this.checkBudget(fork.id);
+    if (halted !== undefined) return halted;
+    this.inTurn = fork.id;
+    try {
+      return await this.driveSection(section, wait, context);
+    } finally {
+      this.inTurn = undefined;
+    }
+  }
+
+  private async driveSection(
+    section: ParallelSection,
+    wait: JoinWait,
+    context: RunContext,
+  ): Promise<StepResult> {
+    const { fork, join, branches } = section;
+    const branchOf = new Map(branches.map((id) => [agentType(context.hash, id), id]));
+    const branchTypes = [...branchOf.keys()];
+    const stopped = new Set<string>();
+    const timeoutMs = this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs;
+    const quietMs = this.deps.settleQuietMs ?? defaultSettleQuietMs;
+    const held = () => this.openAsks > 0;
+    const armedAt = this.deps.now?.() ?? Number.NEGATIVE_INFINITY;
+    const watch = new SectionWatch({
+      events: this.deps.events,
+      sessionId: this.deps.sessionId,
+      armedAt,
+      branchTypes,
+      onStopped: (type, message) => {
+        const id = branchOf.get(type);
+        if (id === undefined) return;
+        stopped.add(id);
+        this.record(
+          id,
+          typeof message === "string"
+            ? { kind: "done", payload: { stopMessage: message } }
+            : { kind: "done" },
+        );
+        this.emit(`${id} done`);
+      },
+    });
+    try {
+      this.recordAll([
+        { nodeId: fork, event: { kind: "sent" } },
+        ...branches.map((nodeId): EventEntry => ({ nodeId, event: { kind: "sent" } })),
+        { nodeId: join, event: { kind: "running" } },
+      ]);
+      this.emit(`${fork} started`);
+      const missing = () =>
+        unlaunched(branchTypes, [...watch.launched]).map((type) => branchOf.get(type) ?? type);
+      const untilJoined = () =>
+        watch.untilStopped((types) => joinComplete(wait, branchTypes, types), timeoutMs, held);
+      let stopMessage: string | undefined;
+      try {
+        await context.ensureStarted();
+        const text = forkTurnText(context.hash, branches);
+        if (wait === "first") {
+          await this.deps.prompts.sendPrompt(text);
+          await untilJoined();
+          await this.deps.prompts.interrupt();
+          if (missing().length > 0) return this.failLaunch(section, stopped, missing());
+          const skipped = skippedBranches(branches, stopped);
+          this.recordAll(skipped.map((nodeId) => ({ nodeId, event: { kind: "skipped" } })));
+          for (const id of skipped) this.emit(`${id} skipped`);
+        } else {
+          const turnEnd = this.armTurnEnd(armedAt);
+          await this.deps.prompts.sendPrompt(text);
+          await turnEnd;
+          if (missing().length > 0) return this.failLaunch(section, stopped, missing());
+          await untilJoined();
+          stopMessage = lastMessage(await watch.settled(quietMs, timeoutMs));
+        }
+      } catch (error) {
+        return this.failSection(section, stopped, messageOf(error));
+      }
+      this.record(join, { kind: "done" });
+      this.emit(`${join} done`);
+      this.finishTurn(fork, stopMessage);
+      return {};
+    } finally {
+      watch.close();
+    }
+  }
+
+  private failLaunch(
+    section: ParallelSection,
+    stopped: ReadonlySet<string>,
+    missing: readonly string[],
+  ): StepResult {
+    const reason = `not started: ${missing.join(", ")}`;
+    const ends = section.branches
+      .filter((id) => !stopped.has(id))
+      .map((nodeId): EventEntry =>
+        missing.includes(nodeId)
+          ? {
+              nodeId,
+              event: { kind: "failed", payload: { message: `${nodeId} failed: not started` } },
+            }
+          : { nodeId, event: { kind: "skipped" } },
+      );
+    this.recordAll([
+      ...ends,
+      {
+        nodeId: section.join,
+        event: { kind: "failed", payload: { message: `${section.join} failed: ${reason}` } },
+      },
+    ]);
+    return { failure: { nodeId: section.fork, reason } };
+  }
+
+  private failSection(
+    section: ParallelSection,
+    stopped: ReadonlySet<string>,
+    reason: string,
+  ): StepResult {
+    const failed = (nodeId: string): EventEntry => ({
+      nodeId,
+      event: { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
+    });
+    this.recordAll([
+      ...section.branches.filter((id) => !stopped.has(id)).map(failed),
+      failed(section.join),
+    ]);
+    return { failure: { nodeId: section.fork, reason } };
   }
 
   private startRound(

@@ -1,6 +1,7 @@
 import type { ManifestNode } from "../compiler/lower.js";
 import { agentType } from "../nodes/agent/execute.js";
 import { nodeStatus } from "./run-events.js";
+import type { NodeState } from "./state.js";
 import type { StoredEvent } from "./store.js";
 import type { HumanDecision } from "./wait.js";
 
@@ -69,11 +70,28 @@ function settleHuman(events: readonly StoredEvent[]): ResumeAction {
     : { kind: "ask" };
 }
 
+function sectionInterrupted(node: ManifestNode, status: NodeState, interrupted: boolean): boolean {
+  if (node.type === "fork") return status === "sent";
+  if (node.type === "join") return status === "running";
+  return interrupted && node.type === "agent" && status === "sent";
+}
+
 export function decideResume({ manifest, events, turns }: ResumeInput): ResumeActions {
   const actions: ResumeActions = {};
+  const statusOf = (id: string) => nodeStatus(events.filter((event) => event.nodeId === id));
+  const interrupted = manifest.nodes.some(
+    (node) => node.type === "fork" && statusOf(node.id) === "sent",
+  );
   for (const node of manifest.nodes) {
     const own = events.filter((event) => event.nodeId === node.id);
     const status = nodeStatus(own);
+    if (sectionInterrupted(node, status, interrupted)) {
+      actions[node.id] = {
+        kind: "fail",
+        message: `${node.id} failed: parallel section was interrupted; start a new run`,
+      };
+      continue;
+    }
     if (status === "sent") actions[node.id] = settleTurn(node, manifest.hash, own, turns);
     if (status === "running" && node.type === "script") {
       actions[node.id] = {

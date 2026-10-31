@@ -4,6 +4,7 @@ import { rule as loopCap } from "./rules/loop-cap.js";
 import { rule as loopSingleEntry } from "./rules/loop-single-entry.js";
 import { rule as noCycle } from "./rules/no-cycle.js";
 import { rule as nodeIds } from "./rules/node-ids.js";
+import { rule as parallelSection } from "./rules/parallel-section.js";
 import { rule as ports } from "./rules/ports.js";
 import { rule as references } from "./rules/references.js";
 import { rule as requiredSettings } from "./rules/required-settings.js";
@@ -31,6 +32,7 @@ export const rules = [
   noCycle,
   loopSingleEntry,
   nodeIds,
+  parallelSection,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

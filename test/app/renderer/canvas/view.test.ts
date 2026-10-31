@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  alignedEnds,
   edgeId,
   FRAME_PADDING,
   SESSION_FRAME_ID,
@@ -12,8 +13,10 @@ import {
   agent,
   ask,
   flow,
+  fork,
   gate,
   hardstop,
+  join,
   loop,
   output,
   prompt,
@@ -410,5 +413,120 @@ describe("edgeId", () => {
     ).wires;
 
     expect(new Set(wires.map(edgeId)).size).toBe(wires.length);
+  });
+});
+
+const parallelSection = () =>
+  flow(
+    [
+      { ...trigger("T"), position: { x: -200, y: 10 } },
+      { ...fork("F"), position: { x: 10, y: 10 } },
+      { ...agent("b1"), position: { x: 70, y: 10 } },
+      { ...agent("b2"), position: { x: 70, y: 90 } },
+      { ...agent("b3"), position: { x: 70, y: 170 } },
+      { ...join("J"), position: { x: 270, y: 10 } },
+      { ...output("O"), position: { x: 400, y: 10 } },
+    ],
+    [
+      thenWire("T", "F"),
+      thenWire("F", "b1"),
+      thenWire("F", "b2"),
+      thenWire("F", "b3"),
+      thenWire("b1", "J"),
+      thenWire("b2", "J"),
+      thenWire("b3", "J"),
+      thenWire("J", "O"),
+    ],
+  );
+
+const viewOf = (view: ReturnType<typeof toViewNodes>, id: string) =>
+  view.find((node) => node.id === id);
+
+describe("toViewNodes with a parallel section", () => {
+  it("stretches the fork and join bars over every branch they span", () => {
+    const view = toViewNodes(parallelSection(), [], {}, null);
+
+    expect(viewOf(view, "F")).toMatchObject({
+      position: { x: 10, y: 10 },
+      width: 28,
+      height: 208,
+    });
+    expect(viewOf(view, "J")).toMatchObject({
+      position: { x: 270, y: 10 },
+      width: 28,
+      height: 208,
+    });
+  });
+
+  it("takes the bar's x from its drag position and its y from its branches", () => {
+    const view = toViewNodes(parallelSection(), [], { F: { x: 40, y: 500 } }, null);
+
+    expect(viewOf(view, "F")).toMatchObject({ position: { x: 40, y: 10 }, height: 208 });
+  });
+
+  it("keeps a fork with no wires at its stored position with no height override", () => {
+    const [node] = toViewNodes(
+      flow([{ ...fork("F"), position: { x: 30, y: 60 } }], []),
+      [],
+      {},
+      null,
+    );
+
+    expect(node).toMatchObject({ id: "F", position: { x: 30, y: 60 } });
+    expect(node).not.toHaveProperty("height");
+  });
+
+  it("widens a session frame by a member fork's spanned box", () => {
+    const [frame] = toViewNodes(framed(parallelSection(), ["F"]), [], {}, null);
+
+    expect(frame).toMatchObject({
+      id: SESSION_FRAME_ID,
+      position: { x: 10 - FRAME_PADDING, y: 10 - FRAME_PADDING },
+      width: 28 + 2 * FRAME_PADDING,
+      height: 208 + 2 * FRAME_PADDING,
+    });
+  });
+});
+
+describe("toViewEdges with a parallel section", () => {
+  const edges = () => new Map(toViewEdges(parallelSection()).map((edge) => [edge.id, edge]));
+
+  it("aligns each wire out of a fork to its target", () => {
+    for (const branch of ["b1", "b2", "b3"]) {
+      expect(edges().get(`F:out->${branch}:in`)).toMatchObject({
+        type: "aligned",
+        data: { align: "target" },
+      });
+    }
+  });
+
+  it("aligns each wire into a join to its source", () => {
+    for (const branch of ["b1", "b2", "b3"]) {
+      expect(edges().get(`${branch}:out->J:in`)).toMatchObject({
+        type: "aligned",
+        data: { align: "source" },
+      });
+    }
+  });
+
+  it("leaves wires into a fork and out of a join unchanged", () => {
+    for (const id of ["T:out->F:in", "J:out->O:in"]) {
+      const edge = edges().get(id);
+      expect(edge).toBeDefined();
+      expect(edge).not.toHaveProperty("type");
+      expect(edge).not.toHaveProperty("data");
+    }
+  });
+});
+
+describe("alignedEnds", () => {
+  const ends = { sourceX: 38, sourceY: 114, targetX: 70, targetY: 34 };
+
+  it("levels the source with the target for align target", () => {
+    expect(alignedEnds(ends, "target")).toEqual({ ...ends, sourceY: 34 });
+  });
+
+  it("levels the target with the source for align source", () => {
+    expect(alignedEnds(ends, "source")).toEqual({ ...ends, targetY: 114 });
   });
 });

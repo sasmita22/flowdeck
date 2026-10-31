@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentNodeId } from "../nodes/agent/execute.js";
 import { attribute, type NodeWindow } from "./attribution.js";
 
 const base = { id: z.number().int(), nodeId: z.string(), at: z.number(), summary: z.string() };
@@ -60,12 +61,14 @@ function addEntry(
   const unchanged = { feed, changed: undefined };
   const at = payload["flowdeck_hook_at"];
   if (payload["agent_id"] !== undefined || typeof at !== "number") return unchanged;
-  const nodeId = attribute(windows, at);
-  if (nodeId === undefined) return unchanged;
   const tool = String(payload["tool_name"]);
   const input = recordOf(payload["tool_input"]);
-  const common = { id: feed.nextId, nodeId, at };
   const subagentType = input["subagent_type"];
+  const owner =
+    tool === "Agent" && typeof subagentType === "string" ? agentNodeId(subagentType) : undefined;
+  const nodeId = attribute(windows, at, owner);
+  if (nodeId === undefined) return unchanged;
+  const common = { id: feed.nextId, nodeId, at };
   const changed: ActivityEntry =
     tool === "Agent"
       ? {

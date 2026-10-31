@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ManifestNode } from "../../../src/core/compiler/lower.js";
+import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
+import { forkTurnText } from "../../../src/core/nodes/fork/execute.js";
 import {
   agentVerdictTurnText,
   capRequest,
@@ -26,6 +27,7 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
+import * as builders from "../../fixtures/flow-builders.js";
 import { budget as budgetWait, permission as permissionWait } from "../../fixtures/waits.js";
 
 const hash = "abc123";
@@ -89,6 +91,7 @@ function harness(
   const deps: TestDeps = {
     store: new FakeStore(),
     prompts: {
+      interrupt: async () => undefined,
       sendPrompt: async (text) => {
         calls.push(`send ${text}`);
         if (stop === "during-send") publishStop();
@@ -130,6 +133,7 @@ function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000, waiter = new Fake
   const deps: TestDeps = {
     store: new FakeStore(),
     prompts: {
+      interrupt: async () => undefined,
       sendPrompt: async (text) => {
         calls.push(`send ${text}`);
         for (const event of turns[sent++] ?? []) {
@@ -329,6 +333,7 @@ describe("Runner", () => {
       const events = deps.events as FakeEventSource;
       deps.now = () => 2;
       deps.prompts = {
+        interrupt: async () => undefined,
         sendPrompt: async () => {
           events.publish({ kind: "Stop", sessionId, payload: { flowdeck_hook_at: 1 } });
           events.publish({ kind: "SubagentStop", sessionId, payload: { agent_type: a1Type } });
@@ -1081,7 +1086,10 @@ describe("Runner", () => {
     const failing: TestDeps = {
       ...deps,
       turnTimeoutMs: 20,
-      prompts: { sendPrompt: () => Promise.reject(new Error("box never emptied")) },
+      prompts: {
+        sendPrompt: () => Promise.reject(new Error("box never emptied")),
+        interrupt: async () => undefined,
+      },
     };
 
     const result = await runOn(failing, manifest(prompt("a")));
@@ -1139,6 +1147,7 @@ describe("Runner run state", () => {
       ...deps,
       store,
       prompts: {
+        interrupt: async () => undefined,
         sendPrompt: async (text) => {
           seenAtSend.push(
             store.events(runIdOf(store)).map((event) => `${event.nodeId} ${event.kind}`),
@@ -1794,6 +1803,7 @@ describe("Runner budget", () => {
     });
     const send = h.deps.prompts.sendPrompt;
     h.deps.prompts = {
+      interrupt: async () => undefined,
       sendPrompt: async (text) => {
         await send(text);
         usage.setEntries(sessionId, spent(options.tokens ?? dollars120));
@@ -1946,6 +1956,7 @@ describe("Runner budget", () => {
       const send = h.deps.prompts.sendPrompt;
       let sent = 0;
       h.deps.prompts = {
+        interrupt: async () => undefined,
         sendPrompt: async (text) => {
           await send(text);
           if (sent++ > 0) return;
@@ -2095,5 +2106,537 @@ describe("Runner budget", () => {
     expect(waiter.calls).toEqual([budgetWait]);
     expect(sends(calls)).toEqual([]);
     expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
+  });
+});
+
+describe("Runner parallel section", () => {
+  const quietMs = 30;
+  const branchIds = ["a1", "a2", "a3"];
+  const typeOf = (id: string) => `${hash}:${id}`;
+  const forkSend = (ids = branchIds) => `send ${forkTurnText(hash, ids)}`;
+  const afterSend = `send /${hash}:after`;
+  const approve: WaitReply = { decision: "approve" };
+  const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const eventsOf = (store: FakeStore, nodeId: string) =>
+    store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+  const kindsOf = (store: FakeStore, nodeId: string) =>
+    eventsOf(store, nodeId).map((event) => event.kind);
+  const timeline = (store: FakeStore) =>
+    store.events(runIdOf(store)).map((event) => `${event.nodeId} ${event.kind}`);
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const deferred = () => {
+    let resolve: (reply: WaitReply) => void = () => undefined;
+    const promise = new Promise<WaitReply>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+
+  function sectionManifest(
+    options: { branches?: string[]; wait?: "all" | "first"; after?: boolean } = {},
+  ): RunnableManifest {
+    const ids = options.branches ?? branchIds;
+    const withAfter = options.after ?? true;
+    const flow = builders.flow(
+      [
+        builders.fork("f"),
+        ...ids.map((id) => builders.agent(id)),
+        builders.join("j", { settings: { wait: options.wait ?? "all" } }),
+        ...(withAfter ? [builders.prompt("after")] : []),
+      ],
+      [
+        ...ids.map((id) => builders.thenWire("f", id)),
+        ...ids.map((id) => builders.thenWire(id, "j")),
+        ...(withAfter ? [builders.thenWire("j", "after")] : []),
+      ],
+    );
+    const { nodes, wires } = lower(flow).manifest;
+    return { hash, nodes, wires };
+  }
+
+  type Session = {
+    launch: (id: string) => void;
+    subagentStop: (id: string, reply?: string) => void;
+    stop: (reply?: string) => void;
+  };
+  type Turn = (session: Session) => void;
+
+  function sectionHarness(
+    options: {
+      onFork?: Turn;
+      onInterrupt?: Turn;
+      waiter?: FakeWaiter;
+      permissions?: FakePermissionSource;
+      usage?: FakeUsageSource;
+      budget?: number;
+      turnTimeoutMs?: number;
+    } = {},
+  ) {
+    const events = new FakeEventSource();
+    const calls: string[] = [];
+    const lines: string[] = [];
+    let clock = 1000;
+    const publish = (kind: "Stop" | "SubagentStop" | "PreToolUse", payload: object) => {
+      calls.push(`event ${kind} ${JSON.stringify(payload)}`);
+      events.publish({ kind, sessionId, payload: { ...payload, flowdeck_hook_at: ++clock } });
+    };
+    const session: Session = {
+      launch: (id) =>
+        publish("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: typeOf(id) } }),
+      subagentStop: (id, reply) =>
+        publish("SubagentStop", {
+          agent_type: typeOf(id),
+          agent_id: `agent-${id}`,
+          ...(reply === undefined ? {} : { last_assistant_message: reply }),
+        }),
+      stop: (reply) =>
+        publish("Stop", reply === undefined ? {} : { last_assistant_message: reply }),
+    };
+    const onFork =
+      options.onFork ??
+      ((s: Session) => {
+        for (const id of branchIds) s.launch(id);
+        s.stop("Launched.");
+      });
+    const deps: TestDeps & { settleQuietMs: number } = {
+      store: new FakeStore(),
+      prompts: {
+        sendPrompt: async (text) => {
+          calls.push(`send ${text}`);
+          if (text === forkTurnText(hash, branchIds)) onFork(session);
+          else if (text === `/${hash}:after`) session.stop("OK");
+        },
+        interrupt: async () => {
+          calls.push("interrupt");
+          options.onInterrupt?.(session);
+        },
+      },
+      session: { ensureStarted: async () => undefined },
+      events,
+      scripts: new FakeProcessRunner([]),
+      waiter: options.waiter ?? new FakeWaiter([]),
+      ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
+      ...(options.usage === undefined ? {} : { usage: options.usage }),
+      ...(options.budget === undefined ? {} : { budget: options.budget }),
+      onChange: (line) => lines.push(line),
+      cwd,
+      sessionId,
+      turnTimeoutMs: options.turnTimeoutMs ?? 500,
+      now: () => clock,
+      settleQuietMs: quietMs,
+    };
+    const finishBranches = (ids = branchIds) => {
+      for (const id of ids) session.subagentStop(id, `${id} reply`);
+      session.stop("All done.");
+    };
+    return { deps, calls, lines, session, finishBranches };
+  }
+
+  const forkSent = (calls: string[]) =>
+    vi.waitFor(() => expect(sends(calls)).toHaveLength(1), { timeout: 200 });
+  const launchAll: Turn = (s) => {
+    for (const id of branchIds) s.launch(id);
+  };
+  const sendsAndInterrupts = (calls: string[]) =>
+    calls.filter((call) => call.startsWith("send") || call === "interrupt");
+
+  it("sends one fork turn and marks the fork, each branch and the join before any SubagentStop", async () => {
+    const h = sectionHarness();
+    const running = runOn(h.deps, sectionManifest());
+    await forkSent(h.calls);
+
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    expect(timeline(h.deps.store)).toEqual([
+      "f sent",
+      "a1 sent",
+      "a2 sent",
+      "a3 sent",
+      "j running",
+    ]);
+    h.finishBranches();
+    await running;
+  });
+
+  it("waits for all: each branch is done at its SubagentStop, and the next node only after the settle", async () => {
+    const waiter = new FakeWaiter([]);
+    const h = sectionHarness({ waiter });
+    const running = runOn(h.deps, sectionManifest());
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", "a1 reply");
+    await vi.waitFor(() => expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]));
+    expect(eventsOf(h.deps.store, "a1").at(-1)).toMatchObject({
+      kind: "done",
+      payload: { stopMessage: "a1 reply" },
+    });
+    expect(kindsOf(h.deps.store, "a2")).toEqual(["sent"]);
+    h.session.stop("a1 noted");
+    h.session.subagentStop("a2", "a2 reply");
+    h.session.stop("a2 noted");
+    h.session.subagentStop("a3", "a3 reply");
+    await sleep(quietMs * 3);
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    h.session.stop("All three are done.");
+    await sleep(quietMs / 3);
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    const result = await running;
+
+    expect(result.outcome).toBe("done");
+    expect(sends(h.calls)).toEqual([forkSend(), afterSend]);
+    for (const id of ["a2", "a3"]) {
+      expect(eventsOf(h.deps.store, id).at(-1)).toMatchObject({
+        kind: "done",
+        payload: { stopMessage: `${id} reply` },
+      });
+    }
+    const order = timeline(h.deps.store);
+    expect(order.indexOf("j done")).toBeGreaterThan(order.indexOf("a3 done"));
+    expect(order.indexOf("f done")).toBeGreaterThan(order.indexOf("j done"));
+    expect(eventsOf(h.deps.store, "f").at(-1)).toMatchObject({
+      kind: "done",
+      payload: { stopMessage: "All three are done." },
+    });
+    expect(waiter.calls).toEqual([]);
+  });
+
+  it("does not complete a three-branch join on a duplicate SubagentStop", async () => {
+    const h = sectionHarness();
+    const running = runOn(h.deps, sectionManifest());
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", "a1 reply");
+    h.session.subagentStop("a1", "a1 again");
+    h.session.subagentStop("a2", "a2 reply");
+    h.session.stop("Two of three.");
+    await sleep(quietMs * 3);
+
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    expect(kindsOf(h.deps.store, "j")).toEqual(["running"]);
+    expect(kindsOf(h.deps.store, "a3")).toEqual(["sent"]);
+    h.finishBranches(["a3"]);
+    expect((await running).outcome).toBe("done");
+  });
+
+  it("waits for first: interrupts at the first SubagentStop without waiting for a Stop, skips the rest, then runs the next node", async () => {
+    const h = sectionHarness({ onFork: launchAll });
+    const running = runOn(h.deps, sectionManifest({ wait: "first" }));
+    await forkSent(h.calls);
+
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    expect(h.calls).not.toContain("interrupt");
+    h.session.subagentStop("a2", "a2 reply");
+    const result = await running;
+
+    expect(result.outcome).toBe("done");
+    expect(result.states).toEqual({
+      f: "done",
+      a1: "skipped",
+      a2: "done",
+      a3: "skipped",
+      j: "done",
+      after: "done",
+    });
+    expect(sendsAndInterrupts(h.calls)).toEqual([forkSend(), "interrupt", afterSend]);
+    expect(h.calls.filter((call) => call.startsWith("event Stop"))).toEqual([
+      'event Stop {"last_assistant_message":"OK"}',
+    ]);
+    const order = timeline(h.deps.store);
+    expect(order.indexOf("a1 skipped")).toBeGreaterThan(order.indexOf("a2 done"));
+    expect(order.indexOf("j done")).toBeGreaterThan(order.indexOf("a3 skipped"));
+    expect(order.indexOf("f done")).toBeGreaterThan(order.indexOf("j done"));
+  });
+
+  it("waits for first: a sibling that stops while the session is interrupted ends done, not skipped", async () => {
+    const h = sectionHarness({
+      onFork: launchAll,
+      onInterrupt: (s) => s.subagentStop("a3", "a3 reply"),
+    });
+    const running = runOn(h.deps, sectionManifest({ wait: "first" }));
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a2", "a2 reply");
+    const result = await running;
+
+    expect(result.states).toMatchObject({ a1: "skipped", a2: "done", a3: "done", j: "done" });
+    expect(eventsOf(h.deps.store, "a3").at(-1)).toMatchObject({
+      kind: "done",
+      payload: { stopMessage: "a3 reply" },
+    });
+  });
+
+  it("waits for first: fails the section when the interrupt fails", async () => {
+    const h = sectionHarness({
+      onFork: launchAll,
+      onInterrupt: () => {
+        throw new Error("still busy");
+      },
+    });
+    const running = runOn(h.deps, sectionManifest({ wait: "first" }));
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a2", "a2 reply");
+    const result = await running;
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+    expect(result.states).toMatchObject({ f: "failed", a1: "failed", a2: "done", j: "failed" });
+    expect(sendsAndInterrupts(h.calls)).toEqual([forkSend(), "interrupt"]);
+    expect(eventsOf(h.deps.store, "j").at(-1)).toMatchObject({
+      kind: "failed",
+      payload: { message: "j failed: still busy" },
+    });
+  });
+
+  it("waits for first: fails the section when a branch never launched, after the interrupt and without a cancel turn", async () => {
+    const h = sectionHarness({
+      onFork: (s) => {
+        s.launch("a1");
+        s.launch("a2");
+      },
+    });
+    const running = runOn(h.deps, sectionManifest({ wait: "first" }));
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", "a1 reply");
+    const result = await running;
+
+    expect(sendsAndInterrupts(h.calls)).toEqual([forkSend(), "interrupt"]);
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+    expect(result.states).toMatchObject({
+      f: "failed",
+      a1: "done",
+      a2: "skipped",
+      a3: "failed",
+      j: "failed",
+    });
+  });
+
+  it("fails the section without another turn when a branch never launches", async () => {
+    const h = sectionHarness({
+      onFork: (s) => {
+        s.launch("a1");
+        s.launch("a2");
+        s.subagentStop("a1", "a1 reply");
+        s.subagentStop("a2", "a2 reply");
+        s.stop("Launched two.");
+      },
+    });
+
+    const result = await runOn(h.deps, sectionManifest());
+
+    expect(sends(h.calls)).toEqual([forkSend()]);
+    expect(result.outcome).toBe("failed");
+    expect(result.states).toEqual({
+      f: "failed",
+      a1: "done",
+      a2: "done",
+      a3: "failed",
+      j: "failed",
+      after: "waiting",
+    });
+    expect(h.lines.at(-1)).toMatch(/a3/);
+  });
+
+  it("fails a branch that never stops at the turn timeout, with its join and fork", async () => {
+    const h = sectionHarness({ turnTimeoutMs: 100 });
+    const running = runOn(h.deps, sectionManifest());
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", "a1 reply");
+    h.session.subagentStop("a2", "a2 reply");
+    h.session.stop("Two of three.");
+    const result = await running;
+
+    expect(result.outcome).toBe("failed");
+    expect(result.states).toMatchObject({
+      f: "failed",
+      a1: "done",
+      a2: "done",
+      a3: "failed",
+      j: "failed",
+      after: "waiting",
+    });
+    expect(h.lines.at(-1)).toMatch(/no SubagentStop for session s1 within 100 ms/);
+    expect(sends(h.calls)).not.toContain(afterSend);
+  });
+
+  it("holds the branch timeout while a permission ask is open", async () => {
+    const pending = deferred();
+    const waiter = new FakeWaiter([pending.promise]);
+    const permissions = new FakePermissionSource();
+    const h = sectionHarness({ waiter, permissions, turnTimeoutMs: 50 });
+    const running = runOn(h.deps, sectionManifest());
+    await forkSent(h.calls);
+
+    const asked = permissions.ask(sessionId, bash("echo hi"));
+    await sleep(150);
+    h.finishBranches();
+    pending.resolve(approve);
+    await asked;
+    const result = await running;
+
+    expect(result.outcome).toBe("done");
+    expect(result.states).toMatchObject({ a1: "done", a2: "done", a3: "done", j: "done" });
+  });
+
+  describe("budget", () => {
+    const overBudget = (): UsageEntry[] => [
+      {
+        messageId: "m1",
+        model: "claude-opus-5-5",
+        inputTokens: 0,
+        outputTokens: 60_000,
+        cacheWrite5mTokens: 0,
+        cacheWrite1hTokens: 0,
+        cacheReadTokens: 0,
+      },
+    ];
+
+    it("halts at the fork before anything is sent when the budget is reached", async () => {
+      const usage = new FakeUsageSource();
+      usage.setEntries(sessionId, overBudget());
+      const waiter = new FakeWaiter([{ decision: "stop", reason: "too much" }]);
+      const h = sectionHarness({ waiter, usage, budget: 1 });
+
+      const result = await runOn(h.deps, sectionManifest());
+
+      expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "f" }]);
+      expect(sends(h.calls)).toEqual([]);
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+      for (const id of [...branchIds, "j"]) expect(kindsOf(h.deps.store, id)).toEqual([]);
+    });
+
+    it("checks the budget once, for the fork, and never for a branch", async () => {
+      const usage = new FakeUsageSource();
+      usage.setEntries(sessionId, overBudget());
+      const waiter = new FakeWaiter([{ decision: "raise", budget: 2 }]);
+      const h = sectionHarness({
+        waiter,
+        usage,
+        budget: 1,
+        onFork: (s) => {
+          for (const id of branchIds) s.launch(id);
+          for (const id of branchIds) s.subagentStop(id, `${id} reply`);
+          s.stop("All done.");
+        },
+      });
+
+      const result = await runOn(h.deps, sectionManifest({ after: false }));
+
+      expect(result.outcome).toBe("done");
+      expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "f" }]);
+      expect(usage.calls).toEqual([sessionId]);
+      for (const id of branchIds) expect(kindsOf(h.deps.store, id)).not.toContain("budget");
+    });
+  });
+
+  describe("permission requests", () => {
+    it("files a request while the branches run under the fork's id", async () => {
+      const waiter = new FakeWaiter([approve]);
+      const permissions = new FakePermissionSource();
+      const h = sectionHarness({ waiter, permissions });
+      const running = runOn(h.deps, sectionManifest());
+      await forkSent(h.calls);
+
+      const decision = await permissions.ask(sessionId, bash("echo hi"));
+      h.finishBranches();
+      await running;
+
+      expect(waiter.calls).toEqual([{ ...permissionWait, nodeId: "f" }]);
+      expect(decision).toEqual({ behavior: "allow" });
+    });
+
+    it("files a request during the interrupt under the fork's id", async () => {
+      const waiter = new FakeWaiter([approve]);
+      const permissions = new FakePermissionSource();
+      const h = sectionHarness({ waiter, permissions, onFork: launchAll });
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      h.deps.prompts = {
+        ...h.deps.prompts,
+        interrupt: async () => {
+          h.calls.push("interrupt");
+          await released;
+        },
+      };
+      const running = runOn(h.deps, sectionManifest({ wait: "first" }));
+      await forkSent(h.calls);
+      h.session.subagentStop("a1", "a1 reply");
+      await vi.waitFor(() => expect(h.calls).toContain("interrupt"));
+
+      const decision = await permissions.ask(sessionId, bash("echo hi"));
+      release();
+      await running;
+
+      expect(waiter.calls).toEqual([{ ...permissionWait, nodeId: "f" }]);
+      expect(decision).toEqual({ behavior: "allow" });
+    });
+  });
+
+  it("does not rerun the branches after the section: one fork turn, then the next node", async () => {
+    const h = sectionHarness({
+      onFork: (s) => {
+        for (const id of branchIds) s.launch(id);
+        for (const id of branchIds) s.subagentStop(id, `${id} reply`);
+        s.stop("All done.");
+      },
+    });
+
+    const result = await runOn(h.deps, sectionManifest());
+
+    expect(result.outcome).toBe("done");
+    expect(sends(h.calls)).toEqual([forkSend(), afterSend]);
+    for (const id of branchIds) expect(kindsOf(h.deps.store, id)).toEqual(["sent", "done"]);
+  });
+
+  it("refuses a fork with one branch before anything is sent", async () => {
+    const h = sectionHarness();
+
+    const error = await runOn(h.deps, sectionManifest({ branches: ["a1"] })).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(StructureError);
+    expect((error as StructureError).problems).toContainEqual(
+      expect.stringMatching(/^f\b.*has 1 branches; a parallel start needs two or more\.$/),
+    );
+    expect(h.calls).toEqual([]);
+  });
+
+  it("fails the fork, branches and join as a resume's fail actions say, sending nothing", async () => {
+    const h = sectionHarness();
+    const m = sectionManifest({ branches: ["a1", "a2"] });
+    const { id } = h.deps.store.createRun(newRun(m));
+    for (const [nodeId, kind] of [
+      ["f", "sent"],
+      ["a1", "sent"],
+      ["a2", "sent"],
+      ["j", "running"],
+    ] as const) {
+      h.deps.store.append(id, nodeId, { kind });
+    }
+    const interrupted = (nodeId: string) =>
+      `${nodeId} failed: parallel section was interrupted; start a new run`;
+    const actions: ResumeActions = {
+      f: { kind: "fail", message: interrupted("f") },
+      a1: { kind: "fail", message: interrupted("a1") },
+      j: { kind: "fail", message: interrupted("j") },
+    };
+
+    const result = await new Runner({ ...h.deps, runId: id }).run(m, { actions });
+
+    expect(sends(h.calls)).toEqual([]);
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+    expect(result.states).toEqual({
+      f: "failed",
+      a1: "failed",
+      a2: "sent",
+      j: "failed",
+      after: "waiting",
+    });
+    expect(eventsOf(h.deps.store, "a1").at(-1)).toMatchObject({
+      kind: "failed",
+      payload: { message: interrupted("a1") },
+    });
+    expect(h.lines.at(-1)).toBe(interrupted("f"));
   });
 });

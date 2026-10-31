@@ -71,7 +71,49 @@ describe("attribute", () => {
   });
 });
 
+describe("attribute with an owner", () => {
+  const section = windowsFrom([
+    ["fork", "sent", 100],
+    ["a1", "sent", 100],
+    ["a2", "sent", 100],
+  ]);
+
+  it("places a stamp on the owner when its open window covers the stamp", () => {
+    expect(attribute(section, 150, "a2")).toBe("a2");
+  });
+
+  it("places a stamp with no owner on the first open window", () => {
+    expect(attribute(section, 150)).toBe("fork");
+  });
+
+  it("falls back to the first open window when no window of the owner covers the stamp", () => {
+    expect(attribute(section, 150, "a3")).toBe("fork");
+    expect(
+      attribute(windowsFrom([...threeNodes.slice(0, 2), ["p2", "sent", 300]]), 350, "p1"),
+    ).toBe("p2");
+  });
+});
+
 describe("trackWindow", () => {
+  it("closes a window on skipped as it does on done", () => {
+    const skipped = trackWindow(
+      windowsFrom([
+        ["fork", "sent", 100],
+        ["a1", "sent", 100],
+        ["a2", "sent", 100],
+      ]),
+      "a1",
+      "skipped",
+      300,
+    );
+
+    expect(skipped).toEqual([
+      { nodeId: "fork", sentAt: 100 },
+      { nodeId: "a1", sentAt: 100, endedAt: 300 },
+      { nodeId: "a2", sentAt: 100 },
+    ]);
+  });
+
   it.each(["running", "reset"])("leaves the windows unchanged on %s", (kind) => {
     const before = windowsFrom([["p2", "sent", 300]]);
 

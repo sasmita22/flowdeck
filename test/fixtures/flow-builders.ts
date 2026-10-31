@@ -33,6 +33,8 @@ export const hardstop = node("hardstop", {
   enabled: true,
 });
 export const output = node("output", { name: "result", type: "text" });
+export const fork = node("fork", {});
+export const join = node("join", { wait: "all" });
 
 export const wire = (from: string, fromPort: string, to: string, toPort: string) => ({
   kind: "then",

@@ -4,10 +4,14 @@ import { ports as agentPorts } from "../../../src/core/nodes/agent/ports.js";
 import { settings as agentSettings } from "../../../src/core/nodes/agent/settings.js";
 import { ports as askPorts } from "../../../src/core/nodes/ask/ports.js";
 import { settings as askSettings } from "../../../src/core/nodes/ask/settings.js";
+import { ports as forkPorts } from "../../../src/core/nodes/fork/ports.js";
+import { settings as forkSettings } from "../../../src/core/nodes/fork/settings.js";
 import { ports as gatePorts } from "../../../src/core/nodes/gate/ports.js";
 import { settings as gateSettings } from "../../../src/core/nodes/gate/settings.js";
 import { ports as hardstopPorts } from "../../../src/core/nodes/hardstop/ports.js";
 import { settings as hardstopSettings } from "../../../src/core/nodes/hardstop/settings.js";
+import { ports as joinPorts } from "../../../src/core/nodes/join/ports.js";
+import { settings as joinSettings } from "../../../src/core/nodes/join/settings.js";
 import { ports as loopPorts } from "../../../src/core/nodes/loop/ports.js";
 import { settings as loopSettings } from "../../../src/core/nodes/loop/settings.js";
 import { ports as outputPorts } from "../../../src/core/nodes/output/ports.js";
@@ -121,6 +125,24 @@ const cases: Case[] = [
     badPath: ["type"],
     expectedPorts: [inPort],
   },
+  {
+    type: "fork",
+    settings: forkSettings,
+    ports: forkPorts,
+    valid: {},
+    bad: { branches: 2 },
+    badPath: [],
+    expectedPorts: [inPort, outPort],
+  },
+  {
+    type: "join",
+    settings: joinSettings,
+    ports: joinPorts,
+    valid: { wait: "first" },
+    bad: { wait: "some" },
+    badPath: ["wait"],
+    expectedPorts: [inPort, outPort],
+  },
 ];
 
 describe.each(cases)("$type node", ({ settings, ports, valid, bad, badPath, expectedPorts }) => {
@@ -153,6 +175,10 @@ describe("required and lenient settings", () => {
       condition: "tests pass",
       cap: 3,
     });
+  });
+
+  it("accepts a join without wait, waiting for all", () => {
+    expect(joinSettings.parse({})).toEqual({ wait: "all" });
   });
 
   it("rejects an unknown loop onCap", () => {

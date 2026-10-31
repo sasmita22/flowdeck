@@ -712,7 +712,7 @@ describe("createEngineHandler", async () => {
     const claudeSession = (ensureStarted: () => Promise<void>): OpenedSession => ({
       sessionId: "claude-session-1",
       session: { ensureStarted },
-      prompts: { sendPrompt: async () => undefined },
+      prompts: { sendPrompt: async () => undefined, interrupt: async () => undefined },
       stop: async () => undefined,
     });
 
@@ -804,6 +804,7 @@ describe("createEngineHandler", async () => {
               sessionId: claudeSessionId,
               session: { ensureStarted: async () => undefined },
               prompts: {
+                interrupt: async () => undefined,
                 sendPrompt: async () => {
                   clock = 1500;
                   hook("PreToolUse", claudeSessionId, 1200);
@@ -863,6 +864,7 @@ describe("createEngineHandler", async () => {
             sessionId: opening.claudeSessionId,
             session: { ensureStarted: async () => undefined },
             prompts: {
+              interrupt: async () => undefined,
               sendPrompt: async () => {
                 decision = await permissions.ask(opening.claudeSessionId, {
                   hook_event_name: "PermissionRequest",
