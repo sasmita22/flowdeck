@@ -2,6 +2,7 @@ import { copyFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { nativeModules } from "./native-modules.js";
 
 const migrationsSource = fileURLToPath(
   new URL("./src/adapters/sqlite/migrations/", import.meta.url),
@@ -25,7 +26,7 @@ export default defineConfig({
       fileName: () => "[name].cjs",
       formats: ["cjs"],
     },
-    rollupOptions: { external: ["better-sqlite3"] },
+    rollupOptions: { external: nativeModules },
   },
   plugins: [copyMigrations()],
 });

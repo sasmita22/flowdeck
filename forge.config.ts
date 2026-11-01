@@ -1,10 +1,28 @@
+import { MakerDMG } from "@electron-forge/maker-dmg";
+import { MakerZIP } from "@electron-forge/maker-zip";
 import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
+import { nativeModules } from "./native-modules.js";
+
+const shippedModules = [...nativeModules, "node-addon-api"];
+const keep = (file: string) =>
+  !file ||
+  file === "/package.json" ||
+  file.startsWith("/.vite") ||
+  file === "/node_modules" ||
+  shippedModules.some(
+    (m) => file === `/node_modules/${m}` || file.startsWith(`/node_modules/${m}/`),
+  );
 
 export default {
-  packagerConfig: { asar: true },
-  makers: [],
+  packagerConfig: {
+    name: "Flowdeck",
+    prune: false,
+    asar: { unpack: "**/{*.node,spawn-helper}" },
+    ignore: (file: string) => !keep(file),
+  },
+  makers: [new MakerZIP({}, ["darwin"]), new MakerDMG({})],
   plugins: [
     new VitePlugin({
       build: [
