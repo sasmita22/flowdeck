@@ -18,6 +18,7 @@ const allMigrations = [
   { name: "001_runs.sql" },
   { name: "002_flows.sql" },
   { name: "003_builds.sql" },
+  { name: "004_events_lock.sql" },
 ];
 
 describe("openDatabase", () => {
@@ -44,7 +45,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies 001_runs.sql, 002_flows.sql and 003_builds.sql to a new database file", () => {
+  it("applies every migration, 001 to 004, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
