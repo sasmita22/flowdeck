@@ -1,6 +1,7 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
 import type { VerifyFileSystem } from "../compiler/verify.js";
 import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
+import { branchSkips, branchTakes, triggerFlags } from "../nodes/branch/execute.js";
 import {
   forkTurnText,
   parallelSections,
@@ -59,6 +60,7 @@ export type RunnerDeps = {
   waiter: HumanWaiter;
   files: Pick<VerifyFileSystem, "readFile">;
   auto?: boolean;
+  flags?: Record<string, boolean>;
   onChange?: (line: string) => void;
   cwd: string;
   sessionId: string;
@@ -89,12 +91,14 @@ type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait };
 type ForEachSettings = { file: string };
+type BranchSettings = { flag: string };
 
 type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
 type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
 type RunContext = {
   hash: string;
+  manifest: RunnableManifest;
   nodes: readonly ManifestNode[];
   sections: readonly ParallelSection[];
   ensureStarted: () => Promise<void>;
@@ -115,6 +119,7 @@ const runnable = new Set<ManifestNode["type"]>([
   "foreach",
   "fork",
   "join",
+  "branch",
 ]);
 
 export function structureProblems(
@@ -309,7 +314,13 @@ export class Runner {
       started = true;
     };
     const { sections } = parallelSections(manifest.nodes, manifest.wires ?? []);
-    const context: RunContext = { hash: manifest.hash, nodes, sections, ensureStarted };
+    const context: RunContext = {
+      hash: manifest.hash,
+      manifest,
+      nodes,
+      sections,
+      ensureStarted,
+    };
     for (const node of nodes.filter((node) => node.parent === undefined)) {
       const { failure } = await this.runStep(node, context);
       if (failure !== undefined) {
@@ -427,6 +438,8 @@ export class Runner {
     } else if (node.type === "fork") {
       const result = await this.runSection(node, context);
       if (result.failure !== undefined) return result;
+    } else if (node.type === "branch") {
+      this.runBranch(node, context);
     } else if (node.type === "join") {
       throw new Error(`${node.id} (join) was reached outside its parallel section`);
     } else if (node.type === "prompt" || node.type === "agent") {
@@ -460,6 +473,37 @@ export class Runner {
     if (failure !== undefined) return { failure: { nodeId: node.id, reason: failure } };
     this.emit(`${node.id} ${doneLine}`);
     return { reply };
+  }
+
+  private runBranch(branch: ManifestNode, context: RunContext): void {
+    const { manifest, nodes } = context;
+    const defaults = triggerFlags(manifest.nodes);
+    const takes = (node: ManifestNode) =>
+      branchTakes((node.settings as BranchSettings).flag, defaults, this.deps.flags ?? {});
+    const decisions = new Map(
+      nodes
+        .filter(
+          (node) =>
+            node.type === "branch" && (node.id === branch.id || this.status(node.id) === "done"),
+        )
+        .map((node) => [node.id, takes(node)]),
+    );
+    const eligible = new Set(
+      nodes.filter((node) => this.status(node.id) === "waiting").map((node) => node.id),
+    );
+    const skips = branchSkips({
+      branchId: branch.id,
+      decisions,
+      nodes: manifest.nodes,
+      wires: manifest.wires ?? [],
+      eligible,
+    });
+    this.recordAll([
+      { nodeId: branch.id, event: { kind: "running" } },
+      { nodeId: branch.id, event: { kind: "done" } },
+      ...skips.map((nodeId) => ({ nodeId, event: { kind: "skipped" } as const })),
+    ]);
+    for (const id of skips) this.emit(`${id} skipped`);
   }
 
   private async checkBudget(nodeId: string): Promise<StepResult | undefined> {

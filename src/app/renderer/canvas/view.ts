@@ -1,4 +1,5 @@
 import type { Flow, Node, Wire } from "../../../core/flow/schema.js";
+import { branchSwitch, triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { nodeLook } from "../nodes/look.js";
 
 type Position = { x: number; y: number };
@@ -16,6 +17,7 @@ export interface ViewNode {
   data: {
     label?: string;
     highlighted?: boolean;
+    sub?: string;
     name?: string;
     loopId?: string;
     forEachId?: string;
@@ -161,7 +163,13 @@ export const toViewNodes = (
     ...placed(flow, node, dragPositions[node.id] ?? node.position),
     selected: selection.includes(node.id),
     ...(node.type === "hardstop" && { deletable: false }),
-    data: { label: node.label, highlighted: node.id === highlighted },
+    data: {
+      label: node.label,
+      highlighted: node.id === highlighted,
+      ...(node.type === "branch" && {
+        sub: branchSwitch(node.settings.flag, triggerFlags(flow.nodes)),
+      }),
+    },
   })),
 ];
 

@@ -16,6 +16,7 @@ import { SqliteStore } from "../adapters/sqlite/sqlite-store.js";
 import { assertSessionName, TmuxSessionHost } from "../adapters/tmux/tmux-session-host.js";
 import { build } from "../core/compiler/build.js";
 import { FlowParseError, parseFlow } from "../core/flow/schema.js";
+import { triggerFlags } from "../core/nodes/branch/execute.js";
 import {
   execute,
   loadBuild,
@@ -104,18 +105,56 @@ const writeLines = (write: (line: string) => void, text: string) => {
   for (const line of text.split("\n")) write(line);
 };
 
-async function runCommand(args: string[], deps: CliDeps): Promise<number> {
-  const { positionals, values } = parseArgs({
+const runOptions = {
+  cwd: { type: "string" },
+  session: { type: "string" },
+  model: { type: "string" },
+  auto: { type: "boolean" },
+} as const;
+
+function parseRun(args: string[], flagNames: readonly string[]) {
+  const { positionals, values, tokens } = parseArgs({
     args,
     allowPositionals: true,
     strict: true,
+    allowNegative: true,
+    tokens: true,
     options: {
-      cwd: { type: "string" },
-      session: { type: "string" },
-      model: { type: "string" },
-      auto: { type: "boolean" },
+      ...Object.fromEntries(flagNames.map((name) => [name, { type: "boolean" as const }])),
+      ...runOptions,
     },
   });
+  const negatedBuiltIn = tokens.some(
+    (token) =>
+      token.kind === "option" && token.name in runOptions && token.rawName.startsWith("--no-"),
+  );
+  if (negatedBuiltIn) throw new UsageError();
+  const parsed: Record<string, string | boolean | undefined> = values;
+  const flags = Object.fromEntries(
+    flagNames.flatMap((name) => {
+      const value = parsed[name];
+      return typeof value === "boolean" ? [[name, value]] : [];
+    }),
+  );
+  return { positionals, values, flags };
+}
+
+async function runCommand(args: string[], deps: CliDeps): Promise<number> {
+  const [looseBuildArg] = parseArgs({
+    args,
+    allowPositionals: true,
+    strict: false,
+    options: runOptions,
+  }).positionals;
+  const loaded =
+    looseBuildArg === undefined ? undefined : await loadBuild(resolve(looseBuildArg), deps);
+  const declared = loaded?.kind === "loaded" ? triggerFlags(loaded.build.nodes) : {};
+  const clash = Object.keys(declared).find((name) => name in runOptions);
+  if (clash !== undefined) {
+    deps.stderr(`Trigger flag "${clash}" clashes with the built-in option --${clash}`);
+    return 2;
+  }
+  const { positionals, values, flags } = parseRun(args, Object.keys(declared));
   const [buildArg, ...rest] = positionals;
   if (buildArg === undefined || rest.length > 0 || values.cwd === undefined) throw new UsageError();
   const buildDir = resolve(buildArg);
@@ -133,9 +172,8 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
   const socketPath = socket.path;
-  const loaded = await loadBuild(buildDir, deps);
-  if (loaded.kind === "error") {
-    writeLines(deps.stderr, loaded.message);
+  if (loaded === undefined || loaded.kind === "error") {
+    writeLines(deps.stderr, loaded?.message ?? "");
     return 2;
   }
   const manifest = loaded.build;
@@ -154,6 +192,7 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     manifest,
     cwd,
     auto: values.auto ?? false,
+    flags,
     socketPath,
     open: async () =>
       needsClaude(manifest)
@@ -194,6 +233,12 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
   const manifest = loaded.build;
+  const flags = Object.fromEntries(
+    Object.keys(triggerFlags(manifest.nodes)).flatMap((name) => {
+      const value = run.inputs[name];
+      return typeof value === "boolean" ? [[name, value]] : [];
+    }),
+  );
   const { tmuxName: sessionName, cwd, claudeSessionId } = run.session;
   const socketPath = `${flowdeckHome(deps.env)}/sockets/${sessionName}.sock`;
   const model = run.inputs["model"];
@@ -215,6 +260,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     manifest,
     cwd,
     auto: values.auto ?? false,
+    flags,
     socketPath,
     open: async () => opened,
     actions: async () =>

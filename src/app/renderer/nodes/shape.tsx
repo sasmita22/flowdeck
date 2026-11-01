@@ -41,6 +41,7 @@ export function NodeShape({
   fill = "var(--panel)",
   strokeWidth = 1.4,
   textColor = "var(--fg)",
+  handles = ports(id, type),
   children,
 }: {
   id: string;
@@ -52,6 +53,7 @@ export function NodeShape({
   fill?: string;
   strokeWidth?: number;
   textColor?: string;
+  handles?: ReactNode;
   children: ReactNode;
 }) {
   const clip = `fd-clip-${useId().replace(/[^\w-]/g, "")}`;
@@ -89,7 +91,7 @@ export function NodeShape({
       <div style={{ position: "absolute", left: padL, top: 25, color: textColor }}>
         <NodeStatusBadge nodeId={id} />
       </div>
-      {ports(id, type)}
+      {handles}
     </div>
   );
 }

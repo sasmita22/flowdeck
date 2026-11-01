@@ -13,10 +13,15 @@ const idleStore: StoreApi<Pick<RunState, "snapshot">> = {
   subscribe: () => () => undefined,
 };
 
-export function NodeStatusBadge({ nodeId }: { nodeId: string }) {
+export function useNodeDisplay(nodeId: string) {
   const store = useContext(RunStoreContext);
   const status = useStore(store ?? idleStore, (state) => selectNodeDisplay(state, nodeId));
-  if (store === null || status === null) return null;
+  return store === null ? null : status;
+}
+
+export function NodeStatusBadge({ nodeId }: { nodeId: string }) {
+  const status = useNodeDisplay(nodeId);
+  if (status === null) return null;
   const { label, color } = statusBadge(status);
   return (
     <span

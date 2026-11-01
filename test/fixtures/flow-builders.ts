@@ -38,6 +38,8 @@ export const forEach = (
   settings: Record<string, unknown> = { file: "plan.md" },
   label = "each plan unit",
 ) => ({ id, label, position: at, type: "foreach", settings });
+export const branch = (id: string, flag: string, options: { parent?: string } = {}) =>
+  node("branch", { flag })(id, options);
 export const fork = node("fork", {});
 export const join = node("join", { wait: "all" });
 

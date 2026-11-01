@@ -12,6 +12,7 @@ import type { Flow, NodeType, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   ask,
+  branch,
   flow,
   forEach,
   fork,
@@ -415,6 +416,54 @@ describe("toViewNodes delete lock", () => {
 
     expect(nodes.map((node) => node.id)).toEqual(["T", "P", "S", "G", "K", "Q", "L", "O"]);
     for (const node of nodes) expect(node).not.toHaveProperty("deletable");
+  });
+});
+
+describe("toViewNodes with a branch", () => {
+  const branchData = (flags: Record<string, boolean>) => {
+    const source = flow(
+      [trigger("T", { settings: { flags } }), { ...branch("B", "e2e"), label: "E2E?" }],
+      [],
+    );
+    return toViewNodes(source, [], {}, null).find((node) => node.id === "B")?.data;
+  };
+
+  it("sub-lines the branch with the switch that turns a declared-on flag off", () => {
+    expect(branchData({ e2e: true })).toEqual({
+      label: "E2E?",
+      highlighted: false,
+      sub: "--no-e2e",
+    });
+  });
+
+  it("sub-lines the branch with the switch that turns a declared-off flag on", () => {
+    expect(branchData({ e2e: false })?.sub).toBe("--e2e");
+  });
+
+  it("sub-lines the branch with the bare flag name when the trigger does not declare it", () => {
+    expect(branchData({})?.sub).toBe("e2e");
+  });
+
+  it("adds no sub to any other type", () => {
+    const source = flow(
+      [
+        trigger("T", { settings: { flags: { e2e: true } } }),
+        prompt("P"),
+        script("S"),
+        agent("G"),
+        gate("K"),
+        ask("Q"),
+        hardstop("H"),
+        output("O"),
+        branch("B", "e2e"),
+      ],
+      [],
+    );
+
+    const others = toViewNodes(source, [], {}, null).filter((node) => node.id !== "B");
+
+    expect(others.map((node) => node.id)).toEqual(["T", "P", "S", "G", "K", "Q", "H", "O"]);
+    for (const node of others) expect(node.data).not.toHaveProperty("sub");
   });
 });
 

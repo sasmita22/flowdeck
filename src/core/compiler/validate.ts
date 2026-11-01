@@ -1,4 +1,5 @@
 import type { Flow } from "../flow/schema.js";
+import { rule as branchFlag } from "./rules/branch-flag.js";
 import { rule as foreachFirstPrompt } from "./rules/foreach-first-prompt.js";
 import { rule as foreachNesting } from "./rules/foreach-nesting.js";
 import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
@@ -37,6 +38,7 @@ export const rules = [
   parallelSection,
   foreachFirstPrompt,
   foreachNesting,
+  branchFlag,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

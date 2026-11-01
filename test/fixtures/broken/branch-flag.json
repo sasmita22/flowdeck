@@ -1,0 +1,45 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": { "x": 0, "y": 0 },
+      "settings": { "inputs": ["ticket"], "flags": {} }
+    },
+    {
+      "id": "ife2e",
+      "label": "E2E?",
+      "type": "branch",
+      "position": { "x": 240, "y": 0 },
+      "settings": { "flag": "e2e" }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": { "x": 480, "y": 0 },
+      "settings": { "name": "result", "type": "text" }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": { "node": "start", "port": "out" },
+      "to": { "node": "ife2e", "port": "in" }
+    },
+    {
+      "kind": "then",
+      "from": { "node": "ife2e", "port": "yes" },
+      "to": { "node": "done", "port": "in" }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "workingFolder": { "kind": "worktree", "branch": "main" },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

@@ -45,6 +45,7 @@ const looks: Record<NodeType, NodeLook> = {
   fork: look("fork", "PARALLEL START", ctrl, ctrl, box.height, 28),
   join: look("join", "PARALLEL END", ctrl, ctrl, box.height, 28),
   foreach: look("foreach", "EACH", ctrl, "none"),
+  branch: look("branch", "IF", ctrl, ctrl, box.height, 116),
 };
 
 export const nodeLook = (type: NodeType): NodeLook => looks[type];

@@ -22,6 +22,7 @@ import { ports as promptPorts } from "../../../src/core/nodes/prompt/ports.js";
 import { settings as promptSettings } from "../../../src/core/nodes/prompt/settings.js";
 import { ports as scriptPorts } from "../../../src/core/nodes/script/ports.js";
 import { settings as scriptSettings } from "../../../src/core/nodes/script/settings.js";
+import { registry } from "../../../src/core/nodes/registry.js";
 import { ports as triggerPorts } from "../../../src/core/nodes/trigger/ports.js";
 import { settings as triggerSettings } from "../../../src/core/nodes/trigger/settings.js";
 
@@ -239,5 +240,25 @@ describe("foreach settings", () => {
 
   it("has the prompt node's ports", () => {
     expect(foreachPorts).toEqual(promptPorts);
+  });
+});
+
+describe("branch node", () => {
+  it("accepts a flag name unchanged", () => {
+    expect(registry.branch.settings.safeParse({ flag: "e2e" }).data).toEqual({ flag: "e2e" });
+  });
+
+  it.each([{}, { flag: "" }])("refuses the settings %j at the flag", (settings) => {
+    const result = registry.branch.settings.safeParse(settings);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["flag"]);
+  });
+
+  it("has an in port and yes and no out ports", () => {
+    expect(registry.branch.ports).toEqual([
+      inPort,
+      { name: "yes", direction: "out", kind: "then" },
+      { name: "no", direction: "out", kind: "then" },
+    ]);
   });
 });

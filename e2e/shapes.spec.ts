@@ -1,10 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agent,
   ask,
+  branch,
   flow,
   forEach,
   fork,
@@ -17,6 +18,7 @@ import {
   script,
   thenWire,
   trigger,
+  wire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchApp, type ColorScheme, type LaunchedApp } from "../scripts/drive.js";
@@ -74,6 +76,27 @@ const forEachShapes = () =>
     ],
     [thenWire("first", "second")],
   );
+
+const branchShapes = () =>
+  flow(
+    [
+      at(trigger("trigger", { settings: { flags: { e2e: true } } }), 10, 10),
+      at({ ...branch("branch", "e2e"), label: "E2E?" }, 220, 10),
+      at(script("yes"), 400, 10),
+      at(script("no"), 220, 120),
+    ],
+    [
+      thenWire("trigger", "branch"),
+      wire("branch", "yes", "yes", "in"),
+      wire("branch", "no", "no", "in"),
+    ],
+  );
+
+const pointsOf = async (polygon: Locator) =>
+  ((await polygon.getAttribute("points")) ?? "")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
 
 const exact = { threshold: 0 };
 
@@ -154,5 +177,36 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect
       .soft(window.getByTestId("foreach-frame-each"))
       .toHaveScreenshot(`${colorScheme}-foreach.png`, exact);
+  });
+}
+
+for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
+  test(`Branch draws as an IF hexagon in the ${colorScheme} theme`, async () => {
+    seedFlow(home, branchShapes());
+    launched = await launchApp({ home, logPath: join(logDir, "app.log"), colorScheme });
+    const { window } = launched;
+    const node = window.getByTestId("node-branch");
+    await expect(node).toBeVisible();
+    for (const id of ["trigger", "yes", "no"]) {
+      await expect(window.getByTestId(`node-${id}`)).toBeVisible();
+    }
+    await window.evaluate(() => document.fonts.ready);
+
+    const box = await node.boundingBox();
+    expect(box?.width).toBeCloseTo(116, 0);
+    expect(box?.height).toBeCloseTo(48, 0);
+    expect(await pointsOf(node.locator("polygon").first())).toEqual([
+      12, 0, 104, 0, 116, 24, 104, 48, 12, 48, 0, 24,
+    ]);
+    await expect(node).toContainText("IF");
+    await expect(node).toContainText("E2E?");
+    await expect(node).toContainText("--no-e2e");
+
+    const port = (name: string) => window.getByTestId(`port-branch-${name}`);
+    for (const name of ["in", "yes", "no"]) await expect(port(name)).toBeAttached();
+    const [yes, no] = await Promise.all([port("yes").boundingBox(), port("no").boundingBox()]);
+    expect([yes?.x, yes?.y]).not.toEqual([no?.x, no?.y]);
+
+    await expect(node).toHaveScreenshot(`${colorScheme}-branch.png`, exact);
   });
 }

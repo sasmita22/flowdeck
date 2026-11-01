@@ -53,6 +53,7 @@ export type Execution = {
   manifest: LoadedBuild;
   cwd: string;
   auto: boolean;
+  flags?: Record<string, boolean>;
   socketPath: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
@@ -140,7 +141,7 @@ function completeWaitWith({ actions, stop }: ResumeRead): ResumeActions {
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
-  const { store, runId, manifest, cwd, auto, socketPath } = execution;
+  const { store, runId, manifest, cwd, auto, flags = {}, socketPath } = execution;
   const events = await deps.startEvents(socketPath);
   let opened: OpenedSession | undefined;
   let stopping: Promise<void> | undefined;
@@ -198,6 +199,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       waiter: deps.waiter,
       files: deps.fs,
       auto,
+      flags,
       onChange: (line) => deps.onChange(line),
       cwd,
       sessionId: opened.sessionId,

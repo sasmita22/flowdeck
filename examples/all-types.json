@@ -11,7 +11,8 @@
       "settings": {
         "inputs": ["ticket"],
         "flags": {
-          "dryRun": false
+          "dryRun": false,
+          "e2e": true
         }
       }
     },
@@ -107,6 +108,18 @@
       "settings": {
         "command": "npm",
         "args": ["run", "lint"]
+      }
+    },
+    {
+      "id": "ife2e",
+      "label": "E2E?",
+      "type": "branch",
+      "position": {
+        "x": 1560,
+        "y": 120
+      },
+      "settings": {
+        "flag": "e2e"
       }
     },
     {
@@ -310,6 +323,28 @@
       "from": {
         "node": "lint",
         "port": "out"
+      },
+      "to": {
+        "node": "ife2e",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "ife2e",
+        "port": "yes"
+      },
+      "to": {
+        "node": "approve",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "ife2e",
+        "port": "no"
       },
       "to": {
         "node": "approve",

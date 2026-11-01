@@ -18,6 +18,7 @@ const groups: Record<NodeType, string> = {
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
   foreach: "var(--c-ctrl)",
+  branch: "var(--c-ctrl)",
 };
 
 const tags: Record<NodeType, string> = {
@@ -33,6 +34,7 @@ const tags: Record<NodeType, string> = {
   fork: "PARALLEL START",
   join: "PARALLEL END",
   foreach: "EACH",
+  branch: "IF",
 };
 
 const outlines: Record<NodeType, string> = {
@@ -48,6 +50,7 @@ const outlines: Record<NodeType, string> = {
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
   foreach: "none",
+  branch: "var(--c-ctrl)",
 };
 
 describe("nodeLook", () => {
@@ -71,7 +74,7 @@ describe("nodeLook", () => {
     expect(nodeLook(type).outline).toBe(outlines[type]);
   });
 
-  it.each(types.filter((type) => !["ask", "fork", "join"].includes(type)))(
+  it.each(types.filter((type) => !["ask", "fork", "join", "branch"].includes(type)))(
     "boxes %s at 170x48",
     (type) => {
       expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
@@ -89,6 +92,20 @@ describe("nodeLook", () => {
       outline: "none",
       box: { width: 170, height: 48 },
     });
+  });
+
+  it("boxes branch at 116x48 for its hexagon", () => {
+    expect(nodeLook("branch").box).toEqual({ width: 116, height: 48 });
+  });
+
+  it("gives branch an in port and yes and no out ports", () => {
+    const names = (direction: "in" | "out") =>
+      nodeLook("branch")
+        .ports.filter((port) => port.direction === direction)
+        .map((port) => port.name);
+
+    expect(names("in")).toEqual(["in"]);
+    expect(names("out")).toEqual(["yes", "no"]);
   });
 
   it("boxes ask at 170x57 so its tail fits", () => {

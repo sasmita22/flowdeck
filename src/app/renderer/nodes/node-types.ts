@@ -4,6 +4,7 @@ import { LoopFrame } from "../canvas/loop-frame.js";
 import { SessionFrame } from "../canvas/session.js";
 import { AgentNode } from "./agent.js";
 import { AskNode } from "./ask.js";
+import { BranchNode } from "./branch.js";
 import { ForEachNode } from "./foreach.js";
 import { ForkNode } from "./fork.js";
 import { GateNode } from "./gate.js";
@@ -27,6 +28,7 @@ export const nodeTypes: NodeTypes = {
   foreach: ForEachNode,
   fork: ForkNode,
   join: JoinNode,
+  branch: BranchNode,
   output: OutputNode,
   session: SessionFrame,
   "loop-frame": LoopFrame,
