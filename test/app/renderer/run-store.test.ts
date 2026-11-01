@@ -275,7 +275,7 @@ describe("selectNodeDisplay", () => {
 
     expect(selectNodeDisplay(run.getState(), "a")).toBe("running");
     expect(selectNodeDisplay(run.getState(), "b")).toBe("needs you");
-    expect(selectNodeDisplay(run.getState(), "c")).toBe("done");
+    expect(selectNodeDisplay(run.getState(), "c")).toBe("skipped");
     expect(selectNodeDisplay(run.getState(), "zz")).toBeNull();
   });
 });

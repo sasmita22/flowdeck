@@ -1,6 +1,6 @@
 import type { NodeState } from "./state.js";
 
-export type DisplayStatus = "waiting" | "running" | "needs you" | "failed" | "done";
+export type DisplayStatus = "waiting" | "running" | "needs you" | "failed" | "done" | "skipped";
 
 export function displayStatus(state: NodeState): DisplayStatus {
   switch (state) {
@@ -14,7 +14,8 @@ export function displayStatus(state: NodeState): DisplayStatus {
     case "failed":
       return "failed";
     case "done":
-    case "skipped":
       return "done";
+    case "skipped":
+      return "skipped";
   }
 }

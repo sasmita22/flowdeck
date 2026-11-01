@@ -6,6 +6,7 @@ const colors: Record<DisplayStatus, string> = {
   "needs you": "#ec4899",
   failed: "#ef4444",
   done: "#22c55e",
+  skipped: "var(--muted)",
 };
 
 export const statusBadge = (status: DisplayStatus): { label: string; color: string } => ({

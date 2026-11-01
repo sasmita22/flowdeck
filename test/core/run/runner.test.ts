@@ -71,6 +71,7 @@ function harness(
     stop?: StopTiming;
     waiter?: FakeWaiter;
     auto?: boolean;
+    flags?: Record<string, boolean>;
     replies?: (string | undefined)[];
     permissions?: FakePermissionSource;
     usage?: FakeUsageSource;
@@ -112,6 +113,7 @@ function harness(
     scripts,
     waiter: options.waiter ?? new FakeWaiter([]),
     ...(options.auto === undefined ? {} : { auto: options.auto }),
+    ...(options.flags === undefined ? {} : { flags: options.flags }),
     ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
     ...(options.usage === undefined ? {} : { usage: options.usage }),
     ...(options.budget === undefined ? {} : { budget: options.budget }),
@@ -2854,5 +2856,380 @@ describe("Runner parallel section", () => {
       payload: { message: interrupted("a1") },
     });
     expect(h.lines.at(-1)).toBe(interrupted("f"));
+  });
+});
+
+describe("Runner branch on a flag", () => {
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const kindsOf = (store: FakeStore, nodeId: string) =>
+    store
+      .events(runIdOf(store))
+      .filter((event) => event.nodeId === nodeId)
+      .map((event) => event.kind);
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const ran = (scripts: FakeProcessRunner) => scripts.calls.map((call) => call.command);
+  const step = (id: string) => builders.script(id, { settings: { command: id } });
+  const start = (e2e: boolean) =>
+    builders.trigger("start", { settings: { inputs: [], flags: { e2e } } });
+  const yes = (to: string) => builders.wire("b", "yes", to, "in");
+  const no = (to: string) => builders.wire("b", "no", to, "in");
+  const toManifest = (nodes: unknown[], wires: unknown[]): RunnableManifest => {
+    const { nodes: lowered, wires: loweredWires } = lower(builders.flow(nodes, wires)).manifest;
+    return { hash, nodes: lowered, wires: loweredWires };
+  };
+  const twoPaths = (e2e = true) =>
+    toManifest(
+      [start(e2e), builders.branch("b", "e2e"), step("e2e"), step("quick"), step("finish")],
+      [
+        builders.thenWire("start", "b"),
+        yes("e2e"),
+        no("quick"),
+        builders.thenWire("e2e", "finish"),
+        builders.thenWire("quick", "finish"),
+      ],
+    );
+  const results = () => [exit(0), exit(0), exit(0), exit(0)];
+
+  it("skips the yes path and runs the no path and the rejoin when the run turns the flag off", async () => {
+    const { deps, scripts, lines } = harness({ results: results(), flags: { e2e: false } });
+
+    const result = await runOn(deps, twoPaths());
+
+    expect(result.outcome).toBe("done");
+    expect(ran(scripts)).toEqual(["quick", "finish"]);
+    expect(kindsOf(deps.store, "e2e")).toEqual(["skipped"]);
+    expect(lines).toContain("e2e skipped");
+    expect(result.states).toMatchObject({
+      b: "done",
+      e2e: "skipped",
+      quick: "done",
+      finish: "done",
+    });
+  });
+
+  it("runs the yes path and skips the no path when the flag keeps its true default", async () => {
+    const { deps, scripts } = harness({ results: results() });
+
+    const result = await runOn(deps, twoPaths());
+
+    expect(result.outcome).toBe("done");
+    expect(ran(scripts)).toEqual(["e2e", "finish"]);
+    expect(kindsOf(deps.store, "quick")).toEqual(["skipped"]);
+    expect(result.states).toMatchObject({
+      b: "done",
+      e2e: "done",
+      quick: "skipped",
+      finish: "done",
+    });
+  });
+
+  it("runs the yes path when the run turns a false default on", async () => {
+    const { deps, scripts } = harness({ results: results(), flags: { e2e: true } });
+
+    const result = await runOn(deps, twoPaths(false));
+
+    expect(ran(scripts)).toEqual(["e2e", "finish"]);
+    expect(result.states).toMatchObject({ b: "done", quick: "skipped" });
+  });
+
+  it("writes the Branch's running and done and every skip in one batch", async () => {
+    const { deps } = harness({ results: results() });
+    const spy = vi.spyOn(deps.store, "appendAll");
+
+    await runOn(
+      deps,
+      toManifest(
+        [start(true), builders.branch("b", "e2e"), step("e2e"), step("quick"), step("lint")],
+        [
+          builders.thenWire("start", "b"),
+          yes("e2e"),
+          no("quick"),
+          builders.thenWire("quick", "lint"),
+        ],
+      ),
+    );
+
+    const batches = spy.mock.calls.map(([, entries]) =>
+      entries.map(({ nodeId, event }) => `${nodeId} ${event.kind}`),
+    );
+    expect(batches).toContainEqual(["b running", "b done", "quick skipped", "lint skipped"]);
+    expect(kindsOf(deps.store, "b")).toEqual(["running", "done"]);
+  });
+
+  it.each([
+    ["loop", builders.loop("body", { settings: { condition: "done", cap: 3, onCap: "fail" } })],
+    ["for each", builders.forEach("body")],
+  ])(
+    "skips a %s and its body on the path not taken, and the run finishes",
+    async (_, container) => {
+      const { deps, calls, scripts } = harness({ results: results() });
+
+      const result = await runOn(
+        deps,
+        toManifest(
+          [
+            start(true),
+            builders.branch("b", "e2e"),
+            step("e2e"),
+            container,
+            builders.prompt("body-1", { parent: "body" }),
+            step("finish"),
+          ],
+          [
+            builders.thenWire("start", "b"),
+            yes("e2e"),
+            no("body"),
+            builders.thenWire("e2e", "finish"),
+            builders.thenWire("body", "finish"),
+          ],
+        ),
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(sends(calls)).toEqual([]);
+      expect(ran(scripts)).toEqual(["e2e", "finish"]);
+      expect(result.states).toMatchObject({ body: "skipped", "body-1": "skipped", finish: "done" });
+    },
+  );
+
+  it.each([
+    ["loop", builders.loop("body", { settings: { condition: "done", cap: 3, onCap: "fail" } })],
+    ["for each", builders.forEach("body")],
+  ])(
+    "skips a %s whose body is wired straight from the path not taken, and the run finishes",
+    async (_, container) => {
+      const { deps, calls, scripts } = harness({ results: results() });
+
+      const result = await runOn(
+        deps,
+        toManifest(
+          [
+            start(true),
+            builders.branch("b", "e2e"),
+            step("e2e"),
+            container,
+            builders.prompt("fix", { parent: "body" }),
+            builders.script("check", { parent: "body", settings: { command: "check" } }),
+            step("finish"),
+          ],
+          [
+            builders.thenWire("start", "b"),
+            yes("e2e"),
+            no("fix"),
+            builders.thenWire("fix", "check"),
+            builders.thenWire("e2e", "finish"),
+            builders.thenWire("check", "finish"),
+          ],
+        ),
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(sends(calls)).toEqual([]);
+      expect(ran(scripts)).toEqual(["e2e", "finish"]);
+      expect(result.states).toMatchObject({
+        body: "skipped",
+        fix: "skipped",
+        check: "skipped",
+        finish: "done",
+      });
+    },
+  );
+
+  it("skips a loop whose back-edge sits behind a node on the path not taken", async () => {
+    const { deps, calls, scripts } = harness({ results: results() });
+
+    const result = await runOn(
+      deps,
+      toManifest(
+        [
+          start(true),
+          builders.branch("b", "e2e"),
+          step("e2e"),
+          step("prep"),
+          builders.loop("review", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
+          builders.prompt("fix", { parent: "review" }),
+          builders.script("check", { parent: "review", settings: { command: "check" } }),
+          step("finish"),
+        ],
+        [
+          builders.thenWire("start", "b"),
+          yes("e2e"),
+          no("prep"),
+          builders.thenWire("prep", "fix"),
+          builders.thenWire("fix", "check"),
+          builders.thenWire("check", "fix"),
+          builders.thenWire("e2e", "finish"),
+          builders.thenWire("check", "finish"),
+        ],
+      ),
+    );
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([]);
+    expect(ran(scripts)).toEqual(["e2e", "finish"]);
+    expect(result.states).toMatchObject({
+      prep: "skipped",
+      review: "skipped",
+      fix: "skipped",
+      check: "skipped",
+      finish: "done",
+    });
+  });
+
+  it("skips a whole parallel section on the path not taken, and the run finishes", async () => {
+    const { deps, calls, scripts } = harness({ results: results() });
+
+    const result = await runOn(
+      deps,
+      toManifest(
+        [
+          start(true),
+          builders.branch("b", "e2e"),
+          step("e2e"),
+          builders.fork("f"),
+          builders.agent("a1"),
+          builders.agent("a2"),
+          builders.join("j"),
+          step("finish"),
+        ],
+        [
+          builders.thenWire("start", "b"),
+          yes("e2e"),
+          no("f"),
+          builders.thenWire("f", "a1"),
+          builders.thenWire("f", "a2"),
+          builders.thenWire("a1", "j"),
+          builders.thenWire("a2", "j"),
+          builders.thenWire("e2e", "finish"),
+          builders.thenWire("j", "finish"),
+        ],
+      ),
+    );
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([]);
+    expect(ran(scripts)).toEqual(["e2e", "finish"]);
+    expect(result.states).toMatchObject({
+      f: "skipped",
+      a1: "skipped",
+      a2: "skipped",
+      j: "skipped",
+      finish: "done",
+    });
+  });
+
+  it("skips a node fed only by paths two branches did not take", async () => {
+    const { deps, scripts } = harness({ results: results() });
+
+    const result = await runOn(
+      deps,
+      toManifest(
+        [
+          builders.trigger("start", { settings: { inputs: [], flags: { one: true, two: true } } }),
+          builders.branch("b1", "one"),
+          builders.branch("b2", "two"),
+          step("p"),
+          step("q"),
+          step("X"),
+          step("end"),
+        ],
+        [
+          builders.thenWire("start", "b1"),
+          builders.wire("b1", "yes", "b2", "in"),
+          builders.wire("b1", "no", "p", "in"),
+          builders.wire("b2", "yes", "q", "in"),
+          builders.wire("b2", "no", "X", "in"),
+          builders.thenWire("p", "X"),
+          builders.thenWire("q", "end"),
+          builders.thenWire("X", "end"),
+        ],
+      ),
+    );
+
+    expect(result.outcome).toBe("done");
+    expect(ran(scripts)).toEqual(["q", "end"]);
+    expect(result.states).toMatchObject({ p: "skipped", X: "skipped", q: "done", end: "done" });
+  });
+
+  it("runs a node after a loop nothing outside wires into, though the path not taken also leads to it", async () => {
+    const fence = "```";
+    const { deps, calls, scripts } = harness({
+      results: results(),
+      replies: [`ok\n${fence}json\n{"done": true}\n${fence}`],
+    });
+
+    const result = await runOn(
+      deps,
+      toManifest(
+        [
+          start(true),
+          builders.branch("b", "e2e"),
+          step("y"),
+          builders.loop("review", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
+          builders.prompt("fix", { parent: "review" }),
+          builders.script("check", { parent: "review", settings: { command: "check" } }),
+          step("z"),
+        ],
+        [
+          builders.thenWire("start", "b"),
+          yes("y"),
+          no("z"),
+          builders.thenWire("fix", "check"),
+          builders.thenWire("check", "z"),
+        ],
+      ),
+    );
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toHaveLength(1);
+    expect(ran(scripts)).toEqual(["y", "check", "z"]);
+    expect(result.states).toMatchObject({ review: "done", check: "done", z: "done" });
+  });
+
+  describe("when an earlier Branch's path not taken and the current one's meet", () => {
+    const meeting = () =>
+      toManifest(
+        [
+          builders.trigger("start", { settings: { inputs: [], flags: { one: true, two: true } } }),
+          builders.branch("b1", "one"),
+          builders.branch("b2", "two"),
+          step("q"),
+          step("Z"),
+          step("end"),
+        ],
+        [
+          builders.thenWire("start", "b1"),
+          builders.wire("b1", "yes", "b2", "in"),
+          builders.wire("b1", "no", "Z", "in"),
+          builders.wire("b2", "yes", "q", "in"),
+          builders.wire("b2", "no", "Z", "in"),
+          builders.thenWire("q", "end"),
+          builders.thenWire("Z", "end"),
+        ],
+      );
+
+    it("skips the node both paths not taken lead to", async () => {
+      const { deps, scripts } = harness({ results: results() });
+
+      const result = await runOn(deps, meeting());
+
+      expect(result.outcome).toBe("done");
+      expect(ran(scripts)).toEqual(["q", "end"]);
+      expect(result.states).toMatchObject({ Z: "skipped", q: "done", end: "done" });
+    });
+
+    it("skips it on a resume where the earlier Branch is already done", async () => {
+      const { deps, scripts } = harness({ results: results() });
+      const m = meeting();
+      const { id } = deps.store.createRun(newRun(m));
+      deps.store.append(id, "b1", { kind: "running" });
+      deps.store.append(id, "b1", { kind: "done" });
+
+      const result = await new Runner({ ...deps, runId: id }).run(m, { actions: {} });
+
+      expect(result.outcome).toBe("done");
+      expect(ran(scripts)).toEqual(["q", "end"]);
+      expect(result.states).toMatchObject({ b1: "done", Z: "skipped", q: "done", end: "done" });
+    });
   });
 });

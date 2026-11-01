@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { settings as agent } from "../nodes/agent/settings.js";
 import { settings as ask } from "../nodes/ask/settings.js";
+import { settings as branch } from "../nodes/branch/settings.js";
 import { settings as foreach } from "../nodes/foreach/settings.js";
 import { settings as fork } from "../nodes/fork/settings.js";
 import { settings as gate } from "../nodes/gate/settings.js";
@@ -25,6 +26,7 @@ export const NodeType = z.enum([
   "fork",
   "join",
   "foreach",
+  "branch",
 ]);
 
 export const WireKind = z.enum(["then", "file", "event"]);
@@ -78,6 +80,7 @@ export const Node = z.discriminatedUnion("type", [
   NodeBase.extend({ type: z.literal("fork"), settings: fork }),
   NodeBase.extend({ type: z.literal("join"), settings: join }),
   NodeBase.extend({ type: z.literal("foreach"), settings: foreach }),
+  NodeBase.extend({ type: z.literal("branch"), settings: branch }),
 ]);
 
 export const Flow = z.object({

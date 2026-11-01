@@ -10,7 +10,7 @@ describe("displayStatus", () => {
     ["needs-you", "needs you"],
     ["failed", "failed"],
     ["done", "done"],
-    ["skipped", "done"],
+    ["skipped", "skipped"],
   ])("shows %s as %s", (state, shown) => {
     expect(displayStatus(state)).toBe(shown);
   });

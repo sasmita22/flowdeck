@@ -21,6 +21,7 @@ import { FakeWaiter } from "../fakes/fake-waiter.js";
 import {
   agent,
   ask,
+  branch,
   flow,
   gate,
   loop,
@@ -29,6 +30,7 @@ import {
   script,
   thenWire,
   trigger,
+  wire,
 } from "../fixtures/flow-builders.js";
 
 const shScript = (id: string) => script(id, { settings: { command: "sh" } });
@@ -927,5 +929,122 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume"], deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain("flowdeck resume <id> [--auto]");
+  });
+});
+
+describe("runCli branch flags", () => {
+  const step = (id: string) => script(id, { settings: { command: id } });
+  const start = (flags: Record<string, boolean>) =>
+    trigger("t", { settings: { inputs: [], flags } });
+  const ran = (scripts: FakeProcessRunner) => scripts.calls.map((call) => call.command);
+  const kindsOf = (store: FakeStore, runId: string, nodeId: string) =>
+    store
+      .events(runId)
+      .filter((event) => event.nodeId === nodeId)
+      .map((event) => event.kind);
+
+  async function branchBuild(e2e: boolean) {
+    const other = new FakeFileSystem();
+    const { dir } = await built(
+      other,
+      flow(
+        [
+          start({ e2e }),
+          step("s0"),
+          branch("b", "e2e"),
+          step("e2e"),
+          step("quick"),
+          step("finish"),
+        ],
+        [
+          thenWire("t", "s0"),
+          thenWire("s0", "b"),
+          wire("b", "yes", "e2e", "in"),
+          wire("b", "no", "quick", "in"),
+          thenWire("e2e", "finish"),
+          thenWire("quick", "finish"),
+        ],
+      ),
+    );
+    return { other, dir };
+  }
+
+  async function flagsOnlyBuild(flags: Record<string, boolean>) {
+    const other = new FakeFileSystem();
+    const { dir } = await built(other, flow([start(flags), step("s0")], [thenWire("t", "s0")]));
+    return { other, dir };
+  }
+
+  it("skips the e2e path under --no-e2e, runs the rest and stores the override", async () => {
+    const { other, dir } = await branchBuild(true);
+    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok, ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo, "--no-e2e"], deps)).toBe(0);
+    expect(ran(scripts)).toEqual(["s0", "quick", "finish"]);
+    const runId = store.runs[0]?.id ?? "";
+    expect(kindsOf(store, runId, "e2e")).toEqual(["skipped"]);
+    expect(store.runs[0]?.inputs).toMatchObject({ e2e: false });
+  });
+
+  it("runs the e2e path and skips quick without the flag", async () => {
+    const { other, dir } = await branchBuild(true);
+    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok, ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(0);
+    expect(ran(scripts)).toEqual(["s0", "e2e", "finish"]);
+    expect(kindsOf(store, store.runs[0]?.id ?? "", "quick")).toEqual(["skipped"]);
+  });
+
+  it("runs the e2e path under --e2e when the Trigger defaults it to false", async () => {
+    const { other, dir } = await branchBuild(false);
+    const { deps, scripts } = stubDeps(other, { results: [ok, ok, ok, ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo, "--e2e"], deps)).toBe(0);
+    expect(ran(scripts)).toEqual(["s0", "e2e", "finish"]);
+  });
+
+  it("refuses --no-e2e with exit 2 when the Trigger does not declare e2e", async () => {
+    const { other, dir } = await flagsOnlyBuild({ lint: true });
+    const { deps, recorded, scripts } = stubDeps(other, { results: [ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo, "--no-e2e"], deps)).toBe(2);
+    nothingStarted(recorded, scripts);
+  });
+
+  it("refuses --no-auto with exit 2 on a build that declares flags", async () => {
+    const { other, dir } = await branchBuild(true);
+    const { deps, recorded, scripts } = stubDeps(other, { results: [ok, ok, ok] });
+
+    expect(await runCli(["run", dir, "--cwd", repo, "--no-auto"], deps)).toBe(2);
+    nothingStarted(recorded, scripts);
+  });
+
+  it.each(["auto", "cwd"])(
+    "refuses with exit 2 a Trigger flag named like the built-in option %s",
+    async (name) => {
+      const { other, dir } = await flagsOnlyBuild({ [name]: true });
+      const { deps, recorded, scripts } = stubDeps(other, { results: [ok] });
+
+      expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(2);
+      expect(recorded.stderr.join("\n")).toContain(name);
+      nothingStarted(recorded, scripts);
+    },
+  );
+
+  it("reapplies a stored --no-e2e on resume, so e2e stays skipped and quick runs", async () => {
+    const { other, dir } = await branchBuild(true);
+    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok] });
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: { cwd: repo, session: "fd-a", e2e: false },
+      nodeIds: ["t", "s0", "b", "e2e", "quick", "finish"],
+      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
+    });
+    store.append(id, "s0", { kind: "running" });
+    store.append(id, "s0", { kind: "done" });
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+    expect(ran(scripts)).toEqual(["quick", "finish"]);
+    expect(kindsOf(store, id, "e2e")).toEqual(["skipped"]);
   });
 });

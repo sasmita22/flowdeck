@@ -25,6 +25,7 @@ describe("examples", () => {
         "review-b",
         "merge",
         "lint",
+        "ife2e",
         "approve",
         "choose",
         "stop",

@@ -161,7 +161,20 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("lists the twelve node types", () => {
+  it("parses a branch on a flag", () => {
+    const branch = {
+      id: "b",
+      label: "E2E?",
+      position: { x: 0, y: 0 },
+      type: "branch",
+      settings: { flag: "e2e" },
+    };
+    const flow = flowWith({ nodes: [promptNode, branch] });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("lists the thirteen node types", () => {
     expect(NodeType.options).toEqual([
       "prompt",
       "script",
@@ -175,6 +188,7 @@ describe("parseFlow", () => {
       "fork",
       "join",
       "foreach",
+      "branch",
     ]);
   });
 });
