@@ -9,7 +9,6 @@ import { launchApp, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
 let folder: string;
-let logDir: string;
 let launched: LaunchedApp | undefined;
 
 const scriptThenGateThenScript = () =>
@@ -26,7 +25,6 @@ test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-ap-"));
   folder = await realpath(await mkdtemp(join(tmpdir(), "fd-ap-wf-")));
-  logDir = await mkdtemp(join(tmpdir(), "fd-ap-log-"));
 });
 
 test.afterEach(async () => {
@@ -35,13 +33,12 @@ test.afterEach(async () => {
   } finally {
     await rm(home, { recursive: true, force: true });
     await rm(folder, { recursive: true, force: true });
-    await rm(logDir, { recursive: true, force: true });
   }
 });
 
 test("Approving a gate in the inspector lets the run carry on to the last script", async () => {
   seedFlow(home, scriptThenGateThenScript(), folder);
-  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-run")).toBeVisible();
 

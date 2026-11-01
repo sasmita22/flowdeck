@@ -51,7 +51,7 @@ test.afterEach(async () => {
 
 const drive = async (steps: unknown[]) => {
   const stepsPath = join(work, "steps.json");
-  const outDir = join(work, "out");
+  const outDir = test.info().outputPath("out");
   await writeFile(stepsPath, JSON.stringify(steps));
   return { outDir, result: await runDrive(stepsPath, outDir) };
 };

@@ -10,7 +10,6 @@ import { launchApp, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
 let folder: string;
-let logDir: string;
 let launched: LaunchedApp | undefined;
 
 const twoScripts = () =>
@@ -22,7 +21,6 @@ test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-r-"));
   folder = await realpath(await mkdtemp(join(tmpdir(), "fd-r-wf-")));
-  logDir = await mkdtemp(join(tmpdir(), "fd-r-log-"));
 });
 
 test.afterEach(async () => {
@@ -31,13 +29,12 @@ test.afterEach(async () => {
   } finally {
     await rm(home, { recursive: true, force: true });
     await rm(folder, { recursive: true, force: true });
-    await rm(logDir, { recursive: true, force: true });
   }
 });
 
 test("Run saves the edit first, builds it, runs it and shows each node's status", async () => {
   seedFlow(home, twoScripts(), folder);
-  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-run")).toBeVisible();
 
@@ -93,7 +90,7 @@ test("Run saves the edit first, builds it, runs it and shows each node's status"
 
 test("Open terminal stays disabled through a script-only run, and no pane appears", async () => {
   seedFlow(home, twoScripts(), folder);
-  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-run")).toBeVisible();
   await expect(window.getByTestId("terminal-open")).toBeDisabled();

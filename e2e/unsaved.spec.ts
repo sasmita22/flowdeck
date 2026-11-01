@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { launchApp, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
-let logDir: string;
 let opened: LaunchedApp[];
 
 const open = async () => {
-  const launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  const launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   opened.push(launched);
   await expect(launched.window.getByTestId("canvas-save")).toBeVisible();
   return launched;
@@ -50,7 +49,6 @@ const editThenClose = async (launched: LaunchedApp) => {
 test.beforeEach(async () => {
   opened = [];
   home = await mkdtemp(join(tmpdir(), "fd-e2e-home-"));
-  logDir = await mkdtemp(join(tmpdir(), "fd-e2e-log-"));
 });
 
 test.afterEach(async () => {
@@ -62,7 +60,6 @@ test.afterEach(async () => {
     if (failed) throw failed.reason;
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(logDir, { recursive: true, force: true });
   }
 });
 
