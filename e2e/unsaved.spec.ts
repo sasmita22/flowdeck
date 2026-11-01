@@ -26,6 +26,20 @@ const exited = (launched: LaunchedApp) =>
     else proc.once("exit", () => resolve());
   });
 
+const targetClosed = (error: unknown) =>
+  error instanceof Error &&
+  error.message.includes("Target page, context or browser has been closed");
+
+const clickToQuit = async (launched: LaunchedApp, testid: string) => {
+  const exit = exited(launched);
+  try {
+    await launched.window.getByTestId(testid).click();
+  } catch (error) {
+    if (!targetClosed(error)) throw error;
+  }
+  await exit;
+};
+
 const closeWindow = (launched: LaunchedApp) =>
   launched.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0]?.close();
@@ -79,8 +93,7 @@ test("Don't save closes the app without writing, and a relaunch opens an empty f
   const first = await open();
   await editThenClose(first);
 
-  await first.window.getByTestId("close-discard").click();
-  await exited(first);
+  await clickToQuit(first, "close-discard");
 
   const second = await open();
   expect((await readout(second.window)).nodes).toEqual([]);
@@ -137,8 +150,7 @@ test("After the renderer reloads mid-prompt, a new edit asks again on close", as
   await expect(first.window.getByTestId("flow-unsaved")).toHaveCount(0);
 
   await editThenClose(first);
-  await first.window.getByTestId("close-discard").click();
-  await exited(first);
+  await clickToQuit(first, "close-discard");
 });
 
 test("After the renderer crashes mid-prompt, closing the window closes the app", async () => {
