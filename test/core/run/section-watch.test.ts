@@ -50,6 +50,15 @@ const subagentStop = (type: string, at: number, message = `${type} finished`) =>
 const stop = (at: number, message = `stop at ${at}`) =>
   hookEvent("Stop", at, { last_assistant_message: message });
 
+const notLoggedIn = "Not logged in · Please run /login";
+const stopFailure = (at: number, sessionId = ours) =>
+  hookEvent(
+    "StopFailure",
+    at,
+    { error: "authentication_failed", last_assistant_message: notLoggedIn },
+    sessionId,
+  );
+
 describe("SectionWatch", () => {
   let source: FakeEventSource;
   let unsubscribes: Mock<() => void>[];
@@ -308,8 +317,63 @@ describe("SectionWatch", () => {
     });
   });
 
+  describe("a turn that fails", () => {
+    const never = () => false;
+
+    it("rejects untilStopped with the session's message", async () => {
+      const outcome = track(watch.untilStopped(never, longTimeoutMs, never));
+
+      await publish(subagentStop(a1, 1200), stopFailure(1300));
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toBe(notLoggedIn);
+    });
+
+    it("rejects untilStopped at once when the failure arrived before the call", async () => {
+      await publish(stopFailure(1300));
+
+      const outcome = track(watch.untilStopped(never, longTimeoutMs, never));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toBe(notLoggedIn);
+    });
+
+    it("rejects untilStopped while held, since the turn is over", async () => {
+      const outcome = track(watch.untilStopped(never, longTimeoutMs, () => true));
+
+      await publish(stopFailure(1300));
+
+      expect(outcome.status).toBe("rejected");
+    });
+
+    it("rejects settled with the session's message", async () => {
+      await publish(subagentStop(a1, 1200));
+      const outcome = track(watch.settled(quietMs, longTimeoutMs));
+
+      await publish(stopFailure(1300));
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toBe(notLoggedIn);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([
+      { name: "stamped before the arm time", event: () => stopFailure(armedAt - 1) },
+      { name: "for another session", event: () => stopFailure(1300, other) },
+    ])("ignores a StopFailure $name", async ({ event }) => {
+      const waiting = track(watch.untilStopped(never, longTimeoutMs, never));
+      const settling = track(watch.settled(quietMs, longTimeoutMs));
+
+      await publish(event());
+
+      expect(waiting.status).toBe("pending");
+      expect(settling.status).toBe("pending");
+    });
+  });
+
   describe("close", () => {
-    it("releases its three subscriptions and every timer", async () => {
+    it("releases its four subscriptions and every timer", async () => {
       track(
         watch.untilStopped(
           () => false,
@@ -325,8 +389,15 @@ describe("SectionWatch", () => {
 
       expect(
         new Set(events.subscribe.mock.calls.map(([kind, sessionId]) => `${kind}:${sessionId}`)),
-      ).toEqual(new Set([`Stop:${ours}`, `SubagentStop:${ours}`, `PreToolUse:${ours}`]));
-      expect(unsubscribes).toHaveLength(3);
+      ).toEqual(
+        new Set([
+          `Stop:${ours}`,
+          `StopFailure:${ours}`,
+          `SubagentStop:${ours}`,
+          `PreToolUse:${ours}`,
+        ]),
+      );
+      expect(unsubscribes).toHaveLength(4);
       for (const unsubscribe of unsubscribes) expect(unsubscribe).toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     });

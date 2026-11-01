@@ -1,4 +1,4 @@
-import { stampedBefore, type TurnEndEvent, type TurnEvents } from "./turns.js";
+import { stampedBefore, turnFailure, type TurnEndEvent, type TurnEvents } from "./turns.js";
 
 export type SectionWatchDeps = {
   events: TurnEvents;
@@ -20,6 +20,7 @@ export class SectionWatch {
   private readonly stopped = new Set<string>();
   private lastStoppedAt = Number.NEGATIVE_INFINITY;
   private latestStop: TurnEndEvent | undefined;
+  private failure: Error | undefined;
   private readonly listeners = new Set<() => void>();
   private readonly timers = new Set<Timer>();
   private readonly unsubscribes: (() => void)[];
@@ -30,6 +31,7 @@ export class SectionWatch {
       events.subscribe("PreToolUse", sessionId, (event) => this.onToolUse(event)),
       events.subscribe("SubagentStop", sessionId, (event) => this.onSubagentStop(event)),
       events.subscribe("Stop", sessionId, (event) => this.onStop(event)),
+      events.subscribe("StopFailure", sessionId, (event) => this.onStopFailure(event)),
     ];
   }
 
@@ -45,9 +47,13 @@ export class SectionWatch {
         this.clear(timer);
       };
       const check = () => {
-        if (!predicate(this.stopped)) return;
-        finish();
-        resolve();
+        if (predicate(this.stopped)) {
+          finish();
+          resolve();
+        } else if (this.failure !== undefined) {
+          finish();
+          reject(this.failure);
+        }
       };
       const arm = () => {
         timer = this.schedule(() => {
@@ -74,6 +80,11 @@ export class SectionWatch {
         this.clear(deadline);
       };
       const check = () => {
+        if (this.failure !== undefined) {
+          finish();
+          reject(this.failure);
+          return;
+        }
         const stop = this.latestStop;
         const settling = stop !== undefined && stampOf(stop) >= this.lastStoppedAt;
         if (!settling) {
@@ -130,6 +141,12 @@ export class SectionWatch {
   private onStop(event: TurnEndEvent) {
     if (stampedBefore(event, this.deps.armedAt)) return;
     this.latestStop = event;
+    this.notify();
+  }
+
+  private onStopFailure(event: TurnEndEvent) {
+    if (stampedBefore(event, this.deps.armedAt)) return;
+    this.failure = turnFailure(event);
     this.notify();
   }
 

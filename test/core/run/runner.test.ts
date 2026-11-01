@@ -127,9 +127,17 @@ function harness(
 }
 
 type Emitted =
-  { kind: "Stop"; reply?: string } | { kind: "SubagentStop"; agentType: string; reply?: string };
+  | { kind: "Stop"; reply?: string }
+  | { kind: "SubagentStop"; agentType: string; reply?: string }
+  | { kind: "StopFailure"; error: string; reply?: string };
 
 const stopped: Emitted = { kind: "Stop" };
+const notLoggedIn = "Not logged in · Please run /login";
+const failedTurn: Emitted = {
+  kind: "StopFailure",
+  error: "authentication_failed",
+  reply: notLoggedIn,
+};
 const subagentStopped = (agentType: string): Emitted => ({ kind: "SubagentStop", agentType });
 const agent = (id: string) => node(id, "agent", { instructions: "Write notes.md." });
 
@@ -155,6 +163,7 @@ function turnHarness(
             sessionId,
             payload: {
               ...(event.kind === "SubagentStop" ? { agent_type: event.agentType } : {}),
+              ...(event.kind === "StopFailure" ? { error: event.error } : {}),
               ...(event.reply === undefined ? {} : { last_assistant_message: event.reply }),
             },
           });
@@ -286,6 +295,31 @@ describe("Runner", () => {
         { command: "ls", args: [], cwd },
       ]);
     });
+  });
+
+  describe("a turn that fails", () => {
+    it.each([
+      { name: "prompt", first: prompt("n1"), text: `/${hash}:n1` },
+      { name: "agent", first: agent("n1"), text: agentTurnText(hash, "n1") },
+    ])(
+      "fails the $name node with the session's message and sends nothing after it",
+      async ({ first, text }) => {
+        const { deps, calls, lines } = turnHarness([[failedTurn], [stopped]], 60_000);
+
+        const result = await runOn(deps, manifest(first, prompt("p2")));
+
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "n1" });
+        expect(result.states).toEqual({ n1: "failed", p2: "waiting" });
+        expect(calls).toEqual(["start", `send ${text}`]);
+        expect(lines).toEqual(["n1 started", `n1 failed: ${notLoggedIn}`]);
+        expect(deps.store.events(deps.store.runs[0]?.id ?? "").at(-1)).toMatchObject({
+          nodeId: "n1",
+          kind: "failed",
+          payload: { message: `n1 failed: ${notLoggedIn}` },
+        });
+      },
+      2000,
+    );
   });
 
   describe("agent nodes", () => {
@@ -2375,6 +2409,7 @@ describe("Runner parallel section", () => {
     launch: (id: string) => void;
     subagentStop: (id: string, reply?: string) => void;
     stop: (reply?: string) => void;
+    failTurn: (reply: string) => void;
   };
   type Turn = (session: Session) => void;
 
@@ -2393,7 +2428,10 @@ describe("Runner parallel section", () => {
     const calls: string[] = [];
     const lines: string[] = [];
     let clock = 1000;
-    const publish = (kind: "Stop" | "SubagentStop" | "PreToolUse", payload: object) => {
+    const publish = (
+      kind: "Stop" | "StopFailure" | "SubagentStop" | "PreToolUse",
+      payload: object,
+    ) => {
       calls.push(`event ${kind} ${JSON.stringify(payload)}`);
       events.publish({ kind, sessionId, payload: { ...payload, flowdeck_hook_at: ++clock } });
     };
@@ -2408,6 +2446,8 @@ describe("Runner parallel section", () => {
         }),
       stop: (reply) =>
         publish("Stop", reply === undefined ? {} : { last_assistant_message: reply }),
+      failTurn: (reply) =>
+        publish("StopFailure", { error: "authentication_failed", last_assistant_message: reply }),
     };
     const onFork =
       options.onFork ??
@@ -2652,6 +2692,47 @@ describe("Runner parallel section", () => {
       after: "waiting",
     });
     expect(h.lines.at(-1)).toMatch(/a3/);
+  });
+
+  describe("a turn that fails", () => {
+    const notLoggedIn = "Not logged in · Please run /login";
+
+    it("waits for first: fails the section with the session's message when the fork turn fails", async () => {
+      const h = sectionHarness({ onFork: (s) => s.failTurn(notLoggedIn), turnTimeoutMs: 60_000 });
+
+      const result = await runOn(h.deps, sectionManifest({ wait: "first" }));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+      expect(result.states).toMatchObject({
+        f: "failed",
+        a1: "failed",
+        a2: "failed",
+        a3: "failed",
+        j: "failed",
+        after: "waiting",
+      });
+      expect(h.lines.at(-1)).toBe(`f failed: ${notLoggedIn}`);
+      expect(eventsOf(h.deps.store, "j").at(-1)).toMatchObject({
+        kind: "failed",
+        payload: { message: `j failed: ${notLoggedIn}` },
+      });
+      expect(sends(h.calls)).toEqual([forkSend()]);
+    }, 2000);
+
+    it("waits for all: fails the section with the session's message when the fork turn fails", async () => {
+      const h = sectionHarness({ turnTimeoutMs: 60_000 });
+      const running = runOn(h.deps, sectionManifest());
+      await forkSent(h.calls);
+
+      for (const id of branchIds) h.session.subagentStop(id, `${id} reply`);
+      h.session.failTurn(notLoggedIn);
+      const result = await running;
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+      expect(result.states).toMatchObject({ a1: "done", a2: "done", a3: "done", j: "failed" });
+      expect(h.lines.at(-1)).toBe(`f failed: ${notLoggedIn}`);
+      expect(sends(h.calls)).toEqual([forkSend()]);
+    }, 2000);
   });
 
   it("fails a branch that never stops at the turn timeout, with its join and fork", async () => {

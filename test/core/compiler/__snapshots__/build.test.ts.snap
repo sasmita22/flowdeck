@@ -58,6 +58,16 @@ Do the work.
         ]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "type": "command"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
@@ -75,10 +85,10 @@ Do the work.
   "files": {
     "agents/a.md": "238d61888f0612fd74e1d6f0a26245167e3dee8bf3564cd6bcdfaa126fd7c95b",
     "commands/p.md": "703684da25d686d4bda63b4abfc34d8e50f6ed561e3702f6f463da3dd9cf42f1",
-    "hooks/hooks.json": "044d9a3a127829a4992d21d430c91e1f60eca94caa1b9b70b93fa37e35704f8a",
+    "hooks/hooks.json": "398ff0a21a09965e7d43e04f0ff3a091a0394a1ce2e0483ec186aef46fb2d5bd",
     "settings.json": "49a144a48736cdc6813ad746092c2c5f949092d3bfee8b489af474c71ed2f473"
   },
-  "hash": "b79bf9cc19ab3f9408906a6571715657e543511dd5676a412a6bd2960986fb3a",
+  "hash": "1fa8fee455e501785f4e6f2d71d93f161300c330ef2e5f95d4afef2f7fa40515",
   "nodes": [
     {
       "file": "commands/p.md",

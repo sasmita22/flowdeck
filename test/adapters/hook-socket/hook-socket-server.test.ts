@@ -13,8 +13,14 @@ import {
   waitUntil,
 } from "../../fixtures/hook-socket.js";
 
-const fixtures = ["stop", "pre-tool-use", "post-tool-use", "subagent-stop"] as const;
-const kinds: HookEventKind[] = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"];
+const fixtures = [
+  "stop",
+  "pre-tool-use",
+  "post-tool-use",
+  "subagent-stop",
+  "stop-failure",
+] as const;
+const kinds: HookEventKind[] = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop", "StopFailure"];
 const readFixture = (name: string) =>
   readFile(new URL(`../../fixtures/hooks/${name}.json`, import.meta.url), "utf8");
 const parseFixture = async (name: string) =>

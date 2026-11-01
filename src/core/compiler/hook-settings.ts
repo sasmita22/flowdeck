@@ -6,6 +6,7 @@ export type HookSettings = {
     PreToolUse: HookEntry;
     PostToolUse: HookEntry;
     SubagentStop: HookEntry;
+    StopFailure: HookEntry;
     PermissionRequest: HookEntry;
   };
 };
@@ -38,6 +39,7 @@ export function hookSettings(options: { nodePath: string; hookScriptPath: string
       PreToolUse: entry,
       PostToolUse: entry,
       SubagentStop: entry,
+      StopFailure: entry,
       PermissionRequest: permission,
     },
   };
