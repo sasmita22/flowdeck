@@ -5,7 +5,7 @@ import type { SessionHost, SessionKey } from "../../ports/session-host.js";
 
 const run = promisify(execFile);
 const sessionName = /^fd-[A-Za-z0-9_-]+$/;
-const noServer = /no server running on|error connecting to/;
+const noServer = /no server running on|error connecting to|server exited unexpectedly/;
 
 export function assertSessionName(name: string): void {
   if (!sessionName.test(name)) {
@@ -66,8 +66,7 @@ export class TmuxSessionHost implements SessionHost {
 
   private async serverRunning(): Promise<boolean> {
     try {
-      await this.tmux("list-sessions");
-      return true;
+      return (await this.tmux("list-sessions")).trim() !== "";
     } catch (error) {
       if (noServer.test(stderrOf(error))) return false;
       throw error;

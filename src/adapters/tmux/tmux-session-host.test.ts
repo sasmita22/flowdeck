@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SessionHost } from "../../ports/session-host.js";
 import { TmuxSessionHost } from "./tmux-session-host.js";
 
@@ -77,6 +77,15 @@ const linesEqualTo = (pane: string, line: string) =>
 describe("TmuxSessionHost", () => {
   let host: SessionHost;
   let tmp: string;
+  const keeper = `flowdeck-keep-${process.pid}`;
+
+  beforeAll(async () => {
+    await tmux("new-session", "-d", "-s", keeper);
+  });
+
+  afterAll(async () => {
+    await tmux("kill-session", "-t", `=${keeper}`);
+  });
 
   beforeEach(async () => {
     host = new TmuxSessionHost();
@@ -313,6 +322,47 @@ describe("TmuxSessionHost", () => {
       expect(await exists(socketPath)).toBe(true);
       await own.stop(`${prefix}b`);
       expect(await exists(socketPath)).toBe(false);
+    });
+
+    describe("when the server is still exiting after its last session stops", () => {
+      const path = process.env["PATH"];
+      let shim: string;
+
+      const answerListSessions = async (answer: string) => {
+        const real = (await run("sh", ["-c", "command -v tmux"])).stdout.trim();
+        shim = await mkdtemp(join(tmpdir(), "fd-test-shim-"));
+        await writeFile(
+          join(shim, "tmux"),
+          `#!/bin/sh\nfor last; do :; done\nif [ "$last" = list-sessions ]; then ${answer}; fi\nexec "${real}" "$@"\n`,
+        );
+        await chmod(join(shim, "tmux"), 0o755);
+        process.env["PATH"] = `${shim}:${path ?? ""}`;
+      };
+
+      afterEach(async () => {
+        process.env["PATH"] = path;
+        await rm(shim, { recursive: true, force: true });
+      });
+
+      it("treats a server that exits mid-stop as gone", async () => {
+        await own.start(`${prefix}a`, tmp, "bash");
+        const socketPath = await socketPathOf();
+        await answerListSessions("echo 'server exited unexpectedly' >&2; exit 1");
+
+        await own.stop(`${prefix}a`);
+
+        expect(await exists(socketPath)).toBe(false);
+      });
+
+      it("treats an empty session list as a stopped server", async () => {
+        await own.start(`${prefix}a`, tmp, "bash");
+        const socketPath = await socketPathOf();
+        await answerListSessions("exit 0");
+
+        await own.stop(`${prefix}a`);
+
+        expect(await exists(socketPath)).toBe(false);
+      });
     });
   });
 
