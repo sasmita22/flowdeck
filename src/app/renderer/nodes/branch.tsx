@@ -38,7 +38,7 @@ export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
         />
       ))}
     >
-      <polygon points={points} fill={group} fillOpacity={0.6} />
+      <polygon points={points} fill={group} fillOpacity={0.08} />
       <TagPill type="branch" padL={padL} />
       <Label type="branch" padL={padL} text={data.label} />
       {status === null && (

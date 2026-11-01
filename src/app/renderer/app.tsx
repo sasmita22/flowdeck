@@ -50,7 +50,7 @@ function TitleStrip({
       )}
       {ready && (
         <button
-          data-testid="canvas-run"
+          data-testid="canvas-run-broken"
           disabled={runDisabled}
           onClick={() => void run.getState().run()}
         >
