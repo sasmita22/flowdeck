@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +11,7 @@ import { createActivityRelay } from "./activity.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
+import { loginPath } from "./login-path.js";
 import { createTerminal, type Terminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { answerWait, createWaitRelay } from "./wait.js";
@@ -24,6 +26,30 @@ const toLoadedFlow = (result: LoadLatestFlowResult): unknown => {
   if (result.kind === "error") throw new Error(result.message);
   return result.kind === "loaded" ? result.flow : null;
 };
+
+const loginShellTimeoutMs = 3000;
+
+const runLoginShell = (command: string, args: readonly string[]) =>
+  new Promise<{ code: number | null; stdout: string }>((resolve) => {
+    execFile(
+      command,
+      args,
+      { cwd: homedir(), timeout: loginShellTimeoutMs, killSignal: "SIGKILL" },
+      (error, stdout) => {
+        const code = error === null ? 0 : typeof error.code === "number" ? error.code : null;
+        resolve({ code, stdout });
+      },
+    );
+  });
+
+async function useLoginPath() {
+  const path = await loginPath({
+    shell: process.env["SHELL"],
+    run: runLoginShell,
+    timeoutMs: loginShellTimeoutMs,
+  });
+  if (path !== undefined) process.env["PATH"] = path;
+}
 
 function startEngine(home: string) {
   const engine = utilityProcess.fork(join(__dirname, "engine.cjs"), [], {
@@ -118,7 +144,8 @@ function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
   window.webContents.on("render-process-gone", () => guard.reset());
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  if (app.isPackaged) await useLoginPath();
   const { engine, client, exited } = startEngine(resolveFlowdeckHome(process.env, homedir()));
   const windowGuard = createWindowGuard({
     appUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL ?? pathToFileURL(rendererIndexPath).href,
