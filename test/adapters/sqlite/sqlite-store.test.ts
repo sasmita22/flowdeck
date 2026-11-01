@@ -98,9 +98,10 @@ describe("SqliteStore", () => {
       { name: "001_runs.sql" },
       { name: "002_flows.sql" },
       { name: "003_builds.sql" },
+      { name: "004_events_lock.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 3]);
+    expect(before).toEqual([1, 1, 3, 1, 4]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -239,6 +240,28 @@ describe("SqliteStore", () => {
 
     expect(() => db.exec("UPDATE events SET kind = 'x'")).toThrow("events are append-only");
     expect(() => db.exec("DELETE FROM events")).toThrow("events are append-only");
+    expect(rows()).toEqual(before);
+  });
+
+  it("rejects an INSERT OR REPLACE over an existing event in the database itself", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    store.appendAll(id, [
+      { nodeId: "p1", event: { kind: "sent" } },
+      { nodeId: "p1", event: { kind: "done" } },
+    ]);
+    const db = raw();
+    const rows = () => db.prepare("SELECT * FROM events ORDER BY seq").all();
+    const before = rows();
+    const { seq } = db.prepare("SELECT MIN(seq) AS seq FROM events").get() as { seq: number };
+
+    expect(() =>
+      db
+        .prepare(
+          "INSERT OR REPLACE INTO events (seq, run_id, node_id, kind, payload, time) VALUES (?, ?, 'p1', 'failed', '\"forged\"', 'now')",
+        )
+        .run(seq, id),
+    ).toThrow("events are append-only");
     expect(rows()).toEqual(before);
   });
 

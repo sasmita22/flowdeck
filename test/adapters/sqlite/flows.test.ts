@@ -333,6 +333,7 @@ describe("SqliteFlowStore", () => {
       { name: "001_runs.sql" },
       { name: "002_flows.sql" },
       { name: "003_builds.sql" },
+      { name: "004_events_lock.sql" },
     ]);
   });
 });
