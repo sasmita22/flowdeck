@@ -100,7 +100,10 @@ better-sqlite3 and node-pty match Electron.
 
 - Ticket ids: `FD-NN`, matching the board.
 - Branches: `feature/FD-NN-<slug>`, cut from `main`.
-- **`main` only changes through a merged PR.** A GitHub ruleset protects it, with no bypass.
+- **`main` only changes through a merged PR.** A GitHub ruleset protects it: required checks
+  `check` and `e2e`, no direct pushes. Admins can bypass only on a PR, to merge past failing
+  checks. An agent merges with `--admin` only when the failing check is proven unrelated to the
+  PR (it fails the same way on `main`, or it is a known flake), and says so in the PR body.
 - Commit and PR titles: conventional, ending with the ticket id, for example
   `feat(engine): start tmux sessions (FD-03)`.
 - Code explains itself: no comments that restate the code, and no ticket ids in code.
