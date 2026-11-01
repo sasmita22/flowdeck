@@ -186,24 +186,94 @@ describe("waitForTurnEnd", () => {
     });
   });
 
-  it("releases its subscription and its timer once resolved", async () => {
-    track(waitForTurnEnd(events, ours, timeoutMs));
+  describe("StopFailure", () => {
+    const stopFailure = (sessionId: string, fields: Record<string, unknown>): HookEvent => {
+      const event = hookEvent("StopFailure", sessionId);
+      return { ...event, payload: { ...event.payload, ...fields } };
+    };
 
-    source.publish(hookEvent("Stop", ours));
-    await vi.advanceTimersByTimeAsync(0);
+    it("rejects with the last assistant message on our session's StopFailure", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs));
 
-    expect(events.subscribe).toHaveBeenCalledTimes(1);
-    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
+      source.publish(
+        stopFailure(ours, {
+          error: "authentication_failed",
+          last_assistant_message: "Not logged in · Please run /login",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toBe("Not logged in · Please run /login");
+    });
+
+    it("rejects with the error when the StopFailure has no last assistant message", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs));
+
+      source.publish(stopFailure(ours, { error: "rate_limit" }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toBe("rate_limit");
+    });
+
+    it("rejects naming the session when the StopFailure carries neither", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs));
+
+      source.publish(stopFailure(ours, {}));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("rejected");
+      expect((outcome.error as Error).message).toContain(ours);
+    });
+
+    it("ignores another session's StopFailure", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs));
+
+      source.publish(stopFailure(other, { error: "rate_limit" }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("pending");
+    });
+
+    it("ignores a StopFailure stamped before it was armed", async () => {
+      const armedAt = 1000;
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs, armedAt));
+
+      source.publish(stopFailure(ours, { error: "rate_limit", flowdeck_hook_at: armedAt - 1 }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("pending");
+    });
+
+    it("rejects while held, since the turn is over", async () => {
+      const outcome = track(waitForTurnEnd(events, ours, timeoutMs, undefined, () => true));
+
+      source.publish(stopFailure(ours, { error: "rate_limit" }));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome.status).toBe("rejected");
+    });
   });
 
-  it("releases its subscription and its timer once timed out", async () => {
+  it.each([
+    { name: "resolved", end: () => source.publish(hookEvent("Stop", ours)) },
+    {
+      name: "failed",
+      end: () => source.publish(hookEvent("StopFailure", ours)),
+    },
+    { name: "timed out", end: () => vi.advanceTimersByTimeAsync(timeoutMs) },
+  ])("releases its subscriptions and its timer once $name", async ({ end }) => {
     track(waitForTurnEnd(events, ours, timeoutMs));
 
-    await vi.advanceTimersByTimeAsync(timeoutMs);
+    await end();
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(events.subscribe).toHaveBeenCalledTimes(1);
-    expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(events.subscribe.mock.calls.map(([kind]) => kind).sort()).toEqual([
+      "Stop",
+      "StopFailure",
+    ]);
+    for (const unsubscribe of unsubscribes) expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

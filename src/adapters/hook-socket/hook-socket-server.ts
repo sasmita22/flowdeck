@@ -12,6 +12,7 @@ const hookEventKinds: Record<HookEventKind, true> = {
   PreToolUse: true,
   PostToolUse: true,
   SubagentStop: true,
+  StopFailure: true,
 };
 
 function isHookEventKind(value: unknown): value is HookEventKind {

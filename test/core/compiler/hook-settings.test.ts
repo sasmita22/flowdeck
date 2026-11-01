@@ -36,6 +36,7 @@ describe("hookSettings", () => {
         PreToolUse: entry,
         PostToolUse: entry,
         SubagentStop: entry,
+        StopFailure: entry,
         PermissionRequest: [
           {
             hooks: [
