@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      update-snapshots:
+        description: Regenerate the Linux shapes baselines
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -18,3 +24,30 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
       - run: npm ci
       - run: npm run check
+
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: npm ci
+      - run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run e2e -- $UPDATE_SNAPSHOTS
+        env:
+          UPDATE_SNAPSHOTS: ${{ inputs.update-snapshots && '--update-snapshots' || '' }}
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results
+          path: |
+            test-results/
+            playwright-report/
+      - if: failure() || inputs.update-snapshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-linux-snapshots
+          path: e2e/shapes.spec.ts-snapshots/*-linux.png
+          if-no-files-found: ignore

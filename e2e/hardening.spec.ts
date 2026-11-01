@@ -10,7 +10,6 @@ const settleMs = 2000;
 type MainProbe = { fdSeen?: string[] };
 
 let home: string;
-let logDir: string;
 let launched: LaunchedApp | undefined;
 let app: LaunchedApp;
 let window: Page;
@@ -70,8 +69,7 @@ const navigateToRemote = async (target: LaunchedApp) => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-e2e-home-"));
-  logDir = await mkdtemp(join(tmpdir(), "fd-e2e-log-"));
-  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   app = launched;
   window = launched.window;
   await expect(window.getByTestId("canvas-save")).toBeVisible();
@@ -82,7 +80,6 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(logDir, { recursive: true, force: true });
   }
 });
 

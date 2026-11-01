@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { launchApp, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
-let logDir: string;
 let opened: LaunchedApp[];
 
 const open = async () => {
-  const launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  const launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   opened.push(launched);
   await expect(launched.window.getByTestId("canvas-save")).toBeVisible();
   return launched;
@@ -26,6 +25,20 @@ const exited = (launched: LaunchedApp) =>
     if (proc.exitCode !== null || proc.signalCode !== null) resolve();
     else proc.once("exit", () => resolve());
   });
+
+const targetClosed = (error: unknown) =>
+  error instanceof Error &&
+  error.message.includes("Target page, context or browser has been closed");
+
+const clickToQuit = async (launched: LaunchedApp, testid: string) => {
+  const exit = exited(launched);
+  try {
+    await launched.window.getByTestId(testid).click();
+  } catch (error) {
+    if (!targetClosed(error)) throw error;
+  }
+  await exit;
+};
 
 const closeWindow = (launched: LaunchedApp) =>
   launched.app.evaluate(({ BrowserWindow }) => {
@@ -50,7 +63,6 @@ const editThenClose = async (launched: LaunchedApp) => {
 test.beforeEach(async () => {
   opened = [];
   home = await mkdtemp(join(tmpdir(), "fd-e2e-home-"));
-  logDir = await mkdtemp(join(tmpdir(), "fd-e2e-log-"));
 });
 
 test.afterEach(async () => {
@@ -62,7 +74,6 @@ test.afterEach(async () => {
     if (failed) throw failed.reason;
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(logDir, { recursive: true, force: true });
   }
 });
 
@@ -82,8 +93,7 @@ test("Don't save closes the app without writing, and a relaunch opens an empty f
   const first = await open();
   await editThenClose(first);
 
-  await first.window.getByTestId("close-discard").click();
-  await exited(first);
+  await clickToQuit(first, "close-discard");
 
   const second = await open();
   expect((await readout(second.window)).nodes).toEqual([]);
@@ -140,8 +150,7 @@ test("After the renderer reloads mid-prompt, a new edit asks again on close", as
   await expect(first.window.getByTestId("flow-unsaved")).toHaveCount(0);
 
   await editThenClose(first);
-  await first.window.getByTestId("close-discard").click();
-  await exited(first);
+  await clickToQuit(first, "close-discard");
 });
 
 test("After the renderer crashes mid-prompt, closing the window closes the app", async () => {

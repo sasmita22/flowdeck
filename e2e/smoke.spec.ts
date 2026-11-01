@@ -15,7 +15,6 @@ const realDb = join(homedir(), ".flowdeck", "flowdeck.db");
 const realDbMtime = () => (existsSync(realDb) ? statSync(realDb).mtimeMs : undefined);
 
 let home: string;
-let logDir: string;
 let launched: LaunchedApp | undefined;
 let window: Page;
 let realDbBefore: number | undefined;
@@ -23,16 +22,14 @@ let realDbBefore: number | undefined;
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-e2e-home-"));
-  logDir = await mkdtemp(join(tmpdir(), "fd-e2e-log-"));
   realDbBefore = realDbMtime();
-  launched = await launchApp({ home, logPath: join(logDir, "app.log") });
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   window = launched.window;
 });
 
 test.afterEach(async () => {
   await launched?.close();
   await rm(home, { recursive: true, force: true });
-  await rm(logDir, { recursive: true, force: true });
 });
 
 test("opens a window titled Flowdeck", async () => {
