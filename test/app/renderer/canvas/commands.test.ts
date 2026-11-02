@@ -4,6 +4,7 @@ import {
   addWire,
   deleteNodes,
   moveNodes,
+  updateNode,
   updateSession,
   wrapInSession,
   type Command,
@@ -228,6 +229,33 @@ describe("updateSession", () => {
   });
 });
 
+describe("updateNode", () => {
+  it("replaces one node's label and settings, and undo puts the old node back", () => {
+    const before = fourNodes();
+    const old = before.nodes[1];
+    if (old === undefined) throw new Error("expected node B");
+    const edited = { ...old, label: "Renamed", settings: { instructions: "New." } } as Node;
+
+    const command = updateNode(edited);
+    const after = command.do(before);
+
+    expect(after.nodes[1]).toEqual(edited);
+    expect(after.nodes.filter((_node, index) => index !== 1)).toEqual(
+      before.nodes.filter((_node, index) => index !== 1),
+    );
+    expect(after.wires).toBe(before.wires);
+    expect(command.undo(after)).toEqual(before);
+    expect(command.do(command.undo(after))).toEqual(after);
+  });
+
+  it("leaves the flow alone when the node is gone", () => {
+    const before = fourNodes();
+    const command = updateNode({ ...onlyNode(before), id: "missing" });
+
+    expect(command.undo(command.do(before))).toEqual(before);
+  });
+});
+
 describe("commands", () => {
   const cases: [string, (before: Flow) => Command][] = [
     ["addNode", () => addNode(onlyNode(flow([script("E")], [])))],
@@ -239,6 +267,7 @@ describe("commands", () => {
       "updateSession",
       (before) => updateSession({ ...before.session, model: "haiku", allowedTools: ["Read"] }),
     ],
+    ["updateNode", (before) => updateNode({ ...onlyNode(before), label: "Renamed" })],
   ];
 
   it.each(cases)("%s never mutates the flow it is given", (_name, make) => {

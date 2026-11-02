@@ -6,6 +6,7 @@ import { statusBadge } from "../canvas/status-look.js";
 import { selectNodeDisplay, type RunState } from "../run-store.js";
 import { ActivityFeed } from "./activity-feed.js";
 import { Ask } from "./ask.js";
+import { NodeSettingsSection } from "./node-settings.js";
 import { SessionSettingsSection } from "./session-settings.js";
 import type { InspectorState } from "./store.js";
 import type { WaitState } from "./wait-store.js";
@@ -69,6 +70,7 @@ export function Inspector({
         fontSize: 12,
       }}
     >
+      <NodeSettingsSection canvas={canvas} />
       <h2 style={headingStyle}>Session</h2>
       <div
         data-testid="inspector-session"

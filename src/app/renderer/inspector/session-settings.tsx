@@ -1,112 +1,17 @@
-import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { Session } from "../../../core/flow/schema.js";
 import type { CanvasState } from "../canvas/store.js";
-import {
-  applyField,
-  describeFields,
-  sessionSettingsSchema,
-  type FieldDescription,
-} from "./schema-form.js";
+import { Field, type Commit } from "./field.js";
+import { applyField, describeFields, sessionSettingsSchema } from "./schema-form.js";
 
 const fields = describeFields(sessionSettingsSchema);
 
-const labelStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  fontSize: 12,
-};
-
-const valueAt = (session: Session, path: readonly string[]): unknown =>
-  path.reduce<unknown>(
-    (value, key) => (value as Record<string, unknown> | undefined)?.[key],
-    session,
-  );
-
-const textOf = (value: unknown) =>
-  Array.isArray(value)
-    ? value.join("\n")
-    : typeof value === "string" || typeof value === "number"
-      ? String(value)
-      : "";
-
-function Field({
-  field,
-  session,
-  commit,
-}: {
-  field: FieldDescription;
-  session: Session;
-  commit: (path: readonly string[], value: string) => void;
-}) {
-  const value = textOf(valueAt(session, field.path));
-  const commitIfChanged = (next: string) => {
-    if (next !== value) commit(field.path, next);
-  };
-  if (field.control === "select") {
-    return (
-      <>
-        <label style={labelStyle}>
-          {field.label}
-          <select
-            data-testid={field.testId}
-            value={value}
-            onChange={(event) => commit(field.path, event.target.value)}
-          >
-            {field.options.map((option) => (
-              <option key={option} value={option}>
-                {field.optionLabels[option]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {(field.variants[value] ?? []).map((child) => (
-          <Field key={child.testId} field={child} session={session} commit={commit} />
-        ))}
-      </>
-    );
-  }
-  if (field.control === "list") {
-    return (
-      <label style={labelStyle}>
-        {field.label}
-        <textarea
-          key={value}
-          data-testid={field.testId}
-          defaultValue={value}
-          rows={3}
-          onBlur={(event) => commitIfChanged(event.target.value)}
-        />
-      </label>
-    );
-  }
-  const numeric = field.control === "number";
-  return (
-    <label style={labelStyle}>
-      {field.label}
-      <input
-        key={value}
-        data-testid={field.testId}
-        type={numeric ? "number" : "text"}
-        min={numeric ? "0" : undefined}
-        step={numeric ? "any" : undefined}
-        defaultValue={value}
-        onBlur={(event) => commitIfChanged(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
-      />
-    </label>
-  );
-}
-
 export function SessionSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> }) {
   const session = useStore(canvas, (state) => state.flow.session);
-  const commit = (path: readonly string[], value: string) => {
+  const commit: Commit = (path, value) => {
     const { flow, updateSession } = canvas.getState();
-    updateSession(applyField(flow.session, path, value));
+    if (typeof value === "string") updateSession(applyField(flow.session, path, value));
+    return null;
   };
   return (
     <div
@@ -114,7 +19,7 @@ export function SessionSettingsSection({ canvas }: { canvas: StoreApi<CanvasStat
       style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}
     >
       {fields.map((field) => (
-        <Field key={field.testId} field={field} session={session} commit={commit} />
+        <Field key={field.testId} field={field} values={session} commit={commit} />
       ))}
     </div>
   );

@@ -8,7 +8,9 @@ import {
   placeNode,
   selectCanvasEmpty,
   selectDirty,
+  selectFieldIssues,
   selectNodeIssues,
+  selectSelectedNode,
   wrappableIds,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
@@ -621,6 +623,13 @@ describe("edit gate", () => {
     ["endDrag", (s) => s.endDrag(["prompt-1"])],
     ["wrapSelection", (s) => s.wrapSelection()],
     ["updateSession", (s) => s.updateSession({ ...s.flow.session, model: "haiku" })],
+    [
+      "updateNode",
+      (s) =>
+        s.updateNode({ ...s.flow.nodes[0], label: "Renamed" } as Parameters<
+          typeof s.updateNode
+        >[0]),
+    ],
     ["undo", (s) => s.undo()],
     ["redo", (s) => s.redo()],
   ];
@@ -1162,5 +1171,81 @@ describe("selectNodeIssues", () => {
     const current = flow([fork("fork-1")], []);
 
     expect(selectNodeIssues(current)).toBe(selectNodeIssues(current));
+  });
+});
+
+describe("updateNode", () => {
+  it("edits a node's settings as an undoable step the canvas sees", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
+    const [gateNode] = store.getState().flow.nodes;
+    if (gateNode?.type !== "gate") throw new Error("expected a gate");
+    const edited = {
+      ...gateNode,
+      label: "Check",
+      settings: { shown: "The plan", skippable: true },
+    };
+
+    act(store, (s) => s.updateNode(edited));
+
+    expect(store.getState().flow.nodes).toEqual([edited]);
+    expect(store.getState().selection).toEqual([gateNode.id]);
+    expect(store.getState().undoStack).toHaveLength(2);
+
+    act(store, (s) => s.undo());
+    expect(store.getState().flow.nodes).toEqual([gateNode]);
+
+    act(store, (s) => s.redo());
+    expect(store.getState().flow.nodes).toEqual([edited]);
+  });
+
+  it("records nothing when the node is unchanged or gone", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
+    const [gateNode] = store.getState().flow.nodes;
+    if (gateNode === undefined) throw new Error("expected a gate");
+    const before = store.getState().flow;
+
+    act(store, (s) => s.updateNode(structuredClone(gateNode)));
+    act(store, (s) => s.updateNode({ ...gateNode, id: "missing" }));
+
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+});
+
+describe("selectSelectedNode", () => {
+  const two = () => flow([prompt("a"), script("b")], []);
+
+  it("is the one selected node", () => {
+    expect(selectSelectedNode({ flow: two(), selection: ["b"] })?.id).toBe("b");
+  });
+
+  it.each([[[]], [["a", "b"]], [["gone"]]])("is null for selection %j", (selection) => {
+    expect(selectSelectedNode({ flow: two(), selection })).toBeNull();
+  });
+});
+
+describe("selectFieldIssues", () => {
+  it("maps each field the validator names to its reason, for that node only", () => {
+    const current = flow(
+      [
+        loop("loop-1", { settings: { cap: 0, onCap: undefined } }),
+        agent("agent-1", { settings: { instructions: "" } }),
+      ],
+      [],
+    );
+
+    expect(selectFieldIssues(current, "loop-1")).toEqual({
+      cap: "Loop cap 0 is not a whole number of at least 1.",
+      onCap: "Loop has no action for when its cap is reached.",
+    });
+    expect(selectFieldIssues(current, "agent-1")).toEqual({
+      instructions: "Agent has no instructions.",
+    });
+  });
+
+  it("is empty for a node with no field-level issue", () => {
+    expect(selectFieldIssues(flow([fork("fork-1")], []), "fork-1")).toEqual({});
   });
 });

@@ -28,6 +28,7 @@ import {
   addWire,
   deleteNodes as deleteNodesCommand,
   moveNodes,
+  updateNode as updateNodeCommand,
   updateSession,
   wrapInSession,
   wrappableIds,
@@ -89,6 +90,7 @@ export interface CanvasState {
   endDrag(ids: readonly string[]): void;
   wrapSelection(): void;
   updateSession(next: Session): void;
+  updateNode(next: Node): void;
   undo(): void;
   redo(): void;
   load(input: unknown): void;
@@ -198,6 +200,28 @@ export const selectNodeIssues = (flow: Flow): Record<string, string> => {
   }
   issuesByFlow.set(flow, issues);
   return issues;
+};
+
+const fieldIssuesByFlow = new WeakMap<Flow, Record<string, Record<string, string>>>();
+
+export const selectFieldIssues = (flow: Flow, nodeId: string): Record<string, string> => {
+  let byNode = fieldIssuesByFlow.get(flow);
+  if (byNode === undefined) {
+    byNode = {};
+    for (const error of validate(flow)) {
+      if (error.node === undefined || error.field === undefined) continue;
+      const fields = (byNode[error.node] ??= {});
+      if (!(error.field in fields)) fields[error.field] = plainReason(error.node, error.message);
+    }
+    fieldIssuesByFlow.set(flow, byNode);
+  }
+  return byNode[nodeId] ?? {};
+};
+
+export const selectSelectedNode = (state: Pick<CanvasState, "flow" | "selection">): Node | null => {
+  const [id, ...more] = state.selection;
+  if (id === undefined || more.length > 0) return null;
+  return state.flow.nodes.find((node) => node.id === id) ?? null;
 };
 
 export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
@@ -319,6 +343,15 @@ export function createCanvasStore(
 
       updateSession: (next) => {
         if (ready()) run(updateSession(next));
+      },
+
+      updateNode: (next) => {
+        if (!ready()) return;
+        const { flow } = get();
+        const current = flow.nodes.find((node) => node.id === next.id);
+        const alone = (node: Node): Flow => ({ ...flow, nodes: [node] });
+        if (current === undefined || flowsEqual(alone(current), alone(next))) return;
+        run(updateNodeCommand(next));
       },
 
       undo: () => {
