@@ -2,6 +2,7 @@ import { Fragment, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { NodeType } from "../../../core/flow/schema.js";
+import { PanelToggle } from "../panel-toggle.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
 import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
@@ -61,6 +62,16 @@ export function Palette({
   const onAdd = (type: NodeType) => canvas.getState().addNext(type);
   return (
     <aside className="fd-sidebar" aria-label="Nodes">
+      <div className="fd-panel-head">
+        <h2 className="fd-panel-title">Nodes</h2>
+        <PanelToggle
+          side="left"
+          label="Hide node sidebar"
+          testId={controlTestIds.sidebarHide}
+          shell={shell}
+          onClick={() => shell.getState().toggleSidebar()}
+        />
+      </div>
       <input
         className="fd-search"
         data-testid={controlTestIds.search}

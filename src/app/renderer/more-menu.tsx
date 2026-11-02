@@ -1,42 +1,25 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { RunState } from "./run-store.js";
-import {
-  menuItems,
-  nextMenuIndex,
-  selectInspectorOpen,
-  type MenuAction,
-  type ShellState,
-} from "./shell-store.js";
+import { menuItems, nextMenuIndex, type MenuAction, type ShellState } from "./shell-store.js";
 import type { TerminalState } from "./terminal/store.js";
 import { controlTestIds } from "./test-ids.js";
 
 export function MoreMenu({
   shell,
-  run,
   terminal,
 }: {
   shell: StoreApi<ShellState>;
-  run: StoreApi<RunState>;
   terminal: StoreApi<TerminalState>;
 }) {
   const open = useStore(shell, (state) => state.menuOpen);
-  const sidebarOpen = useStore(shell, (state) => state.sidebarOpen);
-  const inspectorShown = useStore(shell, (state) => state.inspectorShown);
-  const snapshot = useStore(run, (state) => state.snapshot);
   const terminalOpen = useStore(terminal, (state) => state.visible);
   const terminalAvailable = useStore(terminal, (state) => state.available);
   const anchor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const items = menuItems({
-    terminalOpen,
-    terminalAvailable,
-    sidebarOpen,
-    inspectorOpen: selectInspectorOpen({ inspectorShown }, { snapshot }),
-  });
+  const items = menuItems({ terminalOpen, terminalAvailable });
 
   useEffect(() => {
     if (!open) return;
@@ -55,9 +38,7 @@ export function MoreMenu({
 
   const perform = (action: MenuAction) => {
     if (action === "terminal-open") terminal.getState().show();
-    else if (action === "terminal-close") terminal.getState().close();
-    else if (action === "sidebar") shell.getState().toggleSidebar();
-    else shell.getState().toggleInspector(run.getState());
+    else terminal.getState().close();
     close();
   };
 

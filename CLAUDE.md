@@ -33,7 +33,8 @@ and `/plugin install workflows@agent-workflow`. How tickets run through it is in
 E2E and drive runs started by an agent (Claude Code sets `CLAUDECODE=1`) keep the app window
 hidden; runs started from your own terminal show it. Force either way with
 `FLOWDECK_SHOW_WINDOW=1` or `FLOWDECK_HIDE_WINDOW=1`. Test launches always draw at 1x
-(`--force-device-scale-factor=1`), so screenshots match on any display.
+in sRGB (`--force-device-scale-factor=1 --force-color-profile=srgb`), so screenshots match on any
+display.
 
 ## Architecture
 

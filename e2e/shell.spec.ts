@@ -107,6 +107,25 @@ const titleAndCanvasControls = [
   controlTestIds.zoomOut,
   controlTestIds.fit,
   controlTestIds.search,
+  controlTestIds.sidebarHide,
+  controlTestIds.inspectorShow,
+];
+
+const expectNamed = async (button: Locator, name: string) => {
+  await expect(button).toHaveAttribute("title", name);
+  await expect(button).toHaveAccessibleName(name);
+};
+
+const canvasWidth = async (window: Page) => (await boxOf(window.getByTestId("canvas"))).width;
+
+const canvasControls = [
+  controlTestIds.undo,
+  controlTestIds.redo,
+  controlTestIds.delete,
+  controlTestIds.wrap,
+  controlTestIds.zoomIn,
+  controlTestIds.zoomOut,
+  controlTestIds.fit,
 ];
 
 const reviewShot = async (window: Page, testInfo: TestInfo, name: string) => {
@@ -141,8 +160,7 @@ test("Looks like the design", async () => {
 
   await expect(window).toHaveScreenshot("shell-sidebar-open.png", shot.threshold);
 
-  await window.getByTestId(controlTestIds.more).click();
-  await window.getByTestId(controlTestIds.sidebar).click();
+  await window.getByTestId(controlTestIds.sidebarHide).click();
   await expect(window.getByTestId(controlTestIds.search)).toHaveCount(0);
   await window.mouse.move(1, 1);
 
@@ -192,8 +210,7 @@ test("Controls keep their test ids", async () => {
 
   await window.getByTestId(controlTestIds.more).click();
   await expect(window.getByTestId(controlTestIds.terminalOpen)).toBeDisabled();
-  await expect(window.getByTestId(controlTestIds.sidebar)).toBeVisible();
-  await expect(window.getByTestId(controlTestIds.inspector)).toBeVisible();
+  await expect(window.getByRole("menuitem")).toHaveCount(1);
   await window.keyboard.press("Escape");
 
   await sizeTo(target, smallest);
@@ -257,13 +274,114 @@ test("Sidebar search and toggle", async () => {
   await expect(window.getByTestId(paletteTestId("loop"))).toBeVisible();
   await expect(window.getByTestId(paletteTestId("prompt"))).toHaveCount(0);
 
-  await window.getByTestId(controlTestIds.more).click();
-  await window.getByTestId(controlTestIds.sidebar).click();
+  await window.getByTestId(controlTestIds.sidebarHide).click();
 
   await expect(window.getByTestId(controlTestIds.search)).toHaveCount(0);
   await expect(window.getByTestId("canvas-empty-hint")).toHaveText(
-    "Show the node sidebar from the ⋯ menu to start",
+    "Show the node sidebar with the button at the top left to start",
   );
+});
+
+test("Side panels hide and show from their own buttons", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, shot.size);
+  const sidebar = window.getByRole("complementary", { name: "Nodes" });
+  const inspector = window.getByTestId("inspector");
+
+  await expect(sidebar).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.sidebarShow)).toHaveCount(0);
+  const withSidebar = await canvasWidth(window);
+  await expectNamed(window.getByTestId(controlTestIds.sidebarHide), "Hide node sidebar");
+
+  await window.getByTestId(controlTestIds.sidebarHide).click();
+  await expect(sidebar).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.sidebarHide)).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.sidebarShow)).toBeVisible();
+  expect(await canvasWidth(window)).toBeGreaterThan(withSidebar + 200);
+  await expectNamed(window.getByTestId(controlTestIds.sidebarShow), "Show node sidebar");
+
+  await window.getByTestId(controlTestIds.sidebarShow).click();
+  await expect(sidebar).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.sidebarShow)).toHaveCount(0);
+  expect(await canvasWidth(window)).toBe(withSidebar);
+
+  await expect(inspector).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.inspectorHide)).toHaveCount(0);
+  const withoutInspector = await canvasWidth(window);
+  await expectNamed(window.getByTestId(controlTestIds.inspectorShow), "Show inspector");
+
+  await window.getByTestId(controlTestIds.inspectorShow).click();
+  await expect(inspector).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.inspectorShow)).toHaveCount(0);
+  expect(await canvasWidth(window)).toBeLessThan(withoutInspector - 200);
+  await expectNamed(window.getByTestId(controlTestIds.inspectorHide), "Hide inspector");
+
+  await window.getByTestId(controlTestIds.inspectorHide).click();
+  await expect(inspector).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.inspectorHide)).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.inspectorShow)).toBeVisible();
+  expect(await canvasWidth(window)).toBe(withoutInspector);
+});
+
+test("Panel buttons hand focus to their counterpart", async () => {
+  const { window } = await launch();
+
+  for (const [from, to] of [
+    [controlTestIds.sidebarHide, controlTestIds.sidebarShow],
+    [controlTestIds.sidebarShow, controlTestIds.sidebarHide],
+    [controlTestIds.inspectorShow, controlTestIds.inspectorHide],
+    [controlTestIds.inspectorHide, controlTestIds.inspectorShow],
+  ] as const) {
+    await window.getByTestId(from).focus();
+    await window.keyboard.press("Enter");
+    await expect.soft(window.getByTestId(to)).toBeFocused();
+  }
+});
+
+test("Panels appearing on their own leave focus alone", async () => {
+  seedFlow(home, twoScripts(), folder);
+  const { window } = await launch();
+
+  await expect(window.getByTestId(controlTestIds.inspectorShow)).not.toBeFocused();
+
+  await window.getByTestId(controlTestIds.run).focus();
+  await window.keyboard.press("Enter");
+  await expect(window.getByTestId(controlTestIds.inspectorHide)).toBeVisible({ timeout: 20_000 });
+  await expect(window.getByTestId(controlTestIds.inspectorHide)).not.toBeFocused();
+});
+
+test("Toolbar keeps its height when the sidebar hides", async () => {
+  const { window } = await launch();
+  const undo = window.getByTestId(controlTestIds.undo);
+  const withSidebar = (await boxOf(undo)).height;
+
+  await window.getByTestId(controlTestIds.sidebarHide).click();
+  await expect(window.getByTestId(controlTestIds.sidebarShow)).toBeVisible();
+
+  expect((await boxOf(undo)).height).toBe(withSidebar);
+});
+
+test("Floating panel buttons leave the canvas controls clear", async () => {
+  const testInfo = test.info();
+  const target = await launch();
+  const { window } = target;
+  await showDark(target);
+
+  await window.getByTestId(controlTestIds.sidebarHide).click();
+  const sidebarShow = await boxOf(window.getByTestId(controlTestIds.sidebarShow));
+  const inspectorShow = await boxOf(window.getByTestId(controlTestIds.inspectorShow));
+  for (const id of canvasControls) {
+    const control = await boxOf(window.getByTestId(id));
+    expect(intersects(sidebarShow, control)).toBe(false);
+    expect(intersects(inspectorShow, control)).toBe(false);
+  }
+  const canvas = await boxOf(window.getByTestId("canvas"));
+  expect(sidebarShow.x).toBeLessThan(canvas.x + 24);
+  expect(inspectorShow.x + inspectorShow.width).toBeGreaterThan(canvas.x + canvas.width - 24);
+
+  await window.mouse.move(1, 1);
+  await reviewShot(window, testInfo, "both-hidden");
 });
 
 test("Menu keyboard", async () => {
@@ -271,9 +389,6 @@ test("Menu keyboard", async () => {
 
   await window.getByTestId(controlTestIds.more).click();
   await expect(window.getByTestId(controlTestIds.terminalOpen)).toBeFocused();
-
-  await window.keyboard.press("ArrowDown");
-  await expect(window.getByTestId(controlTestIds.sidebar)).toBeFocused();
 
   await window.keyboard.press("Escape");
   await expect(window.getByRole("menu")).toHaveCount(0);
