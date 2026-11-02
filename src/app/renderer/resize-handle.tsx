@@ -1,7 +1,7 @@
 import { useRef, type PointerEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { RunState } from "./run-store.js";
+import type { RunView } from "./run-store.js";
 import {
   selectInspectorOpen,
   selectShownWidths,
@@ -13,7 +13,7 @@ const growsRightward: Record<Panel, number> = { sidebar: 1, inspector: -1 };
 
 export const useShownWidth = (
   shell: StoreApi<ShellState>,
-  run: StoreApi<Pick<RunState, "snapshot">>,
+  run: StoreApi<RunView>,
   panel: Panel,
 ): number => {
   const snapshot = useStore(run, (state) => state.snapshot);
@@ -34,7 +34,7 @@ export function ResizeHandle({
   label: string;
   testId: string;
   shell: StoreApi<ShellState>;
-  run: StoreApi<Pick<RunState, "snapshot">>;
+  run: StoreApi<RunView>;
 }) {
   const width = useShownWidth(shell, run, panel);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);

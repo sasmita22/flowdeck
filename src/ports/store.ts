@@ -8,6 +8,7 @@ export type {
   NewRun,
   RunRecord,
   RunStatus,
+  RunSummary,
   Store,
   StoredEvent,
 } from "../core/run/store.js";

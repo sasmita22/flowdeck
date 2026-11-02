@@ -27,6 +27,8 @@ mkdirSync(home, { recursive: true });
 
 const dbPath = join(home, "flowdeck.db");
 
+const claudeConfig = process.env["FLOWDECK_CLAUDE_CONFIG"] || undefined;
+
 const openStores = (): EngineStores => {
   try {
     const db = openDatabase({ path: dbPath, migrationsDir: join(__dirname, "migrations") });
@@ -82,7 +84,9 @@ const handler = createEngineHandler({
     }),
   isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
   fs,
-  connectors: new ClaudeUserConnectors(),
+  connectors: new ClaudeUserConnectors(
+    claudeConfig === undefined ? {} : { configPath: claudeConfig },
+  ),
   run,
   waits,
   worktree: new GitWorktree(),

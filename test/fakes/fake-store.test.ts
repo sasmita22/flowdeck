@@ -164,4 +164,27 @@ describe("FakeStore", () => {
 
     expect(store.events(id).map((event) => event.kind)).toEqual(["sent"]);
   });
+
+  it("lists runs running first, then newest, with cost, end and the blueprint version built", () => {
+    const store = new FakeStore();
+    store.recordBuild({ ...build("h1"), source: { flowId: "flow-1", version: 2 } });
+    const done = store.createRun(newRun(["p1"]));
+    store.append(done.id, "p1", { kind: "done" });
+    store.recordCost(done.id, 0.5);
+    store.finishRun(done.id, "done");
+    const running = store.createRun(newRun(["p1"]));
+
+    expect(store.listRuns()).toEqual([
+      expect.objectContaining({ id: running.id, status: "running", endedAt: null }),
+      expect.objectContaining({
+        id: done.id,
+        status: "done",
+        buildHash: "h1",
+        totalCost: 0.5,
+        endedAt: new Date(0).toISOString(),
+        nodeCount: 1,
+        source: { flowId: "flow-1", version: 2 },
+      }),
+    ]);
+  });
 });

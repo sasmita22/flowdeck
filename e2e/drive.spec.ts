@@ -58,7 +58,7 @@ const drive = async (steps: unknown[]) => {
 
 test("leaves one screenshot, one ARIA snapshot and the app log, and removes its home", async () => {
   const { outDir, result } = await drive([
-    { type: "wait-for-text", text: "Flowdeck" },
+    { type: "wait-for-text", text: "Blueprints" },
     { type: "screenshot" },
   ]);
 
@@ -73,7 +73,7 @@ test("leaves one screenshot, one ARIA snapshot and the app log, and removes its 
 
 test("fails on a missing control, names the step, closes the app and removes its home", async () => {
   const { result } = await drive([
-    { type: "wait-for-text", text: "Flowdeck" },
+    { type: "wait-for-text", text: "Blueprints" },
     { type: "click", testid: "no-such-control" },
   ]);
 

@@ -9,6 +9,7 @@ import type {
   NewRun,
   RunRecord,
   RunStatus,
+  RunSummary,
   Store,
   StoredEvent,
 } from "../../ports/store.js";
@@ -28,6 +29,31 @@ type RunRow = {
   claude_session_id: string;
   build_hash: string | null;
 };
+
+type RunSummaryRow = {
+  id: string;
+  status: RunStatus;
+  build_hash: string | null;
+  created_at: string;
+  ended_at: string | null;
+  total_cost: number | null;
+  node_count: number;
+  flow_id: string | null;
+  version: number | null;
+};
+
+const toRunSummary = (row: RunSummaryRow): RunSummary => ({
+  id: row.id,
+  status: row.status,
+  ...(row.build_hash === null ? {} : { buildHash: row.build_hash }),
+  createdAt: row.created_at,
+  endedAt: row.ended_at,
+  totalCost: row.total_cost,
+  nodeCount: row.node_count,
+  ...(row.flow_id === null || row.version === null
+    ? {}
+    : { source: { flowId: row.flow_id, version: row.version } }),
+});
 
 type BuildRow = {
   hash: string;
@@ -120,6 +146,21 @@ export class SqliteStore implements Store {
       status: row.status,
       ...(row.build_hash === null ? {} : { buildHash: row.build_hash }),
     };
+  }
+
+  listRuns(): RunSummary[] {
+    const rows = this.db
+      .prepare(
+        `SELECT runs.id, runs.status, runs.build_hash, runs.created_at, runs.total_cost,
+                CASE WHEN runs.status = 'running' THEN NULL
+                     ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
+                (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
+                builds.flow_id, builds.version
+           FROM runs LEFT JOIN builds ON builds.hash = runs.build_hash
+          ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
+      )
+      .all() as RunSummaryRow[];
+    return rows.map(toRunSummary);
   }
 
   append(runId: string, nodeId: string, event: RunEvent): void {

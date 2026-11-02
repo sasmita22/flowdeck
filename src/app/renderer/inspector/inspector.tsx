@@ -3,7 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
-import { selectNodeDisplay, type RunState } from "../run-store.js";
+import { selectNodeDisplay, type RunView } from "../run-store.js";
 import { useShownWidth } from "../resize-handle.js";
 import type { ShellState } from "../shell-store.js";
 import { ActivityFeed } from "./activity-feed.js";
@@ -31,7 +31,7 @@ function NodeRow({
   nodeId,
   label,
 }: {
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
   nodeId: string;
   label: string;
 }) {
@@ -50,7 +50,7 @@ function RunView({
   canvas,
 }: {
   inspector: StoreApi<InspectorState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
   canvas: StoreApi<CanvasState>;
 }) {
   const sessionName = useStore(canvas, (state) => state.flow.session.name);
@@ -87,15 +87,17 @@ export function Inspector({
   canvas,
   wait,
   shell,
+  readOnly = false,
 }: {
   inspector: StoreApi<InspectorState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
   canvas: StoreApi<CanvasState>;
-  wait: StoreApi<WaitState>;
+  wait?: StoreApi<WaitState> | undefined;
   shell: StoreApi<ShellState>;
+  readOnly?: boolean;
 }) {
-  const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
-  const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
+  const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen) && !readOnly;
+  const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null) && !readOnly;
   const width = useShownWidth(shell, run, "inspector");
   return (
     <aside
@@ -111,7 +113,7 @@ export function Inspector({
         fontSize: "var(--fs-sm)",
       }}
     >
-      <Ask wait={wait} />
+      {wait !== undefined && <Ask wait={wait} />}
       {sessionSettingsOpen ? (
         <>
           <h2 style={headingStyle}>Session settings</h2>

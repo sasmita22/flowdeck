@@ -186,10 +186,10 @@ describe("EngineClient", () => {
     });
   });
 
-  it("posts a start-run request and resolves with its matching reply", async () => {
-    const started = client.request("start-run");
+  it("posts a run-build request and resolves with its matching reply", async () => {
+    const started = client.request("run-build");
 
-    expect(port.posted).toEqual([{ id: expect.any(Number), type: "start-run" }]);
+    expect(port.posted).toEqual([{ id: expect.any(Number), type: "run-build" }]);
     port.reply({ id: port.postedId(0), ok: true, value: { kind: "started", runId: "run-1" } });
     await expect(started).resolves.toEqual({ kind: "started", runId: "run-1" });
   });

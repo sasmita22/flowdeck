@@ -1,8 +1,14 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { parseFlow, type Flow } from "../../core/flow/schema.js";
+import { parseFlow, Session, type Flow } from "../../core/flow/schema.js";
 import { registry } from "../../core/nodes/registry.js";
-import type { FlowStore, LoadedFlow, SavedFlowRef } from "../../ports/flow-store.js";
+import type {
+  FlowStore,
+  FlowSummary,
+  LoadedFlow,
+  NewBlueprint,
+  SavedFlowRef,
+} from "../../ports/flow-store.js";
 
 export type SqliteFlowStoreOptions = {
   db: Database.Database;
@@ -16,6 +22,15 @@ type CurrentRow = {
   version: number;
   session: string;
   notes: string;
+};
+
+type SummaryRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  versions: number;
+  last_saved_at: string | null;
+  session: string | null;
 };
 
 type NodeRow = {
@@ -37,6 +52,21 @@ type WireRow = {
   file: string | null;
 };
 
+const cleanName = (name: string): string => {
+  const trimmed = name.trim();
+  if (trimmed === "") throw new Error("A blueprint needs a name");
+  return trimmed;
+};
+
+const toSummary = (row: SummaryRow): FlowSummary => ({
+  flowId: row.id,
+  name: row.name,
+  createdAt: row.created_at,
+  versions: row.versions,
+  lastSavedAt: row.last_saved_at,
+  workingFolder: row.session === null ? null : Session.parse(JSON.parse(row.session)).workingFolder,
+});
+
 export class SqliteFlowStore implements FlowStore {
   private readonly db: Database.Database;
   private readonly now: () => Date;
@@ -48,10 +78,38 @@ export class SqliteFlowStore implements FlowStore {
     this.newId = options.newId ?? randomUUID;
   }
 
-  save(flow: Flow): SavedFlowRef {
+  create(name: string): FlowSummary {
+    const time = this.now().toISOString();
+    const flowId = this.createFlow(time, cleanName(name));
+    return this.summary(flowId);
+  }
+
+  list(): FlowSummary[] {
+    const rows = this.db
+      .prepare(
+        `SELECT flows.id, flows.name, flows.created_at,
+                (SELECT count(*) FROM flow_versions WHERE flow_id = flows.id) AS versions,
+                latest.saved_at AS last_saved_at, latest.session
+           FROM flows
+           LEFT JOIN flow_versions AS latest ON latest.flow_id = flows.id
+            AND latest.version = (SELECT MAX(version) FROM flow_versions WHERE flow_id = flows.id)
+          ORDER BY COALESCE(latest.saved_at, flows.created_at) DESC, flows.rowid DESC`,
+      )
+      .all() as SummaryRow[];
+    return rows.map(toSummary);
+  }
+
+  rename(flowId: string, name: string): void {
+    const changed = this.db
+      .prepare("UPDATE flows SET name = ? WHERE id = ?")
+      .run(cleanName(name), flowId).changes;
+    if (changed === 0) throw new Error(`No blueprint ${flowId}`);
+  }
+
+  save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {
     return this.db.transaction(() => {
       const time = this.now().toISOString();
-      const flowId = this.currentFlowId() ?? this.createFlow(time);
+      const flowId = this.flowIdFor(target, time);
       const { version } = this.db
         .prepare(
           "SELECT COALESCE(MAX(version), 0) + 1 AS version FROM flow_versions WHERE flow_id = ?",
@@ -120,13 +178,12 @@ export class SqliteFlowStore implements FlowStore {
     })();
   }
 
-  loadLatest(): LoadedFlow | null {
-    const flowId = this.currentFlowId();
+  loadLatest(flowId: string | undefined = this.currentFlowId()): LoadedFlow | null {
     if (flowId === undefined) return null;
     const { version } = this.db
       .prepare("SELECT MAX(version) AS version FROM flow_versions WHERE flow_id = ?")
-      .get(flowId) as { version: number };
-    return this.load({ flowId, version });
+      .get(flowId) as { version: number | null };
+    return version === null ? null : this.load({ flowId, version });
   }
 
   load({ flowId, version }: SavedFlowRef): LoadedFlow | null {
@@ -192,11 +249,30 @@ export class SqliteFlowStore implements FlowStore {
     return row?.flow_id;
   }
 
-  private createFlow(time: string): string {
+  private flowIdFor(target: string | NewBlueprint | undefined, time: string): string {
+    if (typeof target === "string") {
+      if (!this.exists(target)) throw new Error(`No blueprint ${target}`);
+      return target;
+    }
+    if (target !== undefined) return this.createFlow(time, cleanName(target.name));
+    return this.currentFlowId() ?? this.createFlow(time, "Untitled");
+  }
+
+  private exists(flowId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM flows WHERE id = ?").get(flowId) !== undefined;
+  }
+
+  private summary(flowId: string): FlowSummary {
+    const found = this.list().find((flow) => flow.flowId === flowId);
+    if (found === undefined) throw new Error(`No blueprint ${flowId}`);
+    return found;
+  }
+
+  private createFlow(time: string, name: string): string {
     const id = this.newId();
     this.db
       .prepare("INSERT INTO flows (id, name, created_at) VALUES (?, ?, ?)")
-      .run(id, "Untitled", time);
+      .run(id, name, time);
     return id;
   }
 }

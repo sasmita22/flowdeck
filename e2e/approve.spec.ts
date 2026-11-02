@@ -92,7 +92,7 @@ test("Approving a gate in the inspector lets the run carry on to the last script
   }
 });
 
-test("A gate's question shows while a node's settings are open", async () => {
+test("A gate's question shows on the run's page even when a node was selected in the editor", async () => {
   seedFlow(home, scriptThenGateThenScript(), folder);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
@@ -102,8 +102,9 @@ test("A gate's question shows while a node's settings are open", async () => {
   await expect(window.getByTestId("node-settings")).toBeVisible();
   await window.getByTestId("canvas-run").click();
 
+  await expect(window.getByTestId("run-page-status")).toBeVisible();
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
-  await expect(window.getByTestId("node-settings")).toBeVisible();
+  await expect(window.getByTestId("node-settings")).toHaveCount(0);
   await window.getByTestId("wait-approve").click();
   await expect(window.getByTestId("wait-panel")).toHaveCount(0, { timeout: 20_000 });
 });

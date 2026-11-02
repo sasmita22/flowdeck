@@ -7,6 +7,7 @@ import type {
   NewRun,
   RunRecord,
   RunStatus,
+  RunSummary,
   Store,
   StoredEvent,
 } from "../../src/ports/store.js";
@@ -40,6 +41,26 @@ export class FakeStore implements Store {
   findRun(id: string): RunRecord | undefined {
     const record = this.runRecords.find((run) => run.id === id);
     return record && copy(record);
+  }
+
+  listRuns(): RunSummary[] {
+    const summaries = this.runRecords.map((run, index): RunSummary => {
+      const source = this.buildRecords.find((known) => known.hash === run.buildHash)?.source;
+      const last = this.events(run.id).at(-1);
+      return {
+        id: run.id,
+        status: run.status,
+        ...(run.buildHash === undefined ? {} : { buildHash: run.buildHash }),
+        createdAt: new Date(index).toISOString(),
+        endedAt: run.status === "running" ? null : (last?.time ?? null),
+        totalCost: this.costs.get(run.id) ?? null,
+        nodeCount: run.nodeIds.length,
+        ...(source === undefined ? {} : { source: copy(source) }),
+      };
+    });
+    return summaries
+      .reverse()
+      .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"));
   }
 
   append(runId: string, nodeId: string, event: RunEvent): void {

@@ -4,7 +4,7 @@ import type { StoreApi } from "zustand/vanilla";
 import { NodePreview } from "../nodes/preview.js";
 import { PanelToggle } from "../panel-toggle.js";
 import { ResizeHandle, useShownWidth } from "../resize-handle.js";
-import type { RunState } from "../run-store.js";
+import type { RunView } from "../run-store.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
 import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
@@ -62,7 +62,7 @@ export function Palette({
 }: {
   canvas: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
 }) {
   const open = useStore(shell, (state) => state.sidebarOpen);
   const width = useShownWidth(shell, run, "sidebar");

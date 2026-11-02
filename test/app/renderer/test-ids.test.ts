@@ -24,6 +24,10 @@ describe("test ids", () => {
     expect(Object.values(controlTestIds)).toEqual([
       "canvas-save",
       "canvas-run",
+      "canvas-build",
+      "editor-built",
+      "nav-back",
+      "flow-title",
       "menu-more",
       "session-settings-open",
       "terminal-open",

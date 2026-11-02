@@ -3,15 +3,17 @@ import { nodeStatus, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import type { RunStatus } from "./store.js";
 
+export type SnapshotStatus = RunStatus | "interrupted";
+
 export interface RunSnapshot {
   runId: string;
-  status: RunStatus;
+  status: SnapshotStatus;
   nodes: Record<string, NodeState>;
 }
 
 export function runSnapshot(input: {
   runId: string;
-  status: RunStatus;
+  status: SnapshotStatus;
   nodeIds: readonly string[];
   events: readonly (RunEvent & { nodeId: string })[];
 }): RunSnapshot {
@@ -27,7 +29,7 @@ export function runSnapshot(input: {
   };
 }
 
-const runStatusSchema = z.enum(["running", "done", "failed", "stopped"]);
+export const snapshotStatusSchema = z.enum(["running", "done", "failed", "stopped", "interrupted"]);
 
 const nodeStateSchema = z.enum([
   "waiting",
@@ -41,7 +43,7 @@ const nodeStateSchema = z.enum([
 
 export const runSnapshotSchema: z.ZodType<RunSnapshot> = z.object({
   runId: z.string(),
-  status: runStatusSchema,
+  status: snapshotStatusSchema,
   nodes: z.record(z.string(), nodeStateSchema),
 });
 

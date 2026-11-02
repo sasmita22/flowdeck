@@ -1075,6 +1075,22 @@ describe("launchApp colour scheme", () => {
     },
   );
 
+  it("adds the extra env it is given, and never lets it move FLOWDECK_HOME", async () => {
+    const launched = await launchApp({
+      home: outDir,
+      logPath: join(outDir, "app.log"),
+      env: { FLOWDECK_CLAUDE_CONFIG: "/tmp/x/.claude.json", FLOWDECK_HOME: "/elsewhere" },
+    });
+    await launched.close();
+
+    expect(electronLaunch.mock.calls[0]?.[0]).toMatchObject({
+      env: expect.objectContaining({
+        FLOWDECK_CLAUDE_CONFIG: "/tmp/x/.claude.json",
+        FLOWDECK_HOME: outDir,
+      }),
+    });
+  });
+
   it("passes no colorScheme when none is given", async () => {
     const launched = await launchApp({ home: outDir, logPath: join(outDir, "app.log") });
     await launched.close();

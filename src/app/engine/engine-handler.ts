@@ -5,7 +5,9 @@ import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.j
 import type { BuildResult } from "../../core/compiler/build.js";
 import { buildVersion } from "../../core/compiler/build-version.js";
 import { resolveConnectors } from "../../core/compiler/connectors.js";
-import { parseFlow } from "../../core/flow/schema.js";
+import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
+import type { OpenedFlow } from "../../core/flow/flow-store.js";
+import { parseFlow, type Flow } from "../../core/flow/schema.js";
 import { workingFolderSchema, type FolderState } from "../../core/flow/workspace-info.js";
 import {
   execute,
@@ -17,18 +19,19 @@ import {
   type OpenedSession,
   type RunEnvironment,
 } from "../../core/run/execute.js";
+import type {
+  BuildFileContent,
+  BuildVersionResult,
+  ListedRun,
+  LoadedRun,
+} from "../../core/run/listing.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema } from "../../core/run/wait.js";
 import type { ConnectorSource } from "../../ports/connector-source.js";
 import type { FileSystem } from "../../ports/file-system.js";
-import type {
-  FlowStore,
-  LoadLatestFlowResult,
-  SaveFlowResult,
-  SavedFlowRef,
-} from "../../ports/flow-store.js";
+import type { FlowStore, SaveFlowResult, SavedFlowRef } from "../../ports/flow-store.js";
 import type { GitState } from "../../ports/git-state.js";
-import type { Store } from "../../ports/store.js";
+import type { RunSummary, Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
 import { createActivityTracker } from "./activity-tracker.js";
 import type { AppWaiter } from "./app-waiter.js";
@@ -75,25 +78,34 @@ const workspaceInfoPayload = z.object({ workingFolder: workingFolderSchema });
 
 const inputsSchema = z.record(z.string(), z.string());
 
-const startRunPayload = z.object({ inputs: inputsSchema.optional() }).optional();
-
 const buildVersionPayload = z.object({ flowId: z.string(), version: z.number().int() });
 
 const buildFilesPayload = z.object({ hash: z.string() });
 
+const savePayload = z.object({
+  flowId: z.string().nullable(),
+  name: z.string().optional(),
+  flow: z.unknown(),
+});
+
+const renameFlowPayload = z.object({ flowId: z.string(), name: z.string() });
+
+const openFlowPayload = z.object({ flowId: z.string().optional() });
+
+const loadRunPayload = z.object({ runId: z.string() });
+
+const doctorPayload = z.object({ connectors: z.array(z.string()) });
+
 const runBuildPayload = z.object({ hash: z.string(), inputs: inputsSchema.optional() });
 
-export type BuildVersionResult =
-  | {
-      kind: "built";
-      hash: string;
-      dir: string;
-      reused: boolean;
-      restored: { path: string; problem: string }[];
-    }
-  | { kind: "error"; message: string };
+export type { BuildFileContent, BuildVersionResult };
 
-export type BuildFileContent = { path: string; sha256: string; content: string };
+const saveTo = (
+  flows: FlowStore,
+  flowId: string | null,
+  name: string | undefined,
+  flow: Flow,
+): SavedFlowRef => flows.save(flow, flowId ?? { name: name ?? "Untitled" });
 
 const problemsOf = (result: Extract<BuildResult, { ok: false }>) =>
   result.errors.map((error) => `${error.rule}: ${error.message}`).join("\n");
@@ -143,19 +155,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const result = openStoresOnce();
     if (result.kind === "error") return result;
     try {
-      const saved = result.stores.flows.save(parseFlow(payload));
+      const { flowId, name, flow } = savePayload.parse(payload);
+      const saved = saveTo(result.stores.flows, flowId, name, parseFlow(flow));
       return { kind: "saved", flowId: saved.flowId, version: saved.version };
-    } catch (error) {
-      return { kind: "error", message: messageOf(error) };
-    }
-  };
-
-  const loadLatestFlow = (): LoadLatestFlowResult => {
-    const result = openStoresOnce();
-    if (result.kind === "error") return result;
-    try {
-      const latest = result.stores.flows.loadLatest();
-      return latest === null ? { kind: "empty" } : { kind: "loaded", flow: latest.flow };
     } catch (error) {
       return { kind: "error", message: messageOf(error) };
     }
@@ -209,18 +211,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       return { kind: "error", message: messageOf(error) };
     }
   };
-
-  const startRun = (inputs: Record<string, string>): Promise<StartRunResult> =>
-    oneAtATime(() =>
-      withStores(async (stores) => {
-        const latest = stores.flows.loadLatest();
-        if (latest === null) return failure("Save the flow before running it");
-        const { flowId, version } = latest;
-        const built = await buildFlowVersion(stores, { flowId, version });
-        if (built.kind === "error") return built;
-        return launchBuild(stores, built.hash, inputs);
-      }),
-    );
 
   const runBuild = (hash: string, inputs: Record<string, string>): Promise<StartRunResult> =>
     oneAtATime(() => withStores((stores) => launchBuild(stores, hash, inputs)));
@@ -386,6 +376,73 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return result.stores;
   };
 
+  const openFlow = ({ flows }: EngineStores, flowId: string | undefined): OpenedFlow | null => {
+    const latest = flows.loadLatest(flowId);
+    if (latest !== null) {
+      const { name, version, flow } = latest;
+      return { flowId: latest.flowId, name, version, flow };
+    }
+    if (flowId === undefined) return null;
+    const found = flows.list().find((summary) => summary.flowId === flowId);
+    if (found === undefined) throw new Error(`No blueprint ${flowId}`);
+    return { flowId, name: found.name, version: null, flow: null };
+  };
+
+  const isActive = (runId: string) => runId === active?.runId;
+
+  const listed = (summary: RunSummary): ListedRun =>
+    summary.status === "running" && !isActive(summary.id)
+      ? { ...summary, status: "interrupted" }
+      : summary;
+
+  const listRuns = (runs: Store): ListedRun[] => {
+    const all = runs.listRuns().map(listed);
+    const rest = all
+      .filter((run) => !isActive(run.id))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    return [...all.filter((run) => isActive(run.id)), ...rest];
+  };
+
+  const loadRun = ({ runs, flows }: EngineStores, runId: string): LoadedRun => {
+    const record = runs.findRun(runId);
+    const summary = runs.listRuns().find((candidate) => candidate.id === runId);
+    if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
+    const run = listed(summary);
+    const saved = run.source === undefined ? null : flows.load(run.source);
+    return {
+      run,
+      name: saved?.name ?? null,
+      flow: saved?.flow ?? null,
+      snapshot: runSnapshot({
+        runId,
+        status: run.status,
+        nodeIds: record.nodeIds,
+        events: runs.events(runId),
+      }),
+    };
+  };
+
+  const doctor = async (needed: readonly string[]): Promise<DoctorReport> =>
+    diagnoseConnectors(await options.connectors.list(), needed);
+
+  const answer = async (id: number, work: () => unknown): Promise<EngineResponse> => {
+    try {
+      return { id, ok: true, value: (await work()) ?? null };
+    } catch (error) {
+      return { id, ok: false, error: messageOf(error) };
+    }
+  };
+
+  const parsedAnswer = async <T>(
+    request: EngineRequest,
+    schema: z.ZodType<T>,
+    work: (payload: T) => unknown,
+  ): Promise<EngineResponse> => {
+    const parsed = schema.safeParse(request.payload ?? {});
+    if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
+    return answer(request.id, () => work(parsed.data));
+  };
+
   return {
     async stop() {
       await starting;
@@ -403,13 +460,24 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return { id: request.id, ok: true, value: storeStatus() };
         case "save-flow":
           return { id: request.id, ok: true, value: saveFlow(request.payload) };
-        case "load-latest-flow":
-          return { id: request.id, ok: true, value: loadLatestFlow() };
-        case "start-run": {
-          const parsed = startRunPayload.safeParse(request.payload);
-          if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
-          return { id: request.id, ok: true, value: await startRun(parsed.data?.inputs ?? {}) };
-        }
+        case "list-flows":
+          return answer(request.id, () => storesOrThrow().flows.list());
+        case "rename-flow":
+          return parsedAnswer(request, renameFlowPayload, ({ flowId, name }) => {
+            storesOrThrow().flows.rename(flowId, name);
+          });
+        case "open-flow":
+          return parsedAnswer(request, openFlowPayload, ({ flowId }) =>
+            openFlow(storesOrThrow(), flowId),
+          );
+        case "list-runs":
+          return answer(request.id, () => listRuns(storesOrThrow().runs));
+        case "load-run":
+          return parsedAnswer(request, loadRunPayload, ({ runId }) =>
+            loadRun(storesOrThrow(), runId),
+          );
+        case "doctor":
+          return parsedAnswer(request, doctorPayload, ({ connectors }) => doctor(connectors));
         case "build-version": {
           const parsed = buildVersionPayload.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

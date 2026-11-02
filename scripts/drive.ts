@@ -198,7 +198,11 @@ export interface DriveApp {
 
 export type ColorScheme = "light" | "dark";
 
-export type Launch = (home: string, colorScheme?: ColorScheme) => Promise<DriveApp>;
+export type Launch = (
+  home: string,
+  colorScheme?: ColorScheme,
+  env?: Readonly<Record<string, string>>,
+) => Promise<DriveApp>;
 
 export interface LaunchedApp {
   app: DriveApp;
@@ -289,11 +293,11 @@ export async function forceExit(app: DriveApp, options: { timeoutMs?: number } =
 
 export const userDataFlag = (home: string) => `--user-data-dir=${join(home, "user-data")}`;
 
-const launchElectron: Launch = (home, colorScheme) =>
+const launchElectron: Launch = (home, colorScheme, env = {}) =>
   _electron.launch({
     args: [...testDisplayFlags, userDataFlag(home), "."],
     cwd: repoRoot,
-    env: { ...withWindowMode(process.env), FLOWDECK_HOME: home },
+    env: { ...withWindowMode(process.env), ...env, FLOWDECK_HOME: home },
     ...(colorScheme && { colorScheme }),
   });
 
@@ -302,8 +306,13 @@ export async function launchApp(options: {
   logPath: string;
   launch?: Launch;
   colorScheme?: ColorScheme;
+  env?: Readonly<Record<string, string>>;
 }): Promise<LaunchedApp> {
-  const launched = await (options.launch ?? launchElectron)(options.home, options.colorScheme);
+  const launched = await (options.launch ?? launchElectron)(
+    options.home,
+    options.colorScheme,
+    options.env,
+  );
   const proc = launched.process();
   const app: DriveApp = {
     process: () => proc,

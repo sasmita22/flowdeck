@@ -32,6 +32,17 @@ export type RunRecord = Omit<NewRun, "buildHash"> & {
   buildHash?: string;
 };
 
+export type RunSummary = {
+  id: string;
+  status: RunStatus;
+  buildHash?: string;
+  createdAt: string;
+  endedAt: string | null;
+  totalCost: number | null;
+  nodeCount: number;
+  source?: BuildSource;
+};
+
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
 
 export type EventEntry = { nodeId: string; event: RunEvent };
@@ -39,6 +50,8 @@ export type EventEntry = { nodeId: string; event: RunEvent };
 export interface Store {
   createRun(run: NewRun): RunRecord;
   findRun(id: string): RunRecord | undefined;
+  /** Every run, the running ones first, then the newest. */
+  listRuns(): RunSummary[];
   append(runId: string, nodeId: string, event: RunEvent): void;
   appendAll(runId: string, entries: readonly EventEntry[]): void;
   events(runId: string): StoredEvent[];

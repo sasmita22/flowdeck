@@ -217,7 +217,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     const db = openDatabase({ path: join(home, "flowdeck.db") });
     closeDb = () => db.close();
     const stores = { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };
-    stores.flows.save(flow);
+    const savedRef = stores.flows.save(flow);
 
     const fs = new NodeFileSystem();
     handler = createEngineHandler({
@@ -235,7 +235,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       newSessionName: () => sessionName,
     });
 
-    const response = await handler.handle({ id: 1, type: "start-run" });
+    const built = await handler.handle({ id: 1, type: "build-version", payload: savedRef });
+    const { hash } = (built as { value: { hash: string } }).value;
+    const response = await handler.handle({ id: 2, type: "run-build", payload: { hash } });
     expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
     const { runId } = (response as { value: { runId: string } }).value;
     return { runId, runs: stores.runs };

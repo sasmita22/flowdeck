@@ -18,6 +18,7 @@ import {
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
+import type { BuildVersionResult } from "../../../src/core/run/listing.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -55,6 +56,8 @@ const stores = (flows = new FakeFlowStore()) => ({ runs: new FakeStore(), flows 
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
 const savedFlow = () => flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]);
+
+const newBlueprint = () => ({ flowId: null, flow: savedFlow() });
 
 const failingOpen = () => {
   throw new Error("boom");
@@ -145,7 +148,7 @@ describe("createEngineHandler", async () => {
     expect(opens).toBe(1);
   });
 
-  it("opens the stores once across status, save and load requests", async () => {
+  it("opens the stores once across status, save and open requests", async () => {
     let opens = 0;
     const handler = createEngineHandler(
       options({
@@ -157,9 +160,9 @@ describe("createEngineHandler", async () => {
     );
 
     await handler.handle({ id: 1, type: "store-status" });
-    await handler.handle({ id: 2, type: "save-flow", payload: savedFlow() });
-    await handler.handle({ id: 3, type: "load-latest-flow" });
-    await handler.handle({ id: 4, type: "save-flow", payload: savedFlow() });
+    await handler.handle({ id: 2, type: "save-flow", payload: newBlueprint() });
+    await handler.handle({ id: 3, type: "open-flow", payload: {} });
+    await handler.handle({ id: 4, type: "save-flow", payload: newBlueprint() });
 
     expect(opens).toBe(1);
   });
@@ -168,7 +171,7 @@ describe("createEngineHandler", async () => {
     const flows = new FakeFlowStore({ newId: () => "flow-a" });
     const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
 
-    expect(await handler.handle({ id: 5, type: "save-flow", payload: savedFlow() })).toEqual({
+    expect(await handler.handle({ id: 5, type: "save-flow", payload: newBlueprint() })).toEqual({
       id: 5,
       ok: true,
       value: { kind: "saved", flowId: "flow-a", version: 1 },
@@ -185,9 +188,15 @@ describe("createEngineHandler", async () => {
     const flows = new FakeFlowStore({ newId: () => "flow-a" });
     const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
 
-    await handler.handle({ id: 1, type: "save-flow", payload: savedFlow() });
+    await handler.handle({ id: 1, type: "save-flow", payload: newBlueprint() });
 
-    expect(await handler.handle({ id: 2, type: "save-flow", payload: savedFlow() })).toEqual({
+    expect(
+      await handler.handle({
+        id: 2,
+        type: "save-flow",
+        payload: { flowId: "flow-a", flow: savedFlow() },
+      }),
+    ).toEqual({
       id: 2,
       ok: true,
       value: { kind: "saved", flowId: "flow-a", version: 2 },
@@ -198,7 +207,13 @@ describe("createEngineHandler", async () => {
     const flows = new FakeFlowStore();
     const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
 
-    expect(await handler.handle({ id: 3, type: "save-flow", payload: { nodes: "nope" } })).toEqual({
+    expect(
+      await handler.handle({
+        id: 3,
+        type: "save-flow",
+        payload: { flowId: null, flow: { nodes: "nope" } },
+      }),
+    ).toEqual({
       id: 3,
       ok: true,
       value: { kind: "error", message: expect.stringMatching(/\S/) },
@@ -211,7 +226,7 @@ describe("createEngineHandler", async () => {
     flows.failNextSave(new Error("disk full"));
     const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
 
-    expect(await handler.handle({ id: 4, type: "save-flow", payload: savedFlow() })).toEqual({
+    expect(await handler.handle({ id: 4, type: "save-flow", payload: newBlueprint() })).toEqual({
       id: 4,
       ok: true,
       value: { kind: "error", message: "disk full" },
@@ -219,54 +234,18 @@ describe("createEngineHandler", async () => {
     expect(flows.loadLatest()).toBeNull();
   });
 
-  it("loads empty before any save", async () => {
-    const handler = createEngineHandler(options({ openStores: () => stores() }));
-
-    expect(await handler.handle({ id: 6, type: "load-latest-flow" })).toEqual({
-      id: 6,
-      ok: true,
-      value: { kind: "empty" },
-    });
-  });
-
-  it("loads the saved flow after a save", async () => {
-    const handler = createEngineHandler(options({ openStores: () => stores() }));
-
-    await handler.handle({ id: 1, type: "save-flow", payload: savedFlow() });
-
-    expect(await handler.handle({ id: 2, type: "load-latest-flow" })).toEqual({
-      id: 2,
-      ok: true,
-      value: { kind: "loaded", flow: savedFlow() },
-    });
-  });
-
-  it("returns the store's error as an error result when the load throws", async () => {
-    const flows = new FakeFlowStore();
-    flows.loadLatest = () => {
-      throw new Error("database is locked");
-    };
-    const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
-
-    expect(await handler.handle({ id: 7, type: "load-latest-flow" })).toEqual({
-      id: 7,
-      ok: true,
-      value: { kind: "error", message: "database is locked" },
-    });
-  });
-
-  it("returns error results for save and load when the stores fail to open", async () => {
+  it("returns errors for save and open when the stores fail to open", async () => {
     const handler = createEngineHandler(options({ openStores: failingOpen }));
 
-    expect(await handler.handle({ id: 1, type: "save-flow", payload: savedFlow() })).toEqual({
+    expect(await handler.handle({ id: 1, type: "save-flow", payload: newBlueprint() })).toEqual({
       id: 1,
       ok: true,
       value: { kind: "error", message: "boom" },
     });
-    expect(await handler.handle({ id: 2, type: "load-latest-flow" })).toEqual({
+    expect(await handler.handle({ id: 2, type: "open-flow", payload: {} })).toEqual({
       id: 2,
-      ok: true,
-      value: { kind: "error", message: "boom" },
+      ok: false,
+      error: "boom",
     });
     expect(await handler.handle({ id: 3, type: "store-status" })).toEqual({
       id: 3,
@@ -275,7 +254,276 @@ describe("createEngineHandler", async () => {
     });
   });
 
-  describe("start-run", () => {
+  describe("blueprints", () => {
+    const ids = (...list: string[]) => {
+      const queue = [...list];
+      return () => queue.shift() ?? "spare";
+    };
+
+    it("saves, lists, renames and opens blueprints, each keeping its own versions", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      const second = flow([prompt("other")], []);
+
+      const savedA = await handler.handle({
+        id: 3,
+        type: "save-flow",
+        payload: { flowId: null, name: "A", flow: savedFlow() },
+      });
+      await handler.handle({
+        id: 4,
+        type: "save-flow",
+        payload: { flowId: null, name: "B", flow: second },
+      });
+      const renamed = await handler.handle({
+        id: 5,
+        type: "rename-flow",
+        payload: { flowId: "flow-a", name: "Weekly" },
+      });
+
+      expect(savedA).toEqual({
+        id: 3,
+        ok: true,
+        value: { kind: "saved", flowId: "flow-a", version: 1 },
+      });
+      expect(renamed).toEqual({ id: 5, ok: true, value: null });
+      expect(await handler.handle({ id: 6, type: "list-flows" })).toMatchObject({
+        ok: true,
+        value: [
+          { flowId: "flow-b", name: "B", versions: 1 },
+          { flowId: "flow-a", name: "Weekly", versions: 1 },
+        ],
+      });
+      expect(
+        await handler.handle({ id: 7, type: "open-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({
+        id: 7,
+        ok: true,
+        value: { flowId: "flow-a", name: "Weekly", version: 1, flow: savedFlow() },
+      });
+      expect(await handler.handle({ id: 8, type: "open-flow", payload: {} })).toEqual({
+        id: 8,
+        ok: true,
+        value: { flowId: "flow-b", name: "B", version: 1, flow: second },
+      });
+    });
+
+    it("creates the blueprint by name and saves its version 1 in one request when it has no id yet", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      await handler.handle({ id: 1, type: "save-flow", payload: newBlueprint() });
+
+      expect(
+        await handler.handle({
+          id: 2,
+          type: "save-flow",
+          payload: { flowId: null, name: "Second", flow: savedFlow() },
+        }),
+      ).toEqual({ id: 2, ok: true, value: { kind: "saved", flowId: "flow-b", version: 1 } });
+      expect(flows.list().map(({ name, versions }) => [name, versions])).toEqual([
+        ["Second", 1],
+        ["Untitled", 1],
+      ]);
+    });
+
+    it("leaves no empty blueprint when the first save of a new one fails", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      flows.failNextSave(new Error("disk full"));
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+      expect(
+        await handler.handle({
+          id: 1,
+          type: "save-flow",
+          payload: { flowId: null, name: "Report", flow: savedFlow() },
+        }),
+      ).toEqual({ id: 1, ok: true, value: { kind: "error", message: "disk full" } });
+      expect(flows.list()).toEqual([]);
+    });
+
+    it("opens a blueprint never saved as its name with no version, and nothing before any blueprint", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+      expect(await handler.handle({ id: 1, type: "open-flow", payload: {} })).toEqual({
+        id: 1,
+        ok: true,
+        value: null,
+      });
+      flows.create("Fresh");
+
+      expect(
+        await handler.handle({ id: 3, type: "open-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({
+        id: 3,
+        ok: true,
+        value: { flowId: "flow-a", name: "Fresh", version: null, flow: null },
+      });
+    });
+
+    it("refuses a rename to a blank name, a save to an unknown blueprint and an unknown open", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      flows.create("A");
+
+      expect(
+        await handler.handle({
+          id: 2,
+          type: "rename-flow",
+          payload: { flowId: "flow-a", name: " " },
+        }),
+      ).toEqual({ id: 2, ok: false, error: "A blueprint needs a name" });
+      expect(
+        await handler.handle({
+          id: 3,
+          type: "save-flow",
+          payload: { flowId: "nope", flow: savedFlow() },
+        }),
+      ).toEqual({ id: 3, ok: true, value: { kind: "error", message: "No blueprint nope" } });
+      expect(
+        await handler.handle({ id: 4, type: "open-flow", payload: { flowId: "nope" } }),
+      ).toEqual({ id: 4, ok: false, error: "No blueprint nope" });
+    });
+  });
+
+  describe("runs", () => {
+    const seededRun = () => {
+      const flows = new FakeFlowStore({ newId: () => "flow-a" });
+      const runs = new FakeStore();
+      flows.create("Report");
+      const { version } = flows.save(flow([script("s1"), script("s2")], []), "flow-a");
+      runs.recordBuild({
+        hash: "h1",
+        dir: "/fd-home/builds/h1",
+        source: { flowId: "flow-a", version },
+        files: [],
+        nodes: [],
+      });
+      const { id } = runs.createRun({
+        buildDir: "/fd-home/builds/h1",
+        inputs: {},
+        nodeIds: ["s1", "s2"],
+        session: { tmuxName: "fd-run-x", cwd: "/repo", claudeSessionId: "c1" },
+        buildHash: "h1",
+      });
+      runs.append(id, "s1", { kind: "sent" });
+      runs.append(id, "s1", { kind: "done" });
+      runs.finishRun(id, "failed");
+      return { flows, runs, runId: id };
+    };
+
+    it("lists runs with the blueprint version their build came from", async () => {
+      const { flows, runs, runId } = seededRun();
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-runs" })).toEqual({
+        id: 1,
+        ok: true,
+        value: [
+          expect.objectContaining({
+            id: runId,
+            status: "failed",
+            buildHash: "h1",
+            source: { flowId: "flow-a", version: 1 },
+          }),
+        ],
+      });
+    });
+
+    it("loads one run with its blueprint version's canvas and each node's status from its events", async () => {
+      const { flows, runs, runId } = seededRun();
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
+        id: 1,
+        ok: true,
+        value: {
+          run: expect.objectContaining({ id: runId, status: "failed" }),
+          name: "Report",
+          flow: flow([script("s1"), script("s2")], []),
+          snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
+        },
+      });
+      expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
+        { id: 2, ok: false, error: "No run nope" },
+      );
+    });
+
+    it("shows a run left running by an earlier session as interrupted, in the list and on its own", async () => {
+      const { flows, runs } = seededRun();
+      const { id: stale } = runs.createRun({
+        buildDir: "/fd-home/builds/h1",
+        inputs: {},
+        nodeIds: ["s1", "s2"],
+        session: { tmuxName: "fd-run-y", cwd: "/repo", claudeSessionId: "c2" },
+        buildHash: "h1",
+      });
+      runs.append(stale, "s1", { kind: "sent" });
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-runs" })).toMatchObject({
+        value: [{ id: stale, status: "interrupted", endedAt: null }, { status: "failed" }],
+      });
+      expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: stale } })).toEqual({
+        id: 2,
+        ok: true,
+        value: expect.objectContaining({
+          run: expect.objectContaining({ id: stale, status: "interrupted" }),
+          snapshot: { runId: stale, status: "interrupted", nodes: { s1: "sent", s2: "waiting" } },
+        }),
+      });
+      expect(runs.findRun(stale)?.status).toBe("running");
+    });
+  });
+
+  describe("doctor", () => {
+    it("reports installed connectors and the needed ones by name, without any setting's value", async () => {
+      const handler = createEngineHandler(
+        options({
+          connectors: new FakeConnectorSource({
+            jira,
+            slack: { command: "slack-mcp", env: { SLACK_TOKEN: "xoxb-secret" } },
+          }),
+        }),
+      );
+
+      const answer = await handler.handle({
+        id: 1,
+        type: "doctor",
+        payload: { connectors: ["slack", "linear"] },
+      });
+
+      expect(answer).toEqual({
+        id: 1,
+        ok: true,
+        value: {
+          installed: [
+            { name: "jira", status: "ok", settings: [] },
+            { name: "slack", status: "ok", settings: [{ name: "SLACK_TOKEN", set: true }] },
+          ],
+          needed: [
+            expect.objectContaining({ name: "slack", status: "ok" }),
+            expect.objectContaining({ name: "linear", status: "missing" }),
+          ],
+        },
+      });
+      expect(JSON.stringify(answer)).not.toContain("xoxb-secret");
+    });
+
+    it("answers a connector source that cannot be read as an error", async () => {
+      const connectors = new FakeConnectorSource();
+      connectors.list = () => Promise.reject(new Error("~/.claude.json is not valid JSON"));
+      const handler = createEngineHandler(options({ connectors }));
+
+      expect(await handler.handle({ id: 1, type: "doctor", payload: { connectors: [] } })).toEqual({
+        id: 1,
+        ok: false,
+        error: "~/.claude.json is not valid JSON",
+      });
+    });
+  });
+
+  describe("run-build", () => {
     let home: string;
     let repo: TmpRepo;
     let runs: FakeStore;
@@ -326,11 +574,38 @@ describe("createEngineHandler", async () => {
         }),
       );
 
-    const startRun = async () => {
-      const response = await handler.handle({ id: nextId, type: "start-run" });
+    type Started = { kind: "started"; runId: string } | { kind: "error"; message: string };
+
+    const latestBuild = async (): Promise<BuildVersionResult> => {
+      const opened = await handler.handle({ id: nextId++, type: "open-flow", payload: {} });
+      const { flowId, version } = (opened as { value: { flowId: string; version: number } }).value;
+      const built = await handler.handle({
+        id: nextId++,
+        type: "build-version",
+        payload: { flowId, version },
+      });
+      return (built as { value: BuildVersionResult }).value;
+    };
+
+    const builtHash = async () => {
+      const built = await latestBuild();
+      if (built.kind === "error") throw new Error(`did not build: ${built.message}`);
+      return built.hash;
+    };
+
+    const runBuild = async (hash: string, inputs?: Record<string, string>) => {
+      const response = await handler.handle({
+        id: nextId,
+        type: "run-build",
+        payload: inputs === undefined ? { hash } : { hash, inputs },
+      });
       expect(response).toMatchObject({ id: nextId++, ok: true });
-      return (response as { value: unknown }).value as
-        { kind: "started"; runId: string } | { kind: "error"; message: string };
+      return (response as { value: unknown }).value as Started;
+    };
+
+    const startRun = async (inputs?: Record<string, string>): Promise<Started> => {
+      const built = await latestBuild();
+      return built.kind === "error" ? built : runBuild(built.hash, inputs);
     };
 
     const startedRunId = async () => {
@@ -430,6 +705,36 @@ describe("createEngineHandler", async () => {
       expect(runs.findRun(runId)?.status).toBe("done");
     });
 
+    it("lists only the active run as running and first, and an older run left running as interrupted", async () => {
+      const seed = (status?: "done") => {
+        const { id } = runs.createRun({
+          buildDir: "/nowhere",
+          inputs: {},
+          nodeIds: ["nap"],
+          session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "old" },
+          buildHash: "old",
+        });
+        if (status !== undefined) runs.finishRun(id, status);
+        return id;
+      };
+      const stale = seed();
+      const finished = seed("done");
+      flows.save(sleeper());
+      const active = await startedRunId();
+
+      const listed = await handler.handle({ id: 99, type: "list-runs" });
+      const loaded = await handler.handle({ id: 98, type: "load-run", payload: { runId: active } });
+
+      expect((listed as { value: { id: string; status: string }[] }).value).toEqual([
+        expect.objectContaining({ id: active, status: "running" }),
+        expect.objectContaining({ id: finished, status: "done" }),
+        expect.objectContaining({ id: stale, status: "interrupted" }),
+      ]);
+      expect(loaded).toMatchObject({
+        value: { run: { status: "running" }, snapshot: { status: "running" } },
+      });
+    });
+
     it("refuses a second run while one is active and creates no run for it", async () => {
       flows.save(sleeper());
       await startedRunId();
@@ -439,10 +744,6 @@ describe("createEngineHandler", async () => {
         message: "A run is already in progress",
       });
       expect(runs.runs).toHaveLength(1);
-    });
-
-    it("refuses to run when nothing is saved", async () => {
-      await expectErrorAndNoRun("Save the flow before running it");
     });
 
     it("refuses a working folder path that is not a folder", async () => {
@@ -681,20 +982,20 @@ describe("createEngineHandler", async () => {
     it("keeps the inputs a run is started with", async () => {
       flows.save(twoScripts());
 
-      const response = await handler.handle({
-        id: 1,
-        type: "start-run",
-        payload: { inputs: { ticket: "FD-1" } },
-      });
-      const { runId } = (response as { value: { runId: string } }).value;
+      const started = await startRun({ ticket: "FD-1" });
+      if (started.kind === "error") throw new Error(started.message);
+      const { runId } = started;
       await untilFinished(runId);
 
       expect(runs.findRun(runId)?.inputs).toEqual({ ticket: "FD-1" });
     });
 
     it("refuses inputs that are not text", async () => {
+      flows.save(twoScripts());
+      const hash = await builtHash();
+
       expect(
-        await handler.handle({ id: 4, type: "start-run", payload: { inputs: { n: 1 } } }),
+        await handler.handle({ id: 4, type: "run-build", payload: { hash, inputs: { n: 1 } } }),
       ).toMatchObject({ id: 4, ok: false });
       expect(runs.runs).toEqual([]);
     });
@@ -783,7 +1084,7 @@ describe("createEngineHandler", async () => {
     it("returns the open error when the stores fail to open", async () => {
       handler = handlerWith({ openStores: failingOpen });
 
-      expect(await startRun()).toEqual({ kind: "error", message: "boom" });
+      expect(await runBuild("any")).toEqual({ kind: "error", message: "boom" });
     });
 
     it("stops an active run, resolving once it is recorded stopped", async () => {
@@ -811,12 +1112,13 @@ describe("createEngineHandler", async () => {
       throw new Error("socket in use");
     };
 
-    it("accepts only one of two start-runs sent together, and creates one run", async () => {
+    it("accepts only one of two run-builds sent together, and creates one run", async () => {
       flows.save(sleeper());
+      const hash = await builtHash();
 
       const responses = await Promise.all([
-        handler.handle({ id: 1, type: "start-run" }),
-        handler.handle({ id: 2, type: "start-run" }),
+        handler.handle({ id: 1, type: "run-build", payload: { hash } }),
+        handler.handle({ id: 2, type: "run-build", payload: { hash } }),
       ]);
 
       const values = responses.map((response) => (response as { value: { kind: string } }).value);
@@ -829,8 +1131,9 @@ describe("createEngineHandler", async () => {
 
     it("stops a run whose start is still in progress once it has started", async () => {
       flows.save(sleeper());
+      const hash = await builtHash();
 
-      const starting = handler.handle({ id: 1, type: "start-run" });
+      const starting = handler.handle({ id: 1, type: "run-build", payload: { hash } });
       await handler.stop();
       const { value } = (await starting) as { value: { kind: string; runId: string } };
 

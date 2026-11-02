@@ -89,6 +89,7 @@ describe("createActivityTracker", () => {
     expect(store.listBuilds()).toEqual(inner.listBuilds());
     expect(store.findBuild("h1")).toEqual(inner.findBuild("h1"));
     expect(store.buildFiles("h1")).toEqual(inner.buildFiles("h1"));
+    expect(store.listRuns()).toEqual(inner.listRuns());
     expect(store.events(runId)).toEqual(inner.events(runId));
   });
 

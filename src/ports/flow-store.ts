@@ -1,7 +1,9 @@
 export type {
   FlowStore,
+  FlowSummary,
   LoadedFlow,
-  LoadLatestFlowResult,
+  NewBlueprint,
+  OpenedFlow,
   SavedFlowRef,
   SaveFlowResult,
 } from "../core/flow/flow-store.js";

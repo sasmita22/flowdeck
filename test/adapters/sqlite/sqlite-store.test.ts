@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { NewRun } from "../../../src/ports/store.js";
+import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
+import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
+import { flow, script } from "../../fixtures/flow-builders.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
   buildDir: "/fd/builds/abc",
@@ -298,5 +301,68 @@ describe("SqliteStore", () => {
       },
     ]);
     expect(store.findRun(store.createRun(newRun()).id)?.buildHash).toBe("abc");
+  });
+
+  describe("listRuns", () => {
+    it("lists the running run first, then the newest, with when each ended and its cost", () => {
+      let now = "2026-01-01T00:00:00.000Z";
+      const store = open(() => new Date(now));
+      const first = store.createRun(newRun(["p1"]));
+      now = "2026-01-01T00:00:05.000Z";
+      store.append(first.id, "p1", { kind: "sent" });
+      now = "2026-01-01T00:00:09.000Z";
+      store.append(first.id, "p1", { kind: "done" });
+      store.recordCost(first.id, 0.25);
+      store.finishRun(first.id, "done");
+      now = "2026-01-02T00:00:00.000Z";
+      const second = store.createRun(newRun(["p1", "p2"]));
+      now = "2026-01-03T00:00:00.000Z";
+      const third = store.createRun(newRun(["p1"]));
+      store.finishRun(third.id, "stopped");
+
+      expect(store.listRuns()).toEqual([
+        {
+          id: second.id,
+          status: "running",
+          buildHash: "abc",
+          createdAt: "2026-01-02T00:00:00.000Z",
+          endedAt: null,
+          totalCost: null,
+          nodeCount: 2,
+        },
+        {
+          id: third.id,
+          status: "stopped",
+          buildHash: "abc",
+          createdAt: "2026-01-03T00:00:00.000Z",
+          endedAt: null,
+          totalCost: null,
+          nodeCount: 1,
+        },
+        {
+          id: first.id,
+          status: "done",
+          buildHash: "abc",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          endedAt: "2026-01-01T00:00:09.000Z",
+          totalCost: 0.25,
+          nodeCount: 1,
+        },
+      ]);
+    });
+
+    it("names the blueprint version a run's build was made from", () => {
+      const db = openDatabase({ path });
+      opened.push(db);
+      const flows = new SqliteFlowStore({ db, newId: () => "flow-1" });
+      const { version } = flows.save(flow([script("s1")], []));
+      const store = new SqliteStore({ db });
+      store.recordBuild({ ...build, hash: "def", source: { flowId: "flow-1", version } });
+      const run = store.createRun({ ...newRun(["s1"]), buildHash: "def" });
+
+      expect(store.listRuns()).toEqual([
+        expect.objectContaining({ id: run.id, source: { flowId: "flow-1", version: 1 } }),
+      ]);
+    });
   });
 });
