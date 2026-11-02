@@ -23,6 +23,7 @@ export async function openClaudeSession(
     hooks,
     mcpConfigPath,
     attach,
+    resume,
   }: OpenSessionOptions,
   { sessions, claude, sessionId }: { sessions: SessionHost; claude: ClaudeCli; sessionId: string },
 ): Promise<OpenedSession> {
@@ -37,7 +38,7 @@ export async function openClaudeSession(
       .start(
         sessionName,
         cwd,
-        { sessionId, model },
+        { sessionId, model, ...(resume === true ? { resume } : {}) },
         {
           settingsPath: join(buildDir, "settings.json"),
           pluginDir: buildDir,

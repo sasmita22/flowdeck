@@ -6,5 +6,7 @@ export interface ProcessRunner {
     args: readonly string[],
     cwd: string,
     signal?: AbortSignal,
+    job?: string,
   ): Promise<ProcessResult>;
+  rejoin?(job: string, signal?: AbortSignal): Promise<ProcessResult | undefined>;
 }

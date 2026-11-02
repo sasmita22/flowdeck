@@ -164,6 +164,26 @@ describe("openRun", () => {
   });
 });
 
+describe("an interrupted run", () => {
+  it("keeps the note that says why it stopped", async () => {
+    const bridge = fakeBridge();
+    const note = "Flowdeck closed while this run was going.";
+    bridge.loadRun.mockResolvedValueOnce({
+      run: { ...runs[0], status: "interrupted", endedAt: null },
+      name: "Report",
+      flow: null,
+      snapshot: { runId: "run-1", status: "interrupted", nodes: {} },
+      activity: [],
+      note,
+    } as never);
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().openRun("run-1");
+
+    expect(library.getState().viewedRun?.note).toBe(note);
+  });
+});
+
 describe("cards", () => {
   it("names each build's blueprint and version, and marks a build with no blueprint", async () => {
     const library = createLibraryStore({ bridge: fakeBridge() });

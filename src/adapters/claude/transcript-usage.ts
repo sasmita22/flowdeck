@@ -15,6 +15,7 @@ type Block = { type?: string; text?: unknown };
 
 type Line = {
   type?: string;
+  subtype?: string;
   timestamp?: unknown;
   message?: { id?: string; model?: string; content?: unknown; usage?: Usage };
 };
@@ -93,6 +94,17 @@ export class TranscriptUsage implements UsageSource {
     return (await this.transcripts(transcript, sessionId)).flatMap(({ jsonl, agentType }) =>
       entriesIn(jsonl).map((entry) => (agentType === undefined ? entry : { ...entry, agentType })),
     );
+  }
+
+  async compactions(sessionId: string): Promise<number> {
+    if (sessionId === "") return 0;
+    const transcript = await this.findTranscript(sessionId);
+    if (transcript === undefined) return 0;
+    const main = await readOrNothing(() => readFile(transcript, "utf8"), "");
+    return main.split("\n").filter((line) => {
+      const parsed = parse(line);
+      return parsed?.type === "system" && parsed.subtype === "compact_boundary";
+    }).length;
   }
 
   private async transcripts(transcript: string, sessionId: string): Promise<Transcript[]> {

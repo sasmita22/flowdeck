@@ -2,10 +2,17 @@ import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
 import { verify, type VerifyFileSystem } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
+import type { CompactionReader } from "./context.js";
 import { agentNodes, chargeUsage } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
-import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
+import {
+  Runner,
+  StructureError,
+  structureProblems,
+  type RunnerDeps,
+  type ScriptResult,
+} from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
 import type { HumanWaiter } from "./wait.js";
@@ -20,6 +27,7 @@ export type OpenSessionOptions = {
   hooks: HookPaths;
   mcpConfigPath?: string;
   attach?: boolean;
+  resume?: boolean;
 };
 
 export type OpenedSession = {
@@ -37,7 +45,9 @@ export type ExecuteDeps = {
       args: readonly string[],
       cwd: string,
       signal?: AbortSignal,
+      job?: string,
     ): ReturnType<RunnerDeps["scripts"]["run"]>;
+    rejoin?(job: string, signal?: AbortSignal): Promise<ScriptResult | undefined>;
   };
   waiter: HumanWaiter;
   startEvents(
@@ -50,6 +60,7 @@ export type ExecuteDeps = {
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
   usage?: UsageReader;
+  compactions?: CompactionReader;
 };
 
 export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onOutput" | "onInterrupt">;
@@ -67,6 +78,7 @@ export type Execution = {
   auto: boolean;
   flags?: Record<string, boolean>;
   socketPath: string;
+  scriptJobs?: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
 };
@@ -147,7 +159,10 @@ async function readUntilNoStop(
   }
 }
 
-function completeWaitWith({ actions, stop }: ResumeRead): ResumeActions {
+function completeWaitWith(
+  { actions, stop }: ResumeRead,
+  turnNodes: ReadonlySet<string>,
+): ResumeActions {
   if (stop === undefined) return actions;
   const message = stop.payload["last_assistant_message"];
   const complete: ResumeAction =
@@ -155,7 +170,7 @@ function completeWaitWith({ actions, stop }: ResumeRead): ResumeActions {
   return Object.fromEntries(
     Object.entries(actions).map(([nodeId, action]) => [
       nodeId,
-      action.kind === "wait" ? complete : action,
+      action.kind === "wait" && turnNodes.has(nodeId) ? complete : action,
     ]),
   );
 }
@@ -213,6 +228,24 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
   };
 }
 
+function scriptsIn(
+  scripts: ExecuteDeps["scripts"],
+  jobs: string | undefined,
+  signal: AbortSignal,
+  whileRunning: <T>(step: () => Promise<T>) => Promise<T>,
+): RunnerDeps["scripts"] {
+  const jobPath = (job: string | undefined) =>
+    jobs === undefined || job === undefined ? undefined : `${jobs}/${job}`;
+  const run: RunnerDeps["scripts"]["run"] = (command, args, cwd, _signal, job) =>
+    whileRunning(() => scripts.run(command, args, cwd, signal, jobPath(job)));
+  const { rejoin } = scripts;
+  if (jobs === undefined || rejoin === undefined) return { run };
+  return {
+    run,
+    rejoin: (job) => whileRunning(() => rejoin.call(scripts, `${jobs}/${job}`, signal)),
+  };
+}
+
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
   const { store, runId, manifest, cwd, auto, flags = {}, socketPath } = execution;
   const events = await deps.startEvents(socketPath);
@@ -246,6 +279,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
         ? {}
         : completeWaitWith(
             await readUntilNoStop(events.events, opened.sessionId, execution.actions),
+            turnNodeIds(manifest),
           );
     const session = opened;
     const whileRunning = async <T>(step: () => Promise<T>): Promise<T> => {
@@ -268,10 +302,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
           }),
       },
       events: events.events,
-      scripts: {
-        run: (command, args, cwd) =>
-          whileRunning(() => deps.scripts.run(command, args, cwd, scriptsStop.signal)),
-      },
+      scripts: scriptsIn(deps.scripts, execution.scriptJobs, scriptsStop.signal, whileRunning),
       waiter: deps.waiter,
       files: deps.fs,
       auto,
@@ -285,6 +316,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(events.permissions === undefined ? {} : { permissions: events.permissions }),
       ...(deps.usage === undefined ? {} : { usage: deps.usage }),
+      ...(deps.compactions === undefined ? {} : { compactions: deps.compactions }),
       ...(manifest.session.budget === undefined ? {} : { budget: manifest.session.budget }),
     })
       .run(manifest, { actions })

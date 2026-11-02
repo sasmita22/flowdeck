@@ -209,6 +209,10 @@ describe("entryText", () => {
       "Failed: Script exited with code 3",
     ],
     [
+      { ...base, kind: "context", summary: "Context compacted at 162k tokens" },
+      "Context compacted at 162k tokens",
+    ],
+    [
       { ...base, kind: "pr", url: "https://x/pull/1", summary: "https://x/pull/1" },
       "Opened https://x/pull/1",
     ],

@@ -61,6 +61,7 @@ export const pageTestIds = {
   runAgain: "run-again",
   runOpenBlueprint: "run-open-blueprint",
   runPageStatus: "run-page-status",
+  runPageNote: "run-page-note",
   runStop: "run-stop",
   runResume: "run-resume",
   doctorBlueprint: "doctor-blueprint",

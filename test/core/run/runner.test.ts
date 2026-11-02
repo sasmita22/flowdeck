@@ -312,6 +312,14 @@ describe("Runner", () => {
       expect(lines.at(-1)).toBe("s failed: killed by a signal");
     });
 
+    it("fails a script stopped by a signal it reported through its exit code, naming the signal", async () => {
+      const { lines } = await run([exit(143)]);
+
+      expect(lines.at(-1)).toBe(
+        "s failed: exit code 143 (usually means it was stopped by signal 15)",
+      );
+    });
+
     it("fails a script that cannot be started, with the error as reason", async () => {
       const error = Object.assign(new Error("spawn nope ENOENT"), { code: "ENOENT" });
       const { result, nextRan, lines } = await run([error]);
@@ -354,8 +362,8 @@ describe("Runner", () => {
       );
 
       expect(scripts.calls).toEqual([
-        { command: "npm", args: ["test"], cwd },
-        { command: "ls", args: [], cwd },
+        { command: "npm", args: ["test"], cwd, job: expect.stringMatching(/^a-\d+$/) },
+        { command: "ls", args: [], cwd, job: expect.stringMatching(/^b-\d+$/) },
       ]);
     });
   });
@@ -3590,5 +3598,225 @@ describe("Runner branch on a flag", () => {
       expect(ran(scripts)).toEqual(["q", "end"]);
       expect(result.states).toMatchObject({ b1: "done", Z: "skipped", q: "done", end: "done" });
     });
+  });
+});
+
+describe("Runner compaction", () => {
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const eventsOf = (store: FakeStore, nodeId: string) =>
+    store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+  const used = (messageId: string, cacheReadTokens: number): UsageEntry[] => [
+    {
+      messageId,
+      model: "claude-opus-5-5",
+      inputTokens: 0,
+      outputTokens: 10,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      cacheReadTokens,
+    },
+  ];
+  const three = manifest(prompt("n1"), prompt("n2"), prompt("n3"));
+
+  function filling(tokensAfterFirst: number, options: { compactDone?: boolean } = {}) {
+    const usage = new FakeUsageSource();
+    const h = harness({ usage });
+    const send = h.deps.prompts.sendPrompt;
+    let turns = 0;
+    h.deps.prompts = {
+      interrupt: async () => undefined,
+      sendPrompt: async (text) => {
+        if (text === "/compact") {
+          h.calls.push(`send ${text}`);
+          if (options.compactDone !== false) usage.compacted(sessionId);
+          return;
+        }
+        await send(text);
+        turns++;
+        usage.setEntries(sessionId, used(`m${turns}`, turns === 1 ? tokensAfterFirst : 1_000));
+      },
+    };
+    h.deps.compactions = usage;
+    return { ...h, usage };
+  }
+
+  it("sends /compact once between nodes when the context passes 80%, then the next node", async () => {
+    const { deps, calls, lines } = filling(850_000);
+
+    const result = await runOn(deps, three);
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([
+      `send /${hash}:n1`,
+      "send /compact",
+      `send /${hash}:n2`,
+      `send /${hash}:n3`,
+    ]);
+    expect(eventsOf(deps.store, "n2")).toMatchObject([
+      { kind: "compacted", payload: { tokens: 850_000 } },
+      { kind: "sent" },
+      { kind: "done" },
+    ]);
+    expect(lines).toContain("n2 compacting context at 850000 tokens");
+  });
+
+  it("does not compact while the context is under 80%", async () => {
+    const { deps, calls } = filling(799_999);
+
+    await runOn(deps, three);
+
+    expect(sends(calls)).not.toContain("send /compact");
+  });
+
+  it("does not compact again on the same reading before a new turn lands", async () => {
+    const usage = new FakeUsageSource();
+    const h = harness({ usage });
+    h.deps.compactions = usage;
+    usage.setEntries(sessionId, used("m0", 900_000));
+    const send = h.deps.prompts.sendPrompt;
+    h.deps.prompts = {
+      interrupt: async () => undefined,
+      sendPrompt: async (text) => {
+        if (text === "/compact") usage.compacted(sessionId);
+        await send(text);
+      },
+    };
+
+    await runOn(h.deps, three);
+
+    expect(sends(h.calls).filter((call) => call === "send /compact")).toHaveLength(1);
+  });
+
+  it("never compacts a node it resumes in the middle of its turn", async () => {
+    const { deps, calls, events, usage } = filling(850_000);
+    deps.store.createRun(newRun(three));
+    const runId = runIdOf(deps.store);
+    deps.store.append(runId, "n1", { kind: "sent" });
+    usage.setEntries(sessionId, used("m9", 900_000));
+
+    const running = new Runner({ ...deps, runId }).run(three, {
+      actions: { n1: { kind: "wait" } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sends(calls)).toEqual([]);
+    events.publish({ kind: "Stop", sessionId, payload: {} });
+    await running;
+
+    expect(sends(calls)[0]).toBe("send /compact");
+    expect(eventsOf(deps.store, "n1").map((event) => event.kind)).toEqual(["sent", "done"]);
+  });
+
+  it("goes on to the next node, saying so, when compaction does not finish in time", async () => {
+    const { deps, calls, lines } = filling(850_000, { compactDone: false });
+    deps.turnTimeoutMs = 300;
+
+    const result = await runOn(deps, three);
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls).filter((call) => call === "send /compact")).toHaveLength(1);
+    expect(eventsOf(deps.store, "n2").map((event) => event.kind)).toEqual(["sent", "done"]);
+    expect(lines).toContain("n2 context compaction did not finish within 300 ms; going on");
+  });
+
+  it("never reads the context without a compaction reader", async () => {
+    const usage = new FakeUsageSource();
+    const { deps } = harness({ usage });
+
+    await runOn(deps, three);
+
+    expect(usage.calls).toEqual([]);
+  });
+});
+
+describe("Runner rejoining a script", () => {
+  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
+  const eventsOf = (store: FakeStore, nodeId: string) =>
+    store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+  const two = manifest(script("s1"), script("s2"));
+  function seeded(deps: TestDeps, entries: [string, RunEvent][]) {
+    const { id } = deps.store.createRun(newRun(two));
+    for (const [nodeId, event] of entries) deps.store.append(id, nodeId, event);
+    return id;
+  }
+  const runningSeq = (deps: TestDeps, nodeId: string) =>
+    eventsOf(deps.store, nodeId).findLast((event) => event.kind === "running")?.seq;
+
+  it("runs a script under a job named after its running mark", async () => {
+    const { deps, scripts } = harness({ results: [exit(0), exit(0)] });
+
+    await runOn(deps, two);
+
+    expect(scripts.calls.map((call) => call.job)).toEqual([
+      `s1-${runningSeq(deps, "s1")}`,
+      `s2-${runningSeq(deps, "s2")}`,
+    ]);
+  });
+
+  it("waits for a script still running from before, without starting it again", async () => {
+    const { deps, scripts, lines } = harness({ results: [exit(0)] });
+    const runId = seeded(deps, [["s1", { kind: "running" }]]);
+    const job = `s1-${runningSeq(deps, "s1")}`;
+    scripts.finishes(job, exit(0, "late output\n"));
+
+    const result = await new Runner({ ...deps, runId }).run(two, {
+      actions: { s1: { kind: "wait" } },
+    });
+
+    expect(result.outcome).toBe("done");
+    expect(scripts.rejoins).toEqual([job]);
+    expect(scripts.calls.map((call) => call.command)).toEqual(["npm"]);
+    expect(eventsOf(deps.store, "s1").map((event) => event.kind)).toEqual(["running", "done"]);
+    expect(lines).toContain("  late output");
+  });
+
+  it("fails a script it cannot rejoin, as one that was running when the runner stopped", async () => {
+    const { deps } = harness();
+    const runId = seeded(deps, [["s1", { kind: "running" }]]);
+
+    const result = await new Runner({ ...deps, runId }).run(two, {
+      actions: { s1: { kind: "wait" } },
+    });
+
+    expect(result.failedNode).toBe("s1");
+    expect(eventsOf(deps.store, "s1").at(-1)).toMatchObject({
+      kind: "failed",
+      payload: { message: "s1 failed: was running when the runner stopped" },
+    });
+  });
+
+  it("retries a rejoined first attempt that exits with a retry code", async () => {
+    const { deps, scripts } = harness({ results: [exit(0), exit(0)] });
+    const runId = seeded(deps, [["s1", { kind: "running" }]]);
+    scripts.finishes(`s1-${runningSeq(deps, "s1")}`, exit(2));
+
+    const result = await new Runner({ ...deps, runId }).run(two, {
+      actions: { s1: { kind: "wait" } },
+    });
+
+    expect(result.outcome).toBe("done");
+    expect(eventsOf(deps.store, "s1").map((event) => event.kind)).toEqual([
+      "running",
+      "retry",
+      "running",
+      "done",
+    ]);
+  });
+
+  it("does not retry a rejoined second attempt", async () => {
+    const { deps, scripts } = harness();
+    const runId = seeded(deps, [
+      ["s1", { kind: "running" }],
+      ["s1", { kind: "retry" }],
+      ["s1", { kind: "running" }],
+    ]);
+    scripts.finishes(`s1-${runningSeq(deps, "s1")}`, exit(2));
+
+    const result = await new Runner({ ...deps, runId }).run(two, {
+      actions: { s1: { kind: "wait" } },
+    });
+
+    expect(result.failedNode).toBe("s1");
+    expect(scripts.calls).toEqual([]);
   });
 });

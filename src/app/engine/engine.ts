@@ -12,6 +12,7 @@ import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
 import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
+import { HomeLock } from "../../adapters/process/home-lock.js";
 import { NodeProcessRunner } from "../../adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
 import { openDatabase } from "../../adapters/sqlite/open-database.js";
@@ -49,6 +50,10 @@ const fs = new NodeFileSystem();
 
 const waits = createAppWaiter({ push: post });
 
+const usage = new TranscriptUsage({
+  findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
+});
+
 const run: RunEnvironment & { now: () => number } = {
   fs,
   now: Date.now,
@@ -60,9 +65,8 @@ const run: RunEnvironment & { now: () => number } = {
     await server.start();
     return { events: server, permissions: server, stop: () => server.stop() };
   },
-  usage: new TranscriptUsage({
-    findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
-  }),
+  usage,
+  compactions: usage,
   openSession: async (options) => {
     const sessions = new TmuxSessionHost({ socketName: options.sessionName });
     return openClaudeSession(options, {
@@ -72,6 +76,9 @@ const run: RunEnvironment & { now: () => number } = {
     });
   },
 };
+
+const homeLock = new HomeLock(join(home, "engine.lock"));
+process.on("exit", () => homeLock.release());
 
 const handler = createEngineHandler({
   version: pkg.version,
@@ -94,6 +101,8 @@ const handler = createEngineHandler({
   waits,
   worktree: new GitWorktree(),
   gitState: new GitFolderState(),
+  sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
+  homeLock,
   transcriptTurns: async (claudeSessionId) => {
     const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
       claudeSessionId,
@@ -106,11 +115,15 @@ process.parentPort.on("message", (event: { data: EngineRequest }) => {
   void handler.handle(event.data).then(post);
 });
 
+void handler.reattach().catch((error: unknown) => {
+  console.log(`engine: reattach error ${error instanceof Error ? error.message : String(error)}`);
+});
+
 process.on("SIGTERM", () => {
   void handler
-    .stop()
+    .detach()
     .catch((error: unknown) => {
-      console.log(`engine: stop error ${error instanceof Error ? error.message : String(error)}`);
+      console.log(`engine: detach error ${error instanceof Error ? error.message : String(error)}`);
     })
     .finally(() => process.exit(0));
 });

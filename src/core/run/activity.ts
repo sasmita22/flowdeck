@@ -22,6 +22,7 @@ export const activityEntrySchema = z.discriminatedUnion("kind", [
     text: z.string(),
   }),
   z.object({ ...base, kind: z.literal("failure") }),
+  z.object({ ...base, kind: z.literal("context") }),
   z.object({ ...base, kind: z.literal("pr"), url: z.string() }),
 ]);
 
@@ -193,6 +194,14 @@ export function foldNodeEvent(
       ...common,
       kind: "failure",
       summary: plainReason(nodeId, event.payload.message),
+    });
+  }
+  if (event.kind === "compacted") {
+    const thousands = Math.round(event.payload.tokens / 1000);
+    return added(feed, {
+      ...common,
+      kind: "context",
+      summary: `Context compacted at ${thousands}k tokens`,
     });
   }
   if (event.kind !== "done" || !turnNodes.has(nodeId)) return { feed, changed: undefined };

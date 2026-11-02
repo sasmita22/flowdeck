@@ -20,6 +20,18 @@ describe("FakeProcessRunner", () => {
     ]);
   });
 
+  it("records the job a call names, and rejoins a job with the result it finishes with", async () => {
+    const runner = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
+    runner.finishes("s1-4", { code: 3, stdout: "late\n", stderr: "" });
+
+    await runner.run("sh", [], "/repo", undefined, "s1-1");
+
+    expect(runner.calls).toEqual([{ command: "sh", args: [], cwd: "/repo", job: "s1-1" }]);
+    expect(await runner.rejoin("s1-4")).toEqual({ code: 3, stdout: "late\n", stderr: "" });
+    expect(await runner.rejoin("s1-9")).toBeUndefined();
+    expect(runner.rejoins).toEqual(["s1-4", "s1-9"]);
+  });
+
   it("rejects a call scripted as an error with that error", async () => {
     const error = new Error("spawn nope ENOENT");
     const runner = new FakeProcessRunner([error]);

@@ -13,6 +13,16 @@ const entry = (messageId: string, outputTokens: number): UsageEntry => ({
 });
 
 describe("FakeUsageSource", () => {
+  it("counts the compactions marked for a session and none for another", async () => {
+    const usage = new FakeUsageSource();
+
+    usage.compacted("s1");
+    usage.compacted("s1");
+
+    expect(await usage.compactions("s1")).toBe(2);
+    expect(await usage.compactions("s2")).toBe(0);
+  });
+
   it("returns the entries set for a session and none for another", async () => {
     const usage = new FakeUsageSource();
     usage.setEntries("s1", [entry("m1", 10)]);

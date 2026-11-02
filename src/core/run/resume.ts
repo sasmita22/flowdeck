@@ -28,6 +28,8 @@ type ResumeInput = {
   manifest: { hash: string; nodes: readonly ManifestNode[] };
   events: readonly StoredEvent[];
   turns: readonly TranscriptTurn[];
+  rejoinScripts?: boolean;
+  sessionRestarted?: boolean;
 };
 
 const humanTypes = new Set<ManifestNode["type"]>(["gate", "ask", "hardstop", "loop"]);
@@ -82,7 +84,18 @@ function sectionInterrupted(node: ManifestNode, status: NodeState, interrupted: 
   return interrupted && node.type === "agent" && inTurn(node, status);
 }
 
-export function decideResume({ manifest, events, turns }: ResumeInput): ResumeActions {
+const cutOff = (nodeId: string): ResumeAction => ({
+  kind: "fail",
+  message: `${nodeId} failed: its Claude session ended before the turn finished; Retry sends it again`,
+});
+
+export function decideResume({
+  manifest,
+  events,
+  turns,
+  rejoinScripts = false,
+  sessionRestarted = false,
+}: ResumeInput): ResumeActions {
   const actions: ResumeActions = {};
   const statusOf = (id: string) => nodeStatus(events.filter((event) => event.nodeId === id));
   const interrupted = manifest.nodes.some(
@@ -98,12 +111,14 @@ export function decideResume({ manifest, events, turns }: ResumeInput): ResumeAc
       };
       continue;
     }
-    if (inTurn(node, status)) actions[node.id] = settleTurn(node, manifest.hash, own, turns);
+    if (inTurn(node, status)) {
+      const settled = settleTurn(node, manifest.hash, own, turns);
+      actions[node.id] = sessionRestarted && settled.kind === "wait" ? cutOff(node.id) : settled;
+    }
     if (status === "running" && node.type === "script") {
-      actions[node.id] = {
-        kind: "fail",
-        message: `${node.id} failed: was running when the runner stopped`,
-      };
+      actions[node.id] = rejoinScripts
+        ? { kind: "wait" }
+        : { kind: "fail", message: `${node.id} failed: was running when the runner stopped` };
     }
     if (status === "needs-you" && humanTypes.has(node.type)) actions[node.id] = settleHuman(own);
     if (status === "running" && node.type === "hardstop") actions[node.id] = { kind: "ask" };

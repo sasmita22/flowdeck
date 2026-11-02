@@ -1126,6 +1126,21 @@ body,
   color: var(--fg);
 }
 
+.fd-run-note {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 5;
+  width: min(480px, calc(100% - 2 * var(--space-4)));
+  margin: 0;
+  transform: translateX(-50%);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
 .fd-wait-banner {
   position: absolute;
   top: var(--space-3);

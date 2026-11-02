@@ -251,6 +251,45 @@ describe("decideResume", () => {
     });
   });
 
+  it("fails a Prompt whose turn was cut off by a session that ended, so Retry can send it again", () => {
+    const actions = decideResume({
+      manifest,
+      events: killedAtP2,
+      turns: [promptTurn("p1", true, "A"), promptTurn("p2", false)],
+      sessionRestarted: true,
+    });
+
+    expect(actions).toEqual({
+      p2: {
+        kind: "fail",
+        message:
+          "p2 failed: its Claude session ended before the turn finished; Retry sends it again",
+      },
+    });
+  });
+
+  it("still completes or sends a turn as usual when the session was restarted", () => {
+    const actions = decideResume({
+      manifest,
+      events: killedAtP2,
+      turns: [promptTurn("p1", true, "A"), promptTurn("p2", true, "B")],
+      sessionRestarted: true,
+    });
+
+    expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "B" } });
+  });
+
+  it("waits for a Script still running in its own process when scripts can be rejoined", () => {
+    const actions = decideResume({
+      manifest: { hash, nodes: [node("s1", "script")] },
+      events: stored([["s1", { kind: "running" }]]),
+      turns: [],
+      rejoinScripts: true,
+    });
+
+    expect(actions).toEqual({ s1: { kind: "wait" } });
+  });
+
   it("fails a Script that was running and never reruns it", () => {
     const actions = decideResume({
       manifest: { hash, nodes: [node("s1", "script")] },

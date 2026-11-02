@@ -161,6 +161,11 @@ export function RunPage({
         </div>
       </header>
       <div className="fd-main" style={{ position: "relative" }}>
+        {status === "interrupted" && loaded?.note !== undefined && (
+          <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">
+            {loaded.note}
+          </p>
+        )}
         {live !== null && waiting && !inspectorOpen && (
           <div className="fd-wait-banner" data-testid="wait-banner">
             <Ask wait={wait} />

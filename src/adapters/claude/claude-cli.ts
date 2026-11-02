@@ -22,7 +22,7 @@ const cursorOnYes = /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m;
 const rule = "────";
 const busy = "esc to interrupt";
 
-export type ClaudeSession = { sessionId: string; model: string };
+export type ClaudeSession = { sessionId: string; model: string; resume?: boolean };
 
 export type ClaudeStartOptions = {
   settingsPath?: string;
@@ -32,7 +32,7 @@ export type ClaudeStartOptions = {
 };
 
 export function claudeCommand(
-  { sessionId, model }: ClaudeSession,
+  { sessionId, model, resume }: ClaudeSession,
   settingsPath?: string,
   pluginDir?: string,
   mcpConfigPath?: string,
@@ -44,7 +44,8 @@ export function claudeCommand(
     mcpConfigPath === undefined
       ? ""
       : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
-  return `env ${unset} claude --session-id ${sessionId} --model ${shellQuote(model)}${settings}${plugin}${mcp}`;
+  const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
+  return `env ${unset} claude ${session} --model ${shellQuote(model)}${settings}${plugin}${mcp}`;
 }
 
 function showsInputBox(pane: string): boolean {
