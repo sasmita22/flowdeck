@@ -24,7 +24,7 @@ const inspector = createInspectorStore({ bridge: window.flowdeck });
 void inspector.getState().connect();
 const wait = createWaitStore({ bridge: window.flowdeck });
 void wait.getState().connect();
-const shell = createShellStore();
+const shell = createShellStore({ canvas });
 const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save, run });
 
 const root = document.getElementById("root");

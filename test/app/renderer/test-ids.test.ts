@@ -25,6 +25,7 @@ describe("test ids", () => {
       "canvas-save",
       "canvas-run",
       "menu-more",
+      "session-settings-open",
       "terminal-open",
       "menu-terminal-close",
       "sidebar-hide",

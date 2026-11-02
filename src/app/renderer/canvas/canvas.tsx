@@ -241,7 +241,10 @@ function Board({
           onNodeClick={(_, node) => {
             if (node.type !== "note") shell.getState().showInspector();
           }}
-          onPaneClick={() => store.getState().closeNodeMenu()}
+          onPaneClick={() => {
+            store.getState().closeNodeMenu();
+            shell.getState().closeSessionSettings();
+          }}
           onConnect={onConnect}
           onDragOver={onDragOver}
           onDrop={onDrop}

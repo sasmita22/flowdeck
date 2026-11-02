@@ -91,3 +91,19 @@ test("Approving a gate in the inspector lets the run carry on to the last script
     db.close();
   }
 });
+
+test("A gate's question shows while a node's settings are open", async () => {
+  seedFlow(home, scriptThenGateThenScript(), folder);
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await expect(window.getByTestId("canvas-run")).toBeVisible();
+
+  await window.getByTestId("node-s2").click();
+  await expect(window.getByTestId("node-settings")).toBeVisible();
+  await window.getByTestId("canvas-run").click();
+
+  await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
+  await expect(window.getByTestId("node-settings")).toBeVisible();
+  await window.getByTestId("wait-approve").click();
+  await expect(window.getByTestId("wait-panel")).toHaveCount(0, { timeout: 20_000 });
+});

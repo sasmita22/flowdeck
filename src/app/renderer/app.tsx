@@ -13,6 +13,7 @@ import { MoreMenu } from "./more-menu.js";
 import { PanelToggle } from "./panel-toggle.js";
 import { selectRunDisabled, selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
+import { SessionSettingsButton } from "./session-settings-button.js";
 import { selectInspectorOpen, type ShellState } from "./shell-store.js";
 import type { TerminalState } from "./terminal/store.js";
 import { TerminalPane } from "./terminal/terminal-pane.js";
@@ -73,6 +74,7 @@ function TitleRow({
             Run
           </button>
         )}
+        {ready && <SessionSettingsButton shell={shell} />}
         {ready && <MoreMenu shell={shell} terminal={terminal} />}
       </div>
     </header>
@@ -192,7 +194,7 @@ export function App({
               />
               <h2 className="fd-panel-title">Inspector</h2>
             </div>
-            <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} />
+            <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} shell={shell} />
           </div>
         )}
       </div>

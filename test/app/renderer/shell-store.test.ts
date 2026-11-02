@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
 import {
   createShellStore,
   emptyCanvasHint,
@@ -7,22 +8,32 @@ import {
   selectInspectorOpen,
 } from "../../../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../../../src/app/renderer/test-ids.js";
+import { flow, gate, prompt } from "../../fixtures/flow-builders.js";
 
 const noRun = { snapshot: null };
 const aRun = { snapshot: { runId: "run-1", status: "running" as const, nodes: {} } };
 
+const newShell = (canvas = createCanvasStore()) => createShellStore({ canvas });
+
+const twoNodes = () => {
+  const canvas = createCanvasStore();
+  canvas.getState().load(flow([prompt("prompt-1"), gate("gate-1")], []));
+  return canvas;
+};
+
 describe("createShellStore", () => {
   it("starts with the sidebar shown, the menu closed and the inspector following the run", () => {
-    expect(createShellStore().getState()).toMatchObject({
+    expect(newShell().getState()).toMatchObject({
       sidebarOpen: true,
       menuOpen: false,
       inspectorShown: null,
       panelFocus: null,
+      sessionSettingsOpen: false,
     });
   });
 
   it("toggles the sidebar", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleSidebar();
     expect(shell.getState().sidebarOpen).toBe(false);
@@ -32,7 +43,7 @@ describe("createShellStore", () => {
   });
 
   it("asks for focus on the sidebar button that replaces the one pressed", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleSidebar();
     expect(shell.getState().panelFocus).toBe(controlTestIds.sidebarShow);
@@ -42,7 +53,7 @@ describe("createShellStore", () => {
   });
 
   it("asks for focus on the inspector button that replaces the one pressed", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleInspector(noRun);
     expect(shell.getState().panelFocus).toBe(controlTestIds.inspectorHide);
@@ -52,7 +63,7 @@ describe("createShellStore", () => {
   });
 
   it("clears the focus request once taken", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleSidebar();
     shell.getState().clearPanelFocus();
@@ -61,7 +72,7 @@ describe("createShellStore", () => {
   });
 
   it("opens and closes the menu", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().openMenu();
     expect(shell.getState().menuOpen).toBe(true);
@@ -73,7 +84,7 @@ describe("createShellStore", () => {
 
 describe("selectInspectorOpen", () => {
   it("is closed with no run and open with one", () => {
-    const shell = createShellStore().getState();
+    const shell = newShell().getState();
 
     expect(selectInspectorOpen(shell, noRun)).toBe(false);
     expect(selectInspectorOpen(shell, aRun)).toBe(true);
@@ -83,7 +94,7 @@ describe("selectInspectorOpen", () => {
     ["no run", noRun, true],
     ["a run", aRun, false],
   ])("flips what it was with %s after a toggle", (_name, run, expected) => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleInspector(run);
 
@@ -92,7 +103,7 @@ describe("selectInspectorOpen", () => {
   });
 
   it("flips back on a second toggle", () => {
-    const shell = createShellStore();
+    const shell = newShell();
 
     shell.getState().toggleInspector(aRun);
     shell.getState().toggleInspector(aRun);
@@ -106,7 +117,7 @@ describe("showInspector", () => {
     ["no run", noRun],
     ["a run", aRun],
   ])("opens the inspector with %s and leaves focus alone", (_name, run) => {
-    const shell = createShellStore();
+    const shell = newShell();
     shell.getState().toggleInspector(aRun);
     shell.getState().clearPanelFocus();
 
@@ -114,6 +125,77 @@ describe("showInspector", () => {
 
     expect(selectInspectorOpen(shell.getState(), run)).toBe(true);
     expect(shell.getState().panelFocus).toBeNull();
+  });
+});
+
+describe("session settings", () => {
+  it("opens and closes from the gear", () => {
+    const shell = newShell();
+
+    shell.getState().toggleSessionSettings();
+    expect(shell.getState().sessionSettingsOpen).toBe(true);
+
+    shell.getState().toggleSessionSettings();
+    expect(shell.getState().sessionSettingsOpen).toBe(false);
+  });
+
+  it("closes when the empty canvas is clicked", () => {
+    const shell = newShell();
+    shell.getState().toggleSessionSettings();
+
+    shell.getState().closeSessionSettings();
+
+    expect(shell.getState().sessionSettingsOpen).toBe(false);
+  });
+
+  it("closes when a node is selected", () => {
+    const canvas = twoNodes();
+    const shell = newShell(canvas);
+    shell.getState().toggleSessionSettings();
+
+    canvas.getState().select(["gate-1"]);
+
+    expect(shell.getState().sessionSettingsOpen).toBe(false);
+  });
+
+  it("stays open while the selection stays empty", () => {
+    const canvas = twoNodes();
+    const shell = newShell(canvas);
+    shell.getState().toggleSessionSettings();
+
+    canvas.getState().select([]);
+
+    expect(shell.getState().sessionSettingsOpen).toBe(true);
+  });
+
+  it("clears the node selection when it opens", () => {
+    const canvas = twoNodes();
+    canvas.getState().select(["prompt-1", "gate-1"]);
+    const shell = newShell(canvas);
+
+    shell.getState().toggleSessionSettings();
+
+    expect(canvas.getState().selection).toEqual([]);
+    expect(shell.getState().sessionSettingsOpen).toBe(true);
+  });
+
+  it("shows a hidden inspector when it opens", () => {
+    const shell = newShell();
+    shell.getState().toggleInspector(aRun);
+
+    shell.getState().toggleSessionSettings();
+
+    expect(selectInspectorOpen(shell.getState(), aRun)).toBe(true);
+    expect(selectInspectorOpen(shell.getState(), noRun)).toBe(true);
+  });
+
+  it("leaves the inspector open when it closes", () => {
+    const shell = newShell();
+    shell.getState().toggleSessionSettings();
+
+    shell.getState().toggleSessionSettings();
+
+    expect(selectInspectorOpen(shell.getState(), noRun)).toBe(true);
   });
 });
 

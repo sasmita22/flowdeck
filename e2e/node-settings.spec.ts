@@ -177,7 +177,7 @@ test("Double-clicking an unselected node opens the hidden inspector", async () =
   await expect(window.getByTestId("node-label")).toHaveValue("Gate");
 });
 
-test("With nothing selected the inspector shows the session", async () => {
+test("With nothing selected the inspector shows the run, not the session settings", async () => {
   const { window } = await launch();
   await drop(window, "gate", 200);
   await window.getByTestId("node-gate-1").click();
@@ -186,7 +186,68 @@ test("With nothing selected the inspector shows the session", async () => {
   await window.getByTestId("canvas").click({ position: { x: 40, y: 400 } });
 
   await expect(window.getByTestId("node-settings")).toHaveCount(0);
-  await expect(window.getByTestId("session-settings")).toBeVisible();
+  await expect(window.getByTestId("inspector-session")).toBeVisible();
+  await expect(window.getByTestId("inspector-node-gate-1")).toBeVisible();
+  await expect(window.getByTestId("session-settings")).toHaveCount(0);
+});
+
+test("Session settings open from the gear and never mix with a node's settings", async () => {
+  const target = await launch();
+  const { window } = target;
+  const gear = window.getByTestId(controlTestIds.sessionSettings);
+  const sessionFields = window.getByTestId("session-settings");
+  await drop(window, "gate", 200);
+  await expect(window.getByTestId("inspector")).toHaveCount(0);
+
+  await window.getByTestId("node-gate-1").click();
+  await expect(window.getByTestId("node-setting-shown")).toBeVisible();
+  await expect(sessionFields).toHaveCount(0);
+  await expect(window.getByTestId("session-working-folder-kind")).toHaveCount(0);
+  await expect(window.getByTestId("session-model")).toHaveCount(0);
+  await expect(gear).toHaveAttribute("aria-pressed", "false");
+  await showAt1280(target);
+  await reviewShot(window, test.info(), "gate-selected");
+
+  await gear.click();
+  await expect(gear).toHaveAttribute("aria-pressed", "true");
+  await expect(window.getByTestId("node-settings")).toHaveCount(0);
+  await expect(sessionFields).toBeVisible();
+  await expect(window.getByTestId("session-working-folder-kind")).toBeVisible();
+  await expect(window.locator(".react-flow__node.selected")).toHaveCount(0);
+  await window.mouse.move(1, 1);
+  await reviewShot(window, test.info(), "session-settings-open");
+
+  await setText(window.getByTestId("session-model"), "claude-haiku-4-5");
+  await expect
+    .poll(async () => {
+      const flow = JSON.parse(
+        (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "",
+      ) as { session: { model: string } };
+      return flow.session.model;
+    })
+    .toBe("claude-haiku-4-5");
+
+  await window.getByTestId("node-gate-1").click();
+  await expect(window.getByTestId("node-setting-shown")).toBeVisible();
+  await expect(sessionFields).toHaveCount(0);
+  await expect(gear).toHaveAttribute("aria-pressed", "false");
+
+  await gear.click();
+  await expect(sessionFields).toBeVisible();
+  await gear.click();
+  await expect(sessionFields).toHaveCount(0);
+  await expect(window.getByTestId("inspector-session")).toBeVisible();
+
+  await gear.click();
+  await window.getByTestId("canvas").click({ position: { x: 40, y: 400 } });
+  await expect(sessionFields).toHaveCount(0);
+  await expect(gear).toHaveAttribute("aria-pressed", "false");
+
+  await window.getByTestId(controlTestIds.save).click();
+  await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
+  const reopened = (await relaunch()).window;
+  await reopened.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(reopened.getByTestId("session-model")).toHaveValue("claude-haiku-4-5");
 });
 
 test("A Branch's flag comes from the Trigger's flags", async () => {

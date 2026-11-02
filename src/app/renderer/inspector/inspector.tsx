@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { CanvasState } from "../canvas/store.js";
+import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import { selectNodeDisplay, type RunState } from "../run-store.js";
+import type { ShellState } from "../shell-store.js";
 import { ActivityFeed } from "./activity-feed.js";
 import { Ask } from "./ask.js";
 import { NodeSettingsSection } from "./node-settings.js";
@@ -42,20 +43,58 @@ function NodeRow({
   );
 }
 
+function RunView({
+  inspector,
+  run,
+  canvas,
+}: {
+  inspector: StoreApi<InspectorState>;
+  run: StoreApi<RunState>;
+  canvas: StoreApi<CanvasState>;
+}) {
+  const sessionName = useStore(canvas, (state) => state.flow.session.name);
+  const nodes = useStore(canvas, (state) => state.flow.nodes);
+  const runStatus = useStore(run, (state) => state.snapshot?.status ?? "idle");
+  return (
+    <>
+      <h2 style={headingStyle}>Session</h2>
+      <div
+        data-testid="inspector-session"
+        data-status={runStatus}
+        style={{ ...rowStyle, flexShrink: 0 }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{sessionName}</span>
+        <span>{runStatus}</span>
+      </div>
+      <h2 style={headingStyle}>Nodes</h2>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
+        {nodes.map((node) => (
+          <NodeRow key={node.id} run={run} nodeId={node.id} label={node.label} />
+        ))}
+      </ul>
+      <h2 style={headingStyle}>Activity</h2>
+      <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto" }}>
+        <ActivityFeed inspector={inspector} run={run} canvas={canvas} />
+      </div>
+    </>
+  );
+}
+
 export function Inspector({
   inspector,
   run,
   canvas,
   wait,
+  shell,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunState>;
   canvas: StoreApi<CanvasState>;
   wait: StoreApi<WaitState>;
+  shell: StoreApi<ShellState>;
 }) {
-  const sessionName = useStore(canvas, (state) => state.flow.session.name);
-  const nodes = useStore(canvas, (state) => state.flow.nodes);
-  const runStatus = useStore(run, (state) => state.snapshot?.status ?? "idle");
+  const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
+  const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
   return (
     <aside
       data-testid="inspector"
@@ -70,28 +109,17 @@ export function Inspector({
         fontSize: 12,
       }}
     >
-      <NodeSettingsSection canvas={canvas} />
-      <h2 style={headingStyle}>Session</h2>
-      <div
-        data-testid="inspector-session"
-        data-status={runStatus}
-        style={{ ...rowStyle, flexShrink: 0 }}
-      >
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{sessionName}</span>
-        <span>{runStatus}</span>
-      </div>
-      <SessionSettingsSection canvas={canvas} />
-      <h2 style={headingStyle}>Nodes</h2>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
-        {nodes.map((node) => (
-          <NodeRow key={node.id} run={run} nodeId={node.id} label={node.label} />
-        ))}
-      </ul>
       <Ask wait={wait} />
-      <h2 style={headingStyle}>Activity</h2>
-      <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto" }}>
-        <ActivityFeed inspector={inspector} run={run} canvas={canvas} />
-      </div>
+      {sessionSettingsOpen ? (
+        <>
+          <h2 style={headingStyle}>Session settings</h2>
+          <SessionSettingsSection canvas={canvas} />
+        </>
+      ) : nodeSelected ? (
+        <NodeSettingsSection canvas={canvas} />
+      ) : (
+        <RunView inspector={inspector} run={run} canvas={canvas} />
+      )}
     </aside>
   );
 }
