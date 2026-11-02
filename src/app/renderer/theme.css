@@ -30,6 +30,11 @@
   --space-5: 24px;
   --space-6: 32px;
   --space-7: 48px;
+  --fs-2xs: 9.5px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
   --accent: var(--c-flow);
 }
 
@@ -66,7 +71,7 @@ body,
   background: var(--bg);
   color: var(--fg);
   font-family: var(--f-body);
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .fd-shell {
@@ -90,7 +95,7 @@ body,
 .fd-app-name {
   font-family: var(--f-display);
   font-weight: 700;
-  font-size: 14px;
+  font-size: var(--fs-lg);
   margin-right: var(--space-2);
 }
 
@@ -100,7 +105,7 @@ body,
 
 .fd-unsaved {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .fd-title-actions {
@@ -157,7 +162,7 @@ body,
 .fd-group-heading {
   margin: var(--space-2) 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -216,13 +221,13 @@ body,
 .fd-tag {
   padding: 1px 5px;
   border-radius: 4px;
-  font: 600 9.5px var(--f-mono);
+  font: 600 var(--fs-2xs) var(--f-mono);
   letter-spacing: 0.04em;
 }
 
 .fd-palette-description {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.35;
 }
 
@@ -260,7 +265,7 @@ body,
   width: auto;
   height: auto;
   padding: var(--space-1) var(--space-2);
-  font: 12px var(--f-body);
+  font: var(--fs-sm) var(--f-body);
 }
 
 .fd-canvas-top {
@@ -299,7 +304,7 @@ body,
 .fd-panel-title {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -313,7 +318,7 @@ body,
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-lg);
   pointer-events: none;
 }
 
@@ -377,7 +382,7 @@ body,
   background: var(--panel);
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .fd-workspace {
@@ -399,7 +404,7 @@ body,
   border-radius: 6px;
   background: var(--panel);
   color: var(--fg);
-  font: 12px var(--f-body);
+  font: var(--fs-sm) var(--f-body);
   cursor: pointer;
 }
 
@@ -477,7 +482,7 @@ body,
   border-radius: 4px;
   background: none;
   color: var(--fg);
-  font: 12px var(--f-body);
+  font: var(--fs-sm) var(--f-body);
   text-align: left;
   cursor: pointer;
 }

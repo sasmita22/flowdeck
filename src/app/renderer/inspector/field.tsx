@@ -12,12 +12,21 @@ const labelStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
-  fontSize: 12,
+  fontSize: "var(--fs-sm)",
 };
 
-const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 6, fontSize: 12 };
+const rowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: "var(--fs-sm)",
+};
 
-const issueStyle: CSSProperties = { color: "var(--warn)", fontSize: 11, lineHeight: 1.35 };
+const issueStyle: CSSProperties = {
+  color: "var(--warn)",
+  fontSize: "var(--fs-xs)",
+  lineHeight: 1.35,
+};
 
 export const valueAt = (root: unknown, path: Path): unknown =>
   path.reduce<unknown>((value, key) => (value as Record<string, unknown> | undefined)?.[key], root);

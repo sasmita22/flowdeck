@@ -19,11 +19,11 @@ const rowStyle: CSSProperties = {
   minWidth: 0,
   overflow: "hidden",
   whiteSpace: "nowrap",
-  fontSize: 12,
+  fontSize: "var(--fs-sm)",
   padding: "2px 0",
 };
 
-const headingStyle: CSSProperties = { fontSize: 13, margin: "12px 0 4px" };
+const headingStyle: CSSProperties = { fontSize: "var(--fs-md)", margin: "12px 0 4px" };
 
 function NodeRow({
   run,
@@ -107,7 +107,7 @@ export function Inspector({
         display: "flex",
         flexDirection: "column",
         overflow: "auto",
-        fontSize: 12,
+        fontSize: "var(--fs-sm)",
       }}
     >
       <Ask wait={wait} />

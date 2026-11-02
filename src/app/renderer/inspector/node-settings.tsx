@@ -6,7 +6,7 @@ import { selectFieldIssues, selectSelectedNode, type CanvasState } from "../canv
 import { Field, type Commit } from "./field.js";
 import { applyNodeSetting, describeNodeFields } from "./node-form.js";
 
-const headingStyle: CSSProperties = { fontSize: 13, margin: "12px 0 4px" };
+const headingStyle: CSSProperties = { fontSize: "var(--fs-md)", margin: "12px 0 4px" };
 
 const labelStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 2 };
 
@@ -39,7 +39,13 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
       key={node.id}
       data-testid="node-settings"
       aria-label="Node"
-      style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, fontSize: 12 }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        flexShrink: 0,
+        fontSize: "var(--fs-sm)",
+      }}
     >
       <h2 style={headingStyle}>Node</h2>
       {item !== undefined && (
