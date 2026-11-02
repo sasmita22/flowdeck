@@ -248,7 +248,7 @@ test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicat
   seedFlow(home, copyable());
   const window = await launch();
   await window.getByTestId("node-a").click();
-  await window.getByTestId("node-b").click({ modifiers: ["Meta"] });
+  await window.getByTestId("node-b").click({ modifiers: ["ControlOrMeta"] });
   await expect.poll(() => selection(window)).toEqual(["a", "b"]);
 
   await window.keyboard.press("Meta+c");
@@ -334,7 +334,7 @@ const zoomOf = async (window: Page) =>
 test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", async () => {
   seedFlow(
     home,
-    flow([at(prompt("near"), 0, 0), at(prompt("far"), 2400, 1600)], [thenWire("near", "far")]),
+    flow([at(prompt("near"), 0, 0), at(prompt("far"), 1200, 1000)], [thenWire("near", "far")]),
   );
   const window = await launch();
   const canvas = await boxOf(window.getByTestId("canvas"));
