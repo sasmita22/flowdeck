@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
 import { NodeType } from "../src/core/flow/schema.js";
@@ -27,7 +28,13 @@ let folder: string;
 let launched: LaunchedApp | undefined;
 
 const darkBackground = "rgb(14, 17, 22)";
-const shot = { size: { width: 1280, height: 800 }, threshold: { threshold: 0 } };
+const shot = {
+  size: { width: 1280, height: 800 },
+  threshold: {
+    threshold: 0,
+    stylePath: fileURLToPath(new URL("./screenshot.css", import.meta.url)),
+  },
+};
 const smallest = { width: 960, height: 640 };
 
 const twoScripts = (firstCommand?: { command: string; args: string[] }) => {
