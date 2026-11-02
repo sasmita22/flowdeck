@@ -345,6 +345,10 @@ body,
   user-select: none;
 }
 
+.fd-resize-sidebar {
+  margin: 0 -6px 0 0;
+}
+
 .fd-resize::after {
   content: "";
   position: absolute;

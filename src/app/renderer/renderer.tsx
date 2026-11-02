@@ -33,6 +33,9 @@ void inspector.getState().connect();
 const wait = createWaitStore({ bridge: window.flowdeck });
 void wait.getState().connect();
 const shell = createShellStore({ canvas, storage: browserStorage() });
+const syncWindowWidth = () => shell.getState().setWindowWidth(window.innerWidth);
+syncWindowWidth();
+window.addEventListener("resize", syncWindowWidth);
 const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save, run });
 
 const root = document.getElementById("root");

@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { panelWidthLimits } from "../src/app/renderer/shell-store.js";
+import { CANVAS_MIN, panelWidthLimits } from "../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../src/app/renderer/test-ids.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
 
@@ -49,6 +49,19 @@ const dragHandle = async (window: Page, testId: string, dx: number) => {
   await window.mouse.down();
   await window.mouse.move(x + dx, y, { steps: 10 });
   await window.mouse.up();
+};
+
+const smallest = { width: 960, height: 640 };
+const roomy = { width: 1400, height: 900 };
+
+const sizeTo = async (target: LaunchedApp, size: { width: number; height: number }) => {
+  await target.app.evaluate(({ BrowserWindow }, next) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(next.width, next.height);
+  }, size);
+  await target.window.waitForFunction(
+    (next) => window.innerWidth === next.width && window.innerHeight === next.height,
+    size,
+  );
 };
 
 const viewportTransform = (window: Page) =>
@@ -119,7 +132,9 @@ test("A drag that outruns the inspector over its text selects none of it", async
 });
 
 test("Dragging far past the limit stops at the maximum and minimum", async () => {
-  const { window } = await launch();
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, roomy);
 
   await dragHandle(window, controlTestIds.sidebarResize, 600);
   await dragHandle(window, controlTestIds.inspectorResize, -600);
@@ -198,4 +213,64 @@ test("Sidebar tags stay on one line at the narrowest sidebar", async () => {
     const box = await tag.boundingBox();
     expect(box?.height).toBeLessThan(fontSize * 2);
   }
+});
+
+test("At the smallest window the widest panels leave the canvas its room, and come back when it grows", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, roomy);
+  await dragHandle(window, controlTestIds.sidebarResize, 600);
+  await dragHandle(window, controlTestIds.inspectorResize, -600);
+  const preferred = {
+    sidebar: panelWidthLimits.sidebar.max,
+    inspector: panelWidthLimits.inspector.max,
+  };
+  expect(await widths(window)).toMatchObject(preferred);
+
+  await sizeTo(target, smallest);
+  await expect.poll(async () => (await widths(window)).canvas).toBeGreaterThanOrEqual(CANVAS_MIN);
+  await window.emulateMedia({ colorScheme: "dark" });
+  await window.mouse.move(1, 1);
+  await window.screenshot({ path: "/tmp/fd-52/min.png" });
+
+  await dragHandle(window, controlTestIds.sidebarResize, 600);
+  await dragHandle(window, controlTestIds.inspectorResize, -600);
+  const squeezed = await widths(window);
+  expect(squeezed.canvas).toBeGreaterThanOrEqual(CANVAS_MIN);
+  expect(squeezed.sidebar).toBeGreaterThanOrEqual(panelWidthLimits.sidebar.min);
+  expect(squeezed.inspector).toBeGreaterThanOrEqual(panelWidthLimits.inspector.min);
+
+  await sizeTo(target, roomy);
+  await expect.poll(() => widths(window)).toMatchObject(preferred);
+});
+
+test("The sidebar handle sits outside the sidebar's scrollbar", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, smallest);
+
+  const bar = await sidebar(window).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const left = rect.left + element.clientLeft + element.clientWidth;
+    const right = rect.right - parseFloat(getComputedStyle(element).borderRightWidth);
+    return {
+      left,
+      right,
+      top: rect.top + element.clientTop,
+      scrolls: element.scrollHeight > element.clientHeight,
+    };
+  });
+  expect(bar.scrolls).toBe(true);
+  expect(bar.right - bar.left).toBeGreaterThan(0);
+  const handle = await window.getByTestId(controlTestIds.sidebarResize).boundingBox();
+  expect(handle?.x).toBeGreaterThanOrEqual(bar.right);
+
+  const before = await widthOf(sidebar(window));
+  await window.mouse.move(bar.right - 1, bar.top + 10);
+  await window.mouse.down();
+  await window.mouse.move(bar.right - 1, bar.top + 110, { steps: 10 });
+  await window.mouse.up();
+
+  expect(await sidebar(window).evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await widthOf(sidebar(window))).toBe(before);
 });

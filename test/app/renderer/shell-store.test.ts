@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
 import {
+  CANVAS_MIN,
   createShellStore,
+  inspectorFrame,
   emptyCanvasHint,
   menuItems,
   nextMenuIndex,
   panelWidthKey,
   panelWidthLimits,
   selectInspectorOpen,
+  selectShownWidths,
   type WidthStorage,
 } from "../../../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../../../src/app/renderer/test-ids.js";
@@ -336,6 +339,82 @@ describe("panel widths", () => {
     shell.getState().resizePanel("inspector", 400);
 
     expect(shell.getState().panelWidths.inspector).toBe(400);
+  });
+});
+
+describe("panel widths that fit the window", () => {
+  const atMax = () => {
+    const storage = memoryStorage();
+    const shell = createShellStore({ canvas: createCanvasStore(), storage });
+    shell.getState().resizePanel("sidebar", panelWidthLimits.sidebar.max);
+    shell.getState().resizePanel("inspector", panelWidthLimits.inspector.max);
+    return { shell, storage };
+  };
+  const shown = (shell: ReturnType<typeof atMax>["shell"], inspectorOpen = true) =>
+    selectShownWidths(shell.getState(), inspectorOpen);
+
+  it("leaves the canvas about 320 pixels", () => {
+    expect(CANVAS_MIN).toBe(320);
+  });
+
+  it("shows the preferred widths while the window is unknown", () => {
+    expect(shown(atMax().shell)).toEqual({ sidebar: 480, inspector: 560 });
+  });
+
+  it("leaves the canvas its room at the smallest window with both panels at their maximum", () => {
+    const { shell } = atMax();
+
+    shell.getState().setWindowWidth(960);
+
+    const { sidebar, inspector } = shown(shell);
+    expect(960 - sidebar - inspector - inspectorFrame).toBeGreaterThanOrEqual(CANVAS_MIN);
+    expect({ sidebar, inspector }).toEqual({ sidebar: 200, inspector: 415 });
+  });
+
+  it("narrows only the panel that no longer fits", () => {
+    const shell = newShell();
+    shell.getState().resizePanel("sidebar", panelWidthLimits.sidebar.max);
+
+    shell.getState().setWindowWidth(960);
+
+    expect(shown(shell)).toEqual({
+      sidebar: 960 - CANVAS_MIN - inspectorFrame - 260,
+      inspector: 260,
+    });
+  });
+
+  it.each([
+    ["sidebar", "sidebar", { sidebar: 0, inspector: 560 }],
+    ["inspector", "inspector", { sidebar: 480, inspector: 0 }],
+  ] as const)("gives a hidden %s's space to the other panel", (_name, hidden, expected) => {
+    const { shell } = atMax();
+    shell.getState().setWindowWidth(960);
+
+    if (hidden === "sidebar") shell.getState().toggleSidebar();
+
+    expect(shown(shell, hidden !== "inspector")).toEqual(expected);
+  });
+
+  it("brings the preferred widths back when the window grows again", () => {
+    const { shell, storage } = atMax();
+    const saved = storage.saved;
+
+    shell.getState().setWindowWidth(960);
+    shell.getState().setWindowWidth(1600);
+
+    expect(shown(shell)).toEqual({ sidebar: 480, inspector: 560 });
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 480, inspector: 560 });
+    expect(storage.saved).toBe(saved);
+  });
+
+  it.each([960, 700, 400, 0])("never shows a panel below its minimum at width %i", (width) => {
+    const { shell } = atMax();
+
+    shell.getState().setWindowWidth(width);
+
+    const { sidebar, inspector } = shown(shell);
+    expect(sidebar).toBeGreaterThanOrEqual(panelWidthLimits.sidebar.min);
+    expect(inspector).toBeGreaterThanOrEqual(panelWidthLimits.inspector.min);
   });
 });
 
