@@ -7,21 +7,37 @@ import { nodeLook, tagWidth } from "./look.js";
 import { frameLook, nodeOutline, type OutlinedType, type ShapeExtra } from "./outlines.js";
 import "./tokens.css";
 
-export type ShapeNode = Node<{ label?: string; highlighted?: boolean }>;
+export type ShapeNode = Node<{ label?: string; highlighted?: boolean; sub?: string }>;
 
 export const BODY_HEIGHT = 48;
 
-export const ports = (id: string, type: NodeType) =>
-  nodeLook(type).ports.map(({ name, direction }) => (
-    <Handle
-      key={name}
-      id={name}
-      type={direction === "in" ? "target" : "source"}
-      position={direction === "in" ? Position.Left : Position.Right}
-      style={{ top: BODY_HEIGHT / 2 }}
-      data-testid={`port-${id}-${name}`}
-    />
-  ));
+const FILE_PORT_INSET = 24;
+
+export const ports = (id: string, type: NodeType, width = nodeLook(type).box.width) => {
+  return nodeLook(type).ports.map(({ name, direction, kind }) =>
+    kind === "file" ? (
+      <Handle
+        key={name}
+        id={name}
+        className="fd-file-port"
+        type={direction === "in" ? "target" : "source"}
+        position={Position.Bottom}
+        style={{ left: direction === "in" ? FILE_PORT_INSET : width - FILE_PORT_INSET }}
+        title={direction === "in" ? "Files this step needs" : "Files this step writes"}
+        data-testid={`port-${id}-${name}`}
+      />
+    ) : (
+      <Handle
+        key={name}
+        id={name}
+        type={direction === "in" ? "target" : "source"}
+        position={direction === "in" ? Position.Left : Position.Right}
+        style={{ top: BODY_HEIGHT / 2 }}
+        data-testid={`port-${id}-${name}`}
+      />
+    ),
+  );
+};
 
 export const Extras = ({ extras }: { extras: readonly ShapeExtra[] }) =>
   extras.map(({ element, attributes }, index) =>
@@ -33,19 +49,24 @@ export function NodeShape({
   type,
   selected,
   highlighted,
-  handles = ports(id, type),
+  width,
+  handles = ports(id, type, width),
+  overlay,
   children,
 }: {
   id: string;
   type: OutlinedType;
   selected: boolean;
   highlighted: boolean | undefined;
+  width?: number;
   handles?: ReactNode;
+  overlay?: ReactNode;
   children: ReactNode;
 }) {
   const clip = `fd-clip-${useId().replace(/[^\w-]/g, "")}`;
-  const { box, outline: stroke } = nodeLook(type);
-  const { path: outline, padL, fill, strokeWidth, ink, extras } = nodeOutline(type);
+  const { box: look, outline: stroke } = nodeLook(type);
+  const box = { ...look, width: width ?? look.width };
+  const { path: outline, padL, fill, strokeWidth, ink, extras } = nodeOutline(type, box.width);
   return (
     <div
       className="fd-node"
@@ -79,6 +100,7 @@ export function NodeShape({
           <Extras extras={extras} />
           {children}
         </g>
+        {overlay}
       </svg>
       <div style={{ position: "absolute", left: padL, top: 25, color: ink ?? "var(--fg)" }}>
         <NodeStatusBadge nodeId={id} />

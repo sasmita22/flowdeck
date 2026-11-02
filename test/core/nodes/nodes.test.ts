@@ -28,6 +28,8 @@ import { settings as triggerSettings } from "../../../src/core/nodes/trigger/set
 
 const inPort = { name: "in", direction: "in", kind: "then" };
 const outPort = { name: "out", direction: "out", kind: "then" };
+const fileIn = { name: "file-in", direction: "in", kind: "file" };
+const fileOut = { name: "file-out", direction: "out", kind: "file" };
 
 type Case = {
   type: string;
@@ -47,7 +49,7 @@ const cases: Case[] = [
     valid: { instructions: "Summarise" },
     bad: { instructions: 5 },
     badPath: ["instructions"],
-    expectedPorts: [inPort, outPort],
+    expectedPorts: [inPort, outPort, fileIn, fileOut],
   },
   {
     type: "script",
@@ -56,7 +58,7 @@ const cases: Case[] = [
     valid: { command: "npm", args: ["test"] },
     bad: { command: "npm", args: "test" },
     badPath: ["args"],
-    expectedPorts: [inPort, outPort],
+    expectedPorts: [inPort, outPort, fileIn, fileOut],
   },
   {
     type: "agent",
@@ -72,7 +74,7 @@ const cases: Case[] = [
     },
     bad: { role: "reviewer", instructions: "Review", model: "sonnet", tools: "Read" },
     badPath: ["tools"],
-    expectedPorts: [inPort, outPort],
+    expectedPorts: [inPort, outPort, fileIn, fileOut],
   },
   {
     type: "gate",
@@ -153,7 +155,7 @@ const cases: Case[] = [
     valid: { file: "plan.md" },
     bad: { file: 1 },
     badPath: ["file"],
-    expectedPorts: [inPort, outPort],
+    expectedPorts: [inPort, outPort, fileIn],
   },
 ];
 
@@ -253,8 +255,8 @@ describe("foreach settings", () => {
     expect(result.error?.issues[0]?.path).toEqual(["file"]);
   });
 
-  it("has the prompt node's ports", () => {
-    expect(foreachPorts).toEqual(promptPorts);
+  it("takes the prompt node's input ports and gives no file out", () => {
+    expect(foreachPorts).toEqual(promptPorts.filter((port) => port.name !== "file-out"));
   });
 });
 

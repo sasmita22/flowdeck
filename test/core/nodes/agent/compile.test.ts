@@ -43,6 +43,27 @@ describe("compileAgent", () => {
     );
   });
 
+  it("adds the files its wires carry after its own, leaving its own entries as they are", () => {
+    const { content } = compileAgent(agentNode({ given: ["plan.md"], writes: ["review.md"] }), {
+      given: ["plan.md", "ticket.md"],
+      writes: ["notes.md"],
+    });
+
+    expect(content).toMatch(
+      /---\nReview it\.\n\nYou are given: plan\.md, plan\.md, ticket\.md\nWrite: review\.md, notes\.md\n$/,
+    );
+  });
+
+  it("keeps repeated entries of its own exactly as before File wires", () => {
+    const { content } = compileAgent(
+      agentNode({ given: ["plan.md", "plan.md"], writes: ["review.md", "review.md"] }),
+    );
+
+    expect(content).toBe(
+      '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n\nYou are given: plan.md, plan.md\nWrite: review.md, review.md\n',
+    );
+  });
+
   it("names only the side that has files, and nothing for empty lists", () => {
     expect(compileAgent(agentNode({ writes: ["review.md"] })).content).toMatch(
       /---\nReview it\.\n\nWrite: review\.md\n$/,

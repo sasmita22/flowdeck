@@ -1285,11 +1285,10 @@ describe("Runner", () => {
         expect(error.problems).toContain(problem);
       });
 
-      it("refuses a For each whose body starts with an Agent before its Prompt", async () => {
-        const error = await refuses([forEach("e1"), inEach(agent("a1")), inEach(prompt("p1"))]);
+      it("finds no problem in a For each whose body starts with an Agent", () => {
+        const nodes = [forEach("e1"), inEach(agent("a1")), inEach(prompt("p1"))];
 
-        expect(error.problems).toHaveLength(1);
-        expect(error.problems[0]).toMatch(/^e1 \(foreach\) .*a1/);
+        expect(structureProblems(nodes)).toEqual([]);
       });
 
       it.each([
@@ -1413,6 +1412,43 @@ describe("Runner", () => {
       const perRound = ["sent", "done", "reset", "sent", "done", "reset", "sent", "done"];
       expect(kindsOf(deps.store, "p1")).toEqual(perRound);
       expect(kindsOf(deps.store, "p2")).toEqual(perRound);
+    });
+
+    describe("a body that starts with an Agent", () => {
+      const agentFirst = manifest(forEach("e1"), inEach(agent("a1")), inEach(prompt("p2")));
+      const agentRound = [subagentStopped(`${hash}:a1`), stopped];
+      const agentSend = (item: string) =>
+        `send Use the Agent tool with subagent_type "${hash}:a1" and the prompt ${JSON.stringify(`Go. This round's item: ${item}`)}. Then reply DONE.`;
+
+      it("hands each round's item to the agent and runs every round to done", async () => {
+        const { deps, calls } = turnHarness(
+          [agentRound, [stopped], agentRound, [stopped]],
+          1000,
+          undefined,
+          withPlan("- alpha\n- bravo\n"),
+        );
+
+        const result = await runOn(deps, agentFirst);
+
+        expect(sends(calls)).toEqual([agentSend("alpha"), sendP2, agentSend("bravo"), sendP2]);
+        expect(result).toMatchObject({ outcome: "done" });
+        expect(result.states).toEqual({ e1: "done", a1: "done", p2: "done" });
+      });
+
+      it("keeps an item with quotes in one quoted prompt", async () => {
+        const { deps, calls } = turnHarness(
+          [agentRound, [stopped]],
+          1000,
+          undefined,
+          withPlan('- say "hi"\n'),
+        );
+
+        await runOn(deps, agentFirst);
+
+        expect(sends(calls)[0]).toBe(
+          `send Use the Agent tool with subagent_type "${hash}:a1" and the prompt "Go. This round's item: say \\"hi\\"". Then reply DONE.`,
+        );
+      });
     });
 
     describe("resuming", () => {
@@ -3818,5 +3854,159 @@ describe("Runner rejoining a script", () => {
 
     expect(result.failedNode).toBe("s1");
     expect(scripts.calls).toEqual([]);
+  });
+});
+
+describe("Runner File wires", () => {
+  const plan = `${cwd}/plan.md`;
+  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
+  const planner = { ...script("plan"), label: "Planner" };
+  const handoff = (consumer: ManifestNode, ...rest: ManifestNode[]): RunnableManifest => {
+    const nodes = [planner, consumer, ...rest];
+    const wires = [
+      {
+        kind: "then" as const,
+        from: { node: "plan", port: "out" },
+        to: { node: consumer.id, port: "in" },
+      },
+      {
+        kind: "file" as const,
+        from: { node: "plan", port: "file-out" },
+        to: { node: consumer.id, port: "file-in" },
+        file: "plan.md",
+      },
+    ];
+    return { hash, nodes, wires };
+  };
+
+  it("starts the next node once the file its wire names is in the working folder", async () => {
+    const { deps, calls } = harness({
+      results: [exit(0)],
+      files: new FakeFileSystem({ [plan]: "- one\n" }),
+    });
+
+    const result = await runOn(deps, handoff(prompt("build")));
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([`send /${hash}:build`]);
+  });
+
+  it("sees a file the producer wrote during its own step", async () => {
+    const files = new FakeFileSystem();
+    const { deps, calls } = harness({ files });
+    const writing: TestDeps = {
+      ...deps,
+      scripts: {
+        run: async () => {
+          await files.writeFile(plan, "- one\n");
+          return exit(0);
+        },
+      },
+    };
+
+    const result = await runOn(writing, handoff(prompt("build")));
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([`send /${hash}:build`]);
+  });
+
+  it("fails the next node, naming the file and its producer, when the file was not written", async () => {
+    const { deps, calls, lines } = harness({ results: [exit(0)] });
+
+    const result = await runOn(deps, handoff(prompt("build"), prompt("after")));
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
+    expect(result.states).toEqual({ plan: "done", build: "failed", after: "waiting" });
+    expect(lines.at(-1)).toBe("build failed: plan.md wasn't written by Planner");
+    expect(sends(calls)).toEqual([]);
+  });
+
+  it("holds a For each that reads the wired file, so it fails on the wire, not the read", async () => {
+    const { deps, lines } = harness({ results: [exit(0)] });
+    const each = forEach("e1");
+
+    const result = await runOn(deps, handoff(each, inEach(prompt("p1"))));
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "e1" });
+    expect(lines.at(-1)).toBe("e1 failed: plan.md wasn't written by Planner");
+  });
+
+  it("checks again in every round of a For each body", async () => {
+    const files = new FakeFileSystem({ [plan]: "- one\n- two\n" });
+    const { deps, calls } = harness({ files });
+    let round = 0;
+    const deleting: TestDeps = {
+      ...deps,
+      scripts: { run: async () => exit(0) },
+      prompts: {
+        ...deps.prompts,
+        sendPrompt: async (text) => {
+          round++;
+          if (round === 1) await files.remove(`${cwd}/notes.md`);
+          await deps.prompts.sendPrompt(text);
+        },
+      },
+    };
+    await files.writeFile(`${cwd}/notes.md`, "x");
+    const m: RunnableManifest = {
+      hash,
+      nodes: [forEach("e1"), inEach(prompt("p1")), inEach(script("s1"))],
+      wires: [
+        {
+          kind: "file",
+          from: { node: "p1", port: "file-out" },
+          to: { node: "s1", port: "file-in" },
+          file: "notes.md",
+        },
+      ],
+    };
+
+    const result = await runOn(deleting, m);
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "s1" });
+    expect(sends(calls)).toHaveLength(1);
+  });
+
+  it("does not check a node that already finished before a resume", async () => {
+    const { deps, calls } = harness({ results: [] });
+    const m = handoff(prompt("build"));
+    const { id } = deps.store.createRun(newRun(m));
+    deps.store.append(id, "plan", { kind: "running" });
+    deps.store.append(id, "plan", { kind: "done" });
+    deps.store.append(id, "build", { kind: "sent" });
+    deps.store.append(id, "build", { kind: "done" });
+
+    const result = await new Runner({ ...deps, runId: id }).run(m);
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toEqual([]);
+  });
+
+  it("fails a parallel section before sending it when a branch's file is missing", async () => {
+    const { deps, calls, lines } = harness({ results: [exit(0)] });
+    const flow = builders.flow(
+      [
+        { ...builders.script("plan"), label: "Planner" },
+        builders.fork("f"),
+        builders.agent("a1"),
+        builders.agent("a2"),
+        builders.join("j"),
+      ],
+      [
+        builders.thenWire("plan", "f"),
+        builders.thenWire("f", "a1"),
+        builders.thenWire("f", "a2"),
+        builders.thenWire("a1", "j"),
+        builders.thenWire("a2", "j"),
+        builders.fileWire("plan", "a2", "plan.md"),
+      ],
+    );
+    const { nodes, wires } = lower(flow).manifest;
+
+    const result = await runOn(deps, { hash, nodes, wires });
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "a2" });
+    expect(lines.at(-1)).toBe("a2 failed: plan.md wasn't written by Planner");
+    expect(sends(calls)).toEqual([]);
   });
 });

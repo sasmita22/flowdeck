@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/ports.js";
-import { flow, output, prompt, thenWire, trigger, wire } from "../../../fixtures/flow-builders.js";
+import {
+  fileWire,
+  flow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+  wire,
+} from "../../../fixtures/flow-builders.js";
 
 const errorsFor = (nodes: unknown[], wires: unknown[]) =>
   rule.check(flow(nodes, wires)).map(({ rule, wire, node }) => ({ rule, wire, node }));
@@ -38,5 +47,30 @@ describe("ports", () => {
     expect(
       errorsFor([trigger("T"), prompt("P"), output("O")], [thenWire("T", "P"), thenWire("P", "O")]),
     ).toEqual([]);
+  });
+
+  it("accepts a File wire from a file port to a file port", () => {
+    expect(errorsFor([prompt("A"), script("B")], [fileWire("A", "B", "plan.md")])).toEqual([]);
+  });
+
+  it("reports a Then wire drawn between file ports, on both ends, in plain words", () => {
+    const errors = rule.check(
+      flow([prompt("A"), script("B")], [wire("A", "file-out", "B", "file-in")]),
+    );
+
+    expect(errors.map(({ node, message }) => ({ node, message }))).toEqual([
+      { node: "A", message: 'prompt "A" port "file-out" takes File wires, not Then wires.' },
+      { node: "B", message: 'script "B" port "file-in" takes File wires, not Then wires.' },
+    ]);
+  });
+
+  it("reports a File wire drawn between Then ports", () => {
+    const fileOnThen = { ...thenWire("A", "B"), kind: "file", file: "plan.md" };
+    const errors = rule.check(flow([prompt("A"), script("B")], [fileOnThen]));
+
+    expect(errors.map(({ node, message }) => ({ node, message }))).toEqual([
+      { node: "A", message: 'prompt "A" port "out" takes Then wires, not File wires.' },
+      { node: "B", message: 'script "B" port "in" takes Then wires, not File wires.' },
+    ]);
   });
 });

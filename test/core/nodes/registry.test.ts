@@ -51,4 +51,31 @@ describe("node registry", () => {
     expect(z.array(Port).safeParse(entry?.ports).success).toBe(true);
     expect(entry?.settings).toBe(folderSettings[type]);
   });
+
+  it.each([
+    ["prompt", ["file-in", "file-out"]],
+    ["agent", ["file-in", "file-out"]],
+    ["script", ["file-in", "file-out"]],
+    ["foreach", ["file-in"]],
+  ])("gives %s its file ports", (type, names) => {
+    const filePorts = entries[type]?.ports as Port[];
+    expect(filePorts.filter((port) => port.kind === "file").map((port) => port.name)).toEqual(
+      names,
+    );
+  });
+
+  it.each(
+    NodeType.options.filter((type) => !["prompt", "agent", "script", "foreach"].includes(type)),
+  )("gives %s no file port", (type) => {
+    const ports = entries[type]?.ports as Port[];
+    expect(ports.filter((port) => port.kind !== "then")).toEqual([]);
+  });
+
+  it.each(NodeType.options)("names every %s port once, with the file ports in and out", (type) => {
+    const ports = entries[type]?.ports as Port[];
+    expect(new Set(ports.map((port) => port.name)).size).toBe(ports.length);
+    for (const port of ports.filter((each) => each.kind === "file")) {
+      expect(port.name).toBe(`file-${port.direction}`);
+    }
+  });
 });

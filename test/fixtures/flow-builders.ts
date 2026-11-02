@@ -51,6 +51,13 @@ export const wire = (from: string, fromPort: string, to: string, toPort: string)
 
 export const thenWire = (from: string, to: string) => wire(from, "out", to, "in");
 
+export const fileWire = (from: string, to: string, file: string) => ({
+  kind: "file",
+  from: { node: from, port: "file-out" },
+  to: { node: to, port: "file-in" },
+  file,
+});
+
 export const flow = (nodes: unknown[], wires: unknown[]): Flow =>
   parseFlow({
     nodes,

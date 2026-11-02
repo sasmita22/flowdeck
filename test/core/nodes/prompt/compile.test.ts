@@ -43,4 +43,15 @@ describe("compilePrompt", () => {
 
     expect(content).toBe('---\ndescription: "Plan it"\n---\nWrite the plan.\n');
   });
+
+  it("ends the command file with the files it is given and the files it writes", () => {
+    const { content } = compilePrompt(
+      promptNode("Plan it", { instructions: "Write the plan.", expectedOutput: "a plan" }),
+      { given: ["ticket.md"], writes: ["plan.md", "notes.md"] },
+    );
+
+    expect(content).toBe(
+      '---\ndescription: "Plan it"\n---\nWrite the plan.\n\nExpected output: a plan\n\nYou are given: ticket.md\nWrite: plan.md, notes.md\n',
+    );
+  });
 });

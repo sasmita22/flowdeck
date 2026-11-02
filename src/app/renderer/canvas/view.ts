@@ -2,6 +2,18 @@ import { MarkerType } from "@xyflow/react";
 import type { CanvasNote, Flow, Node, Wire } from "../../../core/flow/schema.js";
 import { branchSwitch, triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { nodeLook } from "../nodes/look.js";
+import {
+  bodyFrameBounds,
+  boundsOf,
+  containerMoves,
+  containerSub,
+  followed,
+  padded,
+  withPositions,
+  type Bounds,
+} from "./frames.js";
+
+export { FRAME_PADDING } from "./frames.js";
 
 type Position = { x: number; y: number };
 
@@ -27,7 +39,6 @@ export interface ViewNode {
 }
 
 export const SESSION_FRAME_ID = "session-frame";
-export const FRAME_PADDING = 24;
 
 export interface ViewEdge {
   id: string;
@@ -36,8 +47,8 @@ export interface ViewEdge {
   target: string;
   targetHandle: string;
   markerEnd: { type: MarkerType };
-  type?: "aligned";
-  data?: { align: Align };
+  type?: "aligned" | "file";
+  data?: { align: Align } | { file: string };
 }
 
 export type Align = "source" | "target";
@@ -47,19 +58,16 @@ type EdgeEnds = { sourceX: number; sourceY: number; targetX: number; targetY: nu
 export const alignedEnds = <Ends extends EdgeEnds>(ends: Ends, align: Align): Ends =>
   align === "target" ? { ...ends, sourceY: ends.targetY } : { ...ends, targetY: ends.sourceY };
 
-export const edgeId = ({ from, to }: Wire): string =>
-  `${from.node}:${from.port}->${to.node}:${to.port}`;
-
-type Bounds = { left: number; top: number; right: number; bottom: number };
-
-const boundsOf = ({ type, position: { x, y } }: Node): Bounds => {
-  const { width, height } = nodeLook(type).box;
-  return { left: x, top: y, right: x + width, bottom: y + height };
+export const edgeId = (wire: Wire): string => {
+  const { from, to } = wire;
+  const ends = `${from.node}:${from.port}->${to.node}:${to.port}`;
+  return wire.kind === "file" ? `${ends}:${wire.file}` : ends;
 };
 
 const branchesOf = (flow: Flow, bar: Node): Node[] => {
   const ids = new Set(
-    flow.wires.flatMap(({ from, to }) => {
+    flow.wires.flatMap(({ kind, from, to }) => {
+      if (kind !== "then") return [];
       if (bar.type === "fork" && from.node === bar.id) return [to.node];
       if (bar.type === "join" && to.node === bar.id) return [from.node];
       return [];
@@ -80,16 +88,6 @@ const barBounds = (flow: Flow, bar: Node, x = bar.position.x): Bounds | null => 
     bottom: Math.max(top + height, ...branches.map(({ bottom }) => bottom)),
   };
 };
-
-const padded = (all: readonly Bounds[]): Bounds => ({
-  left: Math.min(...all.map(({ left }) => left)) - FRAME_PADDING,
-  top: Math.min(...all.map(({ top }) => top)) - FRAME_PADDING,
-  right: Math.max(...all.map(({ right }) => right)) + FRAME_PADDING,
-  bottom: Math.max(...all.map(({ bottom }) => bottom)) + FRAME_PADDING,
-});
-
-const bodyFrameBounds = (flow: Flow, scope: Node): Bounds =>
-  padded([scope, ...flow.nodes.filter((node) => node.parent === scope.id)].map(boundsOf));
 
 const frameView = (
   id: string,
@@ -179,28 +177,36 @@ export const toViewNodes = (
   dragPositions: Readonly<Record<string, Position>>,
   highlighted: string | null,
   noteBoxes: Readonly<Record<string, Box>> = {},
-): ViewNode[] => [
-  ...toFrameViewNode(flow),
-  ...toLoopFrameViewNodes(flow),
-  ...toForEachFrameViewNodes(flow),
-  ...(flow.notes ?? []).map((note) =>
-    toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
-  ),
-  ...flow.nodes.map((node) => ({
-    id: node.id,
-    type: node.type,
-    ...placed(flow, node, dragPositions[node.id] ?? node.position),
-    selected: selection.includes(node.id),
-    ...(node.type === "hardstop" && { deletable: false }),
-    data: {
-      label: node.label,
-      highlighted: node.id === highlighted,
-      ...(node.type === "branch" && {
-        sub: branchSwitch(node.settings.flag, triggerFlags(flow.nodes)),
-      }),
-    },
-  })),
-];
+): ViewNode[] => {
+  const live = withPositions(flow, followed(flow, dragPositions));
+  const framing = withPositions(flow, containerMoves(flow, dragPositions));
+  return [
+    ...toFrameViewNode(framing),
+    ...toLoopFrameViewNodes(framing),
+    ...toForEachFrameViewNodes(framing),
+    ...(flow.notes ?? []).map((note) =>
+      toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
+    ),
+    ...live.nodes.map((node) => {
+      const sub =
+        node.type === "branch"
+          ? branchSwitch(node.settings.flag, triggerFlags(flow.nodes))
+          : containerSub(node);
+      return {
+        id: node.id,
+        type: node.type,
+        ...placed(framing, node, node.position),
+        selected: selection.includes(node.id),
+        ...(node.type === "hardstop" && { deletable: false }),
+        data: {
+          label: node.label,
+          highlighted: node.id === highlighted,
+          ...(sub !== undefined && { sub }),
+        },
+      };
+    }),
+  ];
+};
 
 const alignOf = (types: ReadonlyMap<string, Node["type"]>, wire: Wire): Align | null => {
   if (types.get(wire.from.node) === "fork") return "target";
@@ -219,6 +225,7 @@ export const toViewEdges = (flow: Flow): ViewEdge[] => {
       target: wire.to.node,
       targetHandle: wire.to.port,
       markerEnd: { type: MarkerType.ArrowClosed },
+      ...(wire.kind === "file" && { type: "file" as const, data: { file: wire.file } }),
       ...(align !== null && { type: "aligned" as const, data: { align } }),
     };
   });

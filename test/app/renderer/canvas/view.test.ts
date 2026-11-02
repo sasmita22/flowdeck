@@ -8,6 +8,7 @@ import {
   toViewEdges,
   toViewNodes,
 } from "../../../../src/app/renderer/canvas/view.js";
+import { containerText } from "../../../../src/app/renderer/canvas/frames.js";
 import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import type { Flow, NodeType, Wire } from "../../../../src/core/flow/schema.js";
 import {
@@ -680,5 +681,118 @@ describe("alignedEnds", () => {
 
   it("levels the target with the source for align source", () => {
     expect(alignedEnds(ends, "source")).toEqual({ ...ends, targetY: 114 });
+  });
+});
+
+describe("toViewNodes for Loop and For each labels", () => {
+  it("gives a Loop its cap and a For each its list file as a sub-line", () => {
+    const source = flow(
+      [loop("L", { settings: { cap: 5 } }), forEach("E", { file: "plan.md" }), prompt("A")],
+      [],
+    );
+    const data = Object.fromEntries(
+      toViewNodes(source, [], {}, null).map((node) => [node.id, node.data]),
+    );
+
+    expect(data["L"]?.sub).toBe("max 5");
+    expect(data["E"]?.sub).toBe("plan.md");
+    expect(data["A"]).not.toHaveProperty("sub");
+  });
+
+  it("widens a frame so a long Loop label stays inside it", () => {
+    const frameWidth = (label: string) =>
+      toViewNodes(flow([{ ...loop("L"), label }], []), [], {}, null).find(
+        (node) => node.id === "loop-frame-L",
+      )?.width ?? 0;
+
+    expect(frameWidth("Loop")).toBe(nodeLook("loop").box.width + 2 * FRAME_PADDING);
+    expect(frameWidth("until every test passes on the build")).toBeGreaterThan(frameWidth("Loop"));
+  });
+});
+
+describe("toViewNodes while a container is dragged", () => {
+  const dragged = () =>
+    flow(
+      [
+        { ...loop("L"), position: { x: 0, y: 0 } },
+        { ...prompt("X", { parent: "L" }), position: { x: 0, y: 100 } },
+        { ...prompt("A"), position: { x: 600, y: 0 } },
+      ],
+      [],
+    );
+
+  it("moves the body and the frame with the container's live drag", () => {
+    const nodes = toViewNodes(dragged(), [], { L: { x: 50, y: 20 } }, null);
+    const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
+
+    expect(byId["X"]?.position).toEqual({ x: 50, y: 120 });
+    expect(byId["A"]?.position).toEqual({ x: 600, y: 0 });
+    expect(byId["loop-frame-L"]).toMatchObject(
+      enclosing([
+        { type: "loop", x: 50, y: 20 },
+        { type: "prompt", x: 50, y: 120 },
+      ]),
+    );
+  });
+
+  it("follows a body node's own drag position over its container's", () => {
+    const nodes = toViewNodes(dragged(), [], { L: { x: 50, y: 20 }, X: { x: 300, y: 300 } }, null);
+
+    expect(nodes.find((node) => node.id === "X")?.position).toEqual({ x: 300, y: 300 });
+  });
+});
+
+describe("toViewEdges for File wires", () => {
+  const handoff = () =>
+    flow(
+      [prompt("A"), script("B")],
+      [
+        thenWire("A", "B"),
+        {
+          kind: "file",
+          from: { node: "A", port: "file-out" },
+          to: { node: "B", port: "file-in" },
+          file: "plan.md",
+        },
+        {
+          kind: "file",
+          from: { node: "A", port: "file-out" },
+          to: { node: "B", port: "file-in" },
+          file: "notes.md",
+        },
+      ],
+    );
+
+  it("draws each File wire as a file edge that carries its file name", () => {
+    const [, plan, notes] = toViewEdges(handoff());
+
+    expect(plan).toEqual({
+      id: "A:file-out->B:file-in:plan.md",
+      source: "A",
+      sourceHandle: "file-out",
+      target: "B",
+      targetHandle: "file-in",
+      markerEnd: { type: MarkerType.ArrowClosed },
+      type: "file",
+      data: { file: "plan.md" },
+    });
+    expect(notes?.id).toBe("A:file-out->B:file-in:notes.md");
+  });
+
+  it("leaves the Then wire beside them a plain edge", () => {
+    const [then] = toViewEdges(handoff());
+
+    expect(then).not.toHaveProperty("type");
+  });
+});
+
+describe("containerText", () => {
+  it.each([
+    ["loop", "Loop", "max 3", "LOOP · max 3"],
+    ["loop", "review", "max 3", "LOOP · review · max 3"],
+    ["foreach", "For each", "plan.md", "EACH · plan.md"],
+    ["foreach", "each plan unit", "plan.md", "EACH · each plan unit · plan.md"],
+  ] as const)("names a %s labelled %s only when renamed", (type, label, sub, text) => {
+    expect(containerText(type, label, sub)).toBe(text);
   });
 });

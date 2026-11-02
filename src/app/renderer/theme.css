@@ -871,6 +871,65 @@ body,
   text-transform: uppercase;
 }
 
+.fd-canvas .react-flow__handle.fd-file-port {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--muted);
+  border-radius: 2px;
+  background: var(--panel);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.fd-canvas .react-flow__node:hover .fd-file-port,
+.fd-canvas .react-flow__node.selected .fd-file-port,
+.fd-canvas .fd-file-port.connectingfrom,
+.fd-canvas .fd-file-port.connectingto {
+  opacity: 1;
+}
+
+.fd-file-wire-label {
+  position: absolute;
+  padding: 1px 6px;
+  border: 1px dashed var(--muted);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--fg);
+  font: var(--fs-2xs) var(--f-mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fd-file-name {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+  pointer-events: all;
+}
+
+.fd-file-name-label {
+  color: var(--muted);
+  font: var(--fs-xs) var(--f-body);
+  white-space: nowrap;
+}
+
+.fd-file-name input {
+  width: 140px;
+  padding: 4px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: var(--fs-sm) var(--f-mono);
+}
+
 .fd-empty-hint {
   position: absolute;
   inset: 0;

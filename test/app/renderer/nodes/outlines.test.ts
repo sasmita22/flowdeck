@@ -69,6 +69,12 @@ describe("nodeOutline", () => {
     expect(nodeOutline("branch").extras.map(({ element }) => element)).toEqual(["polygon"]);
   });
 
+  it.each(["loop", "foreach"] as const)("draws a widened %s label as wide as its box", (type) => {
+    expect(nodeOutline(type).path).toContain("H166 Q170,0 170,4");
+    expect(nodeOutline(type, 281).path).toContain("H277 Q281,0 281,4");
+    expect(nodeOutline(type, 281).path).not.toContain("170");
+  });
+
   it("draws the script as a terminal box with terminal ink", () => {
     expect(nodeOutline("script")).toMatchObject({
       fill: "var(--term-bg)",

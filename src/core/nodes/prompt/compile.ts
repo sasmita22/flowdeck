@@ -1,6 +1,10 @@
+import { handoffText, type Handoff } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
 
-export function compilePrompt(node: Extract<Node, { type: "prompt" }>): {
+export function compilePrompt(
+  node: Extract<Node, { type: "prompt" }>,
+  wired: Handoff = { given: [], writes: [] },
+): {
   path: string;
   content: string;
 } {
@@ -11,6 +15,6 @@ export function compilePrompt(node: Extract<Node, { type: "prompt" }>): {
       : `\nExpected output: ${expectedOutput}\n`;
   return {
     path: `commands/${node.id}.md`,
-    content: `---\ndescription: ${JSON.stringify(node.label)}\n---\n${instructions}\n${expected}`,
+    content: `---\ndescription: ${JSON.stringify(node.label)}\n---\n${instructions}\n${expected}${handoffText(wired)}`,
   };
 }

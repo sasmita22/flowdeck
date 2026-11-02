@@ -8,6 +8,7 @@ import {
   unlaunched,
   type ParallelSection,
 } from "../nodes/fork/execute.js";
+import { bodyProblems } from "../flow/structure.js";
 import { firstTurnId, listItems, listPath, withItem } from "../nodes/foreach/execute.js";
 import {
   joinComplete,
@@ -152,39 +153,10 @@ export function structureProblems(
   nodes: readonly ManifestNode[],
   wires: Manifest["wires"] = [],
 ): string[] {
-  const scopes = new Map(
-    nodes
-      .filter((node) => node.type === "loop" || node.type === "foreach")
-      .map((node) => [node.id, node.type]),
-  );
   const sectionProblems = parallelSections(nodes, wires).problems.map(
     ({ node, message }) => `${node} ${message}`,
   );
-  const loopProblems = nodes.flatMap((node) => {
-    const problems: string[] = [];
-    const parentType = node.parent === undefined ? undefined : scopes.get(node.parent);
-    if (node.type === "loop" || node.type === "foreach") {
-      const body = nodes.filter((child) => child.parent === node.id);
-      const firstTurn = body.find((child) => child.id === firstTurnId(body));
-      if (firstTurn === undefined) {
-        problems.push(`${node.id} (${node.type}) has no prompt or agent in its body`);
-      } else if (node.type === "foreach" && firstTurn.type !== "prompt") {
-        problems.push(
-          `${node.id} (foreach) starts its body with ${firstTurn.id} (${firstTurn.type}); the first turn must be a prompt`,
-        );
-      }
-      if (parentType !== undefined) {
-        problems.push(`${node.id} (${node.type}) is inside ${parentType} ${node.parent}`);
-      }
-    }
-    if (node.parent !== undefined && parentType === undefined) {
-      problems.push(
-        `${node.id} (${node.type}) has parent ${node.parent}, which is not a loop or foreach`,
-      );
-    }
-    return problems;
-  });
-  return [...loopProblems, ...sectionProblems];
+  return [...bodyProblems(nodes).map(({ message }) => message), ...sectionProblems];
 }
 
 export class StructureError extends Error {
@@ -478,6 +450,8 @@ export class Runner {
   ): Promise<StepResult> {
     const settled = this.settled(node, condition);
     if (settled !== undefined) return settled;
+    const held = await this.holdForFiles(node.id, context);
+    if (held !== undefined) return held;
     const { hash, ensureStarted } = context;
     let failure: string | undefined;
     let reply: string | undefined;
@@ -507,16 +481,11 @@ export class Runner {
       this.inTurn = node.id;
       let turn: TurnResult;
       try {
+        const item = this.roundItem(node, context.nodes);
         turn =
           node.type === "prompt"
-            ? await this.runPrompt(
-                node,
-                hash,
-                ensureStarted,
-                condition,
-                this.roundItem(node, context.nodes),
-              )
-            : await this.runAgent(node, hash, ensureStarted, condition);
+            ? await this.runPrompt(node, hash, ensureStarted, condition, item)
+            : await this.runAgent(node, hash, ensureStarted, condition, item);
       } finally {
         this.inTurn = undefined;
       }
@@ -759,6 +728,28 @@ export class Runner {
     return {};
   }
 
+  private async holdForFiles(nodeId: string, context: RunContext): Promise<StepResult | undefined> {
+    if (this.status(nodeId) !== "waiting") return undefined;
+    for (const wire of context.manifest.wires ?? []) {
+      if (wire.kind !== "file" || wire.to.node !== nodeId) continue;
+      try {
+        await this.deps.files.readFile(listPath(this.deps.cwd, wire.file));
+      } catch {
+        const producer = context.manifest.nodes.find((node) => node.id === wire.from.node);
+        const reason = `${wire.file} wasn't written by ${producer?.label ?? wire.from.node}`;
+        this.recordAll([
+          { nodeId, event: { kind: "running" } },
+          {
+            nodeId,
+            event: { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
+          },
+        ]);
+        return { failure: { nodeId, reason } };
+      }
+    }
+    return undefined;
+  }
+
   private roundItem(node: ManifestNode, nodes: readonly ManifestNode[]): string | undefined {
     const parent = nodes.find((candidate) => candidate.id === node.parent);
     if (parent?.type !== "foreach") return undefined;
@@ -782,6 +773,10 @@ export class Runner {
         }),
       );
       return { failure: { nodeId: fork.id, reason: reasonIn(fork.id, action.message) } };
+    }
+    for (const branch of section.branches) {
+      const held = await this.holdForFiles(branch, context);
+      if (held !== undefined) return held;
     }
     const join = context.nodes.find((node) => node.id === section.join);
     const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
@@ -1067,6 +1062,7 @@ export class Runner {
     hash: string,
     ensureStarted: () => Promise<void>,
     condition?: string,
+    item?: string,
   ): Promise<TurnResult> {
     const action = this.takeAction(node.id);
     if (action?.kind === "complete") return this.finishTurn(node.id, action.stopMessage, condition);
@@ -1088,7 +1084,7 @@ export class Runner {
       const turnEnd = this.armTurnEnd(armedAt);
       const turnText =
         condition === undefined
-          ? agentTurnText(hash, node.id)
+          ? agentTurnText(hash, node.id, item)
           : agentVerdictTurnText(hash, node.id, condition);
       await this.deps.prompts.sendPrompt(withAgentContext(turnText, answers));
       end = await turnEnd;

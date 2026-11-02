@@ -175,6 +175,11 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect
       .soft(window.getByTestId("foreach-frame-each"))
       .toHaveScreenshot(`${colorScheme}-foreach.png`, exact);
+
+    await window.getByTestId("node-each").click();
+    await expect
+      .soft(window.getByTestId("foreach-frame-each"))
+      .toHaveScreenshot(`${colorScheme}-foreach-selected.png`, exact);
   });
 }
 

@@ -144,6 +144,32 @@ describe("moveNodes", () => {
     expect(after.nodes[1]).toEqual(before.nodes[1]);
     expect(restored).toEqual(before);
   });
+
+  it("puts a moved node into a Loop body and undo takes it out again", () => {
+    const before = flow([loop("L"), prompt("A")], []);
+    const command = moveNodes([
+      { id: "A", from: { x: 0, y: 0 }, to: { x: 0, y: 80 }, parent: { from: undefined, to: "L" } },
+    ]);
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(after.nodes[1]).toEqual({ ...before.nodes[1], position: { x: 0, y: 80 }, parent: "L" });
+    expect(restored).toEqual(before);
+    expect(restored.nodes[1]).not.toHaveProperty("parent");
+  });
+
+  it("takes a moved node out of its body, leaving no parent key, and undo puts it back", () => {
+    const before = flow([loop("L"), prompt("A", { parent: "L" })], []);
+    const command = moveNodes([
+      { id: "A", from: { x: 0, y: 0 }, to: { x: 400, y: 0 }, parent: { from: "L", to: undefined } },
+    ]);
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(after.nodes[1]).not.toHaveProperty("parent");
+    expect(after.nodes[1]?.position).toEqual({ x: 400, y: 0 });
+    expect(restored).toEqual(before);
+  });
 });
 
 const framed = (source: Flow, nodes: string[]): Flow => ({

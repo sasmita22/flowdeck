@@ -8,7 +8,7 @@ export function LoopFrame({ data, width, height }: NodeProps<LoopFrameNode>) {
     <div
       className="fd-node"
       data-testid={`loop-frame-${data.loopId ?? ""}`}
-      style={{ position: "relative", width, height, pointerEvents: "none" }}
+      style={{ position: "relative", width, height }}
     >
       <FrameRect width={width} height={height} color="var(--c-ctrl)" dashed />
     </div>

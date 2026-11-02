@@ -8,7 +8,7 @@ export function ForEachFrame({ data, width, height }: NodeProps<ForEachFrameNode
     <div
       className="fd-node"
       data-testid={`foreach-frame-${data.forEachId ?? ""}`}
-      style={{ position: "relative", width, height, pointerEvents: "none" }}
+      style={{ position: "relative", width, height }}
     >
       <FrameRect width={width} height={height} color="var(--c-ctrl)" dashed />
     </div>

@@ -1163,7 +1163,9 @@ describe("selectNodeIssues", () => {
   it("drops the node id and its type from a For each reason", () => {
     const current = flow([forEach("foreach-1")], []);
 
-    expect(selectNodeIssues(current)).toEqual({ "foreach-1": "has no prompt in its body." });
+    expect(selectNodeIssues(current)).toEqual({
+      "foreach-1": "has no prompt or agent in its body.",
+    });
   });
 
   it("has no entry for a valid prompt", () => {
