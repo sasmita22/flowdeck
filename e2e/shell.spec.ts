@@ -96,7 +96,10 @@ const wire = async (window: Page, from: string, to: string) => {
 };
 
 const titleAndCanvasControls = [
+  controlTestIds.back,
+  controlTestIds.title,
   controlTestIds.save,
+  controlTestIds.build,
   controlTestIds.run,
   controlTestIds.more,
   controlTestIds.sessionSettings,
@@ -247,7 +250,7 @@ test("Controls keep their test ids", async () => {
       return { top, bottom, right };
     };
     return {
-      title: rectOf("app-title", "header"),
+      title: rectOf("flow-title", "header"),
       canvas: rectOf("canvas", "div"),
       status: rectOf("run-status", "footer"),
       width: globalThis.innerWidth,

@@ -1,11 +1,24 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { bridgeChannels, type FlowdeckBridge, type StoreStatus } from "./bridge.js";
+import {
+  bridgeChannels,
+  engineCalls,
+  type EngineCalls,
+  type FlowdeckBridge,
+  type StoreStatus,
+} from "./bridge.js";
+
+const calls = Object.fromEntries(
+  Object.entries(engineCalls).map(([method, { channel }]) => [
+    method,
+    (payload?: unknown) => ipcRenderer.invoke(channel, payload),
+  ]),
+) as EngineCalls;
 
 const bridge: FlowdeckBridge = {
+  ...calls,
   version: () => ipcRenderer.invoke(bridgeChannels.version) as Promise<string>,
   storeStatus: () => ipcRenderer.invoke(bridgeChannels.storeStatus) as Promise<StoreStatus>,
   saveFlow: (flow) => ipcRenderer.invoke(bridgeChannels.saveFlow, flow),
-  loadLatestFlow: () => ipcRenderer.invoke(bridgeChannels.loadLatestFlow),
   setDirty: (dirty) => ipcRenderer.send(bridgeChannels.setDirty, dirty),
   onCloseRequest: (listener) => {
     const handler = () => listener();
@@ -15,7 +28,6 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerClose: (answer) => ipcRenderer.send(bridgeChannels.closeAnswer, answer),
-  startRun: () => ipcRenderer.invoke(bridgeChannels.startRun),
   getRunState: () => ipcRenderer.invoke(bridgeChannels.getRunState),
   onRunState: (listener) => {
     const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);

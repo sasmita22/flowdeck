@@ -36,13 +36,32 @@ const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
         ? { kind: "error", message: "disk full" }
         : { kind: "saved", flowId: "flow-1", version: 1 },
     ),
-    loadLatestFlow: vi.fn<() => Promise<unknown>>(async () => options.latest ?? null),
+    openFlow: vi.fn<(payload: { flowId?: string }) => Promise<unknown>>(async () =>
+      options.latest === undefined
+        ? null
+        : { flowId: "flow-1", name: "Untitled", version: 1, flow: options.latest },
+    ),
+    renameFlow: vi.fn<(payload: { flowId: string; name: string }) => Promise<unknown>>(
+      async () => null,
+    ),
     setDirty: vi.fn<(dirty: boolean) => void>(),
     onCloseRequest: vi.fn(() => () => {}),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
   } satisfies SaveBridge;
   const runBridge = {
-    startRun: vi.fn<() => Promise<unknown>>(async () => ({ kind: "started", runId: "run-1" })),
+    buildVersion: vi.fn<(ref: { flowId: string; version: number }) => Promise<unknown>>(
+      async () => ({
+        kind: "built",
+        hash: "h1",
+        dir: "/fd/builds/h1",
+        reused: false,
+        restored: [],
+      }),
+    ),
+    runBuild: vi.fn<(payload: { hash: string }) => Promise<unknown>>(async () => ({
+      kind: "started",
+      runId: "run-1",
+    })),
     getRunState: vi.fn<() => Promise<unknown>>(async () => null),
     onRunState: vi.fn((listener: (value: unknown) => void) => {
       pushRun = listener;

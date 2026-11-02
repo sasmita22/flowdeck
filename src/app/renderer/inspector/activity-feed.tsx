@@ -3,7 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
 import type { CanvasState } from "../canvas/store.js";
-import type { RunState } from "../run-store.js";
+import type { RunView } from "../run-store.js";
 import { selectActivity, type InspectorState } from "./store.js";
 
 const clipped: CSSProperties = {
@@ -33,7 +33,7 @@ export function ActivityFeed({
   canvas,
 }: {
   inspector: StoreApi<InspectorState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
   canvas: StoreApi<CanvasState>;
 }) {
   const runId = useStore(run, (state) => state.snapshot?.runId);

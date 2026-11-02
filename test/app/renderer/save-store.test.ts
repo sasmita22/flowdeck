@@ -10,7 +10,7 @@ import { flow, prompt } from "../../fixtures/flow-builders.js";
 
 type SaveBridge = Pick<
   FlowdeckBridge,
-  "saveFlow" | "loadLatestFlow" | "setDirty" | "onCloseRequest" | "answerClose"
+  "saveFlow" | "openFlow" | "renameFlow" | "setDirty" | "onCloseRequest" | "answerClose"
 >;
 
 const deferred = <T>() => {
@@ -27,7 +27,15 @@ const fakeBridge = (options: { latest?: () => Promise<unknown> } = {}) => {
     saveFlow: vi.fn<(flow: unknown) => Promise<unknown>>(() =>
       Promise.resolve({ kind: "saved", flowId: "flow-1", version: 1 }),
     ),
-    loadLatestFlow: vi.fn<() => Promise<unknown>>(options.latest ?? (() => Promise.resolve(null))),
+    openFlow: vi.fn<(payload: { flowId?: string }) => Promise<unknown>>(async () => {
+      const latest = await (options.latest ?? (() => Promise.resolve(null)))();
+      return latest === null
+        ? null
+        : { flowId: "flow-1", name: "Untitled", version: 1, flow: latest };
+    }),
+    renameFlow: vi.fn<(payload: { flowId: string; name: string }) => Promise<unknown>>(
+      async () => null,
+    ),
     setDirty: vi.fn<(dirty: boolean) => void>(),
     onCloseRequest: vi.fn((listener: () => void) => {
       closeListeners.push(listener);
@@ -144,7 +152,7 @@ describe("save", () => {
   });
 
   it("sends the current flow, is saving during the call, then marks it saved", async () => {
-    const { bridge, canvas, store } = await setup();
+    const { bridge, canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
     makeDirty(canvas);
     const sent = canvas.getState().flow;
     const reply = deferred<unknown>();
@@ -153,10 +161,14 @@ describe("save", () => {
     const saving = store.getState().save();
 
     expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
-    expect(bridge.saveFlow).toHaveBeenCalledWith(sent);
+    expect(bridge.saveFlow).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      name: "Untitled",
+      flow: sent,
+    });
     expect(store.getState().saving).toBe(true);
 
-    reply.resolve({ kind: "saved", flowId: "flow-1", version: 1 });
+    reply.resolve({ kind: "saved", flowId: "flow-1", version: 2 });
 
     await expect(saving).resolves.toBe(true);
     expect(store.getState().saving).toBe(false);
@@ -279,7 +291,7 @@ describe("forced save", () => {
     await expect(store.getState().save({ force: true })).resolves.toBe(true);
 
     expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
-    expect(bridge.saveFlow).toHaveBeenCalledWith(sent);
+    expect(bridge.saveFlow).toHaveBeenCalledWith({ flowId: null, name: "Untitled", flow: sent });
     expect(canvas.getState().saved).toEqual(sent);
     expect(store.getState().hasSavedVersion).toBe(true);
     expect(store.getState().error).toBeNull();
@@ -368,7 +380,11 @@ describe("answerClose", () => {
 
     const answering = store.getState().answerClose("save");
 
-    expect(bridge.saveFlow).toHaveBeenCalledWith(sent);
+    expect(bridge.saveFlow).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      name: "Untitled",
+      flow: sent,
+    });
     expect(bridge.answerClose).not.toHaveBeenCalled();
 
     reply.resolve({ kind: "saved", flowId: "flow-1", version: 2 });
@@ -402,5 +418,150 @@ describe("answerClose", () => {
     expect(store.getState().closePrompt).toBe(false);
     expect(store.getState().error).toBe("engine exited");
     expect(selectDirty(canvas.getState())).toBe(true);
+  });
+});
+
+describe("blueprints", () => {
+  it("opens the blueprint asked for, holding its id, name and version", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    bridge.openFlow.mockResolvedValueOnce({
+      flowId: "flow-2",
+      name: "Weekly",
+      version: 3,
+      flow: savedFlow(),
+    });
+
+    await store.getState().open("flow-2");
+
+    expect(bridge.openFlow).toHaveBeenLastCalledWith({ flowId: "flow-2" });
+    expect(store.getState()).toMatchObject({
+      flowId: "flow-2",
+      name: "Weekly",
+      version: 3,
+      hasSavedVersion: true,
+    });
+  });
+
+  it("opens a blueprint never saved as an empty, clean canvas under its name", async () => {
+    const { bridge, canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    bridge.openFlow.mockResolvedValueOnce({
+      flowId: "flow-2",
+      name: "Fresh",
+      version: null,
+      flow: null,
+    });
+
+    await store.getState().open("flow-2");
+
+    expect(canvas.getState().flow).toEqual(newCanvasFlow());
+    expect(selectDirty(canvas.getState())).toBe(false);
+    expect(store.getState()).toMatchObject({
+      flowId: "flow-2",
+      name: "Fresh",
+      version: null,
+      hasSavedVersion: false,
+    });
+  });
+
+  it("starts with no blueprint, named Untitled, when nothing exists", async () => {
+    const { store } = await setup();
+
+    expect(store.getState()).toMatchObject({ flowId: null, name: "Untitled", version: null });
+  });
+
+  it("creates the blueprint under its title on the first save, then saves to it", async () => {
+    const { bridge, canvas, store } = await setup();
+    await store.getState().rename("Release notes");
+    makeDirty(canvas);
+    bridge.saveFlow
+      .mockResolvedValueOnce({ kind: "saved", flowId: "flow-9", version: 1 })
+      .mockResolvedValueOnce({ kind: "saved", flowId: "flow-9", version: 2 });
+
+    await store.getState().save();
+    makeDirty(canvas);
+    await store.getState().save();
+
+    expect(bridge.renameFlow).not.toHaveBeenCalled();
+    expect(
+      bridge.saveFlow.mock.calls.map(([payload]) => (payload as { flowId: unknown }).flowId),
+    ).toEqual([null, "flow-9"]);
+    expect(bridge.saveFlow.mock.calls[0]?.[0]).toMatchObject({ name: "Release notes" });
+    expect(store.getState()).toMatchObject({ flowId: "flow-9", version: 2 });
+  });
+
+  it("renames a saved blueprint in the store, and keeps the old name when that fails", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+
+    await store.getState().rename("Weekly");
+    expect(bridge.renameFlow).toHaveBeenLastCalledWith({ flowId: "flow-1", name: "Weekly" });
+    expect(store.getState().name).toBe("Weekly");
+
+    bridge.renameFlow.mockRejectedValueOnce(new Error("A blueprint needs a name"));
+    await store.getState().rename(" ");
+    expect(store.getState()).toMatchObject({ name: "Weekly", error: "A blueprint needs a name" });
+  });
+
+  it("starts a new blueprint as an empty canvas with no id", async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+
+    store.getState().startNew();
+
+    expect(canvas.getState().flow).toEqual(newCanvasFlow());
+    expect(store.getState()).toMatchObject({
+      flowId: null,
+      name: "Untitled",
+      version: null,
+      hasSavedVersion: false,
+    });
+  });
+});
+
+describe("leaving unsaved changes", () => {
+  it("goes straight on when the canvas is clean", async () => {
+    const { store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    const next = vi.fn(async () => undefined);
+
+    await store.getState().leave(next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(store.getState().leavePrompt).toBe(false);
+  });
+
+  it("asks first when the canvas is dirty, and cancel keeps the edit", async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    makeDirty(canvas);
+    const next = vi.fn(async () => undefined);
+
+    await store.getState().leave(next);
+    expect(store.getState().leavePrompt).toBe(true);
+    expect(next).not.toHaveBeenCalled();
+
+    await store.getState().answerLeave("cancel");
+    expect(store.getState().leavePrompt).toBe(false);
+    expect(next).not.toHaveBeenCalled();
+    expect(selectDirty(canvas.getState())).toBe(true);
+  });
+
+  it("saves then goes on, or goes on without saving, or stays when the save fails", async () => {
+    const { bridge, canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    const next = vi.fn(async () => undefined);
+
+    makeDirty(canvas);
+    await store.getState().leave(next);
+    await store.getState().answerLeave("save");
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(1);
+
+    makeDirty(canvas);
+    await store.getState().leave(next);
+    await store.getState().answerLeave("discard");
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledTimes(2);
+
+    bridge.saveFlow.mockResolvedValueOnce({ kind: "error", message: "disk full" });
+    await store.getState().leave(next);
+    await store.getState().answerLeave("save");
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(store.getState()).toMatchObject({ leavePrompt: false, error: "disk full" });
   });
 });

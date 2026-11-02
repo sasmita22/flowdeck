@@ -8,6 +8,7 @@ import {
   useReactFlow,
   type Connection,
   type NodeChange,
+  type ReactFlowProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, type DragEvent, type ReactNode } from "react";
@@ -15,7 +16,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "../nodes/node-types.js";
 import { PanelToggle } from "../panel-toggle.js";
-import type { RunState } from "../run-store.js";
+import type { RunView } from "../run-store.js";
 import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-store.js";
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
@@ -24,12 +25,20 @@ import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
 import { CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanvasEmpty, wrappableIds, type CanvasState } from "./store.js";
-import { toViewEdges, toViewNodes } from "./view.js";
+import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
 const startViewport = { x: 24, y: 56, zoom: 1 };
 const proOptions = { hideAttribution: true };
 const edgeTypes = { aligned: AlignedEdge };
+const viewing = {
+  deleteKeyCode: null,
+  nodesDraggable: false,
+  nodesConnectable: false,
+  elementsSelectable: false,
+  fitView: true,
+  fitViewOptions: { maxZoom: 1 },
+} satisfies Partial<ReactFlowProps>;
 
 function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
   const canUndo = useStore(store, (state) => state.undoStack.length > 0);
@@ -102,10 +111,12 @@ function PanelShowButtons({
   shell,
   run,
   toolbar,
+  readOnly,
 }: {
   shell: StoreApi<ShellState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
   toolbar: ReactNode;
+  readOnly: boolean;
 }) {
   const sidebarOpen = useStore(shell, (state) => state.sidebarOpen);
   const inspectorShown = useStore(shell, (state) => state.inspectorShown);
@@ -114,7 +125,7 @@ function PanelShowButtons({
   return (
     <>
       <div className="fd-canvas-top fd-canvas-top-left">
-        {!sidebarOpen && (
+        {!sidebarOpen && !readOnly && (
           <PanelToggle
             side="left"
             label="Show node sidebar"
@@ -162,10 +173,12 @@ function Board({
   store,
   shell,
   run,
+  readOnly,
 }: {
   store: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
-  run: StoreApi<RunState>;
+  run: StoreApi<RunView>;
+  readOnly: boolean;
 }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
@@ -215,6 +228,27 @@ function Board({
     store.getState().drop(type, { x: Math.round(x), y: Math.round(y) });
   };
 
+  const editing: Partial<ReactFlowProps<ViewNode, ViewEdge>> = {
+    deleteKeyCode: deleteKeys,
+    onNodesChange,
+    onNodeDragStop: (_, __, dragged) => store.getState().endDrag(dragged.map((n) => n.id)),
+    onBeforeDelete: async () => {
+      store.getState().deleteSelection();
+      return false;
+    },
+    onNodeContextMenu: (event, node) => {
+      event.preventDefault();
+      store.getState().openNodeMenu(node.id, { x: event.clientX, y: event.clientY });
+    },
+    onPaneClick: () => {
+      store.getState().closeNodeMenu();
+      shell.getState().closeSessionSettings();
+    },
+    onConnect,
+    onDragOver,
+    onDrop,
+  };
+
   return (
     <div className="fd-canvas" data-testid="canvas">
       <CanvasStoreContext.Provider value={store}>
@@ -226,36 +260,24 @@ function Board({
           colorMode="system"
           defaultMarkerColor={null}
           defaultViewport={startViewport}
-          deleteKeyCode={deleteKeys}
           proOptions={proOptions}
-          onNodesChange={onNodesChange}
-          onNodeDragStop={(_, __, dragged) => store.getState().endDrag(dragged.map((n) => n.id))}
-          onBeforeDelete={async () => {
-            store.getState().deleteSelection();
-            return false;
-          }}
-          onNodeContextMenu={(event, node) => {
-            event.preventDefault();
-            store.getState().openNodeMenu(node.id, { x: event.clientX, y: event.clientY });
-          }}
           onNodeClick={(_, node) => {
             if (node.type !== "note") shell.getState().showInspector();
           }}
-          onPaneClick={() => {
-            store.getState().closeNodeMenu();
-            shell.getState().closeSessionSettings();
-          }}
-          onConnect={onConnect}
-          onDragOver={onDragOver}
-          onDrop={onDrop}
+          {...(readOnly ? viewing : editing)}
         >
           <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
           <ZoomControls />
         </ReactFlow>
       </CanvasStoreContext.Provider>
-      <PanelShowButtons shell={shell} run={run} toolbar={<Toolbar store={store} />} />
-      <EmptyHint store={store} shell={shell} />
-      <NodeMenu store={store} />
+      <PanelShowButtons
+        shell={shell}
+        run={run}
+        toolbar={readOnly ? null : <Toolbar store={store} />}
+        readOnly={readOnly}
+      />
+      {!readOnly && <EmptyHint store={store} shell={shell} />}
+      {!readOnly && <NodeMenu store={store} />}
       <Readout store={store} />
     </div>
   );
@@ -281,29 +303,32 @@ export function Canvas({
   shell,
   run,
   onSave,
+  readOnly = false,
 }: {
   store: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
-  run: StoreApi<RunState>;
-  onSave: () => void;
+  run: StoreApi<RunView>;
+  onSave?: () => void;
+  readOnly?: boolean;
 }) {
   useEffect(() => {
+    if (readOnly) return;
     const onKeyDown = (event: KeyboardEvent) => {
       const shortcut = shortcutFor(event);
       if (shortcut === null) return;
       event.preventDefault();
       const state = store.getState();
-      if (shortcut === "save") onSave();
+      if (shortcut === "save") onSave?.();
       else state[shortcut]();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [store, onSave]);
+  }, [store, onSave, readOnly]);
 
   return (
     <ReactFlowProvider>
-      <Palette canvas={store} shell={shell} run={run} />
-      <Board store={store} shell={shell} run={run} />
+      {!readOnly && <Palette canvas={store} shell={shell} run={run} />}
+      <Board store={store} shell={shell} run={run} readOnly={readOnly} />
     </ReactFlowProvider>
   );
 }

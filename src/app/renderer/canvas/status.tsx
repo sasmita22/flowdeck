@@ -1,11 +1,11 @@
 import { createContext, useContext } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { selectNodeDisplay, type RunState } from "../run-store.js";
+import { selectNodeDisplay, type RunView } from "../run-store.js";
 import { statusBadge } from "./status-look.js";
 import { newCanvasFlow, selectNodeIssues, type CanvasState } from "./store.js";
 
-export const RunStoreContext = createContext<StoreApi<RunState> | null>(null);
+export const RunStoreContext = createContext<StoreApi<RunView> | null>(null);
 
 export const CanvasStoreContext = createContext<StoreApi<CanvasState> | null>(null);
 
@@ -18,7 +18,7 @@ const emptyCanvasStore: StoreApi<Pick<CanvasState, "flow">> = {
   subscribe: () => () => undefined,
 };
 
-const idleStore: StoreApi<Pick<RunState, "snapshot">> = {
+const idleStore: StoreApi<RunView> = {
   getState: () => ({ snapshot: null }),
   getInitialState: () => ({ snapshot: null }),
   setState: () => undefined,

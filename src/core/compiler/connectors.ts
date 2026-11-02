@@ -4,6 +4,7 @@ export type McpServer = Record<string, unknown>;
 
 export interface ConnectorSource {
   find(name: string): Promise<McpServer | undefined>;
+  list(): Promise<Record<string, McpServer>>;
 }
 
 export type ResolvedConnectors =

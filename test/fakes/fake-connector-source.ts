@@ -13,4 +13,8 @@ export class FakeConnectorSource implements ConnectorSource {
     const server = Object.hasOwn(this.servers, name) ? this.servers[name] : undefined;
     return server === undefined ? undefined : structuredClone(server);
   }
+
+  async list(): Promise<Record<string, McpServer>> {
+    return structuredClone(this.servers);
+  }
 }

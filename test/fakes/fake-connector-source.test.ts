@@ -13,4 +13,14 @@ describe("FakeConnectorSource", () => {
     expect(await source.find("slack")).toBeUndefined();
     expect(source.calls).toEqual(["jira", "slack"]);
   });
+
+  it("lists copies of every seeded connector", async () => {
+    const definition = { type: "http", url: "https://x" };
+    const source = new FakeConnectorSource({ jira: definition });
+
+    const listed = await source.list();
+
+    expect(listed).toEqual({ jira: definition });
+    expect(listed["jira"]).not.toBe(definition);
+  });
 });

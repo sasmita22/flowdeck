@@ -45,4 +45,40 @@ describe("ClaudeUserConnectors", () => {
 
     await expect(new ClaudeUserConnectors({ configPath }).find("jira")).rejects.toThrow(configPath);
   });
+
+  it("names only the file and where the JSON breaks, never a slice of what it holds", async () => {
+    const secret = "xoxbQZSECRETVALUE";
+    await writeFile(
+      configPath,
+      `{"mcpServers":{"slack":{"command":"x","env":{"SLACK_TOKEN":${secret}}}}}`,
+    );
+    const unquoted = await new ClaudeUserConnectors({ configPath }).list().catch((e: Error) => e);
+    await writeFile(configPath, '{"a":1,\n"b": "open');
+    const unterminated = await new ClaudeUserConnectors({ configPath }).list().catch((e) => e);
+
+    expect(unquoted).toEqual(new Error(`${configPath} is not valid JSON`));
+    expect((unquoted as Error).cause).toBeUndefined();
+    const shown = (unquoted as Error).message.replace(configPath, "");
+    const slices = [...secret]
+      .map((_, at) => secret.slice(at, at + 3))
+      .filter((s) => s.length === 3);
+    expect(slices.filter((slice) => shown.includes(slice))).toEqual([]);
+    expect(unterminated).toEqual(new Error(`${configPath} is not valid JSON (line 2, column 11)`));
+  });
+
+  it("lists every user-scope MCP server, and none without a config file", async () => {
+    expect(await new ClaudeUserConnectors({ configPath }).list()).toEqual({});
+
+    const jira = { type: "http", url: "https://j" };
+    const slack = { command: "slack-mcp", env: { SLACK_TOKEN: "" } };
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        mcpServers: { jira, slack, odd: "not a server" },
+        projects: { "/repo": { mcpServers: { local: { type: "http", url: "https://l" } } } },
+      }),
+    );
+
+    expect(await new ClaudeUserConnectors({ configPath }).list()).toEqual({ jira, slack });
+  });
 });

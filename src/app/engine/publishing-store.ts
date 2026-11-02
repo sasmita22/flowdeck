@@ -30,6 +30,7 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     recordBuild: (build) => store.recordBuild(build),
     findBuild: (hash) => store.findBuild(hash),
     listBuilds: () => store.listBuilds(),
+    listRuns: () => store.listRuns(),
     buildFiles: (hash) => store.buildFiles(hash),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);

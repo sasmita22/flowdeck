@@ -1,8 +1,11 @@
 import { createRoot } from "react-dom/client";
+import { createActions } from "./actions.js";
 import { App } from "./app.js";
 import { createAppStore } from "./app-store.js";
 import { createCanvasStore } from "./canvas/store.js";
 import { createInspectorStore } from "./inspector/store.js";
+import { createLibraryStore } from "./library-store.js";
+import { createNavStore } from "./nav-store.js";
 import { createWaitStore } from "./inspector/wait-store.js";
 import { createRunStore } from "./run-store.js";
 import { createSaveStore } from "./save-store.js";
@@ -37,6 +40,18 @@ const syncWindowWidth = () => shell.getState().setWindowWidth(window.innerWidth)
 syncWindowWidth();
 window.addEventListener("resize", syncWindowWidth);
 const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save, run });
+const nav = createNavStore();
+const library = createLibraryStore({ bridge: window.flowdeck });
+void library.getState().refresh();
+run.subscribe((next, previous) => {
+  if (next.snapshot?.status !== previous.snapshot?.status) void library.getState().refresh();
+});
+save.subscribe((next, previous) => {
+  if (next.version !== previous.version || next.name !== previous.name) {
+    void library.getState().refresh();
+  }
+});
+const actions = createActions({ nav, save, run, library });
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("index.html has no #root element");
@@ -51,5 +66,8 @@ createRoot(root).render(
     wait={wait}
     shell={shell}
     workspace={workspace}
+    nav={nav}
+    library={library}
+    actions={actions}
   />,
 );

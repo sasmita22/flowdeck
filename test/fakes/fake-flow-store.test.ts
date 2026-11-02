@@ -117,4 +117,38 @@ describe("FakeFlowStore", () => {
     expect(store.loadLatest()).toBeNull();
     expect(store.save(flowOf("p1"))).toMatchObject({ version: 1 });
   });
+
+  it("creates a named blueprint with its version 1 in one save, and nothing when that save fails", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+    store.failNextSave(new Error("disk full"));
+
+    expect(() => store.save(flowOf("p1"), { name: "Report" })).toThrow("disk full");
+    expect(() => store.save(flowOf("p1"), { name: " " })).toThrow("A blueprint needs a name");
+    expect(store.list()).toEqual([]);
+
+    expect(store.save(flowOf("p1"), { name: " Report " })).toEqual({
+      flowId: "flow-a",
+      version: 1,
+    });
+    expect(store.list()).toEqual([
+      expect.objectContaining({ flowId: "flow-a", name: "Report", versions: 1 }),
+    ]);
+  });
+
+  it("keeps named blueprints apart, renames them and lists the last saved first", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+    store.create("A");
+    store.create("B");
+
+    expect(store.save(flowOf("p1"), "flow-a")).toEqual({ flowId: "flow-a", version: 1 });
+    store.rename("flow-a", "Renamed");
+
+    expect(store.loadLatest("flow-a")).toMatchObject({ name: "Renamed", version: 1 });
+    expect(store.loadLatest("flow-b")).toBeNull();
+    expect(store.list().map(({ flowId, name, versions }) => ({ flowId, name, versions }))).toEqual([
+      { flowId: "flow-a", name: "Renamed", versions: 1 },
+      { flowId: "flow-b", name: "B", versions: 0 },
+    ]);
+    expect(() => store.save(flowOf("p1"), "nope")).toThrow("No blueprint nope");
+  });
 });

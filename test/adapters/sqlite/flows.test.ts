@@ -405,6 +405,156 @@ describe("SqliteFlowStore", () => {
     });
   });
 
+  describe("many blueprints", () => {
+    const ids = (...list: string[]) => {
+      const queue = [...list];
+      return () => queue.shift() ?? "spare";
+    };
+
+    it("creates named blueprints with no versions, and lists them newest first", () => {
+      const times = ["2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"];
+      let tick = 0;
+      const store = new SqliteFlowStore({
+        db: connect(),
+        newId: ids("flow-a", "flow-b"),
+        now: () => new Date(times[tick++] ?? "2026-12-31T00:00:00.000Z"),
+      });
+
+      expect(store.create("Release notes")).toMatchObject({ flowId: "flow-a", versions: 0 });
+      store.create("Triage");
+
+      expect(store.list()).toEqual([
+        {
+          flowId: "flow-b",
+          name: "Triage",
+          createdAt: times[1],
+          versions: 0,
+          lastSavedAt: null,
+          workingFolder: null,
+        },
+        {
+          flowId: "flow-a",
+          name: "Release notes",
+          createdAt: times[0],
+          versions: 0,
+          lastSavedAt: null,
+          workingFolder: null,
+        },
+      ]);
+      expect(store.loadLatest("flow-a")).toBeNull();
+    });
+
+    it("saves each blueprint's versions apart and loads each by id", () => {
+      const store = open(ids("flow-a", "flow-b"));
+      store.create("A");
+      store.create("B");
+
+      expect(store.save(relabelled("a1"), "flow-a")).toEqual({ flowId: "flow-a", version: 1 });
+      expect(store.save(relabelled("b1"), "flow-b")).toEqual({ flowId: "flow-b", version: 1 });
+      expect(store.save(relabelled("a2"), "flow-a")).toEqual({ flowId: "flow-a", version: 2 });
+
+      expect(store.loadLatest("flow-a")).toEqual({
+        flowId: "flow-a",
+        name: "A",
+        version: 2,
+        flow: relabelled("a2"),
+      });
+      expect(open().loadLatest("flow-b")?.flow).toEqual(relabelled("b1"));
+      expect(store.loadLatest()?.flowId).toBe("flow-a");
+    });
+
+    it("lists the version count, last save and working folder of each, last saved first", () => {
+      const times = [
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-02T00:00:00.000Z",
+        "2026-01-03T00:00:00.000Z",
+        "2026-01-04T00:00:00.000Z",
+      ];
+      let tick = 0;
+      const store = new SqliteFlowStore({
+        db: connect(),
+        newId: ids("flow-a", "flow-b"),
+        now: () => new Date(times[tick++] ?? "2026-12-31T00:00:00.000Z"),
+      });
+      store.create("A");
+      store.create("B");
+      const inRepo: Flow = {
+        ...relabelled("a2"),
+        session: { ...roundTripFlow().session, workingFolder: { kind: "path", path: "/repo" } },
+      };
+      store.save(relabelled("a1"), "flow-a");
+      store.save(inRepo, "flow-a");
+
+      expect(store.list()).toEqual([
+        {
+          flowId: "flow-a",
+          name: "A",
+          createdAt: times[0],
+          versions: 2,
+          lastSavedAt: times[3],
+          workingFolder: { kind: "path", path: "/repo" },
+        },
+        {
+          flowId: "flow-b",
+          name: "B",
+          createdAt: times[1],
+          versions: 0,
+          lastSavedAt: null,
+          workingFolder: null,
+        },
+      ]);
+    });
+
+    it("renames a blueprint without touching its locked versions", () => {
+      const store = open(ids("flow-a"));
+      store.save(relabelled("a1"));
+
+      store.rename("flow-a", "  Weekly report  ");
+
+      expect(store.loadLatest("flow-a")).toMatchObject({ name: "Weekly report", version: 1 });
+      expect(store.load({ flowId: "flow-a", version: 1 })?.flow).toEqual(relabelled("a1"));
+      expect(() => store.rename("flow-a", "   ")).toThrow("A blueprint needs a name");
+      expect(() => store.rename("nope", "X")).toThrow("No blueprint nope");
+      expect(store.list().map((flow) => flow.name)).toEqual(["Weekly report"]);
+    });
+
+    it("creates a named blueprint with its version 1 in one save, and nothing when that save fails", () => {
+      const store = open(ids("flow-a", "flow-b"));
+      const db = raw();
+      db.exec("CREATE TRIGGER boom BEFORE INSERT ON wires BEGIN SELECT RAISE(ABORT, 'boom'); END");
+
+      expect(() => store.save(relabelled("a1"), { name: "Report" })).toThrow("boom");
+      expect(() => store.save(relabelled("a1"), { name: "  " })).toThrow(
+        "A blueprint needs a name",
+      );
+      expect(count(db, "flows")).toBe(0);
+
+      db.exec("DROP TRIGGER boom");
+      expect(store.save(relabelled("a1"), { name: " Report " })).toEqual({
+        flowId: "flow-b",
+        version: 1,
+      });
+      expect(store.list()).toEqual([
+        expect.objectContaining({ flowId: "flow-b", name: "Report", versions: 1 }),
+      ]);
+    });
+
+    it("refuses a save to a blueprint that does not exist", () => {
+      expect(() => open().save(relabelled("a"), "nope")).toThrow("No blueprint nope");
+      expect(count(raw(), "flow_versions")).toBe(0);
+    });
+
+    it("lists the one flow of a database saved before blueprints had names", () => {
+      const store = open();
+      store.save(relabelled("a"));
+      store.save(relabelled("b"));
+
+      expect(open().list()).toEqual([
+        expect.objectContaining({ flowId: "flow-1", name: "Untitled", versions: 2 }),
+      ]);
+    });
+  });
+
   it("shares one migrated connection with SqliteStore", () => {
     const db = connect();
     const runs = new SqliteStore({ db });

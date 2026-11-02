@@ -187,7 +187,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
       const db = openDatabase({ path: join(home, "flowdeck.db") });
       closeDb = () => db.close();
       const stores = { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };
-      stores.flows.save(saved);
+      const savedRef = stores.flows.save(saved);
 
       const waits: (PendingWait | null)[] = [];
       let runId = "";
@@ -227,7 +227,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         newSessionName: () => sessionName,
       });
 
-      const response = await handler.handle({ id: 1, type: "start-run" });
+      const build = await handler.handle({ id: 10, type: "build-version", payload: savedRef });
+      const { hash } = (build as { value: { hash: string } }).value;
+      const response = await handler.handle({ id: 11, type: "run-build", payload: { hash } });
       expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
 
       await vi.waitFor(() => expect(answered).toBeDefined(), { timeout: 30_000, interval: 200 });

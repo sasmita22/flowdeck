@@ -4,28 +4,45 @@ import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 
+const inFolder = (flow: unknown, workingFolder: string | undefined) => {
+  const parsed = parseFlow(flow);
+  return workingFolder === undefined
+    ? parsed
+    : {
+        ...parsed,
+        session: {
+          ...parsed.session,
+          workingFolder: { kind: "path" as const, path: workingFolder },
+        },
+      };
+};
+
+const withStore = <T>(home: string, use: (store: SqliteFlowStore) => T): T => {
+  const db = openDatabase({ path: `${home}/flowdeck.db` });
+  try {
+    return use(new SqliteFlowStore({ db }));
+  } finally {
+    db.close();
+  }
+};
+
 export function seedFlow(
   home: string,
   flow: unknown,
   workingFolder?: string,
 ): { flowId: string; version: number } {
-  const parsed = parseFlow(flow);
-  const seeded =
-    workingFolder === undefined
-      ? parsed
-      : {
-          ...parsed,
-          session: {
-            ...parsed.session,
-            workingFolder: { kind: "path" as const, path: workingFolder },
-          },
-        };
-  const db = openDatabase({ path: `${home}/flowdeck.db` });
-  try {
-    return new SqliteFlowStore({ db }).save(seeded);
-  } finally {
-    db.close();
-  }
+  return withStore(home, (store) => store.save(inFolder(flow, workingFolder)));
+}
+
+export function seedBlueprint(
+  home: string,
+  name: string,
+  flow: unknown,
+  workingFolder?: string,
+): { flowId: string; version: number } {
+  return withStore(home, (store) =>
+    store.save(inFolder(flow, workingFolder), store.create(name).flowId),
+  );
 }
 
 const entry = process.argv[1];

@@ -14,6 +14,8 @@ describe("theme type scale", () => {
     ["--fs-sm", "13px"],
     ["--fs-md", "14px"],
     ["--fs-lg", "16px"],
+    ["--fs-xl", "22px"],
+    ["--fs-2xl", "28px"],
   ])("sets %s to %s", (name, size) => {
     expect(token(name)).toBe(size);
   });

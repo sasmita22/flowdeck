@@ -4,9 +4,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node-pty";
-import type { LoadLatestFlowResult } from "../../core/flow/flow-store.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
-import { bridgeChannels, type CloseAnswer, type StoreStatus } from "../preload/bridge.js";
+import {
+  bridgeChannels,
+  engineCalls,
+  type CloseAnswer,
+  type StoreStatus,
+} from "../preload/bridge.js";
 import { createActivityRelay } from "./activity.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
@@ -23,11 +27,6 @@ const rendererIndexPath = join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/
 
 const toStoreStatus = (result: StoreOpenResult): StoreStatus =>
   result.kind === "ready" ? { kind: "ready" } : { kind: "error", message: result.message };
-
-const toLoadedFlow = (result: LoadLatestFlowResult): unknown => {
-  if (result.kind === "error") throw new Error(result.message);
-  return result.kind === "loaded" ? result.flow : null;
-};
 
 const loginShellTimeoutMs = 3000;
 
@@ -175,12 +174,12 @@ void app.whenReady().then(async () => {
     bridgeChannels.saveFlow,
     windowGuard.handle((flow: unknown) => client.request("save-flow", flow)),
   );
-  ipcMain.handle(
-    bridgeChannels.loadLatestFlow,
-    windowGuard.handle(async () =>
-      toLoadedFlow((await client.request("load-latest-flow")) as LoadLatestFlowResult),
-    ),
-  );
+  for (const { channel, request } of Object.values(engineCalls)) {
+    ipcMain.handle(
+      channel,
+      windowGuard.handle((payload: unknown) => client.request(request, payload)),
+    );
+  }
   const window = openWindow(windowGuard);
   const relay = createRunRelay({
     send: (snapshot) => {
@@ -204,10 +203,6 @@ void app.whenReady().then(async () => {
   client.onPush((push) => {
     if (push.push === "session") terminal.setSession(push.value);
   });
-  ipcMain.handle(
-    bridgeChannels.startRun,
-    windowGuard.handle(() => client.request("start-run")),
-  );
   ipcMain.handle(
     bridgeChannels.getRunState,
     windowGuard.handle(() => relay.latest()),

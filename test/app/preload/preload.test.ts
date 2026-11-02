@@ -47,10 +47,26 @@ describe("preload run-state wiring", () => {
     bridge = electron.exposed["flowdeck"] as FlowdeckBridge;
   });
 
-  it("invokes flowdeck:start-run for startRun and returns its answer", async () => {
-    await expect(bridge.startRun()).resolves.toBe("answer for flowdeck:start-run");
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:start-run");
-  });
+  it.each([
+    ["openFlow", "flowdeck:open-flow", { flowId: "flow-a" }],
+    ["listFlows", "flowdeck:list-flows", undefined],
+    ["renameFlow", "flowdeck:rename-flow", { flowId: "flow-a", name: "Weekly" }],
+    ["buildVersion", "flowdeck:build-version", { flowId: "flow-a", version: 2 }],
+    ["listBuilds", "flowdeck:list-builds", undefined],
+    ["buildFiles", "flowdeck:build-files", { hash: "abc" }],
+    ["runBuild", "flowdeck:run-build", { hash: "abc" }],
+    ["listRuns", "flowdeck:list-runs", undefined],
+    ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
+    ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
+  ] as const)(
+    "%s invokes %s with its payload and returns its answer",
+    async (method, channel, payload) => {
+      const call = bridge[method] as (payload?: unknown) => Promise<unknown>;
+
+      await expect(call(payload)).resolves.toBe(`answer for ${channel}`);
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, payload);
+    },
+  );
 
   it("invokes flowdeck:get-run-state for getRunState and returns its answer", async () => {
     await expect(bridge.getRunState()).resolves.toBe("answer for flowdeck:get-run-state");
