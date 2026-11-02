@@ -26,8 +26,10 @@ host and run each check twice. Use these rules instead.
 6. **Leave nothing behind.** Afterwards, stop every `fd-mt-*` tmux session, delete the temporary
    `FLOWDECK_HOME` and any worktree the test made, and quit the app. Report anything that could
    not be cleaned up.
-7. **No native dialogs.** Playwright can't click macOS file pickers or menus. Every v1 flow has an
+7. **The app stays hidden.** Drive runs started by an agent keep the window hidden (`CLAUDECODE=1`),
+   so nothing appears on the user's screen. To watch a run, set `FLOWDECK_SHOW_WINDOW=1`.
+8. **No native dialogs.** Playwright can't click macOS file pickers or menus. Every v1 flow has an
    in-app way to do the same thing; manual checks use it.
-8. **Where results go.** One row per check in the run's `implementation.md` (check id, what was
+9. **Where results go.** One row per check in the run's `implementation.md` (check id, what was
    driven, result, evidence file, one-line note), and a summary in the PR body. There is no Jira
    ticket to post to.

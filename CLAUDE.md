@@ -30,6 +30,11 @@ and `/plugin install workflows@agent-workflow`. How tickets run through it is in
 
 `npm test` never runs live tests. CI runs `npm run check` on every PR.
 
+E2E and drive runs started by an agent (Claude Code sets `CLAUDECODE=1`) keep the app window
+hidden; runs started from your own terminal show it. Force either way with
+`FLOWDECK_SHOW_WINDOW=1` or `FLOWDECK_HIDE_WINDOW=1`. Test launches always draw at 1x
+(`--force-device-scale-factor=1`), so screenshots match on any display.
+
 ## Architecture
 
 Hexagonal (ports and adapters) with an event-driven run engine. Declarative UI with one-way data
