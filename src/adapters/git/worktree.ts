@@ -1,11 +1,22 @@
 import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { Worktree, WorktreeAddOptions } from "../../ports/worktree.js";
+import type { WorktreeRemoval } from "../../core/run/worktree-cleanup.js";
+import type { Worktree, WorktreeAddOptions, WorktreeRemoveOptions } from "../../ports/worktree.js";
 
 const run = promisify(execFile);
 
 function stderrOf(error: unknown): string {
   return error instanceof Error && "stderr" in error ? String(error.stderr).trim() : "";
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function succeeds(args: string[]): Promise<boolean> {
@@ -30,5 +41,26 @@ export class GitWorktree implements Worktree {
     } catch (error) {
       throw new Error(stderrOf(error) || `git worktree add failed in ${repo}`, { cause: error });
     }
+  }
+
+  async remove({ repo, base, branch, path }: WorktreeRemoveOptions): Promise<WorktreeRemoval> {
+    const removeArgs = (await exists(path)) ? [path] : ["--force", path];
+    await succeeds(["-C", repo, "worktree", "remove", ...removeArgs]);
+    if (await exists(path)) return { worktree: "kept", branch: "kept" };
+    const ref = `refs/heads/${branch}`;
+    if (!(await succeeds(["-C", repo, "rev-parse", "--verify", "--quiet", ref]))) {
+      return { worktree: "removed", branch: "removed" };
+    }
+    if (!(await succeeds(["-C", repo, "merge-base", "--is-ancestor", ref, base]))) {
+      return { worktree: "removed", branch: "kept" };
+    }
+    try {
+      await run("git", ["-C", repo, "branch", "-D", branch]);
+    } catch (error) {
+      throw new Error(stderrOf(error) || `git branch -D ${branch} failed in ${repo}`, {
+        cause: error,
+      });
+    }
+    return { worktree: "removed", branch: "removed" };
   }
 }

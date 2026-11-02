@@ -106,7 +106,7 @@ const titleAndCanvasControls = [
   controlTestIds.undo,
   controlTestIds.redo,
   controlTestIds.delete,
-  controlTestIds.wrap,
+  controlTestIds.sessionChip,
   controlTestIds.zoomIn,
   controlTestIds.zoomOut,
   controlTestIds.fit,
@@ -126,7 +126,7 @@ const canvasControls = [
   controlTestIds.undo,
   controlTestIds.redo,
   controlTestIds.delete,
-  controlTestIds.wrap,
+  controlTestIds.sessionChip,
   controlTestIds.zoomIn,
   controlTestIds.zoomOut,
   controlTestIds.fit,
@@ -416,7 +416,7 @@ test("Menu keyboard", async () => {
 
 test("Invalid node shows its reason", async () => {
   const { window } = await launch();
-  const reason = "has 0 branches; a parallel start needs two or more.";
+  const reason = "Has 0 branches; a parallel start needs two or more.";
 
   await drop(window, paletteTestId("fork"), 200, 150);
   await expect(window.getByTestId("node-issue-fork-1")).toBeVisible();
@@ -433,7 +433,9 @@ test("Invalid node shows its reason", async () => {
 
   await drop(window, paletteTestId("prompt"), 200, 300);
   await expect(window.getByTestId("node-prompt-1")).toBeVisible();
-  await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
+  await expect(window.getByTestId("node-issue-prompt-1")).toHaveText(
+    "Write what the prompt should do.",
+  );
 });
 
 test("Left to right, no overlap", async () => {

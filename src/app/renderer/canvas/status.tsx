@@ -2,7 +2,7 @@ import { createContext, useContext, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { selectNodeDisplay, type RunView } from "../run-store.js";
-import { statusBadge } from "./status-look.js";
+import { issueSummary, statusBadge } from "./status-look.js";
 import { newCanvasFlow, selectNodeIssues, type CanvasState } from "./store.js";
 
 export const RunStoreContext = createContext<StoreApi<RunView> | null>(null);
@@ -77,15 +77,16 @@ export function NodeFailureReason({ nodeId, style }: { nodeId: string; style?: C
 
 export function NodeIssueMarker({ nodeId }: { nodeId: string }) {
   const store = useContext(CanvasStoreContext);
-  const issue = useStore(
+  const issues = useStore(
     store ?? emptyCanvasStore,
     (state) => selectNodeIssues(state.flow)[nodeId],
   );
-  if (issue === undefined) return null;
+  if (issues === undefined) return null;
+  const { text, title } = issueSummary(issues);
   return (
     <span
       data-testid={`node-issue-${nodeId}`}
-      title={issue}
+      title={title}
       style={{
         position: "absolute",
         top: "100%",
@@ -96,7 +97,7 @@ export function NodeIssueMarker({ nodeId }: { nodeId: string }) {
         font: "11px/1.35 var(--f-body)",
       }}
     >
-      {issue}
+      {text}
     </span>
   );
 }

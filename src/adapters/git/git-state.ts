@@ -35,4 +35,17 @@ export class GitFolderState implements GitState {
     if (head !== "HEAD") return { kind: "branch", name: head };
     return { kind: "detached", commit: await git(folder, "rev-parse", "--short", "HEAD") };
   }
+
+  async branches(repo: string): Promise<string[]> {
+    try {
+      await git(repo, "rev-parse", "--git-dir");
+    } catch {
+      throw new Error(`${repo} is not a git repository`);
+    }
+    const listed = await git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads");
+    return listed
+      .split("\n")
+      .filter((name) => name !== "")
+      .sort();
+  }
 }

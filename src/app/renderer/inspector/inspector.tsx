@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
+import type { BranchState } from "../branch-store.js";
 import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import {
@@ -198,6 +199,7 @@ export function Inspector({
   shell,
   readOnly = false,
   page,
+  branches,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
@@ -206,6 +208,7 @@ export function Inspector({
   shell: StoreApi<ShellState>;
   readOnly?: boolean;
   page?: RunPageView | undefined;
+  branches?: StoreApi<BranchState> | undefined;
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen) && !readOnly;
   const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null) && !readOnly;
@@ -228,7 +231,7 @@ export function Inspector({
       {sessionSettingsOpen ? (
         <>
           <h2 style={headingStyle}>Session settings</h2>
-          <SessionSettingsSection canvas={canvas} />
+          <SessionSettingsSection canvas={canvas} branches={branches} />
         </>
       ) : nodeSelected ? (
         <NodeSettingsSection canvas={canvas} />

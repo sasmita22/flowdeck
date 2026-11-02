@@ -635,7 +635,7 @@ describe("createEngineHandler", async () => {
 
     const expectErrorAndNoRun = async (message: string | RegExp) => {
       const result = await startRun();
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         kind: "error",
         message: typeof message === "string" ? message : expect.stringMatching(message),
       });
@@ -877,6 +877,89 @@ describe("createEngineHandler", async () => {
         await expectErrorAndNoRun(/git worktree add exploded/);
         expect(worktree.calls).toHaveLength(1);
       });
+
+      const scriptsIn = (...steps: string[]) =>
+        inFolder(
+          flow(
+            steps.map((command, index) =>
+              script(`s${index + 1}`, { settings: { command: "sh", args: ["-c", command] } }),
+            ),
+            steps.slice(1).map((_, index) => thenWire(`s${index + 1}`, `s${index + 2}`)),
+          ),
+          { kind: "worktree", repo: source.path, branch: "main" },
+        );
+
+      const flowdeckBranches = async () =>
+        (await branches(source.path)).split("\n").filter((name) => name.startsWith("flowdeck/"));
+
+      it("removes the worktree and its branch once a run that changed nothing is done", async () => {
+        handler = handlerWith({ worktree: new GitWorktree() });
+        flows.save(scriptsIn("echo one", "true"));
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+
+        expect(runs.findRun(runId)?.status).toBe("done");
+        await vi.waitFor(async () => expect(await flowdeckBranches()).toEqual([]));
+        expect(await worktreePaths(source.path)).toEqual([source.path]);
+        expect(await stat(runs.findRun(runId)?.session.cwd ?? "").catch(() => undefined)).toBe(
+          undefined,
+        );
+        expect(runs.activity(runId).filter((entry) => entry.kind === "kept")).toEqual([]);
+      });
+
+      it("keeps the worktree and branch of a done run that wrote a file, and says where in the Activity", async () => {
+        handler = handlerWith({ worktree: new GitWorktree() });
+        flows.save(scriptsIn("echo one > made.txt", "test -f made.txt"));
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+        await handler.stop();
+
+        expect(runs.findRun(runId)?.status).toBe("done");
+        const cwd = runs.findRun(runId)?.session.cwd ?? "";
+        const branch = `flowdeck/${cwd.split("/").at(-1) ?? ""}`;
+        expect(await flowdeckBranches()).toEqual([branch]);
+        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
+        const summary = `Kept the worktree ${cwd} and branch ${branch}: they hold this run's changes.`;
+        expect(runs.activity(runId)).toContainEqual(
+          expect.objectContaining({ kind: "kept", summary }),
+        );
+        expect(pushes).toContainEqual({
+          push: "activity",
+          value: { runId, entry: expect.objectContaining({ kind: "kept", summary }) },
+        });
+      });
+
+      it("keeps the worktree and its branch when the run fails, so it can be looked at and retried", async () => {
+        handler = handlerWith({ worktree: new GitWorktree() });
+        flows.save(scriptsIn("echo half > made.txt; exit 3"));
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+        await handler.stop();
+
+        expect(runs.findRun(runId)?.status).toBe("failed");
+        const cwd = runs.findRun(runId)?.session.cwd ?? "";
+        expect(await flowdeckBranches()).toEqual([`flowdeck/${cwd.split("/").at(-1) ?? ""}`]);
+        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
+      });
+
+      it("keeps the worktree and its branch when the run is stopped, so it can be resumed", async () => {
+        handler = handlerWith({ worktree: new GitWorktree() });
+        flows.save(scriptsIn("exec sleep 30", "true"));
+
+        const runId = await startedRunId();
+        expect(
+          await handler.handle({ id: nextId++, type: "stop-run", payload: { runId } }),
+        ).toMatchObject({ ok: true, value: { stopped: true } });
+        await handler.stop();
+
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+        const cwd = runs.findRun(runId)?.session.cwd ?? "";
+        expect(await flowdeckBranches()).toHaveLength(1);
+        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
+      });
     });
 
     it("returns the hook preparation error", async () => {
@@ -888,11 +971,39 @@ describe("createEngineHandler", async () => {
       await expectErrorAndNoRun("No executable node on PATH");
     });
 
-    it("returns the validation problems of a flow that does not build", async () => {
+    it("returns the validation problems of a flow that does not build, in plain words", async () => {
       flows.save(atRepo(flow([loop("retry", { settings: { cap: 0, onCap: "fail" } })], [])));
 
-      await expectErrorAndNoRun(/loop-cap: /);
+      await expectErrorAndNoRun(/^retry: Loop cap 0 is not a whole number of at least 1\./);
       expect(runs.builds()).toEqual([]);
+    });
+
+    it("lists every build problem with its node and field, and no rule ids", async () => {
+      flows.save(
+        atRepo(
+          flow(
+            [
+              loop("retry", { settings: { cap: 0, onCap: "fail" } }),
+              prompt("body", { parent: "retry", settings: { instructions: "" } }),
+            ],
+            [],
+          ),
+        ),
+      );
+
+      const built = await latestBuild();
+
+      expect(built).toEqual({
+        kind: "error",
+        message: [
+          "retry: Loop cap 0 is not a whole number of at least 1.",
+          "body: Write what the prompt should do.",
+        ].join("\n"),
+        problems: [
+          { node: "retry", field: "cap", text: "Loop cap 0 is not a whole number of at least 1." },
+          { node: "body", field: "instructions", text: "Write what the prompt should do." },
+        ],
+      });
     });
 
     it("restores a cached build that changed on disk since its first run, and runs it", async () => {
@@ -1067,7 +1178,11 @@ describe("createEngineHandler", async () => {
         ).toEqual({
           id: 1,
           ok: true,
-          value: { kind: "error", message: "version: flow-1 has no saved version 5" },
+          value: {
+            kind: "error",
+            message: "flow-1 has no saved version 5",
+            problems: [{ text: "flow-1 has no saved version 5" }],
+          },
         });
         expect(
           await handler.handle({ id: 2, type: "run-build", payload: { hash: "nope" } }),
@@ -1319,9 +1434,7 @@ describe("createEngineHandler", async () => {
         ok: true,
         value: {
           kind: "error",
-          message: expect.stringMatching(
-            /^connectors: Connector "jira" is not set up in Claude Code/,
-          ),
+          message: expect.stringMatching(/^Connector "jira" is not set up in Claude Code/),
         },
       });
       expect(runs.runs).toEqual([]);
@@ -1721,5 +1834,31 @@ describe("workspace-info", () => {
       ok: false,
       error: "spawn git ENOENT",
     });
+  });
+});
+
+describe("list-branches", () => {
+  const ask = (gitState: FakeGitState, payload: unknown) =>
+    createEngineHandler(options({ gitState })).handle({ id: 7, type: "list-branches", payload });
+
+  it("answers a repository with its local branches", async () => {
+    const gitState = new FakeGitState({}, { branches: { "/code/shop": ["dev", "main"] } });
+
+    expect(await ask(gitState, { repo: "/code/shop" })).toEqual({
+      id: 7,
+      ok: true,
+      value: ["dev", "main"],
+    });
+  });
+
+  it("answers a git failure and a bad payload as errors", async () => {
+    const failing = new FakeGitState({}, { failWith: "/code/shop is not a git repository" });
+
+    expect(await ask(failing, { repo: "/code/shop" })).toEqual({
+      id: 7,
+      ok: false,
+      error: "/code/shop is not a git repository",
+    });
+    expect(await ask(new FakeGitState(), {})).toMatchObject({ id: 7, ok: false });
   });
 });

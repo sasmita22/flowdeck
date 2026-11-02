@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyField,
-  describeFields,
-  sessionSettingsSchema,
+  sessionFields,
   type FieldDescription,
 } from "../../../../src/app/renderer/inspector/schema-form.js";
+import { modelChoices, permissionModes } from "../../../../src/core/flow/choices.js";
 import { Session } from "../../../../src/core/flow/schema.js";
 
 const deepFreeze = <T>(value: T): T => {
@@ -36,25 +36,72 @@ const worktreeSession = (): Session =>
 const pathSession = (): Session =>
   deepFreeze({ ...worktreeSession(), workingFolder: { kind: "path", path: "/work" } });
 
-const kindField = () => {
-  const [field] = describeFields(sessionSettingsSchema);
+const kindField = (branches?: readonly string[]) => {
+  const field = sessionFields(branches).find(
+    (candidate) => candidate.testId === "session-working-folder-kind",
+  );
   if (field?.control !== "select") throw new Error("expected the working folder kind select");
   return field;
 };
 
 describe("describeFields", () => {
-  it("describes working folder kind, model, allowed tools and budget in schema order", () => {
-    expect(describeFields(sessionSettingsSchema).map(summary)).toEqual([
+  it("describes name, working folder, model, tools, permission mode and budget in schema order", () => {
+    expect(sessionFields().map(summary)).toEqual([
+      { control: "text", path: ["name"], testId: "session-name" },
       {
         control: "select",
         path: ["workingFolder", "kind"],
         testId: "session-working-folder-kind",
         options: ["path", "worktree"],
       },
-      { control: "text", path: ["model"], testId: "session-model" },
+      {
+        control: "select",
+        path: ["model"],
+        testId: "session-model",
+        options: modelChoices.map(({ value }) => value),
+      },
       { control: "list", path: ["allowedTools"], testId: "session-allowed-tools" },
+      {
+        control: "select",
+        path: ["permissionMode"],
+        testId: "session-permission-mode",
+        options: permissionModes.map(({ value }) => value),
+      },
       { control: "number", path: ["budget"], testId: "session-budget" },
     ]);
+  });
+
+  it("names each model and permission mode in plain words", () => {
+    const [, , model, , permission] = sessionFields();
+    if (model?.control !== "select" || permission?.control !== "select") {
+      throw new Error("expected selects");
+    }
+
+    expect(model.optionLabels["sonnet"]).toBe("Sonnet (latest)");
+    expect(permission.optionLabels["acceptEdits"]).toBe("Accept file edits without asking");
+  });
+
+  it("picks the worktree's start branch from the repository's branches once they are known", () => {
+    expect(
+      kindField().variants.worktree?.find((field) => field.path[1] === "branch")?.control,
+    ).toBe("text");
+
+    const branch = kindField(["dev", "main"]).variants.worktree?.find(
+      (field) => field.path[1] === "branch",
+    );
+
+    expect(branch).toMatchObject({
+      control: "select",
+      testId: "session-working-folder-branch",
+      options: ["dev", "main"],
+      optionLabels: { dev: "dev", main: "main" },
+    });
+  });
+
+  it("hints at what to type for the folder path", () => {
+    expect(kindField().variants.path?.[0]).toMatchObject({
+      placeholder: "/Users/you/code/project",
+    });
   });
 
   it("describes the path variant's folder as a text field", () => {
@@ -91,10 +138,12 @@ describe("describeFields", () => {
     const kind = kindField();
     const labelled = (field: FieldDescription) => [field.testId, field.label];
 
-    expect(describeFields(sessionSettingsSchema).map(labelled)).toEqual([
+    expect(sessionFields().map(labelled)).toEqual([
+      ["session-name", "Session name"],
       ["session-working-folder-kind", "Working folder"],
       ["session-model", "Model"],
       ["session-allowed-tools", "Allowed tools (one per line)"],
+      ["session-permission-mode", "Permission mode"],
       ["session-budget", "Budget ($)"],
     ]);
     expect(kind.variants.path?.map(labelled)).toEqual([

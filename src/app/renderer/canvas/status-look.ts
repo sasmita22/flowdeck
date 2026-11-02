@@ -14,3 +14,8 @@ export const statusBadge = (status: DisplayStatus): { label: string; color: stri
   label: status,
   color: colors[status],
 });
+
+export const issueSummary = (issues: readonly string[]): { text: string; title: string } => ({
+  text: issues.length === 1 ? (issues[0] ?? "") : `${issues.length} problems`,
+  title: issues.join("\n"),
+});

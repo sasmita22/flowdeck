@@ -188,19 +188,9 @@ test("A note sits beside the nodes, calm and readable, and never joins the sessi
   const shot = test.info().outputPath("note.png");
   await window.screenshot({ path: shot });
   await test.info().attach("note.png", { path: shot, contentType: "image/png" });
-
-  await window.getByTestId("note-n1").click();
-  await window.getByTestId("node-plan").click({ modifiers: ["Meta"] });
-  await window.getByTestId(controlTestIds.wrap).click();
-  await expect
-    .poll(async () => {
-      const current = (await readout(window)) as Readout & { session: { frame?: unknown } };
-      return current.session.frame;
-    })
-    .toEqual({ nodes: ["plan"] });
 });
 
-test("Cmd+A on the empty canvas selects every node and every note, and Wrap takes only the nodes", async () => {
+test("Cmd+A on the empty canvas selects every node and every note", async () => {
   seedFlow(home, {
     ...flow([{ ...prompt("plan"), position: { x: 40, y: 60 } }], []),
     notes: [
@@ -219,14 +209,6 @@ test("Cmd+A on the empty canvas selects every node and every note, and Wrap take
     )
     .toEqual(["plan", "n1"]);
   await expect(window.locator(".react-flow__node.selected")).toHaveCount(2);
-
-  await window.getByTestId(controlTestIds.wrap).click();
-  await expect
-    .poll(
-      async () =>
-        ((await readout(window)) as Readout & { session: { frame?: unknown } }).session.frame,
-    )
-    .toEqual({ nodes: ["plan"] });
 });
 
 test("A canvas holding only a note shows no start hint", async () => {

@@ -24,6 +24,7 @@ const bridge = (
   retryNode: vi.fn(),
   resumeRun: vi.fn(),
   runCost: vi.fn(),
+  listBranches: vi.fn(),
   setDirty: vi.fn(),
   onCloseRequest: vi.fn(() => () => {}),
   answerClose: vi.fn(),

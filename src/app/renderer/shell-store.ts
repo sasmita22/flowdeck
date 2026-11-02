@@ -83,6 +83,7 @@ export type ShellState = {
   openMenu(): void;
   closeMenu(): void;
   toggleSessionSettings(): void;
+  openSessionSettings(): void;
   closeSessionSettings(): void;
 };
 
@@ -157,10 +158,10 @@ export const createShellStore = ({
     openMenu: () => set({ menuOpen: true }),
     closeMenu: () => set({ menuOpen: false }),
     toggleSessionSettings: () => {
-      if (get().sessionSettingsOpen) {
-        set({ sessionSettingsOpen: false });
-        return;
-      }
+      if (get().sessionSettingsOpen) set({ sessionSettingsOpen: false });
+      else get().openSessionSettings();
+    },
+    openSessionSettings: () => {
       canvas.getState().select([]);
       set({ sessionSettingsOpen: true, inspectorShown: true });
     },

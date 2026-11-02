@@ -17,11 +17,11 @@ import { flow } from "../../fixtures/flow-builders.js";
 type Defaults = { defaultSettings: object; defaultLabel: string };
 
 const cases: [type: string, defaults: Defaults, label: string, rules: string[]][] = [
-  ["agent", agent, "Agent", []],
+  ["agent", agent, "Agent", ["required-settings"]],
   ["gate", gate, "Gate", []],
-  ["ask", ask, "Ask", []],
+  ["ask", ask, "Ask", ["required-settings"]],
   ["hardstop", hardstop, "Hard stop", []],
-  ["loop", loop, "Loop", ["loop-body"]],
+  ["loop", loop, "Loop", ["required-settings", "loop-body"]],
   ["trigger", trigger, "Trigger", []],
   ["output", output, "Output", []],
   ["fork", fork, "Fork", ["parallel-section"]],

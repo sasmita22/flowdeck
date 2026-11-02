@@ -1,4 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import type { Problem } from "../../core/compiler/problems.js";
 import { costReportSchema, type CostReport } from "../../core/run/cost.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
 import { buildVersionResultSchema } from "../../core/run/listing.js";
@@ -33,6 +34,7 @@ export type RunState = {
   snapshot: RunSnapshot | null;
   starting: boolean;
   error: string | null;
+  problems: Problem[] | null;
   lastBuild: BuiltVersion | null;
   dialog: RunDialog | null;
   cost: { runId: string; report: CostReport } | null;
@@ -43,6 +45,7 @@ export type RunState = {
   runBuild(hash: string): Promise<string | null>;
   start(options: RunOptions): Promise<string | null>;
   cancelDialog(): void;
+  dismissProblems(): void;
   stop(runId: string): Promise<void>;
   retry(runId: string, nodeId: string): Promise<string | null>;
   resume(runId: string): Promise<string | null>;
@@ -99,6 +102,9 @@ export const selectLiveBadge = (snapshot: RunSnapshot | null): string | null => 
   return `running · ${shown.filter((status) => status === "done").length} of ${shown.length}`;
 };
 
+export const needsSessionSetup = (problems: readonly Problem[] | null): boolean =>
+  problems?.some(({ node, field }) => node === undefined && field !== undefined) ?? false;
+
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export const createRunStore = ({
@@ -126,7 +132,8 @@ export const createRunStore = ({
       return Promise.resolve(true);
     };
 
-    type Step<T> = { ok: true; value: T } | { ok: false; error: string };
+    type Step<T> =
+      { ok: true; value: T } | { ok: false; error: string; problems?: Problem[] | undefined };
 
     const buildRef = async (ref: {
       flowId: string;
@@ -134,7 +141,9 @@ export const createRunStore = ({
     }): Promise<Step<BuiltVersion>> => {
       const result = buildVersionResultSchema.safeParse(await bridge.buildVersion(ref));
       if (!result.success) return { ok: false, error: "unexpected build result" };
-      if (result.data.kind === "error") return { ok: false, error: result.data.message };
+      if (result.data.kind === "error") {
+        return { ok: false, error: result.data.message, problems: result.data.problems };
+      }
       const built = { hash: result.data.hash, ...ref };
       set({ lastBuild: built });
       return { ok: true, value: built };
@@ -178,7 +187,12 @@ export const createRunStore = ({
       } catch (thrown) {
         step = { ok: false, error: messageOf(thrown) };
       }
-      set({ starting: false, error: step.ok ? null : step.error });
+      const problems = step.ok ? undefined : step.problems;
+      set({
+        starting: false,
+        error: step.ok || problems !== undefined ? null : step.error,
+        problems: problems ?? null,
+      });
       return step.ok ? step.value : null;
     };
 
@@ -189,6 +203,7 @@ export const createRunStore = ({
       snapshot: null,
       starting: false,
       error: null,
+      problems: null,
       lastBuild: null,
       dialog: null,
       cost: null,
@@ -213,7 +228,10 @@ export const createRunStore = ({
       },
 
       buildVersion: async (ref) => {
-        const built = await busy(get().starting, () => buildRef(ref));
+        const built = await busy(get().starting, async () => {
+          const step = await buildRef(ref);
+          return step.ok ? step : { ok: false as const, error: step.error };
+        });
         return built?.hash ?? null;
       },
 
@@ -230,6 +248,8 @@ export const createRunStore = ({
       },
 
       cancelDialog: () => set({ dialog: null }),
+
+      dismissProblems: () => set({ problems: null }),
 
       stop: async (runId) => {
         try {

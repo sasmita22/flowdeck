@@ -6,7 +6,8 @@ import {
   moveNodes,
   updateNode,
   updateSession,
-  wrapInSession,
+  addItems,
+  deleteWires,
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
@@ -177,51 +178,45 @@ const framed = (source: Flow, nodes: string[]): Flow => ({
   session: { ...source.session, frame: { nodes } },
 });
 
-const membersOf = (source: Flow) => source.session.frame?.nodes;
-
-const loopWithBody = () =>
-  flow([loop("L"), prompt("X", { parent: "L" }), prompt("A"), script("C")], []);
-
-describe("wrapInSession", () => {
-  it("frames the ids in selection order and undo leaves no frame key behind", () => {
+describe("deleteWires", () => {
+  it("removes only the wires at the given places and undo puts them back where they were", () => {
     const before = fourNodes();
 
-    const { after, restored } = roundTrip(wrapInSession(["C", "A", "D"]), before);
+    const { after, restored } = roundTrip(deleteWires(before, [3, 1]), before);
 
-    expect(membersOf(after)).toEqual(["C", "A", "D"]);
+    expect(ends(after)).toEqual(["A>B", "C>B"]);
     expect(after.nodes).toEqual(before.nodes);
-    expect(after.wires).toEqual(before.wires);
     expect(restored).toEqual(before);
-    expect(flowsEqual(restored, before)).toBe(true);
-    expect(Object.hasOwn(restored.session, "frame")).toBe(false);
   });
 
-  it("appends only ids that are not members yet and undo restores the previous members", () => {
-    const before = framed(fourNodes(), ["A"]);
+  it("leaves the flow alone for places that hold no wire", () => {
+    const before = fourNodes();
 
-    const { after, restored } = roundTrip(wrapInSession(["B", "A", "C"]), before);
-
-    expect(membersOf(after)).toEqual(["A", "B", "C"]);
-    expect(membersOf(restored)).toEqual(["A"]);
-    expect(flowsEqual(restored, before)).toBe(true);
+    expect(deleteWires(before, [9]).do(before)).toEqual(before);
   });
+});
 
-  it("ignores loop-body ids and ids that name no node", () => {
-    const before = loopWithBody();
+describe("addItems", () => {
+  it("adds nodes, wires and notes as one step and undo takes exactly them away", () => {
+    const before = fourNodes();
+    const pasted = flow([prompt("E"), script("F")], [thenWire("E", "F")]);
+    const note = {
+      id: "n9",
+      text: "copied",
+      position: { x: 1, y: 2 },
+      size: { width: 3, height: 4 },
+    };
 
-    const after = wrapInSession(["X", "A", "ghost", "L"]).do(before);
+    const { after, restored } = roundTrip(
+      addItems({ nodes: pasted.nodes, wires: pasted.wires, notes: [note] }),
+      before,
+    );
 
-    expect(membersOf(after)).toEqual(["A", "L"]);
-  });
-
-  it("returns the flow unchanged when every id is ignored", () => {
-    const before = loopWithBody();
-
-    const { after, restored } = roundTrip(wrapInSession(["X", "ghost"]), before);
-
-    expect(flowsEqual(after, before)).toBe(true);
-    expect(Object.hasOwn(after.session, "frame")).toBe(false);
-    expect(flowsEqual(restored, before)).toBe(true);
+    expect(ids(after)).toEqual(["A", "B", "C", "D", "E", "F"]);
+    expect(ends(after)).toEqual([...ends(before), "E>F"]);
+    expect(after.notes).toEqual([note]);
+    expect(restored).toEqual(before);
+    expect(Object.hasOwn(restored, "notes")).toBe(false);
   });
 });
 
@@ -288,7 +283,11 @@ describe("commands", () => {
     ["addWire", () => addWire(onlyWire(flow([prompt("C"), script("A")], [thenWire("C", "A")])))],
     ["deleteNodes", (before) => deleteNodes(before, ["B"])],
     ["moveNodes", () => moveNodes([{ id: "A", from: { x: 0, y: 0 }, to: { x: 3, y: 4 } }])],
-    ["wrapInSession", () => wrapInSession(["A", "C"])],
+    ["deleteWires", (before) => deleteWires(before, [0, 2])],
+    [
+      "addItems",
+      () => addItems({ nodes: [onlyNode(flow([script("E")], []))], wires: [], notes: [] }),
+    ],
     [
       "updateSession",
       (before) => updateSession({ ...before.session, model: "haiku", allowedTools: ["Read"] }),

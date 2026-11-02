@@ -18,6 +18,7 @@ export const engineCalls = {
   retryNode: { channel: "flowdeck:retry-node", request: "retry-node" },
   resumeRun: { channel: "flowdeck:resume-run", request: "resume-run" },
   runCost: { channel: "flowdeck:run-cost", request: "run-cost" },
+  listBranches: { channel: "flowdeck:list-branches", request: "list-branches" },
 } as const;
 
 export type EngineCalls = {
@@ -41,6 +42,7 @@ export type EngineCalls = {
   retryNode(payload: { runId: string; nodeId: string }): Promise<unknown>;
   resumeRun(payload: { runId: string }): Promise<unknown>;
   runCost(payload: { runId: string }): Promise<unknown>;
+  listBranches(payload: { repo: string }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {

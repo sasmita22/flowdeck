@@ -1,9 +1,13 @@
 import type { z } from "zod";
-import type { Node, NodeType } from "../../../core/flow/schema.js";
+import { agentPlaceholder } from "../../../core/compiler/rules/required-settings.js";
+import { agentModelChoices } from "../../../core/flow/choices.js";
+import type { Flow, Node, NodeType } from "../../../core/flow/schema.js";
+import { triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { registry } from "../../../core/nodes/registry.js";
 import {
   assignField,
   describeFields,
+  withChoices,
   type FieldDescription,
   type FieldValue,
   type Form,
@@ -19,10 +23,14 @@ const typeForm = (
     multiline = [],
     hidden = [],
     optionLabels = {},
+    choices = {},
+    placeholders = {},
   }: {
     multiline?: string[];
     hidden?: string[];
     optionLabels?: Form["optionLabels"];
+    choices?: NonNullable<Form["choices"]>;
+    placeholders?: NonNullable<Form["placeholders"]>;
   } = {},
 ): Form => ({
   prefix: "node-setting",
@@ -30,6 +38,8 @@ const typeForm = (
   optionLabels,
   multiline: new Set(multiline),
   hidden: new Set(hidden),
+  choices,
+  placeholders,
 });
 
 const forms: Record<NodeType, Form> = {
@@ -52,7 +62,11 @@ const forms: Record<NodeType, Form> = {
       given: "Files it is given (one per line)",
       writes: "Files it writes (one per line)",
     },
-    { multiline: ["instructions"] },
+    {
+      multiline: ["instructions"],
+      choices: { model: agentModelChoices },
+      placeholders: { instructions: agentPlaceholder },
+    },
   ),
   gate: typeForm(
     { shown: "What to show you", skippable: "Skip it in automatic runs" },
@@ -102,8 +116,19 @@ type SettingsSchema = z.ZodObject<z.ZodRawShape>;
 
 const schemaOf = (type: NodeType) => registry[type].settings as SettingsSchema;
 
-export const describeNodeFields = (type: NodeType): FieldDescription[] =>
-  describeFields(schemaOf(type), forms[type]);
+const flagChoices = (flow: Pick<Flow, "nodes"> | undefined) =>
+  Object.entries(triggerFlags(flow?.nodes ?? [])).map(([name, on]) => ({
+    value: name,
+    label: `${name} (${on ? "on" : "off"} by default)`,
+  }));
+
+export const describeNodeFields = (
+  type: NodeType,
+  flow?: Pick<Flow, "nodes">,
+): FieldDescription[] => {
+  const fields = describeFields(schemaOf(type), forms[type]);
+  return type === "branch" ? withChoices(fields, "flag", flagChoices(flow)) : fields;
+};
 
 export type SettingResult = { node: Node } | { error: string };
 

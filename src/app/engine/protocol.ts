@@ -24,7 +24,8 @@ export type EngineRequest = {
     | "resume-run"
     | "run-cost"
     | "answer-wait"
-    | "workspace-info";
+    | "workspace-info"
+    | "list-branches";
   payload?: unknown;
 };
 

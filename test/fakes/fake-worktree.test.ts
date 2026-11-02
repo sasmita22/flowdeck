@@ -51,4 +51,16 @@ describe("FakeWorktree", () => {
     expect(worktree.calls).toEqual([options]);
     expect(await exists(options.path)).toBe(false);
   });
+
+  it("records each removal and deletes the worktree folder", async () => {
+    const worktree = new FakeWorktree();
+    const path = join(root, "worktrees", "abcd1234");
+    const options = { repo: "/r", base: "main", branch: "flowdeck/abcd1234", path };
+    await worktree.add(options);
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "removed" });
+
+    expect(worktree.removed).toEqual([options]);
+    expect(await exists(path)).toBe(false);
+  });
 });

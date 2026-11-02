@@ -24,6 +24,7 @@ export const activityEntrySchema = z.discriminatedUnion("kind", [
   z.object({ ...base, kind: z.literal("failure") }),
   z.object({ ...base, kind: z.literal("context") }),
   z.object({ ...base, kind: z.literal("pr"), url: z.string() }),
+  z.object({ ...base, kind: z.literal("kept") }),
 ]);
 
 export type ActivityEntry = z.infer<typeof activityEntrySchema>;

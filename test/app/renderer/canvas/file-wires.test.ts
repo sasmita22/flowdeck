@@ -74,17 +74,17 @@ describe("drawing a File wire", () => {
     [
       "no name",
       "   ",
-      "Can't connect plan to build: A File wire from plan to build names no file.",
+      "Can't connect Planner to build: A File wire from plan to build names no file.",
     ],
     [
       "a name outside the working folder",
       "../plan.md",
-      'Can\'t connect plan to build: File wire "../plan.md" from plan to build must name a file inside the working folder, without ~, commas or control characters.',
+      'Can\'t connect Planner to build: File wire "../plan.md" from plan to build must name a file inside the working folder, without ~, commas or control characters.',
     ],
     [
       "a name with a comma",
       "plan.md, notes.md",
-      'Can\'t connect plan to build: File wire "plan.md, notes.md" from plan to build must name a file inside the working folder, without ~, commas or control characters.',
+      'Can\'t connect Planner to build: File wire "plan.md, notes.md" from plan to build must name a file inside the working folder, without ~, commas or control characters.',
     ],
   ])("refuses %s, says why and keeps asking", (_name, file, message) => {
     const store = planned();
@@ -104,7 +104,7 @@ describe("drawing a File wire", () => {
     expect(store.getState().nameFile("out.txt")).toBe(false);
 
     expect(store.getState().message).toBe(
-      "Can't connect build to plan: plan needs out.txt from build, but build runs after it.",
+      "Can't connect build to Planner: Planner needs out.txt from build, but build runs after it.",
     );
   });
 
@@ -132,7 +132,9 @@ describe("drawing a File wire", () => {
 
     store.getState().connect(fileOut("plan"), fileIn("build"));
     expect(store.getState().nameFile("plan.md")).toBe(false);
-    expect(store.getState().message).toBe("Can't connect plan to build: they are already joined.");
+    expect(store.getState().message).toBe(
+      "Can't connect Planner to build: they are already joined.",
+    );
 
     expect(store.getState().nameFile("notes.md")).toBe(true);
     expect(store.getState().flow.wires).toHaveLength(3);
@@ -147,7 +149,7 @@ describe("drawing a File wire", () => {
     expect(store.getState().flow).toBe(before);
     expect(store.getState().naming).toBeNull();
     expect(store.getState().message).toBe(
-      "Can't connect plan to build: a file port joins only another file port.",
+      "Can't connect Planner to build: a file port joins only another file port.",
     );
   });
 });
@@ -158,7 +160,9 @@ describe("a refused Then wire", () => {
 
     expect(store.getState().connect(end("build", "out"), end("plan", "in"))).toBe(false);
 
-    expect(store.getState().message).toBe("Can't connect build to plan: cycle through plan, build");
+    expect(store.getState().message).toBe(
+      "Can't connect build to Planner: cycle through plan, build",
+    );
   });
 
   it("says when the two ports are already joined", () => {
@@ -166,6 +170,8 @@ describe("a refused Then wire", () => {
 
     expect(store.getState().connect(end("plan", "out"), end("build", "in"))).toBe(false);
 
-    expect(store.getState().message).toBe("Can't connect plan to build: they are already joined.");
+    expect(store.getState().message).toBe(
+      "Can't connect Planner to build: they are already joined.",
+    );
   });
 });

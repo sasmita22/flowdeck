@@ -1,5 +1,6 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import type { BranchState } from "./branch-store.js";
 import type { CanvasState } from "./canvas/store.js";
 import { Inspector, type RunPageView } from "./inspector/inspector.js";
 import type { InspectorState } from "./inspector/store.js";
@@ -18,6 +19,7 @@ export function InspectorPanel({
   wait,
   readOnly = false,
   page,
+  branches,
 }: {
   shell: StoreApi<ShellState>;
   run: StoreApi<RunView>;
@@ -26,6 +28,7 @@ export function InspectorPanel({
   wait?: StoreApi<WaitState> | undefined;
   readOnly?: boolean;
   page?: RunPageView | undefined;
+  branches?: StoreApi<BranchState> | undefined;
 }) {
   const inspectorShown = useStore(shell, (state) => state.inspectorShown);
   const snapshot = useStore(run, (state) => state.snapshot);
@@ -58,6 +61,7 @@ export function InspectorPanel({
           shell={shell}
           readOnly={readOnly}
           page={page}
+          branches={branches}
         />
       </div>
     </>

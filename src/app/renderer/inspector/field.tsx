@@ -151,11 +151,14 @@ export function Field({
         <label style={labelStyle}>
           {field.label}
           <select data-testid={field.testId} value={value} onChange={(e) => send(e.target.value)}>
-            {!field.options.includes(value) && (
-              <option value="" disabled>
-                Choose…
-              </option>
-            )}
+            {!field.options.includes(value) &&
+              (value === "" ? (
+                <option value="" disabled>
+                  Choose…
+                </option>
+              ) : (
+                <option value={value}>{value}</option>
+              ))}
             {field.options.map((option) => (
               <option key={option} value={option}>
                 {field.optionLabels[option]}
@@ -203,6 +206,7 @@ export function Field({
             key={key}
             data-testid={field.testId}
             defaultValue={value}
+            placeholder={field.placeholder}
             rows={3}
             style={{ font: "inherit" }}
             onBlur={(event) => sendIfChanged(event.target.value)}
@@ -224,6 +228,7 @@ export function Field({
           min={numeric ? "0" : undefined}
           step={numeric ? "any" : undefined}
           defaultValue={value}
+          placeholder={field.placeholder}
           onBlur={(event) => sendIfChanged(event.target.value)}
           onKeyDown={blurOnEnter}
         />

@@ -4,7 +4,6 @@ import {
   alignedEnds,
   edgeId,
   FRAME_PADDING,
-  SESSION_FRAME_ID,
   toViewEdges,
   toViewNodes,
 } from "../../../../src/app/renderer/canvas/view.js";
@@ -142,261 +141,19 @@ const grown = (rects: Rect[]): Rect => {
 const enclosing = (boxes: { type: NodeType; x: number; y: number }[]) =>
   grown(boxes.map(({ type, x, y }) => boxOf(type, x, y)));
 
-describe("toViewNodes with a session frame", () => {
-  it("emits no frame view-node when the session has no frame", () => {
-    expect(toViewNodes(threeApart(), [], {}, null).map((node) => node.id)).toEqual(["A", "B", "C"]);
-  });
-
-  it("emits the frame first, fixed in place, enclosing only its members with padding", () => {
+describe("toViewNodes and the session", () => {
+  it("draws no session frame, even for a blueprint saved with one", () => {
     const source = framed(threeApart(), ["A", "B"]);
 
-    const [frame, ...rest] = toViewNodes(source, [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      type: "session",
-      selectable: false,
-      draggable: false,
-      deletable: false,
-      data: { name: "build" },
-      ...enclosing([
-        { type: "prompt", x: 100, y: 50 },
-        { type: "script", x: 400, y: 300 },
-      ]),
-    });
-    expect(rest).toEqual(toViewNodes(threeApart(), [], {}, null));
-    expect(rest.some((node) => "parentId" in node)).toBe(false);
-  });
-
-  it("encloses a member loop's frame plus padding, so the two frames share no edge", () => {
-    const source = framed(
-      flow(
-        [
-          { ...loop("L"), position: { x: 0, y: 0 } },
-          { ...prompt("X", { parent: "L" }), position: { x: 500, y: 400 } },
-        ],
-        [],
-      ),
-      ["L"],
-    );
-
-    const [frame] = toViewNodes(source, [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      ...grown([
-        enclosing([
-          { type: "loop", x: 0, y: 0 },
-          { type: "prompt", x: 500, y: 400 },
-        ]),
-      ]),
-    });
-  });
-
-  it("encloses a member For each's frame plus padding, so the two frames share no edge", () => {
-    const source = framed(
-      flow(
-        [
-          { ...forEach("E"), position: { x: 0, y: 0 } },
-          { ...prompt("X", { parent: "E" }), position: { x: 500, y: 400 } },
-        ],
-        [],
-      ),
-      ["E"],
-    );
-
-    const [frame] = toViewNodes(source, [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      ...grown([
-        enclosing([
-          { type: "foreach", x: 0, y: 0 },
-          { type: "prompt", x: 500, y: 400 },
-        ]),
-      ]),
-    });
-  });
-
-  it("encloses a member loop's frame together with the other members", () => {
-    const source = framed(
-      flow(
-        [
-          { ...loop("L"), position: { x: 0, y: 0 } },
-          { ...prompt("X", { parent: "L" }), position: { x: 300, y: 200 } },
-          { ...script("A"), position: { x: 700, y: -100 } },
-        ],
-        [],
-      ),
-      ["L", "A"],
-    );
-
-    const [frame] = toViewNodes(source, [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      ...grown([
-        enclosing([
-          { type: "loop", x: 0, y: 0 },
-          { type: "prompt", x: 300, y: 200 },
-        ]),
-        boxOf("script", 700, -100),
-      ]),
-    });
-  });
-
-  it("takes an ask member's taller box for its bottom edge", () => {
-    const source = framed(
-      flow(
-        [
-          { ...prompt("A"), position: { x: 0, y: 100 } },
-          { ...ask("Q"), position: { x: 300, y: 100 } },
-        ],
-        [],
-      ),
-      ["A", "Q"],
-    );
-
-    const [frame] = toViewNodes(source, [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      position: { x: -FRAME_PADDING, y: 100 - FRAME_PADDING },
-      height: 57 + 2 * FRAME_PADDING,
-    });
-  });
-
-  it("ignores member ids that name no node", () => {
-    const [frame] = toViewNodes(framed(threeApart(), ["ghost", "A"]), [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      ...enclosing([{ type: "prompt", x: 100, y: 50 }]),
-    });
-  });
-
-  it("emits no frame view-node when no member names a node", () => {
-    const view = toViewNodes(framed(threeApart(), ["ghost"]), [], {}, null);
-
-    expect(view).toEqual(toViewNodes(threeApart(), [], {}, null));
-  });
-});
-
-const loopFrameFlags = {
-  type: "loop-frame",
-  selectable: false,
-  deletable: false,
-  draggable: false,
-};
-
-describe("toViewNodes with a loop", () => {
-  const loopWithBody = () =>
-    flow(
-      [
-        { ...loop("L"), position: { x: 0, y: 0 } },
-        { ...prompt("X", { parent: "L" }), position: { x: 500, y: 400 } },
-        { ...script("Y", { parent: "L" }), position: { x: 200, y: 100 } },
-        { ...prompt("A"), position: { x: 900, y: 900 } },
-      ],
-      [],
-    );
-
-  it("emits a fixed frame enclosing the loop's own box and its body, with padding", () => {
-    const frame = toViewNodes(loopWithBody(), [], {}, null).find(
-      (node) => node.id === "loop-frame-L",
-    );
-
-    expect(frame).toMatchObject({
-      id: "loop-frame-L",
-      ...loopFrameFlags,
-      ...enclosing([
-        { type: "loop", x: 0, y: 0 },
-        { type: "prompt", x: 500, y: 400 },
-        { type: "script", x: 200, y: 100 },
-      ]),
-    });
-  });
-
-  it("emits a frame around the loop's own box when the loop has no body", () => {
-    const source = flow([{ ...loop("E"), position: { x: 40, y: 60 } }], []);
-
-    const frame = toViewNodes(source, [], {}, null).find((node) => node.id === "loop-frame-E");
-
-    expect(frame).toMatchObject({
-      id: "loop-frame-E",
-      ...loopFrameFlags,
-      ...enclosing([{ type: "loop", x: 40, y: 60 }]),
-    });
-  });
-
-  it("puts loop frames before every flow node, so they stack behind them", () => {
-    const source = flow(
-      [
-        { ...loop("L"), position: { x: 0, y: 0 } },
-        { ...prompt("X", { parent: "L" }), position: { x: 200, y: 0 } },
-        { ...loop("M"), position: { x: 0, y: 400 } },
-      ],
-      [],
-    );
-
-    expect(toViewNodes(source, [], {}, null).map((node) => node.id)).toEqual([
-      "loop-frame-L",
-      "loop-frame-M",
-      "L",
-      "X",
-      "M",
-    ]);
-  });
-
-  it("puts loop frames after the session frame and before the flow nodes", () => {
-    const source = framed(loopWithBody(), ["L"]);
-
-    expect(toViewNodes(source, [], {}, null).map((node) => node.id)).toEqual([
-      SESSION_FRAME_ID,
-      "loop-frame-L",
-      "L",
-      "X",
-      "Y",
-      "A",
-    ]);
-  });
-});
-
-describe("toViewNodes with a For each", () => {
-  it("emits a fixed frame enclosing the For each's own box and its body, with padding", () => {
-    const source = flow(
-      [
-        { ...forEach("E"), position: { x: 0, y: 0 } },
-        { ...prompt("X", { parent: "E" }), position: { x: 500, y: 400 } },
-        { ...script("Y", { parent: "E" }), position: { x: 200, y: 100 } },
-        { ...prompt("A"), position: { x: 900, y: 900 } },
-      ],
-      [],
-    );
-
-    const frames = toViewNodes(source, [], {}, null).filter(
-      (node) => node.type === "foreach-frame",
-    );
-
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({
-      selectable: false,
-      deletable: false,
-      draggable: false,
-      ...enclosing([
-        { type: "foreach", x: 0, y: 0 },
-        { type: "prompt", x: 500, y: 400 },
-        { type: "script", x: 200, y: 100 },
-      ]),
-    });
+    expect(toViewNodes(source, [], {}, null).map((node) => node.id)).toEqual(["A", "B", "C"]);
   });
 });
 
 describe("toViewNodes delete lock", () => {
-  it("marks a hard stop view node not deletable", () => {
+  it("lets a hard stop be deleted like any node", () => {
     const [node] = toViewNodes(flow([hardstop("H")], []), [], {}, null);
 
-    expect(node).toMatchObject({ id: "H", type: "hardstop", deletable: false });
+    expect(node).not.toHaveProperty("deletable");
   });
 
   it("adds no deletable field to any other type", () => {
@@ -509,6 +266,54 @@ describe("toViewEdges", () => {
     expect(toViewEdges(source).map((edge) => edge.markerEnd)).toEqual([
       { type: MarkerType.ArrowClosed },
       { type: MarkerType.ArrowClosed },
+    ]);
+  });
+});
+
+describe("toViewEdges selection", () => {
+  it("marks the selected wires selected and leaves the rest alone", () => {
+    const source = flow(
+      [prompt("A"), prompt("B"), script("C")],
+      [thenWire("A", "B"), thenWire("B", "C")],
+    );
+
+    expect(toViewEdges(source, ["B:out->C:in"]).map((edge) => edge.selected)).toEqual([
+      undefined,
+      true,
+    ]);
+  });
+});
+
+describe("toViewEdges selected arrowhead", () => {
+  it("draws the selected wire's arrowhead in the selection colour and leaves the rest plain", () => {
+    const source = flow(
+      [prompt("A"), prompt("B"), script("C")],
+      [thenWire("A", "B"), thenWire("B", "C")],
+    );
+
+    expect(toViewEdges(source, ["B:out->C:in"]).map((edge) => edge.markerEnd)).toEqual([
+      { type: MarkerType.ArrowClosed },
+      { type: MarkerType.ArrowClosed, color: "var(--select)" },
+    ]);
+  });
+});
+
+describe("toViewEdges from a Branch", () => {
+  it("labels the wires leaving yes and no with their port", () => {
+    const source = flow(
+      [
+        trigger("T", { settings: { flags: { e2e: true } } }),
+        branch("B", "e2e"),
+        script("Y"),
+        script("N"),
+      ],
+      [thenWire("T", "B"), wire("B", "yes", "Y", "in"), wire("B", "no", "N", "in")],
+    );
+
+    expect(toViewEdges(source).map(({ id, type, data }) => ({ id, type, data }))).toEqual([
+      { id: "T:out->B:in", type: undefined, data: undefined },
+      { id: "B:yes->Y:in", type: "branch", data: { label: "yes" } },
+      { id: "B:no->N:in", type: "branch", data: { label: "no" } },
     ]);
   });
 });
@@ -627,17 +432,6 @@ describe("toViewNodes with a parallel section", () => {
         height: BAR_MIN_HEIGHT,
       });
     }
-  });
-
-  it("widens a session frame by a member fork's spanned box", () => {
-    const [frame] = toViewNodes(framed(parallelSection(), ["F"]), [], {}, null);
-
-    expect(frame).toMatchObject({
-      id: SESSION_FRAME_ID,
-      position: { x: 10 - FRAME_PADDING, y: 10 - FRAME_PADDING },
-      width: 28 + 2 * FRAME_PADDING,
-      height: 208 + 2 * FRAME_PADDING,
-    });
   });
 });
 

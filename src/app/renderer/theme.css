@@ -930,6 +930,108 @@ body,
   font: var(--fs-sm) var(--f-mono);
 }
 
+.fd-canvas .react-flow__edge.selected .react-flow__edge-path,
+.fd-canvas .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--select);
+  stroke-width: 2.5;
+}
+
+.fd-canvas .react-flow__edge.selected .fd-file-wire-label,
+.fd-canvas .react-flow__edge.selected .fd-branch-wire-label {
+  border-color: var(--select);
+}
+
+.fd-branch-wire-label {
+  position: absolute;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  font: 600 var(--fs-2xs) var(--f-mono);
+  pointer-events: none;
+}
+
+.fd-port-label {
+  position: absolute;
+  color: var(--muted);
+  font: 600 var(--fs-2xs) var(--f-mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fd-port-label-yes {
+  top: -14px;
+  left: 6px;
+}
+
+.fd-port-label-no {
+  top: 6px;
+  left: 8px;
+}
+
+.fd-session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--c-hub) 45%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-hub) 10%, var(--panel));
+  color: var(--fg);
+  font: var(--fs-sm) var(--f-body);
+  cursor: pointer;
+}
+
+.fd-session-chip:hover {
+  background: color-mix(in srgb, var(--c-hub) 18%, var(--panel));
+}
+
+.fd-session-chip:focus-visible {
+  outline: 2px solid var(--c-flow);
+  outline-offset: 2px;
+}
+
+.fd-session-chip-tag {
+  color: var(--c-hub);
+  font: 600 var(--fs-2xs) var(--f-mono);
+  letter-spacing: 0.04em;
+}
+
+.fd-session-chip-model {
+  color: var(--muted);
+  font: var(--fs-xs) var(--f-mono);
+}
+
+.fd-rename {
+  position: absolute;
+  z-index: 10;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--select);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  font: 600 var(--fs-sm) var(--f-body);
+  pointer-events: all;
+}
+
+.fd-canvas-toast {
+  position: absolute;
+  bottom: var(--space-5);
+  left: 50%;
+  z-index: 6;
+  max-width: min(560px, calc(100% - 2 * var(--space-5)));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line));
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+  color: var(--fg);
+  font: var(--fs-sm) / 1.4 var(--f-body);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
 .fd-empty-hint {
   position: absolute;
   inset: 0;
@@ -1211,4 +1313,71 @@ body,
   border-radius: 8px;
   background: var(--panel);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.fd-problems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fd-problems-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+.fd-problems-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fd-problem {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font: var(--fs-sm) / 1.4 var(--f-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fd-problem:hover,
+.fd-problem:focus-visible {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  outline: none;
+}
+
+.fd-problem-where {
+  flex-shrink: 0;
+  color: var(--c-human);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.fd-node-problems {
+  margin: 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  border-left: 2px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--fg);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.fd-hint {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }

@@ -43,6 +43,7 @@ export function entryText(entry: ActivityEntry): string {
     case "failure":
       return `Failed: ${entry.summary}`;
     case "context":
+    case "kept":
       return entry.summary;
     case "pr":
       return `Opened ${entry.url}`;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { shortcutFor } from "../../../../src/app/renderer/canvas/shortcuts.js";
+import { claimsShortcut, shortcutFor } from "../../../../src/app/renderer/canvas/shortcuts.js";
+import { flow, prompt } from "../../../fixtures/flow-builders.js";
 
 describe("shortcutFor", () => {
   it("maps Cmd+Z to undo", () => {
@@ -79,4 +80,96 @@ describe("shortcutFor", () => {
     expect(shortcutFor({ key: "z", metaKey: true, shiftKey: false, target })).toBe("undo");
     expect(shortcutFor({ key: "z", metaKey: true, shiftKey: true, target })).toBe("redo");
   });
+
+  it.each([
+    ["c", "copy"],
+    ["v", "paste"],
+    ["d", "duplicate"],
+    ["=", "zoomIn"],
+    ["+", "zoomIn"],
+    ["-", "zoomOut"],
+    ["0", "zoomReset"],
+  ] as const)("maps Cmd+%s to %s on the canvas", (key, shortcut) => {
+    expect(shortcutFor({ key, metaKey: true, shiftKey: false, target: canvas })).toBe(shortcut);
+  });
+
+  it("maps Enter on the canvas, with no modifier, to rename", () => {
+    expect(shortcutFor({ key: "Enter", metaKey: false, shiftKey: false, target: canvas })).toBe(
+      "rename",
+    );
+    expect(
+      shortcutFor({ key: "Enter", metaKey: true, shiftKey: false, target: canvas }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["an input", { tagName: "INPUT", isContentEditable: false }],
+    ["a textarea", { tagName: "TEXTAREA", isContentEditable: false }],
+    ["a contenteditable element", { tagName: "DIV", isContentEditable: true }],
+  ])("leaves copy, paste, duplicate, zoom and Enter in %s to the field", (_name, target) => {
+    for (const key of ["c", "v", "d", "=", "-", "0"]) {
+      expect(shortcutFor({ key, metaKey: true, shiftKey: false, target }), key).toBeNull();
+    }
+    expect(shortcutFor({ key: "Enter", metaKey: false, shiftKey: false, target })).toBeNull();
+  });
+
+  it("leaves Enter on a focused button to the button", () => {
+    const button = { tagName: "BUTTON", isContentEditable: false };
+
+    expect(
+      shortcutFor({ key: "Enter", metaKey: false, shiftKey: false, target: button }),
+    ).toBeNull();
+  });
+
+  it("maps C, V and D without Cmd to nothing", () => {
+    for (const key of ["c", "v", "d"]) {
+      expect(shortcutFor({ key, metaKey: false, shiftKey: false, target: canvas })).toBeNull();
+    }
+  });
+});
+
+const canvas = { tagName: "DIV", isContentEditable: false };
+
+describe("claimsShortcut", () => {
+  const withNote = {
+    ...flow([prompt("A")], []),
+    notes: [{ id: "n1", text: "", position: { x: 0, y: 0 }, size: { width: 160, height: 90 } }],
+  };
+  const state = (selection: string[], clipboard: object | null = null, ready = true) => ({
+    flow: withNote,
+    selection,
+    clipboard,
+    ready,
+  });
+
+  it.each(["copy", "duplicate"] as const)(
+    "leaves %s to the page when no node or note is selected, so selected text still copies",
+    (shortcut) => {
+      expect(claimsShortcut(shortcut, state([]))).toBe(false);
+      expect(claimsShortcut(shortcut, state(["gone"]))).toBe(false);
+    },
+  );
+
+  it.each(["copy", "duplicate"] as const)("claims %s for a selected node or note", (shortcut) => {
+    expect(claimsShortcut(shortcut, state(["A"]))).toBe(true);
+    expect(claimsShortcut(shortcut, state(["n1"]))).toBe(true);
+  });
+
+  it("claims Cmd+V only when something was copied", () => {
+    expect(claimsShortcut("paste", state([]))).toBe(false);
+    expect(claimsShortcut("paste", state([], { nodes: [], wires: [], notes: [] }))).toBe(true);
+  });
+
+  it("leaves copy, paste and duplicate to the page while the canvas is not ready", () => {
+    for (const shortcut of ["copy", "paste", "duplicate"] as const) {
+      expect(claimsShortcut(shortcut, state(["A"], {}, false))).toBe(false);
+    }
+  });
+
+  it.each(["undo", "save", "zoomIn"] as const)(
+    "claims %s regardless of the selection",
+    (shortcut) => {
+      expect(claimsShortcut(shortcut, state([]))).toBe(true);
+    },
+  );
 });

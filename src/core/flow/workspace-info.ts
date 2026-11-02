@@ -46,6 +46,9 @@ export function workspaceLabel(workingFolder: WorkingFolder, state?: FolderState
       branch: `new worktree from ${workingFolder.branch}`,
     };
   }
+  if (workingFolder.path.trim() === "") {
+    return { folder: { name: "folder not set", title: "" }, branch: "" };
+  }
   return {
     folder: { name: folderName(workingFolder.path), title: workingFolder.path },
     branch: branchText(state),

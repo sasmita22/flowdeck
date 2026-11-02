@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -99,5 +99,64 @@ describe("GitWorktree", () => {
     expect((await git(first, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(
       "flowdeck/abcd1234",
     );
+  });
+
+  const addRunWorktree = async () => {
+    const options = {
+      repo: repo.path,
+      base: "main",
+      branch: "flowdeck/abcd1234",
+      path: join(target, "abcd1234"),
+    };
+    await worktree.add(options);
+    return options;
+  };
+
+  it("removes a clean worktree with no commits of its own, together with its branch", async () => {
+    const options = await addRunWorktree();
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "removed" });
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+    expect(await branches(repo.path)).toBe("main\n");
+    expect(await exists(options.path)).toBe(false);
+  });
+
+  it("keeps a worktree holding an untracked file, and its branch", async () => {
+    const options = await addRunWorktree();
+    await writeFile(join(options.path, "made.txt"), "the run's work\n");
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "kept", branch: "kept" });
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path, options.path]);
+    expect(await branches(repo.path)).toContain("flowdeck/abcd1234");
+    expect(await readFile(join(options.path, "made.txt"), "utf8")).toBe("the run's work\n");
+  });
+
+  it("removes a clean worktree but keeps a branch that holds a commit of its own", async () => {
+    const options = await addRunWorktree();
+    await writeFile(join(options.path, "made.txt"), "committed\n");
+    await git(options.path, "add", "made.txt");
+    await git(options.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "work");
+    const tip = (await git(repo.path, "rev-parse", "flowdeck/abcd1234")).trim();
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "kept" });
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+    expect((await git(repo.path, "rev-parse", "flowdeck/abcd1234")).trim()).toBe(tip);
+  });
+
+  it("clears its own entry when the folder is already gone, leaving the user's other worktrees alone", async () => {
+    const options = await addRunWorktree();
+    const theirs = join(target, "theirs");
+    await git(repo.path, "worktree", "add", "-b", "their-work", theirs, "main");
+    await rm(theirs, { recursive: true, force: true });
+    await rm(options.path, { recursive: true, force: true });
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "removed" });
+    await worktree.remove(options);
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path, theirs]);
+    expect(await branches(repo.path)).toBe("main\ntheir-work\n");
   });
 });

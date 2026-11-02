@@ -8,7 +8,6 @@ import {
   containerMoves,
   containerSub,
   followed,
-  padded,
   withPositions,
   type Bounds,
 } from "./frames.js";
@@ -38,8 +37,6 @@ export interface ViewNode {
   };
 }
 
-export const SESSION_FRAME_ID = "session-frame";
-
 export interface ViewEdge {
   id: string;
   source: string;
@@ -47,8 +44,9 @@ export interface ViewEdge {
   target: string;
   targetHandle: string;
   markerEnd: { type: MarkerType };
-  type?: "aligned" | "file";
-  data?: { align: Align } | { file: string };
+  selected?: boolean;
+  type?: "aligned" | "file" | "branch";
+  data?: { align: Align } | { file: string } | { label: string };
 }
 
 export type Align = "source" | "target";
@@ -105,23 +103,6 @@ const frameView = (
   deletable: false,
   data,
 });
-
-const frameMembers = (flow: Flow): Flow["nodes"] => {
-  const members = new Set(flow.session.frame?.nodes);
-  return flow.nodes.filter(
-    (node) => members.has(node.id) || (node.parent !== undefined && members.has(node.parent)),
-  );
-};
-
-const toFrameViewNode = (flow: Flow): ViewNode[] => {
-  const bounds = frameMembers(flow).map((node) =>
-    node.type === "loop" || node.type === "foreach"
-      ? bodyFrameBounds(flow, node)
-      : (barBounds(flow, node) ?? boundsOf(node)),
-  );
-  if (bounds.length === 0) return [];
-  return [frameView(SESSION_FRAME_ID, "session", padded(bounds), { name: flow.session.name })];
-};
 
 const toLoopFrameViewNodes = (flow: Flow): ViewNode[] =>
   flow.nodes
@@ -181,7 +162,6 @@ export const toViewNodes = (
   const live = withPositions(flow, followed(flow, dragPositions));
   const framing = withPositions(flow, containerMoves(flow, dragPositions));
   return [
-    ...toFrameViewNode(framing),
     ...toLoopFrameViewNodes(framing),
     ...toForEachFrameViewNodes(framing),
     ...(flow.notes ?? []).map((note) =>
@@ -197,7 +177,6 @@ export const toViewNodes = (
         type: node.type,
         ...placed(framing, node, node.position),
         selected: selection.includes(node.id),
-        ...(node.type === "hardstop" && { deletable: false }),
         data: {
           label: node.label,
           highlighted: node.id === highlighted,
@@ -214,19 +193,27 @@ const alignOf = (types: ReadonlyMap<string, Node["type"]>, wire: Wire): Align | 
   return null;
 };
 
-export const toViewEdges = (flow: Flow): ViewEdge[] => {
+export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewEdge[] => {
   const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
   return flow.wires.map((wire) => {
     const align = alignOf(types, wire);
+    const id = edgeId(wire);
+    const fromBranch = types.get(wire.from.node) === "branch";
+    const isSelected = selected.includes(id);
     return {
-      id: edgeId(wire),
+      id,
       source: wire.from.node,
       sourceHandle: wire.from.port,
       target: wire.to.node,
       targetHandle: wire.to.port,
-      markerEnd: { type: MarkerType.ArrowClosed },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        ...(isSelected && { color: "var(--select)" }),
+      },
       ...(wire.kind === "file" && { type: "file" as const, data: { file: wire.file } }),
       ...(align !== null && { type: "aligned" as const, data: { align } }),
+      ...(fromBranch && { type: "branch" as const, data: { label: wire.from.port } }),
+      ...(isSelected && { selected: true }),
     };
   });
 };

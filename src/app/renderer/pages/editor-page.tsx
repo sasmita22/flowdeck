@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Actions } from "../actions.js";
+import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
 import { shortHash } from "../format.js";
@@ -159,6 +160,7 @@ export function EditorPage({
   shell,
   nav,
   actions,
+  branches,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
@@ -168,6 +170,7 @@ export function EditorPage({
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
   actions: Actions;
+  branches?: StoreApi<BranchState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const onSave = useCallback(() => void save.getState().save(), [save]);
@@ -184,7 +187,15 @@ export function EditorPage({
       />
       <div className="fd-main">
         {ready && <Canvas store={canvas} shell={shell} run={idle} onSave={onSave} />}
-        {ready && <InspectorPanel shell={shell} run={idle} canvas={canvas} inspector={inspector} />}
+        {ready && (
+          <InspectorPanel
+            shell={shell}
+            run={idle}
+            canvas={canvas}
+            inspector={inspector}
+            branches={branches}
+          />
+        )}
       </div>
     </>
   );
