@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { openClaudeSession } from "../../src/adapters/claude/claude-session.js";
+import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -219,6 +220,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         fs,
         run: liveEnvironment(fs, appWaiter),
         worktree: new GitWorktree(),
+        gitState: new GitFolderState(),
         waits: appWaiter,
         newSessionName: () => sessionName,
       });

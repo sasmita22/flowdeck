@@ -60,6 +60,7 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerWait: (answer) => ipcRenderer.invoke(bridgeChannels.answerWait, answer) as Promise<boolean>,
+  workspaceInfo: (workingFolder) => ipcRenderer.invoke(bridgeChannels.workspaceInfo, workingFolder),
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

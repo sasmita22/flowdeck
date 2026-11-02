@@ -74,6 +74,18 @@ describe("preload run-state wiring", () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:answer-wait", answer);
   });
 
+  it("invokes flowdeck:workspace-info with the working folder for workspaceInfo and returns its answer", async () => {
+    const workingFolder = { kind: "path", path: "/code/shop" } as const;
+
+    await expect(bridge.workspaceInfo(workingFolder)).resolves.toBe(
+      "answer for flowdeck:workspace-info",
+    );
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+      "flowdeck:workspace-info",
+      workingFolder,
+    );
+  });
+
   it("hands each flowdeck:run-state snapshot to the listener without the event", () => {
     const listener = vi.fn();
     const unsubscribe = bridge.onRunState(listener);

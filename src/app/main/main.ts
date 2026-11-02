@@ -16,6 +16,7 @@ import { createTerminal, type Terminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { answerWait, createWaitRelay } from "./wait.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
+import { workspaceInfoHandler } from "./workspace.js";
 import { defaultWindowBounds, minimumWindowSize } from "./window-size.js";
 
 const rendererIndexPath = join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
@@ -220,6 +221,7 @@ void app.whenReady().then(async () => {
     bridgeChannels.answerWait,
     windowGuard.handle((payload: unknown) => answerWait(client, payload)),
   );
+  ipcMain.handle(bridgeChannels.workspaceInfo, workspaceInfoHandler(windowGuard, client));
   let quitting = false;
   app.on("will-quit", (event) => {
     if (quitting) return;

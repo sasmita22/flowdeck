@@ -25,6 +25,7 @@ export type FlowdeckBridge = {
   getWait(): Promise<unknown>;
   onWait(listener: (value: unknown) => void): () => void;
   answerWait(answer: unknown): Promise<boolean>;
+  workspaceInfo(workingFolder: unknown): Promise<unknown>;
 };
 
 export const bridgeChannels = {
@@ -50,4 +51,5 @@ export const bridgeChannels = {
   getWait: "flowdeck:get-wait",
   wait: "flowdeck:wait",
   answerWait: "flowdeck:answer-wait",
+  workspaceInfo: "flowdeck:workspace-info",
 } as const;

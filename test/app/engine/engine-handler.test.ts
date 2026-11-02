@@ -18,6 +18,7 @@ import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
+import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
@@ -83,6 +84,7 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
     fs,
     run: runEnvironment(fs),
     worktree: new FakeWorktree(),
+    gitState: new FakeGitState(),
     ...overrides,
   };
 };
@@ -1057,6 +1059,53 @@ describe("createEngineHandler", async () => {
       } finally {
         process.off("unhandledRejection", onUnhandled);
       }
+    });
+  });
+});
+
+describe("workspace-info", () => {
+  const ask = (gitState: FakeGitState, payload: unknown) =>
+    createEngineHandler(options({ gitState })).handle({ id: 9, type: "workspace-info", payload });
+
+  it("answers an existing folder with its git state", async () => {
+    const gitState = new FakeGitState({ "/code/shop": { kind: "branch", name: "fd-demo" } });
+
+    expect(await ask(gitState, { workingFolder: { kind: "path", path: "/code/shop" } })).toEqual({
+      id: 9,
+      ok: true,
+      value: { kind: "branch", name: "fd-demo" },
+    });
+    expect(gitState.reads).toEqual(["/code/shop"]);
+  });
+
+  it("answers a new worktree with no state and reads no git", async () => {
+    const gitState = new FakeGitState();
+
+    expect(
+      await ask(gitState, {
+        workingFolder: { kind: "worktree", branch: "main", repo: "/code/shop" },
+      }),
+    ).toEqual({ id: 9, ok: true, value: null });
+    expect(gitState.reads).toEqual([]);
+  });
+
+  it("refuses a payload that is not a working folder and reads no git", async () => {
+    const gitState = new FakeGitState();
+
+    expect(await ask(gitState, { workingFolder: { kind: "path" } })).toMatchObject({
+      id: 9,
+      ok: false,
+    });
+    expect(gitState.reads).toEqual([]);
+  });
+
+  it("answers a git failure as an error instead of throwing", async () => {
+    const gitState = new FakeGitState({}, { failWith: "spawn git ENOENT" });
+
+    expect(await ask(gitState, { workingFolder: { kind: "path", path: "/code/shop" } })).toEqual({
+      id: 9,
+      ok: false,
+      error: "spawn git ENOENT",
     });
   });
 });

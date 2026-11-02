@@ -1,8 +1,10 @@
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { promisify } from "node:util";
 import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
 import { NodeType } from "../src/core/flow/schema.js";
 import {
@@ -15,7 +17,10 @@ import {
   thenWire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+
+const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
 
 let home: string;
 let folder: string;
@@ -409,4 +414,50 @@ test("Run status and inspector", async () => {
 
   await expect(window.getByTestId("run-status")).toHaveText("Done · 2 of 2 nodes done");
   await expect(window.getByTestId("inspector")).toBeVisible();
+});
+
+test("Branch shown", async () => {
+  const repo = await createTmpRepo({ commit: true });
+  try {
+    await git(repo.path, "checkout", "--quiet", "-b", "fd-demo");
+    seedFlow(home, twoScripts(), repo.path);
+    const { window } = await launch();
+
+    await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
+    await expect(window.getByTestId("workspace-folder")).toHaveAttribute("title", repo.path);
+    await expect(window.getByTestId("workspace-branch")).toHaveText("fd-demo");
+    await expect(window.getByTestId("workspace-branch")).toHaveAttribute("title", "fd-demo");
+
+    await git(repo.path, "checkout", "--quiet", "-b", "fd-next");
+    await window.getByTestId(controlTestIds.run).click();
+
+    await expect(window.getByTestId("workspace-branch")).toHaveText("fd-next");
+    await expect(window.getByTestId("run-status")).toHaveText(/^Done/, { timeout: 20_000 });
+  } finally {
+    await launched?.close();
+    launched = undefined;
+    await repo.cleanup();
+  }
+});
+
+test("New worktree shows its base branch", async () => {
+  const repo = await createTmpRepo({ commit: true });
+  try {
+    const base = flow([prompt("prompt-1")], []);
+    seedFlow(home, {
+      ...base,
+      session: {
+        ...base.session,
+        workingFolder: { kind: "worktree", branch: "main", repo: repo.path },
+      },
+    });
+    const { window } = await launch();
+
+    await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
+    await expect(window.getByTestId("workspace-branch")).toHaveText("new worktree from main");
+  } finally {
+    await launched?.close();
+    launched = undefined;
+    await repo.cleanup();
+  }
 });

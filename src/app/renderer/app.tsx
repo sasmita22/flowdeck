@@ -16,6 +16,7 @@ import { selectInspectorOpen, type ShellState } from "./shell-store.js";
 import type { TerminalState } from "./terminal/store.js";
 import { TerminalPane } from "./terminal/terminal-pane.js";
 import { controlTestIds } from "./test-ids.js";
+import { selectWorkspaceLabel, type WorkspaceState } from "./workspace-store.js";
 
 const statusText = (status: AppState["status"]) =>
   status.kind === "error" ? status.message : status.kind;
@@ -99,13 +100,42 @@ function Errors({
   );
 }
 
-function StatusBar({ store, run }: { store: StoreApi<AppState>; run: StoreApi<RunState> }) {
+function StatusBar({
+  store,
+  run,
+  workspace,
+}: {
+  store: StoreApi<AppState>;
+  run: StoreApi<RunState>;
+  workspace: StoreApi<WorkspaceState>;
+}) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
   const summary = useStore(run, selectRunSummary);
+  const folder = useStore(workspace, (state) => state.folder);
+  const folderState = useStore(workspace, (state) => state.state);
+  const label = selectWorkspaceLabel({ folder, state: folderState });
   return (
     <footer className="fd-status-bar">
       <span data-testid="run-status">{summary}</span>
+      {label !== null && (
+        <>
+          <span
+            className="fd-workspace"
+            data-testid="workspace-folder"
+            title={label.folder.title || undefined}
+          >
+            {label.folder.name}
+          </span>
+          <span
+            className="fd-workspace"
+            data-testid="workspace-branch"
+            title={label.branch || undefined}
+          >
+            {label.branch}
+          </span>
+        </>
+      )}
       <span className="fd-status-right">
         <span data-testid="store-status">{status}</span>
         <span data-testid="app-version">{version}</span>
@@ -123,6 +153,7 @@ export function App({
   inspector,
   wait,
   shell,
+  workspace,
 }: {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
@@ -132,6 +163,7 @@ export function App({
   inspector: StoreApi<InspectorState>;
   wait: StoreApi<WaitState>;
   shell: StoreApi<ShellState>;
+  workspace: StoreApi<WorkspaceState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const terminalVisible = useStore(terminal, (state) => state.visible);
@@ -158,7 +190,7 @@ export function App({
           <TerminalPane store={terminal} />
         </section>
       )}
-      <StatusBar store={store} run={run} />
+      <StatusBar store={store} run={run} workspace={workspace} />
       <ClosePrompt store={save} />
     </main>
   );
