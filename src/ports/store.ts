@@ -1,4 +1,8 @@
 export type {
+  BuildFileRecord,
+  BuildNodeRecord,
+  BuildRecord,
+  BuildSource,
   EventEntry,
   NewBuild,
   NewRun,

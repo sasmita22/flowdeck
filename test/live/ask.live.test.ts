@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -13,7 +12,6 @@ import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const runTimeoutMs = 300_000;
 const colourWord = /\b(red|blue|green)\b/i;
 const promptText =
@@ -157,7 +155,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
       const built = await build(liveFlow(), {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
       const colourPath = join(repo.path, "colour.md");

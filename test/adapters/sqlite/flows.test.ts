@@ -250,6 +250,21 @@ describe("SqliteFlowStore", () => {
     });
   });
 
+  it("loads a chosen saved version, and nothing for a version or flow never saved", () => {
+    const store = open();
+    store.save(relabelled("a"));
+    store.save(relabelled("b"));
+
+    expect(open(() => "flow-2").load({ flowId: "flow-1", version: 1 })).toEqual({
+      flowId: "flow-1",
+      name: "Untitled",
+      version: 1,
+      flow: relabelled("a"),
+    });
+    expect(store.load({ flowId: "flow-1", version: 3 })).toBeNull();
+    expect(store.load({ flowId: "nope", version: 1 })).toBeNull();
+  });
+
   it("reopens a saved flow with no nodes or wires as the latest version", () => {
     const store = open();
     store.save(relabelled("a"));
@@ -395,11 +410,13 @@ describe("SqliteFlowStore", () => {
     const runs = new SqliteStore({ db });
     const flows = new SqliteFlowStore({ db, newId: () => "flow-1" });
 
+    runs.recordBuild({ hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] });
     const { id } = runs.createRun({
       buildDir: "/fd/builds/abc",
       inputs: {},
       nodeIds: ["p1"],
       session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
+      buildHash: "abc",
     });
     runs.append(id, "p1", { kind: "sent" });
     flows.save(roundTripFlow());
@@ -412,6 +429,7 @@ describe("SqliteFlowStore", () => {
       { name: "003_builds.sql" },
       { name: "004_events_lock.sql" },
       { name: "005_notes.sql" },
+      { name: "006_build_lineage.sql" },
     ]);
   });
 });

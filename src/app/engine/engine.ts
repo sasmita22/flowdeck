@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import pkg from "../../../package.json" with { type: "json" };
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
+import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
 import { GitFolderState } from "../../adapters/git/git-state.js";
@@ -81,6 +82,7 @@ const handler = createEngineHandler({
     }),
   isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
   fs,
+  connectors: new ClaudeUserConnectors(),
   run,
   waits,
   worktree: new GitWorktree(),

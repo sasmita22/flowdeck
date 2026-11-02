@@ -144,7 +144,10 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
       },
     ];
   }
-  if (inner instanceof z.ZodArray && inner.element instanceof z.ZodString) {
+  if (
+    inner instanceof z.ZodArray &&
+    (inner.element instanceof z.ZodString || inner.element instanceof z.ZodNumber)
+  ) {
     return [{ control: "list", path, testId, label: label() }];
   }
   if (inner instanceof z.ZodString) {
@@ -187,7 +190,8 @@ export const assignField = (
   if (key === undefined) {
     if (typeof value !== "string") return value;
     if (inner instanceof z.ZodNumber) return Number(value);
-    return inner instanceof z.ZodArray ? lines(value) : value;
+    if (!(inner instanceof z.ZodArray)) return value;
+    return inner.element instanceof z.ZodNumber ? lines(value).map(Number) : lines(value);
   }
   const record = current as Record<string, unknown>;
   if (inner instanceof z.ZodDiscriminatedUnion) {

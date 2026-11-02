@@ -37,7 +37,12 @@ const forms: Record<NodeType, Form> = {
     { instructions: "Instructions", expectedOutput: "What it should produce" },
     { multiline: ["instructions", "expectedOutput"] },
   ),
-  script: typeForm({ command: "Command", args: "Arguments (one per line)" }),
+  script: typeForm({
+    command: "Command",
+    args: "Arguments (one per line)",
+    successCodes: "Exit codes that mean done (one per line, 0 when empty)",
+    retryCodes: "Exit codes that run it once more (one per line, 2 when empty)",
+  }),
   agent: typeForm(
     {
       role: "Role",
@@ -75,10 +80,15 @@ const forms: Record<NodeType, Form> = {
   output: typeForm({ name: "Output name", type: "Output type" }),
   fork: typeForm({}),
   join: typeForm(
-    { wait: "Continue when" },
+    { wait: "Continue when", onBranchFail: "If a branch does not start" },
     {
       optionLabels: {
         wait: { all: "Every branch is done", first: "The first branch is done" },
+        onBranchFail: {
+          wait: "Wait for me to decide",
+          skip: "Go on without it",
+          stop: "Stop the run",
+        },
       },
     },
   ),

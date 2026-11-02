@@ -1,7 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
@@ -16,7 +15,6 @@ import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const watchdogMs = 240_000;
 const runTimeoutMs = 300_000;
 const longItem = `${"Check the long third unit of this plan and keep reading to its very end. ".repeat(4)}zulu-3`;
@@ -70,7 +68,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
       const built = await build(forEachFlow(), {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
 

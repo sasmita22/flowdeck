@@ -26,9 +26,19 @@ describe("compilePrompt", () => {
     expect(content).toBe('---\ndescription: "a: b # \\"c\\"\\nd"\n---\nGo.\n');
   });
 
-  it("leaves the expected output out of the command file", () => {
+  it("ends the command file with the expected output", () => {
     const { content } = compilePrompt(
       promptNode("Plan it", { instructions: "Write the plan.", expectedOutput: "plan.md exists" }),
+    );
+
+    expect(content).toBe(
+      '---\ndescription: "Plan it"\n---\nWrite the plan.\n\nExpected output: plan.md exists\n',
+    );
+  });
+
+  it.each(["", "  "])("adds no expected output line for %j", (expectedOutput) => {
+    const { content } = compilePrompt(
+      promptNode("Plan it", { instructions: "Write the plan.", expectedOutput }),
     );
 
     expect(content).toBe('---\ndescription: "Plan it"\n---\nWrite the plan.\n');

@@ -15,6 +15,7 @@ const options = {
   socketPath: "/fd/sockets/fd-run.sock",
   cwd: "/repo",
   claudeSessionId: "s1",
+  hooks: { nodePath: "/opt/my node/bin/node", hookScriptPath: "/fd/hooks/flowdeck-hook.cjs" },
 };
 
 class SlowStartHost extends FakeSessionHost {
@@ -79,7 +80,7 @@ function open(sessions: FakeSessionHost, attach = false) {
 }
 
 describe("openClaudeSession", () => {
-  it("starts Claude with the build as plugin folder and stops it", async () => {
+  it("starts Claude with the build as plugin folder and the hook paths in its environment, and stops it", async () => {
     const sessions = new SlowStartHost();
     const opened = await open(sessions);
     sessions.finishStart();
@@ -90,9 +91,39 @@ describe("openClaudeSession", () => {
     expect(sessions.get("fd-run")?.env).toEqual({
       FLOWDECK_SOCK: "/fd/sockets/fd-run.sock",
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+      FLOWDECK_HOOK_NODE: "/opt/my node/bin/node",
+      FLOWDECK_HOOK_SCRIPT: "/fd/hooks/flowdeck-hook.cjs",
     });
     await opened.stop();
     expect(await sessions.list()).toEqual([]);
+  });
+
+  it("passes the run's MCP config to Claude, alone, when it has one", async () => {
+    const sessions = new SlowStartHost();
+    const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+    const opened = await openClaudeSession(
+      { ...options, mcpConfigPath: "/fd/runs/r1/mcp.json" },
+      { sessions, claude, sessionId: "s1" },
+    );
+    sessions.finishStart();
+
+    await opened.session.ensureStarted();
+
+    expect(sessions.get("fd-run")?.command).toMatch(
+      / --plugin-dir '\/fd\/builds\/abc' --mcp-config '\/fd\/runs\/r1\/mcp\.json' --strict-mcp-config$/,
+    );
+    await opened.stop();
+  });
+
+  it("passes no MCP config when the run has none", async () => {
+    const sessions = new SlowStartHost();
+    const opened = await open(sessions);
+    sessions.finishStart();
+
+    await opened.session.ensureStarted();
+
+    expect(sessions.get("fd-run")?.command).not.toContain("--mcp-config");
+    await opened.stop();
   });
 
   it("waits for a start in flight when stopped, then stops the session it made", async () => {

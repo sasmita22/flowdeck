@@ -58,7 +58,6 @@ describe("the core run path", () => {
     const result = await build(scriptOnly(), {
       fs,
       home,
-      hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
     });
     if (!result.ok) throw new Error("build failed");
     dir = result.dir;
@@ -119,7 +118,7 @@ describe("the core run path", () => {
           ),
         ),
       );
-      const files = emit(lower(broken), { nodePath: process.execPath, hookScriptPath: "/h" });
+      const files = emit(lower(broken));
       const hash = hashBuild(files);
       const brokenDir = join(home, "builds", hash);
       for (const file of files) {
@@ -156,6 +155,7 @@ describe("the core run path", () => {
         inputs: {},
         nodeIds: build.nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+        buildHash: build.hash,
       });
 
       const code = await execute(
@@ -200,6 +200,7 @@ describe("the core run path", () => {
         inputs: {},
         nodeIds: build.nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+        buildHash: build.hash,
       });
 
       const code = await execute(
@@ -248,6 +249,16 @@ describe("the core run path", () => {
 
     it("is false for scripts only", () => {
       expect(needsClaude(manifestWith(["script", "script"]))).toBe(false);
+    });
+
+    it("is true for a hard stop with a condition to check, and false for one without", () => {
+      const withCondition = (condition: string) =>
+        ({
+          nodes: [{ id: "h", type: "hardstop", settings: { condition } }],
+        }) as unknown as Manifest & { hash: string };
+
+      expect(needsClaude(withCondition("tests fail"))).toBe(true);
+      expect(needsClaude(withCondition(" "))).toBe(false);
     });
   });
 
@@ -303,11 +314,13 @@ describe("execute wiring", () => {
     const permissions = new FakePermissionSource();
     const store = new FakeStore();
     const sends: string[] = [];
+    const lines: string[] = [];
     const { id } = store.createRun({
       buildDir: "/fd/builds/abc",
       inputs: {},
       nodeIds: options.manifest.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
+      buildHash: options.manifest.hash,
     });
     const code = await execute(
       {
@@ -320,7 +333,7 @@ describe("execute wiring", () => {
           throw new Error("execute opens the session through the execution");
         },
         store,
-        onChange: () => undefined,
+        onChange: (line) => lines.push(line),
       },
       {
         store,
@@ -344,7 +357,7 @@ describe("execute wiring", () => {
         }),
       },
     );
-    return { code, sends };
+    return { code, sends, store, runId: id, lines };
   }
 
   it("pauses at the manifest's budget before sending the first prompt", async () => {
@@ -382,17 +395,54 @@ describe("execute wiring", () => {
     expect(code).toBe(0);
   });
 
-  it("never reads usage for a manifest without a budget", async () => {
+  it("reads usage only once, after the run, for a manifest without a budget", async () => {
     const usage = new FakeUsageSource();
     usage.setEntries(claudeSessionId, twoDollars);
+    let readsDuringTurn = -1;
 
     const { code } = await executeWith({
       manifest: promptBuild(),
       waiter: new FakeWaiter([]),
       usage,
+      onSend: async () => {
+        readsDuringTurn = usage.calls.length;
+      },
     });
 
-    expect(usage.calls).toEqual([]);
+    expect(readsDuringTurn).toBe(0);
+    expect(usage.calls).toEqual([claudeSessionId]);
     expect(code).toBe(0);
+  });
+
+  it("writes the session's priced spend to the run as its total cost", async () => {
+    const usage = new FakeUsageSource();
+    usage.setEntries(claudeSessionId, twoDollars);
+
+    const { store, runId } = await executeWith({
+      manifest: promptBuild(),
+      waiter: new FakeWaiter([]),
+      usage,
+    });
+
+    expect(store.costOf(runId)).toBe(2);
+    expect(store.findRun(runId)?.status).toBe("done");
+  });
+
+  it("still finishes the run when its spend cannot be read", async () => {
+    const usage = new FakeUsageSource();
+    usage.entries = async () => {
+      throw new Error("transcript gone");
+    };
+
+    const { store, runId, code, lines } = await executeWith({
+      manifest: promptBuild(),
+      waiter: new FakeWaiter([]),
+      usage,
+    });
+
+    expect(code).toBe(0);
+    expect(store.costOf(runId)).toBeUndefined();
+    expect(store.findRun(runId)?.status).toBe("done");
+    expect(lines).toContain("cost not recorded: transcript gone");
   });
 });

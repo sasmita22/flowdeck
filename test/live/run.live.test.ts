@@ -12,7 +12,6 @@ import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", import.meta.url));
 const tsx = join(root, "node_modules", ".bin", "tsx");
 const runDeadlineMs = 240_000;
@@ -218,7 +217,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
       const built = await build(flow, {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`fixture does not build: ${JSON.stringify(built.errors)}`);
       const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };

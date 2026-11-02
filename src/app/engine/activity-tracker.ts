@@ -47,7 +47,11 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       findRun: (id) => inner.findRun(id),
       events: (id) => inner.events(id),
       finishRun: (id, status) => inner.finishRun(id, status),
+      recordCost: (id, totalCost) => inner.recordCost(id, totalCost),
       recordBuild: (build) => inner.recordBuild(build),
+      findBuild: (hash) => inner.findBuild(hash),
+      listBuilds: () => inner.listBuilds(),
+      buildFiles: (hash) => inner.buildFiles(hash),
       append(id, nodeId, event) {
         inner.append(id, nodeId, event);
         track(id, [{ nodeId, event }]);

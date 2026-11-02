@@ -12,7 +12,10 @@ const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
   inputs: { cwd: "/repo", auto: true },
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
+  buildHash: "abc",
 });
+
+const build = { hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -24,6 +27,7 @@ describe("SqliteStore", () => {
   const open = (now?: () => Date) => {
     const store = new SqliteStore(now === undefined ? { path } : { path, now });
     opened.push(store);
+    store.recordBuild(build);
     return store;
   };
 
@@ -70,6 +74,7 @@ describe("SqliteStore", () => {
     });
     const store = new SqliteStore({ path, migrationsDir });
     opened.push(store);
+    store.recordBuild(build);
 
     expect(store.createRun(newRun()).status).toBe("running");
   });
@@ -100,9 +105,10 @@ describe("SqliteStore", () => {
       { name: "003_builds.sql" },
       { name: "004_events_lock.sql" },
       { name: "005_notes.sql" },
+      { name: "006_build_lineage.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 5]);
+    expect(before).toEqual([1, 1, 3, 1, 6]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -281,30 +287,16 @@ describe("SqliteStore", () => {
     expect(db.prepare("SELECT status FROM run_sessions").get()).toEqual({ status: "closed" });
   });
 
-  it("keeps one builds row per hash, stamped from now", () => {
+  it("stamps a build from now", () => {
     const store = open(() => new Date("2026-01-01T00:00:00Z"));
 
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
-
     expect(raw().prepare("SELECT hash, dir, created_at FROM builds").all()).toEqual([
-      { hash: "h1", dir: "/fd/builds/h1", created_at: new Date("2026-01-01T00:00:00Z").getTime() },
+      {
+        hash: "abc",
+        dir: "/fd/builds/abc",
+        created_at: new Date("2026-01-01T00:00:00Z").getTime(),
+      },
     ]);
-  });
-
-  it("stores the build a run was made from, and NULL for a run given none", () => {
-    const store = open();
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
-
-    const withBuild = store.createRun({ ...newRun(), buildHash: "h1" });
-    const withoutBuild = store.createRun(newRun());
-
-    const buildHash = (id: string) =>
-      raw().prepare("SELECT build_hash FROM runs WHERE id = ?").get(id);
-    expect(buildHash(withBuild.id)).toEqual({ build_hash: "h1" });
-    expect(buildHash(withoutBuild.id)).toEqual({ build_hash: null });
-    expect(withBuild.buildHash).toBe("h1");
-    expect(store.findRun(withBuild.id)?.buildHash).toBe("h1");
-    expect(store.findRun(withoutBuild.id)).not.toHaveProperty("buildHash");
+    expect(store.findRun(store.createRun(newRun()).id)?.buildHash).toBe("abc");
   });
 });

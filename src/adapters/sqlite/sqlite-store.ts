@@ -2,6 +2,8 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import type { RunEvent } from "../../core/run/run-events.js";
 import type {
+  BuildFileRecord,
+  BuildRecord,
   EventEntry,
   NewBuild,
   NewRun,
@@ -26,6 +28,25 @@ type RunRow = {
   claude_session_id: string;
   build_hash: string | null;
 };
+
+type BuildRow = {
+  hash: string;
+  dir: string;
+  created_at: number;
+  flow_id: string | null;
+  version: number | null;
+};
+
+const buildColumns = "hash, dir, created_at, flow_id, version";
+
+const toBuild = (row: BuildRow): BuildRecord => ({
+  hash: row.hash,
+  dir: row.dir,
+  createdAt: row.created_at,
+  ...(row.flow_id === null || row.version === null
+    ? {}
+    : { source: { flowId: row.flow_id, version: row.version } }),
+});
 
 type EventRow = {
   seq: number;
@@ -61,7 +82,7 @@ export class SqliteStore implements Store {
         .prepare(
           "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash) VALUES (?, ?, ?, 'running', ?, ?)",
         )
-        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildHash ?? null);
+        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildHash);
       const session = this.db
         .prepare(
           "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
@@ -155,10 +176,61 @@ export class SqliteStore implements Store {
     })();
   }
 
+  recordCost(runId: string, totalCost: number): void {
+    this.db.prepare("UPDATE runs SET total_cost = ? WHERE id = ?").run(totalCost, runId);
+  }
+
   recordBuild(build: NewBuild): void {
-    this.db
-      .prepare("INSERT OR IGNORE INTO builds (hash, dir, created_at) VALUES (?, ?, ?)")
-      .run(build.hash, build.dir, this.now().getTime());
+    this.db.transaction(() => {
+      if (this.findBuild(build.hash) !== undefined) return;
+      const insertFile = this.db.prepare(
+        "INSERT INTO build_files (build_hash, path, sha256) VALUES (?, ?, ?)",
+      );
+      for (const file of build.files) insertFile.run(build.hash, file.path, file.sha256);
+      const insertNode = this.db.prepare(
+        "INSERT INTO build_nodes (build_hash, ordinal, node_id, type, config, file) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      build.nodes.forEach((node, ordinal) => {
+        insertNode.run(
+          build.hash,
+          ordinal,
+          node.nodeId,
+          node.type,
+          JSON.stringify(node.config),
+          node.file ?? null,
+        );
+      });
+      this.db
+        .prepare(
+          "INSERT INTO builds (hash, dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          build.hash,
+          build.dir,
+          this.now().getTime(),
+          build.source?.flowId ?? null,
+          build.source?.version ?? null,
+        );
+    })();
+  }
+
+  findBuild(hash: string): BuildRecord | undefined {
+    const row = this.db.prepare(`SELECT ${buildColumns} FROM builds WHERE hash = ?`).get(hash) as
+      BuildRow | undefined;
+    return row === undefined ? undefined : toBuild(row);
+  }
+
+  listBuilds(): BuildRecord[] {
+    const rows = this.db
+      .prepare(`SELECT ${buildColumns} FROM builds ORDER BY created_at DESC, rowid DESC`)
+      .all() as BuildRow[];
+    return rows.map(toBuild);
+  }
+
+  buildFiles(hash: string): BuildFileRecord[] {
+    return this.db
+      .prepare("SELECT path, sha256 FROM build_files WHERE build_hash = ? ORDER BY path")
+      .all(hash) as BuildFileRecord[];
   }
 
   close(): void {

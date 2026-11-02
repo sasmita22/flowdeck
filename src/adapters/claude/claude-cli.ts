@@ -27,6 +27,7 @@ export type ClaudeSession = { sessionId: string; model: string };
 export type ClaudeStartOptions = {
   settingsPath?: string;
   pluginDir?: string;
+  mcpConfigPath?: string;
   env?: Record<string, string>;
 };
 
@@ -34,11 +35,16 @@ export function claudeCommand(
   { sessionId, model }: ClaudeSession,
   settingsPath?: string,
   pluginDir?: string,
+  mcpConfigPath?: string,
 ): string {
   const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
   const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
   const plugin = pluginDir === undefined ? "" : ` --plugin-dir ${shellQuote(pluginDir)}`;
-  return `env ${unset} claude --session-id ${sessionId} --model ${shellQuote(model)}${settings}${plugin}`;
+  const mcp =
+    mcpConfigPath === undefined
+      ? ""
+      : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
+  return `env ${unset} claude --session-id ${sessionId} --model ${shellQuote(model)}${settings}${plugin}${mcp}`;
 }
 
 function showsInputBox(pane: string): boolean {
@@ -101,10 +107,15 @@ export class ClaudeCli {
     name: string,
     cwd: string,
     session: ClaudeSession,
-    { settingsPath, pluginDir, env }: ClaudeStartOptions = {},
+    { settingsPath, pluginDir, mcpConfigPath, env }: ClaudeStartOptions = {},
   ): Promise<void> {
     this.ready.delete(name);
-    await this.sessions.start(name, cwd, claudeCommand(session, settingsPath, pluginDir), env);
+    await this.sessions.start(
+      name,
+      cwd,
+      claudeCommand(session, settingsPath, pluginDir, mcpConfigPath),
+      env,
+    );
   }
 
   async waitUntilReady(name: string): Promise<void> {

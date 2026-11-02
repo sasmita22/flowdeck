@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import type { FileSystem } from "../../ports/file-system.js";
 
@@ -21,8 +21,18 @@ export class NodeFileSystem implements FileSystem {
     await writeFile(path, content, "utf8");
   }
 
+  async writePrivateFile(path: string, content: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content, { encoding: "utf8", mode: 0o600 });
+    await chmod(path, 0o600);
+  }
+
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
+  }
+
+  async remove(path: string): Promise<void> {
+    await rm(path, { force: true });
   }
 
   async list(dir: string): Promise<string[]> {

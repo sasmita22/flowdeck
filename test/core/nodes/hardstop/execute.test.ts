@@ -19,7 +19,12 @@ describe("hardstopRequest", () => {
   );
 
   it("exports no way to skip a hard stop", () => {
-    expect(Object.keys(hardstop).sort()).toEqual(["hardstopOutcome", "hardstopRequest"]);
+    expect(Object.keys(hardstop).sort()).toEqual([
+      "hardstopCheckTurn",
+      "hardstopOutcome",
+      "hardstopRequest",
+      "noVerdictRequest",
+    ]);
   });
 });
 
@@ -55,14 +60,30 @@ describe("hardstopOutcome", () => {
     });
   });
 
-  it.each<WaitReply>([
-    { decision: "approve" },
-    { decision: "reject", reason: "r" },
-    { decision: "answer", answer: "x" },
-  ])("fails on a reply not meant for a hard stop: $decision", (reply) => {
-    expect(hardstopOutcome("h1", reply)).toEqual({
-      status: "failed",
-      reason: `unexpected reply: ${reply.decision}`,
+  it.each<WaitReply>([{ decision: "approve" }, { decision: "reject", reason: "r" }])(
+    "fails on a reply not meant for a hard stop: $decision",
+    (reply) => {
+      expect(hardstopOutcome("h1", reply)).toEqual({
+        status: "failed",
+        reason: `unexpected reply: ${reply.decision}`,
+      });
+    },
+  );
+
+  it("takes continue or stop as the answer to an unreadable verdict, and refuses any other", () => {
+    const answer = (text: string) => hardstopOutcome("h1", { decision: "answer", answer: text });
+    const decision = (text: string) => ({ nodeId: "h1", decision: "answered", answer: text });
+
+    expect(answer("continue")).toEqual({
+      status: "done",
+      line: "answered: continue",
+      decision: decision("continue"),
     });
+    expect(answer("stop")).toEqual({
+      status: "failed",
+      reason: "stopped: no readable verdict",
+      decision: decision("stop"),
+    });
+    expect(answer("x")).toEqual({ status: "failed", reason: "unexpected answer: x" });
   });
 });

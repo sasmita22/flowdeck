@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
@@ -25,7 +24,6 @@ import {
 } from "../fixtures/flow-builders.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
 
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const runTimeoutMs = 420_000;
 const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
 
@@ -107,7 +105,6 @@ async function runLive(
   const built = await build(parsed, {
     fs: new NodeFileSystem(),
     home,
-    hooks: { nodePath: process.execPath, hookScriptPath },
   });
   if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
 

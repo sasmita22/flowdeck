@@ -53,6 +53,26 @@ describe("claudeCommand", () => {
     );
   });
 
+  it("loads only the run's MCP config, quoted, after the plugin folder", () => {
+    expect(
+      claudeCommand(
+        { sessionId, model: "haiku" },
+        settingsPath,
+        "/tmp/fd home/builds/abc",
+        "/tmp/fd home/runs/r1/mcp.json",
+      ),
+    ).toMatch(
+      / --plugin-dir '\/tmp\/fd home\/builds\/abc' --mcp-config '\/tmp\/fd home\/runs\/r1\/mcp\.json' --strict-mcp-config$/,
+    );
+  });
+
+  it("loads no MCP config without one, and keeps the user's own servers", () => {
+    const command = claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/b");
+
+    expect(command).not.toContain("--mcp-config");
+    expect(command).not.toContain("--strict-mcp-config");
+  });
+
   it("loads no plugin folder without one", () => {
     expect(claudeCommand({ sessionId, model: "haiku" }, settingsPath)).not.toContain(
       "--plugin-dir",

@@ -40,6 +40,21 @@ describe("FakeFlowStore", () => {
     expect(store.save(flowOf("p1", "p2", "p3"))).toEqual({ flowId: "flow-1", version: 3 });
   });
 
+  it("loads a chosen saved version, and nothing for one never saved", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-1") });
+    store.save(flowOf("p1"));
+    store.save(flowOf("p1", "p2"));
+
+    expect(store.load({ flowId: "flow-1", version: 1 })).toEqual({
+      flowId: "flow-1",
+      name: "Untitled",
+      version: 1,
+      flow: flowOf("p1"),
+    });
+    expect(store.load({ flowId: "flow-1", version: 3 })).toBeNull();
+    expect(store.load({ flowId: "nope", version: 1 })).toBeNull();
+  });
+
   it("loads the last saved flow as Untitled at its latest version", () => {
     const store = new FakeFlowStore({ newId: ids("flow-1") });
     store.save(flowOf("p1"));

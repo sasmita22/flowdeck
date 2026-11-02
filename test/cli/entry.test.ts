@@ -78,7 +78,6 @@ describe("the flowdeck entry", () => {
     const built = await build(flow(nodes, wires), {
       fs: new NodeFileSystem(),
       home,
-      hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
     });
     if (!built.ok) throw new Error("build failed");
     return built.dir;

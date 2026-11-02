@@ -10,6 +10,10 @@ export type EngineRequest = {
     | "save-flow"
     | "load-latest-flow"
     | "start-run"
+    | "build-version"
+    | "list-builds"
+    | "build-files"
+    | "run-build"
     | "answer-wait"
     | "workspace-info";
   payload?: unknown;

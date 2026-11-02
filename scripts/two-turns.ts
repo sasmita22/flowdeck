@@ -12,14 +12,17 @@ import { writeHookSettings } from "../src/adapters/claude/write-hook-settings.js
 import { HookSocketServer } from "../src/adapters/hook-socket/hook-socket-server.js";
 import { TmuxSessionHost } from "../src/adapters/tmux/tmux-session-host.js";
 import type { SessionHost } from "../src/ports/session-host.js";
-import { hookSettings } from "../src/core/compiler/hook-settings.js";
+import { hookCommand, hookSettings } from "../src/core/compiler/hook-settings.js";
 import { waitForTurnEnd, type TurnEndEvent, type TurnEvents } from "../src/core/run/turns.js";
 
 const hookScriptPath = fileURLToPath(new URL("../bin/flowdeck-hook.ts", import.meta.url));
 const maxSocketPath = 104;
 
 export function twoTurnsSettings(options: { nodePath: string; hookScriptPath: string }) {
-  const settings = { ...hookSettings(options), permissions: { defaultMode: "acceptEdits" } };
+  const settings = {
+    ...hookSettings(hookCommand(options)),
+    permissions: { defaultMode: "acceptEdits" },
+  };
   return settings;
 }
 

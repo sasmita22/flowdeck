@@ -47,6 +47,8 @@ describe("describeNodeFields", () => {
       [
         ["text", "command", "node-setting-command"],
         ["list", "args", "node-setting-args"],
+        ["list", "successCodes", "node-setting-success-codes"],
+        ["list", "retryCodes", "node-setting-retry-codes"],
       ],
     ],
     [
@@ -104,7 +106,13 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["fork", []],
-    ["join", [["select", "wait", "node-setting-wait"]]],
+    [
+      "join",
+      [
+        ["select", "wait", "node-setting-wait"],
+        ["select", "onBranchFail", "node-setting-on-branch-fail"],
+      ],
+    ],
     ["foreach", [["text", "file", "node-setting-file"]]],
     ["branch", [["text", "flag", "node-setting-flag"]]],
   ])("describes the %s settings", (type, expected) => {
@@ -143,6 +151,7 @@ describe("describeNodeFields", () => {
     expect(options("loop")).toEqual([{ ask: "Ask me", fail: "Fail the run" }]);
     expect(options("join")).toEqual([
       { all: "Every branch is done", first: "The first branch is done" },
+      { wait: "Wait for me to decide", skip: "Go on without it", stop: "Stop the run" },
     ]);
   });
 
@@ -160,6 +169,8 @@ describe("applyNodeSetting", () => {
     ["prompt", ["expectedOutput"], "A plan", { instructions: "", expectedOutput: "A plan" }],
     ["script", ["command"], "npm", { command: "npm" }],
     ["script", ["args"], "test\n\n--run\n", { command: "", args: ["test", "--run"] }],
+    ["script", ["successCodes"], "0\n\n3\n", { command: "", successCodes: [0, 3] }],
+    ["script", ["retryCodes"], "75", { command: "", retryCodes: [75] }],
     ["agent", ["tools"], "Read\nBash", { tools: ["Read", "Bash"] }],
     ["gate", ["shown"], "Check the plan", { shown: "Check the plan", skippable: false }],
     ["gate", ["skippable"], true, { shown: "", skippable: true }],
@@ -171,6 +182,7 @@ describe("applyNodeSetting", () => {
     ["trigger", ["flags"], { deep: true }, { inputs: [], flags: { deep: true } }],
     ["output", ["name"], "result", { name: "result", type: "" }],
     ["join", ["wait"], "first", { wait: "first" }],
+    ["join", ["onBranchFail"], "skip", { wait: "all", onBranchFail: "skip" }],
     ["foreach", ["file"], "plan/units.txt", { file: "plan/units.txt" }],
     ["branch", ["flag"], "deep", { flag: "deep" }],
   ])("sets %s %s and keeps the settings valid", (type, path, value, expected) => {
@@ -191,6 +203,9 @@ describe("applyNodeSetting", () => {
     ["foreach", ["file"], "../items.txt", "must not contain .."],
     ["loop", ["onCap"], "retry", "Choose what happens at the round limit"],
     ["join", ["wait"], "any", "Choose when to continue"],
+    ["join", ["onBranchFail"], "retry", "Choose what happens when a branch fails"],
+    ["script", ["successCodes"], "0\nok", "Exit codes are whole numbers"],
+    ["script", ["retryCodes"], "2.5", "Exit codes are whole numbers"],
   ])("refuses an invalid %s %s and says why", (type, path, value, reason) => {
     const result = applyNodeSetting(nodeOf(type), path, value);
 

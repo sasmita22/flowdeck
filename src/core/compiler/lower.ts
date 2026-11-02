@@ -1,5 +1,6 @@
 import { order } from "../flow/order.js";
 import type { Flow, Node, Session, Wire } from "../flow/schema.js";
+import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
 import { compilePrompt } from "../nodes/prompt/compile.js";
 
@@ -14,8 +15,13 @@ export type ManifestNode = {
   file?: string;
 };
 
+export type ManifestOutput = { node: string; name: string; type: string };
+
 export type Manifest = {
   version: 1;
+  source?: BuildSource;
+  inputs?: string[];
+  outputs?: ManifestOutput[];
   session: Omit<Session, "frame">;
   nodes: ManifestNode[];
   wires: Wire[];
@@ -33,15 +39,34 @@ const compile = (node: Node): BuildFile | undefined => {
   }
 };
 
-export function lower(flow: Flow): { manifest: Omit<Manifest, "files">; nodeFiles: BuildFile[] } {
+const declaredInputs = (nodes: readonly Node[]): string[] => [
+  ...new Set(nodes.flatMap((node) => (node.type === "trigger" ? node.settings.inputs : []))),
+];
+
+const declaredOutputs = (nodes: readonly Node[]): ManifestOutput[] =>
+  nodes.flatMap((node) =>
+    node.type === "output"
+      ? [{ node: node.id, name: node.settings.name, type: node.settings.type }]
+      : [],
+  );
+
+export function lower(
+  flow: Flow,
+  source?: BuildSource,
+): { manifest: Omit<Manifest, "files">; nodeFiles: BuildFile[] } {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
   const compiled = nodes.map((node) => ({ node, file: compile(node) }));
   const session = { ...flow.session };
   delete session.frame;
+  const inputs = declaredInputs(nodes);
+  const outputs = declaredOutputs(nodes);
   return {
     manifest: {
       version: 1,
+      ...(source === undefined ? {} : { source }),
+      ...(inputs.length === 0 ? {} : { inputs }),
+      ...(outputs.length === 0 ? {} : { outputs }),
       session,
       nodes: compiled.map(({ node, file }) => ({
         id: node.id,

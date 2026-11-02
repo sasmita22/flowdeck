@@ -9,7 +9,6 @@ import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
-const hooks = { nodePath: "/usr/local/bin/node", hookScriptPath: "/fd/bin/flowdeck-hook.mjs" };
 const sample = () => flow([prompt("p"), agent("a")], [thenWire("p", "a")]);
 
 const succeeded = (result: BuildResult) => {
@@ -19,7 +18,7 @@ const succeeded = (result: BuildResult) => {
 
 const built = async () => {
   const fs = new FakeFileSystem();
-  const { dir } = succeeded(await build(sample(), { fs, home, hooks }));
+  const { dir } = succeeded(await build(sample(), { fs, home }));
   return { fs, dir };
 };
 
@@ -53,7 +52,7 @@ describe("verify", () => {
   it("accepts a fresh build on the real file system adapter", async () => {
     tmp = await mkdtemp(join(tmpdir(), "fd-verify-"));
     const fs = new NodeFileSystem() satisfies VerifyFileSystem;
-    const { dir } = succeeded(await build(sample(), { fs, home: tmp, hooks }));
+    const { dir } = succeeded(await build(sample(), { fs, home: tmp }));
 
     expect(await verify(dir, { fs })).toStrictEqual({ ok: true });
   });

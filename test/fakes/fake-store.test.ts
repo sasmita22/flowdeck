@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NewRun } from "../../src/ports/store.js";
+import type { NewBuild, NewRun } from "../../src/ports/store.js";
 import { FakeStore } from "./fake-store.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
@@ -7,6 +7,17 @@ const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
   inputs: { cwd: "/repo" },
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
+  buildHash: "h1",
+});
+
+const build = (hash: string): NewBuild => ({
+  hash,
+  dir: `/fd/builds/${hash}`,
+  files: [
+    { path: "manifest.json", sha256: "m" },
+    { path: "commands/p1.md", sha256: "c" },
+  ],
+  nodes: [{ nodeId: "p1", type: "prompt", config: {}, file: "commands/p1.md" }],
 });
 
 describe("FakeStore", () => {
@@ -95,25 +106,50 @@ describe("FakeStore", () => {
     expect(store.findRun(id)?.status).toBe("done");
   });
 
-  it("keeps one build per hash however often it is recorded", () => {
+  it("keeps the first record of a hash however often it is recorded", () => {
     const store = new FakeStore();
 
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+    store.recordBuild(build("h1"));
+    store.recordBuild({ ...build("h1"), dir: "/elsewhere" });
 
-    expect(store.builds()).toEqual([{ hash: "h1", dir: "/fd/builds/h1" }]);
+    expect(store.builds()).toEqual([build("h1")]);
   });
 
-  it("keeps the build hash a run was created with, and none when it was given none", () => {
+  it("lists builds newest first, finds one by hash, and reads its files in path order", () => {
+    const store = new FakeStore();
+    store.recordBuild({ ...build("h1"), source: { flowId: "f1", version: 2 } });
+    store.recordBuild(build("h2"));
+
+    expect(store.listBuilds()).toEqual([
+      { hash: "h2", dir: "/fd/builds/h2", createdAt: 2 },
+      { hash: "h1", dir: "/fd/builds/h1", createdAt: 1, source: { flowId: "f1", version: 2 } },
+    ]);
+    expect(store.findBuild("h1")).toEqual(store.listBuilds()[1]);
+    expect(store.findBuild("nope")).toBeUndefined();
+    expect(store.buildFiles("h1")).toEqual([
+      { path: "commands/p1.md", sha256: "c" },
+      { path: "manifest.json", sha256: "m" },
+    ]);
+    expect(store.buildFiles("nope")).toEqual([]);
+  });
+
+  it("keeps the build hash a run was created with", () => {
     const store = new FakeStore();
 
-    const withBuild = store.createRun({ ...newRun(), buildHash: "h1" });
-    const withoutBuild = store.createRun(newRun());
+    const run = store.createRun(newRun());
 
-    expect(withBuild.buildHash).toBe("h1");
-    expect(store.findRun(withBuild.id)?.buildHash).toBe("h1");
-    expect(withoutBuild).not.toHaveProperty("buildHash");
-    expect(store.findRun(withoutBuild.id)).not.toHaveProperty("buildHash");
+    expect(run.buildHash).toBe("h1");
+    expect(store.findRun(run.id)?.buildHash).toBe("h1");
+  });
+
+  it("keeps the total cost written for a run", () => {
+    const store = new FakeStore();
+    const { id } = store.createRun(newRun());
+
+    store.recordCost(id, 0.5);
+
+    expect(store.costOf(id)).toBe(0.5);
+    expect(store.costOf("nope")).toBeUndefined();
   });
 
   it("gives no way to edit or remove an appended event through what it returns", () => {

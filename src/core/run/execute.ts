@@ -1,6 +1,7 @@
 import type { Manifest } from "../compiler/lower.js";
+import type { HookPaths } from "../compiler/hook-settings.js";
 import { verify, type VerifyFileSystem } from "../compiler/verify.js";
-import type { UsageReader } from "./budget.js";
+import { costOf, type UsageReader } from "./budget.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
@@ -15,6 +16,8 @@ export type OpenSessionOptions = {
   socketPath: string;
   cwd: string;
   claudeSessionId: string;
+  hooks: HookPaths;
+  mcpConfigPath?: string;
   attach?: boolean;
 };
 
@@ -100,8 +103,16 @@ export async function loadBuild(
   return { kind: "loaded", build: manifest };
 }
 
+export const runMcpConfigPath = (home: string, runId: string): string =>
+  `${home}/runs/${runId}/mcp.json`;
+
+const checksACondition = (node: LoadedBuild["nodes"][number]) =>
+  node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
+
 export const needsClaude = (manifest: LoadedBuild) =>
-  manifest.nodes.some((node) => node.type === "prompt" || node.type === "agent");
+  manifest.nodes.some(
+    (node) => node.type === "prompt" || node.type === "agent" || checksACondition(node),
+  );
 
 type ResumeRead = { actions: ResumeActions; stop?: TurnEndEvent };
 
@@ -138,6 +149,21 @@ function completeWaitWith({ actions, stop }: ResumeRead): ResumeActions {
       action.kind === "wait" ? complete : action,
     ]),
   );
+}
+
+async function recordSpend(
+  store: Store,
+  runId: string,
+  usage: UsageReader | undefined,
+  sessionId: string | undefined,
+  onChange: (line: string) => void,
+): Promise<void> {
+  if (usage === undefined || sessionId === undefined || sessionId === "") return;
+  try {
+    store.recordCost(runId, costOf(await usage.entries(sessionId)));
+  } catch (error) {
+    onChange(`cost not recorded: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
@@ -218,6 +244,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
   } finally {
     stopListening();
     await stopAll();
+    await recordSpend(store, runId, deps.usage, opened?.sessionId, deps.onChange);
     store.finishRun(runId, wasInterrupted ? "stopped" : status);
   }
 }

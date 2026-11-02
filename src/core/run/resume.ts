@@ -100,6 +100,7 @@ export function decideResume({ manifest, events, turns }: ResumeInput): ResumeAc
       };
     }
     if (status === "needs-you" && humanTypes.has(node.type)) actions[node.id] = settleHuman(own);
+    if (status === "running" && node.type === "hardstop") actions[node.id] = { kind: "ask" };
   }
   return actions;
 }

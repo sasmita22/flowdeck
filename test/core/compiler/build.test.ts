@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { build, type BuildFileSystem, type BuildResult } from "../../../src/core/compiler/build.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
+import { verify } from "../../../src/core/compiler/verify.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
-const hooks = { nodePath: "/usr/local/bin/node", hookScriptPath: "/fd/bin/flowdeck-hook.mjs" };
 const expectedFiles = [
   "agents/a.md",
   "commands/p.md",
@@ -26,7 +26,7 @@ const sample = (instructions = "Do the work."): Flow => {
   return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit"] } };
 };
 
-const run = (fs: FakeFileSystem, input: Flow = sample()) => build(input, { fs, home, hooks });
+const run = (fs: FakeFileSystem, input: Flow = sample()) => build(input, { fs, home });
 
 const succeeded = (result: BuildResult) => {
   expect(result.ok).toBe(true);
@@ -98,6 +98,76 @@ describe("build", () => {
     expect(writes(fs)).toHaveLength(writesAfterFirst);
   });
 
+  it("builds the same hash and bytes in two homes, naming neither", async () => {
+    const first = new FakeFileSystem();
+    const second = new FakeFileSystem();
+
+    const a = succeeded(await build(sample(), { fs: first, home: "/Users/a/.flowdeck" }));
+    const b = succeeded(await build(sample(), { fs: second, home: "/tmp/other home" }));
+
+    expect(b.hash).toBe(a.hash);
+    const files = await readBack(first, a.dir);
+    expect(await readBack(second, b.dir)).toEqual(files);
+    for (const { content } of files) {
+      expect(content).not.toContain("/Users/a");
+      expect(content).not.toContain("flowdeck-hook");
+    }
+  });
+
+  it("returns its record: every written file with the sha256 of its bytes, and every manifest node", async () => {
+    const fs = new FakeFileSystem();
+
+    const result = succeeded(await run(fs));
+
+    const onDisk = await readBack(fs, result.dir);
+    expect(result.record.files).toEqual(
+      onDisk.map(({ path, content }) => ({
+        path,
+        sha256: createHash("sha256").update(content).digest("hex"),
+      })),
+    );
+    const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`));
+    expect(result.record).toMatchObject({ hash: result.hash, dir: result.dir });
+    expect(result.record).not.toHaveProperty("source");
+    expect(result.record.nodes).toEqual(
+      manifest.nodes.map(
+        (node: { id: string; type: string; settings: unknown; file?: string }) => ({
+          nodeId: node.id,
+          type: node.type,
+          config: node.settings,
+          ...(node.file === undefined ? {} : { file: node.file }),
+        }),
+      ),
+    );
+    expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["p", "a"]);
+  });
+
+  it("returns the same record when it reuses the folder", async () => {
+    const fs = new FakeFileSystem();
+    const first = succeeded(await run(fs));
+
+    const second = succeeded(await run(fs));
+
+    expect(second.record).toEqual(first.record);
+  });
+
+  it("names the saved flow version it was built from, so each version has its own hash", async () => {
+    const v1 = { flowId: "f1", version: 1 };
+    const build1 = succeeded(await build(sample(), { fs: new FakeFileSystem(), home, source: v1 }));
+    const again = succeeded(await build(sample(), { fs: new FakeFileSystem(), home, source: v1 }));
+    const build2 = succeeded(
+      await build(sample(), {
+        fs: new FakeFileSystem(),
+        home,
+        source: { flowId: "f1", version: 2 },
+      }),
+    );
+
+    expect(again.hash).toBe(build1.hash);
+    expect(build2.hash).not.toBe(build1.hash);
+    expect(build1.record.source).toEqual(v1);
+  });
+
   it("gives a different hash when one character of a prompt changes", async () => {
     const before = succeeded(await run(new FakeFileSystem(), sample("Do the work.")));
     const after = succeeded(await run(new FakeFileSystem(), sample("Do the work!")));
@@ -118,6 +188,54 @@ describe("build", () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? [] : result.errors).not.toEqual([]);
     expect(fs.calls).toEqual([]);
+  });
+
+  it("restores a tampered cached build to its recorded bytes, and says what it restored", async () => {
+    const fs = new FakeFileSystem();
+    const first = succeeded(await run(fs));
+    const original = await readBack(fs, first.dir);
+    await fs.writeFile(`${first.dir}/commands/p.md`, "tampered");
+    await fs.remove(`${first.dir}/agents/a.md`);
+    await fs.writeFile(`${first.dir}/.DS_Store`, "finder");
+
+    const second = succeeded(await run(fs));
+
+    expect(second).toMatchObject({ hash: first.hash, dir: first.dir, reused: true });
+    expect(second.restored).toEqual([
+      { path: ".DS_Store", problem: "extra" },
+      { path: "agents/a.md", problem: "missing" },
+      { path: "commands/p.md", problem: "changed" },
+    ]);
+    expect(await readBack(fs, first.dir)).toEqual(original);
+    expect(await verify(first.dir, { fs })).toEqual({ ok: true });
+  });
+
+  it("restores a file edited together with its sha in the manifest", async () => {
+    const fs = new FakeFileSystem();
+    const first = succeeded(await run(fs));
+    const original = await readBack(fs, first.dir);
+    const manifest = JSON.parse(await fs.readFile(`${first.dir}/manifest.json`));
+    manifest.files["commands/p.md"] = createHash("sha256").update("forged").digest("hex");
+    await fs.writeFile(`${first.dir}/commands/p.md`, "forged");
+    await fs.writeFile(`${first.dir}/manifest.json`, JSON.stringify(manifest));
+
+    const second = succeeded(await run(fs));
+
+    expect(second).toMatchObject({ hash: first.hash, reused: true });
+    expect(await readBack(fs, first.dir)).toEqual(original);
+    expect(await verify(first.dir, { fs })).toEqual({ ok: true });
+  });
+
+  it("restores nothing and writes nothing when the cached build is intact", async () => {
+    const fs = new FakeFileSystem();
+    succeeded(await run(fs));
+    const writesBefore = writes(fs).length;
+
+    const again = succeeded(await run(fs));
+
+    expect(again.restored).toEqual([]);
+    expect(writes(fs)).toHaveLength(writesBefore);
+    expect(fs.calls.some((call) => call.method === "remove")).toBe(false);
   });
 
   it("rebuilds a folder that has no manifest", async () => {

@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { cp, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -10,7 +9,6 @@ import { build } from "../../src/core/compiler/build.js";
 import { agent, flow, prompt, thenWire } from "../fixtures/flow-builders.js";
 
 const run = promisify(execFile);
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 
 const details = async (pluginDir: string, hash: string, cwd: string): Promise<string> => {
   const { stdout } = await run("claude", ["--plugin-dir", pluginDir, "plugin", "details", hash], {
@@ -39,7 +37,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build folder in plain claude
       {
         fs: new NodeFileSystem(),
         home: join(tmp, "home"),
-        hooks: { nodePath: process.execPath, hookScriptPath },
       },
     );
     if (!result.ok) throw new Error("build failed");
