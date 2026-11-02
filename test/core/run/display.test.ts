@@ -5,7 +5,7 @@ import type { NodeState } from "../../../src/core/run/state.js";
 describe("displayStatus", () => {
   it.each<[NodeState, string]>([
     ["waiting", "waiting"],
-    ["sent", "running"],
+    ["sent", "sent"],
     ["running", "running"],
     ["needs-you", "needs you"],
     ["failed", "failed"],

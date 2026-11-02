@@ -1,6 +1,8 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { costReportSchema, type CostReport } from "../../core/run/cost.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
 import { buildVersionResultSchema } from "../../core/run/listing.js";
+import { runChoicesSchema, type RunChoices, type RunOptions } from "../../core/run/options.js";
 import {
   runSnapshotSchema,
   startRunResultSchema,
@@ -12,8 +14,18 @@ import type { SaveState } from "./save-store.js";
 
 export type RunBridge = Pick<
   FlowdeckBridge,
-  "buildVersion" | "runBuild" | "getRunState" | "onRunState"
+  | "buildVersion"
+  | "runBuild"
+  | "getRunState"
+  | "onRunState"
+  | "runOptions"
+  | "stopRun"
+  | "retryNode"
+  | "resumeRun"
+  | "runCost"
 >;
+
+export type RunDialog = { hash: string; choices: RunChoices };
 
 export type BuiltVersion = { hash: string; flowId: string; version: number };
 
@@ -22,12 +34,23 @@ export type RunState = {
   starting: boolean;
   error: string | null;
   lastBuild: BuiltVersion | null;
+  dialog: RunDialog | null;
+  cost: { runId: string; report: CostReport } | null;
   connect(): Promise<void>;
   run(): Promise<string | null>;
   build(): Promise<string | null>;
   buildVersion(ref: { flowId: string; version: number }): Promise<string | null>;
   runBuild(hash: string): Promise<string | null>;
+  start(options: RunOptions): Promise<string | null>;
+  cancelDialog(): void;
+  stop(runId: string): Promise<void>;
+  retry(runId: string, nodeId: string): Promise<string | null>;
+  resume(runId: string): Promise<string | null>;
+  loadCost(runId: string): Promise<void>;
 };
+
+const offersChoices = ({ inputs, flags, automatic }: RunChoices) =>
+  inputs.length > 0 || Object.keys(flags).length > 0 || automatic;
 
 export type RunView = Pick<RunState, "snapshot">;
 
@@ -44,17 +67,29 @@ export const selectNodeDisplay = (
   return state === undefined ? null : displayStatus(state);
 };
 
-const summaryLabel = (status: RunSnapshot["status"], shown: readonly DisplayStatus[]) => {
-  if (shown.includes("needs you")) return "Needs you";
+const summaryLabel = (
+  status: RunSnapshot["status"],
+  shown: readonly DisplayStatus[],
+  waiting: boolean,
+) => {
+  if ((waiting && status === "running") || shown.includes("needs you")) return "Needs you";
   if (shown.includes("failed")) return "Failed";
+  if (status === "stopped") return "Stopped";
   return status === "running" ? "Running" : "Done";
 };
 
-export const selectRunSummary = (run: Pick<RunState, "snapshot">): string => {
+export const selectRunSummary = (run: Pick<RunState, "snapshot">, waiting = false): string => {
   if (run.snapshot === null) return "Idle";
   const shown = Object.values(run.snapshot.nodes).map(displayStatus);
   const done = shown.filter((status) => status === "done").length;
-  return `${summaryLabel(run.snapshot.status, shown)} · ${done} of ${shown.length} nodes done`;
+  return `${summaryLabel(run.snapshot.status, shown, waiting)} · ${done} of ${shown.length} nodes done`;
+};
+
+export const selectSessionStatus = (run: Pick<RunState, "snapshot">, waiting = false): string => {
+  const { snapshot } = run;
+  if (snapshot === null) return "idle";
+  const needsYou = Object.values(snapshot.nodes).some((state) => state === "needs-you");
+  return snapshot.status === "running" && (waiting || needsYou) ? "needs you" : snapshot.status;
 };
 
 export const selectLiveBadge = (snapshot: RunSnapshot | null): string | null => {
@@ -116,12 +151,22 @@ export const createRunStore = ({
       return buildRef({ flowId, version });
     };
 
-    const launch = async (hash: string): Promise<Step<string>> => {
-      const result = startRunResultSchema.safeParse(await bridge.runBuild({ hash }));
+    const started = (value: unknown): Step<string> => {
+      const result = startRunResultSchema.safeParse(value);
       if (!result.success) return { ok: false, error: "unexpected start-run result" };
       return result.data.kind === "error"
         ? { ok: false, error: result.data.message }
         : { ok: true, value: result.data.runId };
+    };
+
+    const launch = async (hash: string): Promise<Step<string | null>> => {
+      const choices = runChoicesSchema.safeParse(await bridge.runOptions({ hash }));
+      if (!choices.success) return { ok: false, error: "unexpected run options" };
+      if (offersChoices(choices.data)) {
+        set({ dialog: { hash, choices: choices.data } });
+        return { ok: true, value: null };
+      }
+      return started(await bridge.runBuild({ hash }));
     };
 
     const busy = async <T>(blocked: boolean, work: () => Promise<Step<T>>): Promise<T | null> => {
@@ -137,11 +182,16 @@ export const createRunStore = ({
       return step.ok ? step.value : null;
     };
 
+    const answered = (work: () => Promise<unknown>) =>
+      busy(false, async () => started(await work()));
+
     return {
       snapshot: null,
       starting: false,
       error: null,
       lastBuild: null,
+      dialog: null,
+      cost: null,
 
       connect: async () => {
         bridge.onRunState((value) => {
@@ -152,7 +202,7 @@ export const createRunStore = ({
       },
 
       run: () =>
-        busy(selectRunDisabled(get(), save.getState()), async () => {
+        busy(selectRunDisabled(get(), save.getState()), async (): Promise<Step<string | null>> => {
           const built = await buildSaved();
           return built.ok ? launch(built.value.hash) : built;
         }),
@@ -168,5 +218,38 @@ export const createRunStore = ({
       },
 
       runBuild: (hash) => busy(selectRunDisabled(get(), save.getState()), () => launch(hash)),
+
+      start: async (options) => {
+        const { dialog } = get();
+        if (dialog === null) return null;
+        const runId = await busy(selectRunDisabled(get(), save.getState()), async () =>
+          started(await bridge.runBuild({ hash: dialog.hash, ...options })),
+        );
+        if (runId !== null) set({ dialog: null });
+        return runId;
+      },
+
+      cancelDialog: () => set({ dialog: null }),
+
+      stop: async (runId) => {
+        try {
+          await bridge.stopRun({ runId });
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+        }
+      },
+
+      retry: (runId, nodeId) => answered(() => bridge.retryNode({ runId, nodeId })),
+
+      resume: (runId) => answered(() => bridge.resumeRun({ runId })),
+
+      loadCost: async (runId) => {
+        try {
+          const report = costReportSchema.parse(await bridge.runCost({ runId }));
+          set({ cost: { runId, report } });
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+        }
+      },
     };
   });

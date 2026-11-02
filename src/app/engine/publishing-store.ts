@@ -32,12 +32,19 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     listBuilds: () => store.listBuilds(),
     listRuns: () => store.listRuns(),
     buildFiles: (hash) => store.buildFiles(hash),
+    recordActivity: (id, entry) => store.recordActivity(id, entry),
+    activity: (id) => store.activity(id),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);
       publishFor(id);
     },
     appendAll(id, entries) {
       store.appendAll(id, entries);
+      publishFor(id);
+    },
+    reopenRun(id) {
+      store.reopenRun(id);
+      if (id === runId) status = "running";
       publishFor(id);
     },
     finishRun(id, final) {

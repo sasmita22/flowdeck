@@ -1,3 +1,4 @@
+import type { ActivityEntry } from "./activity.js";
 import type { RunEvent } from "./run-events.js";
 
 export type RunStatus = "running" | "done" | "failed" | "stopped";
@@ -56,6 +57,9 @@ export interface Store {
   appendAll(runId: string, entries: readonly EventEntry[]): void;
   events(runId: string): StoredEvent[];
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void;
+  reopenRun(runId: string): void;
+  recordActivity(runId: string, entry: ActivityEntry): void;
+  activity(runId: string): ActivityEntry[];
   recordCost(runId: string, totalCost: number): void;
   recordBuild(build: NewBuild): void;
   findBuild(hash: string): BuildRecord | undefined;

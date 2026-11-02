@@ -97,6 +97,48 @@ describe("FakeStore", () => {
     ]);
   });
 
+  it("reopens a finished run as running", () => {
+    const store = new FakeStore();
+    const { id } = store.createRun(newRun());
+    store.finishRun(id, "failed");
+
+    store.reopenRun(id);
+
+    expect(store.findRun(id)?.status).toBe("running");
+  });
+
+  it("keeps each run's activity in id order, an entry written again replacing the old one", () => {
+    const store = new FakeStore();
+    const { id } = store.createRun(newRun());
+    const entry = {
+      id: 2,
+      nodeId: "p1",
+      at: 1,
+      kind: "tool" as const,
+      tool: "Bash",
+      summary: "ls",
+    };
+
+    store.recordActivity(id, entry);
+    store.recordActivity(id, { ...entry, id: 1 });
+    store.recordActivity(id, { ...entry, summary: "pwd" });
+
+    expect(store.activity(id)).toEqual([
+      { ...entry, id: 1 },
+      { ...entry, summary: "pwd" },
+    ]);
+    expect(store.activity("other")).toEqual([]);
+  });
+
+  it("stamps events with the clock it is given", () => {
+    const store = new FakeStore({ now: () => new Date(5000) });
+    const { id } = store.createRun(newRun());
+
+    store.append(id, "p1", { kind: "sent" });
+
+    expect(store.events(id)[0]?.time).toBe(new Date(5000).toISOString());
+  });
+
   it("records the status a run finished with", () => {
     const store = new FakeStore();
     const { id } = store.createRun(newRun());

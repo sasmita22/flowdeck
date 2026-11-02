@@ -54,7 +54,36 @@ describe("runSnapshot", () => {
       runId: "run-7",
       status: "failed",
       nodes: { s1: "failed" },
+      reasons: { s1: "Exit 1" },
     });
+  });
+
+  it("carries each failed node's last failure in plain words, and nothing for the others", () => {
+    const events: (RunEvent & { nodeId: string })[] = [
+      { nodeId: "s1", kind: "running" },
+      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: exit code 1" } },
+      { nodeId: "s1", kind: "retry" },
+      { nodeId: "s1", kind: "running" },
+      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: exit code 3" } },
+      { nodeId: "s2", kind: "running" },
+    ];
+
+    const snapshot = runSnapshot({ runId: "r", status: "failed", nodeIds: ["s1", "s2"], events });
+
+    expect(snapshot.reasons).toEqual({ s1: "Script exited with code 3" });
+    expect(runSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("drops the reason once a failed node is retried", () => {
+    const events: (RunEvent & { nodeId: string })[] = [
+      { nodeId: "s1", kind: "running" },
+      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: exit code 3" } },
+      { nodeId: "s1", kind: "retry" },
+    ];
+
+    expect(
+      runSnapshot({ runId: "r", status: "running", nodeIds: ["s1"], events }).reasons,
+    ).toBeUndefined();
   });
 });
 

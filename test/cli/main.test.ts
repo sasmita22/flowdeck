@@ -1118,11 +1118,51 @@ describe("runCli resume", () => {
     expect(waiter.calls).toEqual([]);
   });
 
+  describe("with automatic mode stored on the run", () => {
+    const resumeAtGate = async (args: string[]) => {
+      const other = new FakeFileSystem();
+      const { dir: gateDir } = await built(
+        other,
+        flow(
+          [script("s1"), gate("g1", { settings: { skippable: true } }), script("s2")],
+          [thenWire("s1", "g1"), thenWire("g1", "s2")],
+        ),
+      );
+      const waiter = new FakeWaiter([{ decision: "approve" }]);
+      const { deps, recorded, store } = stubDeps(other, { results: [ok], waiter });
+      const { id } = store.createRun({
+        buildDir: gateDir,
+        inputs: { auto: true },
+        nodeIds: ["s1", "g1", "s2"],
+        session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
+        buildHash: "h",
+      });
+      store.append(id, "s1", { kind: "running" });
+      store.append(id, "s1", { kind: "done" });
+      return { code: await runCli(["resume", id, ...args], deps), recorded, waiter };
+    };
+
+    it("keeps the run's automatic mode, so a skippable Gate is skipped without --auto", async () => {
+      const { code, recorded, waiter } = await resumeAtGate([]);
+
+      expect(code).toBe(0);
+      expect(recorded.stdout).toEqual(["g1 skipped", "s2 started", "s2 done"]);
+      expect(waiter.calls).toEqual([]);
+    });
+
+    it("lets --no-auto override the stored automatic mode, so the Gate asks", async () => {
+      const { code, waiter } = await resumeAtGate(["--no-auto"]);
+
+      expect(code).toBe(0);
+      expect(waiter.calls.map((call) => call.nodeId)).toEqual(["g1"]);
+    });
+  });
+
   it("shows resume in the usage", async () => {
     const { deps, recorded } = stubDeps(fs);
 
     expect(await runCli(["resume"], deps)).toBe(2);
-    expect(recorded.stderr.join("\n")).toContain("flowdeck resume <id> [--auto]");
+    expect(recorded.stderr.join("\n")).toContain("flowdeck resume <id> [--auto | --no-auto]");
   });
 });
 

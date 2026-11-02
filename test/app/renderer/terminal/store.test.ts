@@ -32,6 +32,7 @@ const setup = () => {
     writeTerminal: vi.fn<(data: string) => void>(),
     resizeTerminal: vi.fn<(size: { cols: number; rows: number }) => void>(),
     closeTerminal: vi.fn<() => void>(),
+    popOutTerminal: vi.fn<() => Promise<unknown>>(async () => true),
     onTerminalStatus: vi.fn((listener: (value: unknown) => void) => {
       calls.push("onTerminalStatus");
       statusListener = listener;
@@ -232,5 +233,20 @@ describe("input, resize and data", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith("out");
     expect(unsubscribeData).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pop out", () => {
+  it("asks for the terminal's own window, and follows whether a window holds it", async () => {
+    const { bridge, terminal, push } = await connectedAvailable();
+
+    await terminal.getState().popOut();
+    push({ available: true, attached: true, poppedOut: true });
+
+    expect(bridge.popOutTerminal).toHaveBeenCalledTimes(1);
+    expect(terminal.getState().poppedOut).toBe(true);
+
+    push(status(true, false));
+    expect(terminal.getState().poppedOut).toBe(false);
   });
 });

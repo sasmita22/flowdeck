@@ -17,9 +17,10 @@ describe("createActivityTracker", () => {
   let store: Store;
   let source: FakeEventSource;
   let unwatch: () => void;
+  let output: (nodeId: string, stream: "stdout" | "stderr", text: string) => void;
 
   const hook = (
-    kind: "PreToolUse" | "SubagentStop",
+    kind: "PreToolUse" | "PostToolUse" | "SubagentStop",
     at: number,
     fields: Record<string, unknown> = {},
     sessionId = session,
@@ -56,7 +57,11 @@ describe("createActivityTracker", () => {
       now: () => clock,
       publish: (push) => publish(push),
       log: (line) => logs.push(line),
+      activity: inner,
+      turnNodes: new Set(["p2"]),
+      place: { cwd: "/repo", home: "/Users/me" },
     });
+    output = (nodeId, stream, text) => tracker.output(nodeId, stream, text);
     store = tracker.store(inner);
     clock = 100;
     store.append(runId, "p1", { kind: "sent" });
@@ -104,6 +109,14 @@ describe("createActivityTracker", () => {
           entry: { id: 1, nodeId: "p2", at: 350, kind: "tool", tool: "Bash", summary: "ls" },
         },
       },
+    ]);
+  });
+
+  it("shows a written file relative to the run's working folder", () => {
+    hook("PreToolUse", 350, { tool_name: "Write", tool_input: { file_path: "/repo/src/a.ts" } });
+
+    expect(activity().map((push) => push.value)).toMatchObject([
+      { entry: { kind: "tool", path: "src/a.ts" } },
     ]);
   });
 
@@ -185,5 +198,84 @@ describe("createActivityTracker", () => {
     hook("SubagentStop", 370, { agent_id: "agent-1", agent_type: "general-purpose" });
 
     expect(activity()).toHaveLength(1);
+  });
+
+  it("stores each entry it publishes, and stores it again when it changes", () => {
+    agent(350);
+    hook("SubagentStop", 360, { agent_id: "agent-1", agent_type: "general-purpose" });
+
+    expect(inner.activity(runId)).toEqual([
+      expect.objectContaining({ id: 1, kind: "subagent", state: "finished" }),
+    ]);
+  });
+
+  it("writes a turn entry when a turn node is done, and a failure entry when a node fails", () => {
+    clock = 400;
+    store.append(runId, "p2", { kind: "done", payload: { stopMessage: "All set." } });
+    store.appendAll(runId, [
+      { nodeId: "p1", event: { kind: "reset" } },
+      { nodeId: "p1", event: { kind: "running" } },
+      { nodeId: "p1", event: { kind: "failed", payload: { message: "p1 failed: exit code 3" } } },
+    ]);
+
+    expect(activity().map((push) => push.value.entry)).toEqual([
+      { id: 1, nodeId: "p2", at: 400, kind: "turn", summary: "All set." },
+      { id: 2, nodeId: "p1", at: 400, kind: "failure", summary: "Script exited with code 3" },
+    ]);
+    expect(inner.activity(runId)).toHaveLength(2);
+  });
+
+  it("writes script output it is handed as an output entry on that node", () => {
+    clock = 410;
+    output("p2", "stdout", "hello\n");
+
+    expect(activity().map((push) => push.value.entry)).toEqual([
+      {
+        id: 1,
+        nodeId: "p2",
+        at: 410,
+        kind: "output",
+        stream: "stdout",
+        summary: "hello",
+        text: "hello",
+      },
+    ]);
+  });
+
+  it("writes a pr entry for the URL gh pr create printed", () => {
+    hook("PostToolUse", 350, {
+      tool_name: "Bash",
+      tool_input: { command: "gh pr create" },
+      tool_response: { stdout: "https://github.com/acme/app/pull/7\n" },
+    });
+
+    expect(activity().map((push) => push.value.entry)).toMatchObject([
+      { id: 1, nodeId: "p2", kind: "pr", url: "https://github.com/acme/app/pull/7" },
+    ]);
+  });
+
+  it("numbers new entries after the run's stored ones", () => {
+    const stored = new FakeStore();
+    const id = stored.createRun({
+      buildDir: "/b",
+      inputs: {},
+      nodeIds: ["p1"],
+      session: { tmuxName: "fd-run-test", cwd: "/repo", claudeSessionId: session },
+      buildHash: "b1",
+    }).id;
+    stored.recordActivity(id, { id: 7, nodeId: "p1", at: 1, kind: "turn", summary: "old" });
+    const tracker = createActivityTracker({
+      runId: id,
+      now: () => 5,
+      publish: (push) => pushes.push(push),
+      log: () => undefined,
+      activity: stored,
+      turnNodes: new Set(),
+      place: { cwd: "/repo" },
+    });
+
+    tracker.output("p1", "stdout", "new");
+
+    expect(stored.activity(id).map((entry) => entry.id)).toEqual([7, 8]);
   });
 });

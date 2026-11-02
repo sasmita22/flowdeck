@@ -9,6 +9,7 @@ export type TerminalBridge = Pick<
   | "writeTerminal"
   | "resizeTerminal"
   | "closeTerminal"
+  | "popOutTerminal"
   | "onTerminalStatus"
   | "onTerminalData"
 >;
@@ -17,7 +18,9 @@ export type TerminalState = {
   available: boolean;
   attached: boolean;
   visible: boolean;
+  poppedOut: boolean;
   connect(): Promise<void>;
+  popOut(): Promise<void>;
   show(): void;
   attach(size: TerminalSize): Promise<void>;
   input(data: string): void;
@@ -40,8 +43,14 @@ export const createTerminalStore = ({
     const apply = (value: unknown): boolean => {
       const parsed = terminalStatusSchema.safeParse(value);
       if (!parsed.success) return false;
-      const detached = get().attached && !parsed.data.attached;
-      set(detached ? { ...parsed.data, visible: false } : parsed.data);
+      const { available, attached } = parsed.data;
+      const poppedOut = parsed.data.poppedOut === true;
+      const detached = get().attached && !attached;
+      set(
+        detached
+          ? { available, attached, poppedOut, visible: false }
+          : { available, attached, poppedOut },
+      );
       return true;
     };
 
@@ -49,6 +58,7 @@ export const createTerminalStore = ({
       available: false,
       attached: false,
       visible: false,
+      poppedOut: false,
 
       connect: async () => {
         bridge.onTerminalStatus((value) => {
@@ -70,6 +80,10 @@ export const createTerminalStore = ({
       input: (data) => bridge.writeTerminal(data),
 
       resize: (size) => bridge.resizeTerminal(size),
+
+      popOut: async () => {
+        await bridge.popOutTerminal();
+      },
 
       close: () => {
         bridge.closeTerminal();

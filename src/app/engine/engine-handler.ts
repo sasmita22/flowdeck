@@ -9,6 +9,8 @@ import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connect
 import type { OpenedFlow } from "../../core/flow/flow-store.js";
 import { parseFlow, type Flow } from "../../core/flow/schema.js";
 import { workingFolderSchema, type FolderState } from "../../core/flow/workspace-info.js";
+import { SessionGoneError } from "../../adapters/claude/claude-session.js";
+import { agentNodes, chargeUsage, costReport, type CostReport } from "../../core/run/cost.js";
 import {
   execute,
   loadBuild,
@@ -16,9 +18,23 @@ import {
   noClaude,
   runMcpConfigPath,
   runSocketPath,
+  turnNodeIds,
+  type LoadedBuild,
   type OpenedSession,
   type RunEnvironment,
 } from "../../core/run/execute.js";
+import {
+  optionsClash,
+  runChoices,
+  runOptionsSchema,
+  storedAuto,
+  storedFlags,
+  storedOptions,
+  type RunChoices,
+} from "../../core/run/options.js";
+import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
+import { resumeEntries, retryEntries } from "../../core/run/retry.js";
+import type { EventEntry, StoredEvent } from "../../core/run/store.js";
 import type {
   BuildFileContent,
   BuildVersionResult,
@@ -45,6 +61,7 @@ export type EngineHandlerOptions = {
   version: string;
   openStores: () => EngineStores;
   home: string;
+  userHome?: string;
   publish: (push: EnginePush) => void;
   prepareHooks: () => HooksResult;
   isFolder: (path: string) => boolean;
@@ -55,6 +72,7 @@ export type EngineHandlerOptions = {
   waits?: Pick<AppWaiter, "answer" | "drop">;
   worktree: Worktree;
   gitState: GitState;
+  transcriptTurns: (claudeSessionId: string) => Promise<TranscriptTurn[]>;
 };
 
 export type EngineHandler = {
@@ -96,7 +114,19 @@ const loadRunPayload = z.object({ runId: z.string() });
 
 const doctorPayload = z.object({ connectors: z.array(z.string()) });
 
-const runBuildPayload = z.object({ hash: z.string(), inputs: inputsSchema.optional() });
+const runBuildPayload = runOptionsSchema.extend({
+  hash: z.string(),
+  inputs: inputsSchema.optional(),
+});
+
+const runIdPayload = z.object({ runId: z.string() });
+
+const retryPayload = z.object({ runId: z.string(), nodeId: z.string() });
+
+const sessionGone =
+  "This run's Claude session has ended, so it cannot go on from where it stopped.";
+
+type Continuation = { kind: "retry"; nodeId: string } | { kind: "resume" };
 
 export type { BuildFileContent, BuildVersionResult };
 
@@ -212,13 +242,126 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const runBuild = (hash: string, inputs: Record<string, string>): Promise<StartRunResult> =>
-    oneAtATime(() => withStores((stores) => launchBuild(stores, hash, inputs)));
+  type Execution = {
+    stores: EngineStores;
+    runId: string;
+    manifest: LoadedBuild;
+    nodeIds: readonly string[];
+    cwd: string;
+    socketPath: string;
+    claudeSessionId: string;
+    stored: Record<string, unknown>;
+    open: () => Promise<OpenedSession>;
+    actions?: () => Promise<ReturnType<typeof decideResume>>;
+  };
+
+  const startExecution = (launch: Execution): StartRunResult => {
+    const { runs } = launch.stores;
+    const { runId, manifest, nodeIds, claudeSessionId } = launch;
+    const tracker = createActivityTracker({
+      runId,
+      now: options.run.now,
+      publish: options.publish,
+      log: (line) => console.log(`engine: activity ${line}`),
+      activity: runs,
+      turnNodes: turnNodeIds(manifest),
+      place:
+        options.userHome === undefined
+          ? { cwd: launch.cwd }
+          : { cwd: launch.cwd, home: options.userHome },
+    });
+    const store = createPublishingStore({
+      store: tracker.store(runs),
+      runId,
+      nodeIds,
+      publish: options.publish,
+    });
+    const run: ActiveRun = { runId, done: Promise.resolve() };
+    run.done = execute(
+      {
+        ...options.run,
+        store,
+        startEvents: async (path) => {
+          const started = await options.run.startEvents(path);
+          const unwatch = tracker.watch(started.events, claudeSessionId);
+          return {
+            ...started,
+            stop: async () => {
+              unwatch();
+              await started.stop();
+            },
+          };
+        },
+        onChange: (line) => console.log(`engine: ${line}`),
+        onOutput: (nodeId, stream, text) => tracker.output(nodeId, stream, text),
+        onInterrupt: (handler) => {
+          run.interrupt = handler;
+          if (run.stopRequested !== undefined) handler(run.stopRequested);
+          return () => {
+            delete run.interrupt;
+          };
+        },
+      },
+      {
+        store,
+        runId,
+        manifest,
+        cwd: launch.cwd,
+        auto: storedAuto(launch.stored),
+        flags: storedFlags(launch.stored, manifest),
+        socketPath: launch.socketPath,
+        open: launch.open,
+        ...(launch.actions === undefined ? {} : { actions: launch.actions }),
+      },
+    )
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          console.log(`engine: run ${runId} error ${messageOf(error)}`);
+          if (runs.findRun(runId)?.status === "running") store.finishRun(runId, "failed");
+        },
+      )
+      .catch((error: unknown) => {
+        console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
+      })
+      .finally(() => {
+        options.waits?.drop();
+        active = undefined;
+        try {
+          console.log(`engine: run ${runId} ${runs.findRun(runId)?.status ?? "unknown"}`);
+        } catch (error) {
+          console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
+        }
+      });
+    active = run;
+    console.log(`engine: run ${runId} started`);
+    return { kind: "started", runId };
+  };
+
+  const sessionOptions = async (
+    runId: string,
+    manifest: LoadedBuild,
+    buildDir: string,
+    session: { sessionName: string; socketPath: string; cwd: string; claudeSessionId: string },
+    hooks: Extract<HooksResult, { kind: "ok" }>,
+    servers: Parameters<typeof writeSessionMcpConfig>[2],
+  ) => ({
+    ...session,
+    buildDir,
+    model: manifest.session.model,
+    hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
+    ...(await writeSessionMcpConfig(options.fs, runMcpConfigPath(options.home, runId), servers)),
+  });
+
+  type RunBuildOptions = z.infer<typeof runOptionsSchema>;
+
+  const runBuild = (hash: string, choices: RunBuildOptions): Promise<StartRunResult> =>
+    oneAtATime(() => withStores((stores) => launchBuild(stores, hash, choices)));
 
   const launchBuild = async (
     stores: EngineStores,
     hash: string,
-    inputs: Record<string, string>,
+    choices: RunBuildOptions,
   ): Promise<StartRunResult> => {
     const { runs } = stores;
     const built = runs.findBuild(hash);
@@ -226,6 +369,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const loaded = await loadBuild(built.dir, { fs: options.fs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
+    const clash = optionsClash(manifest);
+    if (clash !== undefined) return failure(clash);
     const connectors = await resolveConnectors(manifest.session.connectors, options.connectors);
     if (!connectors.ok) return failure(problemsOf(connectors));
     const folder = manifest.session.workingFolder;
@@ -257,9 +402,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       cwd = folder.path;
     }
     const nodeIds = manifest.nodes.map((node) => node.id);
+    const declared = runChoices(manifest).flags;
+    const flags = Object.fromEntries(
+      Object.entries(choices.flags ?? {}).filter(([name]) => name in declared),
+    );
+    const stored = storedOptions({
+      inputs: choices.inputs ?? {},
+      flags,
+      auto: choices.auto ?? false,
+    });
     const { id: runId } = runs.createRun({
       buildDir: built.dir,
-      inputs,
+      inputs: stored,
       nodeIds,
       session: { tmuxName: sessionName, cwd, claudeSessionId },
       buildHash: built.hash,
@@ -268,95 +422,183 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       push: "run-state",
       value: runSnapshot({ runId, status: "running", nodeIds, events: [] }),
     });
-    const tracker = createActivityTracker({
+    const session = { sessionName, socketPath: socket.path, cwd, claudeSessionId };
+    return startExecution({
+      stores,
       runId,
-      now: options.run.now,
-      publish: options.publish,
-      log: (line) => console.log(`engine: activity ${line}`),
-    });
-    const store = createPublishingStore({
-      store: tracker.store(runs),
-      runId,
+      manifest,
       nodeIds,
-      publish: options.publish,
+      cwd,
+      socketPath: socket.path,
+      claudeSessionId,
+      stored,
+      open: async () =>
+        needsClaude(manifest)
+          ? announced(
+              await options.run.openSession(
+                await sessionOptions(
+                  runId,
+                  manifest,
+                  built.dir,
+                  session,
+                  hooks,
+                  connectors.servers,
+                ),
+              ),
+              sessionName,
+              options.publish,
+            )
+          : noClaude,
     });
-    const run: ActiveRun = { runId, done: Promise.resolve() };
-    run.done = execute(
-      {
-        ...options.run,
-        store,
-        startEvents: async (path) => {
-          const started = await options.run.startEvents(path);
-          const unwatch = tracker.watch(started.events, claudeSessionId);
-          return {
-            ...started,
-            stop: async () => {
-              unwatch();
-              await started.stop();
-            },
-          };
-        },
-        onChange: (line) => console.log(`engine: ${line}`),
-        onInterrupt: (handler) => {
-          run.interrupt = handler;
-          if (run.stopRequested !== undefined) handler(run.stopRequested);
-          return () => {
-            delete run.interrupt;
-          };
-        },
-      },
-      {
-        store,
-        runId,
+  };
+
+  const continueRun = (runId: string, how: Continuation): Promise<StartRunResult> =>
+    oneAtATime(() => withStores((stores) => launchContinuation(stores, runId, how)));
+
+  const launchContinuation = async (
+    stores: EngineStores,
+    runId: string,
+    how: Continuation,
+  ): Promise<StartRunResult> => {
+    const { runs } = stores;
+    const record = runs.findRun(runId);
+    const summary = runs.listRuns().find((candidate) => candidate.id === runId);
+    if (record === undefined || summary === undefined) return failure(`No run ${runId}`);
+    const status = listed(summary).status;
+    if (how.kind === "resume" && status !== "stopped" && status !== "interrupted") {
+      return failure("Only a stopped or interrupted run can be resumed");
+    }
+    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+    if (loaded.kind === "error") return failure(loaded.message);
+    const manifest = loaded.build;
+    const events = runs.events(runId);
+    let entries: EventEntry[];
+    try {
+      entries =
+        how.kind === "retry"
+          ? retryEntries(manifest, events, how.nodeId)
+          : status === "stopped"
+            ? resumeEntries(manifest, events)
+            : [];
+    } catch (error) {
+      return failure(messageOf(error));
+    }
+    const { tmuxName: sessionName, cwd, claudeSessionId } = record.session;
+    const decide = async (after: readonly StoredEvent[]) =>
+      decideResume({
         manifest,
-        cwd,
-        auto: false,
-        socketPath: socket.path,
-        open: async () =>
-          needsClaude(manifest)
-            ? announced(
-                await options.run.openSession({
-                  sessionName,
-                  buildDir: built.dir,
-                  model: manifest.session.model,
-                  socketPath: socket.path,
-                  cwd,
-                  claudeSessionId,
-                  hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
-                  ...(await writeSessionMcpConfig(
-                    options.fs,
-                    runMcpConfigPath(options.home, runId),
-                    connectors.servers,
-                  )),
-                }),
-                sessionName,
-                options.publish,
-              )
-            : noClaude,
-      },
-    )
-      .then(
-        () => undefined,
-        (error: unknown) => {
-          console.log(`engine: run ${runId} error ${messageOf(error)}`);
-          if (runs.findRun(runId)?.status === "running") store.finishRun(runId, "failed");
-        },
-      )
-      .catch((error: unknown) => {
-        console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
-      })
-      .finally(() => {
-        options.waits?.drop();
-        active = undefined;
-        try {
-          console.log(`engine: run ${runId} ${runs.findRun(runId)?.status ?? "unknown"}`);
-        } catch (error) {
-          console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
-        }
+        events: after,
+        turns: await options.transcriptTurns(claudeSessionId),
       });
-    active = run;
-    console.log(`engine: run ${runId} started`);
-    return { kind: "started", runId };
+    const pending = entries.map(({ nodeId, event }, index): StoredEvent => ({
+      ...event,
+      nodeId,
+      seq: -index,
+      time: "",
+    }));
+    try {
+      await decide([...events, ...pending]);
+    } catch (error) {
+      return failure(messageOf(error));
+    }
+    const connectors = await resolveConnectors(manifest.session.connectors, options.connectors);
+    if (!connectors.ok) return failure(problemsOf(connectors));
+    const hooks = options.prepareHooks();
+    if (hooks.kind === "error") return failure(hooks.message);
+    const socket = runSocketPath(options.home, sessionName);
+    if (socket.kind === "error") return failure(socket.message);
+    let opened: OpenedSession = noClaude;
+    if (needsClaude(manifest)) {
+      const attach = events.some((event) => event.kind === "sent");
+      try {
+        opened = announced(
+          await options.run.openSession({
+            ...(await sessionOptions(
+              runId,
+              manifest,
+              record.buildDir,
+              { sessionName, socketPath: socket.path, cwd, claudeSessionId },
+              hooks,
+              connectors.servers,
+            )),
+            ...(attach ? { attach: true } : {}),
+          }),
+          sessionName,
+          options.publish,
+        );
+      } catch (error) {
+        return failure(error instanceof SessionGoneError ? sessionGone : messageOf(error));
+      }
+    }
+    if (entries.length > 0) runs.appendAll(runId, entries);
+    runs.reopenRun(runId);
+    options.publish({
+      push: "run-state",
+      value: runSnapshot({
+        runId,
+        status: "running",
+        nodeIds: record.nodeIds,
+        events: runs.events(runId),
+      }),
+    });
+    return startExecution({
+      stores,
+      runId,
+      manifest,
+      nodeIds: record.nodeIds,
+      cwd,
+      socketPath: socket.path,
+      claudeSessionId,
+      stored: record.inputs,
+      open: async () => opened,
+      actions: () => decide(runs.events(runId)),
+    });
+  };
+
+  const stopActive = async (run: ActiveRun): Promise<void> => {
+    if (run.interrupt === undefined) run.stopRequested = 143;
+    else run.interrupt(143);
+    await run.done;
+  };
+
+  const stopRun = async (runId: string): Promise<{ stopped: boolean }> => {
+    await starting;
+    const run = active;
+    if (run?.runId !== runId) return { stopped: false };
+    await stopActive(run);
+    return { stopped: true };
+  };
+
+  const choicesOf = async ({ runs }: EngineStores, hash: string): Promise<RunChoices> => {
+    const built = runs.findBuild(hash);
+    if (built === undefined) throw new Error(`No build ${hash}`);
+    const loaded = await loadBuild(built.dir, { fs: options.fs });
+    if (loaded.kind === "error") throw new Error(loaded.message);
+    const clash = optionsClash(loaded.build);
+    if (clash !== undefined) throw new Error(clash);
+    return runChoices(loaded.build);
+  };
+
+  const runCost = async ({ runs }: EngineStores, runId: string): Promise<CostReport> => {
+    const record = runs.findRun(runId);
+    if (record === undefined) throw new Error(`No run ${runId}`);
+    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+    if (loaded.kind === "error") throw new Error(loaded.message);
+    const events = runs.events(runId);
+    const live = isActive(runId);
+    const usage = options.run.usage;
+    const pending =
+      live && usage !== undefined
+        ? chargeUsage({
+            events,
+            entries: await usage.entries(record.session.claudeSessionId),
+            turnNodes: turnNodeIds(loaded.build),
+            agentNodes: agentNodes(loaded.build),
+          })
+        : [];
+    const last = events.at(-1);
+    const now = live || last === undefined ? options.run.now() : Date.parse(last.time);
+    return costReport({ nodeIds: record.nodeIds, events, pending, now });
   };
 
   const buildFiles = async (stores: EngineStores, hash: string): Promise<BuildFileContent[]> => {
@@ -419,6 +661,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         nodeIds: record.nodeIds,
         events: runs.events(runId),
       }),
+      activity: runs.activity(runId),
     };
   };
 
@@ -447,10 +690,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     async stop() {
       await starting;
       const run = active;
-      if (run === undefined) return;
-      if (run.interrupt === undefined) run.stopRequested = 143;
-      else run.interrupt(143);
-      await run.done;
+      if (run !== undefined) await stopActive(run);
     },
     async handle(request) {
       switch (request.type) {
@@ -506,9 +746,28 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "run-build": {
           const parsed = runBuildPayload.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
-          const value = await runBuild(parsed.data.hash, parsed.data.inputs ?? {});
+          const { hash, ...choices } = parsed.data;
+          const value = await runBuild(hash, choices);
           return { id: request.id, ok: true, value };
         }
+        case "run-options":
+          return parsedAnswer(request, buildFilesPayload, ({ hash }) =>
+            choicesOf(storesOrThrow(), hash),
+          );
+        case "stop-run":
+          return parsedAnswer(request, runIdPayload, ({ runId }) => stopRun(runId));
+        case "retry-node":
+          return parsedAnswer(request, retryPayload, ({ runId, nodeId }) =>
+            continueRun(runId, { kind: "retry", nodeId }),
+          );
+        case "resume-run":
+          return parsedAnswer(request, runIdPayload, ({ runId }) =>
+            continueRun(runId, { kind: "resume" }),
+          );
+        case "run-cost":
+          return parsedAnswer(request, runIdPayload, ({ runId }) =>
+            runCost(storesOrThrow(), runId),
+          );
         case "workspace-info": {
           const parsed = workspaceInfoPayload.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { selectNodeDisplay, type RunView } from "../run-store.js";
@@ -45,6 +45,32 @@ export function NodeStatusBadge({ nodeId }: { nodeId: string }) {
         style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }}
       />
       {label}
+    </span>
+  );
+}
+
+export function NodeFailureReason({ nodeId, style }: { nodeId: string; style?: CSSProperties }) {
+  const store = useContext(RunStoreContext);
+  const reason = useStore(store ?? idleStore, (state) =>
+    state.snapshot?.nodes[nodeId] === "failed" ? state.snapshot.reasons?.[nodeId] : undefined,
+  );
+  if (store === null || reason === undefined) return null;
+  return (
+    <span
+      data-testid={`node-reason-${nodeId}`}
+      title={reason}
+      style={{
+        position: "absolute",
+        top: "100%",
+        left: 0,
+        width: 200,
+        marginTop: 4,
+        color: "#ef4444",
+        font: "600 11px/1.35 var(--f-body)",
+        ...style,
+      }}
+    >
+      {reason}
     </span>
   );
 }

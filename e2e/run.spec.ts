@@ -88,7 +88,7 @@ test("Run saves the edit first, builds it, runs it and shows each node's status"
   }
 });
 
-test("Open terminal stays disabled through a script-only run, and no pane appears", async () => {
+test("A script-only run has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
   seedFlow(home, twoScripts(), folder);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
@@ -105,15 +105,17 @@ test("Open terminal stays disabled through a script-only run, and no pane appear
   await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
-  await window.getByTestId("menu-more").click();
-  await expect(window.getByTestId("terminal-open")).toBeDisabled();
-  await window.keyboard.press("Escape");
+  await window.getByTestId("run-tab-terminal").click();
+  await expect(window.getByTestId("terminal-unavailable")).toBeVisible();
   await expect(window.getByTestId("terminal-view")).toHaveCount(0);
+  await window.getByTestId("run-tab-activity").click();
 
   const session = window.getByTestId("inspector-session");
   await expect(session).toContainText("main");
   await expect(session).toHaveAttribute("data-status", "done");
   await expect(window.getByTestId("inspector-node-s1")).toHaveAttribute("data-status", "done");
   await expect(window.getByTestId("inspector-node-s2")).toHaveAttribute("data-status", "done");
-  await expect(window.getByTestId("activity-empty")).toBeVisible();
+  await expect(window.locator('[data-kind="output"][data-node-id="s1"]')).toContainText(
+    "Output: one",
+  );
 });

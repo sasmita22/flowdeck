@@ -46,7 +46,7 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["join", "Control", "Waits for the branches before continuing."],
   ["loop", "Control", "Repeats its body until a condition holds, with a cap."],
   ["foreach", "Control", "Runs its body once per item in a list."],
-  ["branch", "Control", "Routes one way or another on a flag or a verdict."],
+  ["branch", "Control", "Takes one path or the other, set by a flag on the Trigger."],
   ["gate", "People and safety", "Pauses until you approve. A flag can switch it off."],
   [
     "hardstop",

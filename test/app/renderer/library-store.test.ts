@@ -74,6 +74,7 @@ const fakeBridge = () =>
       name: "Report",
       flow: null,
       snapshot: { runId: "run-1", status: "done", nodes: { s1: "done" } },
+      activity: [],
     })),
   }) satisfies LibraryBridge & Partial<FlowdeckBridge>;
 

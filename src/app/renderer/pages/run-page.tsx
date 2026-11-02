@@ -10,11 +10,11 @@ import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
 import type { LibraryState } from "../library-store.js";
-import { MoreMenu } from "../more-menu.js";
+import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
 import { selectLiveBadge, selectRunDisabled, type RunState, type RunView } from "../run-store.js";
 import type { SaveState } from "../save-store.js";
-import type { ShellState } from "../shell-store.js";
+import { selectInspectorOpen, type ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
 import { pageTestIds } from "../test-ids.js";
 
@@ -78,6 +78,19 @@ export function RunPage({
   const badge = (live === null ? null : selectLiveBadge(live)) ?? status;
   const flowId = loaded?.run.source?.flowId;
   const hash = loaded?.run.buildHash;
+  const waiting = useStore(wait, (state) => state.pending !== null);
+  const inspectorOpen = useStore(shell, (state) => selectInspectorOpen(state, { snapshot }));
+  const canGoOn = !blocked && (status === "stopped" || status === "interrupted");
+  const page =
+    loaded === null
+      ? undefined
+      : {
+          runId,
+          run,
+          terminal,
+          stored: loaded.activity,
+          canRetry: !blocked && status !== "running",
+        };
 
   return (
     <>
@@ -114,6 +127,26 @@ export function RunPage({
               Open blueprint
             </button>
           )}
+          {live?.status === "running" && (
+            <button
+              className="fd-btn"
+              data-testid={pageTestIds.runStop}
+              title="Stop the session and mark the run stopped; the working folder is kept"
+              onClick={() => void run.getState().stop(runId)}
+            >
+              Stop
+            </button>
+          )}
+          {canGoOn && (
+            <button
+              className="fd-btn"
+              data-testid={pageTestIds.runResume}
+              title="Carry on from where the run stopped, without redoing finished nodes"
+              onClick={() => void run.getState().resume(runId)}
+            >
+              Resume
+            </button>
+          )}
           {hash !== undefined && (
             <button
               className="fd-btn fd-btn-primary"
@@ -125,10 +158,14 @@ export function RunPage({
               Run again
             </button>
           )}
-          {live !== null && <MoreMenu shell={shell} terminal={terminal} />}
         </div>
       </header>
-      <div className="fd-main">
+      <div className="fd-main" style={{ position: "relative" }}>
+        {live !== null && waiting && !inspectorOpen && (
+          <div className="fd-wait-banner" data-testid="wait-banner">
+            <Ask wait={wait} />
+          </div>
+        )}
         {loaded !== null && loaded.flow !== null ? (
           <RunStoreContext.Provider value={view}>
             <Canvas store={runCanvas} shell={shell} run={view} readOnly />
@@ -148,6 +185,7 @@ export function RunPage({
             inspector={inspector}
             wait={live === null ? undefined : wait}
             readOnly
+            page={page}
           />
         )}
       </div>

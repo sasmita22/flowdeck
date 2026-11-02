@@ -4,9 +4,13 @@ import {
   activityFeedSchema,
   activityUpdateSchema,
   emptyFeed,
+  feedOf,
   foldHookEvent,
+  foldNodeEvent,
+  foldOutput,
   type ActivityEntry,
   type ActivityFeed,
+  type ActivityHookEvent,
 } from "../../../src/core/run/activity.js";
 import { agentType } from "../../../src/core/nodes/agent/execute.js";
 import { trackWindow, type NodeWindow } from "../../../src/core/run/attribution.js";
@@ -252,5 +256,246 @@ describe("activity schemas", () => {
     expect(
       activityUpdateSchema.safeParse({ runId: "run-1", entry: { ...tool, kind: "file" } }).success,
     ).toBe(false);
+  });
+});
+
+describe("the files a node wrote", () => {
+  it.each(["Write", "Edit", "MultiEdit", "NotebookEdit"])(
+    "keeps the whole path of a %s call, however long",
+    (tool) => {
+      const path = `/repo/${"deep/".repeat(30)}file.ts`;
+      const { changed } = foldHookEvent(
+        emptyFeed,
+        windows,
+        pre({ tool_name: tool, tool_input: { file_path: path } }),
+      );
+
+      expect(changed).toMatchObject({ kind: "tool", tool, path });
+      expect(changed?.summary.length).toBeLessThanOrEqual(80);
+    },
+  );
+
+  it.each([
+    ["/repo/src/a.ts", "src/a.ts"],
+    ["/Users/me/.claude/notes.md", "outside the working folder: ~/.claude/notes.md"],
+    ["/etc/hosts", "outside the working folder: /etc/hosts"],
+    ["/repository/a.ts", "outside the working folder: /repository/a.ts"],
+  ])("shows %s as %s, relative to the working folder", (path, shown) => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      pre({ tool_name: "Write", tool_input: { file_path: path } }),
+      { cwd: "/repo", home: "/Users/me" },
+    );
+
+    expect(changed).toMatchObject({ kind: "tool", path: shown });
+  });
+
+  it("keeps no path for a tool that only reads", () => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      pre({ tool_name: "Read", tool_input: { file_path: "/repo/a.ts" } }),
+    );
+
+    expect(changed).not.toHaveProperty("path");
+  });
+});
+
+describe("a pull request a node opened", () => {
+  const post = (fields: Record<string, unknown>): ActivityHookEvent => ({
+    kind: "PostToolUse",
+    payload: { flowdeck_hook_at: insideP2, ...fields },
+  });
+  const created = (stdout: string) =>
+    post({
+      tool_name: "Bash",
+      tool_input: { command: "gh pr create --title x --body y" },
+      tool_response: { stdout, stderr: "", interrupted: false },
+    });
+
+  it("adds a pr entry with the URL gh pr create printed, on the node in its turn", () => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      created("Creating pull request\nhttps://github.com/acme/app/pull/42\n"),
+    );
+
+    expect(changed).toEqual({
+      id: 1,
+      nodeId: "p2",
+      at: insideP2,
+      kind: "pr",
+      url: "https://github.com/acme/app/pull/42",
+      summary: "https://github.com/acme/app/pull/42",
+    });
+  });
+
+  it("adds nothing for a PR URL in another command's output, or a second time for the same URL", () => {
+    const once = foldHookEvent(emptyFeed, windows, created("https://github.com/acme/app/pull/42"));
+
+    expect(
+      foldHookEvent(
+        emptyFeed,
+        windows,
+        post({
+          tool_name: "Bash",
+          tool_input: { command: "cat notes.md" },
+          tool_response: { stdout: "see https://github.com/acme/app/pull/42" },
+        }),
+      ).changed,
+    ).toBeUndefined();
+    expect(
+      foldHookEvent(once.feed, windows, created("https://github.com/acme/app/pull/42")).changed,
+    ).toBeUndefined();
+  });
+});
+
+describe("a pull request gh pr create did not open", () => {
+  const post = (fields: Record<string, unknown>): ActivityHookEvent => ({
+    kind: "PostToolUse",
+    payload: { flowdeck_hook_at: insideP2, tool_name: "Bash", ...fields },
+  });
+  const ghPrCreate = { command: "gh pr create --title x --body y" };
+
+  it("adds nothing when the PR already exists and gh names it only in its error", () => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      post({
+        tool_input: ghPrCreate,
+        tool_response: {
+          stdout: "",
+          stderr:
+            'a pull request for branch "fd" into branch "main" already exists:\nhttps://github.com/acme/app/pull/42\n',
+          interrupted: false,
+        },
+      }),
+    );
+
+    expect(changed).toBeUndefined();
+  });
+
+  it("adds nothing when the call has no output object", () => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      post({ tool_input: ghPrCreate, tool_response: "https://github.com/acme/app/pull/42" }),
+    );
+
+    expect(changed).toBeUndefined();
+  });
+
+  it("adds a PR opened on a GitHub Enterprise host", () => {
+    const { changed } = foldHookEvent(
+      emptyFeed,
+      windows,
+      post({
+        tool_input: ghPrCreate,
+        tool_response: { stdout: "https://github.acme.corp/team/app/pull/7\n", stderr: "" },
+      }),
+    );
+
+    expect(changed).toMatchObject({ kind: "pr", url: "https://github.acme.corp/team/app/pull/7" });
+  });
+});
+
+describe("node events in the feed", () => {
+  const turnNodes = new Set(["p1"]);
+
+  it("adds a turn entry with the turn's last message when a turn node is done", () => {
+    const { changed } = foldNodeEvent(
+      emptyFeed,
+      { nodeId: "p1", at: 5, turnNodes },
+      { kind: "done", payload: { stopMessage: "Wrote the plan." } },
+    );
+
+    expect(changed).toEqual({
+      id: 1,
+      nodeId: "p1",
+      at: 5,
+      kind: "turn",
+      summary: "Wrote the plan.",
+    });
+  });
+
+  it("says the turn ended when it ended without a message", () => {
+    const { changed } = foldNodeEvent(
+      emptyFeed,
+      { nodeId: "p1", at: 5, turnNodes },
+      { kind: "done" },
+    );
+
+    expect(changed).toMatchObject({ kind: "turn", summary: "Turn ended" });
+  });
+
+  it("adds no turn entry for a node that takes no turn", () => {
+    expect(
+      foldNodeEvent(emptyFeed, { nodeId: "s1", at: 5, turnNodes }, { kind: "done" }).changed,
+    ).toBeUndefined();
+  });
+
+  it("adds a failure entry in plain words for any failed node", () => {
+    const { changed } = foldNodeEvent(
+      emptyFeed,
+      { nodeId: "s1", at: 9, turnNodes },
+      { kind: "failed", payload: { message: "s1 failed: exit code 3" } },
+    );
+
+    expect(changed).toEqual({
+      id: 1,
+      nodeId: "s1",
+      at: 9,
+      kind: "failure",
+      summary: "Script exited with code 3",
+    });
+  });
+});
+
+describe("script output in the feed", () => {
+  it("adds one entry per stream with the output trimmed, its first line as the summary", () => {
+    const { changed } = foldOutput(emptyFeed, {
+      nodeId: "s1",
+      at: 3,
+      stream: "stderr",
+      text: "\n  boom\nat line 2\n\n",
+    });
+
+    expect(changed).toEqual({
+      id: 1,
+      nodeId: "s1",
+      at: 3,
+      kind: "output",
+      stream: "stderr",
+      summary: "boom",
+      text: "boom\nat line 2",
+    });
+  });
+
+  it("keeps the last part of a very long output", () => {
+    const text = `${"x".repeat(5000)}END`;
+
+    const { changed } = foldOutput(emptyFeed, { nodeId: "s1", at: 3, stream: "stdout", text });
+
+    expect(changed?.kind === "output" && changed.text.length).toBeLessThanOrEqual(2000);
+    expect(changed?.kind === "output" && changed.text.endsWith("END")).toBe(true);
+  });
+
+  it("adds nothing for blank output", () => {
+    expect(
+      foldOutput(emptyFeed, { nodeId: "s1", at: 3, stream: "stdout", text: " \n" }).changed,
+    ).toBeUndefined();
+  });
+});
+
+describe("feedOf", () => {
+  it("continues numbering after the stored entries", () => {
+    const stored: ActivityEntry[] = [
+      { id: 4, nodeId: "p1", at: 1, kind: "turn", summary: "a" },
+      { id: 2, nodeId: "p1", at: 1, kind: "turn", summary: "b" },
+    ];
+
+    expect(feedOf(stored).nextId).toBe(5);
+    expect(feedOf([]).nextId).toBe(1);
   });
 });

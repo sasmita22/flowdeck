@@ -18,6 +18,11 @@ export type EngineRequest = {
     | "list-builds"
     | "build-files"
     | "run-build"
+    | "run-options"
+    | "stop-run"
+    | "retry-node"
+    | "resume-run"
+    | "run-cost"
     | "answer-wait"
     | "workspace-info";
   payload?: unknown;

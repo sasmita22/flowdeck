@@ -1,3 +1,4 @@
+import type { ActivityEntry } from "../../src/core/run/activity.js";
 import type { RunEvent } from "../../src/core/run/run-events.js";
 import type {
   BuildFileRecord,
@@ -20,8 +21,14 @@ export class FakeStore implements Store {
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: NewBuild[] = [];
   private readonly costs = new Map<string, number>();
+  private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
+  private readonly now: () => Date;
   private nextRun = 1;
   private nextSeq = 1;
+
+  constructor(options: { now?: () => Date } = {}) {
+    this.now = options.now ?? (() => new Date(0));
+  }
 
   get runs(): readonly RunRecord[] {
     return copy(this.runRecords);
@@ -76,7 +83,7 @@ export class FakeStore implements Store {
     for (const { nodeId, event } of entries) {
       this.stored.push({
         runId,
-        event: { ...copy(event), nodeId, seq: this.nextSeq++, time: new Date(0).toISOString() },
+        event: { ...copy(event), nodeId, seq: this.nextSeq++, time: this.now().toISOString() },
       });
     }
   }
@@ -120,6 +127,24 @@ export class FakeStore implements Store {
 
   costOf(runId: string): number | undefined {
     return this.costs.get(runId);
+  }
+
+  reopenRun(runId: string): void {
+    const record = this.runRecords.find((run) => run.id === runId);
+    if (!record) throw new Error(`FakeStore: no run ${runId}`);
+    record.status = "running";
+  }
+
+  recordActivity(runId: string, entry: ActivityEntry): void {
+    const entries = this.activityByRun.get(runId) ?? new Map<number, ActivityEntry>();
+    entries.set(entry.id, copy(entry));
+    this.activityByRun.set(runId, entries);
+  }
+
+  activity(runId: string): ActivityEntry[] {
+    return [...(this.activityByRun.get(runId)?.values() ?? [])]
+      .sort((a, b) => a.id - b.id)
+      .map(copy);
   }
 
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void {

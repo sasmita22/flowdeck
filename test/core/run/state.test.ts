@@ -28,6 +28,8 @@ const legal: [NodeState, NodeState][] = [
   ["skipped", "waiting"],
   ["running", "needs-you"],
   ["needs-you", "running"],
+  ["sent", "needs-you"],
+  ["failed", "waiting"],
 ];
 
 const isLegal = (from: NodeState, to: NodeState) => legal.some(([a, b]) => a === from && b === to);
@@ -56,10 +58,10 @@ describe("move", () => {
     expect(() => move(from, to)).toThrow(`${to}`);
   });
 
-  it("enters needs-you only from waiting or running and leaves it only to running, done or failed", () => {
+  it("enters needs-you only from waiting, sent or running and leaves it only to running, done or failed", () => {
     const intoNeedsYou = legal.filter(([, to]) => to === "needs-you").map(([from]) => from);
     const outOfNeedsYou = legal.filter(([from]) => from === "needs-you").map(([, to]) => to);
-    const into = ["waiting", "running"];
+    const into = ["waiting", "sent", "running"];
     const outOf = ["running", "done", "failed"];
 
     expect([...intoNeedsYou].sort()).toEqual([...into].sort());

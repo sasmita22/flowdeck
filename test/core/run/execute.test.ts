@@ -242,6 +242,103 @@ describe("the core run path", () => {
     });
   });
 
+  it("kills the running script on a stop, and writes nothing more to the run", async () => {
+    const build = await loaded();
+    const store = new FakeStore();
+    let interrupt: (code: number) => void = () => undefined;
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: {},
+      nodeIds: build.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+      buildHash: build.hash,
+    });
+    const pidFile = join(repo.path, "pid");
+    const runner = new NodeProcessRunner();
+    const started = Date.now();
+
+    const code = await execute(
+      {
+        fs,
+        scripts: {
+          run: (_command, _args, cwd, signal) => {
+            setTimeout(() => interrupt(143), 300);
+            return runner.run("sh", ["-c", `echo $$ > ${pidFile}; exec sleep 30`], cwd, signal);
+          },
+        },
+        waiter: new FakeWaiter([]),
+        startEvents: startEvents().startEvents,
+        openSession: async () => {
+          throw new Error("Claude must not start for a script-only flow");
+        },
+        store,
+        onChange: () => undefined,
+        onInterrupt: (handler: (exitCode: number) => void) => {
+          interrupt = handler;
+          return () => undefined;
+        },
+      },
+      {
+        store,
+        runId: id,
+        manifest: build,
+        cwd: repo.path,
+        auto: false,
+        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
+        open: async () => noClaude,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const pid = Number(await readFile(pidFile, "utf8"));
+    expect(code).toBe(143);
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
+    expect(store.findRun(id)?.status).toBe("stopped");
+    expect(store.events(id).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
+      "write running",
+    ]);
+  });
+
+  it("hands each script's output to onOutput with its node", async () => {
+    const build = await loaded();
+    const store = new FakeStore();
+    const outputs: string[] = [];
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: {},
+      nodeIds: build.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+      buildHash: build.hash,
+    });
+
+    await execute(
+      {
+        fs,
+        scripts: { run: async () => ({ code: 0, stdout: "hi\n", stderr: "" }) },
+        waiter: new FakeWaiter([]),
+        startEvents: startEvents().startEvents,
+        openSession: async () => {
+          throw new Error("Claude must not start for a script-only flow");
+        },
+        store,
+        onChange: () => undefined,
+        onOutput: (nodeId, stream, text) => outputs.push(`${nodeId} ${stream} ${text}`),
+      },
+      {
+        store,
+        runId: id,
+        manifest: build,
+        cwd: repo.path,
+        auto: false,
+        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
+        open: async () => noClaude,
+      },
+    );
+
+    expect(outputs).toEqual(["write stdout hi\n", "check stdout hi\n"]);
+  });
+
   describe("needsClaude", () => {
     it("is true for a manifest with a prompt node", () => {
       expect(needsClaude(manifestWith(["script", "prompt"]))).toBe(true);
@@ -426,6 +523,27 @@ describe("execute wiring", () => {
 
     expect(store.costOf(runId)).toBe(2);
     expect(store.findRun(runId)?.status).toBe("done");
+  });
+
+  it("charges the session's usage to the node whose turn it was, as a usage event", async () => {
+    const usage = new FakeUsageSource();
+    usage.setEntries(claudeSessionId, twoDollars);
+
+    const { store, runId } = await executeWith({
+      manifest: promptBuild(),
+      waiter: new FakeWaiter([]),
+      usage,
+    });
+
+    expect(store.events(runId).filter((event) => event.kind === "usage")).toEqual([
+      expect.objectContaining({
+        nodeId: "n1",
+        payload: { messages: ["m1"] },
+        tokens: 100_000,
+        cost: 2,
+      }),
+    ]);
+    expect(usage.calls).toEqual([claudeSessionId]);
   });
 
   it("still finishes the run when its spend cannot be read", async () => {

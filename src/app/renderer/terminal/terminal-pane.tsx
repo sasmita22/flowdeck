@@ -1,11 +1,17 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { StoreApi } from "zustand/vanilla";
 import type { TerminalState } from "./store.js";
 
-export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
+export function TerminalView({
+  store,
+  style,
+}: {
+  store: StoreApi<TerminalState>;
+  style: CSSProperties;
+}) {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,6 +39,10 @@ export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
     };
   }, [store]);
 
+  return <div data-testid="terminal-view" ref={container} style={style} />;
+}
+
+export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
   return (
     <div>
       <div className="fd-terminal-head">
@@ -44,7 +54,15 @@ export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
           Close terminal
         </button>
       </div>
-      <div data-testid="terminal-view" ref={container} style={{ width: "100%", height: "40vh" }} />
+      <TerminalView store={store} style={{ width: "100%", height: "40vh" }} />
     </div>
+  );
+}
+
+export function TerminalWindow({ store }: { store: StoreApi<TerminalState> }) {
+  return (
+    <main className="fd-terminal-window" data-testid="terminal-window">
+      <TerminalView store={store} style={{ position: "absolute", inset: 8 }} />
+    </main>
   );
 }

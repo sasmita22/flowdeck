@@ -13,6 +13,11 @@ export const engineCalls = {
   listRuns: { channel: "flowdeck:list-runs", request: "list-runs" },
   loadRun: { channel: "flowdeck:load-run", request: "load-run" },
   doctor: { channel: "flowdeck:doctor", request: "doctor" },
+  runOptions: { channel: "flowdeck:run-options", request: "run-options" },
+  stopRun: { channel: "flowdeck:stop-run", request: "stop-run" },
+  retryNode: { channel: "flowdeck:retry-node", request: "retry-node" },
+  resumeRun: { channel: "flowdeck:resume-run", request: "resume-run" },
+  runCost: { channel: "flowdeck:run-cost", request: "run-cost" },
 } as const;
 
 export type EngineCalls = {
@@ -22,10 +27,20 @@ export type EngineCalls = {
   buildVersion(payload: { flowId: string; version: number }): Promise<unknown>;
   listBuilds(): Promise<unknown>;
   buildFiles(payload: { hash: string }): Promise<unknown>;
-  runBuild(payload: { hash: string }): Promise<unknown>;
+  runBuild(payload: {
+    hash: string;
+    inputs?: Record<string, string>;
+    flags?: Record<string, boolean>;
+    auto?: boolean;
+  }): Promise<unknown>;
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;
   doctor(payload: { connectors: string[] }): Promise<unknown>;
+  runOptions(payload: { hash: string }): Promise<unknown>;
+  stopRun(payload: { runId: string }): Promise<unknown>;
+  retryNode(payload: { runId: string; nodeId: string }): Promise<unknown>;
+  resumeRun(payload: { runId: string }): Promise<unknown>;
+  runCost(payload: { runId: string }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {
@@ -42,6 +57,7 @@ export type FlowdeckBridge = EngineCalls & {
   writeTerminal(data: string): void;
   resizeTerminal(size: { cols: number; rows: number }): void;
   closeTerminal(): void;
+  popOutTerminal(): Promise<unknown>;
   onTerminalStatus(listener: (status: unknown) => void): () => void;
   onTerminalData(listener: (data: unknown) => void): () => void;
   getActivity(): Promise<unknown>;
@@ -66,6 +82,7 @@ export const bridgeChannels = {
   terminalInput: "flowdeck:terminal-input",
   terminalResize: "flowdeck:terminal-resize",
   closeTerminal: "flowdeck:close-terminal",
+  popOutTerminal: "flowdeck:pop-out-terminal",
   terminalStatus: "flowdeck:terminal-status",
   terminalData: "flowdeck:terminal-data",
   getActivity: "flowdeck:get-activity",

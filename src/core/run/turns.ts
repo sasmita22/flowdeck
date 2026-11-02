@@ -2,7 +2,7 @@ export type TurnEndEvent = { sessionId: string; payload: Record<string, unknown>
 
 export type TurnEvents = {
   subscribe(
-    kind: "Stop" | "StopFailure" | "SubagentStop" | "PreToolUse",
+    kind: "Stop" | "StopFailure" | "SubagentStop" | "PreToolUse" | "PostToolUse",
     sessionId: string,
     handler: (event: TurnEndEvent) => void,
   ): () => void;

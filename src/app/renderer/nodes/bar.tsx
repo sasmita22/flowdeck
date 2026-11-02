@@ -2,7 +2,7 @@ import type { NodeProps } from "@xyflow/react";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
 import { barLook } from "./outlines.js";
-import { NodeIssueMarker } from "../canvas/status.js";
+import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { ports, tagTextStyle, type ShapeNode } from "./shape.js";
 
 export function ParallelBar({
@@ -80,6 +80,22 @@ export function ParallelBar({
         }}
       >
         {data.label}
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          top: "100%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          color: "var(--fg)",
+        }}
+      >
+        <NodeStatusBadge nodeId={id} />
+        <NodeFailureReason
+          nodeId={id}
+          style={{ left: "50%", transform: "translateX(-50%)", width: 160, textAlign: "center" }}
+        />
       </div>
       <NodeIssueMarker nodeId={id} />
       {ports(id, type)}

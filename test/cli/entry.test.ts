@@ -22,7 +22,7 @@ function runEntry(
   options: {
     env: NodeJS.ProcessEnv;
     imports?: string[];
-    signal?: { after: string; send: NodeJS.Signals };
+    signal?: { after: string; send: NodeJS.Signals; once?: () => Promise<void> };
     stdin?: string;
   },
 ): Promise<Exit> {
@@ -43,7 +43,8 @@ function runEntry(
       stdout += chunk.toString();
       if (options.signal && !signalled && stdout.includes(options.signal.after)) {
         signalled = true;
-        child.kill(options.signal.send);
+        const { send, once = async () => undefined } = options.signal;
+        void once().then(() => child.kill(send));
       }
     });
     const deadline = setTimeout(() => {
@@ -73,6 +74,17 @@ describe("the flowdeck entry", () => {
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   });
+
+  const sleepRunning = async () => {
+    for (;;) {
+      const found = await run("pgrep", ["-f", `^sleep ${sleepArg}$`]).then(
+        () => true,
+        () => false,
+      );
+      if (found) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
 
   async function buildFlow(nodes: unknown[], wires: unknown[]) {
     const built = await build(flow(nodes, wires), {
@@ -170,19 +182,20 @@ describe("the flowdeck entry", () => {
     ["SIGTERM", 143],
     ["SIGINT", 130],
   ] as const)(
-    "on %s stops a blocked run, removes its hook socket and exits %i",
+    "on %s stops a blocked run and its script's children, removes its hook socket and exits %i",
     { timeout: exitWithinMs + 10_000 },
     async (signal, code) => {
-      const dir = await buildScript(["sh", "-c", `exec sleep ${sleepArg}`]);
+      const dir = await buildScript(["sh", "-c", `sleep ${sleepArg}; echo after`]);
 
       const exit = await runEntry(["run", dir, "--cwd", repo.path, "--session", "fd-signal"], {
         env: { ...process.env, FLOWDECK_HOME: home },
-        signal: { after: "s started", send: signal },
+        signal: { after: "s started", send: signal, once: sleepRunning },
       });
 
       expect(exit.exitedByItself).toBe(true);
       expect(exit.code).toBe(code);
       expect(await readdir(join(home, "sockets"))).toEqual([]);
+      await expect(run("pgrep", ["-f", `^sleep ${sleepArg}$`])).rejects.toMatchObject({ code: 1 });
     },
   );
 });

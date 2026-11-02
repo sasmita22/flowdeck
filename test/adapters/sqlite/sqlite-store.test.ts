@@ -109,9 +109,10 @@ describe("SqliteStore", () => {
       { name: "004_events_lock.sql" },
       { name: "005_notes.sql" },
       { name: "006_build_lineage.sql" },
+      { name: "007_activity.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 6]);
+    expect(before).toEqual([1, 1, 3, 1, 7]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -288,6 +289,137 @@ describe("SqliteStore", () => {
     expect(store.findRun(id)?.status).toBe("done");
     expect(db.prepare("SELECT status FROM runs").get()).toEqual({ status: "done" });
     expect(db.prepare("SELECT status FROM run_sessions").get()).toEqual({ status: "closed" });
+  });
+
+  it("reopens a finished run as running, with its session open again", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    store.finishRun(id, "failed");
+
+    store.reopenRun(id);
+
+    const db = raw();
+    expect(store.findRun(id)?.status).toBe("running");
+    expect(db.prepare("SELECT status FROM run_sessions").get()).toEqual({ status: "open" });
+  });
+
+  it("keeps a usage event's tokens and cost in their own columns and reads them back", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+
+    store.append(id, "p1", {
+      kind: "usage",
+      payload: { messages: ["m1", "m2"] },
+      tokens: 1200,
+      cost: 0.0042,
+    });
+
+    expect(raw().prepare("SELECT kind, tokens, cost FROM events").get()).toEqual({
+      kind: "usage",
+      tokens: 1200,
+      cost: 0.0042,
+    });
+    expect(store.events(id)).toEqual([
+      expect.objectContaining({
+        nodeId: "p1",
+        kind: "usage",
+        payload: { messages: ["m1", "m2"] },
+        tokens: 1200,
+        cost: 0.0042,
+      }),
+    ]);
+  });
+
+  it("keeps each run's activity, an entry written again read back as its latest state, in id order", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    const other = store.createRun(newRun()).id;
+    const running = {
+      id: 2,
+      nodeId: "p2",
+      at: 20,
+      kind: "subagent" as const,
+      agentType: "x",
+      summary: "work",
+      state: "running" as const,
+    };
+
+    store.recordActivity(id, running);
+    store.recordActivity(id, {
+      id: 1,
+      nodeId: "p1",
+      at: 10,
+      kind: "tool",
+      tool: "Bash",
+      summary: "ls",
+    });
+    store.recordActivity(id, { ...running, state: "finished" });
+    store.recordActivity(other, {
+      id: 1,
+      nodeId: "p1",
+      at: 30,
+      kind: "tool",
+      tool: "Read",
+      summary: "a",
+    });
+
+    expect(store.activity(id)).toEqual([
+      { id: 1, nodeId: "p1", at: 10, kind: "tool", tool: "Bash", summary: "ls" },
+      { ...running, state: "finished" },
+    ]);
+    expect(store.activity(other)).toHaveLength(1);
+    expect(store.activity("none")).toEqual([]);
+  });
+
+  it("keeps every write of an activity entry as its own row, reading back the latest", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    const running = {
+      id: 1,
+      nodeId: "p1",
+      at: 10,
+      kind: "subagent" as const,
+      agentType: "x",
+      summary: "work",
+      state: "running" as const,
+    };
+
+    store.recordActivity(id, running);
+    store.recordActivity(id, { ...running, state: "finished" });
+
+    expect(raw().prepare("SELECT id FROM activity ORDER BY seq").all()).toEqual([
+      { id: 1 },
+      { id: 1 },
+    ]);
+    expect(store.activity(id)).toEqual([{ ...running, state: "finished" }]);
+  });
+
+  it("rejects a raw UPDATE, DELETE or INSERT OR REPLACE on activity in the database itself", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    store.recordActivity(id, {
+      id: 1,
+      nodeId: "p1",
+      at: 10,
+      kind: "tool",
+      tool: "Bash",
+      summary: "ls",
+    });
+    const db = raw();
+    const rows = () => db.prepare("SELECT * FROM activity ORDER BY seq").all();
+    const before = rows();
+    const { seq } = db.prepare("SELECT MIN(seq) AS seq FROM activity").get() as { seq: number };
+
+    expect(() => db.exec("UPDATE activity SET entry = '{}'")).toThrow("activity is append-only");
+    expect(() => db.exec("DELETE FROM activity")).toThrow("activity is append-only");
+    expect(() =>
+      db
+        .prepare(
+          "INSERT OR REPLACE INTO activity (seq, run_id, id, node_id, entry) VALUES (?, ?, 1, 'p1', '{}')",
+        )
+        .run(seq, id),
+    ).toThrow("activity is append-only");
+    expect(rows()).toEqual(before);
   });
 
   it("stamps a build from now", () => {

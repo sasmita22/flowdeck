@@ -61,7 +61,11 @@ const saveWidths = (storage: WidthStorage | undefined, widths: PanelWidths) => {
   }
 };
 
+export type RunTab = "activity" | "files" | "cost" | "terminal";
+
 export type ShellState = {
+  runTab: RunTab;
+  setRunTab(tab: RunTab): void;
   sidebarOpen: boolean;
   menuOpen: boolean;
   inspectorShown: boolean | null;
@@ -122,6 +126,8 @@ export const createShellStore = ({
   };
 
   const store = createStore<ShellState>()((set, get) => ({
+    runTab: "activity",
+    setRunTab: (runTab) => set({ runTab }),
     sidebarOpen: true,
     menuOpen: false,
     inspectorShown: null,

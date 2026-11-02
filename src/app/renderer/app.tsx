@@ -17,6 +17,7 @@ import { DoctorPage } from "./pages/doctor-page.js";
 import { EditorPage } from "./pages/editor-page.js";
 import { RunPage } from "./pages/run-page.js";
 import { RunsPage } from "./pages/runs-page.js";
+import { RunDialog } from "./run-dialog.js";
 import { selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import type { ShellState } from "./shell-store.js";
@@ -60,8 +61,9 @@ function Errors({ canvas, save, run, library }: AppStores) {
   );
 }
 
-function RunSummary({ run, nav }: Pick<AppStores, "run" | "nav">) {
-  const summary = useStore(run, selectRunSummary);
+function RunSummary({ run, nav, wait }: Pick<AppStores, "run" | "nav" | "wait">) {
+  const waiting = useStore(wait, (state) => state.pending !== null);
+  const summary = useStore(run, (state) => selectRunSummary(state, waiting));
   const liveRunId = useStore(run, (state) =>
     state.snapshot?.status === "running" ? state.snapshot.runId : null,
   );
@@ -78,7 +80,7 @@ function RunSummary({ run, nav }: Pick<AppStores, "run" | "nav">) {
   );
 }
 
-function StatusBar({ store, run, workspace, nav }: AppStores) {
+function StatusBar({ store, run, workspace, nav, wait }: AppStores) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
   const folder = useStore(workspace, (state) => state.folder);
@@ -86,7 +88,7 @@ function StatusBar({ store, run, workspace, nav }: AppStores) {
   const label = selectWorkspaceLabel({ folder, state: folderState });
   return (
     <footer className="fd-status-bar">
-      <RunSummary run={run} nav={nav} />
+      <RunSummary run={run} nav={nav} wait={wait} />
       {label !== null && (
         <>
           <span
@@ -202,6 +204,7 @@ export function App(stores: AppStores) {
         </section>
       )}
       <StatusBar {...stores} />
+      <RunDialog run={stores.run} actions={stores.actions} />
       <ClosePrompt store={stores.save} />
       <LeavePrompt store={stores.save} />
     </main>
