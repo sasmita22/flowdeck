@@ -5,6 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeCli } from "../adapters/claude/claude-cli.js";
+import {
+  ClaudeUserConnectors,
+  writeSessionMcpConfig,
+} from "../adapters/claude/claude-connectors.js";
 import { parseTranscriptTurns } from "../adapters/claude/transcript-turns.js";
 import { TranscriptUsage } from "../adapters/claude/transcript-usage.js";
 import { CliWaiter, stdinLines } from "./cli-waiter.js";
@@ -12,9 +16,15 @@ import { HookSocketServer } from "../adapters/hook-socket/hook-socket-server.js"
 import { openClaudeSession } from "../adapters/claude/claude-session.js";
 import { NodeFileSystem } from "../adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../adapters/process/process-runner.js";
+import { SqliteFlowStore } from "../adapters/sqlite/flows.js";
+import { openDatabase } from "../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../adapters/sqlite/sqlite-store.js";
 import { assertSessionName, TmuxSessionHost } from "../adapters/tmux/tmux-session-host.js";
-import { build } from "../core/compiler/build.js";
+import { build, type BuildResult } from "../core/compiler/build.js";
+import { buildVersion } from "../core/compiler/build-version.js";
+import { resolveConnectors, type McpServer } from "../core/compiler/connectors.js";
+import type { HookPaths } from "../core/compiler/hook-settings.js";
+import { buildRecord } from "../core/compiler/record.js";
 import { FlowParseError, parseFlow } from "../core/flow/schema.js";
 import { triggerFlags } from "../core/nodes/branch/execute.js";
 import {
@@ -22,13 +32,17 @@ import {
   loadBuild,
   needsClaude,
   noClaude,
+  runMcpConfigPath,
   runSocketPath,
+  type LoadedBuild,
   type OpenedSession,
   type OpenSessionOptions,
 } from "../core/run/execute.js";
 import { decideResume, type TranscriptTurn } from "../core/run/resume.js";
 import type { TurnEvents } from "../core/run/turns.js";
+import type { ConnectorSource } from "../ports/connector-source.js";
 import type { FileSystem } from "../ports/file-system.js";
+import type { FlowStore } from "../ports/flow-store.js";
 import type { ProcessRunner } from "../ports/process-runner.js";
 import type { Store } from "../ports/store.js";
 import type { PermissionSource } from "../ports/permission-source.js";
@@ -47,7 +61,9 @@ export type CliDeps = {
   ): Promise<{ events: TurnEvents; permissions?: PermissionSource; stop(): Promise<void> }>;
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   usage?: UsageSource;
-  openStore(path: string): Store;
+  hooks: HookPaths;
+  connectors: ConnectorSource;
+  openStore(path: string): { runs: Store; flows: FlowStore };
   transcriptTurns(claudeSessionId: string): Promise<TranscriptTurn[]>;
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
@@ -56,6 +72,7 @@ export type CliDeps = {
 const usage = [
   "Usage:",
   "  flowdeck build <flow.json>",
+  "  flowdeck build --flow <id> --version <n>",
   "  flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
   "  flowdeck resume <id> [--auto]",
 ];
@@ -73,8 +90,37 @@ const flowdeckHome = (env: CliDeps["env"]) => env["FLOWDECK_HOME"] ?? join(homed
 
 const storePath = (env: CliDeps["env"]) => join(flowdeckHome(env), "flowdeck.db");
 
+const report = (result: BuildResult, deps: CliDeps): number => {
+  if (!result.ok) {
+    for (const error of result.errors) deps.stderr(`${error.rule}: ${error.message}`);
+    return 2;
+  }
+  for (const { path, problem } of result.restored) deps.stderr(`restored ${path} (${problem})`);
+  deps.stdout(`hash ${result.hash}`);
+  deps.stdout(`dir ${result.dir}`);
+  return 0;
+};
+
 async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
-  const { positionals } = parseArgs({ args, allowPositionals: true, strict: true });
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    strict: true,
+    options: { flow: { type: "string" }, version: { type: "string" } },
+  });
+  const home = flowdeckHome(deps.env);
+  if (values.flow !== undefined || values.version !== undefined) {
+    const version = Number(values.version);
+    if (values.flow === undefined || positionals.length > 0 || !Number.isInteger(version)) {
+      throw new UsageError();
+    }
+    const { runs, flows } = deps.openStore(storePath(deps.env));
+    const result = await buildVersion(
+      { flowId: values.flow, version },
+      { flows, store: runs, fs: deps.fs, home, connectors: deps.connectors },
+    );
+    return report(result, deps);
+  }
   const [flowPath, ...rest] = positionals;
   if (flowPath === undefined || rest.length > 0) throw new UsageError();
   let flow;
@@ -85,18 +131,9 @@ async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
     deps.stderr(`${flowPath}: ${error.message}`);
     return 2;
   }
-  const result = await build(flow, {
-    fs: deps.fs,
-    home: flowdeckHome(deps.env),
-    hooks: { nodePath: process.execPath, hookScriptPath },
-  });
-  if (!result.ok) {
-    for (const error of result.errors) deps.stderr(`${error.rule}: ${error.message}`);
-    return 2;
-  }
-  deps.stdout(`hash ${result.hash}`);
-  deps.stdout(`dir ${result.dir}`);
-  return 0;
+  const result = await build(flow, { fs: deps.fs, home, connectors: deps.connectors });
+  if (result.ok) deps.openStore(storePath(deps.env)).runs.recordBuild(result.record);
+  return report(result, deps);
 }
 
 const executeDeps = (deps: CliDeps, store: Store) => ({ ...deps, store, onChange: deps.stdout });
@@ -139,6 +176,16 @@ function parseRun(args: string[], flagNames: readonly string[]) {
   return { positionals, values, flags };
 }
 
+async function connectorsOrReport(
+  manifest: LoadedBuild,
+  deps: CliDeps,
+): Promise<Record<string, McpServer> | undefined> {
+  const connectors = await resolveConnectors(manifest.session.connectors, deps.connectors);
+  if (connectors.ok) return connectors.servers;
+  for (const error of connectors.errors) deps.stderr(`${error.rule}: ${error.message}`);
+  return undefined;
+}
+
 async function runCommand(args: string[], deps: CliDeps): Promise<number> {
   const [looseBuildArg] = parseArgs({
     args,
@@ -177,13 +224,17 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
   const manifest = loaded.build;
-  const store = deps.openStore(storePath(deps.env));
+  const servers = await connectorsOrReport(manifest, deps);
+  if (servers === undefined) return 2;
+  const store = deps.openStore(storePath(deps.env)).runs;
+  store.recordBuild(buildRecord(buildDir, await deps.fs.readFile(`${buildDir}/manifest.json`)));
   const claudeSessionId = randomUUID();
   const run = store.createRun({
     buildDir,
     inputs: { ...values },
     nodeIds: manifest.nodes.map((node) => node.id),
     session: { tmuxName: sessionName, cwd, claudeSessionId },
+    buildHash: manifest.hash,
   });
   deps.stderr(`run ${run.id}`);
   return execute(executeDeps(deps, store), {
@@ -203,6 +254,12 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
             socketPath,
             cwd,
             claudeSessionId,
+            hooks: deps.hooks,
+            ...(await writeSessionMcpConfig(
+              deps.fs,
+              runMcpConfigPath(flowdeckHome(deps.env), run.id),
+              servers,
+            )),
           })
         : noClaude,
   });
@@ -217,7 +274,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
   });
   const [runId, ...rest] = positionals;
   if (runId === undefined || rest.length > 0) throw new UsageError();
-  const store = deps.openStore(storePath(deps.env));
+  const store = deps.openStore(storePath(deps.env)).runs;
   const run = store.findRun(runId);
   if (run === undefined) {
     deps.stderr(`no run ${runId}`);
@@ -233,6 +290,8 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
   const manifest = loaded.build;
+  const servers = await connectorsOrReport(manifest, deps);
+  if (servers === undefined) return 2;
   const flags = Object.fromEntries(
     Object.keys(triggerFlags(manifest.nodes)).flatMap((name) => {
       const value = run.inputs[name];
@@ -251,6 +310,12 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
         socketPath,
         cwd,
         claudeSessionId,
+        hooks: deps.hooks,
+        ...(await writeSessionMcpConfig(
+          deps.fs,
+          runMcpConfigPath(flowdeckHome(deps.env), runId),
+          servers,
+        )),
         ...(sessionRecorded ? { attach: true } : {}),
       })
     : noClaude;
@@ -328,7 +393,12 @@ export function realDeps(): CliDeps {
         sessionId: options.claudeSessionId,
       });
     },
-    openStore: (path) => new SqliteStore({ path }),
+    hooks: { nodePath: process.execPath, hookScriptPath },
+    connectors: new ClaudeUserConnectors(),
+    openStore: (path) => {
+      const db = openDatabase({ path });
+      return { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };
+    },
     transcriptTurns: async (claudeSessionId) => {
       const claude = new ClaudeCli({ sessions: new TmuxSessionHost() });
       const transcript = await claude.findTranscript(claudeSessionId);

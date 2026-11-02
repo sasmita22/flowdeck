@@ -11,7 +11,7 @@ import { writeHookSettings } from "../../src/adapters/claude/write-hook-settings
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { EventLog } from "../../src/adapters/jsonl/event-log.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
-import { hookSettings } from "../../src/core/compiler/hook-settings.js";
+import { hookCommand, hookSettings } from "../../src/core/compiler/hook-settings.js";
 import { waitForTurnEnd } from "../../src/core/run/turns.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -120,7 +120,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("event log with real claude",
     started.push({ name, sessionId, unwatch });
     const settingsPath = await writeHookSettings(
       join(home, "sessions", sessionId),
-      hookSettings({ nodePath: process.execPath, hookScriptPath }),
+      hookSettings(hookCommand({ nodePath: process.execPath, hookScriptPath })),
     );
     await cli.start(
       name,

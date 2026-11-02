@@ -3,7 +3,6 @@ import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
@@ -17,7 +16,6 @@ import type { HookEvent } from "../../src/ports/event-source.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const runTimeoutMs = 300_000;
 const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
 
@@ -207,7 +205,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
       const built = await build(liveFlow(secret), {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
       const notesPath = join(repo.path, "notes.md");

@@ -21,7 +21,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs' --permission-deadline-ms=86340000",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\" --permission-deadline-ms=86340000",
             "timeout": 86400,
             "type": "command"
           }
@@ -32,7 +32,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
             "type": "command"
           }
         ]
@@ -42,7 +42,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
             "type": "command"
           }
         ]
@@ -52,7 +52,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
             "type": "command"
           }
         ]
@@ -62,7 +62,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
             "type": "command"
           }
         ]
@@ -72,7 +72,7 @@ Do the work.
       {
         "hooks": [
           {
-            "command": "'/usr/local/bin/node' '/fd/bin/flowdeck-hook.mjs'",
+            "command": "\\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
             "type": "command"
           }
         ]
@@ -85,10 +85,10 @@ Do the work.
   "files": {
     "agents/a.md": "238d61888f0612fd74e1d6f0a26245167e3dee8bf3564cd6bcdfaa126fd7c95b",
     "commands/p.md": "703684da25d686d4bda63b4abfc34d8e50f6ed561e3702f6f463da3dd9cf42f1",
-    "hooks/hooks.json": "398ff0a21a09965e7d43e04f0ff3a091a0394a1ce2e0483ec186aef46fb2d5bd",
+    "hooks/hooks.json": "3571ec12d8166b775efd0e8c58e15f545bb016b26e7d02c9f3a6ee5e95c73369",
     "settings.json": "49a144a48736cdc6813ad746092c2c5f949092d3bfee8b489af474c71ed2f473"
   },
-  "hash": "1fa8fee455e501785f4e6f2d71d93f161300c330ef2e5f95d4afef2f7fa40515",
+  "hash": "d68bbcb3d4d7d22b6ac41c9bd024326297fd841e269924e70c362520b2fef134",
   "nodes": [
     {
       "file": "commands/p.md",

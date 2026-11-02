@@ -9,7 +9,13 @@ import {
   type ParallelSection,
 } from "../nodes/fork/execute.js";
 import { firstTurnId, listItems, listPath, withItem } from "../nodes/foreach/execute.js";
-import { joinComplete, skippedBranches, type JoinWait } from "../nodes/join/execute.js";
+import {
+  joinComplete,
+  notStartedRequest,
+  skippedBranches,
+  type JoinOnBranchFail,
+  type JoinWait,
+} from "../nodes/join/execute.js";
 import {
   askOutcome,
   askRequest,
@@ -17,7 +23,12 @@ import {
   withPromptContext,
 } from "../nodes/ask/execute.js";
 import { gateOutcome, gateRequest, gateSkips } from "../nodes/gate/execute.js";
-import { hardstopOutcome, hardstopRequest } from "../nodes/hardstop/execute.js";
+import {
+  hardstopCheckTurn,
+  hardstopOutcome,
+  hardstopRequest,
+  noVerdictRequest,
+} from "../nodes/hardstop/execute.js";
 import {
   agentVerdictTurnText,
   capAnswer,
@@ -29,7 +40,7 @@ import {
   type LoopAnswer,
   type LoopStep,
 } from "../nodes/loop/execute.js";
-import { scriptOutcome } from "../nodes/script/execute.js";
+import { scriptOutcome, type ExitCodes } from "../nodes/script/execute.js";
 import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
 import {
   denied,
@@ -84,15 +95,16 @@ export type RunResult = {
   decisions: HumanDecision[];
 };
 
-type ScriptSettings = { command: string; args?: string[] };
+type ScriptSettings = { command: string; args?: string[] } & ExitCodes;
 type GateSettings = Parameters<typeof gateRequest>[1];
 type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
-type JoinSettings = { wait: JoinWait };
+type JoinSettings = { wait: JoinWait; onBranchFail?: JoinOnBranchFail };
 type ForEachSettings = { file: string };
 type BranchSettings = { flag: string };
 
+type StepOutcome = { status: "done"; line: string } | { status: "failed"; reason: string };
 type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
 type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
@@ -120,6 +132,7 @@ const runnable = new Set<ManifestNode["type"]>([
   "fork",
   "join",
   "branch",
+  "output",
 ]);
 
 export function structureProblems(
@@ -442,6 +455,11 @@ export class Runner {
       this.runBranch(node, context);
     } else if (node.type === "join") {
       throw new Error(`${node.id} (join) was reached outside its parallel section`);
+    } else if (node.type === "output") {
+      this.recordAll([
+        { nodeId: node.id, event: { kind: "running" } },
+        { nodeId: node.id, event: { kind: "done" } },
+      ]);
     } else if (node.type === "prompt" || node.type === "agent") {
       const halted = await this.checkBudget(node.id);
       if (halted !== undefined) return halted;
@@ -466,7 +484,7 @@ export class Runner {
     } else if (node.type === "script") {
       failure = await this.runScript(node);
     } else {
-      const outcome = await this.runHuman(node);
+      const outcome = await this.runHuman(node, context);
       if (outcome.status === "failed") failure = outcome.reason;
       else doneLine = outcome.line;
     }
@@ -696,12 +714,12 @@ export class Runner {
       return { failure: { nodeId: fork.id, reason: reasonIn(fork.id, action.message) } };
     }
     const join = context.nodes.find((node) => node.id === section.join);
-    const { wait } = join?.settings as JoinSettings;
+    const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
     const halted = await this.checkBudget(fork.id);
     if (halted !== undefined) return halted;
     this.inTurn = fork.id;
     try {
-      return await this.driveSection(section, wait, context);
+      return await this.driveSection(section, wait, onBranchFail, context);
     } finally {
       this.inTurn = undefined;
     }
@@ -710,6 +728,7 @@ export class Runner {
   private async driveSection(
     section: ParallelSection,
     wait: JoinWait,
+    onBranchFail: JoinOnBranchFail,
     context: RunContext,
   ): Promise<StepResult> {
     const { fork, join, branches } = section;
@@ -747,8 +766,10 @@ export class Runner {
       this.emit(`${fork} started`);
       const missing = () =>
         unlaunched(branchTypes, [...watch.launched]).map((type) => branchOf.get(type) ?? type);
-      const untilJoined = () =>
-        watch.untilStopped((types) => joinComplete(wait, branchTypes, types), timeoutMs, held);
+      const untilJoined = (joining: readonly string[] = branchTypes) =>
+        watch.untilStopped((types) => joinComplete(wait, joining, types), timeoutMs, held);
+      const goesOnWithout = (notStarted: readonly string[]) =>
+        notStarted.length === 0 || this.goesOnWithout(join, notStarted, onBranchFail);
       let stopMessage: string | undefined;
       try {
         await context.ensureStarted();
@@ -757,7 +778,9 @@ export class Runner {
           await this.deps.prompts.sendPrompt(text);
           await untilJoined();
           await this.deps.prompts.interrupt();
-          if (missing().length > 0) return this.failLaunch(section, stopped, missing());
+          if (!(await goesOnWithout(missing()))) {
+            return this.failLaunch(section, stopped, missing());
+          }
           const skipped = skippedBranches(branches, stopped);
           this.recordAll(skipped.map((nodeId) => ({ nodeId, event: { kind: "skipped" } })));
           for (const id of skipped) this.emit(`${id} skipped`);
@@ -765,8 +788,15 @@ export class Runner {
           const turnEnd = this.armTurnEnd(armedAt);
           await this.deps.prompts.sendPrompt(text);
           await turnEnd;
-          if (missing().length > 0) return this.failLaunch(section, stopped, missing());
-          await untilJoined();
+          const notStarted = missing();
+          if (!(await goesOnWithout(notStarted))) {
+            return this.failLaunch(section, stopped, notStarted);
+          }
+          this.recordAll(notStarted.map((nodeId) => ({ nodeId, event: { kind: "skipped" } })));
+          for (const id of notStarted) this.emit(`${id} skipped`);
+          await untilJoined(
+            branchTypes.filter((type) => !notStarted.includes(branchOf.get(type) ?? type)),
+          );
           stopMessage = lastMessage(await watch.settled(quietMs, timeoutMs));
         }
       } catch (error) {
@@ -779,6 +809,30 @@ export class Runner {
     } finally {
       watch.close();
     }
+  }
+
+  private async goesOnWithout(
+    joinId: string,
+    notStarted: readonly string[],
+    onBranchFail: JoinOnBranchFail,
+  ): Promise<boolean> {
+    if (onBranchFail !== "wait") return onBranchFail === "skip";
+    this.record(joinId, { kind: "needs-you" });
+    let reply: WaitReply;
+    try {
+      reply = await this.deps.waiter.wait(notStartedRequest(joinId, notStarted));
+    } catch {
+      return false;
+    }
+    if (reply.decision !== "answer") return false;
+    this.record(joinId, {
+      kind: "answered",
+      payload: { nodeId: joinId, decision: "answered", answer: reply.answer },
+    });
+    this.emit(`${joinId} answered: ${reply.answer}`);
+    if (reply.answer !== "continue") return false;
+    this.record(joinId, { kind: "running" });
+    return true;
   }
 
   private failLaunch(
@@ -984,10 +1038,10 @@ export class Runner {
     return answers;
   }
 
-  private runHuman(node: ManifestNode): Promise<HumanOutcome> {
+  private runHuman(node: ManifestNode, context: RunContext): Promise<StepOutcome> {
     if (node.type === "gate") return this.runGate(node);
     if (node.type === "ask") return this.runAsk(node);
-    return this.runHardstop(node);
+    return this.runHardstop(node, context);
   }
 
   private recordDecision(nodeId: string, decision: HumanDecision): void {
@@ -1021,20 +1075,48 @@ export class Runner {
     return outcome;
   }
 
-  private runHardstop(node: ManifestNode): Promise<HumanOutcome> {
-    return this.waitFor(
-      node,
-      hardstopRequest(node.id, node.settings as HardstopSettings),
-      (reply) => hardstopOutcome(node.id, reply),
+  private async runHardstop(node: ManifestNode, context: RunContext): Promise<StepOutcome> {
+    const settings = node.settings as HardstopSettings;
+    const action = this.takeAction(node.id);
+    const ask = (request: WaitRequest) =>
+      this.waitFor(node, request, (reply) => hardstopOutcome(node.id, reply), action);
+    if (
+      settings.condition.trim() === "" ||
+      action !== undefined ||
+      this.status(node.id) === "needs-you"
+    ) {
+      return ask(hardstopRequest(node.id, settings));
+    }
+    if (this.status(node.id) === "waiting") this.record(node.id, { kind: "running" });
+    this.emit(`${node.id} checking`);
+    let reply: string | undefined;
+    this.inTurn = node.id;
+    try {
+      await context.ensureStarted();
+      const turnEnd = this.armTurnEnd(this.deps.now?.());
+      await this.deps.prompts.sendPrompt(hardstopCheckTurn(settings.condition));
+      reply = lastMessage(await turnEnd);
+    } catch (error) {
+      return { status: "failed", reason: messageOf(error) };
+    } finally {
+      this.inTurn = undefined;
+    }
+    const verdict = parseVerdict(reply);
+    if (verdict.kind === "malformed") return ask(noVerdictRequest(node.id, verdict.reason));
+    if (verdict.done) return ask(hardstopRequest(node.id, settings));
+    this.record(
+      node.id,
+      reply === undefined ? { kind: "done" } : { kind: "done", payload: { stopMessage: reply } },
     );
+    return { status: "done", line: "condition not met" };
   }
 
   private async waitFor(
     node: ManifestNode,
     request: WaitRequest,
     toOutcome: (reply: WaitReply) => HumanOutcome,
+    action = this.takeAction(node.id),
   ): Promise<HumanOutcome> {
-    const action = this.takeAction(node.id);
     if (this.status(node.id) !== "needs-you") this.record(node.id, { kind: "needs-you" });
     let outcome: HumanOutcome;
     try {
@@ -1054,7 +1136,7 @@ export class Runner {
   private async runScript(node: ManifestNode): Promise<string | undefined> {
     const action = this.takeAction(node.id);
     if (action?.kind === "fail") return reasonIn(node.id, action.message);
-    const { command, args } = node.settings as ScriptSettings;
+    const { command, args, ...codes } = node.settings as ScriptSettings;
     this.record(node.id, { kind: "running" });
     this.emit(`${node.id} started`);
     for (let attempt = 1; ; attempt++) {
@@ -1067,7 +1149,7 @@ export class Runner {
       for (const line of [...outputLines(result.stdout), ...outputLines(result.stderr)]) {
         this.emit(line);
       }
-      const outcome = scriptOutcome(result.code, attempt);
+      const outcome = scriptOutcome(result.code, attempt, codes);
       if (outcome === "failed") return exitReason(result.code);
       if (outcome === "done") {
         this.record(node.id, { kind: "done" });

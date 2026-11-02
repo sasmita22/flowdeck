@@ -2,11 +2,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit } from "../../../src/core/compiler/emit.js";
-import { hookSettings } from "../../../src/core/compiler/hook-settings.js";
+import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-settings.js";
 import { lower } from "../../../src/core/compiler/lower.js";
 import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
-
-const hooks = { nodePath: "/usr/local/bin/node", hookScriptPath: "/fd/bin/flowdeck-hook.mjs" };
 
 const sample = () => {
   const base = flow(
@@ -26,7 +24,7 @@ const fileAt = (files: { path: string; content: string }[], path: string) => {
 
 describe("emit", () => {
   it("emits the node files and the three build files, sorted by path", () => {
-    expect(emit(lower(sample()), hooks).map((file) => file.path)).toEqual([
+    expect(emit(lower(sample())).map((file) => file.path)).toEqual([
       "agents/a.md",
       "commands/p.md",
       "hooks/hooks.json",
@@ -36,22 +34,23 @@ describe("emit", () => {
   });
 
   it("allows only the session's tools and sets its permission mode", () => {
-    const settings = JSON.parse(fileAt(emit(lower(sample()), hooks), "settings.json"));
+    const settings = JSON.parse(fileAt(emit(lower(sample())), "settings.json"));
 
     expect(settings).toStrictEqual({
       permissions: { allow: ["Read", "Edit"], defaultMode: "acceptEdits" },
     });
   });
 
-  it("writes the hook settings for the given paths", () => {
-    expect(fileAt(emit(lower(sample()), hooks), "hooks/hooks.json")).toBe(
-      canonicalJson(hookSettings(hooks)),
-    );
+  it("writes hook settings that run the hook the session's environment names", () => {
+    const hooks = fileAt(emit(lower(sample())), "hooks/hooks.json");
+
+    expect(hooks).toBe(canonicalJson(hookSettings(buildHookCommand)));
+    expect(hooks).not.toContain("/");
   });
 
   it("writes the lowered manifest with a sha256 per emitted file as canonical JSON, without a hash", () => {
     const lowered = lower(sample());
-    const files = emit(lowered, hooks);
+    const files = emit(lowered);
     const manifest = fileAt(files, "manifest.json");
     const expectedFiles = Object.fromEntries(
       files

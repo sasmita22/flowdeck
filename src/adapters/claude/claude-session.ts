@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { hookEnvironment } from "../../core/compiler/hook-settings.js";
 import type { ClaudeCli } from "./claude-cli.js";
 import type { SessionHost } from "../../ports/session-host.js";
 import type { OpenedSession, OpenSessionOptions } from "../../core/run/execute.js";
@@ -13,7 +14,16 @@ export class SessionGoneError extends Error {
 }
 
 export async function openClaudeSession(
-  { sessionName, buildDir, model, socketPath, cwd, attach }: OpenSessionOptions,
+  {
+    sessionName,
+    buildDir,
+    model,
+    socketPath,
+    cwd,
+    hooks,
+    mcpConfigPath,
+    attach,
+  }: OpenSessionOptions,
   { sessions, claude, sessionId }: { sessions: SessionHost; claude: ClaudeCli; sessionId: string },
 ): Promise<OpenedSession> {
   if (attach === true && !(await sessions.has(sessionName))) {
@@ -31,7 +41,12 @@ export async function openClaudeSession(
         {
           settingsPath: join(buildDir, "settings.json"),
           pluginDir: buildDir,
-          env: { FLOWDECK_SOCK: socketPath, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+          ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }),
+          env: {
+            FLOWDECK_SOCK: socketPath,
+            CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+            ...hookEnvironment(hooks),
+          },
         },
       )
       .then(() => {

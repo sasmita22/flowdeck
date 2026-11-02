@@ -138,7 +138,7 @@ describe("parseFlow", () => {
       label: "J",
       position: { x: 0, y: 0 },
       type: "join",
-      settings: { wait: "first" },
+      settings: { wait: "first", onBranchFail: "skip" },
     };
     const flow = flowWith({ nodes: [promptNode, fork, join] });
 

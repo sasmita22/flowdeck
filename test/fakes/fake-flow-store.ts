@@ -31,6 +31,13 @@ export class FakeFlowStore implements FlowStore {
     return { flowId: saved.flowId, version: saved.version };
   }
 
+  load(ref: SavedFlowRef): LoadedFlow | null {
+    const found = this.versions.find(
+      (saved) => saved.flowId === ref.flowId && saved.version === ref.version,
+    );
+    return found ? copy(found) : null;
+  }
+
   loadLatest(): LoadedFlow | null {
     const latest = this.versions.at(-1);
     return latest ? copy(latest) : null;

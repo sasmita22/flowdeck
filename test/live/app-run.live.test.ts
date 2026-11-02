@@ -29,6 +29,7 @@ import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
 import { flow as buildFlow, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -225,6 +226,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       home,
       publish,
       prepareHooks: () => ({ kind: "ok", nodePath: process.execPath, hookScriptPath }),
+      connectors: new FakeConnectorSource(),
       isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
       fs,
       run: liveEnvironment(fs),

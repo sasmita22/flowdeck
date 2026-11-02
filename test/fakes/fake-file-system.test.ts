@@ -10,6 +10,27 @@ describe("FakeFileSystem", () => {
     expect(await fs.readFile("a/b/c.md")).toBe("hello");
   });
 
+  it("removes one file and nothing else, and does not mind a file already gone", async () => {
+    const fs = new FakeFileSystem({ "a/keep.md": "k", "a/drop.md": "d" });
+
+    await fs.remove("a/drop.md");
+    await fs.remove("a/drop.md");
+
+    expect(await fs.list("a")).toEqual(["keep.md"]);
+    expect(fs.calls.filter((call) => call.method === "remove")).toHaveLength(2);
+  });
+
+  it("reads back a private file and remembers it was written privately", async () => {
+    const fs = new FakeFileSystem();
+
+    await fs.writeFile("a/open.md", "o");
+    await fs.writePrivateFile("a/secret.json", "s");
+
+    expect(await fs.readFile("a/secret.json")).toBe("s");
+    expect(fs.isPrivate("a/secret.json")).toBe(true);
+    expect(fs.isPrivate("a/open.md")).toBe(false);
+  });
+
   it("rejects reading a missing file", async () => {
     await expect(new FakeFileSystem().readFile("missing.md")).rejects.toThrow();
   });

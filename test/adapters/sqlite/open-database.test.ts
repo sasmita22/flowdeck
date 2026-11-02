@@ -12,6 +12,7 @@ const newRun = (): NewRun => ({
   inputs: { cwd: "/repo", auto: true },
   nodeIds: ["p1", "p2"],
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
+  buildHash: "abc",
 });
 
 const allMigrations = [
@@ -20,6 +21,7 @@ const allMigrations = [
   { name: "003_builds.sql" },
   { name: "004_events_lock.sql" },
   { name: "005_notes.sql" },
+  { name: "006_build_lineage.sql" },
 ];
 
 describe("openDatabase", () => {
@@ -46,7 +48,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies every migration, 001 to 005, to a new database file", () => {
+  it("applies every migration, 001 to 006, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
@@ -64,6 +66,7 @@ describe("openDatabase", () => {
 
   it("gives a connection a SqliteStore can create runs and append events on", () => {
     const store = new SqliteStore({ db: open() });
+    store.recordBuild({ hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] });
     const { id } = store.createRun(newRun());
 
     store.append(id, "p1", { kind: "sent" });

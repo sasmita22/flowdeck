@@ -15,7 +15,6 @@ import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const mainPath = fileURLToPath(new URL("../../src/cli/main.ts", import.meta.url));
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const watchdogMs = 180_000;
 const words = { p1: "ALPHA", p2: "BRAVO", p3: "CHARLIE" };
 
@@ -164,7 +163,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
           ),
           [thenWire("p1", "p2"), thenWire("p2", "p3")],
         ),
-        { fs: new NodeFileSystem(), home, hooks: { nodePath: process.execPath, hookScriptPath } },
+        { fs: new NodeFileSystem(), home },
       );
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
       const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
-import { hookSettings } from "../../src/core/compiler/hook-settings.js";
+import { hookCommand, hookSettings } from "../../src/core/compiler/hook-settings.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import {
   driveTwoTurns,
@@ -29,7 +29,7 @@ const stop = (sessionId: string, turn: string): HookEvent => ({
 describe("twoTurnsSettings", () => {
   it("adds acceptEdits to the hook settings so the Write tool runs without a prompt", () => {
     expect(twoTurnsSettings({ nodePath: "/n", hookScriptPath: "/h" })).toEqual({
-      ...hookSettings({ nodePath: "/n", hookScriptPath: "/h" }),
+      ...hookSettings(hookCommand({ nodePath: "/n", hookScriptPath: "/h" })),
       permissions: { defaultMode: "acceptEdits" },
     });
   });

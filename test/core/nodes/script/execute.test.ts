@@ -21,4 +21,26 @@ describe("scriptOutcome", () => {
   it("fails a script killed by a signal", () => {
     expect(scriptOutcome(null, 1)).toBe("failed");
   });
+
+  describe("with its own exit codes", () => {
+    const codes = { successCodes: [0, 3], retryCodes: [75] };
+
+    it.each([0, 3])("is done for listed success code %i", (code) => {
+      expect(scriptOutcome(code, 1, codes)).toBe("done");
+    });
+
+    it("retries a listed retry code once, then fails it", () => {
+      expect(scriptOutcome(75, 1, codes)).toBe("retry");
+      expect(scriptOutcome(75, 2, codes)).toBe("failed");
+    });
+
+    it.each([1, 2])("fails exit code %i that neither list names", (code) => {
+      expect(scriptOutcome(code, 1, codes)).toBe("failed");
+    });
+
+    it("keeps 0 as done and 2 as retry when the lists are empty", () => {
+      expect(scriptOutcome(0, 1, { successCodes: [], retryCodes: [] })).toBe("done");
+      expect(scriptOutcome(2, 1, { successCodes: [], retryCodes: [] })).toBe("retry");
+    });
+  });
 });

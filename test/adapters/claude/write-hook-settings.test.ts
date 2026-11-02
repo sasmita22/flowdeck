@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeHookSettings } from "../../../src/adapters/claude/write-hook-settings.js";
-import { hookSettings } from "../../../src/core/compiler/hook-settings.js";
+import { hookCommand, hookSettings } from "../../../src/core/compiler/hook-settings.js";
 
-const settings = hookSettings({
-  nodePath: "/usr/local/bin/node",
-  hookScriptPath: "/repo/bin/flowdeck-hook.ts",
-});
+const settings = hookSettings(
+  hookCommand({
+    nodePath: "/usr/local/bin/node",
+    hookScriptPath: "/repo/bin/flowdeck-hook.ts",
+  }),
+);
 
 describe("writeHookSettings", () => {
   let tmp: string;

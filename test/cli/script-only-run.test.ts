@@ -7,6 +7,8 @@ import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js"
 import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { build } from "../../src/core/compiler/build.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
+import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { FakeFlowStore } from "../fakes/fake-flow-store.js";
 import { FakeStore } from "../fakes/fake-store.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { flow, script, thenWire } from "../fixtures/flow-builders.js";
@@ -38,7 +40,7 @@ describe("a script-only run", () => {
         ],
         [thenWire("write", "check")],
       ),
-      { fs, home, hooks: { nodePath: process.execPath, hookScriptPath: "/h" } },
+      { fs, home },
     );
     if (!result.ok) throw new Error("build failed");
     let openSessionCalls = 0;
@@ -58,7 +60,9 @@ describe("a script-only run", () => {
           eventStops++;
         },
       }),
-      openStore: () => new FakeStore(),
+      openStore: () => ({ runs: new FakeStore(), flows: new FakeFlowStore() }),
+      hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
+      connectors: new FakeConnectorSource(),
       transcriptTurns: async () => [],
       openSession: async () => {
         openSessionCalls++;

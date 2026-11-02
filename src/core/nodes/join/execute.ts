@@ -1,7 +1,19 @@
 import type { z } from "zod";
+import type { WaitRequest } from "../../run/wait.js";
 import type { settings } from "./settings.js";
 
 export type JoinWait = z.infer<typeof settings>["wait"];
+
+export type JoinOnBranchFail = z.infer<typeof settings>["onBranchFail"];
+
+export function notStartedRequest(joinId: string, notStarted: readonly string[]): WaitRequest {
+  return {
+    nodeId: joinId,
+    kind: "ask",
+    question: `${notStarted.join(", ")} did not start. Go on without ${notStarted.length === 1 ? "it" : "them"}?`,
+    options: ["continue", "stop"],
+  };
+}
 
 export function joinComplete(
   wait: JoinWait,

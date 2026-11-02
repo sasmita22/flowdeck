@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
+import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
+import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
+import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import {
@@ -16,6 +19,7 @@ import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
+import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
@@ -47,6 +51,8 @@ const branches = (repo: string): Promise<string> =>
   git(repo, "branch", "--list", "--format=%(refname:short)");
 
 const stores = (flows = new FakeFlowStore()) => ({ runs: new FakeStore(), flows });
+
+const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
 const savedFlow = () => flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]);
 
@@ -82,6 +88,7 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
     }),
     isFolder,
     fs,
+    connectors: new FakeConnectorSource({ jira }),
     run: runEnvironment(fs),
     worktree: new FakeWorktree(),
     gitState: new FakeGitState(),
@@ -585,20 +592,192 @@ describe("createEngineHandler", async () => {
       expect(runs.builds()).toEqual([]);
     });
 
-    it("refuses a cached build that changed on disk since its first run", async () => {
+    it("restores a cached build that changed on disk since its first run, and runs it", async () => {
       flows.save(twoScripts());
       const first = await startedRunId();
       await untilFinished(first);
       const [cached] = runs.builds();
-      await appendFile(join(cached?.dir ?? "", "settings.json"), "\n");
+      const settingsPath = join(cached?.dir ?? "", "settings.json");
+      const original = await new NodeFileSystem().readFile(settingsPath);
+      await appendFile(settingsPath, "\n");
+      const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-      const result = await startRun();
+      const second = await startedRunId();
+      await untilFinished(second);
 
-      expect(result).toEqual({
-        kind: "error",
-        message: expect.stringContaining("settings.json: changed"),
+      expect(await new NodeFileSystem().readFile(settingsPath)).toBe(original);
+      expect(runs.findRun(second)?.status).toBe("done");
+      expect(runs.findRun(second)?.buildHash).toBe(cached?.hash);
+      expect(logged).toHaveBeenCalledWith(
+        `engine: build ${cached?.hash} restored settings.json (changed)`,
+      );
+      logged.mockRestore();
+    });
+
+    it("records the build with the version it was made from", async () => {
+      flows.save(twoScripts());
+      flows.save(twoScripts());
+
+      const runId = await startedRunId();
+      await untilFinished(runId);
+
+      const [built] = runs.listBuilds();
+      expect(built?.source).toEqual({ flowId: "flow-1", version: 2 });
+      expect(runs.findRun(runId)?.buildHash).toBe(built?.hash);
+      expect(runs.buildFiles(built?.hash ?? "").map((file) => file.path)).toContain(
+        "manifest.json",
+      );
+    });
+
+    it("leaves a run that joins in SQL to its build, its build nodes, and the flow version", async () => {
+      const db = openDatabase({ path: join(home, "flowdeck.db") });
+      try {
+        const sqlFlows = new SqliteFlowStore({ db, newId: () => "flow-sql" });
+        sqlFlows.save(twoScripts());
+        sqlFlows.save(twoScripts());
+        handler = handlerWith({
+          openStores: () => ({ runs: new SqliteStore({ db }), flows: sqlFlows }),
+        });
+
+        const runId = await startedRunId();
+        await untilFinished(runId);
+
+        const rows = db
+          .prepare(
+            `SELECT flows.id AS flow, flow_versions.version, builds.hash, builds.dir,
+                    run_nodes.node_id, build_nodes.type
+               FROM runs
+               JOIN builds ON builds.hash = runs.build_hash
+               JOIN flow_versions ON flow_versions.flow_id = builds.flow_id
+                                 AND flow_versions.version = builds.version
+               JOIN flows ON flows.id = flow_versions.flow_id
+               JOIN run_nodes ON run_nodes.run_id = runs.id
+               JOIN build_nodes ON build_nodes.build_hash = builds.hash
+                               AND build_nodes.node_id = run_nodes.node_id
+              WHERE runs.id = ? ORDER BY build_nodes.ordinal`,
+          )
+          .all(runId) as { hash: string; dir: string }[];
+        expect(rows).toEqual([
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
+            node_id: "write",
+            type: "script",
+          }),
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
+            node_id: "check",
+            type: "script",
+          }),
+        ]);
+        expect(rows[0]?.dir).toBe(join(home, "builds", rows[0]?.hash ?? ""));
+      } finally {
+        await handler.stop();
+        db.close();
+      }
+    });
+
+    it("keeps the inputs a run is started with", async () => {
+      flows.save(twoScripts());
+
+      const response = await handler.handle({
+        id: 1,
+        type: "start-run",
+        payload: { inputs: { ticket: "FD-1" } },
       });
-      expect(runs.runs.map((run) => run.id)).toEqual([first]);
+      const { runId } = (response as { value: { runId: string } }).value;
+      await untilFinished(runId);
+
+      expect(runs.findRun(runId)?.inputs).toEqual({ ticket: "FD-1" });
+    });
+
+    it("refuses inputs that are not text", async () => {
+      expect(
+        await handler.handle({ id: 4, type: "start-run", payload: { inputs: { n: 1 } } }),
+      ).toMatchObject({ id: 4, ok: false });
+      expect(runs.runs).toEqual([]);
+    });
+
+    describe("builds", () => {
+      it("builds a chosen version, lists it, reads its files, and runs it", async () => {
+        flows.save(twoScripts());
+        const v1 = twoScripts();
+        flows.save({ ...v1, nodes: v1.nodes.filter((node) => node.id === "write"), wires: [] });
+
+        const built = await handler.handle({
+          id: 1,
+          type: "build-version",
+          payload: { flowId: "flow-1", version: 1 },
+        });
+        const { hash, dir } = (built as { value: { hash: string; dir: string } }).value;
+        expect(built).toEqual({
+          id: 1,
+          ok: true,
+          value: { kind: "built", hash, dir, reused: false, restored: [] },
+        });
+
+        expect(await handler.handle({ id: 2, type: "list-builds" })).toEqual({
+          id: 2,
+          ok: true,
+          value: [
+            {
+              hash,
+              dir,
+              createdAt: expect.any(Number),
+              source: { flowId: "flow-1", version: 1 },
+            },
+          ],
+        });
+
+        const files = await handler.handle({ id: 3, type: "build-files", payload: { hash } });
+        const listed = (files as { value: { path: string; content: string }[] }).value;
+        expect(listed.map((file) => file.path)).toEqual(runs.buildFiles(hash).map((f) => f.path));
+        expect(listed.find((file) => file.path === "manifest.json")?.content).toBe(
+          await new NodeFileSystem().readFile(`${dir}/manifest.json`),
+        );
+
+        const started = await handler.handle({
+          id: 4,
+          type: "run-build",
+          payload: { hash, inputs: { ticket: "FD-2" } },
+        });
+        const { runId } = (started as { value: { runId: string } }).value;
+        await untilFinished(runId);
+        expect(runs.findRun(runId)).toMatchObject({
+          buildHash: hash,
+          nodeIds: ["write", "check"],
+          inputs: { ticket: "FD-2" },
+          status: "done",
+        });
+      });
+
+      it("answers an unsaved version, an unknown build and a bad payload with errors", async () => {
+        flows.save(twoScripts());
+
+        expect(
+          await handler.handle({
+            id: 1,
+            type: "build-version",
+            payload: { flowId: "flow-1", version: 5 },
+          }),
+        ).toEqual({
+          id: 1,
+          ok: true,
+          value: { kind: "error", message: "version: flow-1 has no saved version 5" },
+        });
+        expect(
+          await handler.handle({ id: 2, type: "run-build", payload: { hash: "nope" } }),
+        ).toEqual({ id: 2, ok: true, value: { kind: "error", message: "No build nope" } });
+        expect(
+          await handler.handle({ id: 3, type: "build-files", payload: { hash: "nope" } }),
+        ).toEqual({ id: 3, ok: false, error: "No build nope" });
+        expect(await handler.handle({ id: 4, type: "build-version", payload: {} })).toMatchObject({
+          id: 4,
+          ok: false,
+        });
+        expect(runs.runs).toEqual([]);
+      });
     });
 
     it("returns the open error when the stores fail to open", async () => {
@@ -767,6 +946,115 @@ describe("createEngineHandler", async () => {
       await vi.waitFor(() => {
         expect(sessionPushes()).toEqual([{ push: "session", value: "fd-run-test" }]);
       });
+    });
+
+    it("gives the session the hook paths of this machine and the run's own private MCP config", async () => {
+      const opened: OpenSessionOptions[] = [];
+      const secretJira = { ...jira, headers: { Authorization: "Bearer s3cret" } };
+      handler = handlerWith({
+        newSessionName: () => "fd-run-test",
+        connectors: new FakeConnectorSource({ jira: secretJira }),
+        run: {
+          ...runEnvironment(new NodeFileSystem()),
+          openSession: async (opening) => {
+            opened.push(opening);
+            return claudeSession(async () => undefined);
+          },
+        },
+      });
+      const base = promptFlow();
+      flows.save({ ...base, session: { ...base.session, connectors: ["jira"] } });
+
+      const runId = await startedRunId();
+      await vi.waitFor(() => expect(opened).toHaveLength(1));
+
+      const runtimePath = `${home}/runs/${runId}/mcp.json`;
+      expect(opened[0]).toMatchObject({
+        hooks: { nodePath: process.execPath, hookScriptPath: `${home}/hooks/flowdeck-hook.cjs` },
+        mcpConfigPath: runtimePath,
+      });
+      expect((await stat(runtimePath)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await new NodeFileSystem().readFile(runtimePath))).toEqual({
+        mcpServers: { jira: secretJira },
+      });
+      const [built] = runs.listBuilds();
+      const files = await handler.handle({
+        id: 90,
+        type: "build-files",
+        payload: { hash: built?.hash },
+      });
+      const listed = (files as { value: { path: string; content: string }[] }).value;
+      expect(listed.map((file) => file.path)).not.toContain("mcp.json");
+      expect(listed.filter((file) => file.content.includes("s3cret"))).toEqual([]);
+    });
+
+    it("refuses to run a build whose connector Claude Code no longer has, starting nothing", async () => {
+      const opened: OpenSessionOptions[] = [];
+      const base = promptFlow();
+      flows.save({ ...base, session: { ...base.session, connectors: ["jira"] } });
+      const built = await handler.handle({
+        id: 1,
+        type: "build-version",
+        payload: { flowId: "flow-1", version: 1 },
+      });
+      const { hash } = (built as { value: { hash: string } }).value;
+      handler = handlerWith({
+        connectors: new FakeConnectorSource(),
+        run: {
+          ...runEnvironment(new NodeFileSystem()),
+          openSession: async (opening) => {
+            opened.push(opening);
+            return claudeSession(async () => undefined);
+          },
+        },
+      });
+
+      expect(await handler.handle({ id: 2, type: "run-build", payload: { hash } })).toEqual({
+        id: 2,
+        ok: true,
+        value: {
+          kind: "error",
+          message: expect.stringMatching(
+            /^connectors: Connector "jira" is not set up in Claude Code/,
+          ),
+        },
+      });
+      expect(runs.runs).toEqual([]);
+      expect(opened).toEqual([]);
+    });
+
+    it("builds the same hash for a version whatever node and hook paths this machine has", async () => {
+      const openings: OpenSessionOptions[] = [];
+      const machine = (nodePath: string) =>
+        handlerWith({
+          prepareHooks: () => ({ kind: "ok", nodePath, hookScriptPath: `${nodePath}-hook.cjs` }),
+          run: {
+            ...runEnvironment(new NodeFileSystem()),
+            openSession: async (opening) => {
+              openings.push(opening);
+              return claudeSession(async () => undefined);
+            },
+          },
+        });
+      flows.save(promptFlow());
+
+      handler = machine("/usr/local/bin/node");
+      await startedRunId();
+      await vi.waitFor(() => expect(openings).toHaveLength(1));
+      await handler.stop();
+      handler = machine("/Users/someone/.nvm/versions/node/v24/bin/node");
+      await startedRunId();
+      await vi.waitFor(() => expect(openings).toHaveLength(2));
+
+      expect(runs.builds()).toHaveLength(1);
+      expect(openings.map((opening) => opening.buildDir)).toEqual([
+        runs.builds()[0]?.dir,
+        runs.builds()[0]?.dir,
+      ]);
+      expect(openings.map((opening) => opening.hooks.nodePath)).toEqual([
+        "/usr/local/bin/node",
+        "/Users/someone/.nvm/versions/node/v24/bin/node",
+      ]);
     });
 
     it("announces no session for a script-only run", async () => {

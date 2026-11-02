@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { joinComplete, skippedBranches } from "../../../../src/core/nodes/join/execute.js";
+import {
+  joinComplete,
+  notStartedRequest,
+  skippedBranches,
+} from "../../../../src/core/nodes/join/execute.js";
 
 const branchTypes = ["h:a1", "h:a2", "h:a3"];
 const stopped = (...types: string[]) => new Set(types);
@@ -50,5 +54,16 @@ describe("skippedBranches", () => {
 
   it("ignores a stopped id that is not a branch", () => {
     expect(skippedBranches(["a1", "a2"], stopped("x", "a1"))).toEqual(["a2"]);
+  });
+});
+
+describe("notStartedRequest", () => {
+  it("asks whether to go on without the branches that did not start", () => {
+    expect(notStartedRequest("j", ["a2", "a3"])).toEqual({
+      nodeId: "j",
+      kind: "ask",
+      question: "a2, a3 did not start. Go on without them?",
+      options: ["continue", "stop"],
+    });
   });
 });

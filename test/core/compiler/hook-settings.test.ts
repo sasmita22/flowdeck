@@ -1,5 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildHookCommand,
+  hookCommand,
+  hookEnvironment,
   hookSettings,
   permissionHookTimeoutSeconds,
   shellQuote,
@@ -18,10 +25,12 @@ describe("shellQuote", () => {
 describe("hookSettings", () => {
   const command = "'/Users/x/my node/bin/node' '/Users/x/flow deck/bin/flowdeck-hook.ts'";
   const settings = () =>
-    hookSettings({
-      nodePath: "/Users/x/my node/bin/node",
-      hookScriptPath: "/Users/x/flow deck/bin/flowdeck-hook.ts",
-    });
+    hookSettings(
+      hookCommand({
+        nodePath: "/Users/x/my node/bin/node",
+        hookScriptPath: "/Users/x/flow deck/bin/flowdeck-hook.ts",
+      }),
+    );
 
   it("waits a day for a permission answer", () => {
     expect(permissionHookTimeoutSeconds).toBe(86_400);
@@ -60,5 +69,31 @@ describe("hookSettings", () => {
         timeout: permissionHookTimeoutSeconds,
       },
     ]);
+  });
+});
+
+describe("the build's hook command", () => {
+  it("names no machine path", () => {
+    expect(buildHookCommand).not.toMatch(/\//);
+  });
+
+  it("runs the node and hook script that the session's environment names, spaces and all", () => {
+    const folder = mkdtempSync(join(tmpdir(), "fd hook "));
+    try {
+      const script = join(folder, "my hook.cjs");
+      writeFileSync(script, "process.stdout.write('hook ran ' + process.argv.slice(2).join(' '))");
+
+      const output = execFileSync("/bin/sh", ["-c", `${buildHookCommand} --flag`], {
+        env: {
+          PATH: "",
+          ...hookEnvironment({ nodePath: process.execPath, hookScriptPath: script }),
+        },
+        encoding: "utf8",
+      });
+
+      expect(output).toBe("hook ran --flag");
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });

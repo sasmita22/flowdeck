@@ -10,7 +10,7 @@ import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { writeHookSettings } from "../../src/adapters/claude/write-hook-settings.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
-import { hookSettings } from "../../src/core/compiler/hook-settings.js";
+import { hookCommand, hookSettings } from "../../src/core/compiler/hook-settings.js";
 import { waitForTurnEnd, type TurnEndEvent } from "../../src/core/run/turns.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -99,7 +99,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("turn end with real claude", 
     const sessionId = randomUUID();
     const name = `fd-live-${process.pid}-${label}`;
     started.push({ name, sessionId });
-    const settings = hookSettings({ nodePath: process.execPath, hookScriptPath });
+    const settings = hookSettings(hookCommand({ nodePath: process.execPath, hookScriptPath }));
     const observed = { hooks: { ...settings.hooks, PostToolUse: settings.hooks.Stop } };
     const settingsPath = await writeHookSettings(
       join(home, "sessions", sessionId),

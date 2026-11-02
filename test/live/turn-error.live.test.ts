@@ -16,7 +16,6 @@ import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const tsx = join(root, "node_modules", ".bin", "tsx");
 const runDeadlineMs = 60_000;
 const notLoggedIn = "Not logged in · Please run /login";
@@ -93,7 +92,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
       const built = await build(flow, {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
 

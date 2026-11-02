@@ -1,13 +1,14 @@
 import type { FileSystem } from "../../src/ports/file-system.js";
 
 export type FileSystemCall = {
-  method: "exists" | "writeFile" | "readFile" | "list";
+  method: "exists" | "writeFile" | "writePrivateFile" | "readFile" | "list" | "remove";
   path: string;
 };
 
 export class FakeFileSystem implements FileSystem {
   readonly calls: FileSystemCall[] = [];
   private readonly files: Map<string, string>;
+  private readonly privatePaths = new Set<string>();
 
   constructor(seed: Record<string, string> = {}) {
     this.files = new Map(Object.entries(seed));
@@ -21,6 +22,17 @@ export class FakeFileSystem implements FileSystem {
   async writeFile(path: string, content: string): Promise<void> {
     this.calls.push({ method: "writeFile", path });
     this.files.set(path, content);
+    this.privatePaths.delete(path);
+  }
+
+  async writePrivateFile(path: string, content: string): Promise<void> {
+    this.calls.push({ method: "writePrivateFile", path });
+    this.files.set(path, content);
+    this.privatePaths.add(path);
+  }
+
+  isPrivate(path: string): boolean {
+    return this.privatePaths.has(path);
   }
 
   async readFile(path: string): Promise<string> {
@@ -28,6 +40,12 @@ export class FakeFileSystem implements FileSystem {
     const content = this.files.get(path);
     if (content === undefined) throw new Error(`No such file: ${path}`);
     return content;
+  }
+
+  async remove(path: string): Promise<void> {
+    this.calls.push({ method: "remove", path });
+    this.files.delete(path);
+    this.privatePaths.delete(path);
   }
 
   async list(dir: string): Promise<string[]> {

@@ -1,5 +1,7 @@
 import type { RunEvent } from "../../src/core/run/run-events.js";
 import type {
+  BuildFileRecord,
+  BuildRecord,
   EventEntry,
   NewBuild,
   NewRun,
@@ -16,6 +18,7 @@ export class FakeStore implements Store {
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: NewBuild[] = [];
+  private readonly costs = new Map<string, number>();
   private nextRun = 1;
   private nextSeq = 1;
 
@@ -68,6 +71,34 @@ export class FakeStore implements Store {
   recordBuild(build: NewBuild): void {
     if (this.buildRecords.some((known) => known.hash === build.hash)) return;
     this.buildRecords.push(copy(build));
+  }
+
+  findBuild(hash: string): BuildRecord | undefined {
+    return this.listBuilds().find((build) => build.hash === hash);
+  }
+
+  listBuilds(): BuildRecord[] {
+    return this.buildRecords
+      .map(({ hash, dir, source }, index) => ({
+        hash,
+        dir,
+        createdAt: index + 1,
+        ...(source === undefined ? {} : { source: copy(source) }),
+      }))
+      .reverse();
+  }
+
+  buildFiles(hash: string): BuildFileRecord[] {
+    const files = this.buildRecords.find((build) => build.hash === hash)?.files ?? [];
+    return copy(files).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
+
+  recordCost(runId: string, totalCost: number): void {
+    this.costs.set(runId, totalCost);
+  }
+
+  costOf(runId: string): number | undefined {
+    return this.costs.get(runId);
   }
 
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { forkTurnText } from "../../../src/core/nodes/fork/execute.js";
+import { hardstopCheckTurn } from "../../../src/core/nodes/hardstop/execute.js";
 import {
   agentVerdictTurnText,
   capRequest,
@@ -56,6 +57,7 @@ const newRun = (m: RunnableManifest) => ({
   inputs: {},
   nodeIds: m.nodes.map((each) => each.id),
   session: { tmuxName: "fd-run", cwd, claudeSessionId: sessionId },
+  buildHash: hash,
 });
 
 function runOn(deps: TestDeps, m: RunnableManifest, options?: RunOptions) {
@@ -222,6 +224,43 @@ describe("Runner", () => {
     expect(lines.at(-1)).toMatch(/^a failed: .*no Stop for session s1 within 20 ms/);
   });
 
+  describe("output nodes", () => {
+    const output = (id: string) => node(id, "output", { name: "result", type: "text" });
+
+    it("marks an Output done once the node before it finishes", async () => {
+      const { deps, lines, calls } = harness();
+
+      const result = await runOn(deps, manifest(prompt("p"), output("o")));
+
+      expect(result.outcome).toBe("done");
+      expect(result.states).toEqual({ p: "done", o: "done" });
+      expect(lines).toEqual(["p started", "p done", "o done"]);
+      expect(calls.filter((call) => call.startsWith("send"))).toEqual([`send /${hash}:p`]);
+    });
+
+    it("leaves an Output waiting when the run fails before it", async () => {
+      const { deps } = harness({ results: [exit(1)] });
+
+      const result = await runOn(deps, manifest(script("s"), output("o")));
+
+      expect(result.states).toEqual({ s: "failed", o: "waiting" });
+    });
+
+    it("does not mark an Output that is already done again on resume", async () => {
+      const { deps, lines } = harness();
+      const m = manifest(output("o"));
+      const { id } = deps.store.createRun(newRun(m));
+      deps.store.append(id, "o", { kind: "running" });
+      deps.store.append(id, "o", { kind: "done" });
+
+      const result = await new Runner({ ...deps, runId: id }).run(m);
+
+      expect(result.states).toEqual({ o: "done" });
+      expect(deps.store.events(id)).toHaveLength(2);
+      expect(lines).toEqual([]);
+    });
+  });
+
   describe("script exit codes", () => {
     const run = async (results: (ProcessResult | Error)[]) => {
       const h = harness({ results });
@@ -280,6 +319,30 @@ describe("Runner", () => {
       expect(result).toMatchObject({ outcome: "failed", failedNode: "s" });
       expect(nextRan).toBe(false);
       expect(lines.at(-1)).toBe("s failed: spawn nope ENOENT");
+    });
+
+    it("follows the script's own exit codes: a success code moves on, a retry code runs it again", async () => {
+      const { deps, scripts, calls, lines } = harness({ results: [exit(75), exit(3)] });
+      const own = script("s", { command: "npm", successCodes: [3], retryCodes: [75] });
+
+      const result = await runOn(deps, manifest(own, prompt("next")));
+
+      expect(result.outcome).toBe("done");
+      expect(scripts.calls).toHaveLength(2);
+      expect(lines.slice(0, 3)).toEqual(["s started", "s retry", "s done"]);
+      expect(calls).toContain(`send /${hash}:next`);
+    });
+
+    it("stops the run at exit 0 when the script names other success codes", async () => {
+      const { deps, lines } = harness({ results: [exit(0)] });
+
+      const result = await runOn(
+        deps,
+        manifest(script("s", { command: "npm", successCodes: [3] }), prompt("next")),
+      );
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "s" });
+      expect(lines.at(-1)).toBe("s failed: exit code 0");
     });
 
     it("runs the command with its args, or none, in the run's folder", async () => {
@@ -461,7 +524,7 @@ describe("Runner", () => {
     const gate = (id: string, skippable = false) =>
       node(id, "gate", { shown: "Check the plan", skippable });
     const hardstopSettings = {
-      condition: "tests fail",
+      condition: "",
       shown: "Check tests",
       locked: true,
       enabled: true,
@@ -560,7 +623,7 @@ describe("Runner", () => {
       const result = await runOn(deps, manifest(prompt("p1"), hardstop("h1"), prompt("p2")));
 
       expect(waiter.calls).toEqual([
-        { nodeId: "h1", kind: "hardstop", shown: "Check tests", condition: "tests fail" },
+        { nodeId: "h1", kind: "hardstop", shown: "Check tests", condition: "" },
       ]);
       expect(lines).toContain("h1 continued");
       expect(result.outcome).toBe("done");
@@ -578,6 +641,110 @@ describe("Runner", () => {
         expect(waiter.calls).toHaveLength(1);
       },
     );
+
+    describe("a Hard stop with a condition", () => {
+      const checking = (id: string) => hardstop(id, { condition: "tests fail" });
+      const verdict = (holds: boolean) => `Checked.\n\`\`\`json\n{"done": ${holds}}\n\`\`\``;
+
+      it("asks the model whether the condition holds, and stops to ask you when it does", async () => {
+        const waiter = new FakeWaiter([{ decision: "stop", reason: "red" }]);
+        const { deps, calls, lines } = harness({ waiter, replies: ["P1", verdict(true)] });
+
+        const result = await runOn(deps, manifest(prompt("p1"), checking("h1"), prompt("p2")));
+
+        expect(sends(calls)).toEqual([
+          `send /${hash}:p1`,
+          `send ${hardstopCheckTurn("tests fail")}`,
+        ]);
+        expect(hardstopCheckTurn("tests fail")).toContain(verdictRequest("tests fail"));
+        expect(waiter.calls).toEqual([
+          { nodeId: "h1", kind: "hardstop", shown: "Check tests", condition: "tests fail" },
+        ]);
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "h1" });
+        expect(lines.at(-1)).toBe("h1 failed: stopped: red");
+      });
+
+      it("goes on without asking when the condition does not hold", async () => {
+        const waiter = new FakeWaiter([]);
+        const { deps, calls, lines } = harness({ waiter, replies: ["P1", verdict(false), "P2"] });
+
+        const result = await runOn(deps, manifest(prompt("p1"), checking("h1"), prompt("p2")));
+
+        expect(result.outcome).toBe("done");
+        expect(waiter.calls).toEqual([]);
+        expect(result.states).toEqual({ p1: "done", h1: "done", p2: "done" });
+        expect(lines).toContain("h1 condition not met");
+        expect(sends(calls).at(-1)).toBe(`send /${hash}:p2`);
+      });
+
+      it("checks and stops under auto too", async () => {
+        const waiter = new FakeWaiter([{ decision: "continue" }]);
+        const { deps } = harness({ waiter, auto: true, replies: [verdict(true), "P2"] });
+
+        const result = await runOn(deps, manifest(checking("h1"), prompt("p2")));
+
+        expect(waiter.calls).toHaveLength(1);
+        expect(result.decisions).toEqual([{ nodeId: "h1", decision: "continued" }]);
+      });
+
+      it.each([
+        ["continue", "done", "h1 answered: continue"],
+        ["stop", "failed", "h1 failed: stopped: no readable verdict"],
+      ] as const)(
+        "asks you when the verdict is unreadable, and %s does what it says",
+        async (answer, state, line) => {
+          const waiter = new FakeWaiter([{ decision: "answer", answer }]);
+          const { deps, lines } = harness({ waiter, replies: ["no idea", "P2"] });
+
+          const result = await runOn(deps, manifest(checking("h1"), prompt("p2")));
+
+          expect(waiter.calls).toEqual([
+            {
+              nodeId: "h1",
+              kind: "ask",
+              question: "The hard stop got no readable verdict (no json block). Stop the run here?",
+              options: ["stop", "continue"],
+            },
+          ]);
+          expect(result.states["h1"]).toBe(state);
+          expect(lines).toContain(line);
+          expect(result.decisions).toEqual([{ nodeId: "h1", decision: "answered", answer }]);
+        },
+      );
+
+      it("reuses an answer to an unreadable verdict on resume, without checking again", async () => {
+        const waiter = new FakeWaiter([]);
+        const { deps, calls } = harness({ waiter, replies: ["P2"] });
+        const m = manifest(checking("h1"), prompt("p2"));
+        const { id } = deps.store.createRun(newRun(m));
+        const decision = { nodeId: "h1", decision: "answered", answer: "continue" } as const;
+        for (const event of [
+          { kind: "running" },
+          { kind: "needs-you" },
+          { kind: "answered", payload: decision },
+        ] as RunEvent[]) {
+          deps.store.append(id, "h1", event);
+        }
+
+        const result = await new Runner({ ...deps, runId: id }).run(m, {
+          actions: { h1: { kind: "reuse", decision } },
+        });
+
+        expect(result.outcome).toBe("done");
+        expect(waiter.calls).toEqual([]);
+        expect(sends(calls)).toEqual([`send /${hash}:p2`]);
+      });
+
+      it("sends no check for a Hard stop with no condition, and asks you", async () => {
+        const waiter = new FakeWaiter([{ decision: "continue" }]);
+        const { deps, calls } = harness({ waiter });
+
+        await runOn(deps, manifest(hardstop("h1"), prompt("p2")));
+
+        expect(sends(calls)).toEqual([`send /${hash}:p2`]);
+        expect(waiter.calls).toHaveLength(1);
+      });
+    });
 
     it("stops the run at a Hard stop stopped with a reason", async () => {
       const waiter = new FakeWaiter([{ decision: "stop", reason: "tests fail" }]);
@@ -1285,7 +1452,7 @@ describe("Runner", () => {
     });
   });
 
-  it("skips trigger and output nodes without a line or a call", async () => {
+  it("skips a trigger without a line or a call, and marks an output done without a call", async () => {
     const { deps, calls, lines } = harness();
 
     const result = await runOn(
@@ -1295,7 +1462,7 @@ describe("Runner", () => {
 
     expect(result.outcome).toBe("done");
     expect(calls).toEqual(["start", `send /${hash}:p`]);
-    expect(lines).toEqual(["p started", "p done"]);
+    expect(lines).toEqual(["p started", "p done", "o done"]);
   });
 
   it("never starts Claude for a script-only manifest", async () => {
@@ -2384,7 +2551,12 @@ describe("Runner parallel section", () => {
   };
 
   function sectionManifest(
-    options: { branches?: string[]; wait?: "all" | "first"; after?: boolean } = {},
+    options: {
+      branches?: string[];
+      wait?: "all" | "first";
+      after?: boolean;
+      onBranchFail?: "wait" | "skip" | "stop";
+    } = {},
   ): RunnableManifest {
     const ids = options.branches ?? branchIds;
     const withAfter = options.after ?? true;
@@ -2392,7 +2564,9 @@ describe("Runner parallel section", () => {
       [
         builders.fork("f"),
         ...ids.map((id) => builders.agent(id)),
-        builders.join("j", { settings: { wait: options.wait ?? "all" } }),
+        builders.join("j", {
+          settings: { wait: options.wait ?? "all", onBranchFail: options.onBranchFail ?? "stop" },
+        }),
         ...(withAfter ? [builders.prompt("after")] : []),
       ],
       [
@@ -2665,6 +2839,72 @@ describe("Runner parallel section", () => {
       a2: "skipped",
       a3: "failed",
       j: "failed",
+    });
+  });
+
+  describe("when a branch never starts", () => {
+    const twoOfThree: Turn = (s) => {
+      s.launch("a1");
+      s.launch("a2");
+      s.subagentStop("a1", "a1 reply");
+      s.subagentStop("a2", "a2 reply");
+      s.stop("Launched two.");
+    };
+    const notStarted = {
+      nodeId: "j",
+      kind: "ask",
+      question: "a3 did not start. Go on without it?",
+      options: ["continue", "stop"],
+    };
+
+    it("goes on without it when the Join says skip", async () => {
+      const h = sectionHarness({ onFork: twoOfThree });
+
+      const result = await runOn(h.deps, sectionManifest({ onBranchFail: "skip" }));
+
+      expect(result.outcome).toBe("done");
+      expect(result.states).toEqual({
+        f: "done",
+        a1: "done",
+        a2: "done",
+        a3: "skipped",
+        j: "done",
+        after: "done",
+      });
+      expect(h.lines).toContain("a3 skipped");
+      expect(sends(h.calls)).toEqual([forkSend(), `send /${hash}:after`]);
+    });
+
+    it("waits for first and skips both the unfinished and the unstarted branch when the Join says skip", async () => {
+      const h = sectionHarness({
+        onFork: (s) => {
+          s.launch("a1");
+          s.launch("a2");
+        },
+      });
+      const running = runOn(h.deps, sectionManifest({ wait: "first", onBranchFail: "skip" }));
+      await forkSent(h.calls);
+
+      h.session.subagentStop("a1", "a1 reply");
+      const result = await running;
+
+      expect(result.outcome).toBe("done");
+      expect(result.states).toMatchObject({ a1: "done", a2: "skipped", a3: "skipped", j: "done" });
+    });
+
+    it.each([
+      ["continue", "done", "skipped"],
+      ["stop", "failed", "failed"],
+    ] as const)("asks you when the Join says wait, and %s decides", async (answer, outcome, a3) => {
+      const waiter = new FakeWaiter([{ decision: "answer", answer }]);
+      const h = sectionHarness({ onFork: twoOfThree, waiter });
+
+      const result = await runOn(h.deps, sectionManifest({ onBranchFail: "wait" }));
+
+      expect(waiter.calls).toEqual([notStarted]);
+      expect(result.outcome).toBe(outcome);
+      expect(result.states).toMatchObject({ a3, j: outcome });
+      expect(result.decisions).toEqual([{ nodeId: "j", decision: "answered", answer }]);
     });
   });
 

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -23,7 +22,6 @@ import {
 } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const questionWithinMs = 120_000;
 const unattendedHoldMs = 5000;
 
@@ -108,7 +106,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
         {
           fs: new NodeFileSystem(),
           home,
-          hooks: { nodePath: process.execPath, hookScriptPath },
         },
       );
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);

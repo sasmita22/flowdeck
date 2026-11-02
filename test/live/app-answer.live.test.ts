@@ -26,6 +26,7 @@ import type { StoredEvent } from "../../src/core/run/store.js";
 import type { PendingWait } from "../../src/core/run/wait.js";
 import { ask, flow, prompt, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -216,6 +217,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         home,
         publish,
         prepareHooks: () => ({ kind: "ok", nodePath: process.execPath, hookScriptPath }),
+        connectors: new FakeConnectorSource(),
         isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
         fs,
         run: liveEnvironment(fs, appWaiter),

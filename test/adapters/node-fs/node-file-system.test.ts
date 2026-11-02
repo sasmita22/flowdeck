@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,6 +20,36 @@ describe("NodeFileSystem", () => {
     await fs.writeFile(join(tmp, "a/b/c.md"), "hello");
 
     expect(await fs.readFile(join(tmp, "a/b/c.md"))).toBe("hello");
+  });
+
+  it("removes one file and nothing else, and does not mind a file already gone", async () => {
+    await fs.writeFile(join(tmp, "a/keep.md"), "k");
+    await fs.writeFile(join(tmp, "a/drop.md"), "d");
+
+    await fs.remove(join(tmp, "a/drop.md"));
+    await fs.remove(join(tmp, "a/drop.md"));
+
+    expect(await fs.list(tmp)).toEqual(["a/keep.md"]);
+  });
+
+  it("writes a private file only its owner can read, creating missing folders", async () => {
+    const path = join(tmp, "runs/r1/mcp.json");
+
+    await fs.writePrivateFile(path, "secret");
+
+    expect(await fs.readFile(path)).toBe("secret");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it("makes an existing readable file private when writing it privately", async () => {
+    const path = join(tmp, "mcp.json");
+    await fs.writeFile(path, "old");
+    await chmod(path, 0o644);
+
+    await fs.writePrivateFile(path, "new");
+
+    expect(await fs.readFile(path)).toBe("new");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it("rejects reading a missing file", async () => {

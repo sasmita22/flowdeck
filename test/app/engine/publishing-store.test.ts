@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createPublishingStore } from "../../../src/app/engine/publishing-store.js";
 import { runSnapshot } from "../../../src/core/run/snapshot.js";
-import type { NewRun } from "../../../src/ports/store.js";
+import type { NewBuild, NewRun } from "../../../src/ports/store.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 
 const nodeIds = ["p1", "p2"];
@@ -11,7 +11,15 @@ const newRun = (): NewRun => ({
   inputs: {},
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
+  buildHash: "h0",
 });
+
+const build: NewBuild = {
+  hash: "h1",
+  dir: "/fd/builds/h1",
+  files: [{ path: "manifest.json", sha256: "m" }],
+  nodes: [],
+};
 
 const setup = () => {
   const inner = new FakeStore();
@@ -74,13 +82,18 @@ describe("createPublishingStore", () => {
     const { inner, runId, pushes, store } = setup();
 
     const created = store.createRun(newRun());
-    store.recordBuild({ hash: "h1", dir: "/fd/builds/h1" });
+    store.recordBuild(build);
+    store.recordCost(runId, 0.25);
     const found = store.findRun(runId);
     const events = store.events(runId);
 
     expect(pushes).toEqual([]);
     expect(inner.runs.map((run) => run.id)).toEqual([runId, created.id]);
-    expect(inner.builds()).toEqual([{ hash: "h1", dir: "/fd/builds/h1" }]);
+    expect(inner.builds()).toEqual([build]);
+    expect(inner.costOf(runId)).toBe(0.25);
+    expect(store.listBuilds()).toEqual(inner.listBuilds());
+    expect(store.findBuild("h1")).toEqual(inner.findBuild("h1"));
+    expect(store.buildFiles("h1")).toEqual(inner.buildFiles("h1"));
     expect(found).toEqual(inner.findRun(runId));
     expect(events).toEqual(inner.events(runId));
   });

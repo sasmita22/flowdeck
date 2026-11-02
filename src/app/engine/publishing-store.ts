@@ -26,7 +26,11 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
     events: (id) => store.events(id),
+    recordCost: (id, totalCost) => store.recordCost(id, totalCost),
     recordBuild: (build) => store.recordBuild(build),
+    findBuild: (hash) => store.findBuild(hash),
+    listBuilds: () => store.listBuilds(),
+    buildFiles: (hash) => store.buildFiles(hash),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);
       publishFor(id);

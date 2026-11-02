@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -15,7 +14,6 @@ import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidenc
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
-const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const watchdogMs = 240_000;
 const runTimeoutMs = 300_000;
 const condition = "every error the review reported is fixed";
@@ -197,7 +195,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
       const built = await build(liveFlow(), {
         fs: new NodeFileSystem(),
         home,
-        hooks: { nodePath: process.execPath, hookScriptPath },
       });
       if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
       const before = await nodeIn(repo.path, "--check", "src/math.js");

@@ -26,6 +26,7 @@ export interface FlowStore {
   save(flow: Flow): SavedFlowRef;
   /** The current flow at its highest version, or `null` when nothing has been saved. */
   loadLatest(): LoadedFlow | null;
+  load(ref: SavedFlowRef): LoadedFlow | null;
 }
 
 export const saveFlowResultSchema = z.discriminatedUnion("kind", [

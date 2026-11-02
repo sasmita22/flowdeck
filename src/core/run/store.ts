@@ -7,12 +7,30 @@ export type NewRun = {
   inputs: Record<string, unknown>;
   nodeIds: string[];
   session: { tmuxName: string; cwd: string; claudeSessionId: string };
-  buildHash?: string;
+  buildHash: string;
 };
 
-export type NewBuild = { hash: string; dir: string };
+export type BuildSource = { flowId: string; version: number };
 
-export type RunRecord = NewRun & { id: string; status: RunStatus };
+export type BuildFileRecord = { path: string; sha256: string };
+
+export type BuildNodeRecord = { nodeId: string; type: string; config: unknown; file?: string };
+
+export type NewBuild = {
+  hash: string;
+  dir: string;
+  source?: BuildSource;
+  files: BuildFileRecord[];
+  nodes: BuildNodeRecord[];
+};
+
+export type BuildRecord = { hash: string; dir: string; createdAt: number; source?: BuildSource };
+
+export type RunRecord = Omit<NewRun, "buildHash"> & {
+  id: string;
+  status: RunStatus;
+  buildHash?: string;
+};
 
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
 
@@ -25,5 +43,9 @@ export interface Store {
   appendAll(runId: string, entries: readonly EventEntry[]): void;
   events(runId: string): StoredEvent[];
   finishRun(runId: string, status: Exclude<RunStatus, "running">): void;
+  recordCost(runId: string, totalCost: number): void;
   recordBuild(build: NewBuild): void;
+  findBuild(hash: string): BuildRecord | undefined;
+  listBuilds(): BuildRecord[];
+  buildFiles(hash: string): BuildFileRecord[];
 }

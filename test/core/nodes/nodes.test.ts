@@ -141,7 +141,7 @@ const cases: Case[] = [
     type: "join",
     settings: joinSettings,
     ports: joinPorts,
-    valid: { wait: "first" },
+    valid: { wait: "first", onBranchFail: "skip" },
     bad: { wait: "some" },
     badPath: ["wait"],
     expectedPorts: [inPort, outPort],
@@ -189,8 +189,23 @@ describe("required and lenient settings", () => {
     });
   });
 
-  it("accepts a join without wait, waiting for all", () => {
-    expect(joinSettings.parse({})).toEqual({ wait: "all" });
+  it("accepts a join without wait or a branch-fail choice, waiting for all and stopping", () => {
+    expect(joinSettings.parse({})).toEqual({ wait: "all", onBranchFail: "stop" });
+  });
+
+  it("rejects an unknown join branch-fail choice", () => {
+    const result = joinSettings.safeParse({ onBranchFail: "retry" });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["onBranchFail"]);
+  });
+
+  it("accepts whole-number script exit codes and rejects others", () => {
+    expect(
+      scriptSettings.parse({ command: "npm", successCodes: [0, 3], retryCodes: [75] }),
+    ).toEqual({ command: "npm", successCodes: [0, 3], retryCodes: [75] });
+    const result = scriptSettings.safeParse({ command: "npm", retryCodes: [1.5] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe("Exit codes are whole numbers");
   });
 
   it("rejects an unknown loop onCap", () => {

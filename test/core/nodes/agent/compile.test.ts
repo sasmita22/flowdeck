@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { compileAgent } from "../../../../src/core/nodes/agent/compile.js";
 
 const agentNode = (
-  settings: Partial<{ role: string; instructions: string; model: string; tools: string[] }> = {},
+  settings: Partial<{
+    role: string;
+    instructions: string;
+    model: string;
+    tools: string[];
+    given: string[];
+    writes: string[];
+  }> = {},
 ) => ({
   id: "reviewer",
   type: "agent" as const,
@@ -24,6 +31,25 @@ describe("compileAgent", () => {
       content:
         '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n',
     });
+  });
+
+  it("ends the agent file with the files it is given and the files it writes", () => {
+    const { content } = compileAgent(
+      agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] }),
+    );
+
+    expect(content).toMatch(
+      /---\nReview it\.\n\nYou are given: plan\.md, notes\.md\nWrite: review\.md\n$/,
+    );
+  });
+
+  it("names only the side that has files, and nothing for empty lists", () => {
+    expect(compileAgent(agentNode({ writes: ["review.md"] })).content).toMatch(
+      /---\nReview it\.\n\nWrite: review\.md\n$/,
+    );
+    expect(compileAgent(agentNode({ given: [], writes: [] })).content).toMatch(
+      /---\nReview it\.\n$/,
+    );
   });
 
   it("leaves the tools line out when the list is empty", () => {

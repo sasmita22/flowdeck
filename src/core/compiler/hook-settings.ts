@@ -19,8 +19,22 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function hookSettings(options: { nodePath: string; hookScriptPath: string }): HookSettings {
-  const command = `${shellQuote(options.nodePath)} ${shellQuote(options.hookScriptPath)}`;
+export type HookPaths = { nodePath: string; hookScriptPath: string };
+
+const nodeVariable = "FLOWDECK_HOOK_NODE";
+const scriptVariable = "FLOWDECK_HOOK_SCRIPT";
+
+export const buildHookCommand = `"$${nodeVariable}" "$${scriptVariable}"`;
+
+export function hookEnvironment(paths: HookPaths): Record<string, string> {
+  return { [nodeVariable]: paths.nodePath, [scriptVariable]: paths.hookScriptPath };
+}
+
+export function hookCommand(paths: HookPaths): string {
+  return `${shellQuote(paths.nodePath)} ${shellQuote(paths.hookScriptPath)}`;
+}
+
+export function hookSettings(command: string): HookSettings {
   const entry: HookEntry = [{ hooks: [{ type: "command", command }] }];
   const permission: HookEntry = [
     {

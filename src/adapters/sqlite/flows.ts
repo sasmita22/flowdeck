@@ -123,15 +123,22 @@ export class SqliteFlowStore implements FlowStore {
   loadLatest(): LoadedFlow | null {
     const flowId = this.currentFlowId();
     if (flowId === undefined) return null;
+    const { version } = this.db
+      .prepare("SELECT MAX(version) AS version FROM flow_versions WHERE flow_id = ?")
+      .get(flowId) as { version: number };
+    return this.load({ flowId, version });
+  }
+
+  load({ flowId, version }: SavedFlowRef): LoadedFlow | null {
     const current = this.db
       .prepare(
         `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.session,
                 flow_versions.notes
            FROM flow_versions JOIN flows ON flows.id = flow_versions.flow_id
-          WHERE flow_versions.flow_id = ?
-          ORDER BY flow_versions.version DESC LIMIT 1`,
+          WHERE flow_versions.flow_id = ? AND flow_versions.version = ?`,
       )
-      .get(flowId) as CurrentRow;
+      .get(flowId, version) as CurrentRow | undefined;
+    if (current === undefined) return null;
 
     const nodes = (
       this.db

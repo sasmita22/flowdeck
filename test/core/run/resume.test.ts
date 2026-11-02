@@ -276,6 +276,14 @@ describe("decideResume", () => {
     },
   );
 
+  it("asks again at a hard stop that was checking its condition when the runner stopped", () => {
+    const manifest = { hash, nodes: [node("h1", "hardstop"), node("p1", "prompt")] };
+
+    expect(
+      decideResume({ manifest, events: stored([["h1", { kind: "running" }]]), turns: [] }),
+    ).toEqual({ h1: { kind: "ask" } });
+  });
+
   it("does not reuse a loop answer given before the loop asked again", () => {
     const events = stored([
       ["l1", { kind: "running" }],
