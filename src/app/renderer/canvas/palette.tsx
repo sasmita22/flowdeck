@@ -2,6 +2,7 @@ import { Fragment, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { NodeType } from "../../../core/flow/schema.js";
+import { NodePreview } from "../nodes/preview.js";
 import { PanelToggle } from "../panel-toggle.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
@@ -31,19 +32,24 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: NodeType) => 
       onDoubleClick={() => onAdd(item.type)}
       onKeyDown={onKeyDown}
     >
-      <span className="fd-palette-head">
-        <span
-          className="fd-tag"
-          style={{
-            color: item.color,
-            background: `color-mix(in srgb, ${item.color} 15%, transparent)`,
-          }}
-        >
-          {item.tag}
-        </span>
-        {item.label}
+      <span className="fd-palette-preview">
+        <NodePreview type={item.type} />
       </span>
-      <span className="fd-palette-description">{item.description}</span>
+      <span className="fd-palette-text">
+        <span className="fd-palette-head">
+          <span
+            className="fd-tag"
+            style={{
+              color: item.color,
+              background: `color-mix(in srgb, ${item.color} 15%, transparent)`,
+            }}
+          >
+            {item.tag}
+          </span>
+          {item.label}
+        </span>
+        <span className="fd-palette-description">{item.description}</span>
+      </span>
     </div>
   );
 }

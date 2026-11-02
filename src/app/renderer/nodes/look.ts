@@ -17,6 +17,10 @@ const line = "var(--line)";
 
 const box = { width: 170, height: 48 };
 
+export const tagWidth = (tag: string) => tag.length * 7 + 10;
+
+export const BAR_MIN_HEIGHT = tagWidth("PARALLEL START") + 4;
+
 const look = (
   type: NodeType,
   tag: string,
@@ -42,8 +46,8 @@ const looks: Record<NodeType, NodeLook> = {
   hardstop: look("hardstop", "STOP", human, human),
   ask: look("ask", "ASK", human, human, 57),
   loop: look("loop", "LOOP", ctrl, "none"),
-  fork: look("fork", "PARALLEL START", ctrl, ctrl, box.height, 28),
-  join: look("join", "PARALLEL END", ctrl, ctrl, box.height, 28),
+  fork: look("fork", "PARALLEL START", ctrl, ctrl, BAR_MIN_HEIGHT, 28),
+  join: look("join", "PARALLEL END", ctrl, ctrl, BAR_MIN_HEIGHT, 28),
   foreach: look("foreach", "EACH", ctrl, "none"),
   branch: look("branch", "IF", ctrl, ctrl, box.height, 116),
 };

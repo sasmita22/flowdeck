@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterPalette,
   groupPalette,
+  nodeTitle,
   paletteGroups,
   paletteItems,
 } from "../../../../src/app/renderer/canvas/palette-items.js";
@@ -15,6 +16,13 @@ const itemOf = (type: NodeType) => {
   if (item === undefined) throw new Error(`no palette item for ${type}`);
   return item;
 };
+
+describe("nodeTitle", () => {
+  it.each(NodeType.options)("names %s and says what it does, as the sidebar does", (type) => {
+    const { label, description } = itemOf(type);
+    expect(nodeTitle(type)).toBe(`${label}: ${description}`);
+  });
+});
 
 describe("paletteItems", () => {
   it("has one entry per node type", () => {

@@ -1,0 +1,146 @@
+import type { NodeType } from "../../../core/flow/schema.js";
+import { nodeLook } from "./look.js";
+
+export const roundedRect = (width: number, height: number, r: number, inset = 0): string => {
+  const [x, y, w, h] = [inset, inset, width - 2 * inset, height - 2 * inset];
+  return `M${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x + r} Q${x},${y + h} ${x},${y + h - r} V${y + r} Q${x},${y} ${x + r},${y} Z`;
+};
+
+export const octagon = (w: number, h: number, c: number): string =>
+  `M${c},0 H${w - c} L${w},${c} V${h - c} L${w - c},${h} H${c} L0,${h - c} V${c} Z`;
+
+export interface ShapeExtra {
+  element: "path" | "rect" | "polygon";
+  attributes: Readonly<Record<string, string | number>>;
+}
+
+export interface NodeOutline {
+  path: string;
+  padL: number;
+  fill: string;
+  strokeWidth: number;
+  ink?: string;
+  extras: readonly ShapeExtra[];
+}
+
+export type OutlinedType = Exclude<NodeType, "fork" | "join">;
+
+const w = 170;
+const h = 48;
+const r = h / 2;
+
+const outline = (path: string, padL: number, more: Partial<NodeOutline> = {}): NodeOutline => ({
+  path,
+  padL,
+  fill: "var(--panel)",
+  strokeWidth: 1.4,
+  extras: [],
+  ...more,
+});
+
+const human = nodeLook("hardstop").group;
+const work = nodeLook("agent").group;
+const ctrl = nodeLook("branch").group;
+
+const branch = nodeLook("branch").box;
+const hexagon = `12,0 ${branch.width - 12},0 ${branch.width},${branch.height / 2} ${branch.width - 12},${branch.height} 12,${branch.height} 0,${branch.height / 2}`;
+const stop = octagon(w, h, 13);
+
+const outlines: Record<OutlinedType, NodeOutline> = {
+  trigger: outline(
+    `M${r},0 H${w - 6} Q${w},0 ${w},6 V${h - 6} Q${w},${h} ${w - 6},${h} H${r} A${r},${r} 0 0 1 ${r},0 Z`,
+    16,
+  ),
+  output: outline(
+    `M6,0 H${w - r} A${r},${r} 0 0 1 ${w - r},${h} H6 Q0,${h} 0,${h - 6} V6 Q0,0 6,0 Z`,
+    8,
+  ),
+  prompt: outline(roundedRect(w, h, 4), 8),
+  agent: outline(roundedRect(w, h, 12), 10, {
+    strokeWidth: 1.6,
+    extras: [
+      {
+        element: "path",
+        attributes: {
+          d: roundedRect(w, h, 9, 3.5),
+          fill: "none",
+          stroke: work,
+          strokeOpacity: 0.4,
+        },
+      },
+    ],
+  }),
+  script: outline(roundedRect(w, h, 6), 8, {
+    fill: "var(--term-bg)",
+    strokeWidth: 1,
+    ink: "var(--term-fg)",
+  }),
+  gate: outline(roundedRect(w, h, 3), 12, {
+    strokeWidth: 1,
+    extras: [
+      { element: "rect", attributes: { x: 0, y: 0, width: 5, height: h, rx: 2, fill: human } },
+      { element: "rect", attributes: { x: w - 5, y: 0, width: 5, height: h, rx: 2, fill: human } },
+    ],
+  }),
+  hardstop: outline(stop, 12, {
+    strokeWidth: 2,
+    extras: [{ element: "path", attributes: { d: stop, fill: human, fillOpacity: 0.14 } }],
+  }),
+  ask: outline(
+    `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
+    8,
+  ),
+  loop: outline(roundedRect(w, h, 4), 8, { fill: "none" }),
+  foreach: outline(roundedRect(w, h, 4), 8, { fill: "none" }),
+  branch: outline(`M${hexagon.replaceAll(" ", " L")} Z`, 14, {
+    extras: [
+      { element: "polygon", attributes: { points: hexagon, fill: ctrl, fillOpacity: 0.08 } },
+    ],
+  }),
+};
+
+export const nodeOutline = (type: OutlinedType): NodeOutline => outlines[type];
+
+export const barLook = { rx: 8, fillOpacity: 0.16, strokeWidth: 1.4 } as const;
+
+export const frameLook = {
+  rx: 10,
+  fillOpacity: 0.05,
+  strokeOpacity: 0.6,
+  strokeWidth: 1.4,
+  dash: "6 4",
+} as const;
+
+export type Preview =
+  | { kind: "node"; type: OutlinedType; outline: NodeOutline }
+  | { kind: "bar"; type: "fork" | "join"; bar: typeof barLook }
+  | { kind: "frame"; type: "loop" | "foreach"; frame: typeof frameLook };
+
+export const previewOf = (type: NodeType): Preview => {
+  if (type === "fork" || type === "join") return { kind: "bar", type, bar: barLook };
+  if (type === "loop" || type === "foreach") return { kind: "frame", type, frame: frameLook };
+  return { kind: "node", type, outline: nodeOutline(type) };
+};
+
+export const barPreview = { width: 22, height: 60, reach: 28, rows: [10, 30, 50] } as const;
+
+export const framePreview = { width: w, height: 56 } as const;
+
+const previewPad = 4;
+
+const previewSize = (type: NodeType) => {
+  const preview = previewOf(type);
+  switch (preview.kind) {
+    case "node":
+      return nodeLook(type).box;
+    case "bar":
+      return { width: barPreview.width + barPreview.reach, height: barPreview.height };
+    case "frame":
+      return framePreview;
+  }
+};
+
+export const previewViewBox = (type: NodeType): string => {
+  const { width, height } = previewSize(type);
+  return `${-previewPad} ${-previewPad} ${width + 2 * previewPad} ${height + 2 * previewPad}`;
+};

@@ -82,3 +82,9 @@ export const groupPalette = (items: readonly PaletteItem[]) =>
   paletteGroups
     .map((group) => ({ group, items: items.filter((item) => item.group === group) }))
     .filter(({ items: grouped }) => grouped.length > 0);
+
+const titles = new Map(
+  paletteItems.map(({ type, label, description }) => [type, `${label}: ${description}`]),
+);
+
+export const nodeTitle = (type: NodeType): string => titles.get(type) ?? "";

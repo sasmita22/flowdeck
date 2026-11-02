@@ -22,6 +22,7 @@ import {
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchApp, type ColorScheme, type LaunchedApp } from "../scripts/drive.js";
+import { nodeTitle } from "../src/app/renderer/canvas/palette-items.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -207,3 +208,81 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect(node).toHaveScreenshot(`${colorScheme}-branch.png`, exact);
   });
 }
+
+const inside = (inner: Box, outer: Box) =>
+  inner.x >= outer.x &&
+  inner.y >= outer.y &&
+  inner.x + inner.width <= outer.x + outer.width &&
+  inner.y + inner.height <= outer.y + outer.height;
+
+type Box = { x: number; y: number; width: number; height: number };
+
+const boxOf = async (locator: Locator): Promise<Box> => {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("element has no box");
+  return box;
+};
+
+const intersects = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+test("A parallel start and end show their full tag inside the bar and their label above it, clear of every node", async () => {
+  seedFlow(
+    home,
+    flow(
+      [
+        at(trigger("trigger"), 80, 120),
+        { ...at(fork("fork"), 298, 40), label: "Split the review" },
+        at(prompt("b1"), 374, 40),
+        at(prompt("b2"), 374, 120),
+        at(prompt("b3"), 374, 200),
+        { ...at(joinNode("join"), 592, 120), label: "Wait for all reviewers" },
+        at(output("output"), 668, 120),
+      ],
+      [
+        thenWire("trigger", "fork"),
+        ...["b1", "b2", "b3"].flatMap((id) => [thenWire("fork", id), thenWire(id, "join")]),
+        thenWire("join", "output"),
+      ],
+    ),
+  );
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await expect(window.getByTestId("node-output")).toBeVisible();
+  const nodes = await Promise.all(
+    (await window.locator(".react-flow__node").all()).map((node) => boxOf(node)),
+  );
+  expect(nodes).toHaveLength(7);
+
+  for (const [id, tag, label] of [
+    ["fork", "PARALLEL START", "Split the review"],
+    ["join", "PARALLEL END", "Wait for all reviewers"],
+  ] as const) {
+    const bar = window.getByTestId(`node-${id}`);
+    const barBox = await boxOf(bar);
+    const tagText = bar.locator("text", { hasText: tag });
+    await expect(tagText).toHaveText(tag);
+    expect(inside(await boxOf(tagText), barBox)).toBe(true);
+    const labelText = bar.getByText(label, { exact: true });
+    await expect(labelText).toBeVisible();
+    const labelBox = await boxOf(labelText);
+    expect(labelBox.y + labelBox.height).toBeLessThanOrEqual(barBox.y);
+    expect(intersects(labelBox, barBox)).toBe(false);
+    for (const node of nodes) expect(intersects(labelBox, node)).toBe(false);
+  }
+});
+
+test("Hovering a node says what it is and what it does", async () => {
+  seedFlow(home, parallelShapes());
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+
+  for (const [id, type] of [
+    ["b1", "agent"],
+    ["fork", "fork"],
+  ] as const) {
+    const node = window.getByTestId(`node-${id}`);
+    await node.hover();
+    await expect(node).toHaveAttribute("title", nodeTitle(type));
+  }
+});

@@ -1,23 +1,15 @@
 import { Handle, Position, type Node } from "@xyflow/react";
-import { useId, type ReactNode } from "react";
+import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
+import { nodeTitle } from "../canvas/palette-items.js";
 import { NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
-import { nodeLook } from "./look.js";
+import { nodeLook, tagWidth } from "./look.js";
+import { frameLook, nodeOutline, type OutlinedType, type ShapeExtra } from "./outlines.js";
 import "./tokens.css";
 
 export type ShapeNode = Node<{ label?: string; highlighted?: boolean }>;
 
 export const BODY_HEIGHT = 48;
-
-export const roundedRect = (width: number, height: number, r: number, inset = 0): string => {
-  const [x, y, w, h] = [inset, inset, width - 2 * inset, height - 2 * inset];
-  return `M${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x + r} Q${x},${y + h} ${x},${y + h - r} V${y + r} Q${x},${y} ${x + r},${y} Z`;
-};
-
-export const octagon = (w: number, h: number, c: number): string =>
-  `M${c},0 H${w - c} L${w},${c} V${h - c} L${w - c},${h} H${c} L0,${h - c} V${c} Z`;
-
-export const tagWidth = (tag: string) => tag.length * 7 + 10;
 
 export const ports = (id: string, type: NodeType) =>
   nodeLook(type).ports.map(({ name, direction }) => (
@@ -31,38 +23,35 @@ export const ports = (id: string, type: NodeType) =>
     />
   ));
 
+export const Extras = ({ extras }: { extras: readonly ShapeExtra[] }) =>
+  extras.map(({ element, attributes }, index) =>
+    createElement(element, { key: index, ...attributes }),
+  );
+
 export function NodeShape({
   id,
   type,
   selected,
   highlighted,
-  outline,
-  padL,
-  fill = "var(--panel)",
-  strokeWidth = 1.4,
-  textColor = "var(--fg)",
   handles = ports(id, type),
   children,
 }: {
   id: string;
-  type: NodeType;
+  type: OutlinedType;
   selected: boolean;
   highlighted: boolean | undefined;
-  outline: string;
-  padL: number;
-  fill?: string;
-  strokeWidth?: number;
-  textColor?: string;
   handles?: ReactNode;
   children: ReactNode;
 }) {
   const clip = `fd-clip-${useId().replace(/[^\w-]/g, "")}`;
   const { box, outline: stroke } = nodeLook(type);
+  const { path: outline, padL, fill, strokeWidth, ink, extras } = nodeOutline(type);
   return (
     <div
       className="fd-node"
       data-testid={`node-${id}`}
       data-highlighted={highlighted === true ? "true" : undefined}
+      title={nodeTitle(type)}
       style={{ position: "relative", ...box }}
     >
       <svg
@@ -86,9 +75,12 @@ export function NodeShape({
           stroke={stroke}
           strokeWidth={strokeWidth}
         />
-        <g clipPath={`url(#${clip})`}>{children}</g>
+        <g clipPath={`url(#${clip})`}>
+          <Extras extras={extras} />
+          {children}
+        </g>
       </svg>
-      <div style={{ position: "absolute", left: padL, top: 25, color: textColor }}>
+      <div style={{ position: "absolute", left: padL, top: 25, color: ink ?? "var(--fg)" }}>
         <NodeStatusBadge nodeId={id} />
       </div>
       <NodeIssueMarker nodeId={id} />
@@ -97,51 +89,36 @@ export function NodeShape({
   );
 }
 
-export function TagPill({ type, padL, color }: { type: NodeType; padL: number; color?: string }) {
+export const tagTextStyle = { font: "600 9.5px var(--f-mono)", letterSpacing: "0.04em" };
+
+export function TagChip({ x, tag, fill }: { x: number; tag: string; fill: string }) {
+  return (
+    <rect x={x} y={8} width={tagWidth(tag)} height={15} rx={4} fill={fill} fillOpacity={0.15} />
+  );
+}
+
+export function TagPill({ type }: { type: OutlinedType }) {
   const { tag, group } = nodeLook(type);
-  const fill = color ?? group;
+  const { padL, ink } = nodeOutline(type);
+  const fill = ink ?? group;
   return (
     <>
-      <rect
-        x={padL}
-        y={8}
-        width={tagWidth(tag)}
-        height={15}
-        rx={4}
-        fill={fill}
-        fillOpacity={0.15}
-      />
-      <text
-        x={padL + 5}
-        y={19}
-        fill={fill}
-        style={{ font: "600 9.5px var(--f-mono)", letterSpacing: "0.04em" }}
-      >
+      <TagChip x={padL} tag={tag} fill={fill} />
+      <text x={padL + 5} y={19} fill={fill} style={tagTextStyle}>
         {tag}
       </text>
     </>
   );
 }
 
-export function Label({
-  type,
-  padL,
-  text,
-  mono = false,
-  color = "var(--fg)",
-}: {
-  type: NodeType;
-  padL: number;
-  text: string | undefined;
-  mono?: boolean;
-  color?: string;
-}) {
+export function Label({ type, text }: { type: OutlinedType; text: string | undefined }) {
+  const { padL, ink } = nodeOutline(type);
   return (
     <text
       x={padL + tagWidth(nodeLook(type).tag) + 6}
       y={20}
-      fill={color}
-      style={{ font: mono ? "600 12px var(--f-mono)" : "600 13px var(--f-body)" }}
+      fill={ink ?? "var(--fg)"}
+      style={{ font: ink === undefined ? "600 13px var(--f-body)" : "600 12px var(--f-mono)" }}
     >
       {text}
     </text>
@@ -168,13 +145,13 @@ export function FrameRect({
       <rect
         width={width}
         height={height}
-        rx={10}
+        rx={frameLook.rx}
         fill={color}
-        fillOpacity={0.05}
+        fillOpacity={frameLook.fillOpacity}
         stroke={color}
-        strokeOpacity={0.6}
-        strokeWidth={1.4}
-        strokeDasharray={dashed ? "6 4" : undefined}
+        strokeOpacity={frameLook.strokeOpacity}
+        strokeWidth={frameLook.strokeWidth}
+        strokeDasharray={dashed ? frameLook.dash : undefined}
       />
     </svg>
   );
