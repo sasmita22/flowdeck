@@ -2,7 +2,7 @@ import { Handle, Position, type Node } from "@xyflow/react";
 import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeTitle } from "../canvas/palette-items.js";
-import { NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
+import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { nodeLook, tagWidth } from "./look.js";
 import { frameLook, nodeOutline, type OutlinedType, type ShapeExtra } from "./outlines.js";
 import "./tokens.css";
@@ -84,6 +84,7 @@ export function NodeShape({
         <NodeStatusBadge nodeId={id} />
       </div>
       <NodeIssueMarker nodeId={id} />
+      <NodeFailureReason nodeId={id} />
       {handles}
     </div>
   );

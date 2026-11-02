@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Flow } from "../flow/schema.js";
+import { activityEntrySchema } from "./activity.js";
 import { runSnapshotSchema, snapshotStatusSchema } from "./snapshot.js";
 
 const sourceSchema = z.object({ flowId: z.string(), version: z.number().int() });
@@ -22,6 +23,7 @@ export const loadedRunSchema = z.object({
   name: z.string().nullable(),
   flow: Flow.nullable(),
   snapshot: runSnapshotSchema,
+  activity: z.array(activityEntrySchema),
 });
 
 export type LoadedRun = z.infer<typeof loadedRunSchema>;

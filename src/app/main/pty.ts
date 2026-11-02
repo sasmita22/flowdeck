@@ -22,6 +22,7 @@ export type Terminal = {
   write(data: unknown): void;
   resize(size: unknown): void;
   close(): void;
+  setPoppedOut(poppedOut: boolean): void;
   dispose(): void;
 };
 
@@ -51,8 +52,13 @@ export function createTerminal(options: {
   let session: string | null = null;
   let pty: PtyProcess | null = null;
   let disposed = false;
+  let poppedOut = false;
 
-  const status = (): TerminalStatus => ({ available: session !== null, attached: pty !== null });
+  const status = (): TerminalStatus => ({
+    available: session !== null,
+    attached: pty !== null,
+    ...(poppedOut ? { poppedOut: true } : {}),
+  });
   const report = () => options.sendStatus(status());
 
   const close = () => {
@@ -102,6 +108,10 @@ export function createTerminal(options: {
       if (parsed.success) pty?.resize(parsed.data.cols, parsed.data.rows);
     },
     close,
+    setPoppedOut(value) {
+      poppedOut = value;
+      report();
+    },
     dispose() {
       close();
       disposed = true;

@@ -67,6 +67,11 @@ const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
       pushRun = listener;
       return () => {};
     }),
+    runOptions: vi.fn(async () => ({ inputs: [], flags: {}, automatic: false })),
+    stopRun: vi.fn(async () => ({ stopped: false })),
+    retryNode: vi.fn(async () => null),
+    resumeRun: vi.fn(async () => null),
+    runCost: vi.fn(async () => null),
   } satisfies RunBridge;
   const bridge = {
     workspaceInfo: vi.fn<(workingFolder: unknown) => Promise<unknown>>(async (folder) =>

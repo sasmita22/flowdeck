@@ -472,3 +472,13 @@ describe("nextMenuIndex", () => {
     expect(nextMenuIndex(current, key, 3)).toBe(expected);
   });
 });
+
+describe("run tab", () => {
+  it("starts on Activity and shows the tab picked", () => {
+    const shell = createShellStore({ canvas: createCanvasStore() });
+
+    expect(shell.getState().runTab).toBe("activity");
+    shell.getState().setRunTab("cost");
+    expect(shell.getState().runTab).toBe("cost");
+  });
+});

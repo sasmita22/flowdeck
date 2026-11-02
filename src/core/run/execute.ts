@@ -2,6 +2,7 @@ import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
 import { verify, type VerifyFileSystem } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
+import { agentNodes, chargeUsage } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
@@ -30,7 +31,14 @@ export type OpenedSession = {
 
 export type ExecuteDeps = {
   fs: VerifyFileSystem;
-  scripts: RunnerDeps["scripts"];
+  scripts: {
+    run(
+      command: string,
+      args: readonly string[],
+      cwd: string,
+      signal?: AbortSignal,
+    ): ReturnType<RunnerDeps["scripts"]["run"]>;
+  };
   waiter: HumanWaiter;
   startEvents(
     socketPath: string,
@@ -38,12 +46,13 @@ export type ExecuteDeps = {
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   store: Store;
   onChange(line: string): void;
+  onOutput?: RunnerDeps["onOutput"];
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
   usage?: UsageReader;
 };
 
-export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onInterrupt">;
+export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onOutput" | "onInterrupt">;
 
 export type LoadedBuild = Manifest & { hash: string };
 
@@ -151,19 +160,57 @@ function completeWaitWith({ actions, stop }: ResumeRead): ResumeActions {
   );
 }
 
+const turnTypes = new Set(["prompt", "agent", "fork", "hardstop"]);
+
+export const turnNodeIds = (manifest: Pick<LoadedBuild, "nodes">): Set<string> =>
+  new Set(manifest.nodes.filter((node) => turnTypes.has(node.type)).map((node) => node.id));
+
 async function recordSpend(
   store: Store,
   runId: string,
+  manifest: LoadedBuild,
   usage: UsageReader | undefined,
   sessionId: string | undefined,
   onChange: (line: string) => void,
 ): Promise<void> {
   if (usage === undefined || sessionId === undefined || sessionId === "") return;
   try {
-    store.recordCost(runId, costOf(await usage.entries(sessionId)));
+    const entries = await usage.entries(sessionId);
+    const charges = chargeUsage({
+      events: store.events(runId),
+      entries,
+      turnNodes: turnNodeIds(manifest),
+      agentNodes: agentNodes(manifest),
+    });
+    if (charges.length > 0) store.appendAll(runId, charges);
+    store.recordCost(runId, costOf(entries));
   } catch (error) {
     onChange(`cost not recorded: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function writesUntil(store: Store, stopped: () => boolean): Store {
+  return {
+    createRun: (run) => store.createRun(run),
+    findRun: (id) => store.findRun(id),
+    listRuns: () => store.listRuns(),
+    events: (id) => store.events(id),
+    finishRun: (id, status) => store.finishRun(id, status),
+    reopenRun: (id) => store.reopenRun(id),
+    recordActivity: (id, entry) => store.recordActivity(id, entry),
+    activity: (id) => store.activity(id),
+    recordCost: (id, totalCost) => store.recordCost(id, totalCost),
+    recordBuild: (build) => store.recordBuild(build),
+    findBuild: (hash) => store.findBuild(hash),
+    listBuilds: () => store.listBuilds(),
+    buildFiles: (hash) => store.buildFiles(hash),
+    append(id, nodeId, event) {
+      if (!stopped()) store.append(id, nodeId, event);
+    },
+    appendAll(id, entries) {
+      if (!stopped()) store.appendAll(id, entries);
+    },
+  };
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
@@ -181,10 +228,12 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
     })());
   let stopListening: () => void = () => undefined;
   let wasInterrupted = false;
+  const scriptsStop = new AbortController();
   const interrupted = new Promise<number>((resolve) => {
     if (deps.onInterrupt) {
       stopListening = deps.onInterrupt((code) => {
         wasInterrupted = true;
+        scriptsStop.abort();
         void stopAll().then(() => resolve(code));
       });
     }
@@ -220,16 +269,18 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       },
       events: events.events,
       scripts: {
-        run: (command, args, cwd) => whileRunning(() => deps.scripts.run(command, args, cwd)),
+        run: (command, args, cwd) =>
+          whileRunning(() => deps.scripts.run(command, args, cwd, scriptsStop.signal)),
       },
       waiter: deps.waiter,
       files: deps.fs,
       auto,
       flags,
       onChange: (line) => deps.onChange(line),
+      ...(deps.onOutput === undefined ? {} : { onOutput: deps.onOutput }),
       cwd,
       sessionId: opened.sessionId,
-      store,
+      store: writesUntil(store, () => wasInterrupted),
       runId,
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(events.permissions === undefined ? {} : { permissions: events.permissions }),
@@ -244,7 +295,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
   } finally {
     stopListening();
     await stopAll();
-    await recordSpend(store, runId, deps.usage, opened?.sessionId, deps.onChange);
+    await recordSpend(store, runId, manifest, deps.usage, opened?.sessionId, deps.onChange);
     store.finishRun(runId, wasInterrupted ? "stopped" : status);
   }
 }

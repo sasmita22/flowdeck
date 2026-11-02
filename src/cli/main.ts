@@ -38,6 +38,7 @@ import {
   type OpenedSession,
   type OpenSessionOptions,
 } from "../core/run/execute.js";
+import { storedAuto } from "../core/run/options.js";
 import { decideResume, type TranscriptTurn } from "../core/run/resume.js";
 import type { TurnEvents } from "../core/run/turns.js";
 import type { ConnectorSource } from "../ports/connector-source.js";
@@ -74,7 +75,7 @@ const usage = [
   "  flowdeck build <flow.json>",
   "  flowdeck build --flow <id> --version <n>",
   "  flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
-  "  flowdeck resume <id> [--auto]",
+  "  flowdeck resume <id> [--auto | --no-auto]",
 ];
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 
@@ -270,6 +271,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     args,
     allowPositionals: true,
     strict: true,
+    allowNegative: true,
     options: { auto: { type: "boolean" } },
   });
   const [runId, ...rest] = positionals;
@@ -324,7 +326,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     runId,
     manifest,
     cwd,
-    auto: values.auto ?? false,
+    auto: values.auto ?? storedAuto(run.inputs),
     flags,
     socketPath,
     open: async () => opened,

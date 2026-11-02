@@ -1,4 +1,5 @@
 import type { StoreApi } from "zustand/vanilla";
+import type { RunOptions } from "../../core/run/options.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
 import type { RunState } from "./run-store.js";
@@ -7,7 +8,7 @@ import type { SaveState } from "./save-store.js";
 export type ActionStores = {
   nav: StoreApi<NavState>;
   save: StoreApi<Pick<SaveState, "flowId" | "open" | "startNew" | "leave" | "rename">>;
-  run: StoreApi<Pick<RunState, "run" | "runBuild">>;
+  run: StoreApi<Pick<RunState, "run" | "runBuild" | "start">>;
   library: StoreApi<Pick<LibraryState, "refresh" | "rename">>;
 };
 
@@ -17,6 +18,7 @@ export type Actions = {
   renameBlueprint(flowId: string, name: string): Promise<void>;
   buildAndRun(): Promise<void>;
   runBuild(hash: string): Promise<void>;
+  startRun(options: RunOptions): Promise<void>;
 };
 
 export const createActions = ({ nav, save, run, library }: ActionStores): Actions => {
@@ -50,5 +52,6 @@ export const createActions = ({ nav, save, run, library }: ActionStores): Action
     },
     buildAndRun: () => showRun(run.getState().run()),
     runBuild: (hash) => showRun(run.getState().runBuild(hash)),
+    startRun: (options) => showRun(run.getState().start(options)),
   };
 };

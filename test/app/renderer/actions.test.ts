@@ -16,6 +16,7 @@ const setup = (options: { flowId?: string | null; runId?: string | null } = {}) 
   const run = createStore(() => ({
     run: vi.fn(async () => options.runId ?? null),
     runBuild: vi.fn(async () => options.runId ?? null),
+    start: vi.fn(async () => options.runId ?? null),
   }));
   const library = createStore(() => ({
     refresh: vi.fn(async () => undefined),
@@ -66,6 +67,16 @@ describe("createActions", () => {
     expect(run.getState().runBuild).toHaveBeenCalledWith("abc");
     expect(nav.getState().page).toEqual({ name: "run", runId: "run-7" });
     expect(library.getState().refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the run page once the run dialog starts a run", async () => {
+    const { actions, nav, run } = setup({ runId: "run-8" });
+    const options = { inputs: { ticket: "FD-1" }, flags: { deep: false }, auto: true };
+
+    await actions.startRun(options);
+
+    expect(run.getState().start).toHaveBeenCalledWith(options);
+    expect(nav.getState().page).toEqual({ name: "run", runId: "run-8" });
   });
 
   it("stays put when the run did not start", async () => {

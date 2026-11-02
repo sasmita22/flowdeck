@@ -95,6 +95,7 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
     run: runEnvironment(fs),
     worktree: new FakeWorktree(),
     gitState: new FakeGitState(),
+    transcriptTurns: async () => [],
     ...overrides,
   };
 };
@@ -442,6 +443,7 @@ describe("createEngineHandler", async () => {
           name: "Report",
           flow: flow([script("s1"), script("s2")], []),
           snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
+          activity: [],
         },
       });
       expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
@@ -1369,7 +1371,9 @@ describe("createEngineHandler", async () => {
       expect(sessionPushes()).toEqual([]);
     });
 
-    const startActivityRun = async () => {
+    const startActivityRun = async (
+      toolCall: Record<string, unknown> = { tool_name: "Bash", tool_input: { command: "ls" } },
+    ) => {
       let clock = 1000;
       const source = new FakeEventSource();
       let claudeSessionId = "";
@@ -1381,13 +1385,12 @@ describe("createEngineHandler", async () => {
             hook_event_name: kind,
             session_id: sessionId,
             flowdeck_hook_at: at,
-            ...(kind === "PreToolUse"
-              ? { tool_name: "Bash", tool_input: { command: "ls" } }
-              : { last_assistant_message: "OK" }),
+            ...(kind === "PreToolUse" ? toolCall : { last_assistant_message: "OK" }),
           },
         });
       handler = handlerWith({
         newSessionName: () => "fd-run-test",
+        userHome: "/Users/me",
         run: {
           ...runEnvironment(new NodeFileSystem(), () => clock),
           startEvents: async () => ({ events: source, stop: async () => undefined }),
@@ -1431,15 +1434,35 @@ describe("createEngineHandler", async () => {
             entry: { id: 1, nodeId: "plan", at: 1200, kind: "tool", tool: "Bash", summary: "ls" },
           },
         },
+        {
+          push: "activity",
+          value: {
+            runId,
+            entry: { id: 2, nodeId: "plan", at: 1500, kind: "turn", summary: "OK" },
+          },
+        },
       ]);
     });
+
+    it.each([
+      ["src/a.ts", "src/a.ts"],
+      ["/Users/me/.claude/notes.md", "outside the working folder: ~/.claude/notes.md"],
+    ])(
+      "shows a file the run wrote at %s as %s, against the run's working folder and home",
+      async (path, shown) => {
+        const filePath = path.startsWith("/") ? path : `${repo.path}/${path}`;
+        await startActivityRun({ tool_name: "Write", tool_input: { file_path: filePath } });
+
+        expect(activityPushes()[0]?.value).toMatchObject({ entry: { kind: "tool", path: shown } });
+      },
+    );
 
     it("pushes no activity for a tool call that arrives after the run has finished", async () => {
       const { claudeSessionId, hook } = await startActivityRun();
 
       hook("PreToolUse", claudeSessionId, 1200);
 
-      expect(activityPushes()).toHaveLength(1);
+      expect(activityPushes()).toHaveLength(2);
     });
 
     it("asks the run's waiter about a permission request from the run's Claude session", async () => {

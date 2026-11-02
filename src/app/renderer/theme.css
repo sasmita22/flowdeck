@@ -1096,3 +1096,45 @@ body,
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+.fd-terminal-window {
+  position: fixed;
+  inset: 0;
+  background: #000;
+}
+
+.fd-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.fd-tab {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: 600 var(--fs-sm) var(--f-body);
+  cursor: pointer;
+}
+
+.fd-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
+}
+
+.fd-wait-banner {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 5;
+  width: min(420px, calc(100% - 2 * var(--space-4)));
+  transform: translateX(-50%);
+  padding: 0 var(--space-3) var(--space-3);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}

@@ -133,3 +133,13 @@ describe("groupPalette", () => {
     ]);
   });
 });
+
+describe("the Branch entry", () => {
+  it("says it follows a Trigger flag, and promises no verdict", () => {
+    const { description } = itemOf("branch");
+
+    expect(description).toMatch(/Trigger/);
+    expect(description).toMatch(/flag/);
+    expect(description).not.toMatch(/verdict/i);
+  });
+});

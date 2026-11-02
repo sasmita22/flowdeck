@@ -54,6 +54,26 @@ describe("decideResume", () => {
     expect(decideResume({ manifest: { hash, nodes }, events, turns: [] })).toEqual({});
   });
 
+  it.each<[string, RunEvent[]]>([
+    ["running again after a permission answer", [{ kind: "needs-you" }, { kind: "running" }]],
+    ["waiting on a permission answer", [{ kind: "needs-you" }]],
+  ])("settles a Prompt that was %s from its transcript turn", (_, afterSend) => {
+    const events = stored([
+      ["p1", sent],
+      ["p1", done],
+      ["p2", sent],
+      ...afterSend.map((event): [string, RunEvent] => ["p2", event]),
+    ]);
+
+    const actions = decideResume({
+      manifest,
+      events,
+      turns: [promptTurn("p1", true, "A"), promptTurn("p2", true, "X")],
+    });
+
+    expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "X" } });
+  });
+
   it("sends a Prompt killed between its sent mark and the send", () => {
     const actions = decideResume({
       manifest,

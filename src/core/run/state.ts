@@ -3,11 +3,11 @@ export type NodeState =
 
 const transitions: Record<NodeState, readonly NodeState[]> = {
   waiting: ["sent", "running", "needs-you", "skipped"],
-  sent: ["done", "failed", "skipped"],
+  sent: ["done", "failed", "skipped", "needs-you"],
   running: ["done", "failed", "waiting", "needs-you"],
   "needs-you": ["done", "failed", "running"],
   skipped: ["waiting"],
-  failed: [],
+  failed: ["waiting"],
   done: ["waiting"],
 };
 

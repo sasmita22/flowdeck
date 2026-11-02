@@ -69,16 +69,19 @@ function startEngine(home: string) {
   return { engine, client, exited };
 }
 
-function openWindow(windowGuard: WindowGuard) {
-  nativeTheme.themeSource = "dark";
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const minimumSize = minimumWindowSize(workArea);
-  const hidden = process.env["FLOWDECK_HIDE_WINDOW"] === "1";
+const hiddenWindows = () => process.env["FLOWDECK_HIDE_WINDOW"] === "1";
+
+function appWindow(
+  windowGuard: WindowGuard,
+  options: Pick<
+    Electron.BrowserWindowConstructorOptions,
+    "title" | "x" | "y" | "width" | "height" | "minWidth" | "minHeight"
+  >,
+  hash?: string,
+) {
+  const hidden = hiddenWindows();
   const window = new BrowserWindow({
-    title: "Flowdeck",
-    ...defaultWindowBounds(workArea),
-    minWidth: minimumSize.width,
-    minHeight: minimumSize.height,
+    ...options,
     show: !hidden,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
@@ -89,9 +92,13 @@ function openWindow(windowGuard: WindowGuard) {
     },
   });
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
-    void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    void window.loadURL(
+      hash === undefined
+        ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+        : `${MAIN_WINDOW_VITE_DEV_SERVER_URL}#${hash}`,
+    );
   } else {
-    void window.loadFile(rendererIndexPath);
+    void window.loadFile(rendererIndexPath, hash === undefined ? {} : { hash });
   }
   window.webContents.setWindowOpenHandler(() => windowGuard.denyWindowOpen());
   window.webContents.on("will-navigate", (event) => {
@@ -100,16 +107,58 @@ function openWindow(windowGuard: WindowGuard) {
   return window;
 }
 
+function openWindow(windowGuard: WindowGuard) {
+  nativeTheme.themeSource = "dark";
+  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const minimumSize = minimumWindowSize(workArea);
+  return appWindow(windowGuard, {
+    title: "Flowdeck",
+    ...defaultWindowBounds(workArea),
+    minWidth: minimumSize.width,
+    minHeight: minimumSize.height,
+  });
+}
+
+const toEveryWindow = (channel: string, value: unknown) => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send(channel, value);
+  }
+};
+
 function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard): Terminal {
   const terminal = createTerminal({
     spawn,
     env: process.env,
-    sendStatus: (status) => {
-      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.terminalStatus, status);
-    },
-    sendData: (data) => {
-      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.terminalData, data);
-    },
+    sendStatus: (status) => toEveryWindow(bridgeChannels.terminalStatus, status),
+    sendData: (data) => toEveryWindow(bridgeChannels.terminalData, data),
+  });
+  let popOut: BrowserWindow | null = null;
+  ipcMain.handle(
+    bridgeChannels.popOutTerminal,
+    windowGuard.handle(() => {
+      if (!terminal.status().available) return false;
+      if (popOut !== null && !popOut.isDestroyed()) {
+        popOut.focus();
+        return true;
+      }
+      terminal.close();
+      const opened = appWindow(
+        windowGuard,
+        { title: "Flowdeck terminal", width: 900, height: 560, minWidth: 360, minHeight: 200 },
+        "terminal",
+      );
+      popOut = opened;
+      terminal.setPoppedOut(true);
+      opened.on("closed", () => {
+        popOut = null;
+        terminal.close();
+        terminal.setPoppedOut(false);
+      });
+      return true;
+    }),
+  );
+  window.on("closed", () => {
+    if (popOut !== null && !popOut.isDestroyed()) popOut.close();
   });
   ipcMain.handle(
     bridgeChannels.openTerminal,

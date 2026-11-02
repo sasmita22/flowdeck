@@ -233,6 +233,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       worktree: new GitWorktree(),
       gitState: new GitFolderState(),
       newSessionName: () => sessionName,
+      transcriptTurns: async () => [],
     });
 
     const built = await handler.handle({ id: 1, type: "build-version", payload: savedRef });
@@ -297,10 +298,14 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
         { timeout: runDeadlineMs, interval: 500 },
       );
 
-      const latest = [...new Map(arrivals.map(({ entry }) => [entry.id, entry])).values()];
+      const latest = [...new Map(arrivals.map(({ entry }) => [entry.id, entry])).values()].filter(
+        (entry) => entry.kind === "tool" || entry.kind === "subagent",
+      );
       const of = (nodeId: string) => latest.filter((entry) => entry.nodeId === nodeId);
       const shape = (entry: ActivityEntry) =>
-        entry.kind === "tool" ? `tool ${entry.tool}` : `subagent ${entry.state}`;
+        entry.kind === "tool"
+          ? `tool ${entry.tool}`
+          : `subagent ${entry.kind === "subagent" ? entry.state : ""}`;
 
       expect(of("p2").map(shape).sort()).toEqual([
         "subagent finished",

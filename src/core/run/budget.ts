@@ -7,6 +7,8 @@ export type UsageEntry = {
   cacheWrite1hTokens: number;
   cacheReadTokens: number;
   text?: string;
+  at?: number;
+  agentType?: string;
 };
 
 export type UsageReader = { entries(sessionId: string): Promise<UsageEntry[]> };

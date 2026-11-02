@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatCost,
   formatDuration,
+  formatTokens,
   formatWhen,
   folderText,
   shortHash,
@@ -37,5 +38,14 @@ describe("format", () => {
     );
     expect(folderText({ kind: "worktree", branch: "main" })).toBe("New worktree");
     expect(folderText(null)).toBe("No folder yet");
+  });
+});
+
+describe("formatTokens", () => {
+  it("says small counts whole and large ones in thousands or millions", () => {
+    expect(formatTokens(0)).toBe("0 tokens");
+    expect(formatTokens(950)).toBe("950 tokens");
+    expect(formatTokens(12_345)).toBe("12.3k tokens");
+    expect(formatTokens(2_500_000)).toBe("2.5M tokens");
   });
 });

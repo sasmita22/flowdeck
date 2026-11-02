@@ -1452,6 +1452,23 @@ describe("Runner", () => {
     });
   });
 
+  it("marks a trigger done when the run starts, before anything is sent", async () => {
+    const { deps } = harness();
+    let triggerAtSend: string | undefined;
+    const send = deps.prompts.sendPrompt;
+    deps.prompts.sendPrompt = async (text) => {
+      triggerAtSend = nodeStatus(
+        deps.store.events(deps.store.runs[0]?.id ?? "").filter((e) => e.nodeId === "t"),
+      );
+      await send(text);
+    };
+
+    const result = await runOn(deps, manifest(node("t", "trigger"), prompt("p")));
+
+    expect(result.outcome).toBe("done");
+    expect(triggerAtSend).toBe("done");
+  });
+
   it("skips a trigger without a line or a call, and marks an output done without a call", async () => {
     const { deps, calls, lines } = harness();
 
@@ -1463,6 +1480,16 @@ describe("Runner", () => {
     expect(result.outcome).toBe("done");
     expect(calls).toEqual(["start", `send /${hash}:p`]);
     expect(lines).toEqual(["p started", "p done", "o done"]);
+  });
+
+  it("hands each script run's stdout and stderr to onOutput, with its node, and skips empty output", async () => {
+    const { deps } = harness({ results: [exit(1, "first try\n"), exit(0, "ok\n", "warn\n")] });
+    const outputs: string[] = [];
+    deps.onOutput = (nodeId, stream, text) => outputs.push(`${nodeId} ${stream} ${text}`);
+
+    await runOn(deps, manifest(script("s1", { command: "npm", retryCodes: [1], maxRetries: 1 })));
+
+    expect(outputs).toEqual(["s1 stdout first try\n", "s1 stdout ok\n", "s1 stderr warn\n"]);
   });
 
   it("never starts Claude for a script-only manifest", async () => {
@@ -2049,10 +2076,21 @@ describe("Runner permission requests", () => {
     expect(decision).toEqual({ behavior: "deny", message: "no" });
   });
 
-  it("adds no event to the node for a permission wait", async () => {
-    const { deps } = await askDuringTurn(new FakeWaiter([approve]));
+  it("marks the node needs you while a permission wait is open, and running again after the answer", async () => {
+    const reply = deferred();
+    const permissions = new FakePermissionSource();
+    const h = harness({ waiter: new FakeWaiter([reply.promise]), permissions, stop: "never" });
+    const running = runOn(h.deps, manifest(prompt("n1")));
+    await vi.waitFor(() => expect(sends(h.calls)).toHaveLength(1));
 
-    expect(kindsOf(deps.store, "n1")).toEqual(["sent", "done"]);
+    const asked = permissions.ask(sessionId, bash("echo hi"));
+    await vi.waitFor(() => expect(kindsOf(h.deps.store, "n1")).toEqual(["sent", "needs-you"]));
+    reply.resolve(approve);
+    await asked;
+    expect(kindsOf(h.deps.store, "n1")).toEqual(["sent", "needs-you", "running"]);
+
+    h.events.publish({ kind: "Stop", sessionId, payload: {} });
+    expect((await running).states["n1"]).toBe("done");
   });
 
   it("still asks under auto", async () => {

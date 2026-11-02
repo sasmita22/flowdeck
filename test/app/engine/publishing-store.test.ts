@@ -78,12 +78,31 @@ describe("createPublishingStore", () => {
     expect(pushes.at(-1)).toMatchObject({ value: { status: "failed" } });
   });
 
+  it("publishes a running snapshot when a finished run is reopened", () => {
+    const { inner, runId, pushes, store, expected } = setup();
+    store.finishRun(runId, "failed");
+
+    store.reopenRun(runId);
+
+    expect(inner.findRun(runId)?.status).toBe("running");
+    expect(pushes.at(-1)).toEqual(expected("running"));
+  });
+
   it("delegates the other methods to the inner store and publishes nothing for them", () => {
     const { inner, runId, pushes, store } = setup();
 
     const created = store.createRun(newRun());
     store.recordBuild(build);
     store.recordCost(runId, 0.25);
+    const entry = {
+      id: 1,
+      nodeId: "p1",
+      at: 1,
+      kind: "tool" as const,
+      tool: "Bash",
+      summary: "ls",
+    };
+    store.recordActivity(runId, entry);
     const found = store.findRun(runId);
     const events = store.events(runId);
 
@@ -97,6 +116,8 @@ describe("createPublishingStore", () => {
     expect(store.listRuns()).toEqual(inner.listRuns());
     expect(found).toEqual(inner.findRun(runId));
     expect(events).toEqual(inner.events(runId));
+    expect(store.activity(runId)).toEqual([entry]);
+    expect(inner.activity(runId)).toEqual([entry]);
   });
 
   it("passes every write to the inner store unchanged", () => {

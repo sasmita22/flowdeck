@@ -225,6 +225,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         gitState: new GitFolderState(),
         waits: appWaiter,
         newSessionName: () => sessionName,
+        transcriptTurns: async () => [],
       });
 
       const build = await handler.handle({ id: 10, type: "build-version", payload: savedRef });

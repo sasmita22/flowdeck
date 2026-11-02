@@ -24,10 +24,58 @@ const merge = (older: readonly ActivityEntry[], newer: readonly ActivityEntry[])
 export const selectActivity = (
   state: Pick<InspectorState, "feed">,
   runId: string | undefined,
-): ActivityEntry[] =>
-  state.feed === null || state.feed.runId !== runId
-    ? []
-    : [...state.feed.entries].sort((a, b) => b.id - a.id);
+  stored: readonly ActivityEntry[] = [],
+): ActivityEntry[] => {
+  const live = state.feed === null || state.feed.runId !== runId ? [] : state.feed.entries;
+  return merge(stored, live).sort((a, b) => b.id - a.id);
+};
+
+export function entryText(entry: ActivityEntry): string {
+  switch (entry.kind) {
+    case "tool":
+      return `${entry.tool} ${entry.summary}`;
+    case "subagent":
+      return `${entry.agentType} ${entry.summary} ${entry.state}`;
+    case "turn":
+      return `Turn ended: ${entry.summary}`;
+    case "output":
+      return `${entry.stream === "stdout" ? "Output" : "Errors"}: ${entry.summary}`;
+    case "failure":
+      return `Failed: ${entry.summary}`;
+    case "pr":
+      return `Opened ${entry.url}`;
+  }
+}
+
+export type WrittenFiles = {
+  nodes: { nodeId: string; paths: string[] }[];
+  pullRequests: { nodeId: string; url: string }[];
+};
+
+export function selectFiles(
+  entries: readonly ActivityEntry[],
+  nodeOrder: readonly string[],
+): WrittenFiles {
+  const ordered = [...entries].sort((a, b) => a.id - b.id);
+  const paths = new Map<string, string[]>();
+  for (const entry of ordered) {
+    if (entry.kind !== "tool" || entry.path === undefined) continue;
+    const known = paths.get(entry.nodeId) ?? [];
+    if (!known.includes(entry.path)) paths.set(entry.nodeId, [...known, entry.path]);
+  }
+  const rank = (nodeId: string) => {
+    const index = nodeOrder.indexOf(nodeId);
+    return index === -1 ? nodeOrder.length : index;
+  };
+  return {
+    nodes: [...paths]
+      .map(([nodeId, list]) => ({ nodeId, paths: list }))
+      .sort((a, b) => rank(a.nodeId) - rank(b.nodeId)),
+    pullRequests: ordered.flatMap((entry) =>
+      entry.kind === "pr" ? [{ nodeId: entry.nodeId, url: entry.url }] : [],
+    ),
+  };
+}
 
 export const createInspectorStore = ({
   bridge,

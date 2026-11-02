@@ -15,6 +15,7 @@ type Block = { type?: string; text?: unknown };
 
 type Line = {
   type?: string;
+  timestamp?: unknown;
   message?: { id?: string; model?: string; content?: unknown; usage?: Usage };
 };
 
@@ -50,6 +51,7 @@ function entryOf(line: Line | undefined): UsageEntry | undefined {
   if (message === undefined || usage === undefined) return undefined;
   const split = usage.cache_creation;
   const text = textOf(message.content);
+  const at = typeof line?.timestamp === "string" ? Date.parse(line.timestamp) : Number.NaN;
   return {
     messageId: message.id ?? "",
     model: message.model ?? "",
@@ -62,11 +64,20 @@ function entryOf(line: Line | undefined): UsageEntry | undefined {
     cacheWrite1hTokens: split?.ephemeral_1h_input_tokens ?? 0,
     cacheReadTokens: usage.cache_read_input_tokens ?? 0,
     ...(text === undefined ? {} : { text }),
+    ...(Number.isNaN(at) ? {} : { at }),
   };
 }
 
 const entriesIn = (jsonl: string): UsageEntry[] =>
   jsonl.split("\n").flatMap((line) => entryOf(parse(line)) ?? []);
+
+type Transcript = { jsonl: string; agentType?: string };
+
+function agentTypeIn(meta: string | undefined): string | undefined {
+  const parsed =
+    meta === undefined ? undefined : (parse(meta) as { agentType?: unknown } | undefined);
+  return typeof parsed?.agentType === "string" ? parsed.agentType : undefined;
+}
 
 export class TranscriptUsage implements UsageSource {
   private readonly findTranscript: (sessionId: string) => Promise<string | undefined>;
@@ -79,10 +90,12 @@ export class TranscriptUsage implements UsageSource {
     if (sessionId === "") return [];
     const transcript = await this.findTranscript(sessionId);
     if (transcript === undefined) return [];
-    return (await this.transcripts(transcript, sessionId)).flatMap(entriesIn);
+    return (await this.transcripts(transcript, sessionId)).flatMap(({ jsonl, agentType }) =>
+      entriesIn(jsonl).map((entry) => (agentType === undefined ? entry : { ...entry, agentType })),
+    );
   }
 
-  private async transcripts(transcript: string, sessionId: string): Promise<string[]> {
+  private async transcripts(transcript: string, sessionId: string): Promise<Transcript[]> {
     const read = (file: string) => readOrNothing(() => readFile(file, "utf8"), undefined);
     const main = await read(transcript);
     if (main === undefined) return [];
@@ -90,7 +103,15 @@ export class TranscriptUsage implements UsageSource {
     const names = (await readOrNothing(() => readdir(subagents), [])).filter((name) =>
       name.endsWith(".jsonl"),
     );
-    const others = await Promise.all(names.map((name) => read(join(subagents, name))));
-    return [main, ...others.flatMap((jsonl) => jsonl ?? [])];
+    const others = await Promise.all(
+      names.map(async (name): Promise<Transcript | undefined> => {
+        const jsonl = await read(join(subagents, name));
+        if (jsonl === undefined) return undefined;
+        const meta = await read(join(subagents, name.replace(/\.jsonl$/, ".meta.json")));
+        const agentType = agentTypeIn(meta);
+        return agentType === undefined ? { jsonl } : { jsonl, agentType };
+      }),
+    );
+    return [{ jsonl: main }, ...others.flatMap((other) => other ?? [])];
   }
 }

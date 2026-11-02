@@ -1,8 +1,17 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 describe("NodeProcessRunner", () => {
   const runner = new NodeProcessRunner();
@@ -22,6 +31,62 @@ describe("NodeProcessRunner", () => {
 
   it("reports a process killed by a signal as code null", async () => {
     expect((await runner.run("sh", ["-c", "kill -9 $$"], cwd)).code).toBeNull();
+  });
+
+  it("kills the command when its signal aborts, and reports it as killed", async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    setTimeout(() => abort.abort(), 100);
+
+    const result = await runner.run("sleep", ["30"], cwd, abort.signal);
+
+    expect(result.code).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("kills the script's whole process group when its signal aborts", async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    const pidFile = join(cwd, "grandchild.pid");
+    setTimeout(() => abort.abort(), 300);
+
+    const result = await runner.run(
+      "sh",
+      ["-c", `sh -c 'echo $$ > ${pidFile}; exec sleep 30'; echo x`],
+      cwd,
+      abort.signal,
+    );
+
+    expect(result).toEqual({ code: null, stdout: "", stderr: "" });
+    expect(Date.now() - started).toBeLessThan(2000);
+    const grandchild = Number(await readFile(pidFile, "utf8"));
+    await expect.poll(() => isAlive(grandchild), { timeout: 1000 }).toBe(false);
+  });
+
+  it("kills a script that ignores SIGTERM once the grace period is over", async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    setTimeout(() => abort.abort(), 100);
+
+    const result = await runner.run(
+      "sh",
+      ["-c", "trap '' TERM; sleep 30; echo x"],
+      cwd,
+      abort.signal,
+    );
+
+    expect(result.code).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("does not start a command whose signal has already aborted", async () => {
+    const abort = new AbortController();
+    abort.abort();
+
+    expect(
+      (await runner.run("sh", ["-c", "echo ran > ran.txt"], cwd, abort.signal)).code,
+    ).toBeNull();
+    await expect(realpath(join(cwd, "ran.txt"))).rejects.toThrow();
   });
 
   it("captures stdout and stderr", async () => {

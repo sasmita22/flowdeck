@@ -259,3 +259,16 @@ describe("dispose", () => {
     expect(spawns).toHaveLength(1);
   });
 });
+
+describe("setPoppedOut", () => {
+  it("reports the terminal as popped out while its own window holds it, and not after", () => {
+    const { terminal, statuses } = attached();
+
+    terminal.setPoppedOut(true);
+    expect(statuses.at(-1)).toEqual({ available: true, attached: true, poppedOut: true });
+    expect(terminal.status()).toEqual({ available: true, attached: true, poppedOut: true });
+
+    terminal.setPoppedOut(false);
+    expect(statuses.at(-1)).toEqual({ available: true, attached: true });
+  });
+});

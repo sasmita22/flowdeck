@@ -580,6 +580,7 @@ describe("SqliteFlowStore", () => {
       { name: "004_events_lock.sql" },
       { name: "005_notes.sql" },
       { name: "006_build_lineage.sql" },
+      { name: "007_activity.sql" },
     ]);
   });
 });

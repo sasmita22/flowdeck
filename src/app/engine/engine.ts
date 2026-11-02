@@ -1,10 +1,12 @@
 import { mkdirSync, statSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../../package.json" with { type: "json" };
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
+import { parseTranscriptTurns } from "../../adapters/claude/transcript-turns.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
 import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
@@ -75,6 +77,7 @@ const handler = createEngineHandler({
   version: pkg.version,
   openStores,
   home,
+  userHome: homedir(),
   publish: post,
   prepareHooks: () =>
     prepareHooks({
@@ -91,6 +94,12 @@ const handler = createEngineHandler({
   waits,
   worktree: new GitWorktree(),
   gitState: new GitFolderState(),
+  transcriptTurns: async (claudeSessionId) => {
+    const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
+      claudeSessionId,
+    );
+    return transcript === undefined ? [] : parseTranscriptTurns(await readFile(transcript, "utf8"));
+  },
 });
 
 process.parentPort.on("message", (event: { data: EngineRequest }) => {

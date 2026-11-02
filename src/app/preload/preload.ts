@@ -41,6 +41,7 @@ const bridge: FlowdeckBridge = {
   writeTerminal: (data) => ipcRenderer.send(bridgeChannels.terminalInput, data),
   resizeTerminal: (size) => ipcRenderer.send(bridgeChannels.terminalResize, size),
   closeTerminal: () => ipcRenderer.send(bridgeChannels.closeTerminal),
+  popOutTerminal: () => ipcRenderer.invoke(bridgeChannels.popOutTerminal),
   onTerminalStatus: (listener) => {
     const handler = (_event: unknown, status: unknown) => listener(status);
     ipcRenderer.on(bridgeChannels.terminalStatus, handler);

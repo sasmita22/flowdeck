@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
 import type { RunEvent } from "../../core/run/run-events.js";
 import type {
   BuildFileRecord,
@@ -79,6 +80,8 @@ type EventRow = {
   node_id: string;
   kind: string;
   payload: string | null;
+  tokens: number | null;
+  cost: number | null;
   time: string;
 };
 
@@ -173,7 +176,7 @@ export class SqliteStore implements Store {
       for (const { nodeId, event } of entries) {
         this.db
           .prepare(
-            "INSERT INTO events (run_id, node_id, kind, payload, time) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO events (run_id, node_id, kind, payload, tokens, cost, time) VALUES (?, ?, ?, ?, ?, ?, ?)",
           )
           .run(
             runId,
@@ -182,6 +185,8 @@ export class SqliteStore implements Store {
             "payload" in event && event.payload !== undefined
               ? JSON.stringify(event.payload)
               : null,
+            event.kind === "usage" ? event.tokens : null,
+            event.kind === "usage" ? event.cost : null,
             time,
           );
         const update = nodeUpdates[event.kind];
@@ -196,13 +201,17 @@ export class SqliteStore implements Store {
 
   events(runId: string): StoredEvent[] {
     const rows = this.db
-      .prepare("SELECT seq, node_id, kind, payload, time FROM events WHERE run_id = ? ORDER BY seq")
+      .prepare(
+        "SELECT seq, node_id, kind, payload, tokens, cost, time FROM events WHERE run_id = ? ORDER BY seq",
+      )
       .all(runId) as EventRow[];
     return rows.map(
       (row) =>
         ({
           kind: row.kind,
           ...(row.payload === null ? {} : { payload: JSON.parse(row.payload) as unknown }),
+          ...(row.tokens === null ? {} : { tokens: row.tokens }),
+          ...(row.cost === null ? {} : { cost: row.cost }),
           nodeId: row.node_id,
           seq: row.seq,
           time: row.time,
@@ -215,6 +224,34 @@ export class SqliteStore implements Store {
       this.db.prepare("UPDATE runs SET status = ? WHERE id = ?").run(status, runId);
       this.db.prepare("UPDATE run_sessions SET status = 'closed' WHERE run_id = ?").run(runId);
     })();
+  }
+
+  reopenRun(runId: string): void {
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(runId);
+      this.db.prepare("UPDATE run_sessions SET status = 'open' WHERE run_id = ?").run(runId);
+    })();
+  }
+
+  recordActivity(runId: string, entry: ActivityEntry): void {
+    this.db
+      .prepare("INSERT INTO activity (run_id, id, node_id, entry) VALUES (?, ?, ?, ?)")
+      .run(runId, entry.id, entry.nodeId, JSON.stringify(entry));
+  }
+
+  activity(runId: string): ActivityEntry[] {
+    const rows = this.db
+      .prepare(
+        `SELECT entry FROM activity AS latest
+         WHERE run_id = ?
+           AND seq = (SELECT MAX(seq) FROM activity WHERE run_id = latest.run_id AND id = latest.id)
+         ORDER BY id`,
+      )
+      .all(runId) as { entry: string }[];
+    return rows.flatMap((row) => {
+      const parsed = activityEntrySchema.safeParse(JSON.parse(row.entry));
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 
   recordCost(runId: string, totalCost: number): void {

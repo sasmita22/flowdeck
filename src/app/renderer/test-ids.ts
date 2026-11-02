@@ -61,6 +61,8 @@ export const pageTestIds = {
   runAgain: "run-again",
   runOpenBlueprint: "run-open-blueprint",
   runPageStatus: "run-page-status",
+  runStop: "run-stop",
+  runResume: "run-resume",
   doctorBlueprint: "doctor-blueprint",
   doctorRecheck: "doctor-recheck",
   doctorNeeded: (name: string) => `doctor-needed-${name}`,
@@ -69,4 +71,13 @@ export const pageTestIds = {
   leaveSave: "leave-save",
   leaveDiscard: "leave-discard",
   leaveCancel: "leave-cancel",
+} as const;
+
+export const dialogTestIds = {
+  dialog: "run-dialog",
+  input: (name: string) => `run-dialog-input-${name}`,
+  flag: (name: string) => `run-dialog-flag-${name}`,
+  auto: "run-dialog-auto",
+  start: "run-dialog-start",
+  cancel: "run-dialog-cancel",
 } as const;

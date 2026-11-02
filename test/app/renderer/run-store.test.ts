@@ -12,7 +12,20 @@ import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save
 import type { NodeState } from "../../../src/core/run/state.js";
 import { flow, prompt } from "../../fixtures/flow-builders.js";
 
-type RunBridge = Pick<FlowdeckBridge, "buildVersion" | "runBuild" | "getRunState" | "onRunState">;
+type RunBridge = Pick<
+  FlowdeckBridge,
+  | "buildVersion"
+  | "runBuild"
+  | "getRunState"
+  | "onRunState"
+  | "runOptions"
+  | "stopRun"
+  | "retryNode"
+  | "resumeRun"
+  | "runCost"
+>;
+
+const noChoices = { inputs: [], flags: {}, automatic: false };
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -29,7 +42,7 @@ const snapshot = (
 
 const savedFlow = () => flow([prompt("prompt-1")], []);
 
-const setup = async (options: { latest?: unknown } = {}) => {
+const setup = async (options: { latest?: unknown; choices?: unknown } = {}) => {
   const calls: string[] = [];
   let pushListener: (value: unknown) => void = () => undefined;
 
@@ -71,6 +84,23 @@ const setup = async (options: { latest?: unknown } = {}) => {
       pushListener = listener;
       return () => {};
     }),
+    runOptions: vi.fn<(payload: { hash: string }) => Promise<unknown>>(
+      async () => options.choices ?? noChoices,
+    ),
+    stopRun: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async () => ({
+      stopped: true,
+    })),
+    retryNode: vi.fn<(payload: { runId: string; nodeId: string }) => Promise<unknown>>(
+      async ({ runId }) => ({ kind: "started", runId }),
+    ),
+    resumeRun: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async ({ runId }) => ({
+      kind: "started",
+      runId,
+    })),
+    runCost: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async () => ({
+      nodes: [{ nodeId: "p1", tokens: 10, cost: 0.5, ms: 1000 }],
+      total: { tokens: 10, cost: 0.5, ms: 1000 },
+    })),
   } satisfies RunBridge;
 
   const canvas = createCanvasStore({ ready: false });
@@ -302,6 +332,84 @@ describe("runBuild", () => {
   });
 });
 
+describe("the run dialog", () => {
+  const choices = { inputs: ["ticket"], flags: { deep: true }, automatic: true };
+
+  it("opens instead of starting when the build lets the run choose, then starts with the choices", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow(), choices });
+
+    await expect(run.getState().runBuild("abc")).resolves.toBeNull();
+
+    expect(bridge.runOptions).toHaveBeenCalledWith({ hash: "abc" });
+    expect(bridge.runBuild).not.toHaveBeenCalled();
+    expect(run.getState().dialog).toEqual({ hash: "abc", choices });
+
+    const chosen = { inputs: { ticket: "FD-1" }, flags: { deep: false }, auto: true };
+    await expect(run.getState().start(chosen)).resolves.toBe("run-1");
+
+    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "abc", ...chosen });
+    expect(run.getState().dialog).toBeNull();
+  });
+
+  it("starts at once when the build offers nothing to choose", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow() });
+
+    await expect(run.getState().runBuild("abc")).resolves.toBe("run-1");
+
+    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "abc" });
+    expect(run.getState().dialog).toBeNull();
+  });
+
+  it("opens after Build & run too, and cancel closes it without a run", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow(), choices });
+
+    await expect(run.getState().run()).resolves.toBeNull();
+    expect(run.getState().dialog?.hash).toBe("h1");
+
+    run.getState().cancelDialog();
+
+    expect(run.getState().dialog).toBeNull();
+    expect(bridge.runBuild).not.toHaveBeenCalled();
+  });
+});
+
+describe("controls", () => {
+  it("stops, retries and resumes a run through the bridge", async () => {
+    const { bridge, run } = await setup();
+
+    await run.getState().stop("run-7");
+    await expect(run.getState().retry("run-7", "s1")).resolves.toBe("run-7");
+    await expect(run.getState().resume("run-7")).resolves.toBe("run-7");
+
+    expect(bridge.stopRun).toHaveBeenCalledWith({ runId: "run-7" });
+    expect(bridge.retryNode).toHaveBeenCalledWith({ runId: "run-7", nodeId: "s1" });
+    expect(bridge.resumeRun).toHaveBeenCalledWith({ runId: "run-7" });
+  });
+
+  it("holds the message when a retry or resume is refused", async () => {
+    const { bridge, run } = await setup();
+    bridge.resumeRun.mockResolvedValueOnce({ kind: "error", message: "nope" });
+
+    await expect(run.getState().resume("run-7")).resolves.toBeNull();
+
+    expect(run.getState().error).toBe("nope");
+  });
+
+  it("keeps the cost report of the run it was asked for", async () => {
+    const { run } = await setup();
+
+    await run.getState().loadCost("run-7");
+
+    expect(run.getState().cost).toEqual({
+      runId: "run-7",
+      report: {
+        nodes: [{ nodeId: "p1", tokens: 10, cost: 0.5, ms: 1000 }],
+        total: { tokens: 10, cost: 0.5, ms: 1000 },
+      },
+    });
+  });
+});
+
 describe("selectRunDisabled", () => {
   it("is false when nothing is starting, saving or running", async () => {
     const { disabled } = await setup({ latest: savedFlow() });
@@ -372,7 +480,7 @@ describe("selectNodeDisplay", () => {
 
     push(snapshot("running", { a: "sent", b: "needs-you", c: "skipped" }));
 
-    expect(selectNodeDisplay(run.getState(), "a")).toBe("running");
+    expect(selectNodeDisplay(run.getState(), "a")).toBe("sent");
     expect(selectNodeDisplay(run.getState(), "b")).toBe("needs you");
     expect(selectNodeDisplay(run.getState(), "c")).toBe("skipped");
     expect(selectNodeDisplay(run.getState(), "zz")).toBeNull();
@@ -416,6 +524,20 @@ describe("selectRunSummary", () => {
   it("puts Needs you before Failed", async () => {
     expect(await summaryOf(snapshot("running", { a: "failed", b: "needs-you" }))).toBe(
       "Needs you · 0 of 2 nodes done",
+    );
+  });
+
+  it("says Needs you while a wait is open, though no node shows it", async () => {
+    const { run, push } = await setup();
+    await run.getState().connect();
+    push(snapshot("running", { a: "done", b: "waiting" }));
+
+    expect(selectRunSummary(run.getState(), true)).toBe("Needs you · 1 of 2 nodes done");
+  });
+
+  it("says Stopped for a stopped run", async () => {
+    expect(await summaryOf(snapshot("stopped", { a: "done", b: "running" }))).toBe(
+      "Stopped · 1 of 2 nodes done",
     );
   });
 

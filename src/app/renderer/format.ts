@@ -20,6 +20,12 @@ export const formatDuration = (ms: number): string => {
   return `${seconds}s`;
 };
 
+export const formatTokens = (tokens: number): string => {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k tokens`;
+  return `${tokens} tokens`;
+};
+
 export const formatCost = (cost: number | null): string =>
   cost === null ? "No cost recorded" : `$${cost.toFixed(2)}`;
 

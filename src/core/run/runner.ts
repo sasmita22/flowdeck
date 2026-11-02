@@ -73,6 +73,7 @@ export type RunnerDeps = {
   auto?: boolean;
   flags?: Record<string, boolean>;
   onChange?: (line: string) => void;
+  onOutput?: (nodeId: string, stream: "stdout" | "stderr", text: string) => void;
   cwd: string;
   sessionId: string;
   turnTimeoutMs?: number;
@@ -297,15 +298,17 @@ export class Runner {
     payload: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<PermissionDecision> {
-    if (this.inTurn === undefined) return denied("No node is running");
+    const nodeId = this.inTurn;
+    if (nodeId === undefined) return denied("No node is running");
     this.openAsks++;
+    if (this.status(nodeId) !== "needs-you") this.record(nodeId, { kind: "needs-you" });
     try {
       const withdrawn = new Promise<WaitReply>((resolve) =>
         signal.addEventListener("abort", () => resolve({ decision: "closed" }), { once: true }),
       );
       return permissionDecision(
         await Promise.race([
-          this.deps.waiter.wait(permissionRequest(this.inTurn, payload), signal),
+          this.deps.waiter.wait(permissionRequest(nodeId, payload), signal),
           withdrawn,
         ]),
       );
@@ -313,6 +316,9 @@ export class Runner {
       return denied(messageOf(error));
     } finally {
       this.openAsks--;
+      if (this.openAsks === 0 && this.status(nodeId) === "needs-you") {
+        this.record(nodeId, { kind: "running" });
+      }
     }
   }
 
@@ -320,6 +326,7 @@ export class Runner {
     const nodes = manifest.nodes.filter((node) => runnable.has(node.type));
     this.actions = new Map(Object.entries(options.actions ?? {}));
     this.replayAnswers(nodes);
+    this.startTriggers(manifest.nodes);
     let started = false;
     const ensureStarted = async () => {
       if (started) return;
@@ -346,6 +353,19 @@ export class Runner {
       }
     }
     return { outcome: "done", ...this.projection(nodes) };
+  }
+
+  private startTriggers(nodes: readonly ManifestNode[]): void {
+    const waiting = nodes.filter(
+      (node) => node.type === "trigger" && this.status(node.id) === "waiting",
+    );
+    if (waiting.length === 0) return;
+    this.recordAll(
+      waiting.flatMap((node): EventEntry[] => [
+        { nodeId: node.id, event: { kind: "running" } },
+        { nodeId: node.id, event: { kind: "done" } },
+      ]),
+    );
   }
 
   private projection(nodes: readonly ManifestNode[]): Pick<RunResult, "states" | "decisions"> {
@@ -1149,6 +1169,8 @@ export class Runner {
       for (const line of [...outputLines(result.stdout), ...outputLines(result.stderr)]) {
         this.emit(line);
       }
+      if (result.stdout !== "") this.deps.onOutput?.(node.id, "stdout", result.stdout);
+      if (result.stderr !== "") this.deps.onOutput?.(node.id, "stderr", result.stderr);
       const outcome = scriptOutcome(result.code, attempt, codes);
       if (outcome === "failed") return exitReason(result.code);
       if (outcome === "done") {

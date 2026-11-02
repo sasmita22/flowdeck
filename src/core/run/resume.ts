@@ -70,17 +70,23 @@ function settleHuman(events: readonly StoredEvent[]): ResumeAction {
     : { kind: "ask" };
 }
 
+const turnTypes = new Set<ManifestNode["type"]>(["prompt", "agent", "fork"]);
+
+const inTurn = (node: ManifestNode, status: NodeState): boolean =>
+  status === "sent" ||
+  (turnTypes.has(node.type) && (status === "running" || status === "needs-you"));
+
 function sectionInterrupted(node: ManifestNode, status: NodeState, interrupted: boolean): boolean {
-  if (node.type === "fork") return status === "sent";
+  if (node.type === "fork") return inTurn(node, status);
   if (node.type === "join") return status === "running";
-  return interrupted && node.type === "agent" && status === "sent";
+  return interrupted && node.type === "agent" && inTurn(node, status);
 }
 
 export function decideResume({ manifest, events, turns }: ResumeInput): ResumeActions {
   const actions: ResumeActions = {};
   const statusOf = (id: string) => nodeStatus(events.filter((event) => event.nodeId === id));
   const interrupted = manifest.nodes.some(
-    (node) => node.type === "fork" && statusOf(node.id) === "sent",
+    (node) => node.type === "fork" && inTurn(node, statusOf(node.id)),
   );
   for (const node of manifest.nodes) {
     const own = events.filter((event) => event.nodeId === node.id);
@@ -92,7 +98,7 @@ export function decideResume({ manifest, events, turns }: ResumeInput): ResumeAc
       };
       continue;
     }
-    if (status === "sent") actions[node.id] = settleTurn(node, manifest.hash, own, turns);
+    if (inTurn(node, status)) actions[node.id] = settleTurn(node, manifest.hash, own, turns);
     if (status === "running" && node.type === "script") {
       actions[node.id] = {
         kind: "fail",

@@ -107,6 +107,55 @@ describe("TranscriptUsage", () => {
     );
   });
 
+  it("tags a subagent's usage with the agent type its meta file names, and leaves the rest untagged", async () => {
+    const tokens = { output_tokens: 1 };
+    await writeMain(jsonl(assistant("msg_main", "claude-haiku-5-5", tokens)));
+    await writeSubagent("agent-a1.jsonl", jsonl(assistant("msg_a1", "claude-haiku-5-5", tokens)));
+    await writeSubagent(
+      "agent-a1.meta.json",
+      JSON.stringify({ agentType: "hash:a1", toolUseId: "toolu_1" }),
+    );
+    await writeSubagent("agent-a2.jsonl", jsonl(assistant("msg_a2", "claude-haiku-5-5", tokens)));
+    await writeSubagent("agent-a3.jsonl", jsonl(assistant("msg_a3", "claude-haiku-5-5", tokens)));
+    await writeSubagent("agent-a3.meta.json", "not json");
+
+    const tags = Object.fromEntries(
+      (await usage.entries(sessionId)).map((found) => [found.messageId, found.agentType]),
+    );
+
+    expect(tags).toEqual({
+      msg_main: undefined,
+      msg_a1: "hash:a1",
+      msg_a2: undefined,
+      msg_a3: undefined,
+    });
+  });
+
+  it("carries the time an assistant line was written, and none when it has no valid timestamp", async () => {
+    const stamped = (id: string, timestamp: unknown) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp,
+        message: { id, model: "claude-haiku-5-5", content: [], usage: { output_tokens: 1 } },
+      });
+    await writeMain(
+      jsonl(
+        stamped("msg_1", "2026-11-02T10:00:01.500Z"),
+        stamped("msg_2", "never"),
+        stamped("msg_3", 7),
+      ),
+    );
+
+    const entries = await usage.entries(sessionId);
+
+    expect(entries.map((each) => each.at)).toEqual([
+      Date.parse("2026-11-02T10:00:01.500Z"),
+      undefined,
+      undefined,
+    ]);
+    expect(entries[1]).not.toHaveProperty("at");
+  });
+
   it("counts a bare cache_creation_input_tokens as a 5 minute write", async () => {
     await writeMain(
       jsonl(

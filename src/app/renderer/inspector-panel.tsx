@@ -1,7 +1,7 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { CanvasState } from "./canvas/store.js";
-import { Inspector } from "./inspector/inspector.js";
+import { Inspector, type RunPageView } from "./inspector/inspector.js";
 import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
 import { PanelToggle } from "./panel-toggle.js";
@@ -17,6 +17,7 @@ export function InspectorPanel({
   inspector,
   wait,
   readOnly = false,
+  page,
 }: {
   shell: StoreApi<ShellState>;
   run: StoreApi<RunView>;
@@ -24,6 +25,7 @@ export function InspectorPanel({
   inspector: StoreApi<InspectorState>;
   wait?: StoreApi<WaitState> | undefined;
   readOnly?: boolean;
+  page?: RunPageView | undefined;
 }) {
   const inspectorShown = useStore(shell, (state) => state.inspectorShown);
   const snapshot = useStore(run, (state) => state.snapshot);
@@ -55,6 +57,7 @@ export function InspectorPanel({
           wait={wait}
           shell={shell}
           readOnly={readOnly}
+          page={page}
         />
       </div>
     </>
