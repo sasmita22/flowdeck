@@ -184,3 +184,18 @@ test("The widths survive a restart", async () => {
     inspector: panelWidthLimits.inspector.initial + 100,
   });
 });
+
+test("Sidebar tags stay on one line at the narrowest sidebar", async () => {
+  const { window } = await launch();
+  await dragHandle(window, controlTestIds.sidebarResize, -400);
+  await expect.poll(() => widthOf(sidebar(window))).toBe(panelWidthLimits.sidebar.min);
+
+  for (const type of ["fork", "join"]) {
+    const tag = window.getByTestId(`palette-${type}`).locator(".fd-tag");
+    const fontSize = await tag.evaluate((element) =>
+      parseFloat(getComputedStyle(element).fontSize),
+    );
+    const box = await tag.boundingBox();
+    expect(box?.height).toBeLessThan(fontSize * 2);
+  }
+});
