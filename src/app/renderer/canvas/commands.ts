@@ -110,3 +110,18 @@ export const updateSession = (next: Session): Command => {
     undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
   };
 };
+
+export const updateNode = (next: Node): Command => {
+  let previous: Node | undefined;
+  const replace = (flow: Flow, node: Node | undefined): Flow =>
+    node === undefined
+      ? flow
+      : { ...flow, nodes: flow.nodes.map((current) => (current.id === node.id ? node : current)) };
+  return {
+    do: (flow) => {
+      previous = flow.nodes.find((node) => node.id === next.id);
+      return previous === undefined ? flow : replace(flow, next);
+    },
+    undo: (flow) => replace(flow, previous),
+  };
+};

@@ -101,6 +101,22 @@ describe("selectInspectorOpen", () => {
   });
 });
 
+describe("showInspector", () => {
+  it.each([
+    ["no run", noRun],
+    ["a run", aRun],
+  ])("opens the inspector with %s and leaves focus alone", (_name, run) => {
+    const shell = createShellStore();
+    shell.getState().toggleInspector(aRun);
+    shell.getState().clearPanelFocus();
+
+    shell.getState().showInspector();
+
+    expect(selectInspectorOpen(shell.getState(), run)).toBe(true);
+    expect(shell.getState().panelFocus).toBeNull();
+  });
+});
+
 describe("emptyCanvasHint", () => {
   it("is null when the canvas has nodes", () => {
     expect(emptyCanvasHint(false, true)).toBeNull();

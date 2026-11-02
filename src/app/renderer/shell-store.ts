@@ -11,6 +11,7 @@ export type ShellState = {
   panelFocus: string | null;
   toggleSidebar(): void;
   toggleInspector(run: RunView): void;
+  showInspector(): void;
   clearPanelFocus(): void;
   openMenu(): void;
   closeMenu(): void;
@@ -41,6 +42,7 @@ export const createShellStore = (): StoreApi<ShellState> =>
         panelFocus: inspectorShown ? controlTestIds.inspectorHide : controlTestIds.inspectorShow,
       });
     },
+    showInspector: () => set({ inspectorShown: true }),
     clearPanelFocus: () => set({ panelFocus: null }),
     openMenu: () => set({ menuOpen: true }),
     closeMenu: () => set({ menuOpen: false }),

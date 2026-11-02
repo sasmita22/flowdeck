@@ -237,6 +237,7 @@ function Board({
             event.preventDefault();
             store.getState().openNodeMenu(node.id, { x: event.clientX, y: event.clientY });
           }}
+          onNodeClick={() => shell.getState().showInspector()}
           onPaneClick={() => store.getState().closeNodeMenu()}
           onConnect={onConnect}
           onDragOver={onDragOver}
