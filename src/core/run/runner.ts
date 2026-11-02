@@ -42,6 +42,7 @@ import {
 } from "../nodes/loop/execute.js";
 import { scriptOutcome, type ExitCodes } from "../nodes/script/execute.js";
 import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
+import { contextFull, contextUse, type CompactionReader } from "./context.js";
 import {
   denied,
   permissionDecision,
@@ -67,7 +68,16 @@ export type RunnerDeps = {
   prompts: { sendPrompt(text: string): Promise<void>; interrupt(): Promise<void> };
   session: { ensureStarted(): Promise<void> };
   events: TurnEvents;
-  scripts: { run(command: string, args: readonly string[], cwd: string): Promise<ScriptResult> };
+  scripts: {
+    run(
+      command: string,
+      args: readonly string[],
+      cwd: string,
+      signal?: AbortSignal,
+      job?: string,
+    ): Promise<ScriptResult>;
+    rejoin?(job: string): Promise<ScriptResult | undefined>;
+  };
   waiter: HumanWaiter;
   files: Pick<VerifyFileSystem, "readFile">;
   auto?: boolean;
@@ -82,6 +92,7 @@ export type RunnerDeps = {
   now?: () => number;
   permissions?: PermissionAsks;
   usage?: UsageReader;
+  compactions?: CompactionReader;
   budget?: number;
   usageSettleMs?: number;
   settleQuietMs?: number;
@@ -121,6 +132,7 @@ const defaultTurnTimeoutMs = 600_000;
 const defaultUsageSettleMs = 2_000;
 const defaultSettleQuietMs = 5_000;
 const usagePollMs = 50;
+const compactPollMs = 250;
 const runnable = new Set<ManifestNode["type"]>([
   "prompt",
   "agent",
@@ -236,8 +248,15 @@ const decisionEvent = (decision: HumanDecision): RunEvent => ({
   payload: decision,
 });
 
-const exitReason = (code: number | null) =>
-  code === null ? "killed by a signal" : `exit code ${code}`;
+const signalOf = (code: number) => (code > 128 && code <= 128 + 64 ? code - 128 : undefined);
+
+function exitReason(code: number | null): string {
+  if (code === null) return "killed by a signal";
+  const signal = signalOf(code);
+  return signal === undefined
+    ? `exit code ${code}`
+    : `exit code ${code} (usually means it was stopped by signal ${signal})`;
+}
 
 type SubagentStops = { seen: string[]; unsubscribe: () => void };
 
@@ -274,6 +293,7 @@ export class Runner {
   private finishedTurn: FinishedTurn | undefined;
   private inTurn: string | undefined;
   private openAsks = 0;
+  private compactedAt: string | undefined;
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
@@ -483,6 +503,7 @@ export class Runner {
     } else if (node.type === "prompt" || node.type === "agent") {
       const halted = await this.checkBudget(node.id);
       if (halted !== undefined) return halted;
+      await this.compactIfFull(node.id, ensureStarted);
       this.inTurn = node.id;
       let turn: TurnResult;
       try {
@@ -595,6 +616,35 @@ export class Runner {
         halted: true,
       },
     };
+  }
+
+  private async compactIfFull(nodeId: string, ensureStarted: () => Promise<void>): Promise<void> {
+    const { usage, compactions, sessionId } = this.deps;
+    if (usage === undefined || compactions === undefined || this.status(nodeId) !== "waiting") {
+      return;
+    }
+    const use = contextUse(await usage.entries(sessionId));
+    if (use === undefined || use.messageId === this.compactedAt || !contextFull(use)) return;
+    this.compactedAt = use.messageId;
+    this.emit(`${nodeId} compacting context at ${use.tokens} tokens`);
+    const timeoutMs = this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs;
+    try {
+      await ensureStarted();
+      const before = await compactions.compactions(sessionId);
+      await this.deps.prompts.sendPrompt("/compact");
+      for (let waited = 0; (await compactions.compactions(sessionId)) <= before;) {
+        if (waited >= timeoutMs) {
+          this.emit(`${nodeId} context compaction did not finish within ${timeoutMs} ms; going on`);
+          return;
+        }
+        await sleep(compactPollMs);
+        waited += compactPollMs;
+      }
+    } catch (error) {
+      this.emit(`${nodeId} context not compacted: ${messageOf(error)}`);
+      return;
+    }
+    this.record(nodeId, { kind: "compacted", payload: { tokens: use.tokens } });
   }
 
   private async usageAfterTurn(
@@ -737,6 +787,7 @@ export class Runner {
     const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
     const halted = await this.checkBudget(fork.id);
     if (halted !== undefined) return halted;
+    await this.compactIfFull(fork.id, context.ensureStarted);
     this.inTurn = fork.id;
     try {
       return await this.driveSection(section, wait, onBranchFail, context);
@@ -1107,6 +1158,7 @@ export class Runner {
     ) {
       return ask(hardstopRequest(node.id, settings));
     }
+    await this.compactIfFull(node.id, context.ensureStarted);
     if (this.status(node.id) === "waiting") this.record(node.id, { kind: "running" });
     this.emit(`${node.id} checking`);
     let reply: string | undefined;
@@ -1153,19 +1205,58 @@ export class Runner {
     return outcome;
   }
 
+  private scriptJob(nodeId: string): string {
+    const running = this.eventsOf(nodeId).findLast((event) => event.kind === "running");
+    return `${nodeId}-${running?.seq ?? 0}`;
+  }
+
+  private scriptAttempt(nodeId: string): number {
+    const events = this.eventsOf(nodeId);
+    const last = events.findLastIndex((event) => event.kind === "running");
+    return events[last - 1]?.kind === "retry" && events[last - 2]?.kind === "running" ? 2 : 1;
+  }
+
+  private async rejoinScript(nodeId: string): Promise<ScriptResult | string> {
+    this.emit(`${nodeId} rejoined`);
+    try {
+      const result = await this.deps.scripts.rejoin?.(this.scriptJob(nodeId));
+      return result ?? "was running when the runner stopped";
+    } catch (error) {
+      return messageOf(error);
+    }
+  }
+
   private async runScript(node: ManifestNode): Promise<string | undefined> {
     const action = this.takeAction(node.id);
     if (action?.kind === "fail") return reasonIn(node.id, action.message);
     const { command, args, ...codes } = node.settings as ScriptSettings;
-    this.record(node.id, { kind: "running" });
-    this.emit(`${node.id} started`);
-    for (let attempt = 1; ; attempt++) {
+    let rejoined: ScriptResult | undefined;
+    let attempt = 1;
+    if (action?.kind === "wait") {
+      const result = await this.rejoinScript(node.id);
+      if (typeof result === "string") return result;
+      rejoined = result;
+      attempt = this.scriptAttempt(node.id);
+    } else {
+      this.record(node.id, { kind: "running" });
+      this.emit(`${node.id} started`);
+    }
+    for (; ; attempt++) {
       let result: ScriptResult;
       try {
-        result = await this.deps.scripts.run(command, args ?? [], this.deps.cwd);
+        result =
+          rejoined ??
+          (await this.deps.scripts.run(
+            command,
+            args ?? [],
+            this.deps.cwd,
+            undefined,
+            this.scriptJob(node.id),
+          ));
       } catch (error) {
         return messageOf(error);
       }
+      rejoined = undefined;
       for (const line of [...outputLines(result.stdout), ...outputLines(result.stderr)]) {
         this.emit(line);
       }

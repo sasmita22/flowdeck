@@ -42,6 +42,8 @@ export function entryText(entry: ActivityEntry): string {
       return `${entry.stream === "stdout" ? "Output" : "Errors"}: ${entry.summary}`;
     case "failure":
       return `Failed: ${entry.summary}`;
+    case "context":
+      return entry.summary;
     case "pr":
       return `Opened ${entry.url}`;
   }

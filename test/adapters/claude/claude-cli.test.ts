@@ -41,6 +41,19 @@ describe("claudeCommand", () => {
     );
   });
 
+  it("resumes the session's conversation by id instead of starting a new one", () => {
+    const command = claudeCommand(
+      { sessionId, model: "haiku", resume: true },
+      settingsPath,
+      "/b",
+      "/m.json",
+    );
+
+    expect(command).toContain(` claude --resume ${sessionId} --model 'haiku' --settings `);
+    expect(command).not.toContain("--session-id");
+    expect(command).toMatch(/ --plugin-dir '\/b' --mcp-config '\/m\.json' --strict-mcp-config$/);
+  });
+
   it("adds no settings without a settings path", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain("--settings");
   });

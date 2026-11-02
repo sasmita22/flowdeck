@@ -24,6 +24,7 @@ export const loadedRunSchema = z.object({
   flow: Flow.nullable(),
   snapshot: runSnapshotSchema,
   activity: z.array(activityEntrySchema),
+  note: z.string().optional(),
 });
 
 export type LoadedRun = z.infer<typeof loadedRunSchema>;

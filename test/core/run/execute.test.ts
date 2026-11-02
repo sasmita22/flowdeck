@@ -20,8 +20,10 @@ import {
 } from "../../../src/core/run/execute.js";
 import type { ScriptResult } from "../../../src/core/run/runner.js";
 import type { PermissionDecision } from "../../../src/ports/permission-source.js";
+import type { UsageEntry } from "../../../src/ports/usage-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
+import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
@@ -339,6 +341,108 @@ describe("the core run path", () => {
     expect(outputs).toEqual(["write stdout hi\n", "check stdout hi\n"]);
   });
 
+  it("runs each script under a job in the run's script folder, and rejoins one there", async () => {
+    const build = await loaded();
+    const store = new FakeStore();
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: {},
+      nodeIds: build.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+      buildHash: build.hash,
+    });
+    store.append(id, "write", { kind: "running" });
+    const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
+    const jobs = "/fd/runs/r1/scripts";
+    const writeJob = `${jobs}/write-${store.events(id)[0]?.seq}`;
+    scripts.finishes(writeJob, { code: 0, stdout: "", stderr: "" });
+
+    const code = await execute(
+      {
+        fs,
+        scripts,
+        waiter: new FakeWaiter([]),
+        startEvents: startEvents().startEvents,
+        openSession: async () => {
+          throw new Error("Claude must not start for a script-only flow");
+        },
+        store,
+        onChange: () => undefined,
+      },
+      {
+        store,
+        runId: id,
+        manifest: build,
+        cwd: repo.path,
+        auto: false,
+        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
+        open: async () => noClaude,
+        scriptJobs: jobs,
+        actions: async () => ({ write: { kind: "wait" } }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(scripts.rejoins).toEqual([writeJob]);
+    expect(scripts.calls.map((call) => call.job)).toEqual([
+      expect.stringMatching(new RegExp(`^${jobs}/check-\\d+$`)),
+    ]);
+  });
+
+  it("still rejoins a script when a Stop hook lands while the run is read back", async () => {
+    const build = await loaded();
+    const store = new FakeStore();
+    const { id } = store.createRun({
+      buildDir: dir,
+      inputs: {},
+      nodeIds: build.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
+      buildHash: build.hash,
+    });
+    store.append(id, "write", { kind: "running" });
+    const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
+    const jobs = "/fd/runs/r1/scripts";
+    const writeJob = `${jobs}/write-${store.events(id)[0]?.seq}`;
+    scripts.finishes(writeJob, { code: 0, stdout: "", stderr: "" });
+    const events = new FakeEventSource();
+    let reads = 0;
+
+    const code = await execute(
+      {
+        fs,
+        scripts,
+        waiter: new FakeWaiter([]),
+        startEvents: async () => ({ events, stop: async () => undefined }),
+        openSession: async () => {
+          throw new Error("execute opens the session through the execution");
+        },
+        store,
+        onChange: () => undefined,
+      },
+      {
+        store,
+        runId: id,
+        manifest: build,
+        cwd: repo.path,
+        auto: false,
+        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
+        open: async () => ({ ...noClaude, sessionId: "c1" }),
+        scriptJobs: jobs,
+        actions: async () => {
+          if (reads++ === 0) events.publish({ kind: "Stop", sessionId: "c1", payload: {} });
+          return { write: { kind: "wait" } };
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(reads).toBe(2);
+    expect(scripts.rejoins).toEqual([writeJob]);
+    expect(scripts.calls.map((call) => call.job)).toEqual([
+      expect.stringMatching(new RegExp(`^${jobs}/check-\\d+$`)),
+    ]);
+  });
+
   describe("needsClaude", () => {
     it("is true for a manifest with a prompt node", () => {
       expect(needsClaude(manifestWith(["script", "prompt"]))).toBe(true);
@@ -402,6 +506,7 @@ describe("execute wiring", () => {
     manifest: LoadedBuild;
     waiter: FakeWaiter;
     usage: FakeUsageSource;
+    compacts?: boolean;
     onSend?: (wiring: {
       events: FakeEventSource;
       permissions: FakePermissionSource;
@@ -425,6 +530,7 @@ describe("execute wiring", () => {
         scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
         waiter: options.waiter,
         usage: options.usage,
+        ...(options.compacts === true ? { compactions: options.usage } : {}),
         startEvents: async () => ({ events, permissions, stop: async () => undefined }),
         openSession: async () => {
           throw new Error("execute opens the session through the execution");
@@ -446,6 +552,10 @@ describe("execute wiring", () => {
             interrupt: async () => undefined,
             sendPrompt: async (text) => {
               sends.push(text);
+              if (text === "/compact") {
+                options.usage.compacted(claudeSessionId);
+                return;
+              }
               await options.onSend?.({ events, permissions });
               events.publish({ kind: "Stop", sessionId: claudeSessionId, payload: {} });
             },
@@ -467,6 +577,23 @@ describe("execute wiring", () => {
     expect(waiter.calls).toEqual([{ nodeId: "n1", kind: "budget", spend: 2, budget: 1 }]);
     expect(sends).toEqual([]);
     expect(code).toBe(1);
+  });
+
+  it("compacts a full context before the next turn when it is given a compaction reader", async () => {
+    const usage = new FakeUsageSource();
+    usage.setEntries(claudeSessionId, [
+      { ...(twoDollars[0] as UsageEntry), outputTokens: 0, cacheReadTokens: 900_000 },
+    ]);
+
+    const { code, sends } = await executeWith({
+      manifest: promptBuild(),
+      waiter: new FakeWaiter([]),
+      usage,
+      compacts: true,
+    });
+
+    expect(sends).toEqual(["/compact", "/abc123:n1"]);
+    expect(code).toBe(0);
   });
 
   it("passes a permission request during a turn to the waiter", async () => {

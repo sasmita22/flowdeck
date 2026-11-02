@@ -452,6 +452,24 @@ describe("node events in the feed", () => {
   });
 });
 
+describe("context compaction in the feed", () => {
+  it("adds a context entry with the size the context was compacted at", () => {
+    const { changed } = foldNodeEvent(
+      emptyFeed,
+      { nodeId: "p2", at: 7, turnNodes: new Set(["p2"]) },
+      { kind: "compacted", payload: { tokens: 162_400 } },
+    );
+
+    expect(changed).toEqual({
+      id: 1,
+      nodeId: "p2",
+      at: 7,
+      kind: "context",
+      summary: "Context compacted at 162k tokens",
+    });
+  });
+});
+
 describe("script output in the feed", () => {
   it("adds one entry per stream with the output trimmed, its first line as the summary", () => {
     const { changed } = foldOutput(emptyFeed, {

@@ -223,6 +223,23 @@ describe("TranscriptUsage", () => {
     ]);
   });
 
+  it("counts the compactions in the main transcript", async () => {
+    const boundary = JSON.stringify({
+      type: "system",
+      subtype: "compact_boundary",
+      content: "Conversation compacted",
+      compactMetadata: { trigger: "manual", preTokens: 850_000 },
+    });
+    await writeMain(
+      jsonl(user, boundary, assistant("msg_1", "claude-opus-5-5", { input_tokens: 1 }), boundary),
+    );
+    await writeSubagent("agent-a.jsonl", jsonl(boundary));
+
+    expect(await usage.compactions(sessionId)).toBe(2);
+    expect(await usage.compactions("11111111-2222-3333-4444-555555555555")).toBe(0);
+    expect(await usage.compactions("")).toBe(0);
+  });
+
   it("gives no entries for an empty session id", async () => {
     await writeMain(jsonl(assistant("msg_1", "claude-opus-5-5", { input_tokens: 1 })));
 

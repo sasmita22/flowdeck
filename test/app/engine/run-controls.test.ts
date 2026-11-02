@@ -353,22 +353,37 @@ describe("run controls", () => {
       });
     });
 
-    it("refuses when the run's Claude session is gone, changing nothing", async () => {
-      const opened: OpenSessionOptions[] = [];
-      handler = handlerWith({
-        run: runEnvironment({
-          openSession: async (options) => {
-            opened.push(options);
-            if (options.attach === true) throw new SessionGoneError(options.sessionName);
-            return {
-              sessionId: options.claudeSessionId,
-              session: { ensureStarted: async () => undefined },
-              prompts: { sendPrompt: async () => undefined, interrupt: async () => undefined },
-              stop: async () => undefined,
-            };
-          },
-        }),
+    const recordingSessions = (opened: OpenSessionOptions[]) =>
+      runEnvironment({
+        openSession: async (options) => {
+          opened.push(options);
+          if (options.attach === true) throw new SessionGoneError(options.sessionName);
+          return {
+            sessionId: options.claudeSessionId,
+            session: { ensureStarted: async () => undefined },
+            prompts: { sendPrompt: async () => undefined, interrupt: async () => undefined },
+            stop: async () => undefined,
+          };
+        },
       });
+
+    it("starts Claude again with --resume when the run's Claude session is gone", async () => {
+      const opened: OpenSessionOptions[] = [];
+      handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => false });
+      const runId = await start(flow([prompt("p1")], []));
+      await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
+      await call("stop-run", { runId });
+
+      expect(started(await call("resume-run", { runId }))).toBe(runId);
+
+      expect(opened.at(-1)).toMatchObject({ resume: true });
+      expect(opened.at(-1)?.attach).toBeUndefined();
+      await call("stop-run", { runId });
+    });
+
+    it("refuses, changing nothing, when the session ends between the check and the attach", async () => {
+      const opened: OpenSessionOptions[] = [];
+      handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => true });
       const runId = await start(flow([prompt("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
@@ -376,7 +391,8 @@ describe("run controls", () => {
 
       expect(await call("resume-run", { runId })).toEqual({
         kind: "error",
-        message: "This run's Claude session has ended, so it cannot go on from where it stopped.",
+        message:
+          "This run's Claude session ended just now. Resume again to start Claude on the same conversation.",
       });
       expect(opened.at(-1)?.attach).toBe(true);
       expect(runs.events(runId)).toEqual(before);

@@ -157,6 +157,27 @@ describe("openClaudeSession", () => {
     expect(sessions.startCalls).toBe(0);
   });
 
+  it("restarts the conversation in a new session with --resume and the build's flags", async () => {
+    const sessions = new SlowStartHost();
+    const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+    const opened = await openClaudeSession(
+      { ...options, mcpConfigPath: "/fd/runs/r1/mcp.json", resume: true },
+      { sessions, claude, sessionId: "s1" },
+    );
+    sessions.finishStart();
+
+    await opened.session.ensureStarted();
+
+    const command = sessions.get("fd-run")?.command ?? "";
+    expect(command).toContain(" claude --resume s1 --model 'haiku'");
+    expect(command).toContain(" --settings '/fd/builds/abc/settings.json'");
+    expect(command).toMatch(
+      / --plugin-dir '\/fd\/builds\/abc' --mcp-config '\/fd\/runs\/r1\/mcp\.json' --strict-mcp-config$/,
+    );
+    expect(sessions.get("fd-run")?.env?.["FLOWDECK_SOCK"]).toBe("/fd/sockets/fd-run.sock");
+    await opened.stop();
+  });
+
   describe("attached to a session that is already running", () => {
     it("never starts Claude, waits until it is ready, and stops the session on stop", async () => {
       const sessions = new RecordingHost();

@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -118,5 +119,190 @@ describe("NodeProcessRunner", () => {
 
   it("passes args without a shell", async () => {
     expect((await runner.run("echo", ["$HOME"], cwd)).stdout).toBe("$HOME\n");
+  });
+});
+
+describe("NodeProcessRunner jobs", () => {
+  const runner = new NodeProcessRunner();
+  let cwd: string;
+  let job: string;
+  const pidOf = async () => Number(await readFile(join(job, "pid"), "utf8").catch(() => "0"));
+
+  beforeEach(async () => {
+    cwd = await realpath(await mkdtemp(join(tmpdir(), "fd-job-")));
+    job = join(cwd, "jobs", "s1-4");
+  });
+
+  afterEach(async () => {
+    const pid = await pidOf();
+    if (pid > 0 && isAlive(pid)) process.kill(-pid, "SIGKILL");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("gives the code and output like a plain run, and keeps them in the job's folder", async () => {
+    const result = await runner.run(
+      "sh",
+      ["-c", "echo out; echo err >&2; exit 3"],
+      cwd,
+      undefined,
+      job,
+    );
+
+    expect(result).toEqual({ code: 3, stdout: "out\n", stderr: "err\n" });
+    expect(await readFile(join(job, "exit"), "utf8")).toBe("3\n");
+  });
+
+  it("runs in the given folder and passes args without a shell", async () => {
+    const result = await runner.run("pwd", [], cwd, undefined, job);
+    const again = await runner.run("echo", ["a b", "$HOME"], cwd, undefined, `${job}-2`);
+
+    expect(result.stdout).toBe(`${cwd}\n`);
+    expect(again.stdout).toBe("a b $HOME\n");
+  });
+
+  it("keeps a job's real exit code and all its output when it prints over 1 MiB", async () => {
+    const result = await runner.run(
+      "sh",
+      ["-c", "head -c 2000000 /dev/zero | tr '\\0' a"],
+      cwd,
+      undefined,
+      job,
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toHaveLength(2_000_000);
+    expect((await readFile(join(job, "out"), "utf8")).length).toBe(2_000_000);
+  });
+
+  it("keeps all of a job's output on disk but reads back only the last 4 MiB of each stream, marked", async () => {
+    const fourMiB = 4 * 1024 * 1024;
+    const result = await runner.run(
+      "sh",
+      [
+        "-c",
+        "head -c 5000000 /dev/zero | tr '\\0' a; printf end; head -c 5000000 /dev/zero | tr '\\0' b >&2",
+      ],
+      cwd,
+      undefined,
+      job,
+    );
+    const marker = (stream: string) =>
+      `… earlier output trimmed; full output in ${join(job, stream)}\n`;
+
+    expect(result.code).toBe(0);
+    expect((await readFile(join(job, "out"), "utf8")).length).toBe(5_000_003);
+    expect((await readFile(join(job, "err"), "utf8")).length).toBe(5_000_000);
+    expect(result.stdout.startsWith(marker("out"))).toBe(true);
+    expect(result.stdout.slice(marker("out").length)).toHaveLength(fourMiB);
+    expect(result.stdout.endsWith("aend")).toBe(true);
+    expect(result.stderr).toBe(marker("err") + "b".repeat(fourMiB));
+    expect(await new NodeProcessRunner().rejoin(job)).toEqual(result);
+  });
+
+  it("rejoins a finished job with its result, from another runner", async () => {
+    await runner.run("sh", ["-c", "echo done; exit 2"], cwd, undefined, job);
+
+    expect(await new NodeProcessRunner().rejoin(job)).toEqual({
+      code: 2,
+      stdout: "done\n",
+      stderr: "",
+    });
+  });
+
+  it("rejoins a job still running and answers once it exits", async () => {
+    void runner.run(
+      "sh",
+      [
+        "-c",
+        "n=0; while [ ! -f go ] && [ $n -lt 300 ]; do sleep 0.05; n=$((n+1)); done; echo late",
+      ],
+      cwd,
+      undefined,
+      job,
+    );
+    await expect.poll(pidOf).toBeGreaterThan(0);
+
+    const rejoined = new NodeProcessRunner().rejoin(job);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await writeFile(join(cwd, "go"), "");
+
+    expect(await rejoined).toEqual({ code: 0, stdout: "late\n", stderr: "" });
+  });
+
+  it("keeps a job running after the process that started it is killed, and rejoins it", async () => {
+    const adapter = join(process.cwd(), "src/adapters/process/process-runner.ts");
+    const starter = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "-e",
+        `import(${JSON.stringify(adapter)}).then(({ NodeProcessRunner }) => new NodeProcessRunner().run("sh", ["-c", "n=0; while [ ! -f go ] && [ $n -lt 300 ]; do sleep 0.05; n=$((n+1)); done; echo survived"], ${JSON.stringify(cwd)}, undefined, ${JSON.stringify(job)}))`,
+      ],
+      { stdio: "ignore" },
+    );
+    const starterExit = new Promise((resolve) => starter.once("exit", resolve));
+    try {
+      await expect.poll(pidOf, { timeout: 10_000 }).toBeGreaterThan(0);
+    } finally {
+      starter.kill("SIGKILL");
+      await starterExit;
+    }
+
+    expect(isAlive(await pidOf())).toBe(true);
+    await writeFile(join(cwd, "go"), "");
+    expect(await runner.rejoin(job)).toEqual({ code: 0, stdout: "survived\n", stderr: "" });
+  });
+
+  it("answers nothing for a job that never started, or died without an exit code", async () => {
+    expect(await runner.rejoin(join(cwd, "jobs", "never"))).toBeUndefined();
+    void runner.run("sleep", ["30"], cwd, undefined, job);
+    await expect.poll(pidOf).toBeGreaterThan(0);
+    process.kill(-(await pidOf()), "SIGKILL");
+
+    expect(await new NodeProcessRunner().rejoin(job)).toBeUndefined();
+  });
+
+  it("kills a rejoined job's process group when its signal aborts, and reports it as killed", async () => {
+    void runner.run("sleep", ["30"], cwd, undefined, job);
+    await expect.poll(pidOf).toBeGreaterThan(0);
+    const pid = await pidOf();
+    const abort = new AbortController();
+    setTimeout(() => abort.abort(), 200);
+
+    expect(await new NodeProcessRunner().rejoin(job, abort.signal)).toEqual({
+      code: null,
+      stdout: "",
+      stderr: "",
+    });
+    await expect.poll(() => isAlive(pid)).toBe(false);
+  });
+
+  it("does not wait on or kill a live process that took over the job's pid", async () => {
+    const foreign = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    const foreignPid = foreign.pid ?? 0;
+    try {
+      await mkdir(job, { recursive: true });
+      await writeFile(join(job, "pid"), `${foreignPid}\n`);
+      const abort = new AbortController();
+      setTimeout(() => abort.abort(), 50);
+      const started = Date.now();
+
+      expect(await runner.rejoin(job)).toBeUndefined();
+      expect(await runner.rejoin(job, abort.signal)).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(isAlive(foreignPid)).toBe(true);
+    } finally {
+      process.kill(-foreignPid, "SIGKILL");
+    }
+  });
+
+  it("reports a job killed by its abort signal as code null", async () => {
+    const abort = new AbortController();
+    setTimeout(() => abort.abort(), 200);
+
+    expect((await runner.run("sleep", ["30"], cwd, abort.signal, job)).code).toBeNull();
   });
 });

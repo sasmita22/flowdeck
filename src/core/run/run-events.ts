@@ -8,6 +8,7 @@ export type RunEvent =
   | { kind: "decided" | "answered"; payload: HumanDecision }
   | { kind: "round"; payload: { round: number; items?: string[] } }
   | { kind: "usage"; payload: { messages: string[] }; tokens: number; cost: number }
+  | { kind: "compacted"; payload: { tokens: number } }
   | {
       kind: "budget";
       payload:

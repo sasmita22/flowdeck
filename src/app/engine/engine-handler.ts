@@ -73,11 +73,15 @@ export type EngineHandlerOptions = {
   worktree: Worktree;
   gitState: GitState;
   transcriptTurns: (claudeSessionId: string) => Promise<TranscriptTurn[]>;
+  sessionAlive?: (sessionName: string) => Promise<boolean>;
+  homeLock?: { acquire(): Promise<boolean> };
 };
 
 export type EngineHandler = {
   handle(request: EngineRequest): Promise<EngineResponse>;
   stop(): Promise<void>;
+  detach(): Promise<void>;
+  reattach(): Promise<void>;
 };
 
 type ActiveRun = {
@@ -85,6 +89,9 @@ type ActiveRun = {
   done: Promise<void>;
   interrupt?: (code: number) => void;
   stopRequested?: number;
+  detached?: boolean;
+  stopEvents?: () => Promise<void>;
+  claudeCalls: Set<Promise<unknown>>;
 };
 
 type Opened = { kind: "ready"; stores: EngineStores } | { kind: "error"; message: string };
@@ -124,7 +131,49 @@ const runIdPayload = z.object({ runId: z.string() });
 const retryPayload = z.object({ runId: z.string(), nodeId: z.string() });
 
 const sessionGone =
-  "This run's Claude session has ended, so it cannot go on from where it stopped.";
+  "This run's Claude session ended just now. Resume again to start Claude on the same conversation.";
+
+const closedNote =
+  "Flowdeck closed while this run was going. Resume carries on from where it stopped.";
+
+const sessionEndedNote =
+  "Flowdeck closed while this run was going, and its Claude session has ended since. Resume starts Claude again on the same conversation.";
+
+const detachWaitMs = 8_000;
+
+const detachedError = () => new Error("Flowdeck is closing; the run carries on without it");
+
+function detachable(store: Store, detached: () => boolean): Store {
+  return {
+    createRun: (run) => store.createRun(run),
+    findRun: (id) => store.findRun(id),
+    listRuns: () => store.listRuns(),
+    events: (id) => store.events(id),
+    activity: (id) => store.activity(id),
+    findBuild: (hash) => store.findBuild(hash),
+    listBuilds: () => store.listBuilds(),
+    buildFiles: (hash) => store.buildFiles(hash),
+    recordBuild: (build) => store.recordBuild(build),
+    append(id, nodeId, event) {
+      if (!detached()) store.append(id, nodeId, event);
+    },
+    appendAll(id, entries) {
+      if (!detached()) store.appendAll(id, entries);
+    },
+    finishRun(id, status) {
+      if (!detached()) store.finishRun(id, status);
+    },
+    reopenRun(id) {
+      if (!detached()) store.reopenRun(id);
+    },
+    recordActivity(id, entry) {
+      if (!detached()) store.recordActivity(id, entry);
+    },
+    recordCost(id, totalCost) {
+      if (!detached()) store.recordCost(id, totalCost);
+    },
+  };
+}
 
 type Continuation = { kind: "retry"; nodeId: string } | { kind: "resume" };
 
@@ -144,8 +193,10 @@ function announced(
   opened: OpenedSession,
   sessionName: string,
   publish: (push: EnginePush) => void,
+  running = false,
 ): OpenedSession {
-  let isAnnounced = false;
+  let isAnnounced = running;
+  if (running) publish({ push: "session", value: sessionName });
   return {
     ...opened,
     session: {
@@ -196,6 +247,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const newSessionName = options.newSessionName ?? (() => `fd-run-${randomUUID().slice(0, 8)}`);
   let active: ActiveRun | undefined;
   let starting: Promise<StartRunResult> | undefined;
+  const notes = new Map<string, string>();
+  const sessionAlive = options.sessionAlive ?? (async () => false);
 
   const failure = (message: string): StartRunResult => ({ kind: "error", message });
 
@@ -256,8 +309,26 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const startExecution = (launch: Execution): StartRunResult => {
-    const { runs } = launch.stores;
+    const run: ActiveRun = {
+      runId: launch.runId,
+      done: Promise.resolve(),
+      claudeCalls: new Set(),
+    };
+    const isDetached = () => run.detached === true;
+    const runs = detachable(launch.stores.runs, isDetached);
     const { runId, manifest, nodeIds, claudeSessionId } = launch;
+    const unlessDetached = <T>(step: () => Promise<T>): Promise<T> =>
+      isDetached() ? Promise.reject(detachedError()) : step();
+    const claudeCall = <T>(step: () => Promise<T>): Promise<T> => {
+      const call = unlessDetached(step);
+      run.claudeCalls.add(call);
+      const forget = () => run.claudeCalls.delete(call);
+      call.then(forget, forget);
+      return call;
+    };
+    const { scripts } = options.run;
+    let eventsFailed = false;
+    const continuesEarlierRun = launch.actions !== undefined;
     const tracker = createActivityTracker({
       runId,
       now: options.run.now,
@@ -276,21 +347,32 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       nodeIds,
       publish: options.publish,
     });
-    const run: ActiveRun = { runId, done: Promise.resolve() };
     run.done = execute(
       {
         ...options.run,
         store,
+        scripts: {
+          run: (command, args, cwd, signal, job) =>
+            unlessDetached(() => scripts.run(command, args, cwd, signal, job)),
+          ...(scripts.rejoin === undefined
+            ? {}
+            : {
+                rejoin: (job: string, signal?: AbortSignal) =>
+                  unlessDetached(async () => scripts.rejoin?.(job, signal)),
+              }),
+        },
         startEvents: async (path) => {
-          const started = await options.run.startEvents(path);
+          const started = await options.run.startEvents(path).catch((error: unknown) => {
+            eventsFailed = true;
+            throw error;
+          });
           const unwatch = tracker.watch(started.events, claudeSessionId);
-          return {
-            ...started,
-            stop: async () => {
-              unwatch();
-              await started.stop();
-            },
+          const stopEvents = async () => {
+            unwatch();
+            await started.stop();
           };
+          run.stopEvents = stopEvents;
+          return { ...started, stop: stopEvents };
         },
         onChange: (line) => console.log(`engine: ${line}`),
         onOutput: (nodeId, stream, text) => tracker.output(nodeId, stream, text),
@@ -310,7 +392,21 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         auto: storedAuto(launch.stored),
         flags: storedFlags(launch.stored, manifest),
         socketPath: launch.socketPath,
-        open: launch.open,
+        scriptJobs: join(options.home, "runs", runId, "scripts"),
+        open: async () => {
+          const opened = await launch.open();
+          return {
+            ...opened,
+            session: {
+              ensureStarted: () => claudeCall(() => opened.session.ensureStarted()),
+            },
+            prompts: {
+              sendPrompt: (text) => claudeCall(() => opened.prompts.sendPrompt(text)),
+              interrupt: () => claudeCall(() => opened.prompts.interrupt()),
+            },
+            stop: () => (isDetached() ? Promise.resolve() : opened.stop()),
+          };
+        },
         ...(launch.actions === undefined ? {} : { actions: launch.actions }),
       },
     )
@@ -318,6 +414,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         () => undefined,
         (error: unknown) => {
           console.log(`engine: run ${runId} error ${messageOf(error)}`);
+          if (eventsFailed && continuesEarlierRun) return;
           if (runs.findRun(runId)?.status === "running") store.finishRun(runId, "failed");
         },
       )
@@ -325,6 +422,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
       })
       .finally(() => {
+        if (isDetached()) return;
         options.waits?.drop();
         active = undefined;
         try {
@@ -484,11 +582,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       return failure(messageOf(error));
     }
     const { tmuxName: sessionName, cwd, claudeSessionId } = record.session;
+    const sentBefore = needsClaude(manifest) && events.some((event) => event.kind === "sent");
+    const restart = sentBefore && !(await sessionAlive(sessionName));
     const decide = async (after: readonly StoredEvent[]) =>
       decideResume({
         manifest,
         events: after,
         turns: await options.transcriptTurns(claudeSessionId),
+        rejoinScripts: true,
+        sessionRestarted: restart,
       });
     const pending = entries.map(({ nodeId, event }, index): StoredEvent => ({
       ...event,
@@ -509,7 +611,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (socket.kind === "error") return failure(socket.message);
     let opened: OpenedSession = noClaude;
     if (needsClaude(manifest)) {
-      const attach = events.some((event) => event.kind === "sent");
+      const attach = sentBefore && !restart;
       try {
         opened = announced(
           await options.run.openSession({
@@ -522,9 +624,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
               connectors.servers,
             )),
             ...(attach ? { attach: true } : {}),
+            ...(restart ? { resume: true } : {}),
           }),
           sessionName,
           options.publish,
+          attach,
         );
       } catch (error) {
         return failure(error instanceof SessionGoneError ? sessionGone : messageOf(error));
@@ -532,6 +636,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
     if (entries.length > 0) runs.appendAll(runId, entries);
     runs.reopenRun(runId);
+    notes.delete(runId);
     options.publish({
       push: "run-state",
       value: runSnapshot({
@@ -553,6 +658,66 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       open: async () => opened,
       actions: () => decide(runs.events(runId)),
     });
+  };
+
+  const reattach = async (): Promise<void> => {
+    if (options.homeLock !== undefined && !(await options.homeLock.acquire())) {
+      console.log(`engine: another Flowdeck holds ${options.home}; not reattaching`);
+      return;
+    }
+    const result = openStoresOnce();
+    if (result.kind === "error") return;
+    const { runs } = result.stores;
+    const left = runs
+      .listRuns()
+      .filter((run) => run.status === "running" && !isActive(run.id))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    const record = left === undefined ? undefined : runs.findRun(left.id);
+    if (record === undefined) return;
+    const runId = record.id;
+    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+    if (loaded.kind === "error") {
+      notes.set(runId, `${closedNote} Its build cannot be read: ${loaded.message}`);
+      return;
+    }
+    const sent = runs.events(runId).some((event) => event.kind === "sent");
+    if (needsClaude(loaded.build) && sent && !(await sessionAlive(record.session.tmuxName))) {
+      console.log(`engine: run ${runId} interrupted, its session has ended`);
+      notes.set(runId, sessionEndedNote);
+      return;
+    }
+    const picked = await continueRun(runId, { kind: "resume" });
+    if (picked.kind === "error") {
+      console.log(`engine: run ${runId} not reattached (${picked.message})`);
+      notes.set(runId, `${closedNote} It could not be picked up again: ${picked.message}`);
+      return;
+    }
+    console.log(`engine: run ${runId} reattached`);
+  };
+
+  const claudeCallsSettled = async ({ runId, claudeCalls }: ActiveRun): Promise<void> => {
+    if (claudeCalls.size === 0) return;
+    console.log(
+      `engine: run ${runId} detach waits up to ${detachWaitMs} ms for ${claudeCalls.size} Claude call(s)`,
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      Promise.allSettled(claudeCalls).then(() => true),
+      new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), detachWaitMs))),
+    ]);
+    clearTimeout(timer);
+    if (!settled) {
+      console.log(`engine: run ${runId} detach gave up after ${detachWaitMs} ms on Claude calls`);
+    }
+  };
+
+  const detach = async (): Promise<void> => {
+    await starting;
+    const run = active;
+    if (run === undefined) return;
+    run.detached = true;
+    await claudeCallsSettled(run);
+    await run.stopEvents?.();
   };
 
   const stopActive = async (run: ActiveRun): Promise<void> => {
@@ -652,6 +817,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const run = listed(summary);
     const saved = run.source === undefined ? null : flows.load(run.source);
     return {
+      ...(run.status === "interrupted" ? { note: notes.get(runId) ?? closedNote } : {}),
       run,
       name: saved?.name ?? null,
       flow: saved?.flow ?? null,
@@ -687,6 +853,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   return {
+    detach,
+    reattach,
     async stop() {
       await starting;
       const run = active;
