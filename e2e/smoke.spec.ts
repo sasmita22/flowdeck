@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { hideWindow } from "../scripts/window-mode.js";
 
 const packageVersion = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -34,6 +35,15 @@ test.afterEach(async () => {
 
 test("opens a window titled Flowdeck", async () => {
   await expect.poll(() => window.title()).toBe("Flowdeck");
+});
+
+test("shows its window only when a person runs the tests", async () => {
+  await expect(window.getByTestId("store-status")).toHaveText("ready");
+  if (launched === undefined) throw new Error("the app did not launch");
+  const visible = await launched.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((each) => each.isVisible()),
+  );
+  expect(visible).toEqual([!hideWindow(process.env)]);
 });
 
 test("shows the package version answered by the engine", async () => {

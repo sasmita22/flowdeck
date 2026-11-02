@@ -12,6 +12,7 @@ import Database from "better-sqlite3";
 import { flow, script, thenWire, trigger } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
+import { hideWindow, testScaleFactor } from "../scripts/window-mode.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultAppPath = join(repoRoot, "out", "Flowdeck-darwin-arm64", "Flowdeck.app");
@@ -87,8 +88,13 @@ const launchCopy = async (home: string) => {
 
   const port = await freePort();
   let output = "";
-  const launched = spawn(executable(copy), [`--remote-debugging-port=${port}`], {
-    env: { HOME: homedir(), PATH: minimalPath, FLOWDECK_HOME: home },
+  const launched = spawn(executable(copy), [testScaleFactor, `--remote-debugging-port=${port}`], {
+    env: {
+      ...(hideWindow(process.env) && { FLOWDECK_HIDE_WINDOW: "1" }),
+      HOME: homedir(),
+      PATH: minimalPath,
+      FLOWDECK_HOME: home,
+    },
   });
   const launch: Launch = { child: launched };
   launches.push(launch);

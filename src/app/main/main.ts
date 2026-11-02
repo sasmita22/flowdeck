@@ -74,16 +74,19 @@ function openWindow(windowGuard: WindowGuard) {
   nativeTheme.themeSource = "dark";
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const minimumSize = minimumWindowSize(workArea);
+  const hidden = process.env["FLOWDECK_HIDE_WINDOW"] === "1";
   const window = new BrowserWindow({
     title: "Flowdeck",
     ...defaultWindowBounds(workArea),
     minWidth: minimumSize.width,
     minHeight: minimumSize.height,
+    show: !hidden,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      backgroundThrottling: !hidden,
     },
   });
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL !== undefined) {
