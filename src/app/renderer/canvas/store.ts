@@ -98,6 +98,7 @@ export interface CanvasState {
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
+  selectAll(): void;
   openNodeMenu(nodeId: string, at: Position): void;
   closeNodeMenu(): void;
   highlight(id: string | null): void;
@@ -254,7 +255,7 @@ export const selectSelectedNode = (state: Pick<CanvasState, "flow" | "selection"
 };
 
 export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
-  state.flow.nodes.length === 0;
+  state.flow.nodes.length === 0 && (state.flow.notes ?? []).length === 0;
 
 const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.port;
 
@@ -381,6 +382,10 @@ export function createCanvasStore(
       deleteSelection: () => deleteNodes(get().selection),
 
       select: (ids) => set({ selection: [...ids], message: null, menu: null }),
+      selectAll: () => {
+        const { flow, select } = get();
+        select([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id));
+      },
 
       openNodeMenu: (nodeId, { x, y }) => set({ menu: { nodeId, x, y } }),
 

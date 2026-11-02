@@ -1,9 +1,13 @@
 export type Shortcut = "undo" | "redo" | "save" | "selectAll";
 
+const fieldTags = ["INPUT", "TEXTAREA", "SELECT"];
+
 const editsText = (target: object | null = null) =>
   target !== null &&
   (("isContentEditable" in target && target.isContentEditable === true) ||
-    ("tagName" in target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")));
+    ("tagName" in target &&
+      typeof target.tagName === "string" &&
+      fieldTags.includes(target.tagName)));
 
 export const shortcutFor = (event: {
   key: string;
@@ -18,6 +22,6 @@ export const shortcutFor = (event: {
   }
   if (!event.metaKey) return null;
   if (key === "s") return event.shiftKey ? null : "save";
-  if (key !== "z") return null;
+  if (key !== "z" || editsText(event.target)) return null;
   return event.shiftKey ? "redo" : "undo";
 };

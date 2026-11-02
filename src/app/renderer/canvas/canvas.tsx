@@ -294,7 +294,6 @@ export function Canvas({
       event.preventDefault();
       const state = store.getState();
       if (shortcut === "save") onSave();
-      else if (shortcut === "selectAll") state.select(state.flow.nodes.map((node) => node.id));
       else state[shortcut]();
     };
     window.addEventListener("keydown", onKeyDown);

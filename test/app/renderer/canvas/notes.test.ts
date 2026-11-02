@@ -322,6 +322,16 @@ describe("a selected note", () => {
   });
 });
 
+describe("selecting all", () => {
+  it("selects every node and every note", () => {
+    const store = promptAndNote();
+
+    store.getState().selectAll();
+
+    expect(store.getState().selection).toEqual(["prompt-1", "n1"]);
+  });
+});
+
 describe("toViewNodes with notes", () => {
   const noted = (): Flow => ({
     ...flow(

@@ -53,11 +53,30 @@ describe("shortcutFor", () => {
   it.each([
     ["an input", { tagName: "INPUT", isContentEditable: false }],
     ["a textarea", { tagName: "TEXTAREA", isContentEditable: false }],
+    ["a select", { tagName: "SELECT", isContentEditable: false }],
     ["a contenteditable element", { tagName: "DIV", isContentEditable: true }],
   ])("maps Cmd+A and Ctrl+A in %s to nothing, keeping text select-all", (_name, target) => {
     expect(shortcutFor({ key: "a", metaKey: true, shiftKey: false, target })).toBeNull();
     expect(
       shortcutFor({ key: "a", metaKey: false, ctrlKey: true, shiftKey: false, target }),
     ).toBeNull();
+  });
+
+  it.each([
+    ["an input", { tagName: "INPUT", isContentEditable: false }],
+    ["a textarea", { tagName: "TEXTAREA", isContentEditable: false }],
+    ["a select", { tagName: "SELECT", isContentEditable: false }],
+    ["a contenteditable element", { tagName: "DIV", isContentEditable: true }],
+  ])("leaves Cmd+Z and Shift+Cmd+Z in %s to the field", (_name, target) => {
+    expect(shortcutFor({ key: "z", metaKey: true, shiftKey: false, target })).toBeNull();
+    expect(shortcutFor({ key: "z", metaKey: true, shiftKey: true, target })).toBeNull();
+  });
+
+  it.each([
+    ["the canvas", { tagName: "DIV", isContentEditable: false }],
+    ["the page body", { tagName: "BODY", isContentEditable: false }],
+  ])("maps Cmd+Z and Shift+Cmd+Z on %s to undo and redo", (_name, target) => {
+    expect(shortcutFor({ key: "z", metaKey: true, shiftKey: false, target })).toBe("undo");
+    expect(shortcutFor({ key: "z", metaKey: true, shiftKey: true, target })).toBe("redo");
   });
 });

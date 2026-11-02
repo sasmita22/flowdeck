@@ -297,6 +297,31 @@ test("A Branch's flag comes from the Trigger's flags", async () => {
   await expect.poll(() => nodeIn(window, "branch-1")).toMatchObject({ settings: { flag: "deep" } });
 });
 
+test("Cmd+Z in a settings field undoes the typing and leaves the canvas alone", async () => {
+  const { window } = await launch();
+  await drop(window, "gate", 200);
+  await window.getByTestId("node-gate-1").click();
+  const shown = window.getByLabel("What to show you");
+  const before = await nodeIn(window, "gate-1");
+
+  await shown.click();
+  await window.keyboard.type("Check the plan");
+  await expect(shown).toHaveValue("Check the plan");
+  await window.keyboard.press("ControlOrMeta+z");
+
+  await expect(shown).toHaveValue("");
+  await expect(shown).toBeFocused();
+  await expect(window.getByTestId("node-gate-1")).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.redo)).toBeDisabled();
+  expect(await nodeIn(window, "gate-1")).toEqual(before);
+
+  await window.keyboard.type("ab");
+  await window.keyboard.press("Backspace");
+  await expect(shown).toHaveValue("a");
+  await expect(window.getByTestId("node-gate-1")).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.redo)).toBeDisabled();
+});
+
 test("A Hard stop has no switch to turn it off", async () => {
   const { window } = await launch();
   await drop(window, "hardstop", 200);
