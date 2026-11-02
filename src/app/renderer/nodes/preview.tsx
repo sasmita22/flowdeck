@@ -91,6 +91,39 @@ function FramePreview({ preview }: { preview: Of<"frame"> }) {
   );
 }
 
+const previewLines = [
+  { y: 11, width: 112 },
+  { y: 25, width: 140 },
+  { y: 39, width: 84 },
+];
+
+function NotePreview({ preview }: { preview: Of<"note"> }) {
+  const { rx, fill, stroke, ink } = preview.note;
+  return (
+    <>
+      <rect
+        width={framePreview.width}
+        height={framePreview.height}
+        rx={rx}
+        style={{ fill, stroke }}
+        strokeWidth={1}
+      />
+      {previewLines.map(({ y, width }) => (
+        <rect
+          key={y}
+          x={12}
+          y={y}
+          width={width}
+          height={5}
+          rx={2.5}
+          fill={ink}
+          fillOpacity={0.35}
+        />
+      ))}
+    </>
+  );
+}
+
 function PreviewBody({ preview }: { preview: Preview }) {
   switch (preview.kind) {
     case "node":
@@ -99,10 +132,12 @@ function PreviewBody({ preview }: { preview: Preview }) {
       return <BarPreview preview={preview} />;
     case "frame":
       return <FramePreview preview={preview} />;
+    case "note":
+      return <NotePreview preview={preview} />;
   }
 }
 
-export function NodePreview({ type }: { type: NodeType }) {
+export function NodePreview({ type }: { type: NodeType | "note" }) {
   return (
     <svg viewBox={previewViewBox(type)} aria-hidden="true" className="fd-preview">
       <PreviewBody preview={previewOf(type)} />

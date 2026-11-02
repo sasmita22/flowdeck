@@ -4,6 +4,7 @@ import { flowsEqual } from "../../../core/flow/equal.js";
 import {
   NodeType,
   parseFlow,
+  type CanvasNote,
   type Flow,
   type Node,
   type Session,
@@ -23,12 +24,15 @@ import * as joinDefaults from "../../../core/nodes/join/defaults.js";
 import * as foreachDefaults from "../../../core/nodes/foreach/defaults.js";
 import * as branchDefaults from "../../../core/nodes/branch/defaults.js";
 import { nodeLook } from "../nodes/look.js";
+import { noteLook } from "../nodes/note-look.js";
 import {
   addNode,
+  addNote,
   addWire,
   deleteNodes as deleteNodesCommand,
   moveNodes,
   updateNode as updateNodeCommand,
+  updateNote,
   updateSession,
   wrapInSession,
   wrappableIds,
@@ -39,6 +43,11 @@ import {
 export { wrappableIds };
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
+
+export type CanvasItemType = NodeType | "note";
+
+export const isCanvasItemType = (value: string): value is CanvasItemType =>
+  value === "note" || isNodeType(value);
 
 type SettingsOf<T extends NodeType> = Extract<Node, { type: T }>["settings"];
 
@@ -62,6 +71,8 @@ export type WireEnd = { node: string; port: string };
 
 type Position = { x: number; y: number };
 
+export type NoteBox = { x: number; y: number; width: number; height: number };
+
 export type NodeMenu = { nodeId: string; x: number; y: number };
 
 const lockedMessage = "Hard stop is locked";
@@ -75,10 +86,14 @@ export interface CanvasState {
   undoStack: Command[];
   redoStack: Command[];
   dragPositions: Record<string, Position>;
+  noteBoxes: Record<string, NoteBox>;
   message: string | null;
   menu: NodeMenu | null;
-  drop(type: NodeType, position: Position): void;
-  addNext(type: NodeType): void;
+  drop(type: CanvasItemType, position: Position): void;
+  addNext(type: CanvasItemType): void;
+  editNoteText(id: string, text: string): void;
+  resizeNoteLive(id: string, box: NoteBox): void;
+  resizeNote(id: string, box: NoteBox): void;
   connect(from: WireEnd, to: WireEnd): boolean;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
@@ -120,6 +135,20 @@ export const nextNodeId = (type: NodeType, flow: Flow): string => {
   while (used.has(`${type}-${n}`)) n += 1;
   return `${type}-${n}`;
 };
+
+export const nextNoteId = (flow: Flow): string => {
+  const used = new Set([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id.toLowerCase()));
+  let n = 1;
+  while (used.has(`n${n}`)) n += 1;
+  return `n${n}`;
+};
+
+const newNote = (id: string, { x, y }: Position): CanvasNote => ({
+  id,
+  text: "",
+  position: { x, y },
+  size: { ...noteLook.size },
+});
 
 const newNode = (type: NodeType, id: string, { x, y }: Position): Node =>
   ({
@@ -230,11 +259,16 @@ export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
 const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.port;
 
 const kept = (selection: readonly string[], flow: Flow) => {
-  const ids = new Set(flow.nodes.map((node) => node.id));
+  const ids = new Set([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id));
   return selection.filter((id) => ids.has(id));
 };
 
 const samePosition = (a: Position, b: Position) => a.x === b.x && a.y === b.y;
+
+const noteIn = (flow: Flow, id: string) => flow.notes?.find((note) => note.id === id);
+
+const positionOf = (flow: Flow, id: string) =>
+  (flow.nodes.find((node) => node.id === id) ?? noteIn(flow, id))?.position;
 
 export const selectDirty = (state: Pick<CanvasState, "flow" | "saved">): boolean =>
   !flowsEqual(state.flow, state.saved);
@@ -264,7 +298,10 @@ export function createCanvasStore(
       set({ menu: null });
       const { flow } = get();
       const present = flow.nodes.filter((node) => ids.includes(node.id));
-      const deletable = present.filter((node) => node.type !== "hardstop").map((node) => node.id);
+      const deletable = [
+        ...present.filter((node) => node.type !== "hardstop").map((node) => node.id),
+        ...(flow.notes ?? []).filter((note) => ids.includes(note.id)).map((note) => note.id),
+      ];
       if (deletable.length > 0) run(deleteNodesCommand(flow, deletable));
       if (deletable.length < present.length) set({ message: lockedMessage });
     };
@@ -280,17 +317,52 @@ export function createCanvasStore(
       undoStack: [],
       redoStack: [],
       dragPositions: {},
+      noteBoxes: {},
       message: null,
       menu: null,
 
       drop: (type, position) => {
         if (!ready()) return;
         const { flow } = get();
+        if (type === "note") {
+          const id = nextNoteId(flow);
+          run(addNote(newNote(id, position)), [id]);
+          return;
+        }
         const id = nextId(type, flow);
         run(addNode(newNode(type, id, placeNode(flow, type, position))), [id]);
       },
 
       addNext: (type) => get().drop(type, nextTo(get().flow, get().selection)),
+
+      editNoteText: (id, text) => {
+        if (!ready()) return;
+        const note = noteIn(get().flow, id);
+        if (note === undefined || note.text === text) return;
+        run(updateNote({ ...note, text }));
+      },
+
+      resizeNoteLive: (id, box) => {
+        if (!ready()) return;
+        set(({ noteBoxes }) => ({ noteBoxes: { ...noteBoxes, [id]: { ...box } } }));
+      },
+
+      resizeNote: (id, { x, y, width, height }) => {
+        if (!ready()) return;
+        set(({ noteBoxes }) => ({
+          noteBoxes: Object.fromEntries(Object.entries(noteBoxes).filter(([key]) => key !== id)),
+        }));
+        const note = noteIn(get().flow, id);
+        if (note === undefined) return;
+        const size = {
+          width: Math.max(width, noteLook.minSize.width),
+          height: Math.max(height, noteLook.minSize.height),
+        };
+        const { position: from, size: was } = note;
+        if (samePosition(from, { x, y }) && size.width === was.width && size.height === was.height)
+          return;
+        run(updateNote({ ...note, position: { x, y }, size }));
+      },
 
       connect: (from, to) => {
         if (!ready()) return false;
@@ -326,7 +398,7 @@ export function createCanvasStore(
         const { flow, dragPositions } = get();
         const moves = ids.flatMap((id): Move[] => {
           const to = dragPositions[id];
-          const from = flow.nodes.find((node) => node.id === id)?.position;
+          const from = positionOf(flow, id);
           return to === undefined || from === undefined || samePosition(from, to)
             ? []
             : [{ id, from, to }];
@@ -392,6 +464,7 @@ export function createCanvasStore(
           undoStack: [],
           redoStack: [],
           dragPositions: {},
+          noteBoxes: {},
         });
       },
 

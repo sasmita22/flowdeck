@@ -192,3 +192,34 @@ describe("parseFlow", () => {
     ]);
   });
 });
+
+describe("notes", () => {
+  const note = {
+    id: "n1",
+    text: "Explains the flow",
+    position: { x: 10, y: 20 },
+    size: { width: 200, height: 120 },
+  };
+
+  it("keeps a flow's notes exactly", () => {
+    const flow = flowWith({ notes: [note] });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("adds no notes key to a flow without notes", () => {
+    expect(parseFlow(flowWith({}))).not.toHaveProperty("notes");
+  });
+
+  it("keeps an empty note text", () => {
+    expect(parseFlow(flowWith({ notes: [{ ...note, text: "" }] })).notes?.[0]?.text).toBe("");
+  });
+
+  it.each([
+    ["an empty id", { ...note, id: "" }, ["notes", 0, "id"]],
+    ["a zero width", { ...note, size: { width: 0, height: 120 } }, ["notes", 0, "size", "width"]],
+    ["no position", { id: "n1", text: "", size: note.size }, ["notes", 0, "position"]],
+  ])("rejects a note with %s at its path", (_name, bad, path) => {
+    expect(parseError(flowWith({ notes: [bad] })).issues[0]?.path).toEqual(path);
+  });
+});

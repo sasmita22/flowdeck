@@ -23,7 +23,7 @@ import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
 import { CanvasStoreContext } from "./status.js";
-import { isNodeType, selectCanvasEmpty, wrappableIds, type CanvasState } from "./store.js";
+import { isCanvasItemType, selectCanvasEmpty, wrappableIds, type CanvasState } from "./store.js";
 import { toViewEdges, toViewNodes } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
@@ -171,9 +171,10 @@ function Board({
   const selection = useStore(store, (state) => state.selection);
   const dragPositions = useStore(store, (state) => state.dragPositions);
   const highlighted = useStore(store, (state) => state.highlighted);
+  const noteBoxes = useStore(store, (state) => state.noteBoxes);
   const nodes = useMemo(
-    () => toViewNodes(flow, selection, dragPositions, highlighted),
-    [flow, selection, dragPositions, highlighted],
+    () => toViewNodes(flow, selection, dragPositions, highlighted, noteBoxes),
+    [flow, selection, dragPositions, highlighted, noteBoxes],
   );
   const edges = useMemo(() => toViewEdges(flow), [flow]);
   const { screenToFlowPosition } = useReactFlow();
@@ -209,7 +210,7 @@ function Board({
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const type = event.dataTransfer.getData(nodeMimeType);
-    if (!isNodeType(type)) return;
+    if (!isCanvasItemType(type)) return;
     const { x, y } = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     store.getState().drop(type, { x: Math.round(x), y: Math.round(y) });
   };
@@ -237,7 +238,9 @@ function Board({
             event.preventDefault();
             store.getState().openNodeMenu(node.id, { x: event.clientX, y: event.clientY });
           }}
-          onNodeClick={() => shell.getState().showInspector()}
+          onNodeClick={(_, node) => {
+            if (node.type !== "note") shell.getState().showInspector();
+          }}
           onPaneClick={() => store.getState().closeNodeMenu()}
           onConnect={onConnect}
           onDragOver={onDragOver}

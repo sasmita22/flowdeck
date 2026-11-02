@@ -1,6 +1,6 @@
 import type { NodeType } from "../../core/flow/schema.js";
 
-export const paletteTestId = (type: NodeType) => `palette-${type}` as const;
+export const paletteTestId = (type: NodeType | "note") => `palette-${type}` as const;
 
 export const controlTestIds = {
   save: "canvas-save",

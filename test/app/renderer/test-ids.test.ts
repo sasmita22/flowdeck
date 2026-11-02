@@ -11,6 +11,10 @@ describe("test ids", () => {
     expect(paletteTestId(type)).toBe(`palette-${type}`);
   });
 
+  it("names the note palette entry palette-note", () => {
+    expect(paletteTestId("note")).toBe("palette-note");
+  });
+
   it("keeps the ids the e2e specs drag exactly", () => {
     expect(paletteTestId("prompt")).toBe("palette-prompt");
     expect(paletteTestId("script")).toBe("palette-script");

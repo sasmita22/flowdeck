@@ -10,7 +10,13 @@ export type SqliteFlowStoreOptions = {
   newId?: () => string;
 };
 
-type CurrentRow = { flow_id: string; name: string; version: number; session: string };
+type CurrentRow = {
+  flow_id: string;
+  name: string;
+  version: number;
+  session: string;
+  notes: string;
+};
 
 type NodeRow = {
   id: string;
@@ -106,9 +112,9 @@ export class SqliteFlowStore implements FlowStore {
 
       this.db
         .prepare(
-          "INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES (?, ?, ?, ?)",
+          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES (?, ?, ?, ?, ?)",
         )
-        .run(flowId, version, JSON.stringify(flow.session), time);
+        .run(flowId, version, JSON.stringify(flow.session), JSON.stringify(flow.notes ?? []), time);
 
       return { flowId, version };
     })();
@@ -119,7 +125,8 @@ export class SqliteFlowStore implements FlowStore {
     if (flowId === undefined) return null;
     const current = this.db
       .prepare(
-        `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.session
+        `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.session,
+                flow_versions.notes
            FROM flow_versions JOIN flows ON flows.id = flow_versions.flow_id
           WHERE flow_versions.flow_id = ?
           ORDER BY flow_versions.version DESC LIMIT 1`,
@@ -156,11 +163,18 @@ export class SqliteFlowStore implements FlowStore {
       ...(row.file === null ? {} : { file: row.file }),
     }));
 
+    const notes = JSON.parse(current.notes) as unknown[];
+
     return {
       flowId,
       name: current.name,
       version: current.version,
-      flow: parseFlow({ nodes, wires, session: JSON.parse(current.session) as unknown }),
+      flow: parseFlow({
+        nodes,
+        wires,
+        session: JSON.parse(current.session) as unknown,
+        ...(notes.length === 0 ? {} : { notes }),
+      }),
     };
   }
 

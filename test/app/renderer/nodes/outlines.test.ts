@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { paletteItems } from "../../../../src/app/renderer/canvas/palette-items.js";
+import { noteLook } from "../../../../src/app/renderer/nodes/note-look.js";
 import {
   barLook,
   frameLook,
@@ -15,7 +16,9 @@ const shaped = paletteItems
   .map(({ type }) => type)
   .filter(
     (type): type is Exclude<NodeType, "fork" | "join"> =>
-      !(bars as readonly string[]).includes(type) && !(frames as readonly string[]).includes(type),
+      type !== "note" &&
+      !(bars as readonly string[]).includes(type) &&
+      !(frames as readonly string[]).includes(type),
   );
 
 describe("previewOf", () => {
@@ -31,6 +34,10 @@ describe("previewOf", () => {
   it.each(frames)("previews %s as the canvas body frame", (type) => {
     expect(previewOf(type)).toEqual({ kind: "frame", type, frame: frameLook });
   });
+
+  it("previews the note as a note card in the note's own colours", () => {
+    expect(previewOf("note")).toEqual({ kind: "note", type: "note", note: noteLook });
+  });
 });
 
 describe("previewViewBox", () => {
@@ -44,6 +51,7 @@ describe("previewViewBox", () => {
     ["join", 58, 68],
     ["loop", 178, 64],
     ["foreach", 178, 64],
+    ["note", 178, 64],
   ] as const)("crops %s to its own shape plus padding", (type, width, height) => {
     expect(previewViewBox(type)).toBe(`-4 -4 ${width} ${height}`);
   });

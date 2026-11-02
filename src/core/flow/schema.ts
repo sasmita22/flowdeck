@@ -83,10 +83,18 @@ export const Node = z.discriminatedUnion("type", [
   NodeBase.extend({ type: z.literal("branch"), settings: branch }),
 ]);
 
+export const CanvasNote = z.object({
+  id: z.string().min(1),
+  text: z.string(),
+  position: z.object({ x: z.number(), y: z.number() }),
+  size: z.object({ width: z.number().positive(), height: z.number().positive() }),
+});
+
 export const Flow = z.object({
   nodes: z.array(Node),
   wires: z.array(Wire),
   session: Session,
+  notes: z.array(CanvasNote).optional(),
 });
 
 export type NodeType = z.infer<typeof NodeType>;
@@ -95,6 +103,7 @@ export type Port = z.infer<typeof Port>;
 export type Wire = z.infer<typeof Wire>;
 export type Session = z.infer<typeof Session>;
 export type Node = z.infer<typeof Node>;
+export type CanvasNote = z.infer<typeof CanvasNote>;
 export type Flow = z.infer<typeof Flow>;
 
 export class FlowParseError extends Error {

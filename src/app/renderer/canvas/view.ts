@@ -1,5 +1,5 @@
 import { MarkerType } from "@xyflow/react";
-import type { Flow, Node, Wire } from "../../../core/flow/schema.js";
+import type { CanvasNote, Flow, Node, Wire } from "../../../core/flow/schema.js";
 import { branchSwitch, triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { nodeLook } from "../nodes/look.js";
 
@@ -22,6 +22,7 @@ export interface ViewNode {
     name?: string;
     loopId?: string;
     forEachId?: string;
+    text?: string;
   };
 }
 
@@ -155,15 +156,36 @@ const placed = (flow: Flow, node: Node, position: Position) => {
   };
 };
 
+type Box = { x: number; y: number; width: number; height: number };
+
+const toNoteViewNode = (
+  { id, text, position, size }: CanvasNote,
+  selection: readonly string[],
+  dragPosition: Position | undefined,
+  live: Box | undefined,
+): ViewNode => ({
+  id,
+  type: "note",
+  position: live === undefined ? { ...(dragPosition ?? position) } : { x: live.x, y: live.y },
+  width: live?.width ?? size.width,
+  height: live?.height ?? size.height,
+  selected: selection.includes(id),
+  data: { text },
+});
+
 export const toViewNodes = (
   flow: Flow,
   selection: readonly string[],
   dragPositions: Readonly<Record<string, Position>>,
   highlighted: string | null,
+  noteBoxes: Readonly<Record<string, Box>> = {},
 ): ViewNode[] => [
   ...toFrameViewNode(flow),
   ...toLoopFrameViewNodes(flow),
   ...toForEachFrameViewNodes(flow),
+  ...(flow.notes ?? []).map((note) =>
+    toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
+  ),
   ...flow.nodes.map((node) => ({
     id: node.id,
     type: node.type,
