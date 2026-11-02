@@ -5,7 +5,10 @@ import {
   emptyCanvasHint,
   menuItems,
   nextMenuIndex,
+  panelWidthKey,
+  panelWidthLimits,
   selectInspectorOpen,
+  type WidthStorage,
 } from "../../../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../../../src/app/renderer/test-ids.js";
 import { flow, gate, prompt } from "../../fixtures/flow-builders.js";
@@ -196,6 +199,143 @@ describe("session settings", () => {
     shell.getState().toggleSessionSettings();
 
     expect(selectInspectorOpen(shell.getState(), noRun)).toBe(true);
+  });
+});
+
+const memoryStorage = (saved?: string): WidthStorage & { saved: string | null } => {
+  const storage = {
+    saved: saved ?? null,
+    getItem: (key: string) => (key === panelWidthKey ? storage.saved : null),
+    setItem: (key: string, value: string) => {
+      if (key === panelWidthKey) storage.saved = value;
+    },
+  };
+  return storage;
+};
+
+const brokenStorage: WidthStorage = {
+  getItem: () => {
+    throw new Error("storage is off");
+  },
+  setItem: () => {
+    throw new Error("storage is off");
+  },
+};
+
+describe("panel widths", () => {
+  const withStorage = (storage: WidthStorage) =>
+    createShellStore({ canvas: createCanvasStore(), storage });
+
+  it("starts both panels at their default width", () => {
+    expect(newShell().getState().panelWidths).toEqual({ sidebar: 260, inspector: 260 });
+  });
+
+  it.each(["sidebar", "inspector"] as const)("resizes the %s within its limits", (panel) => {
+    const shell = newShell();
+    const { min, max } = panelWidthLimits[panel];
+
+    shell.getState().resizePanel(panel, 300);
+    expect(shell.getState().panelWidths[panel]).toBe(300);
+
+    shell.getState().resizePanel(panel, min - 1);
+    expect(shell.getState().panelWidths[panel]).toBe(min);
+
+    shell.getState().resizePanel(panel, max + 1);
+    expect(shell.getState().panelWidths[panel]).toBe(max);
+  });
+
+  it("uses the limits 200 to 480 for the sidebar and 240 to 560 for the inspector", () => {
+    expect(panelWidthLimits).toEqual({
+      sidebar: { initial: 260, min: 200, max: 480 },
+      inspector: { initial: 260, min: 240, max: 560 },
+    });
+  });
+
+  it("rounds a dragged width to whole pixels", () => {
+    const shell = newShell();
+
+    shell.getState().resizePanel("sidebar", 300.6);
+
+    expect(shell.getState().panelWidths.sidebar).toBe(301);
+  });
+
+  it.each(["sidebar", "inspector"] as const)("resets the %s to its default", (panel) => {
+    const shell = newShell();
+    shell.getState().resizePanel(panel, 400);
+
+    shell.getState().resetPanelWidth(panel);
+
+    expect(shell.getState().panelWidths[panel]).toBe(panelWidthLimits[panel].initial);
+  });
+
+  it("leaves the other panel alone", () => {
+    const shell = newShell();
+
+    shell.getState().resizePanel("sidebar", 400);
+
+    expect(shell.getState().panelWidths.inspector).toBe(260);
+  });
+
+  it("keeps the width while a panel is hidden and shown again", () => {
+    const shell = newShell();
+    shell.getState().resizePanel("sidebar", 400);
+    shell.getState().resizePanel("inspector", 500);
+
+    shell.getState().toggleSidebar();
+    shell.getState().toggleSidebar();
+    shell.getState().toggleInspector(noRun);
+    shell.getState().toggleInspector(noRun);
+
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 400, inspector: 500 });
+  });
+
+  it("saves every resize and reset", () => {
+    const storage = memoryStorage();
+    const shell = withStorage(storage);
+
+    shell.getState().resizePanel("sidebar", 400);
+    expect(JSON.parse(storage.saved ?? "null")).toEqual({ sidebar: 400, inspector: 260 });
+
+    shell.getState().resetPanelWidth("sidebar");
+    expect(JSON.parse(storage.saved ?? "null")).toEqual({ sidebar: 260, inspector: 260 });
+  });
+
+  it("loads saved widths", () => {
+    const shell = withStorage(memoryStorage(JSON.stringify({ sidebar: 400, inspector: 500 })));
+
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 400, inspector: 500 });
+  });
+
+  it("clamps a saved width outside the limits", () => {
+    const shell = withStorage(memoryStorage(JSON.stringify({ sidebar: 9999, inspector: 1 })));
+
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 480, inspector: 240 });
+  });
+
+  it.each([
+    ["text that is not JSON", "{"],
+    ["JSON that is not an object", "42"],
+    ["null", "null"],
+    ["widths that are not numbers", JSON.stringify({ sidebar: "400", inspector: null })],
+    ["missing widths", JSON.stringify({})],
+  ])("falls back to the defaults for %s", (_name, saved) => {
+    const shell = withStorage(memoryStorage(saved));
+
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 260, inspector: 260 });
+  });
+
+  it("keeps one good saved width when the other is bad", () => {
+    const shell = withStorage(memoryStorage(JSON.stringify({ sidebar: 400, inspector: "x" })));
+
+    expect(shell.getState().panelWidths).toEqual({ sidebar: 400, inspector: 260 });
+  });
+
+  it("still resizes when storage throws", () => {
+    const shell = withStorage(brokenStorage);
+
+    shell.getState().resizePanel("inspector", 400);
+
+    expect(shell.getState().panelWidths.inspector).toBe(400);
   });
 });
 

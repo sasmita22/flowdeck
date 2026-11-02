@@ -95,11 +95,12 @@ export function Inspector({
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
   const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
+  const width = useStore(shell, (state) => state.panelWidths.inspector);
   return (
     <aside
       data-testid="inspector"
       style={{
-        width: 260,
+        width,
         flexShrink: 0,
         minWidth: 0,
         maxHeight: "100%",

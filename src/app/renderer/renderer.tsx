@@ -11,6 +11,14 @@ import { createTerminalStore } from "./terminal/store.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import "./theme.css";
 
+const browserStorage = () => {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+};
+
 const store = createAppStore(window.flowdeck);
 void store.getState().load();
 const canvas = createCanvasStore({ ready: false });
@@ -24,7 +32,7 @@ const inspector = createInspectorStore({ bridge: window.flowdeck });
 void inspector.getState().connect();
 const wait = createWaitStore({ bridge: window.flowdeck });
 void wait.getState().connect();
-const shell = createShellStore({ canvas });
+const shell = createShellStore({ canvas, storage: browserStorage() });
 const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save, run });
 
 const root = document.getElementById("root");

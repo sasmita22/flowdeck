@@ -287,9 +287,11 @@ export async function forceExit(app: DriveApp, options: { timeoutMs?: number } =
   }
 }
 
+export const userDataFlag = (home: string) => `--user-data-dir=${join(home, "user-data")}`;
+
 const launchElectron: Launch = (home, colorScheme) =>
   _electron.launch({
-    args: [...testDisplayFlags, "."],
+    args: [...testDisplayFlags, userDataFlag(home), "."],
     cwd: repoRoot,
     env: { ...withWindowMode(process.env), FLOWDECK_HOME: home },
     ...(colorScheme && { colorScheme }),
