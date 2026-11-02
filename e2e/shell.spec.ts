@@ -99,6 +99,7 @@ const titleAndCanvasControls = [
   controlTestIds.save,
   controlTestIds.run,
   controlTestIds.more,
+  controlTestIds.sessionSettings,
   controlTestIds.undo,
   controlTestIds.redo,
   controlTestIds.delete,

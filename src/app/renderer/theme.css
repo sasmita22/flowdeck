@@ -424,6 +424,11 @@ body,
   color: var(--fg);
 }
 
+.fd-icon-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .fd-menu-anchor {
   position: relative;
 }

@@ -1,20 +1,26 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import type { CanvasState } from "./canvas/store.js";
 import type { RunState } from "./run-store.js";
 import { controlTestIds } from "./test-ids.js";
 
 type RunView = Pick<RunState, "snapshot">;
+
+type SelectionView = Pick<CanvasState, "selection" | "select">;
 
 export type ShellState = {
   sidebarOpen: boolean;
   menuOpen: boolean;
   inspectorShown: boolean | null;
   panelFocus: string | null;
+  sessionSettingsOpen: boolean;
   toggleSidebar(): void;
   toggleInspector(run: RunView): void;
   showInspector(): void;
   clearPanelFocus(): void;
   openMenu(): void;
   closeMenu(): void;
+  toggleSessionSettings(): void;
+  closeSessionSettings(): void;
 };
 
 export const selectInspectorOpen = (
@@ -22,12 +28,17 @@ export const selectInspectorOpen = (
   run: RunView,
 ): boolean => shell.inspectorShown ?? run.snapshot !== null;
 
-export const createShellStore = (): StoreApi<ShellState> =>
-  createStore<ShellState>()((set, get) => ({
+export const createShellStore = ({
+  canvas,
+}: {
+  canvas: StoreApi<SelectionView>;
+}): StoreApi<ShellState> => {
+  const store = createStore<ShellState>()((set, get) => ({
     sidebarOpen: true,
     menuOpen: false,
     inspectorShown: null,
     panelFocus: null,
+    sessionSettingsOpen: false,
     toggleSidebar: () => {
       const sidebarOpen = !get().sidebarOpen;
       set({
@@ -46,7 +57,25 @@ export const createShellStore = (): StoreApi<ShellState> =>
     clearPanelFocus: () => set({ panelFocus: null }),
     openMenu: () => set({ menuOpen: true }),
     closeMenu: () => set({ menuOpen: false }),
+    toggleSessionSettings: () => {
+      if (get().sessionSettingsOpen) {
+        set({ sessionSettingsOpen: false });
+        return;
+      }
+      canvas.getState().select([]);
+      set({ sessionSettingsOpen: true, inspectorShown: true });
+    },
+    closeSessionSettings: () => set({ sessionSettingsOpen: false }),
   }));
+
+  canvas.subscribe((next) => {
+    if (next.selection.length > 0 && store.getState().sessionSettingsOpen) {
+      store.getState().closeSessionSettings();
+    }
+  });
+
+  return store;
+};
 
 export const emptyCanvasHint = (empty: boolean, sidebarOpen: boolean): string | null => {
   if (!empty) return null;

@@ -6,6 +6,7 @@ export const controlTestIds = {
   save: "canvas-save",
   run: "canvas-run",
   more: "menu-more",
+  sessionSettings: "session-settings-open",
   terminalOpen: "terminal-open",
   terminalClose: "menu-terminal-close",
   sidebarHide: "sidebar-hide",
