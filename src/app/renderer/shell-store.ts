@@ -8,8 +8,10 @@ export type ShellState = {
   sidebarOpen: boolean;
   menuOpen: boolean;
   inspectorShown: boolean | null;
+  panelFocus: string | null;
   toggleSidebar(): void;
   toggleInspector(run: RunView): void;
+  clearPanelFocus(): void;
   openMenu(): void;
   closeMenu(): void;
 };
@@ -24,8 +26,22 @@ export const createShellStore = (): StoreApi<ShellState> =>
     sidebarOpen: true,
     menuOpen: false,
     inspectorShown: null,
-    toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),
-    toggleInspector: (run) => set({ inspectorShown: !selectInspectorOpen(get(), run) }),
+    panelFocus: null,
+    toggleSidebar: () => {
+      const sidebarOpen = !get().sidebarOpen;
+      set({
+        sidebarOpen,
+        panelFocus: sidebarOpen ? controlTestIds.sidebarHide : controlTestIds.sidebarShow,
+      });
+    },
+    toggleInspector: (run) => {
+      const inspectorShown = !selectInspectorOpen(get(), run);
+      set({
+        inspectorShown,
+        panelFocus: inspectorShown ? controlTestIds.inspectorHide : controlTestIds.inspectorShow,
+      });
+    },
+    clearPanelFocus: () => set({ panelFocus: null }),
     openMenu: () => set({ menuOpen: true }),
     closeMenu: () => set({ menuOpen: false }),
   }));
@@ -34,18 +50,16 @@ export const emptyCanvasHint = (empty: boolean, sidebarOpen: boolean): string | 
   if (!empty) return null;
   return sidebarOpen
     ? "Pick a node from the left to start"
-    : "Show the node sidebar from the ⋯ menu to start";
+    : "Show the node sidebar with the button at the top left to start";
 };
 
-export type MenuAction = "terminal-open" | "terminal-close" | "sidebar" | "inspector";
+export type MenuAction = "terminal-open" | "terminal-close";
 
 export type MenuItem = { action: MenuAction; testId: string; label: string; disabled: boolean };
 
 export const menuItems = (state: {
   terminalOpen: boolean;
   terminalAvailable: boolean;
-  sidebarOpen: boolean;
-  inspectorOpen: boolean;
 }): MenuItem[] => [
   state.terminalOpen
     ? {
@@ -60,18 +74,6 @@ export const menuItems = (state: {
         label: "Open terminal",
         disabled: !state.terminalAvailable,
       },
-  {
-    action: "sidebar",
-    testId: controlTestIds.sidebar,
-    label: state.sidebarOpen ? "Hide node sidebar" : "Show node sidebar",
-    disabled: false,
-  },
-  {
-    action: "inspector",
-    testId: controlTestIds.inspector,
-    label: state.inspectorOpen ? "Hide inspector" : "Show inspector",
-    disabled: false,
-  },
 ];
 
 export const nextMenuIndex = (current: number, key: string, count: number): number => {

@@ -6,6 +6,7 @@ import {
   nextMenuIndex,
   selectInspectorOpen,
 } from "../../../src/app/renderer/shell-store.js";
+import { controlTestIds } from "../../../src/app/renderer/test-ids.js";
 
 const noRun = { snapshot: null };
 const aRun = { snapshot: { runId: "run-1", status: "running" as const, nodes: {} } };
@@ -16,6 +17,7 @@ describe("createShellStore", () => {
       sidebarOpen: true,
       menuOpen: false,
       inspectorShown: null,
+      panelFocus: null,
     });
   });
 
@@ -27,6 +29,35 @@ describe("createShellStore", () => {
 
     shell.getState().toggleSidebar();
     expect(shell.getState().sidebarOpen).toBe(true);
+  });
+
+  it("asks for focus on the sidebar button that replaces the one pressed", () => {
+    const shell = createShellStore();
+
+    shell.getState().toggleSidebar();
+    expect(shell.getState().panelFocus).toBe(controlTestIds.sidebarShow);
+
+    shell.getState().toggleSidebar();
+    expect(shell.getState().panelFocus).toBe(controlTestIds.sidebarHide);
+  });
+
+  it("asks for focus on the inspector button that replaces the one pressed", () => {
+    const shell = createShellStore();
+
+    shell.getState().toggleInspector(noRun);
+    expect(shell.getState().panelFocus).toBe(controlTestIds.inspectorHide);
+
+    shell.getState().toggleInspector(noRun);
+    expect(shell.getState().panelFocus).toBe(controlTestIds.inspectorShow);
+  });
+
+  it("clears the focus request once taken", () => {
+    const shell = createShellStore();
+
+    shell.getState().toggleSidebar();
+    shell.getState().clearPanelFocus();
+
+    expect(shell.getState().panelFocus).toBeNull();
   });
 
   it("opens and closes the menu", () => {
@@ -80,8 +111,10 @@ describe("emptyCanvasHint", () => {
     expect(emptyCanvasHint(true, true)).toBe("Pick a node from the left to start");
   });
 
-  it("points at the menu when the sidebar is hidden", () => {
-    expect(emptyCanvasHint(true, false)).toBe("Show the node sidebar from the ⋯ menu to start");
+  it("points at the show button when the sidebar is hidden", () => {
+    expect(emptyCanvasHint(true, false)).toBe(
+      "Show the node sidebar with the button at the top left to start",
+    );
   });
 });
 
@@ -89,46 +122,23 @@ describe("menuItems", () => {
   const view = (state: Parameters<typeof menuItems>[0]) =>
     menuItems(state).map(({ testId, label, disabled }) => ({ testId, label, disabled }));
 
-  it("offers Open terminal, disabled with no session, then Hide for the shown panels", () => {
-    expect(
-      view({
-        terminalOpen: false,
-        terminalAvailable: false,
-        sidebarOpen: true,
-        inspectorOpen: true,
-      }),
-    ).toEqual([
-      { testId: "terminal-open", label: "Open terminal", disabled: true },
-      { testId: "menu-sidebar", label: "Hide node sidebar", disabled: false },
-      { testId: "menu-inspector", label: "Hide inspector", disabled: false },
+  it.each([
+    [false, true],
+    [true, false],
+  ])("offers only Open terminal, disabled %s with available %s", (disabled, available) => {
+    expect(view({ terminalOpen: false, terminalAvailable: available })).toEqual([
+      { testId: "terminal-open", label: "Open terminal", disabled },
     ]);
   });
 
-  it("enables Open terminal with a session and offers Show for hidden panels", () => {
-    expect(
-      view({
-        terminalOpen: false,
-        terminalAvailable: true,
-        sidebarOpen: false,
-        inspectorOpen: false,
-      }),
-    ).toEqual([
-      { testId: "terminal-open", label: "Open terminal", disabled: false },
-      { testId: "menu-sidebar", label: "Show node sidebar", disabled: false },
-      { testId: "menu-inspector", label: "Show inspector", disabled: false },
-    ]);
-  });
-
-  it.each([true, false])("offers Close terminal while it is open (available %s)", (available) => {
-    expect(
-      view({
-        terminalOpen: true,
-        terminalAvailable: available,
-        sidebarOpen: true,
-        inspectorOpen: false,
-      })[0],
-    ).toEqual({ testId: "menu-terminal-close", label: "Close terminal", disabled: false });
-  });
+  it.each([true, false])(
+    "offers only Close terminal while it is open (available %s)",
+    (available) => {
+      expect(view({ terminalOpen: true, terminalAvailable: available })).toEqual([
+        { testId: "menu-terminal-close", label: "Close terminal", disabled: false },
+      ]);
+    },
+  );
 });
 
 describe("nextMenuIndex", () => {

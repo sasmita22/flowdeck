@@ -2,7 +2,7 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 const hideFlag = "FLOWDECK_HIDE_WINDOW";
 
-export const testScaleFactor = "--force-device-scale-factor=1";
+export const testDisplayFlags = ["--force-device-scale-factor=1", "--force-color-profile=srgb"];
 
 export const hideWindow = (env: Env): boolean =>
   env[hideFlag] === "1" || (env["CLAUDECODE"] === "1" && env["FLOWDECK_SHOW_WINDOW"] !== "1");

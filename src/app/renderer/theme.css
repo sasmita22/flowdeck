@@ -241,13 +241,46 @@ body,
   font: 12px var(--f-body);
 }
 
-.fd-canvas-tools {
+.fd-canvas-top {
   position: absolute;
   top: var(--space-3);
-  left: var(--space-3);
   z-index: 5;
   display: flex;
+  align-items: center;
   gap: var(--space-2);
+}
+
+.fd-canvas-top-left {
+  left: var(--space-3);
+}
+
+.fd-canvas-top-right {
+  right: var(--space-3);
+}
+
+.fd-canvas-tools {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.fd-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.fd-inspector .fd-panel-head {
+  justify-content: flex-start;
+}
+
+.fd-panel-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .fd-empty-hint {
@@ -352,6 +385,20 @@ body,
   border-color: var(--line);
   background: var(--panel);
   color: var(--muted);
+}
+
+.fd-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.fd-icon-btn:hover:not(:disabled) {
+  color: var(--fg);
 }
 
 .fd-menu-anchor {

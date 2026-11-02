@@ -10,11 +10,13 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useMemo, type DragEvent } from "react";
+import { useEffect, useMemo, type DragEvent, type ReactNode } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "../nodes/node-types.js";
-import { emptyCanvasHint, type ShellState } from "../shell-store.js";
+import { PanelToggle } from "../panel-toggle.js";
+import type { RunState } from "../run-store.js";
+import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-store.js";
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
 import { NodeMenu } from "./node-menu.js";
@@ -96,6 +98,48 @@ function ZoomControls() {
   );
 }
 
+function PanelShowButtons({
+  shell,
+  run,
+  toolbar,
+}: {
+  shell: StoreApi<ShellState>;
+  run: StoreApi<RunState>;
+  toolbar: ReactNode;
+}) {
+  const sidebarOpen = useStore(shell, (state) => state.sidebarOpen);
+  const inspectorShown = useStore(shell, (state) => state.inspectorShown);
+  const snapshot = useStore(run, (state) => state.snapshot);
+  const inspectorOpen = selectInspectorOpen({ inspectorShown }, { snapshot });
+  return (
+    <>
+      <div className="fd-canvas-top fd-canvas-top-left">
+        {!sidebarOpen && (
+          <PanelToggle
+            side="left"
+            label="Show node sidebar"
+            testId={controlTestIds.sidebarShow}
+            shell={shell}
+            onClick={() => shell.getState().toggleSidebar()}
+          />
+        )}
+        {toolbar}
+      </div>
+      {!inspectorOpen && (
+        <div className="fd-canvas-top fd-canvas-top-right">
+          <PanelToggle
+            side="right"
+            label="Show inspector"
+            testId={controlTestIds.inspectorShow}
+            shell={shell}
+            onClick={() => shell.getState().toggleInspector(run.getState())}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 function EmptyHint({
   store,
   shell,
@@ -114,7 +158,15 @@ function EmptyHint({
   );
 }
 
-function Board({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreApi<ShellState> }) {
+function Board({
+  store,
+  shell,
+  run,
+}: {
+  store: StoreApi<CanvasState>;
+  shell: StoreApi<ShellState>;
+  run: StoreApi<RunState>;
+}) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
   const dragPositions = useStore(store, (state) => state.dragPositions);
@@ -194,7 +246,7 @@ function Board({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreApi
           <ZoomControls />
         </ReactFlow>
       </CanvasStoreContext.Provider>
-      <Toolbar store={store} />
+      <PanelShowButtons shell={shell} run={run} toolbar={<Toolbar store={store} />} />
       <EmptyHint store={store} shell={shell} />
       <NodeMenu store={store} />
       <Readout store={store} />
@@ -220,10 +272,12 @@ function Readout({ store }: { store: StoreApi<CanvasState> }) {
 export function Canvas({
   store,
   shell,
+  run,
   onSave,
 }: {
   store: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
+  run: StoreApi<RunState>;
   onSave: () => void;
 }) {
   useEffect(() => {
@@ -243,7 +297,7 @@ export function Canvas({
   return (
     <ReactFlowProvider>
       <Palette canvas={store} shell={shell} />
-      <Board store={store} shell={shell} />
+      <Board store={store} shell={shell} run={run} />
     </ReactFlowProvider>
   );
 }

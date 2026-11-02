@@ -10,6 +10,7 @@ import { Inspector } from "./inspector/inspector.js";
 import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
 import { MoreMenu } from "./more-menu.js";
+import { PanelToggle } from "./panel-toggle.js";
 import { selectRunDisabled, selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import { selectInspectorOpen, type ShellState } from "./shell-store.js";
@@ -72,7 +73,7 @@ function TitleRow({
             Run
           </button>
         )}
-        {ready && <MoreMenu shell={shell} run={run} terminal={terminal} />}
+        {ready && <MoreMenu shell={shell} terminal={terminal} />}
       </div>
     </header>
   );
@@ -177,10 +178,20 @@ export function App({
       <Errors canvas={canvas} save={save} run={run} />
       <div className="fd-main">
         <RunStoreContext.Provider value={run}>
-          {ready && <Canvas store={canvas} shell={shell} onSave={onSave} />}
+          {ready && <Canvas store={canvas} shell={shell} run={run} onSave={onSave} />}
         </RunStoreContext.Provider>
         {ready && inspectorOpen && (
           <div className="fd-inspector">
+            <div className="fd-panel-head">
+              <PanelToggle
+                side="right"
+                label="Hide inspector"
+                testId={controlTestIds.inspectorHide}
+                shell={shell}
+                onClick={() => shell.getState().toggleInspector(run.getState())}
+              />
+              <h2 className="fd-panel-title">Inspector</h2>
+            </div>
             <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} />
           </div>
         )}

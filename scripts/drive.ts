@@ -9,7 +9,7 @@ import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { testScaleFactor, withWindowMode } from "./window-mode.js";
+import { testDisplayFlags, withWindowMode } from "./window-mode.js";
 
 const stepSchemas = {
   click: z.object({ type: z.literal("click"), testid: z.string().min(1) }),
@@ -289,7 +289,7 @@ export async function forceExit(app: DriveApp, options: { timeoutMs?: number } =
 
 const launchElectron: Launch = (home, colorScheme) =>
   _electron.launch({
-    args: [testScaleFactor, "."],
+    args: [...testDisplayFlags, "."],
     cwd: repoRoot,
     env: { ...withWindowMode(process.env), FLOWDECK_HOME: home },
     ...(colorScheme && { colorScheme }),
