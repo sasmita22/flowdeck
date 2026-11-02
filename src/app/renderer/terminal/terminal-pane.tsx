@@ -35,10 +35,16 @@ export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
 
   return (
     <div>
-      <button data-testid="terminal-close" onClick={() => store.getState().close()}>
-        Close terminal
-      </button>
-      <div data-testid="terminal-view" ref={container} style={{ width: "100%", height: 320 }} />
+      <div className="fd-terminal-head">
+        <button
+          className="fd-btn"
+          data-testid="terminal-close"
+          onClick={() => store.getState().close()}
+        >
+          Close terminal
+        </button>
+      </div>
+      <div data-testid="terminal-view" ref={container} style={{ width: "100%", height: "40vh" }} />
     </div>
   );
 }

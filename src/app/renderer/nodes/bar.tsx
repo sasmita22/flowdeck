@@ -1,6 +1,7 @@
 import type { NodeProps } from "@xyflow/react";
 import { nodeLook } from "./look.js";
-import { ports, type ShapeNode } from "./shape.js";
+import { NodeIssueMarker } from "../canvas/status.js";
+import { ports, tagWidth, type ShapeNode } from "./shape.js";
 
 export function ParallelBar({
   id,
@@ -14,6 +15,7 @@ export function ParallelBar({
 }) {
   const { box, group, outline, tag } = nodeLook(type);
   const [w, h] = [width ?? box.width, height ?? box.height];
+  const label = tagWidth(tag) <= h ? tag : type.toUpperCase();
   const ring = (stroke: string, strokeWidth: number) => (
     <rect width={w} height={h} rx={8} fill="none" stroke={stroke} strokeWidth={strokeWidth} />
   );
@@ -50,9 +52,10 @@ export function ParallelBar({
           transform={`rotate(-90 ${w / 2} ${h / 2})`}
           style={{ font: "600 9.5px var(--f-mono)", letterSpacing: "0.04em" }}
         >
-          {tag}
+          {label}
         </text>
       </svg>
+      <NodeIssueMarker nodeId={id} />
       {ports(id, type)}
     </div>
   );

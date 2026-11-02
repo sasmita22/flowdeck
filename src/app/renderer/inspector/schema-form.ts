@@ -4,12 +4,14 @@ import { Session } from "../../../core/flow/schema.js";
 type Path = readonly string[];
 
 export type FieldDescription =
-  | { control: "text" | "list" | "number"; path: Path; testId: string }
+  | { control: "text" | "list" | "number"; path: Path; testId: string; label: string }
   | {
       control: "select";
       path: Path;
       testId: string;
+      label: string;
       options: string[];
+      optionLabels: Record<string, string>;
       variants: Record<string, FieldDescription[]>;
     };
 
@@ -21,6 +23,31 @@ export const sessionSettingsSchema = Session.pick({
   allowedTools: true,
   budget: true,
 });
+
+const fieldLabels: Record<string, string> = {
+  "workingFolder.kind": "Working folder",
+  "workingFolder.path": "Folder path",
+  "workingFolder.repo": "Repository",
+  "workingFolder.branch": "Start from branch",
+  model: "Model",
+  allowedTools: "Allowed tools (one per line)",
+  budget: "Budget ($)",
+};
+
+const optionLabels: Record<string, Record<string, string>> = {
+  "workingFolder.kind": { path: "Existing folder", worktree: "New git worktree" },
+};
+
+const labelOf = (path: Path): string => {
+  const label = fieldLabels[path.join(".")];
+  if (label === undefined) throw new Error(`No label for ${path.join(".")}`);
+  return label;
+};
+
+const optionLabelsOf = (path: Path, options: string[]): Record<string, string> =>
+  Object.fromEntries(
+    options.map((option) => [option, optionLabels[path.join(".")]?.[option] ?? option]),
+  );
 
 const testIdOf = (path: Path) =>
   ["session", ...path]
@@ -63,24 +90,41 @@ const fieldsOf = (path: Path, schema: z.ZodType): FieldDescription[] => {
       ]),
     );
     const kindPath = [...path, discriminator];
+    const options = Object.keys(variants);
     return [
       {
         control: "select",
         path: kindPath,
         testId: testIdOf(kindPath),
-        options: Object.keys(variants),
+        label: labelOf(kindPath),
+        options,
+        optionLabels: optionLabelsOf(kindPath, options),
         variants,
       },
     ];
   }
   if (inner instanceof z.ZodEnum) {
-    return [{ control: "select", path, testId, options: inner.options.map(String), variants: {} }];
+    const options = inner.options.map(String);
+    return [
+      {
+        control: "select",
+        path,
+        testId,
+        label: labelOf(path),
+        options,
+        optionLabels: optionLabelsOf(path, options),
+        variants: {},
+      },
+    ];
   }
   if (inner instanceof z.ZodArray && inner.element instanceof z.ZodString) {
-    return [{ control: "list", path, testId }];
+    return [{ control: "list", path, testId, label: labelOf(path) }];
   }
-  if (inner instanceof z.ZodString) return [{ control: "text", path, testId }];
-  if (inner instanceof z.ZodNumber) return [{ control: "number", path, testId }];
+  if (inner instanceof z.ZodString)
+    return [{ control: "text", path, testId, label: labelOf(path) }];
+  if (inner instanceof z.ZodNumber) {
+    return [{ control: "number", path, testId, label: labelOf(path) }];
+  }
   if (inner instanceof z.ZodObject) return objectFields(path, inner as AnyObject);
   return [];
 };

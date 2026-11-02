@@ -1,0 +1,97 @@
+import { describe, expect, it } from "vitest";
+import {
+  filterPalette,
+  groupPalette,
+  paletteGroups,
+  paletteItems,
+} from "../../../../src/app/renderer/canvas/palette-items.js";
+import { nodeDefaults } from "../../../../src/app/renderer/canvas/store.js";
+import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
+import { paletteTestId } from "../../../../src/app/renderer/test-ids.js";
+import { NodeType } from "../../../../src/core/flow/schema.js";
+
+const itemOf = (type: NodeType) => {
+  const item = paletteItems.find((entry) => entry.type === type);
+  if (item === undefined) throw new Error(`no palette item for ${type}`);
+  return item;
+};
+
+describe("paletteItems", () => {
+  it("has one entry per node type", () => {
+    expect(paletteItems.map((item) => item.type).sort()).toEqual([...NodeType.options].sort());
+  });
+
+  it.each(NodeType.options)("draws %s from its test id, defaults and look", (type) => {
+    expect(itemOf(type)).toMatchObject({
+      testId: paletteTestId(type),
+      label: nodeDefaults[type].label,
+      tag: nodeLook(type).tag,
+      color: nodeLook(type).group,
+    });
+  });
+
+  it.each(NodeType.options)("puts %s in one of the design's six groups", (type) => {
+    expect(paletteGroups).toContain(itemOf(type).group);
+  });
+
+  it.each(NodeType.options)("describes %s in one non-empty line", (type) => {
+    const { description } = itemOf(type);
+    expect(description.trim()).not.toBe("");
+    expect(description).not.toMatch(/\n/);
+  });
+
+  it("names the six groups in the design's order", () => {
+    expect(paletteGroups).toEqual([
+      "Composition",
+      "Work",
+      "Control",
+      "People and safety",
+      "Run events",
+      "In and out",
+    ]);
+  });
+});
+
+describe("filterPalette", () => {
+  it.each(["", "   "])("returns every entry for the query %j", (query) => {
+    expect(filterPalette(paletteItems, query)).toEqual(paletteItems);
+  });
+
+  it("matches labels without regard to case", () => {
+    expect(filterPalette(paletteItems, "LOOP").map((item) => item.type)).toEqual(["loop"]);
+  });
+
+  it("matches group names", () => {
+    expect(
+      filterPalette(paletteItems, "people")
+        .map((item) => item.type)
+        .sort(),
+    ).toEqual(
+      paletteItems
+        .filter((item) => item.group === "People and safety")
+        .map((item) => item.type)
+        .sort(),
+    );
+  });
+
+  it("returns nothing when nothing matches", () => {
+    expect(filterPalette(paletteItems, "zzz")).toEqual([]);
+  });
+});
+
+describe("groupPalette", () => {
+  it("lists groups in the design's order and leaves out empty ones", () => {
+    const grouped = groupPalette(paletteItems);
+    const names = grouped.map(({ group }) => group);
+
+    expect(names).toEqual(paletteGroups.filter((group) => names.includes(group)));
+    expect(grouped.every(({ items }) => items.length > 0)).toBe(true);
+    expect(grouped.flatMap(({ items }) => items)).toHaveLength(paletteItems.length);
+  });
+
+  it("keeps only the groups that hold a match", () => {
+    expect(groupPalette(filterPalette(paletteItems, "loop"))).toEqual([
+      { group: "Control", items: [itemOf("loop")] },
+    ]);
+  });
+});

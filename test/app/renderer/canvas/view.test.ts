@@ -1,3 +1,4 @@
+import { MarkerType } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 import {
   alignedEnds,
@@ -476,6 +477,7 @@ describe("toViewEdges", () => {
         sourceHandle: "out",
         target: "script-1",
         targetHandle: "in",
+        markerEnd: { type: MarkerType.ArrowClosed },
       },
     ]);
   });
@@ -495,6 +497,18 @@ describe("toViewEdges", () => {
 
   it("returns no entries for a flow without wires", () => {
     expect(toViewEdges(flow([prompt("A")], []))).toEqual([]);
+  });
+
+  it("ends every wire in a closed arrowhead", () => {
+    const source = flow(
+      [prompt("A"), prompt("B"), script("C")],
+      [thenWire("A", "B"), thenWire("B", "C")],
+    );
+
+    expect(toViewEdges(source).map((edge) => edge.markerEnd)).toEqual([
+      { type: MarkerType.ArrowClosed },
+      { type: MarkerType.ArrowClosed },
+    ]);
   });
 });
 
@@ -569,7 +583,7 @@ describe("toViewNodes with a parallel section", () => {
     expect(viewOf(view, "F")).toMatchObject({ position: { x: 40, y: 10 }, height: 208 });
   });
 
-  it("keeps a fork with no wires at its stored position with no height override", () => {
+  it("gives a fork with no wires its look box at its stored position", () => {
     const [node] = toViewNodes(
       flow([{ ...fork("F"), position: { x: 30, y: 60 } }], []),
       [],
@@ -577,8 +591,13 @@ describe("toViewNodes with a parallel section", () => {
       null,
     );
 
-    expect(node).toMatchObject({ id: "F", position: { x: 30, y: 60 } });
-    expect(node).not.toHaveProperty("height");
+    expect(node).toMatchObject({ id: "F", position: { x: 30, y: 60 }, width: 28, height: 48 });
+  });
+
+  it("gives a join with no wires its look box", () => {
+    const [node] = toViewNodes(flow([join("J")], []), [], {}, null);
+
+    expect(node).toMatchObject({ id: "J", width: 28, height: 48 });
   });
 
   it("widens a session frame by a member fork's spanned box", () => {

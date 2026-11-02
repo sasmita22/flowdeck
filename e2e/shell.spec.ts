@@ -1,0 +1,412 @@
+import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
+import { NodeType } from "../src/core/flow/schema.js";
+import {
+  agent,
+  flow,
+  fork,
+  join as joinNode,
+  prompt,
+  script,
+  thenWire,
+} from "../test/fixtures/flow-builders.js";
+import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+
+let home: string;
+let folder: string;
+let launched: LaunchedApp | undefined;
+
+const darkBackground = "rgb(14, 17, 22)";
+const shot = { size: { width: 1280, height: 800 }, threshold: { threshold: 0 } };
+const smallest = { width: 960, height: 640 };
+
+const twoScripts = (firstCommand?: { command: string; args: string[] }) => {
+  const seeded = JSON.parse(
+    readFileSync(new URL("../test/fixtures/app-run-two-scripts.json", import.meta.url), "utf8"),
+  ) as { nodes: { settings: object }[] };
+  const [first] = seeded.nodes;
+  if (first !== undefined && firstCommand !== undefined) first.settings = firstCommand;
+  return seeded;
+};
+
+const launch = async () => {
+  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
+  return launched;
+};
+
+const sizeTo = async (target: LaunchedApp, size: { width: number; height: number }) => {
+  await target.app.evaluate(({ BrowserWindow }, next) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(next.width, next.height);
+  }, size);
+  await target.window.waitForFunction(
+    (next) => window.innerWidth === next.width && window.innerHeight === next.height,
+    size,
+  );
+};
+
+const showDark = async (target: LaunchedApp) => {
+  await target.window.emulateMedia({ colorScheme: null });
+  await sizeTo(target, shot.size);
+  await target.window.evaluate(() => document.fonts.ready);
+  await target.window.mouse.move(1, 1);
+};
+
+const drop = async (window: Page, testId: string, x: number, y: number) => {
+  await window.getByTestId(testId).dragTo(window.getByTestId("canvas"), {
+    targetPosition: { x, y },
+  });
+};
+
+const boxOf = async (locator: Locator) => {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("element has no box");
+  return box;
+};
+
+const intersects = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+const wire = async (window: Page, from: string, to: string) => {
+  const start = await boxOf(window.getByTestId(from));
+  const end = await boxOf(window.getByTestId(to));
+  await window.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await window.mouse.down();
+  await window.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 10 });
+  await window.mouse.up();
+};
+
+const titleAndCanvasControls = [
+  controlTestIds.save,
+  controlTestIds.run,
+  controlTestIds.more,
+  controlTestIds.undo,
+  controlTestIds.redo,
+  controlTestIds.delete,
+  controlTestIds.wrap,
+  controlTestIds.zoomIn,
+  controlTestIds.zoomOut,
+  controlTestIds.fit,
+  controlTestIds.search,
+];
+
+const reviewShot = async (window: Page, testInfo: TestInfo, name: string) => {
+  const image = testInfo.outputPath(`${name}.png`);
+  const aria = testInfo.outputPath(`${name}.aria.yml`);
+  await window.screenshot({ path: image });
+  await writeFile(aria, await window.locator("body").ariaSnapshot());
+  await testInfo.attach(`${name}.png`, { path: image, contentType: "image/png" });
+  await testInfo.attach(`${name}.aria.yml`, { path: aria, contentType: "text/yaml" });
+};
+
+test.beforeEach(async () => {
+  launched = undefined;
+  home = await mkdtemp(join(tmpdir(), "fd-shell-"));
+  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-shell-wf-")));
+});
+
+test.afterEach(async () => {
+  try {
+    await launched?.close();
+  } finally {
+    await rm(home, { recursive: true, force: true });
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test("Looks like the design", async () => {
+  const target = await launch();
+  const { window } = target;
+  await showDark(target);
+  await expect(window.getByTestId("canvas-empty-hint")).toBeVisible();
+
+  await expect(window).toHaveScreenshot("shell-sidebar-open.png", shot.threshold);
+
+  await window.getByTestId(controlTestIds.more).click();
+  await window.getByTestId(controlTestIds.sidebar).click();
+  await expect(window.getByTestId(controlTestIds.search)).toHaveCount(0);
+  await window.mouse.move(1, 1);
+
+  await expect(window).toHaveScreenshot("shell-sidebar-closed.png", shot.threshold);
+});
+
+test("Always dark", async () => {
+  const { app, window } = await launch();
+
+  expect(await app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe("dark");
+
+  await window.emulateMedia({ colorScheme: null });
+  expect(await window.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    darkBackground,
+  );
+});
+
+test("Readouts hidden, still readable", async () => {
+  const { window } = await launch();
+
+  for (const id of Object.values(readoutTestIds)) {
+    const box = await boxOf(window.getByTestId(id));
+    expect(box.width).toBeLessThanOrEqual(1);
+    expect(box.height).toBeLessThanOrEqual(1);
+  }
+
+  await drop(window, paletteTestId("prompt"), 200, 150);
+
+  await expect
+    .poll(() => window.locator("body").ariaSnapshot())
+    .toContain('\\"id\\":\\"prompt-1\\"');
+});
+
+test("Controls keep their test ids", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, shot.size);
+
+  for (const type of NodeType.options) {
+    await expect(window.getByTestId(paletteTestId(type))).toHaveCount(1);
+    await expect(window.getByTestId(paletteTestId(type))).toBeVisible();
+  }
+  for (const id of titleAndCanvasControls) {
+    await expect(window.getByTestId(id)).toHaveCount(1);
+    await expect(window.getByTestId(id)).toBeVisible();
+  }
+
+  await window.getByTestId(controlTestIds.more).click();
+  await expect(window.getByTestId(controlTestIds.terminalOpen)).toBeDisabled();
+  await expect(window.getByTestId(controlTestIds.sidebar)).toBeVisible();
+  await expect(window.getByTestId(controlTestIds.inspector)).toBeVisible();
+  await window.keyboard.press("Escape");
+
+  await sizeTo(target, smallest);
+  const scroll = await window.evaluate(() => {
+    const page = document.scrollingElement ?? document.documentElement;
+    return {
+      down: page.scrollHeight - page.clientHeight,
+      across: page.scrollWidth - page.clientWidth,
+    };
+  });
+  expect(scroll).toEqual({ down: 0, across: 0 });
+
+  const layout = await window.evaluate(() => {
+    const rectOf = (testId: string, closest: string) => {
+      const element = document.querySelector(`[data-testid="${testId}"]`)?.closest(closest);
+      if (element === null || element === undefined) throw new Error(`no ${closest} for ${testId}`);
+      const { top, bottom, right } = element.getBoundingClientRect();
+      return { top, bottom, right };
+    };
+    return {
+      title: rectOf("app-title", "header"),
+      canvas: rectOf("canvas", "div"),
+      status: rectOf("run-status", "footer"),
+      width: globalThis.innerWidth,
+      height: globalThis.innerHeight,
+    };
+  });
+  expect(layout.canvas.top).toBeGreaterThanOrEqual(layout.title.bottom);
+  expect(layout.canvas.bottom).toBeLessThanOrEqual(layout.status.top);
+  expect(layout.status.bottom).toBeLessThanOrEqual(layout.height);
+  expect(layout.canvas.right).toBeLessThanOrEqual(layout.width);
+  expect(layout.status.right).toBeLessThanOrEqual(layout.width);
+});
+
+test("Every node type drops", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, shot.size);
+
+  for (const [index, type] of NodeType.options.entries()) {
+    await drop(
+      window,
+      paletteTestId(type),
+      60 + (index % 4) * 220,
+      80 + Math.floor(index / 4) * 110,
+    );
+    if (index === 0) await expect(window.getByTestId("canvas-empty-hint")).toHaveCount(0);
+  }
+
+  const readout = (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "";
+  for (const type of NodeType.options) {
+    expect(readout).toContain(`"id":"${type}-1"`);
+    await expect(window.getByTestId(`node-${type}-1`)).toBeVisible();
+  }
+});
+
+test("Sidebar search and toggle", async () => {
+  const { window } = await launch();
+
+  await window.getByTestId(controlTestIds.search).fill("loop");
+  await expect(window.getByTestId(paletteTestId("loop"))).toBeVisible();
+  await expect(window.getByTestId(paletteTestId("prompt"))).toHaveCount(0);
+
+  await window.getByTestId(controlTestIds.more).click();
+  await window.getByTestId(controlTestIds.sidebar).click();
+
+  await expect(window.getByTestId(controlTestIds.search)).toHaveCount(0);
+  await expect(window.getByTestId("canvas-empty-hint")).toHaveText(
+    "Show the node sidebar from the ⋯ menu to start",
+  );
+});
+
+test("Menu keyboard", async () => {
+  const { window } = await launch();
+
+  await window.getByTestId(controlTestIds.more).click();
+  await expect(window.getByTestId(controlTestIds.terminalOpen)).toBeFocused();
+
+  await window.keyboard.press("ArrowDown");
+  await expect(window.getByTestId(controlTestIds.sidebar)).toBeFocused();
+
+  await window.keyboard.press("Escape");
+  await expect(window.getByRole("menu")).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.more)).toBeFocused();
+});
+
+test("Invalid node shows its reason", async () => {
+  const { window } = await launch();
+  const reason = "has 0 branches; a parallel start needs two or more.";
+
+  await drop(window, paletteTestId("fork"), 200, 150);
+  await expect(window.getByTestId("node-issue-fork-1")).toBeVisible();
+  await expect(window.getByTestId("node-issue-fork-1")).toHaveText(reason);
+  await expect(window.getByTestId("node-issue-fork-1")).toHaveAttribute("title", reason);
+  const bar = await boxOf(window.getByTestId("node-fork-1"));
+  const label = await boxOf(window.getByTestId("node-fork-1").locator("text"));
+  expect(label.y).toBeGreaterThanOrEqual(bar.y);
+  expect(label.y + label.height).toBeLessThanOrEqual(bar.y + bar.height);
+  const marker = await boxOf(window.getByTestId("node-issue-fork-1"));
+  expect(marker.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+
+  await drop(window, paletteTestId("prompt"), 200, 300);
+  await expect(window.getByTestId("node-prompt-1")).toBeVisible();
+  await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
+});
+
+test("Left to right, no overlap", async () => {
+  const { window } = await launch();
+
+  await drop(window, paletteTestId("prompt"), 200, 150);
+  await drop(window, paletteTestId("prompt"), 200, 150);
+  const first = await boxOf(window.getByTestId("node-prompt-1"));
+  const second = await boxOf(window.getByTestId("node-prompt-2"));
+  expect(intersects(first, second)).toBe(false);
+
+  await window.getByTestId("node-prompt-1").click();
+  await window.getByTestId(paletteTestId("script")).focus();
+  await window.keyboard.press("Enter");
+  const next = await boxOf(window.getByTestId("node-script-1"));
+  expect(next.x).toBeGreaterThanOrEqual(first.x + first.width);
+  expect(Math.abs(next.y - first.y)).toBeLessThan(2);
+
+  await wire(window, "port-prompt-1-out", "port-script-1-in");
+  const edge = window.locator(".react-flow__edge-path");
+  await expect(edge).toHaveCount(1);
+  await expect(edge).toHaveAttribute("marker-end", /url\(/);
+});
+
+test("Wires around a parallel section keep their arrowheads", async () => {
+  seedFlow(
+    home,
+    flow(
+      [
+        { ...fork("fork"), position: { x: 0, y: 0 } },
+        { ...agent("b1"), position: { x: 80, y: 0 } },
+        { ...agent("b2"), position: { x: 80, y: 90 } },
+        { ...joinNode("join"), position: { x: 320, y: 0 } },
+      ],
+      [
+        thenWire("fork", "b1"),
+        thenWire("fork", "b2"),
+        thenWire("b1", "join"),
+        thenWire("b2", "join"),
+      ],
+    ),
+  );
+  const { window } = await launch();
+
+  const edges = window.locator(".react-flow__edge-path");
+  await expect(edges).toHaveCount(4);
+  for (const edge of await edges.all()) {
+    await expect(edge).toHaveAttribute("marker-end", /url\(/);
+  }
+});
+
+test("Review shots", async () => {
+  const testInfo = test.info();
+  seedFlow(
+    home,
+    flow(
+      [
+        { ...prompt("prompt-1"), label: "Prompt", position: { x: 80, y: 80 } },
+        { ...script("script-1"), label: "Script", position: { x: 298, y: 80 } },
+      ],
+      [thenWire("prompt-1", "script-1")],
+    ),
+  );
+  let target = await launch();
+  await showDark(target);
+  await reviewShot(target.window, testInfo, "small-flow");
+  await target.close();
+
+  await rm(home, { recursive: true, force: true });
+  home = await mkdtemp(join(tmpdir(), "fd-shell-"));
+  target = await launch();
+  const { window } = target;
+  await showDark(target);
+  await reviewShot(window, testInfo, "empty-canvas");
+
+  await window.getByTestId(controlTestIds.search).fill("people");
+  await window.mouse.move(1, 1);
+  await reviewShot(window, testInfo, "palette-open");
+  await window.getByTestId(controlTestIds.search).fill("");
+
+  await window.getByTestId(controlTestIds.more).click();
+  await reviewShot(window, testInfo, "menu-open");
+  await window.keyboard.press("Escape");
+  await target.close();
+
+  await rm(home, { recursive: true, force: true });
+  home = await mkdtemp(join(tmpdir(), "fd-shell-"));
+  seedFlow(home, twoScripts({ command: "sleep", args: ["5"] }), folder);
+  target = await launch();
+  await showDark(target);
+  await target.window.getByTestId(controlTestIds.run).click();
+  await expect(target.window.getByTestId("run-status")).toHaveText(/^Running/, {
+    timeout: 20_000,
+  });
+  await expect(target.window.getByTestId("node-status-s1")).toHaveAttribute(
+    "data-status",
+    "running",
+  );
+  await target.window.mouse.move(1, 1);
+  await reviewShot(target.window, testInfo, "running-flow");
+  await expect(target.window.getByTestId("run-status")).toHaveText(/^Done/, { timeout: 20_000 });
+
+  expect(testInfo.attachments.map(({ name }) => name).sort()).toEqual(
+    ["empty-canvas", "menu-open", "palette-open", "running-flow", "small-flow"]
+      .flatMap((name) => [`${name}.aria.yml`, `${name}.png`])
+      .sort(),
+  );
+});
+
+test("Run status and inspector", async () => {
+  seedFlow(home, twoScripts(), folder);
+  const { window } = await launch();
+
+  await expect(window.getByTestId("run-status")).toHaveText("Idle");
+  await expect(window.getByTestId("inspector")).toHaveCount(0);
+
+  await window.getByTestId(controlTestIds.run).click();
+  await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
+    timeout: 20_000,
+  });
+
+  await expect(window.getByTestId("run-status")).toHaveText("Done · 2 of 2 nodes done");
+  await expect(window.getByTestId("inspector")).toBeVisible();
+});

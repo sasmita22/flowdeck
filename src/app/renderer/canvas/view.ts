@@ -1,3 +1,4 @@
+import { MarkerType } from "@xyflow/react";
 import type { Flow, Node, Wire } from "../../../core/flow/schema.js";
 import { branchSwitch, triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { nodeLook } from "../nodes/look.js";
@@ -33,6 +34,7 @@ export interface ViewEdge {
   sourceHandle: string;
   target: string;
   targetHandle: string;
+  markerEnd: { type: MarkerType };
   type?: "aligned";
   data?: { align: Align };
 }
@@ -138,9 +140,12 @@ const toForEachFrameViewNodes = (flow: Flow): ViewNode[] =>
       }),
     );
 
+const isBar = (node: Node) => node.type === "fork" || node.type === "join";
+
 const placed = (flow: Flow, node: Node, position: Position) => {
+  if (!isBar(node)) return { position };
   const bar = barBounds(flow, node, position.x);
-  if (bar === null) return { position };
+  if (bar === null) return { position, ...nodeLook(node.type).box };
   return {
     position: { x: bar.left, y: bar.top },
     width: bar.right - bar.left,
@@ -189,6 +194,7 @@ export const toViewEdges = (flow: Flow): ViewEdge[] => {
       sourceHandle: wire.from.port,
       target: wire.to.node,
       targetHandle: wire.to.port,
+      markerEnd: { type: MarkerType.ArrowClosed },
       ...(align !== null && { type: "aligned" as const, data: { align } }),
     };
   });

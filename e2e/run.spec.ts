@@ -93,7 +93,9 @@ test("Open terminal stays disabled through a script-only run, and no pane appear
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await window.getByTestId("menu-more").click();
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
+  await window.keyboard.press("Escape");
 
   await window.getByTestId("canvas-run").click();
 
@@ -103,7 +105,9 @@ test("Open terminal stays disabled through a script-only run, and no pane appear
   await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
+  await window.getByTestId("menu-more").click();
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
+  await window.keyboard.press("Escape");
   await expect(window.getByTestId("terminal-view")).toHaveCount(0);
 
   const session = window.getByTestId("inspector-session");

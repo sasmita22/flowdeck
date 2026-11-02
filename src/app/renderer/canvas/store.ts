@@ -1,7 +1,8 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { validate } from "../../../core/compiler/validate.js";
+import { validate, type ValidationError } from "../../../core/compiler/validate.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import {
+  NodeType,
   parseFlow,
   type Flow,
   type Node,
@@ -10,6 +11,18 @@ import {
 } from "../../../core/flow/schema.js";
 import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
 import * as scriptDefaults from "../../../core/nodes/script/defaults.js";
+import * as agentDefaults from "../../../core/nodes/agent/defaults.js";
+import * as gateDefaults from "../../../core/nodes/gate/defaults.js";
+import * as askDefaults from "../../../core/nodes/ask/defaults.js";
+import * as hardstopDefaults from "../../../core/nodes/hardstop/defaults.js";
+import * as loopDefaults from "../../../core/nodes/loop/defaults.js";
+import * as triggerDefaults from "../../../core/nodes/trigger/defaults.js";
+import * as outputDefaults from "../../../core/nodes/output/defaults.js";
+import * as forkDefaults from "../../../core/nodes/fork/defaults.js";
+import * as joinDefaults from "../../../core/nodes/join/defaults.js";
+import * as foreachDefaults from "../../../core/nodes/foreach/defaults.js";
+import * as branchDefaults from "../../../core/nodes/branch/defaults.js";
+import { nodeLook } from "../nodes/look.js";
 import {
   addNode,
   addWire,
@@ -24,7 +37,25 @@ import {
 
 export { wrappableIds };
 
-export type CanvasNodeType = "prompt" | "script";
+export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
+
+type SettingsOf<T extends NodeType> = Extract<Node, { type: T }>["settings"];
+
+export const nodeDefaults: { [T in NodeType]: { label: string; settings: SettingsOf<T> } } = {
+  prompt: { label: promptDefaults.defaultLabel, settings: promptDefaults.defaultSettings },
+  script: { label: scriptDefaults.defaultLabel, settings: scriptDefaults.defaultSettings },
+  agent: { label: agentDefaults.defaultLabel, settings: agentDefaults.defaultSettings },
+  gate: { label: gateDefaults.defaultLabel, settings: gateDefaults.defaultSettings },
+  ask: { label: askDefaults.defaultLabel, settings: askDefaults.defaultSettings },
+  hardstop: { label: hardstopDefaults.defaultLabel, settings: hardstopDefaults.defaultSettings },
+  loop: { label: loopDefaults.defaultLabel, settings: loopDefaults.defaultSettings },
+  trigger: { label: triggerDefaults.defaultLabel, settings: triggerDefaults.defaultSettings },
+  output: { label: outputDefaults.defaultLabel, settings: outputDefaults.defaultSettings },
+  fork: { label: forkDefaults.defaultLabel, settings: forkDefaults.defaultSettings },
+  join: { label: joinDefaults.defaultLabel, settings: joinDefaults.defaultSettings },
+  foreach: { label: foreachDefaults.defaultLabel, settings: foreachDefaults.defaultSettings },
+  branch: { label: branchDefaults.defaultLabel, settings: branchDefaults.defaultSettings },
+};
 
 export type WireEnd = { node: string; port: string };
 
@@ -45,7 +76,8 @@ export interface CanvasState {
   dragPositions: Record<string, Position>;
   message: string | null;
   menu: NodeMenu | null;
-  drop(type: CanvasNodeType, position: Position): void;
+  drop(type: NodeType, position: Position): void;
+  addNext(type: NodeType): void;
   connect(from: WireEnd, to: WireEnd): boolean;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
@@ -76,7 +108,7 @@ export const newCanvasFlow = (): Flow => ({
   },
 });
 
-export const nextNodeId = (type: CanvasNodeType, flow: Flow): string => {
+export const nextNodeId = (type: NodeType, flow: Flow): string => {
   const used = new Set(
     [...flow.nodes.map((node) => node.id), ...(flow.session.frame?.nodes ?? [])].map((id) =>
       id.toLowerCase(),
@@ -87,22 +119,89 @@ export const nextNodeId = (type: CanvasNodeType, flow: Flow): string => {
   return `${type}-${n}`;
 };
 
-const newNode = (type: CanvasNodeType, id: string, { x, y }: Position): Node =>
-  type === "prompt"
-    ? {
-        id,
-        type,
-        label: promptDefaults.defaultLabel,
-        position: { x, y },
-        settings: { ...promptDefaults.defaultSettings },
-      }
-    : {
-        id,
-        type,
-        label: scriptDefaults.defaultLabel,
-        position: { x, y },
-        settings: { ...scriptDefaults.defaultSettings },
-      };
+const newNode = (type: NodeType, id: string, { x, y }: Position): Node =>
+  ({
+    id,
+    type,
+    label: nodeDefaults[type].label,
+    position: { x, y },
+    settings: structuredClone(nodeDefaults[type].settings),
+  }) as Node;
+
+const gap = 48;
+const firstPosition: Position = { x: 80, y: 80 };
+
+const topLevel = (flow: Flow) => flow.nodes.filter((node) => node.parent === undefined);
+
+const rightEdge = (node: Node) => node.position.x + nodeLook(node.type).box.width;
+
+const overlapping = (flow: Flow, type: NodeType, { x, y }: Position) => {
+  const { width, height } = nodeLook(type).box;
+  return topLevel(flow).find((node) => {
+    const box = nodeLook(node.type).box;
+    return (
+      x < node.position.x + box.width &&
+      node.position.x < x + width &&
+      y < node.position.y + box.height &&
+      node.position.y < y + height
+    );
+  });
+};
+
+export const placeNode = (flow: Flow, type: NodeType, at: Position): Position => {
+  let position = { ...at };
+  for (let hit = overlapping(flow, type, position); hit; hit = overlapping(flow, type, position)) {
+    position = { x: rightEdge(hit) + gap, y: position.y };
+  }
+  return position;
+};
+
+const nextTo = (flow: Flow, selection: readonly string[]): Position => {
+  const selected =
+    selection.length === 1 ? flow.nodes.find((node) => node.id === selection[0]) : undefined;
+  const anchor =
+    selected ??
+    topLevel(flow).reduce<Node | undefined>(
+      (rightmost, node) =>
+        rightmost === undefined || rightEdge(node) > rightEdge(rightmost) ? node : rightmost,
+      undefined,
+    );
+  return anchor === undefined
+    ? firstPosition
+    : { x: rightEdge(anchor) + gap, y: anchor.position.y };
+};
+
+const sameError = (a: ValidationError, b: ValidationError) =>
+  a.rule === b.rule && a.node === b.node && a.wire === b.wire && a.field === b.field;
+
+const introducesErrors = (before: Flow, after: Flow) => {
+  const known = validate(before);
+  return validate(after).some((error) => !known.some((old) => sameError(old, error)));
+};
+
+const issuesByFlow = new WeakMap<Flow, Record<string, string>>();
+
+const typeTags = new RegExp(` \\((?:${NodeType.options.join("|")})\\)`, "g");
+
+const plainReason = (nodeId: string, message: string) => {
+  const untagged = message.replace(typeTags, "");
+  return untagged.startsWith(`${nodeId} `) ? untagged.slice(nodeId.length + 1) : untagged;
+};
+
+export const selectNodeIssues = (flow: Flow): Record<string, string> => {
+  const cached = issuesByFlow.get(flow);
+  if (cached !== undefined) return cached;
+  const issues: Record<string, string> = {};
+  for (const error of validate(flow)) {
+    if (error.node !== undefined && !(error.node in issues))
+      issues[error.node] = plainReason(error.node, error.message);
+  }
+  issuesByFlow.set(flow, issues);
+  return issues;
+};
+
+export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
+  state.flow.nodes.length === 0;
 
 const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.port;
 
@@ -117,7 +216,7 @@ export const selectDirty = (state: Pick<CanvasState, "flow" | "saved">): boolean
   !flowsEqual(state.flow, state.saved);
 
 export function createCanvasStore(
-  deps: { nextId?: (type: CanvasNodeType, flow: Flow) => string; ready?: boolean } = {},
+  deps: { nextId?: (type: NodeType, flow: Flow) => string; ready?: boolean } = {},
 ): StoreApi<CanvasState> {
   const nextId = deps.nextId ?? nextNodeId;
 
@@ -162,9 +261,12 @@ export function createCanvasStore(
 
       drop: (type, position) => {
         if (!ready()) return;
-        const id = nextId(type, get().flow);
-        run(addNode(newNode(type, id, position)), [id]);
+        const { flow } = get();
+        const id = nextId(type, flow);
+        run(addNode(newNode(type, id, placeNode(flow, type, position))), [id]);
       },
+
+      addNext: (type) => get().drop(type, nextTo(get().flow, get().selection)),
 
       connect: (from, to) => {
         if (!ready()) return false;
@@ -173,7 +275,7 @@ export function createCanvasStore(
           return false;
         }
         const command = addWire({ kind: "then", from: { ...from }, to: { ...to } } satisfies Wire);
-        if (validate(command.do(flow)).length > 0) return false;
+        if (introducesErrors(flow, command.do(flow))) return false;
         run(command);
         return true;
       },

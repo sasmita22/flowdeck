@@ -62,10 +62,10 @@ export function Inspector({
         width: 260,
         flexShrink: 0,
         minWidth: 0,
-        maxHeight: 600,
+        maxHeight: "100%",
         display: "flex",
         flexDirection: "column",
-        overflow: "hidden",
+        overflow: "auto",
         fontSize: 12,
       }}
     >

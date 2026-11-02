@@ -1,4 +1,8 @@
 import {
+  Background,
+  BackgroundVariant,
+  ControlButton,
+  Controls,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -10,49 +14,107 @@ import { useEffect, useMemo, type DragEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "../nodes/node-types.js";
+import { emptyCanvasHint, type ShellState } from "../shell-store.js";
+import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
-import { wrappableIds, type CanvasNodeType, type CanvasState } from "./store.js";
+import { CanvasStoreContext } from "./status.js";
+import { isNodeType, selectCanvasEmpty, wrappableIds, type CanvasState } from "./store.js";
 import { toViewEdges, toViewNodes } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
-const startViewport = { x: 0, y: 0, zoom: 1 };
+const startViewport = { x: 24, y: 56, zoom: 1 };
 const proOptions = { hideAttribution: true };
 const edgeTypes = { aligned: AlignedEdge };
-const readoutStyle = { margin: 0, fontFamily: "ui-monospace, monospace", fontSize: 11 };
-
-const isNodeType = (value: string): value is CanvasNodeType =>
-  value === "prompt" || value === "script";
 
 function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
   const canUndo = useStore(store, (state) => state.undoStack.length > 0);
   const canRedo = useStore(store, (state) => state.redoStack.length > 0);
   const canDelete = useStore(store, (state) => state.selection.length > 0);
   const canWrap = useStore(store, (state) => wrappableIds(state.flow, state.selection).length > 0);
-  const message = useStore(store, (state) => state.message);
   const { undo, redo, deleteSelection, wrapSelection } = store.getState();
   return (
-    <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-      <button data-testid="canvas-undo" disabled={!canUndo} onClick={undo}>
+    <div className="fd-canvas-tools" role="toolbar" aria-label="Canvas">
+      <button
+        className="fd-btn"
+        data-testid={controlTestIds.undo}
+        disabled={!canUndo}
+        onClick={undo}
+      >
         Undo
       </button>
-      <button data-testid="canvas-redo" disabled={!canRedo} onClick={redo}>
+      <button
+        className="fd-btn"
+        data-testid={controlTestIds.redo}
+        disabled={!canRedo}
+        onClick={redo}
+      >
         Redo
       </button>
-      <button data-testid="canvas-delete" disabled={!canDelete} onClick={deleteSelection}>
+      <button
+        className="fd-btn"
+        data-testid={controlTestIds.delete}
+        disabled={!canDelete}
+        onClick={deleteSelection}
+      >
         Delete
       </button>
-      <button data-testid="canvas-wrap" disabled={!canWrap} onClick={wrapSelection}>
+      <button
+        className="fd-btn"
+        data-testid={controlTestIds.wrap}
+        disabled={!canWrap}
+        onClick={wrapSelection}
+      >
         Wrap in session
       </button>
-      {message !== null && <span data-testid="canvas-message">{message}</span>}
     </div>
   );
 }
 
-function Board({ store }: { store: StoreApi<CanvasState> }) {
+function ZoomControls() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  return (
+    <Controls
+      position="bottom-left"
+      orientation="horizontal"
+      showZoom={false}
+      showFitView={false}
+      showInteractive={false}
+    >
+      <ControlButton data-testid={controlTestIds.zoomIn} onClick={() => void zoomIn()}>
+        Zoom in
+      </ControlButton>
+      <ControlButton data-testid={controlTestIds.zoomOut} onClick={() => void zoomOut()}>
+        Zoom out
+      </ControlButton>
+      <ControlButton data-testid={controlTestIds.fit} onClick={() => void fitView()}>
+        Fit
+      </ControlButton>
+    </Controls>
+  );
+}
+
+function EmptyHint({
+  store,
+  shell,
+}: {
+  store: StoreApi<CanvasState>;
+  shell: StoreApi<ShellState>;
+}) {
+  const empty = useStore(store, selectCanvasEmpty);
+  const sidebarOpen = useStore(shell, (state) => state.sidebarOpen);
+  const hint = emptyCanvasHint(empty, sidebarOpen);
+  if (hint === null) return null;
+  return (
+    <div className="fd-empty-hint" data-testid="canvas-empty-hint">
+      {hint}
+    </div>
+  );
+}
+
+function Board({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreApi<ShellState> }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
   const dragPositions = useStore(store, (state) => state.dragPositions);
@@ -101,15 +163,15 @@ function Board({ store }: { store: StoreApi<CanvasState> }) {
   };
 
   return (
-    <div style={{ display: "flex", gap: 12 }}>
-      <Palette />
-      <div data-testid="canvas" style={{ flex: 1, height: 600, outline: "1px solid #d0d0d0" }}>
+    <div className="fd-canvas" data-testid="canvas">
+      <CanvasStoreContext.Provider value={store}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           colorMode="system"
+          defaultMarkerColor={null}
           defaultViewport={startViewport}
           deleteKeyCode={deleteKeys}
           proOptions={proOptions}
@@ -127,9 +189,15 @@ function Board({ store }: { store: StoreApi<CanvasState> }) {
           onConnect={onConnect}
           onDragOver={onDragOver}
           onDrop={onDrop}
-        />
-        <NodeMenu store={store} />
-      </div>
+        >
+          <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
+          <ZoomControls />
+        </ReactFlow>
+      </CanvasStoreContext.Provider>
+      <Toolbar store={store} />
+      <EmptyHint store={store} shell={shell} />
+      <NodeMenu store={store} />
+      <Readout store={store} />
     </div>
   );
 }
@@ -138,18 +206,26 @@ function Readout({ store }: { store: StoreApi<CanvasState> }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
   return (
-    <section style={{ marginTop: 8 }}>
-      <pre data-testid="canvas-flow" style={readoutStyle}>
+    <>
+      <pre className="fd-visually-hidden" data-testid={readoutTestIds.flow}>
         {JSON.stringify(flow)}
       </pre>
-      <pre data-testid="canvas-selection" style={readoutStyle}>
+      <pre className="fd-visually-hidden" data-testid={readoutTestIds.selection}>
         {JSON.stringify(selection)}
       </pre>
-    </section>
+    </>
   );
 }
 
-export function Canvas({ store, onSave }: { store: StoreApi<CanvasState>; onSave: () => void }) {
+export function Canvas({
+  store,
+  shell,
+  onSave,
+}: {
+  store: StoreApi<CanvasState>;
+  shell: StoreApi<ShellState>;
+  onSave: () => void;
+}) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const shortcut = shortcutFor(event);
@@ -166,9 +242,8 @@ export function Canvas({ store, onSave }: { store: StoreApi<CanvasState>; onSave
 
   return (
     <ReactFlowProvider>
-      <Toolbar store={store} />
-      <Board store={store} />
-      <Readout store={store} />
+      <Palette canvas={store} shell={shell} />
+      <Board store={store} shell={shell} />
     </ReactFlowProvider>
   );
 }

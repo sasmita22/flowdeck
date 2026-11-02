@@ -9,66 +9,108 @@ import { ClosePrompt } from "./close-prompt.js";
 import { Inspector } from "./inspector/inspector.js";
 import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
-import { selectRunDisabled, type RunState } from "./run-store.js";
+import { MoreMenu } from "./more-menu.js";
+import { selectRunDisabled, selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
-import { selectOpenDisabled, type TerminalState } from "./terminal/store.js";
+import { selectInspectorOpen, type ShellState } from "./shell-store.js";
+import type { TerminalState } from "./terminal/store.js";
 import { TerminalPane } from "./terminal/terminal-pane.js";
+import { controlTestIds } from "./test-ids.js";
 
 const statusText = (status: AppState["status"]) =>
   status.kind === "error" ? status.message : status.kind;
 
-function TitleStrip({
+function TitleRow({
   canvas,
   save,
   run,
   terminal,
+  shell,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
   run: StoreApi<RunState>;
   terminal: StoreApi<TerminalState>;
+  shell: StoreApi<ShellState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
-  const error = useStore(save, (state) => state.error);
   const runDisabled = useStore(run, (state) => selectRunDisabled(state, { saving }));
-  const runError = useStore(run, (state) => state.error);
-  const openDisabled = useStore(terminal, selectOpenDisabled);
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "baseline", marginBottom: 8 }}>
-      <span data-testid="flow-title">Untitled</span>
-      {ready && dirty && <span data-testid="flow-unsaved">Unsaved</span>}
-      {ready && (
-        <button
-          data-testid="canvas-save"
-          disabled={!dirty || saving}
-          onClick={() => void save.getState().save()}
-        >
-          Save
-        </button>
+    <header className="fd-title-row">
+      <span className="fd-app-name" data-testid="app-title">
+        Flowdeck
+      </span>
+      <span className="fd-flow-title" data-testid="flow-title">
+        Untitled
+      </span>
+      {ready && dirty && (
+        <span className="fd-unsaved" data-testid="flow-unsaved">
+          Unsaved
+        </span>
       )}
-      {ready && (
-        <button
-          data-testid="canvas-run"
-          disabled={runDisabled}
-          onClick={() => void run.getState().run()}
-        >
-          Run
-        </button>
-      )}
-      {ready && (
-        <button
-          data-testid="terminal-open"
-          disabled={openDisabled}
-          onClick={() => terminal.getState().show()}
-        >
-          Open terminal
-        </button>
-      )}
+      <div className="fd-title-actions">
+        {ready && (
+          <button
+            className="fd-btn fd-btn-primary"
+            data-testid={controlTestIds.save}
+            disabled={!dirty || saving}
+            onClick={() => void save.getState().save()}
+          >
+            Save
+          </button>
+        )}
+        {ready && (
+          <button
+            className="fd-btn fd-btn-primary"
+            data-testid={controlTestIds.run}
+            disabled={runDisabled}
+            onClick={() => void run.getState().run()}
+          >
+            Run
+          </button>
+        )}
+        {ready && <MoreMenu shell={shell} run={run} terminal={terminal} />}
+      </div>
+    </header>
+  );
+}
+
+function Errors({
+  canvas,
+  save,
+  run,
+}: {
+  canvas: StoreApi<CanvasState>;
+  save: StoreApi<SaveState>;
+  run: StoreApi<RunState>;
+}) {
+  const error = useStore(save, (state) => state.error);
+  const runError = useStore(run, (state) => state.error);
+  const message = useStore(canvas, (state) => state.message);
+  if (error === null && runError === null && message === null) return null;
+  return (
+    <div className="fd-errors" data-testid="app-errors" role="status">
       {error !== null && <span data-testid="flow-error">{error}</span>}
       {runError !== null && <span data-testid="run-error">{runError}</span>}
+      {message !== null && <span data-testid="canvas-message">{message}</span>}
     </div>
+  );
+}
+
+function StatusBar({ store, run }: { store: StoreApi<AppState>; run: StoreApi<RunState> }) {
+  const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
+  const status = useStore(store, (state) => statusText(state.status));
+  const summary = useStore(run, selectRunSummary);
+  return (
+    <footer className="fd-status-bar">
+      <span data-testid="run-status">{summary}</span>
+      <span className="fd-status-right">
+        <span data-testid="store-status">{status}</span>
+        <span data-testid="app-version">{version}</span>
+      </span>
+    </footer>
   );
 }
 
@@ -80,6 +122,7 @@ export function App({
   terminal,
   inspector,
   wait,
+  shell,
 }: {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
@@ -88,27 +131,34 @@ export function App({
   terminal: StoreApi<TerminalState>;
   inspector: StoreApi<InspectorState>;
   wait: StoreApi<WaitState>;
+  shell: StoreApi<ShellState>;
 }) {
-  const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
-  const status = useStore(store, (state) => statusText(state.status));
   const ready = useStore(canvas, (state) => state.ready);
   const terminalVisible = useStore(terminal, (state) => state.visible);
+  const inspectorShown = useStore(shell, (state) => state.inspectorShown);
+  const snapshot = useStore(run, (state) => state.snapshot);
+  const inspectorOpen = selectInspectorOpen({ inspectorShown }, { snapshot });
   const onSave = useCallback(() => void save.getState().save(), [save]);
   return (
-    <main>
-      <h1 data-testid="app-title">Flowdeck</h1>
-      <p data-testid="app-version">{version}</p>
-      <p data-testid="store-status">{status}</p>
-      <TitleStrip canvas={canvas} save={save} run={run} terminal={terminal} />
-      <div style={{ display: "flex", gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <RunStoreContext.Provider value={run}>
-            {ready && <Canvas store={canvas} onSave={onSave} />}
-          </RunStoreContext.Provider>
-        </div>
-        {ready && <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} />}
+    <main className="fd-shell">
+      <TitleRow canvas={canvas} save={save} run={run} terminal={terminal} shell={shell} />
+      <Errors canvas={canvas} save={save} run={run} />
+      <div className="fd-main">
+        <RunStoreContext.Provider value={run}>
+          {ready && <Canvas store={canvas} shell={shell} onSave={onSave} />}
+        </RunStoreContext.Provider>
+        {ready && inspectorOpen && (
+          <div className="fd-inspector">
+            <Inspector inspector={inspector} run={run} canvas={canvas} wait={wait} />
+          </div>
+        )}
       </div>
-      {terminalVisible && <TerminalPane store={terminal} />}
+      {terminalVisible && (
+        <section className="fd-terminal" aria-label="Terminal">
+          <TerminalPane store={terminal} />
+        </section>
+      )}
+      <StatusBar store={store} run={run} />
       <ClosePrompt store={save} />
     </main>
   );

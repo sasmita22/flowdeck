@@ -42,7 +42,6 @@ function Field({
   commit: (path: readonly string[], value: string) => void;
 }) {
   const value = textOf(valueAt(session, field.path));
-  const label = field.path.at(-1);
   const commitIfChanged = (next: string) => {
     if (next !== value) commit(field.path, next);
   };
@@ -50,7 +49,7 @@ function Field({
     return (
       <>
         <label style={labelStyle}>
-          {label}
+          {field.label}
           <select
             data-testid={field.testId}
             value={value}
@@ -58,7 +57,7 @@ function Field({
           >
             {field.options.map((option) => (
               <option key={option} value={option}>
-                {option}
+                {field.optionLabels[option]}
               </option>
             ))}
           </select>
@@ -72,7 +71,7 @@ function Field({
   if (field.control === "list") {
     return (
       <label style={labelStyle}>
-        {label}
+        {field.label}
         <textarea
           key={value}
           data-testid={field.testId}
@@ -86,7 +85,7 @@ function Field({
   const numeric = field.control === "number";
   return (
     <label style={labelStyle}>
-      {label}
+      {field.label}
       <input
         key={value}
         data-testid={field.testId}
