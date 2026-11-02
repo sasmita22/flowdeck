@@ -164,6 +164,27 @@ test("Clicking a Gate shows what it is and its settings, and edits are saved", a
   await expect(reopened.getByTestId("inspector")).toHaveCount(0);
 });
 
+test("The sidebar, inspector and status bar draw text at the type scale's body size", async () => {
+  const { window } = await launch();
+  await drop(window, "gate", 200);
+  await window.getByTestId("node-gate-1").click();
+  const fontSize = (locator: Locator) =>
+    locator.evaluate((element) => getComputedStyle(element).fontSize);
+
+  const body = await window.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--fs-sm").trim(),
+  );
+
+  expect(body).toBe("13px");
+  expect({
+    description: await fontSize(
+      window.getByTestId(paletteTestId("gate")).locator(".fd-palette-description"),
+    ),
+    label: await fontSize(window.locator("label", { hasText: "What to show you" })),
+    status: await fontSize(window.getByTestId("run-status")),
+  }).toEqual({ description: body, label: body, status: body });
+});
+
 test("Double-clicking an unselected node opens the hidden inspector", async () => {
   const { window } = await launch();
   await drop(window, "gate", 200);

@@ -18,7 +18,7 @@ const entryStyle: CSSProperties = {
   display: "block",
   width: "100%",
   textAlign: "left",
-  fontSize: 12,
+  fontSize: "var(--fs-sm)",
   padding: "4px 6px",
 };
 
