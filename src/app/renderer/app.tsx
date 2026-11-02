@@ -189,6 +189,7 @@ export function App({
             label="Drag to resize the inspector"
             testId={controlTestIds.inspectorResize}
             shell={shell}
+            run={run}
           />
         )}
         {ready && inspectorOpen && (

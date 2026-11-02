@@ -20,6 +20,10 @@ export const panelWidthLimits = {
   inspector: { initial: 260, min: 240, max: 560 },
 } as const satisfies Record<Panel, { initial: number; min: number; max: number }>;
 
+export const CANVAS_MIN = 320;
+
+export const inspectorFrame = 25;
+
 const panels = Object.keys(panelWidthLimits) as Panel[];
 
 const clampWidth = (panel: Panel, width: number) => {
@@ -64,6 +68,8 @@ export type ShellState = {
   panelFocus: string | null;
   sessionSettingsOpen: boolean;
   panelWidths: PanelWidths;
+  windowWidth: number;
+  setWindowWidth(width: number): void;
   resizePanel(panel: Panel, width: number): void;
   resetPanelWidth(panel: Panel): void;
   toggleSidebar(): void;
@@ -80,6 +86,27 @@ export const selectInspectorOpen = (
   shell: Pick<ShellState, "inspectorShown">,
   run: RunView,
 ): boolean => shell.inspectorShown ?? run.snapshot !== null;
+
+const fit = (panel: Panel, preferred: number, room: number) =>
+  Math.max(panelWidthLimits[panel].min, Math.min(preferred, room));
+
+export const selectShownWidths = (
+  shell: Pick<ShellState, "panelWidths" | "windowWidth" | "sidebarOpen">,
+  inspectorOpen: boolean,
+): PanelWidths => {
+  const room = shell.windowWidth - CANVAS_MIN - (inspectorOpen ? inspectorFrame : 0);
+  const inspector = inspectorOpen
+    ? fit(
+        "inspector",
+        shell.panelWidths.inspector,
+        room - (shell.sidebarOpen ? panelWidthLimits.sidebar.min : 0),
+      )
+    : 0;
+  const sidebar = shell.sidebarOpen
+    ? fit("sidebar", shell.panelWidths.sidebar, room - inspector)
+    : 0;
+  return { sidebar, inspector };
+};
 
 export const createShellStore = ({
   canvas,
@@ -101,6 +128,8 @@ export const createShellStore = ({
     panelFocus: null,
     sessionSettingsOpen: false,
     panelWidths: loadWidths(storage),
+    windowWidth: Number.POSITIVE_INFINITY,
+    setWindowWidth: (windowWidth) => set({ windowWidth }),
     resizePanel: (panel, width) => setWidth(panel, width),
     resetPanelWidth: (panel) => setWidth(panel, panelWidthLimits[panel].initial),
     toggleSidebar: () => {

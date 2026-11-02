@@ -303,7 +303,7 @@ export function Canvas({
 
   return (
     <ReactFlowProvider>
-      <Palette canvas={store} shell={shell} />
+      <Palette canvas={store} shell={shell} run={run} />
       <Board store={store} shell={shell} run={run} />
     </ReactFlowProvider>
   );

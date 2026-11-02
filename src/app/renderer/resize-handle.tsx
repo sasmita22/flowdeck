@@ -1,22 +1,42 @@
 import { useRef, type PointerEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { Panel, ShellState } from "./shell-store.js";
+import type { RunState } from "./run-store.js";
+import {
+  selectInspectorOpen,
+  selectShownWidths,
+  type Panel,
+  type ShellState,
+} from "./shell-store.js";
 
 const growsRightward: Record<Panel, number> = { sidebar: 1, inspector: -1 };
+
+export const useShownWidth = (
+  shell: StoreApi<ShellState>,
+  run: StoreApi<Pick<RunState, "snapshot">>,
+  panel: Panel,
+): number => {
+  const snapshot = useStore(run, (state) => state.snapshot);
+  return useStore(
+    shell,
+    (state) => selectShownWidths(state, selectInspectorOpen(state, { snapshot }))[panel],
+  );
+};
 
 export function ResizeHandle({
   panel,
   label,
   testId,
   shell,
+  run,
 }: {
   panel: Panel;
   label: string;
   testId: string;
   shell: StoreApi<ShellState>;
+  run: StoreApi<Pick<RunState, "snapshot">>;
 }) {
-  const width = useStore(shell, (state) => state.panelWidths[panel]);
+  const width = useShownWidth(shell, run, panel);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -41,7 +61,7 @@ export function ResizeHandle({
 
   return (
     <div
-      className="fd-resize"
+      className={`fd-resize fd-resize-${panel}`}
       data-testid={testId}
       role="separator"
       aria-orientation="vertical"

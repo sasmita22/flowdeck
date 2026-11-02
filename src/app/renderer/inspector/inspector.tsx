@@ -4,6 +4,7 @@ import type { StoreApi } from "zustand/vanilla";
 import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import { selectNodeDisplay, type RunState } from "../run-store.js";
+import { useShownWidth } from "../resize-handle.js";
 import type { ShellState } from "../shell-store.js";
 import { ActivityFeed } from "./activity-feed.js";
 import { Ask } from "./ask.js";
@@ -95,7 +96,7 @@ export function Inspector({
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
   const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
-  const width = useStore(shell, (state) => state.panelWidths.inspector);
+  const width = useShownWidth(shell, run, "inspector");
   return (
     <aside
       data-testid="inspector"
