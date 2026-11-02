@@ -4,7 +4,14 @@ import type { PendingWait } from "../../core/run/wait.js";
 
 export type EngineRequest = {
   id: number;
-  type: "version" | "store-status" | "save-flow" | "load-latest-flow" | "start-run" | "answer-wait";
+  type:
+    | "version"
+    | "store-status"
+    | "save-flow"
+    | "load-latest-flow"
+    | "start-run"
+    | "answer-wait"
+    | "workspace-info";
   payload?: unknown;
 };
 

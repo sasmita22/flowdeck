@@ -5,6 +5,7 @@ import pkg from "../../../package.json" with { type: "json" };
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
+import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
 import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
@@ -83,6 +84,7 @@ const handler = createEngineHandler({
   run,
   waits,
   worktree: new GitWorktree(),
+  gitState: new GitFolderState(),
 });
 
 process.parentPort.on("message", (event: { data: EngineRequest }) => {

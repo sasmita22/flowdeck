@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { z } from "zod";
 import { build, type BuildFileSystem } from "../../core/compiler/build.js";
 import type { VerifyFileSystem } from "../../core/compiler/verify.js";
 import { parseFlow } from "../../core/flow/schema.js";
+import { workingFolderSchema, type FolderState } from "../../core/flow/workspace-info.js";
 import {
   execute,
   loadBuild,
@@ -15,6 +17,7 @@ import {
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema } from "../../core/run/wait.js";
 import type { FlowStore, LoadLatestFlowResult, SaveFlowResult } from "../../ports/flow-store.js";
+import type { GitState } from "../../ports/git-state.js";
 import type { Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
 import { createActivityTracker } from "./activity-tracker.js";
@@ -37,6 +40,7 @@ export type EngineHandlerOptions = {
   newSessionName?: () => string;
   waits?: Pick<AppWaiter, "answer" | "drop">;
   worktree: Worktree;
+  gitState: GitState;
 };
 
 export type EngineHandler = {
@@ -55,6 +59,8 @@ type Opened = { kind: "ready"; stores: EngineStores } | { kind: "error"; message
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const workspaceInfoPayload = z.object({ workingFolder: workingFolderSchema });
 
 function announced(
   opened: OpenedSession,
@@ -306,6 +312,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return { id: request.id, ok: true, value: loadLatestFlow() };
         case "start-run":
           return { id: request.id, ok: true, value: await startRun() };
+        case "workspace-info": {
+          const parsed = workspaceInfoPayload.safeParse(request.payload);
+          if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
+          const folder = parsed.data.workingFolder;
+          try {
+            const value: FolderState | null =
+              folder.kind === "path" ? await options.gitState.read(folder.path) : null;
+            return { id: request.id, ok: true, value };
+          } catch (error) {
+            return { id: request.id, ok: false, error: messageOf(error) };
+          }
+        }
         case "answer-wait": {
           const parsed = waitAnswerSchema.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

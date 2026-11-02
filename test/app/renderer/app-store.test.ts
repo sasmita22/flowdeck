@@ -28,6 +28,7 @@ const bridge = (
   getWait: vi.fn(async () => null),
   onWait: vi.fn(() => () => {}),
   answerWait: vi.fn(async () => false),
+  workspaceInfo: vi.fn(async () => null),
 });
 
 describe("createAppStore", () => {

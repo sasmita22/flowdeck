@@ -300,6 +300,13 @@ body,
   font-size: 12px;
 }
 
+.fd-workspace {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .fd-status-right {
   display: flex;
   gap: var(--space-4);
