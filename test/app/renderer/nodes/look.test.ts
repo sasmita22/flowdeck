@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
+import { BAR_MIN_HEIGHT, nodeLook, tagWidth } from "../../../../src/app/renderer/nodes/look.js";
 import type { NodeType } from "../../../../src/core/flow/schema.js";
 import { registry } from "../../../../src/core/nodes/registry.js";
 
@@ -81,8 +81,16 @@ describe("nodeLook", () => {
     },
   );
 
-  it.each(["fork", "join"] as const)("boxes %s as a 28x48 bar until it spans branches", (type) => {
-    expect(nodeLook(type).box).toEqual({ width: 28, height: 48 });
+  it.each(["fork", "join"] as const)(
+    "boxes a lone %s as a 28-wide bar of the minimum height",
+    (type) => {
+      expect(nodeLook(type).box).toEqual({ width: 28, height: BAR_MIN_HEIGHT });
+    },
+  );
+
+  it("keeps a bar tall enough for the longest parallel tag", () => {
+    expect(BAR_MIN_HEIGHT).toBeGreaterThan(tagWidth("PARALLEL START"));
+    expect(BAR_MIN_HEIGHT).toBeLessThanOrEqual(tagWidth("PARALLEL START") + 8);
   });
 
   it("draws foreach as a control frame tagged EACH with no outline, boxed at 170x48", () => {

@@ -8,7 +8,7 @@ import {
   toViewEdges,
   toViewNodes,
 } from "../../../../src/app/renderer/canvas/view.js";
-import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
+import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import type { Flow, NodeType, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
@@ -591,13 +591,41 @@ describe("toViewNodes with a parallel section", () => {
       null,
     );
 
-    expect(node).toMatchObject({ id: "F", position: { x: 30, y: 60 }, width: 28, height: 48 });
+    expect(node).toMatchObject({
+      id: "F",
+      position: { x: 30, y: 60 },
+      width: 28,
+      height: BAR_MIN_HEIGHT,
+    });
   });
 
   it("gives a join with no wires its look box", () => {
     const [node] = toViewNodes(flow([join("J")], []), [], {}, null);
 
-    expect(node).toMatchObject({ id: "J", width: 28, height: 48 });
+    expect(node).toMatchObject({ id: "J", width: 28, height: BAR_MIN_HEIGHT });
+  });
+
+  it("keeps a bar over branches shorter than its tag at the minimum height", () => {
+    const view = toViewNodes(
+      flow(
+        [
+          { ...fork("F"), position: { x: 10, y: 10 } },
+          { ...agent("b1"), position: { x: 70, y: 30 } },
+          { ...join("J"), position: { x: 270, y: 10 } },
+        ],
+        [thenWire("F", "b1"), thenWire("b1", "J")],
+      ),
+      [],
+      {},
+      null,
+    );
+
+    for (const id of ["F", "J"]) {
+      expect(viewOf(view, id)).toMatchObject({
+        position: { x: expect.any(Number), y: 30 },
+        height: BAR_MIN_HEIGHT,
+      });
+    }
   });
 
   it("widens a session frame by a member fork's spanned box", () => {

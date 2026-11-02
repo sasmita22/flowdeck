@@ -70,11 +70,13 @@ const branchesOf = (flow: Flow, bar: Node): Node[] => {
 const barBounds = (flow: Flow, bar: Node, x = bar.position.x): Bounds | null => {
   const branches = branchesOf(flow, bar).map(boundsOf);
   if (branches.length === 0) return null;
+  const { width, height } = nodeLook(bar.type).box;
+  const top = Math.min(...branches.map((branch) => branch.top));
   return {
     left: x,
-    top: Math.min(...branches.map(({ top }) => top)),
-    right: x + nodeLook(bar.type).box.width,
-    bottom: Math.max(...branches.map(({ bottom }) => bottom)),
+    top,
+    right: x + width,
+    bottom: Math.max(top + height, ...branches.map(({ bottom }) => bottom)),
   };
 };
 

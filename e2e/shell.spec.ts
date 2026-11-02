@@ -194,6 +194,21 @@ test("Readouts hidden, still readable", async () => {
     .toContain('\\"id\\":\\"prompt-1\\"');
 });
 
+test("Each sidebar entry previews its node's shape left of its name", async () => {
+  const { window } = await launch();
+
+  for (const type of NodeType.options) {
+    const entry = window.getByTestId(paletteTestId(type));
+    await entry.scrollIntoViewIfNeeded();
+    const preview = entry.locator("svg");
+    await expect(preview).toHaveCount(1);
+    await expect(preview).toBeVisible();
+    const shape = await boxOf(preview);
+    const text = await boxOf(entry.locator(".fd-palette-description"));
+    expect(shape.x + shape.width).toBeLessThanOrEqual(text.x);
+  }
+});
+
 test("Controls keep their test ids", async () => {
   const target = await launch();
   const { window } = target;
@@ -404,7 +419,9 @@ test("Invalid node shows its reason", async () => {
   await expect(window.getByTestId("node-issue-fork-1")).toHaveText(reason);
   await expect(window.getByTestId("node-issue-fork-1")).toHaveAttribute("title", reason);
   const bar = await boxOf(window.getByTestId("node-fork-1"));
-  const label = await boxOf(window.getByTestId("node-fork-1").locator("text"));
+  const label = await boxOf(
+    window.getByTestId("node-fork-1").locator("text", { hasText: "PARALLEL START" }),
+  );
   expect(label.y).toBeGreaterThanOrEqual(bar.y);
   expect(label.y + label.height).toBeLessThanOrEqual(bar.y + bar.height);
   const marker = await boxOf(window.getByTestId("node-issue-fork-1"));

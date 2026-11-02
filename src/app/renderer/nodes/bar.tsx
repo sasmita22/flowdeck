@@ -1,7 +1,9 @@
 import type { NodeProps } from "@xyflow/react";
+import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
+import { barLook } from "./outlines.js";
 import { NodeIssueMarker } from "../canvas/status.js";
-import { ports, tagWidth, type ShapeNode } from "./shape.js";
+import { ports, tagTextStyle, type ShapeNode } from "./shape.js";
 
 export function ParallelBar({
   id,
@@ -15,15 +17,22 @@ export function ParallelBar({
 }) {
   const { box, group, outline, tag } = nodeLook(type);
   const [w, h] = [width ?? box.width, height ?? box.height];
-  const label = tagWidth(tag) <= h ? tag : type.toUpperCase();
   const ring = (stroke: string, strokeWidth: number) => (
-    <rect width={w} height={h} rx={8} fill="none" stroke={stroke} strokeWidth={strokeWidth} />
+    <rect
+      width={w}
+      height={h}
+      rx={barLook.rx}
+      fill="none"
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+    />
   );
   return (
     <div
       className="fd-node"
       data-testid={`node-${id}`}
       data-highlighted={data.highlighted === true ? "true" : undefined}
+      title={nodeTitle(type)}
       style={{ position: "relative", width: w, height: h }}
     >
       <svg
@@ -37,11 +46,11 @@ export function ParallelBar({
           className="fd-node-outline"
           width={w}
           height={h}
-          rx={8}
+          rx={barLook.rx}
           fill={group}
-          fillOpacity={0.16}
+          fillOpacity={barLook.fillOpacity}
           stroke={outline}
-          strokeWidth={1.4}
+          strokeWidth={barLook.strokeWidth}
         />
         <text
           x={w / 2}
@@ -50,11 +59,28 @@ export function ParallelBar({
           textAnchor="middle"
           dominantBaseline="central"
           transform={`rotate(-90 ${w / 2} ${h / 2})`}
-          style={{ font: "600 9.5px var(--f-mono)", letterSpacing: "0.04em" }}
+          style={tagTextStyle}
         >
-          {label}
+          {tag}
         </text>
       </svg>
+      <div
+        style={{
+          position: "absolute",
+          bottom: "100%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          marginBottom: 6,
+          maxWidth: 170,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          color: "var(--fg)",
+          font: "600 13px var(--f-body)",
+        }}
+      >
+        {data.label}
+      </div>
       <NodeIssueMarker nodeId={id} />
       {ports(id, type)}
     </div>
