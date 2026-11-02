@@ -1,58 +1,83 @@
-import type { CSSProperties, DragEvent } from "react";
-import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
-import * as scriptDefaults from "../../../core/nodes/script/defaults.js";
-import type { CanvasNodeType } from "./store.js";
+import { Fragment, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useStore } from "zustand";
+import type { StoreApi } from "zustand/vanilla";
+import type { NodeType } from "../../../core/flow/schema.js";
+import type { ShellState } from "../shell-store.js";
+import { controlTestIds } from "../test-ids.js";
+import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
+import type { CanvasState } from "./store.js";
 
 export const nodeMimeType = "application/flowdeck-node";
 
-const items: { type: CanvasNodeType; label: string; style: CSSProperties }[] = [
-  {
-    type: "prompt",
-    label: promptDefaults.defaultLabel,
-    style: {
-      background: "#ffffff",
-      color: "#1d1d1f",
-      border: "1.4px solid #3a3a3c",
-      borderRadius: 4,
-    },
-  },
-  {
-    type: "script",
-    label: scriptDefaults.defaultLabel,
-    style: {
-      background: "#1e1e1e",
-      color: "#e6e6e6",
-      border: "1px solid #1e1e1e",
-      borderRadius: 6,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    },
-  },
-];
-
-const onDragStart = (type: CanvasNodeType) => (event: DragEvent<HTMLDivElement>) => {
+const onDragStart = (type: NodeType) => (event: DragEvent<HTMLDivElement>) => {
   event.dataTransfer.setData(nodeMimeType, type);
   event.dataTransfer.effectAllowed = "move";
 };
 
-export function Palette() {
+function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: NodeType) => void }) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    onAdd(item.type);
+  };
   return (
-    <aside style={{ display: "flex", flexDirection: "column", gap: 8, width: 120 }}>
-      {items.map(({ type, label, style }) => (
-        <div
-          key={type}
-          data-testid={`palette-${type}`}
-          draggable
-          onDragStart={onDragStart(type)}
+    <div
+      className="fd-palette-item"
+      data-testid={item.testId}
+      tabIndex={0}
+      draggable
+      onDragStart={onDragStart(item.type)}
+      onDoubleClick={() => onAdd(item.type)}
+      onKeyDown={onKeyDown}
+    >
+      <span className="fd-palette-head">
+        <span
+          className="fd-tag"
           style={{
-            padding: "8px 12px",
-            fontFamily: "system-ui, sans-serif",
-            fontSize: 13,
-            cursor: "grab",
-            ...style,
+            color: item.color,
+            background: `color-mix(in srgb, ${item.color} 15%, transparent)`,
           }}
         >
-          {label}
-        </div>
+          {item.tag}
+        </span>
+        {item.label}
+      </span>
+      <span className="fd-palette-description">{item.description}</span>
+    </div>
+  );
+}
+
+export function Palette({
+  canvas,
+  shell,
+}: {
+  canvas: StoreApi<CanvasState>;
+  shell: StoreApi<ShellState>;
+}) {
+  const open = useStore(shell, (state) => state.sidebarOpen);
+  const [query, setQuery] = useState("");
+  if (!open) return null;
+  const groups = groupPalette(filterPalette(paletteItems, query));
+  const onAdd = (type: NodeType) => canvas.getState().addNext(type);
+  return (
+    <aside className="fd-sidebar" aria-label="Nodes">
+      <input
+        className="fd-search"
+        data-testid={controlTestIds.search}
+        type="search"
+        placeholder="Search nodes"
+        aria-label="Search nodes"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      {groups.length === 0 && <p className="fd-palette-empty">No node matches “{query}”.</p>}
+      {groups.map(({ group, items }) => (
+        <Fragment key={group}>
+          <h2 className="fd-group-heading">{group}</h2>
+          {items.map((item) => (
+            <Entry key={item.type} item={item} onAdd={onAdd} />
+          ))}
+        </Fragment>
       ))}
     </aside>
   );

@@ -1,7 +1,7 @@
 import { Handle, Position, type Node } from "@xyflow/react";
 import { useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
-import { NodeStatusBadge } from "../canvas/status.js";
+import { NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { nodeLook } from "./look.js";
 import "./tokens.css";
 
@@ -17,7 +17,7 @@ export const roundedRect = (width: number, height: number, r: number, inset = 0)
 export const octagon = (w: number, h: number, c: number): string =>
   `M${c},0 H${w - c} L${w},${c} V${h - c} L${w - c},${h} H${c} L0,${h - c} V${c} Z`;
 
-const tagWidth = (tag: string) => tag.length * 7 + 10;
+export const tagWidth = (tag: string) => tag.length * 7 + 10;
 
 export const ports = (id: string, type: NodeType) =>
   nodeLook(type).ports.map(({ name, direction }) => (
@@ -91,6 +91,7 @@ export function NodeShape({
       <div style={{ position: "absolute", left: padL, top: 25, color: textColor }}>
         <NodeStatusBadge nodeId={id} />
       </div>
+      <NodeIssueMarker nodeId={id} />
       {handles}
     </div>
   );

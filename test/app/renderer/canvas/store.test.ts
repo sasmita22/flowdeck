@@ -1,17 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createCanvasStore,
+  isNodeType,
   newCanvasFlow,
   nextNodeId,
+  nodeDefaults,
+  placeNode,
+  selectCanvasEmpty,
   selectDirty,
+  selectNodeIssues,
   wrappableIds,
-  type CanvasNodeType,
 } from "../../../../src/app/renderer/canvas/store.js";
+import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { SESSION_FRAME_ID, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
+import { NodeType, parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
 import {
+  agent,
   flow,
+  forEach,
+  fork,
   hardstop,
   loop,
   output,
@@ -424,7 +432,7 @@ describe("move", () => {
   it("records one move for nodes dragged together and leaves undragged ids alone", () => {
     const store = createCanvasStore();
     act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("script", { x: 100, y: 0 }));
+    act(store, (s) => s.drop("script", { x: 0, y: 100 }));
     act(store, (s) => s.drop("script", { x: 200, y: 0 }));
     const before = store.getState().flow;
 
@@ -556,7 +564,7 @@ describe("undo and redo", () => {
 
 describe("node ids", () => {
   it("drops with the injected id source", () => {
-    const nextId = vi.fn((type: CanvasNodeType) => `${type}-custom`);
+    const nextId = vi.fn((type: NodeType) => `${type}-custom`);
     const store = createCanvasStore({ nextId });
     const empty = store.getState().flow;
 
@@ -950,5 +958,209 @@ describe("highlight", () => {
     store.getState().highlight(null);
 
     expect(store.getState().highlighted).toBeNull();
+  });
+});
+
+const everyType = NodeType.options;
+
+describe("every node type", () => {
+  it.each(everyType)("isNodeType accepts %s", (type) => {
+    expect(isNodeType(type)).toBe(true);
+  });
+
+  it.each(["session", "", "Prompt"])("isNodeType refuses %j", (value) => {
+    expect(isNodeType(value)).toBe(false);
+  });
+
+  it.each(everyType)("drops %s with its core defaults", (type) => {
+    const store = createCanvasStore();
+
+    store.getState().drop(type, { x: 40, y: 40 });
+
+    const current = store.getState().flow;
+    expect(current.nodes).toEqual([
+      {
+        id: `${type}-1`,
+        type,
+        label: nodeDefaults[type].label,
+        position: { x: 40, y: 40 },
+        settings: nodeDefaults[type].settings,
+      },
+    ]);
+    expect(parseFlow(current)).toEqual(current);
+  });
+});
+
+describe("connect beside an invalid node", () => {
+  const withLoneFork = () => {
+    const store = createCanvasStore();
+    store.getState().drop("prompt", { x: 0, y: 0 });
+    store.getState().drop("script", { x: 300, y: 0 });
+    store.getState().drop("fork", { x: 0, y: 300 });
+    return store;
+  };
+
+  it("accepts a valid wire while a lone fork is on the canvas", () => {
+    const store = withLoneFork();
+
+    expect(store.getState().connect(end("prompt-1", "out"), end("script-1", "in"))).toBe(true);
+    expect(store.getState().flow.wires).toEqual([then("prompt-1", "script-1")]);
+  });
+
+  it("still refuses a wire whose own errors are new", () => {
+    const store = withLoneFork();
+    const before = store.getState();
+
+    expect(store.getState().connect(end("prompt-1", "in"), end("script-1", "in"))).toBe(false);
+    expect(store.getState().flow).toEqual(before.flow);
+    expect(store.getState().undoStack).toEqual(before.undoStack);
+  });
+
+  it("wires a parallel section one wire at a time into a valid flow", () => {
+    const store = createCanvasStore();
+    store.getState().drop("fork", { x: 0, y: 0 });
+    store.getState().drop("agent", { x: 200, y: 0 });
+    store.getState().drop("agent", { x: 200, y: 200 });
+    store.getState().drop("join", { x: 500, y: 0 });
+
+    expect(store.getState().connect(end("fork-1", "out"), end("agent-1", "in"))).toBe(true);
+    expect(store.getState().connect(end("fork-1", "out"), end("agent-2", "in"))).toBe(true);
+    expect(store.getState().connect(end("agent-1", "out"), end("join-1", "in"))).toBe(true);
+    expect(store.getState().connect(end("agent-2", "out"), end("join-1", "in"))).toBe(true);
+    expect(store.getState().flow.wires).toHaveLength(4);
+    expect(validate(store.getState().flow)).toEqual([]);
+  });
+});
+
+describe("selectCanvasEmpty", () => {
+  it("is true for a new store and false after one drop", () => {
+    const store = createCanvasStore();
+    expect(selectCanvasEmpty(store.getState())).toBe(true);
+
+    store.getState().drop("prompt", { x: 0, y: 0 });
+
+    expect(selectCanvasEmpty(store.getState())).toBe(false);
+  });
+});
+
+const promptWidth = nodeLook("prompt").box.width;
+const boxOf = (node: Flow["nodes"][number]) => ({ ...node.position, ...nodeLook(node.type).box });
+const overlaps = (a: ReturnType<typeof boxOf>, b: ReturnType<typeof boxOf>) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+describe("placeNode", () => {
+  it("returns the request on an empty flow", () => {
+    expect(placeNode(newCanvasFlow(), "prompt", { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
+  });
+
+  it("moves a request that overlaps a node to that node's right edge plus 48", () => {
+    const current = flow([{ ...prompt("p"), position: { x: 100, y: 100 } }], []);
+
+    expect(placeNode(current, "script", { x: 120, y: 110 })).toEqual({
+      x: 100 + promptWidth + 48,
+      y: 110,
+    });
+  });
+
+  it("clears two nodes in a row", () => {
+    const current = flow(
+      [
+        { ...prompt("p"), position: { x: 100, y: 100 } },
+        { ...prompt("q"), position: { x: 100 + promptWidth + 48, y: 100 } },
+      ],
+      [],
+    );
+
+    expect(placeNode(current, "prompt", { x: 100, y: 100 })).toEqual({
+      x: 100 + 2 * (promptWidth + 48),
+      y: 100,
+    });
+  });
+
+  it("keeps two drops at the same point from overlapping", () => {
+    const store = createCanvasStore();
+
+    store.getState().drop("prompt", { x: 50, y: 50 });
+    store.getState().drop("prompt", { x: 50, y: 50 });
+
+    const [first, second] = store.getState().flow.nodes;
+    if (first === undefined || second === undefined) throw new Error("expected two nodes");
+    expect(overlaps(boxOf(first), boxOf(second))).toBe(false);
+  });
+});
+
+describe("addNext", () => {
+  it("adds right of the one selected node at its y", () => {
+    const store = createCanvasStore();
+    store.getState().drop("prompt", { x: 100, y: 100 });
+
+    store.getState().addNext("script");
+
+    expect(store.getState().flow.nodes[1]?.position).toEqual({
+      x: 100 + promptWidth + 48,
+      y: 100,
+    });
+    expect(store.getState().selection).toEqual(["script-1"]);
+  });
+
+  it("adds right of the rightmost node when nothing is selected", () => {
+    const store = createCanvasStore();
+    store.getState().drop("prompt", { x: 100, y: 100 });
+    store.getState().drop("prompt", { x: 500, y: 40 });
+    store.getState().select([]);
+
+    store.getState().addNext("script");
+
+    expect(store.getState().flow.nodes[2]?.position).toEqual({
+      x: 500 + promptWidth + 48,
+      y: 40,
+    });
+  });
+
+  it("adds at (80, 80) on an empty canvas, as one undoable command", () => {
+    const store = createCanvasStore();
+
+    store.getState().addNext("prompt");
+
+    expect(store.getState().flow.nodes.map((node) => node.position)).toEqual([{ x: 80, y: 80 }]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+
+    expect(store.getState().flow).toEqual(newCanvasFlow());
+  });
+});
+
+describe("selectNodeIssues", () => {
+  it("maps a lone fork to its parallel-section message without the node id", () => {
+    const current = flow([fork("fork-1")], []);
+    const message = validate(current).find((error) => error.rule === "parallel-section")?.message;
+
+    expect(message).toBe("fork-1 has 0 branches; a parallel start needs two or more.");
+    expect(selectNodeIssues(current)).toEqual({
+      "fork-1": "has 0 branches; a parallel start needs two or more.",
+    });
+  });
+
+  it("drops the node id and its type from a For each reason", () => {
+    const current = flow([forEach("foreach-1")], []);
+
+    expect(selectNodeIssues(current)).toEqual({ "foreach-1": "has no prompt in its body." });
+  });
+
+  it("has no entry for a valid prompt", () => {
+    expect(selectNodeIssues(flow([prompt("prompt-1")], []))).toEqual({});
+  });
+
+  it("maps an agent with empty instructions to its reason", () => {
+    const current = flow([agent("agent-1", { settings: { instructions: "" } })], []);
+
+    expect(selectNodeIssues(current)).toEqual({ "agent-1": "Agent has no instructions." });
+  });
+
+  it("returns the same map for the same flow", () => {
+    const current = flow([fork("fork-1")], []);
+
+    expect(selectNodeIssues(current)).toBe(selectNodeIssues(current));
   });
 });

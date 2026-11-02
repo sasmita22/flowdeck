@@ -5,6 +5,7 @@ import {
   createRunStore,
   selectNodeDisplay,
   selectRunDisabled,
+  selectRunSummary,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import { flow, prompt } from "../../fixtures/flow-builders.js";
@@ -277,5 +278,52 @@ describe("selectNodeDisplay", () => {
     expect(selectNodeDisplay(run.getState(), "b")).toBe("needs you");
     expect(selectNodeDisplay(run.getState(), "c")).toBe("skipped");
     expect(selectNodeDisplay(run.getState(), "zz")).toBeNull();
+  });
+});
+
+describe("selectRunSummary", () => {
+  const summaryOf = async (value: unknown) => {
+    const { run, push } = await setup();
+    await run.getState().connect();
+    push(value);
+    return selectRunSummary(run.getState());
+  };
+
+  it("is Idle before any snapshot", async () => {
+    const { run } = await setup();
+
+    expect(selectRunSummary(run.getState())).toBe("Idle");
+  });
+
+  it("counts done nodes while running", async () => {
+    expect(
+      await summaryOf(
+        snapshot("running", { a: "done", b: "done", c: "done", d: "running", e: "waiting" }),
+      ),
+    ).toBe("Running · 3 of 5 nodes done");
+  });
+
+  it("says Needs you when a node waits on the user", async () => {
+    expect(await summaryOf(snapshot("running", { a: "done", b: "needs-you" }))).toBe(
+      "Needs you · 1 of 2 nodes done",
+    );
+  });
+
+  it("says Failed when a node failed", async () => {
+    expect(await summaryOf(snapshot("failed", { a: "done", b: "failed" }))).toBe(
+      "Failed · 1 of 2 nodes done",
+    );
+  });
+
+  it("puts Needs you before Failed", async () => {
+    expect(await summaryOf(snapshot("running", { a: "failed", b: "needs-you" }))).toBe(
+      "Needs you · 0 of 2 nodes done",
+    );
+  });
+
+  it("says Done once every node is done and the run stopped running", async () => {
+    expect(
+      await summaryOf(snapshot("done", { a: "done", b: "done", c: "done", d: "done", e: "done" })),
+    ).toBe("Done · 5 of 5 nodes done");
   });
 });

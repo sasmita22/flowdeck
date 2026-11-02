@@ -12,7 +12,13 @@ const overlayStyle = {
   zIndex: 10,
 } as const;
 
-const dialogStyle = { background: "#fff", padding: 16, borderRadius: 6 } as const;
+const dialogStyle = {
+  background: "var(--panel)",
+  color: "var(--fg)",
+  border: "1px solid var(--line)",
+  padding: 16,
+  borderRadius: 6,
+} as const;
 
 export function ClosePrompt({ store }: { store: StoreApi<SaveState> }) {
   const open = useStore(store, (state) => state.closePrompt);
@@ -25,6 +31,7 @@ export function ClosePrompt({ store }: { store: StoreApi<SaveState> }) {
         <p id="close-prompt-text">Save changes before closing?</p>
         <div style={{ display: "flex", gap: 8 }}>
           <button
+            className="fd-btn"
             data-testid="close-save"
             disabled={saving}
             onClick={() => void answerClose("save")}
@@ -32,6 +39,7 @@ export function ClosePrompt({ store }: { store: StoreApi<SaveState> }) {
             Save
           </button>
           <button
+            className="fd-btn"
             data-testid="close-discard"
             disabled={saving}
             onClick={() => void answerClose("discard")}
@@ -39,6 +47,7 @@ export function ClosePrompt({ store }: { store: StoreApi<SaveState> }) {
             Don't save
           </button>
           <button
+            className="fd-btn"
             data-testid="close-cancel"
             disabled={saving}
             onClick={() => void answerClose("cancel")}

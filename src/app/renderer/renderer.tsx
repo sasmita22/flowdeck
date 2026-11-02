@@ -6,7 +6,9 @@ import { createInspectorStore } from "./inspector/store.js";
 import { createWaitStore } from "./inspector/wait-store.js";
 import { createRunStore } from "./run-store.js";
 import { createSaveStore } from "./save-store.js";
+import { createShellStore } from "./shell-store.js";
 import { createTerminalStore } from "./terminal/store.js";
+import "./theme.css";
 
 const store = createAppStore(window.flowdeck);
 void store.getState().load();
@@ -21,6 +23,7 @@ const inspector = createInspectorStore({ bridge: window.flowdeck });
 void inspector.getState().connect();
 const wait = createWaitStore({ bridge: window.flowdeck });
 void wait.getState().connect();
+const shell = createShellStore();
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("index.html has no #root element");
@@ -33,5 +36,6 @@ createRoot(root).render(
     terminal={terminal}
     inspector={inspector}
     wait={wait}
+    shell={shell}
   />,
 );

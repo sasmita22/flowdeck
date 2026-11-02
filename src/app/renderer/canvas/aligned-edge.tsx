@@ -7,8 +7,9 @@ export function AlignedEdge({
   targetX,
   targetY,
   data,
+  markerEnd,
 }: EdgeProps<Edge<{ align: Align }>>) {
   const ends = { sourceX, sourceY, targetX, targetY };
   const [path] = getStraightPath(data === undefined ? ends : alignedEnds(ends, data.align));
-  return <BaseEdge path={path} />;
+  return <BaseEdge path={path} {...(markerEnd !== undefined && { markerEnd })} />;
 }

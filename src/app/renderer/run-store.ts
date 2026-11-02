@@ -32,6 +32,19 @@ export const selectNodeDisplay = (
   return state === undefined ? null : displayStatus(state);
 };
 
+const summaryLabel = (status: RunSnapshot["status"], shown: readonly DisplayStatus[]) => {
+  if (shown.includes("needs you")) return "Needs you";
+  if (shown.includes("failed")) return "Failed";
+  return status === "running" ? "Running" : "Done";
+};
+
+export const selectRunSummary = (run: Pick<RunState, "snapshot">): string => {
+  if (run.snapshot === null) return "Idle";
+  const shown = Object.values(run.snapshot.nodes).map(displayStatus);
+  const done = shown.filter((status) => status === "done").length;
+  return `${summaryLabel(run.snapshot.status, shown)} · ${done} of ${shown.length} nodes done`;
+};
+
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export const createRunStore = ({

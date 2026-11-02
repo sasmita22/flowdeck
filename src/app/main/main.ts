@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { createTerminal, type Terminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { answerWait, createWaitRelay } from "./wait.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
+import { defaultWindowBounds, minimumWindowSize } from "./window-size.js";
 
 const rendererIndexPath = join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
 
@@ -69,8 +70,14 @@ function startEngine(home: string) {
 }
 
 function openWindow(windowGuard: WindowGuard) {
+  nativeTheme.themeSource = "dark";
+  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const minimumSize = minimumWindowSize(workArea);
   const window = new BrowserWindow({
     title: "Flowdeck",
+    ...defaultWindowBounds(workArea),
+    minWidth: minimumSize.width,
+    minHeight: minimumSize.height,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,

@@ -86,6 +86,34 @@ describe("describeFields", () => {
       ]),
     );
   });
+
+  it("labels every field in plain words", () => {
+    const kind = kindField();
+    const labelled = (field: FieldDescription) => [field.testId, field.label];
+
+    expect(describeFields(sessionSettingsSchema).map(labelled)).toEqual([
+      ["session-working-folder-kind", "Working folder"],
+      ["session-model", "Model"],
+      ["session-allowed-tools", "Allowed tools (one per line)"],
+      ["session-budget", "Budget ($)"],
+    ]);
+    expect(kind.variants.path?.map(labelled)).toEqual([
+      ["session-working-folder-path", "Folder path"],
+    ]);
+    expect(kind.variants.worktree?.map(labelled)).toEqual(
+      expect.arrayContaining([
+        ["session-working-folder-repo", "Repository"],
+        ["session-working-folder-branch", "Start from branch"],
+      ]),
+    );
+  });
+
+  it("names each working folder kind in plain words and keeps its value", () => {
+    expect(kindField().optionLabels).toEqual({
+      path: "Existing folder",
+      worktree: "New git worktree",
+    });
+  });
 });
 
 describe("applyField", () => {
