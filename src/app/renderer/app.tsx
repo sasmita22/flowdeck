@@ -11,6 +11,7 @@ import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
 import { MoreMenu } from "./more-menu.js";
 import { PanelToggle } from "./panel-toggle.js";
+import { ResizeHandle } from "./resize-handle.js";
 import { selectRunDisabled, selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import { SessionSettingsButton } from "./session-settings-button.js";
@@ -182,6 +183,14 @@ export function App({
         <RunStoreContext.Provider value={run}>
           {ready && <Canvas store={canvas} shell={shell} run={run} onSave={onSave} />}
         </RunStoreContext.Provider>
+        {ready && inspectorOpen && (
+          <ResizeHandle
+            panel="inspector"
+            label="Drag to resize the inspector"
+            testId={controlTestIds.inspectorResize}
+            shell={shell}
+          />
+        )}
         {ready && inspectorOpen && (
           <div className="fd-inspector">
             <div className="fd-panel-head">

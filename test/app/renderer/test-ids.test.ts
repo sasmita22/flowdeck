@@ -32,6 +32,8 @@ describe("test ids", () => {
       "sidebar-show",
       "inspector-hide",
       "inspector-show",
+      "sidebar-resize",
+      "inspector-resize",
       "canvas-undo",
       "canvas-redo",
       "canvas-delete",

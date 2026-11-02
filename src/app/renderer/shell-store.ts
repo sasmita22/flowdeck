@@ -7,12 +7,65 @@ type RunView = Pick<RunState, "snapshot">;
 
 type SelectionView = Pick<CanvasState, "selection" | "select">;
 
+export type Panel = "sidebar" | "inspector";
+
+export type PanelWidths = Record<Panel, number>;
+
+export type WidthStorage = Pick<Storage, "getItem" | "setItem">;
+
+export const panelWidthKey = "flowdeck.panelWidths";
+
+export const panelWidthLimits = {
+  sidebar: { initial: 260, min: 200, max: 480 },
+  inspector: { initial: 260, min: 240, max: 560 },
+} as const satisfies Record<Panel, { initial: number; min: number; max: number }>;
+
+const panels = Object.keys(panelWidthLimits) as Panel[];
+
+const clampWidth = (panel: Panel, width: number) => {
+  const { min, max } = panelWidthLimits[panel];
+  return Math.min(max, Math.max(min, Math.round(width)));
+};
+
+const initialWidths = (): PanelWidths => ({
+  sidebar: panelWidthLimits.sidebar.initial,
+  inspector: panelWidthLimits.inspector.initial,
+});
+
+const loadWidths = (storage: WidthStorage | undefined): PanelWidths => {
+  const widths = initialWidths();
+  let saved: unknown;
+  try {
+    saved = JSON.parse(storage?.getItem(panelWidthKey) ?? "null");
+  } catch {
+    return widths;
+  }
+  if (typeof saved !== "object" || saved === null) return widths;
+  for (const panel of panels) {
+    const width = (saved as Partial<Record<Panel, unknown>>)[panel];
+    if (typeof width === "number" && Number.isFinite(width))
+      widths[panel] = clampWidth(panel, width);
+  }
+  return widths;
+};
+
+const saveWidths = (storage: WidthStorage | undefined, widths: PanelWidths) => {
+  try {
+    storage?.setItem(panelWidthKey, JSON.stringify(widths));
+  } catch {
+    return;
+  }
+};
+
 export type ShellState = {
   sidebarOpen: boolean;
   menuOpen: boolean;
   inspectorShown: boolean | null;
   panelFocus: string | null;
   sessionSettingsOpen: boolean;
+  panelWidths: PanelWidths;
+  resizePanel(panel: Panel, width: number): void;
+  resetPanelWidth(panel: Panel): void;
   toggleSidebar(): void;
   toggleInspector(run: RunView): void;
   showInspector(): void;
@@ -30,15 +83,26 @@ export const selectInspectorOpen = (
 
 export const createShellStore = ({
   canvas,
+  storage,
 }: {
   canvas: StoreApi<SelectionView>;
+  storage?: WidthStorage | undefined;
 }): StoreApi<ShellState> => {
+  const setWidth = (panel: Panel, width: number) => {
+    const panelWidths = { ...store.getState().panelWidths, [panel]: clampWidth(panel, width) };
+    store.setState({ panelWidths });
+    saveWidths(storage, panelWidths);
+  };
+
   const store = createStore<ShellState>()((set, get) => ({
     sidebarOpen: true,
     menuOpen: false,
     inspectorShown: null,
     panelFocus: null,
     sessionSettingsOpen: false,
+    panelWidths: loadWidths(storage),
+    resizePanel: (panel, width) => setWidth(panel, width),
+    resetPanelWidth: (panel) => setWidth(panel, panelWidthLimits[panel].initial),
     toggleSidebar: () => {
       const sidebarOpen = !get().sidebarOpen;
       set({

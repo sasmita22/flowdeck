@@ -13,6 +13,8 @@ export const controlTestIds = {
   sidebarShow: "sidebar-show",
   inspectorHide: "inspector-hide",
   inspectorShow: "inspector-show",
+  sidebarResize: "sidebar-resize",
+  inspectorResize: "inspector-resize",
   undo: "canvas-undo",
   redo: "canvas-redo",
   delete: "canvas-delete",

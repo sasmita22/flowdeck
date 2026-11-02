@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { NodePreview } from "../nodes/preview.js";
 import { PanelToggle } from "../panel-toggle.js";
+import { ResizeHandle } from "../resize-handle.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
 import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
@@ -61,40 +62,49 @@ export function Palette({
   shell: StoreApi<ShellState>;
 }) {
   const open = useStore(shell, (state) => state.sidebarOpen);
+  const width = useStore(shell, (state) => state.panelWidths.sidebar);
   const [query, setQuery] = useState("");
   if (!open) return null;
   const groups = groupPalette(filterPalette(paletteItems, query));
   const onAdd = (type: CanvasItemType) => canvas.getState().addNext(type);
   return (
-    <aside className="fd-sidebar" aria-label="Nodes">
-      <div className="fd-panel-head">
-        <h2 className="fd-panel-title">Nodes</h2>
-        <PanelToggle
-          side="left"
-          label="Hide node sidebar"
-          testId={controlTestIds.sidebarHide}
-          shell={shell}
-          onClick={() => shell.getState().toggleSidebar()}
+    <>
+      <aside className="fd-sidebar" aria-label="Nodes" style={{ width }}>
+        <div className="fd-panel-head">
+          <h2 className="fd-panel-title">Nodes</h2>
+          <PanelToggle
+            side="left"
+            label="Hide node sidebar"
+            testId={controlTestIds.sidebarHide}
+            shell={shell}
+            onClick={() => shell.getState().toggleSidebar()}
+          />
+        </div>
+        <input
+          className="fd-search"
+          data-testid={controlTestIds.search}
+          type="search"
+          placeholder="Search nodes"
+          aria-label="Search nodes"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
         />
-      </div>
-      <input
-        className="fd-search"
-        data-testid={controlTestIds.search}
-        type="search"
-        placeholder="Search nodes"
-        aria-label="Search nodes"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
+        {groups.length === 0 && <p className="fd-palette-empty">No node matches “{query}”.</p>}
+        {groups.map(({ group, items }) => (
+          <Fragment key={group}>
+            <h2 className="fd-group-heading">{group}</h2>
+            {items.map((item) => (
+              <Entry key={item.type} item={item} onAdd={onAdd} />
+            ))}
+          </Fragment>
+        ))}
+      </aside>
+      <ResizeHandle
+        panel="sidebar"
+        label="Drag to resize the node sidebar"
+        testId={controlTestIds.sidebarResize}
+        shell={shell}
       />
-      {groups.length === 0 && <p className="fd-palette-empty">No node matches “{query}”.</p>}
-      {groups.map(({ group, items }) => (
-        <Fragment key={group}>
-          <h2 className="fd-group-heading">{group}</h2>
-          {items.map((item) => (
-            <Entry key={item.type} item={item} onAdd={onAdd} />
-          ))}
-        </Fragment>
-      ))}
-    </aside>
+    </>
   );
 }
