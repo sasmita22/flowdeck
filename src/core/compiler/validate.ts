@@ -1,8 +1,9 @@
 import type { Flow } from "../flow/schema.js";
+import { rule as bodyNodes } from "./rules/body-nodes.js";
 import { rule as branchFlag } from "./rules/branch-flag.js";
-import { rule as foreachFirstPrompt } from "./rules/foreach-first-prompt.js";
-import { rule as foreachNesting } from "./rules/foreach-nesting.js";
+import { rule as fileWires } from "./rules/file-wires.js";
 import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
+import { rule as loopBody } from "./rules/loop-body.js";
 import { rule as loopCap } from "./rules/loop-cap.js";
 import { rule as loopSingleEntry } from "./rules/loop-single-entry.js";
 import { rule as noCycle } from "./rules/no-cycle.js";
@@ -36,9 +37,10 @@ export const rules = [
   loopSingleEntry,
   nodeIds,
   parallelSection,
-  foreachFirstPrompt,
-  foreachNesting,
+  loopBody,
+  bodyNodes,
   branchFlag,
+  fileWires,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

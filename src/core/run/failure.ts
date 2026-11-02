@@ -8,6 +8,7 @@ function plainCause(cause: string): string {
   if (cause === "killed by a signal") return "Script was stopped by a signal";
   const inner = /^(\S+) failed: (.*)$/s.exec(cause);
   if (inner !== null) return `${inner[1]} failed: ${plainCause(inner[2] ?? "")}`;
+  if (/^\S+ wasn't written by /.test(cause)) return cause;
   return capitalized(cause);
 }
 

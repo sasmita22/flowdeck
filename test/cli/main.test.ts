@@ -1,10 +1,9 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
 import { SessionGoneError } from "../../src/adapters/claude/claude-session.js";
 import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
@@ -240,52 +239,33 @@ describe("runCli run", () => {
     nothingStarted(recorded, scripts);
   });
 
-  it("refuses a loop with an empty body before starting anything", async () => {
-    const other = new FakeFileSystem();
-    const { dir: loopDir } = await built(
-      other,
-      flow([prompt("p1"), loop("l1")], [thenWire("p1", "l1")]),
-    );
-    const { deps, recorded, scripts } = stubDeps(other);
+  it.each([
+    ["an empty body", flow([prompt("p1"), loop("l1")], [thenWire("p1", "l1")])],
+    [
+      "a Script-only body",
+      flow([loop("l1"), script("s1", { parent: "l1" })], [thenWire("l1", "s1")]),
+    ],
+  ])(
+    "refuses to build a loop with %s, the same way the runner refuses it",
+    async (_name, input) => {
+      const result = await build(input, {
+        fs: new FakeFileSystem(),
+        home,
+        connectors: new FakeConnectorSource({ jira }),
+      });
 
-    expect(await runCli(["run", loopDir, "--cwd", repo], deps)).toBe(2);
-    expect(recorded.stderr.join("\n")).toContain("l1 (loop) has no prompt or agent in its body");
-    nothingStarted(recorded, scripts);
-  });
-
-  it("refuses a loop whose body is a Script only, running nothing", async () => {
-    const other = new FakeFileSystem();
-    const marked = await mkdtemp(join(tmpdir(), "fd-cwd-"));
-    try {
-      const { dir: loopDir } = await built(
-        other,
-        flow(
-          [
-            loop("l1"),
-            script("s1", {
-              parent: "l1",
-              settings: { command: "sh", args: ["-c", "echo ran > marker.txt"] },
-            }),
-          ],
-          [thenWire("l1", "s1")],
-        ),
-      );
-      const { deps, recorded } = stubDeps(other);
-
-      expect(
-        await runCli(["run", loopDir, "--cwd", marked], {
-          ...deps,
-          scripts: new NodeProcessRunner(),
-        }),
-      ).toBe(2);
-      expect(recorded.stderr.join("\n")).toContain("l1 (loop) has no prompt or agent in its body");
-      await expect(access(join(marked, "marker.txt"))).rejects.toThrow();
-      expect(recorded.startEvents).toEqual([]);
-      expect(recorded.openSession).toEqual([]);
-    } finally {
-      await rm(marked, { recursive: true, force: true });
-    }
-  });
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          {
+            rule: "loop-body",
+            node: "l1",
+            message: "l1 (loop) has no prompt or agent in its body.",
+          },
+        ],
+      });
+    },
+  );
 
   describe("gates and asks", () => {
     const echoed = (text: string): ProcessResult => ({ code: 0, stdout: `${text}\n`, stderr: "" });

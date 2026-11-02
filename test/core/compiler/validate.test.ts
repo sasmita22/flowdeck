@@ -50,8 +50,8 @@ describe("validate", () => {
       { rule: "loop-cap", node: "retry" },
       { rule: "required-settings", node: "build" },
       { rule: "ports", node: "start" },
-      { rule: "foreach-first-prompt", node: "each" },
-      { rule: "foreach-nesting", node: "inner" },
+      { rule: "loop-body", node: "retry" },
+      { rule: "loop-body", node: "inner" },
     ]);
   });
 

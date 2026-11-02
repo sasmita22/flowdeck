@@ -6,6 +6,7 @@ import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
 import { compilePrompt } from "../../../src/core/nodes/prompt/compile.js";
 import {
   agent,
+  fileWire,
   flow,
   loop,
   output,
@@ -127,6 +128,37 @@ describe("lower", () => {
       compileAgent(nodeOf(input, "a", "agent")),
       compilePrompt(nodeOf(input, "x", "prompt")),
     ]);
+  });
+
+  describe("File wires", () => {
+    const handoff = () =>
+      flow(
+        [prompt("plan"), agent("build"), prompt("check")],
+        [
+          thenWire("plan", "build"),
+          thenWire("build", "check"),
+          fileWire("plan", "build", "plan.md"),
+          fileWire("plan", "check", "plan.md"),
+          fileWire("build", "check", "diff.md"),
+        ],
+      );
+
+    it("keeps every File wire, with its file, in the manifest", () => {
+      const input = handoff();
+
+      expect(lower(input).manifest.wires).toStrictEqual(input.wires);
+      expect(lower(input).manifest.wires.filter((wire) => wire.kind === "file")).toHaveLength(3);
+    });
+
+    it("tells each producer what to write and each consumer what it is given", () => {
+      const files = Object.fromEntries(
+        lower(handoff()).nodeFiles.map(({ path, content }) => [path, content]),
+      );
+
+      expect(files["commands/plan.md"]).toMatch(/\nWrite: plan\.md\n$/);
+      expect(files["agents/build.md"]).toMatch(/\nYou are given: plan\.md\nWrite: diff\.md\n$/);
+      expect(files["commands/check.md"]).toMatch(/\nYou are given: plan\.md, diff\.md\n$/);
+    });
   });
 
   it("ignores node positions", () => {

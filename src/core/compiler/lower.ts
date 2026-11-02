@@ -1,3 +1,4 @@
+import { handoffOf } from "../flow/handoff.js";
 import { order } from "../flow/order.js";
 import type { Flow, Node, Session, Wire } from "../flow/schema.js";
 import type { BuildSource } from "../run/store.js";
@@ -28,12 +29,12 @@ export type Manifest = {
   files: Record<string, string>;
 };
 
-const compile = (node: Node): BuildFile | undefined => {
+const compile = (node: Node, wires: readonly Wire[]): BuildFile | undefined => {
   switch (node.type) {
     case "prompt":
-      return compilePrompt(node);
+      return compilePrompt(node, handoffOf(node.id, wires));
     case "agent":
-      return compileAgent(node);
+      return compileAgent(node, handoffOf(node.id, wires));
     default:
       return undefined;
   }
@@ -56,7 +57,7 @@ export function lower(
 ): { manifest: Omit<Manifest, "files">; nodeFiles: BuildFile[] } {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
-  const compiled = nodes.map((node) => ({ node, file: compile(node) }));
+  const compiled = nodes.map((node) => ({ node, file: compile(node, flow.wires) }));
   const session = { ...flow.session };
   delete session.frame;
   const inputs = declaredInputs(nodes);

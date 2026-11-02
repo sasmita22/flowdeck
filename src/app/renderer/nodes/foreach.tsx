@@ -1,20 +1,31 @@
 import type { NodeProps } from "@xyflow/react";
+import { containerLabelWidth, containerText } from "../canvas/frames.js";
 import { nodeLook } from "./look.js";
 import { nodeOutline } from "./outlines.js";
 import { NodeShape, type ShapeNode } from "./shape.js";
 
 export function ForEachNode({ id, data, selected }: NodeProps<ShapeNode>) {
-  const { tag, group } = nodeLook("foreach");
+  const { group } = nodeLook("foreach");
+  const text = containerText("foreach", data.label ?? "", data.sub);
   return (
-    <NodeShape id={id} type="foreach" selected={selected} highlighted={data.highlighted}>
-      <text
-        x={nodeOutline("foreach").padL}
-        y={20}
-        fill={group}
-        style={{ font: "600 11px var(--f-mono)", letterSpacing: "0.04em" }}
-      >
-        {`${tag} · ${data.label ?? ""}`}
-      </text>
+    <NodeShape
+      id={id}
+      type="foreach"
+      selected={selected}
+      highlighted={data.highlighted}
+      width={containerLabelWidth("foreach", text)}
+      overlay={
+        <text
+          x={nodeOutline("foreach").padL}
+          y={20}
+          fill={group}
+          style={{ font: "600 11px var(--f-mono)", letterSpacing: "0.04em", whiteSpace: "pre" }}
+        >
+          {text}
+        </text>
+      }
+    >
+      {null}
     </NodeShape>
   );
 }

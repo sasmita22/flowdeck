@@ -20,6 +20,8 @@ import type { RunView } from "../run-store.js";
 import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-store.js";
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
+import { FileEdge } from "./file-edge.js";
+import { FileNamePrompt } from "./file-name-prompt.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { shortcutFor } from "./shortcuts.js";
@@ -30,7 +32,14 @@ import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.j
 const deleteKeys = ["Delete", "Backspace"];
 const startViewport = { x: 24, y: 56, zoom: 1 };
 const proOptions = { hideAttribution: true };
-const edgeTypes = { aligned: AlignedEdge };
+const edgeTypes = { aligned: AlignedEdge, file: FileEdge };
+
+const containerOfFrame = (node: ViewNode): string | undefined =>
+  node.type === "loop-frame"
+    ? node.data.loopId
+    : node.type === "foreach-frame"
+      ? node.data.forEachId
+      : undefined;
 const viewing = {
   deleteKeyCode: null,
   nodesDraggable: false,
@@ -262,12 +271,18 @@ function Board({
           defaultViewport={startViewport}
           proOptions={proOptions}
           onNodeClick={(_, node) => {
+            const container = containerOfFrame(node);
+            if (container !== undefined) {
+              if (readOnly) return;
+              store.getState().select([container]);
+            }
             if (node.type !== "note") shell.getState().showInspector();
           }}
           {...(readOnly ? viewing : editing)}
         >
           <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
           <ZoomControls />
+          {!readOnly && <FileNamePrompt store={store} />}
         </ReactFlow>
       </CanvasStoreContext.Provider>
       <PanelShowButtons

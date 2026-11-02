@@ -14,42 +14,28 @@
       }
     },
     {
-      "id": "each",
-      "label": "Each unit",
-      "type": "foreach",
+      "id": "retry",
+      "label": "Retry",
+      "type": "loop",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "file": "plan.md"
+        "condition": "tests pass",
+        "cap": 2,
+        "onCap": "fail"
       }
     },
     {
-      "id": "build",
-      "label": "Build",
-      "type": "agent",
+      "id": "work",
+      "label": "Work",
+      "type": "prompt",
       "position": {
         "x": 240,
         "y": 160
       },
-      "parent": "each",
-      "settings": {
-        "role": "implementer",
-        "instructions": "Do the work.",
-        "model": "sonnet",
-        "tools": ["Read"]
-      }
-    },
-    {
-      "id": "note",
-      "label": "Note",
-      "type": "prompt",
-      "position": {
-        "x": 480,
-        "y": 160
-      },
-      "parent": "each",
+      "parent": "retry",
       "settings": {
         "instructions": "Do the work."
       }
@@ -59,9 +45,10 @@
       "label": "Done",
       "type": "output",
       "position": {
-        "x": 720,
-        "y": 0
+        "x": 480,
+        "y": 160
       },
+      "parent": "retry",
       "settings": {
         "name": "result",
         "type": "text"
@@ -76,25 +63,14 @@
         "port": "out"
       },
       "to": {
-        "node": "build",
+        "node": "retry",
         "port": "in"
       }
     },
     {
       "kind": "then",
       "from": {
-        "node": "build",
-        "port": "out"
-      },
-      "to": {
-        "node": "note",
-        "port": "in"
-      }
-    },
-    {
-      "kind": "then",
-      "from": {
-        "node": "note",
+        "node": "work",
         "port": "out"
       },
       "to": {

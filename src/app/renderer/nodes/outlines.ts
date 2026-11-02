@@ -39,6 +39,8 @@ const outline = (path: string, padL: number, more: Partial<NodeOutline> = {}): N
   ...more,
 });
 
+const container = (width: number) => outline(roundedRect(width, h, 4), 8, { fill: "none" });
+
 const human = nodeLook("hardstop").group;
 const work = nodeLook("agent").group;
 const ctrl = nodeLook("branch").group;
@@ -91,8 +93,8 @@ const outlines: Record<OutlinedType, NodeOutline> = {
     `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
     8,
   ),
-  loop: outline(roundedRect(w, h, 4), 8, { fill: "none" }),
-  foreach: outline(roundedRect(w, h, 4), 8, { fill: "none" }),
+  loop: container(w),
+  foreach: container(w),
   branch: outline(`M${hexagon.replaceAll(" ", " L")} Z`, 14, {
     extras: [
       { element: "polygon", attributes: { points: hexagon, fill: ctrl, fillOpacity: 0.08 } },
@@ -100,7 +102,8 @@ const outlines: Record<OutlinedType, NodeOutline> = {
   }),
 };
 
-export const nodeOutline = (type: OutlinedType): NodeOutline => outlines[type];
+export const nodeOutline = (type: OutlinedType, width = w): NodeOutline =>
+  (type === "loop" || type === "foreach") && width !== w ? container(width) : outlines[type];
 
 export const barLook = { rx: 8, fillOpacity: 0.16, strokeWidth: 1.4 } as const;
 

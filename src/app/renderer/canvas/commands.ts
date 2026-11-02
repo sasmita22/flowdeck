@@ -91,22 +91,41 @@ export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => {
   };
 };
 
-export type Move = { id: string; from: Position; to: Position };
+export type Move = {
+  id: string;
+  from: Position;
+  to: Position;
+  parent?: { from: string | undefined; to: string | undefined };
+};
+
+const withParent = (node: Node, parent: string | undefined): Node => {
+  if (parent !== undefined) return { ...node, parent };
+  const rest = { ...node };
+  delete rest.parent;
+  return rest;
+};
 
 const placeAt =
-  (moves: readonly Move[], pick: (move: Move) => Position) =>
+  (moves: readonly Move[], side: "from" | "to") =>
   (flow: Flow): Flow => {
-    const targets = new Map(moves.map((move) => [move.id, pick(move)]));
+    const byId = new Map(moves.map((move) => [move.id, move]));
     const place = <T extends { id: string; position: Position }>(item: T): T => {
-      const position = targets.get(item.id);
-      return position === undefined ? item : { ...item, position: { ...position } };
+      const move = byId.get(item.id);
+      return move === undefined ? item : { ...item, position: { ...move[side] } };
     };
-    return withNotes({ ...flow, nodes: flow.nodes.map(place) }, notesOf(flow).map(place));
+    const nest = (node: Node): Node => {
+      const parent = byId.get(node.id)?.parent;
+      return parent === undefined ? node : withParent(node, parent[side]);
+    };
+    return withNotes(
+      { ...flow, nodes: flow.nodes.map((node) => nest(place(node))) },
+      notesOf(flow).map(place),
+    );
   };
 
 export const moveNodes = (moves: readonly Move[]): Command => ({
-  do: placeAt(moves, (move) => move.to),
-  undo: placeAt(moves, (move) => move.from),
+  do: placeAt(moves, "to"),
+  undo: placeAt(moves, "from"),
 });
 
 const withSession = (flow: Flow, session: Session): Flow => ({ ...flow, session });

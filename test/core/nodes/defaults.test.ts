@@ -21,12 +21,12 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["gate", gate, "Gate", []],
   ["ask", ask, "Ask", []],
   ["hardstop", hardstop, "Hard stop", []],
-  ["loop", loop, "Loop", []],
+  ["loop", loop, "Loop", ["loop-body"]],
   ["trigger", trigger, "Trigger", []],
   ["output", output, "Output", []],
   ["fork", fork, "Fork", ["parallel-section"]],
   ["join", join, "Join", ["parallel-section"]],
-  ["foreach", foreach, "For each", ["foreach-first-prompt"]],
+  ["foreach", foreach, "For each", ["loop-body"]],
   ["branch", branch, "Branch", ["branch-flag"]],
 ];
 

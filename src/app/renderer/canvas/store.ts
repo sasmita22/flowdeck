@@ -7,6 +7,7 @@ import {
   type CanvasNote,
   type Flow,
   type Node,
+  type Port,
   type Session,
   type Wire,
 } from "../../../core/flow/schema.js";
@@ -25,6 +26,15 @@ import * as foreachDefaults from "../../../core/nodes/foreach/defaults.js";
 import * as branchDefaults from "../../../core/nodes/branch/defaults.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
+import {
+  bodyOf,
+  centerOf,
+  containerAt,
+  containerMoves,
+  followed,
+  isContainer,
+  withPositions,
+} from "./frames.js";
 import {
   addNode,
   addNote,
@@ -75,6 +85,8 @@ export type NoteBox = { x: number; y: number; width: number; height: number };
 
 export type NodeMenu = { nodeId: string; x: number; y: number };
 
+export type Naming = { from: WireEnd; to: WireEnd };
+
 const lockedMessage = "Hard stop is locked";
 
 export interface CanvasState {
@@ -89,12 +101,15 @@ export interface CanvasState {
   noteBoxes: Record<string, NoteBox>;
   message: string | null;
   menu: NodeMenu | null;
+  naming: Naming | null;
   drop(type: CanvasItemType, position: Position): void;
   addNext(type: CanvasItemType): void;
   editNoteText(id: string, text: string): void;
   resizeNoteLive(id: string, box: NoteBox): void;
   resizeNote(id: string, box: NoteBox): void;
   connect(from: WireEnd, to: WireEnd): boolean;
+  nameFile(file: string): boolean;
+  cancelNaming(): void;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
@@ -151,12 +166,13 @@ const newNote = (id: string, { x, y }: Position): CanvasNote => ({
   size: { ...noteLook.size },
 });
 
-const newNode = (type: NodeType, id: string, { x, y }: Position): Node =>
+const newNode = (type: NodeType, id: string, { x, y }: Position, parent?: string): Node =>
   ({
     id,
     type,
     label: nodeDefaults[type].label,
     position: { x, y },
+    ...(parent === undefined ? {} : { parent }),
     settings: structuredClone(nodeDefaults[type].settings),
   }) as Node;
 
@@ -167,9 +183,14 @@ const topLevel = (flow: Flow) => flow.nodes.filter((node) => node.parent === und
 
 const rightEdge = (node: Node) => node.position.x + nodeLook(node.type).box.width;
 
-const overlapping = (flow: Flow, type: NodeType, { x, y }: Position) => {
+const neighbours = (flow: Flow, parent: string | undefined) =>
+  parent === undefined
+    ? topLevel(flow)
+    : flow.nodes.filter((node) => node.id === parent || node.parent === parent);
+
+const overlapping = (flow: Flow, type: NodeType, { x, y }: Position, parent?: string) => {
   const { width, height } = nodeLook(type).box;
-  return topLevel(flow).find((node) => {
+  return neighbours(flow, parent).find((node) => {
     const box = nodeLook(node.type).box;
     return (
       x < node.position.x + box.width &&
@@ -180,9 +201,13 @@ const overlapping = (flow: Flow, type: NodeType, { x, y }: Position) => {
   });
 };
 
-export const placeNode = (flow: Flow, type: NodeType, at: Position): Position => {
+export const placeNode = (flow: Flow, type: NodeType, at: Position, parent?: string): Position => {
   let position = { ...at };
-  for (let hit = overlapping(flow, type, position); hit; hit = overlapping(flow, type, position)) {
+  for (
+    let hit = overlapping(flow, type, position, parent);
+    hit;
+    hit = overlapping(flow, type, position, parent)
+  ) {
     position = { x: rightEdge(hit) + gap, y: position.y };
   }
   return position;
@@ -206,9 +231,9 @@ const nextTo = (flow: Flow, selection: readonly string[]): Position => {
 const sameError = (a: ValidationError, b: ValidationError) =>
   a.rule === b.rule && a.node === b.node && a.wire === b.wire && a.field === b.field;
 
-const introducesErrors = (before: Flow, after: Flow) => {
+const newErrors = (before: Flow, after: Flow) => {
   const known = validate(before);
-  return validate(after).some((error) => !known.some((old) => sameError(old, error)));
+  return validate(after).filter((error) => !known.some((old) => sameError(old, error)));
 };
 
 const issuesByFlow = new WeakMap<Flow, Record<string, string>>();
@@ -219,6 +244,8 @@ const plainReason = (nodeId: string, message: string) => {
   const untagged = message.replace(typeTags, "");
   return untagged.startsWith(`${nodeId} `) ? untagged.slice(nodeId.length + 1) : untagged;
 };
+
+const reasonOf = (error: ValidationError) => error.message.replace(typeTags, "");
 
 export const selectNodeIssues = (flow: Flow): Record<string, string> => {
   const cached = issuesByFlow.get(flow);
@@ -258,6 +285,23 @@ export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
   state.flow.nodes.length === 0 && (state.flow.notes ?? []).length === 0;
 
 const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.port;
+
+const sameWire = (a: Wire, b: Wire) =>
+  sameEnd(a.from, b.from) &&
+  sameEnd(a.to, b.to) &&
+  (a.kind !== "file" || b.kind !== "file" || a.file === b.file);
+
+const portKind = (flow: Flow, end: WireEnd, direction: Port["direction"]) => {
+  const node = flow.nodes.find((candidate) => candidate.id === end.node);
+  if (node === undefined) return undefined;
+  const ports: readonly Port[] = nodeLook(node.type).ports;
+  return ports.find((port) => port.name === end.port && port.direction === direction)?.kind;
+};
+
+const cannotConnect = (from: WireEnd, to: WireEnd, reason: string) =>
+  `Can't connect ${from.node} to ${to.node}: ${reason}`;
+
+const alreadyJoined = "they are already joined.";
 
 const kept = (selection: readonly string[], flow: Flow) => {
   const ids = new Set([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id));
@@ -299,12 +343,40 @@ export function createCanvasStore(
       set({ menu: null });
       const { flow } = get();
       const present = flow.nodes.filter((node) => ids.includes(node.id));
+      const holdsLock = (node: Node) =>
+        isContainer(node) && bodyOf(flow, node.id).some((child) => child.type === "hardstop");
+      const kept = new Set(present.filter(holdsLock).map((node) => node.id));
+      const doomed = new Set(
+        present
+          .filter((node) => !kept.has(node.id))
+          .flatMap((node) => [node, ...(isContainer(node) ? bodyOf(flow, node.id) : [])])
+          .filter((node) => node.type !== "hardstop")
+          .map((node) => node.id),
+      );
       const deletable = [
-        ...present.filter((node) => node.type !== "hardstop").map((node) => node.id),
+        ...flow.nodes.filter((node) => doomed.has(node.id)).map((node) => node.id),
         ...(flow.notes ?? []).filter((note) => ids.includes(note.id)).map((note) => note.id),
       ];
       if (deletable.length > 0) run(deleteNodesCommand(flow, deletable));
-      if (deletable.length < present.length) set({ message: lockedMessage });
+      if (kept.size > 0 || present.some((node) => node.type === "hardstop")) {
+        set({ message: lockedMessage });
+      }
+    };
+
+    const addChecked = (wire: Wire): boolean => {
+      const { flow } = get();
+      if (flow.wires.some((existing) => sameWire(existing, wire))) {
+        set({ message: cannotConnect(wire.from, wire.to, alreadyJoined) });
+        return false;
+      }
+      const command = addWire(wire);
+      const [error] = newErrors(flow, command.do(flow));
+      if (error !== undefined) {
+        set({ message: cannotConnect(wire.from, wire.to, reasonOf(error)) });
+        return false;
+      }
+      run(command);
+      return true;
     };
 
     const start = newCanvasFlow();
@@ -321,6 +393,7 @@ export function createCanvasStore(
       noteBoxes: {},
       message: null,
       menu: null,
+      naming: null,
 
       drop: (type, position) => {
         if (!ready()) return;
@@ -331,7 +404,19 @@ export function createCanvasStore(
           return;
         }
         const id = nextId(type, flow);
-        run(addNode(newNode(type, id, placeNode(flow, type, position))), [id]);
+        const parent = isContainer({ type }) ? undefined : containerAt(flow, position);
+        const at = placeNode(flow, type, position, parent);
+        const command = addNode(newNode(type, id, at, parent));
+        const [misplaced] = newErrors(flow, command.do(flow)).filter(
+          (error) => error.rule === "body-nodes",
+        );
+        if (misplaced !== undefined) {
+          set({
+            message: `Can't drop ${nodeDefaults[type].label} into ${parent ?? ""}: ${reasonOf(misplaced)}`,
+          });
+          return;
+        }
+        run(command, [id]);
       },
 
       addNext: (type) => get().drop(type, nextTo(get().flow, get().selection)),
@@ -368,14 +453,32 @@ export function createCanvasStore(
       connect: (from, to) => {
         if (!ready()) return false;
         const { flow } = get();
-        if (flow.wires.some((wire) => sameEnd(wire.from, from) && sameEnd(wire.to, to))) {
+        const kinds = [portKind(flow, from, "out"), portKind(flow, to, "in")];
+        if (kinds.includes("file")) {
+          if (kinds[0] !== kinds[1]) {
+            set({ message: cannotConnect(from, to, "a file port joins only another file port.") });
+            return false;
+          }
+          set({ naming: { from: { ...from }, to: { ...to } }, message: null });
           return false;
         }
-        const command = addWire({ kind: "then", from: { ...from }, to: { ...to } } satisfies Wire);
-        if (introducesErrors(flow, command.do(flow))) return false;
-        run(command);
-        return true;
+        return addChecked({ kind: "then", from: { ...from }, to: { ...to } });
       },
+
+      nameFile: (file) => {
+        const { naming } = get();
+        if (!ready() || naming === null) return false;
+        const added = addChecked({
+          kind: "file",
+          from: { ...naming.from },
+          to: { ...naming.to },
+          file: file.trim(),
+        });
+        if (added) set({ naming: null });
+        return added;
+      },
+
+      cancelNaming: () => set({ naming: null }),
 
       deleteNodes,
 
@@ -401,15 +504,44 @@ export function createCanvasStore(
       endDrag: (ids) => {
         if (!ready()) return;
         const { flow, dragPositions } = get();
-        const moves = ids.flatMap((id): Move[] => {
-          const to = dragPositions[id];
+        const dragged = Object.fromEntries(
+          ids.flatMap((id) => {
+            const position = dragPositions[id];
+            return position === undefined ? [] : [[id, position] as const];
+          }),
+        );
+        const targets = followed(flow, dragged);
+        const framing = withPositions(flow, containerMoves(flow, dragged));
+        const moved = withPositions(flow, targets);
+        const parentOf = (node: Node): Move["parent"] => {
+          if (isContainer(node) || !(node.id in dragged)) return undefined;
+          if (node.parent !== undefined && node.parent in dragged) return undefined;
+          const to = containerAt(framing, centerOf(node));
+          return to === node.parent ? undefined : { from: node.parent, to };
+        };
+        const moves = Object.entries(targets).flatMap(([id, to]): Move[] => {
           const from = positionOf(flow, id);
-          return to === undefined || from === undefined || samePosition(from, to)
-            ? []
-            : [{ id, from, to }];
+          const node = moved.nodes.find((candidate) => candidate.id === id);
+          const parent = node === undefined ? undefined : parentOf(node);
+          if (from === undefined || (samePosition(from, to) && parent === undefined)) return [];
+          return [{ id, from, to, ...(parent === undefined ? {} : { parent }) }];
         });
-        if (moves.length > 0) run(moveNodes(moves));
         set({ dragPositions: {} });
+        if (moves.length === 0) return;
+        const command = moveNodes(moves);
+        const nested = moves.find((move) => move.parent !== undefined);
+        if (nested?.parent !== undefined) {
+          const [error] = newErrors(flow, command.do(flow)).filter(
+            (candidate) => candidate.rule !== "loop-body",
+          );
+          if (error !== undefined) {
+            const { from, to } = nested.parent;
+            const where = to === undefined ? `out of ${from ?? ""}` : `into ${to}`;
+            set({ message: `Can't move ${nested.id} ${where}: ${reasonOf(error)}` });
+            return;
+          }
+        }
+        run(command);
       },
 
       wrapSelection: () => {
