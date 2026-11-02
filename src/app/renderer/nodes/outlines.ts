@@ -1,5 +1,6 @@
 import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeLook } from "./look.js";
+import { noteLook } from "./note-look.js";
 
 export const roundedRect = (width: number, height: number, r: number, inset = 0): string => {
   const [x, y, w, h] = [inset, inset, width - 2 * inset, height - 2 * inset];
@@ -114,9 +115,11 @@ export const frameLook = {
 export type Preview =
   | { kind: "node"; type: OutlinedType; outline: NodeOutline }
   | { kind: "bar"; type: "fork" | "join"; bar: typeof barLook }
-  | { kind: "frame"; type: "loop" | "foreach"; frame: typeof frameLook };
+  | { kind: "frame"; type: "loop" | "foreach"; frame: typeof frameLook }
+  | { kind: "note"; type: "note"; note: typeof noteLook };
 
-export const previewOf = (type: NodeType): Preview => {
+export const previewOf = (type: NodeType | "note"): Preview => {
+  if (type === "note") return { kind: "note", type, note: noteLook };
   if (type === "fork" || type === "join") return { kind: "bar", type, bar: barLook };
   if (type === "loop" || type === "foreach") return { kind: "frame", type, frame: frameLook };
   return { kind: "node", type, outline: nodeOutline(type) };
@@ -128,19 +131,20 @@ export const framePreview = { width: w, height: 56 } as const;
 
 const previewPad = 4;
 
-const previewSize = (type: NodeType) => {
+const previewSize = (type: NodeType | "note") => {
   const preview = previewOf(type);
   switch (preview.kind) {
     case "node":
-      return nodeLook(type).box;
+      return nodeLook(preview.type).box;
     case "bar":
       return { width: barPreview.width + barPreview.reach, height: barPreview.height };
     case "frame":
+    case "note":
       return framePreview;
   }
 };
 
-export const previewViewBox = (type: NodeType): string => {
+export const previewViewBox = (type: NodeType | "note"): string => {
   const { width, height } = previewSize(type);
   return `${-previewPad} ${-previewPad} ${width + 2 * previewPad} ${height + 2 * previewPad}`;
 };

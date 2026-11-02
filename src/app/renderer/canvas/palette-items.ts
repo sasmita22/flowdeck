@@ -1,7 +1,8 @@
 import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeLook } from "../nodes/look.js";
+import { noteLook } from "../nodes/note-look.js";
 import { paletteTestId } from "../test-ids.js";
-import { nodeDefaults } from "./store.js";
+import { nodeDefaults, type CanvasItemType } from "./store.js";
 
 export const paletteGroups = [
   "Composition",
@@ -10,12 +11,13 @@ export const paletteGroups = [
   "People and safety",
   "Run events",
   "In and out",
+  "Canvas",
 ] as const;
 
 export type PaletteGroup = (typeof paletteGroups)[number];
 
 export interface PaletteItem {
-  type: NodeType;
+  type: CanvasItemType;
   testId: string;
   label: string;
   tag: string;
@@ -56,15 +58,28 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["output", "In and out", "What the flow hands back to whoever used it."],
 ];
 
-export const paletteItems: readonly PaletteItem[] = catalog.map(([type, group, description]) => ({
-  type,
-  testId: paletteTestId(type),
-  label: nodeDefaults[type].label,
-  tag: nodeLook(type).tag,
-  color: nodeLook(type).group,
-  group,
-  description,
-}));
+const noteItem: PaletteItem = {
+  type: "note",
+  testId: paletteTestId("note"),
+  label: "Note",
+  tag: "NOTE",
+  color: noteLook.tag,
+  group: "Canvas",
+  description: "Canvas-only text. It never runs.",
+};
+
+export const paletteItems: readonly PaletteItem[] = [
+  ...catalog.map(([type, group, description]) => ({
+    type,
+    testId: paletteTestId(type),
+    label: nodeDefaults[type].label,
+    tag: nodeLook(type).tag,
+    color: nodeLook(type).group,
+    group,
+    description,
+  })),
+  noteItem,
+];
 
 export const filterPalette = (
   items: readonly PaletteItem[],
@@ -88,3 +103,5 @@ const titles = new Map(
 );
 
 export const nodeTitle = (type: NodeType): string => titles.get(type) ?? "";
+
+export const noteTitle = "Note: canvas-only text. It never runs.";

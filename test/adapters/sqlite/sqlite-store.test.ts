@@ -99,9 +99,10 @@ describe("SqliteStore", () => {
       { name: "002_flows.sql" },
       { name: "003_builds.sql" },
       { name: "004_events_lock.sql" },
+      { name: "005_notes.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 4]);
+    expect(before).toEqual([1, 1, 3, 1, 5]);
   });
 
   it("writes one run, one session and one row per node", () => {

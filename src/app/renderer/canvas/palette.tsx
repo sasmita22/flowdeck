@@ -1,22 +1,21 @@
 import { Fragment, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { NodeType } from "../../../core/flow/schema.js";
 import { NodePreview } from "../nodes/preview.js";
 import { PanelToggle } from "../panel-toggle.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
 import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
-import type { CanvasState } from "./store.js";
+import type { CanvasItemType, CanvasState } from "./store.js";
 
 export const nodeMimeType = "application/flowdeck-node";
 
-const onDragStart = (type: NodeType) => (event: DragEvent<HTMLDivElement>) => {
+const onDragStart = (type: CanvasItemType) => (event: DragEvent<HTMLDivElement>) => {
   event.dataTransfer.setData(nodeMimeType, type);
   event.dataTransfer.effectAllowed = "move";
 };
 
-function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: NodeType) => void }) {
+function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemType) => void }) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -65,7 +64,7 @@ export function Palette({
   const [query, setQuery] = useState("");
   if (!open) return null;
   const groups = groupPalette(filterPalette(paletteItems, query));
-  const onAdd = (type: NodeType) => canvas.getState().addNext(type);
+  const onAdd = (type: CanvasItemType) => canvas.getState().addNext(type);
   return (
     <aside className="fd-sidebar" aria-label="Nodes">
       <div className="fd-panel-head">

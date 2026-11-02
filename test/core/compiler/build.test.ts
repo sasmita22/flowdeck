@@ -140,4 +140,34 @@ describe("build", () => {
 
     expect(files).toMatchSnapshot();
   });
+
+  it("builds a flow with notes into the same hash and the same bytes as the flow without them", async () => {
+    const plain = sample();
+    const noted = parseFlow({
+      ...plain,
+      notes: [
+        {
+          id: "n1",
+          text: "Plan first",
+          position: { x: 0, y: 0 },
+          size: { width: 200, height: 100 },
+        },
+        {
+          id: "p",
+          text: "same id as a node",
+          position: { x: 9, y: 9 },
+          size: { width: 1, height: 1 },
+        },
+      ],
+    });
+    expect(noted.notes).toHaveLength(2);
+    const plainFs = new FakeFileSystem();
+    const notedFs = new FakeFileSystem();
+
+    const without = succeeded(await run(plainFs, plain));
+    const withNotes = succeeded(await run(notedFs, noted));
+
+    expect(withNotes.hash).toBe(without.hash);
+    expect(await readBack(notedFs, withNotes.dir)).toEqual(await readBack(plainFs, without.dir));
+  });
 });

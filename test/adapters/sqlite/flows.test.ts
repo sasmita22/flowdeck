@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,9 +7,23 @@ import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import type { CanvasNote, Flow } from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
 import { roundTripFlow } from "../../fixtures/round-trip-flow.js";
+
+const notes: CanvasNote[] = [
+  {
+    id: "n1",
+    text: "Plan first,\nthen build",
+    position: { x: -40, y: 12.5 },
+    size: { width: 220, height: 140 },
+  },
+  { id: "n2", text: "", position: { x: 300, y: 0 }, size: { width: 160, height: 80 } },
+];
+
+const withNotes = (): Flow => ({ ...roundTripFlow(), notes });
+
+const migrationsDir = new URL("../../../src/adapters/sqlite/migrations/", import.meta.url);
 
 const relabelled = (label: string): Flow => {
   const flow = roundTripFlow();
@@ -79,6 +93,68 @@ describe("SqliteFlowStore", () => {
       const eventWire = flow?.wires.find((wire) => wire.kind === "event");
       expect(eventWire).toBeDefined();
       expect(Object.hasOwn(eventWire ?? {}, "file")).toBe(false);
+    });
+
+    it("reopens a flow's notes exactly, in order", () => {
+      open().save(withNotes());
+
+      expect(open().loadLatest()?.flow).toEqual(withNotes());
+    });
+
+    it("reopens a flow saved without notes with no notes key", () => {
+      open().save(roundTripFlow());
+
+      expect(open().loadLatest()?.flow).not.toHaveProperty("notes");
+    });
+
+    it("reopens a flow saved with an empty notes list with no notes key", () => {
+      open().save({ ...roundTripFlow(), notes: [] });
+
+      expect(open().loadLatest()?.flow).toEqual(roundTripFlow());
+    });
+
+    it("keeps each version's own notes", () => {
+      const store = open();
+      store.save(withNotes());
+      store.save(roundTripFlow());
+
+      expect(open().loadLatest()?.flow).not.toHaveProperty("notes");
+      expect(
+        raw()
+          .prepare("SELECT version, notes FROM flow_versions ORDER BY version")
+          .all()
+          .map((row) => {
+            const { version, notes: stored } = row as { version: number; notes: string };
+            return { version, notes: JSON.parse(stored) as unknown };
+          }),
+      ).toEqual([
+        { version: 1, notes },
+        { version: 2, notes: [] },
+      ]);
+    });
+
+    it("loads a version saved before notes existed with no notes", async () => {
+      const before = join(folder, "migrations-before-notes");
+      await mkdir(before);
+      for (const name of await readdir(migrationsDir)) {
+        if (name < "005") await copyFile(new URL(name, migrationsDir), join(before, name));
+      }
+      const old = openDatabase({ path, migrationsDir: before });
+      opened.push(old);
+      const session = roundTripFlow().session;
+      old
+        .prepare("INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Untitled', 't')")
+        .run();
+      old
+        .prepare(
+          "INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('flow-1', 1, ?, 't')",
+        )
+        .run(JSON.stringify(session));
+
+      const loaded = open().loadLatest();
+
+      expect(loaded?.version).toBe(1);
+      expect(loaded?.flow).toEqual({ nodes: [], wires: [], session });
     });
 
     it("keeps node order and wire order", () => {
@@ -232,6 +308,7 @@ describe("SqliteFlowStore", () => {
   describe("locks saved versions in the database itself", () => {
     const lockedTables = [
       ["flow_versions", "session = '{}'"],
+      ["flow_versions", "notes = '[]'"],
       ["nodes", "label = 'changed'"],
       ["ports", "name = 'changed'"],
       ["wires", "to_port = 'changed'"],
@@ -334,6 +411,7 @@ describe("SqliteFlowStore", () => {
       { name: "002_flows.sql" },
       { name: "003_builds.sql" },
       { name: "004_events_lock.sql" },
+      { name: "005_notes.sql" },
     ]);
   });
 });

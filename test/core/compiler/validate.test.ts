@@ -68,4 +68,20 @@ describe("validate", () => {
       expect(validate(parseFlow(readJson(examplesDir, name)))).toEqual([]);
     },
   );
+
+  it("never reports a note, even one that reuses a node's id or has no text", () => {
+    const valid = parseFlow(readJson(examplesDir, "three-prompts.json"));
+    const broken = parseFlow(readJson(brokenDir, "loop-cap.json"));
+    const [firstNode] = valid.nodes;
+    if (firstNode === undefined) throw new Error("three-prompts.json has no nodes");
+    const notes = [
+      { id: firstNode.id, text: "", position: { x: 0, y: 0 }, size: { width: 1, height: 1 } },
+      { id: "n 1!", text: "x", position: { x: -5, y: -5 }, size: { width: 200, height: 100 } },
+    ];
+    const noted = (flow: typeof valid) => parseFlow({ ...flow, notes });
+    expect(noted(valid).notes).toHaveLength(2);
+
+    expect(validate(noted(valid))).toEqual([]);
+    expect(validate(noted(broken))).toEqual(validate(broken));
+  });
 });

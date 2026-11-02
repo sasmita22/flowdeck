@@ -1,0 +1,1 @@
+ALTER TABLE flow_versions ADD COLUMN notes TEXT NOT NULL DEFAULT '[]';

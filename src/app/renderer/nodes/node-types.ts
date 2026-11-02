@@ -11,6 +11,7 @@ import { GateNode } from "./gate.js";
 import { HardstopNode } from "./hardstop.js";
 import { JoinNode } from "./join.js";
 import { LoopNode } from "./loop.js";
+import { NoteNode } from "./note.js";
 import { OutputNode } from "./output.js";
 import { PromptNode } from "./prompt.js";
 import { ScriptNode } from "./script.js";
@@ -33,4 +34,5 @@ export const nodeTypes: NodeTypes = {
   session: SessionFrame,
   "loop-frame": LoopFrame,
   "foreach-frame": ForEachFrame,
+  note: NoteNode,
 };
