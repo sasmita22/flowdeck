@@ -7,6 +7,7 @@ import {
   selectLiveBadge,
   selectRunDisabled,
   selectRunSummary,
+  needsSessionSetup,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { NodeState } from "../../../src/core/run/state.js";
@@ -297,6 +298,65 @@ describe("build", () => {
   });
 });
 
+describe("refused builds", () => {
+  const refused = {
+    kind: "error",
+    message: "P: Write what the prompt should do.\nChoose the folder.",
+    problems: [
+      { node: "P", field: "instructions", text: "Write what the prompt should do." },
+      { field: "workingFolder.path", text: "Choose the folder." },
+    ],
+  };
+
+  it("holds every problem of a refused Build, each with its node, instead of one error line", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow() });
+    bridge.buildVersion.mockResolvedValueOnce(refused);
+
+    await expect(run.getState().build()).resolves.toBeNull();
+
+    expect(run.getState()).toMatchObject({ error: null, problems: refused.problems });
+  });
+
+  it("holds them for Build & run too, and runs nothing", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow() });
+    bridge.buildVersion.mockResolvedValueOnce(refused);
+
+    await run.getState().run();
+
+    expect(bridge.runBuild).not.toHaveBeenCalled();
+    expect(run.getState().problems).toEqual(refused.problems);
+  });
+
+  it("clears them once a build goes through, or when dismissed", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow() });
+    bridge.buildVersion.mockResolvedValueOnce(refused);
+    await run.getState().build();
+
+    await run.getState().build();
+    expect(run.getState().problems).toBeNull();
+
+    bridge.buildVersion.mockResolvedValueOnce(refused);
+    await run.getState().build();
+    run.getState().dismissProblems();
+    expect(run.getState().problems).toBeNull();
+  });
+});
+
+describe("needsSessionSetup", () => {
+  it("is true when a problem is about the session's folder", () => {
+    expect(needsSessionSetup([{ field: "workingFolder.path", text: "Choose the folder." }])).toBe(
+      true,
+    );
+  });
+
+  it("is false for node problems and for no problems", () => {
+    expect(needsSessionSetup([{ node: "P", field: "instructions", text: "Write it." }])).toBe(
+      false,
+    );
+    expect(needsSessionSetup(null)).toBe(false);
+  });
+});
+
 describe("buildVersion", () => {
   it("builds a given saved version without saving the editor", async () => {
     const { bridge, canvas, run, calls } = await setup({ latest: savedFlow() });
@@ -307,6 +367,22 @@ describe("buildVersion", () => {
     expect(bridge.buildVersion).toHaveBeenCalledWith({ flowId: "flow-b", version: 4 });
     expect(calls).toEqual(["buildVersion"]);
     expect(run.getState().lastBuild).toEqual({ hash: "h1", flowId: "flow-b", version: 4 });
+  });
+
+  it("shows another blueprint's refused build as plain text, not as editor problems", async () => {
+    const { bridge, run } = await setup({ latest: savedFlow() });
+    bridge.buildVersion.mockResolvedValueOnce({
+      kind: "error",
+      message: "p: Write what the prompt should do.",
+      problems: [{ node: "p", field: "instructions", text: "Write what the prompt should do." }],
+    });
+
+    await run.getState().buildVersion({ flowId: "flow-b", version: 4 });
+
+    expect(run.getState()).toMatchObject({
+      problems: null,
+      error: "p: Write what the prompt should do.",
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { modelChoices, permissionModes, type Choice } from "../../../core/flow/choices.js";
 import { Session } from "../../../core/flow/schema.js";
 
 type Path = readonly string[];
@@ -11,6 +12,7 @@ export type FieldDescription =
       path: Path;
       testId: string;
       label: string;
+      placeholder?: string;
     }
   | {
       control: "select";
@@ -25,9 +27,11 @@ export type FieldDescription =
 type AnyObject = z.ZodObject<z.ZodRawShape>;
 
 export const sessionSettingsSchema = Session.pick({
+  name: true,
   workingFolder: true,
   model: true,
   allowedTools: true,
+  permissionMode: true,
   budget: true,
 });
 
@@ -37,15 +41,19 @@ export type Form = {
   optionLabels: Readonly<Record<string, Readonly<Record<string, string>>>>;
   multiline?: ReadonlySet<string>;
   hidden?: ReadonlySet<string>;
+  choices?: Readonly<Record<string, readonly Choice[]>>;
+  placeholders?: Readonly<Record<string, string>>;
 };
 
 const sessionLabels: Record<string, string> = {
+  name: "Session name",
   "workingFolder.kind": "Working folder",
   "workingFolder.path": "Folder path",
   "workingFolder.repo": "Repository",
   "workingFolder.branch": "Start from branch",
   model: "Model",
   allowedTools: "Allowed tools (one per line)",
+  permissionMode: "Permission mode",
   budget: "Budget ($)",
 };
 
@@ -55,6 +63,8 @@ const sessionForm: Form = {
   optionLabels: {
     "workingFolder.kind": { path: "Existing folder", worktree: "New git worktree" },
   },
+  choices: { model: modelChoices, permissionMode: permissionModes },
+  placeholders: { "workingFolder.path": "/Users/you/code/project" },
 };
 
 const labelOf = (form: Form, path: Path): string => {
@@ -151,8 +161,21 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
     return [{ control: "list", path, testId, label: label() }];
   }
   if (inner instanceof z.ZodString) {
-    const control = form.multiline?.has(path.join(".")) ? "multiline" : "text";
-    return [{ control, path, testId, label: label() }];
+    const key = path.join(".");
+    const choices = form.choices?.[key];
+    if (choices !== undefined)
+      return [picked({ control: "text", path, testId, label: label() }, choices)];
+    const control = form.multiline?.has(key) ? "multiline" : "text";
+    const placeholder = form.placeholders?.[key];
+    return [
+      {
+        control,
+        path,
+        testId,
+        label: label(),
+        ...(placeholder === undefined ? {} : { placeholder }),
+      },
+    ];
   }
   if (inner instanceof z.ZodNumber) return [{ control: "number", path, testId, label: label() }];
   if (inner instanceof z.ZodBoolean) return [{ control: "toggle", path, testId, label: label() }];
@@ -163,6 +186,45 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
 
 export const describeFields = (schema: AnyObject, form: Form = sessionForm): FieldDescription[] =>
   objectFields(form, [], schema);
+
+const picked = (field: FieldDescription, choices: readonly Choice[]): FieldDescription => ({
+  control: "select",
+  path: field.path,
+  testId: field.testId,
+  label: field.label,
+  options: choices.map(({ value }) => value),
+  optionLabels: Object.fromEntries(choices.map(({ value, label }) => [value, label])),
+  variants: {},
+});
+
+export const withChoices = (
+  fields: readonly FieldDescription[],
+  path: string,
+  choices: readonly Choice[],
+): FieldDescription[] =>
+  fields.map((field) => {
+    if (field.path.join(".") === path) return picked(field, choices);
+    if (field.control !== "select") return field;
+    return {
+      ...field,
+      variants: Object.fromEntries(
+        Object.entries(field.variants).map(([kind, inner]) => [
+          kind,
+          withChoices(inner, path, choices),
+        ]),
+      ),
+    };
+  });
+
+const asChoices = (values: readonly string[]): Choice[] =>
+  values.map((value) => ({ value, label: value }));
+
+export const sessionFields = (branches?: readonly string[]): FieldDescription[] => {
+  const fields = describeFields(sessionSettingsSchema);
+  return branches === undefined
+    ? fields
+    : withChoices(fields, "workingFolder.branch", asChoices(branches));
+};
 
 const emptyVariant = (variant: AnyObject, discriminator: string, kind: string) =>
   Object.fromEntries(

@@ -1,13 +1,14 @@
 import { createRoot } from "react-dom/client";
 import { createActions } from "./actions.js";
 import { App } from "./app.js";
+import { createBranchStore } from "./branch-store.js";
 import { createAppStore } from "./app-store.js";
 import { createCanvasStore } from "./canvas/store.js";
 import { createInspectorStore } from "./inspector/store.js";
 import { createLibraryStore } from "./library-store.js";
 import { createNavStore } from "./nav-store.js";
 import { createWaitStore } from "./inspector/wait-store.js";
-import { createRunStore } from "./run-store.js";
+import { createRunStore, needsSessionSetup } from "./run-store.js";
 import { createSaveStore } from "./save-store.js";
 import { createShellStore } from "./shell-store.js";
 import { createTerminalStore } from "./terminal/store.js";
@@ -60,6 +61,12 @@ function renderApp(root: HTMLElement) {
       void library.getState().refresh();
     }
   });
+  run.subscribe((next, previous) => {
+    if (next.problems !== previous.problems && needsSessionSetup(next.problems)) {
+      shell.getState().openSessionSettings();
+    }
+  });
+  const branches = createBranchStore({ bridge: window.flowdeck });
   const actions = createActions({ nav, save, run, library });
 
   createRoot(root).render(
@@ -75,6 +82,7 @@ function renderApp(root: HTMLElement) {
       workspace={workspace}
       nav={nav}
       library={library}
+      branches={branches}
       actions={actions}
     />,
   );

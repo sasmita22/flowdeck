@@ -5,12 +5,17 @@ export class FakeGitState implements GitState {
 
   constructor(
     private readonly states: Record<string, FolderState> = {},
-    private readonly options: { failWith?: string } = {},
+    private readonly options: { failWith?: string; branches?: Record<string, string[]> } = {},
   ) {}
 
   async read(folder: string): Promise<FolderState> {
     this.reads.push(folder);
     if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
     return this.states[folder] ?? { kind: "missing" };
+  }
+
+  async branches(repo: string): Promise<string[]> {
+    if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
+    return this.options.branches?.[repo] ?? [];
   }
 }

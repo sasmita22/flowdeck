@@ -67,4 +67,15 @@ describe("GitFolderState", () => {
 
     expect(await state.read(file)).toEqual({ kind: "missing" });
   });
+
+  it("lists a repository's local branches by name", async () => {
+    await git(repo.path, "branch", "dev");
+    await git(repo.path, "branch", "feature/x");
+
+    expect(await state.branches(repo.path)).toEqual(["dev", "feature/x", "main"]);
+  });
+
+  it("refuses to list the branches of a folder that is not a repository, naming it", async () => {
+    await expect(state.branches(plain)).rejects.toThrow(`${plain} is not a git repository`);
+  });
 });

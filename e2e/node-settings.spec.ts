@@ -238,7 +238,7 @@ test("Session settings open from the gear and never mix with a node's settings",
   await window.mouse.move(1, 1);
   await reviewShot(window, test.info(), "session-settings-open");
 
-  await setText(window.getByTestId("session-model"), "claude-haiku-4-5");
+  await window.getByTestId("session-model").selectOption("claude-haiku-4-5");
   await expect
     .poll(async () => {
       const flow = JSON.parse(
@@ -291,7 +291,10 @@ test("A Branch's flag comes from the Trigger's flags", async () => {
     .toMatchObject({ settings: { flags: { deep: true } } });
 
   await window.getByTestId("node-branch-1").click();
-  await setText(window.getByTestId("node-setting-flag"), "deep");
+  await expect(window.getByTestId("node-setting-flag").locator("option")).toContainText([
+    "deep (on by default)",
+  ]);
+  await window.getByTestId("node-setting-flag").selectOption("deep");
 
   await expect(branchIssue).toHaveCount(0);
   await expect.poll(() => nodeIn(window, "branch-1")).toMatchObject({ settings: { flag: "deep" } });
@@ -342,24 +345,26 @@ test("Undo reverts a settings edit, and a field shows the validator's reason", a
   await window.getByTestId("node-agent-1").click();
   const instructions = window.getByTestId("node-setting-instructions");
   const reason = window.getByTestId("node-setting-instructions-issue");
+  await expect(reason).toHaveText("Write what the agent should do.");
+
+  await setText(instructions, "Review the plan.");
+
   await expect(reason).toHaveCount(0);
-
-  await setText(instructions, "");
-
-  await expect(reason).toHaveText("Agent has no instructions.");
-  await expect(window.getByTestId("node-issue-agent-1")).toHaveText("Agent has no instructions.");
+  await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
 
   await window.getByTestId(controlTestIds.undo).click();
 
-  await expect(instructions).toHaveValue("Describe the agent's task.");
-  await expect(reason).toHaveCount(0);
-  await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
+  await expect(instructions).toHaveValue("");
+  await expect(reason).toHaveText("Write what the agent should do.");
+  await expect(window.getByTestId("node-issue-agent-1")).toHaveText(
+    "Write what the agent should do.",
+  );
   await expect
     .poll(() => nodeIn(window, "agent-1"))
-    .toMatchObject({ settings: { instructions: "Describe the agent's task." } });
+    .toMatchObject({ settings: { instructions: "" } });
 
   await window.getByTestId(controlTestIds.redo).click();
-  await expect(instructions).toHaveValue("");
+  await expect(instructions).toHaveValue("Review the plan.");
 });
 
 test("A value the node can't take is refused with a reason", async () => {

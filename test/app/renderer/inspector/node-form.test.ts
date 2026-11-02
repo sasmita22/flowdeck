@@ -14,6 +14,7 @@ import {
 } from "../../../../src/app/renderer/inspector/schema-form.js";
 import { NodeType, type Node } from "../../../../src/core/flow/schema.js";
 import { registry } from "../../../../src/core/nodes/registry.js";
+import { branch, flow, trigger } from "../../../fixtures/flow-builders.js";
 import { z } from "zod";
 
 const summary = (field: FieldDescription) => [field.control, field.path.join("."), field.testId];
@@ -56,7 +57,7 @@ describe("describeNodeFields", () => {
       [
         ["text", "role", "node-setting-role"],
         ["multiline", "instructions", "node-setting-instructions"],
-        ["text", "model", "node-setting-model"],
+        ["select", "model", "node-setting-model"],
         ["list", "tools", "node-setting-tools"],
         ["list", "given", "node-setting-given"],
         ["list", "writes", "node-setting-writes"],
@@ -114,7 +115,7 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["foreach", [["text", "file", "node-setting-file"]]],
-    ["branch", [["text", "flag", "node-setting-flag"]]],
+    ["branch", [["select", "flag", "node-setting-flag"]]],
   ])("describes the %s settings", (type, expected) => {
     expect(describeNodeFields(type).map(summary)).toEqual(expected);
   });
@@ -153,6 +154,44 @@ describe("describeNodeFields", () => {
       { all: "Every branch is done", first: "The first branch is done" },
       { wait: "Wait for me to decide", skip: "Go on without it", stop: "Stop the run" },
     ]);
+  });
+
+  it("picks an agent's model from Claude Code's models, or the session's", () => {
+    const model = describeNodeFields("agent").find((field) => field.path[0] === "model");
+    if (model?.control !== "select") throw new Error("expected a select");
+
+    expect(model.options.slice(0, 4)).toEqual(["", "sonnet", "opus", "haiku"]);
+    expect(model.optionLabels[""]).toBe("Same as the session");
+  });
+
+  it("hints at the agent's task in its empty instructions", () => {
+    expect(
+      describeNodeFields("agent").find((field) => field.path[0] === "instructions"),
+    ).toMatchObject({ placeholder: "Describe the agent's task." });
+  });
+
+  it("picks a Branch flag from the Trigger's on/off flags in the flow", () => {
+    const current = flow(
+      [
+        trigger("T", { settings: { flags: { e2e: true, docs: false, depth: 3 } } }),
+        branch("B", "e2e"),
+      ],
+      [],
+    );
+
+    const [flag] = describeNodeFields("branch", current);
+
+    expect(flag).toMatchObject({
+      control: "select",
+      options: ["e2e", "docs"],
+      optionLabels: { e2e: "e2e (on by default)", docs: "docs (off by default)" },
+    });
+  });
+
+  it("offers no flags to pick when the Trigger has none", () => {
+    const [flag] = describeNodeFields("branch", flow([branch("B", "e2e")], []));
+
+    expect(flag).toMatchObject({ control: "select", options: [] });
   });
 
   it("gives a hard stop no switch to turn it off or unlock it", () => {

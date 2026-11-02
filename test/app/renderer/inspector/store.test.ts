@@ -216,6 +216,14 @@ describe("entryText", () => {
       { ...base, kind: "pr", url: "https://x/pull/1", summary: "https://x/pull/1" },
       "Opened https://x/pull/1",
     ],
+    [
+      {
+        ...base,
+        kind: "kept",
+        summary: "Kept the branch flowdeck/abcd1234: it holds this run's commits.",
+      },
+      "Kept the branch flowdeck/abcd1234: it holds this run's commits.",
+    ],
   ])("says %j as %j", (entry, text) => {
     expect(entryText(entry)).toBe(text);
   });

@@ -2,7 +2,13 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { paletteItems } from "../canvas/palette-items.js";
-import { selectFieldIssues, selectSelectedNode, type CanvasState } from "../canvas/store.js";
+import { triggerFlags } from "../../../core/nodes/branch/execute.js";
+import {
+  selectFieldIssues,
+  selectNodeIssues,
+  selectSelectedNode,
+  type CanvasState,
+} from "../canvas/store.js";
 import { Field, type Commit } from "./field.js";
 import { applyNodeSetting, describeNodeFields } from "./node-form.js";
 
@@ -15,8 +21,10 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const flow = useStore(canvas, (state) => state.flow);
   if (node === null) return null;
   const item = paletteItems.find((entry) => entry.type === node.type);
-  const fields = describeNodeFields(node.type);
+  const fields = describeNodeFields(node.type, flow);
   const issues = selectFieldIssues(flow, node.id);
+  const problems = selectNodeIssues(flow)[node.id] ?? [];
+  const noFlags = node.type === "branch" && Object.keys(triggerFlags(flow.nodes)).length === 0;
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {
@@ -68,6 +76,13 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
           </span>
         </>
       )}
+      {problems.length > 0 && (
+        <ul className="fd-node-problems" data-testid="node-problems" aria-label="Problems">
+          {problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
       <label style={labelStyle}>
         Label
         <input
@@ -90,6 +105,12 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
           issues={issues}
         />
       ))}
+      {noFlags && (
+        <span className="fd-hint" data-testid="branch-no-flags">
+          The Trigger has no flags yet. Select the Trigger, add a flag under Flags, then pick it
+          here.
+        </span>
+      )}
       {fields.length === 0 && (
         <span className="fd-palette-description">Nothing else to set up.</span>
       )}

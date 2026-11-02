@@ -4,13 +4,14 @@ import {
   nextNoteId,
   selectDirty,
   selectSelectedNode,
-  wrappableIds,
 } from "../../../../src/app/renderer/canvas/store.js";
-import { SESSION_FRAME_ID, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
+import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { noteLook } from "../../../../src/app/renderer/nodes/note-look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type CanvasNote, type Flow } from "../../../../src/core/flow/schema.js";
-import { flow, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { flow, loop, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+
+const unfinished = new Set(["required-settings", "session-folder"]);
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -18,7 +19,7 @@ const act = (store: Store, action: (state: ReturnType<Store["getState"]>) => unk
   action(store.getState());
   const current = store.getState().flow;
   expect(parseFlow(current)).toEqual(current);
-  expect(validate(current)).toEqual([]);
+  expect(validate(current).filter((error) => !unfinished.has(error.rule))).toEqual([]);
 };
 
 const note = (id: string, more: Partial<CanvasNote> = {}): CanvasNote => ({
@@ -309,17 +310,6 @@ describe("a selected note", () => {
 
     expect(selectSelectedNode(store.getState())).toBeNull();
   });
-
-  it("is never wrapped in the session; the nodes selected with it are", () => {
-    const store = promptAndNote();
-    act(store, (s) => s.select(["n1", "prompt-1"]));
-
-    expect(wrappableIds(store.getState().flow, ["n1"])).toEqual([]);
-
-    act(store, (s) => s.wrapSelection());
-
-    expect(store.getState().flow.session.frame).toEqual({ nodes: ["prompt-1"] });
-  });
 });
 
 describe("selecting all", () => {
@@ -371,32 +361,16 @@ describe("toViewNodes with notes", () => {
   });
 
   it("puts notes after the frames and before the nodes, so nodes draw over them", () => {
-    const framed = {
-      ...noted(),
-      session: { ...noted().session, frame: { nodes: ["a"] } },
+    const looped: Flow = {
+      ...flow([loop("L"), prompt("a", { parent: "L" })], []),
+      notes: noted().notes ?? [],
     };
 
-    expect(toViewNodes(framed, [], {}, null).map(({ id }) => id)).toEqual([
-      SESSION_FRAME_ID,
+    expect(toViewNodes(looped, [], {}, null).map(({ id }) => id)).toEqual([
+      "loop-frame-L",
       "n1",
+      "L",
       "a",
-      "b",
     ]);
-  });
-
-  it("leaves the session frame's box alone when a note sits beside it", () => {
-    const framed = (notes?: CanvasNote[]): Flow => {
-      const base = noted();
-      return {
-        nodes: base.nodes,
-        wires: base.wires,
-        session: { ...base.session, frame: { nodes: ["a", "n1"] } },
-        ...(notes === undefined ? {} : { notes }),
-      };
-    };
-    const frameOf = (input: Flow) =>
-      toViewNodes(input, [], {}, null).find(({ id }) => id === SESSION_FRAME_ID);
-
-    expect(frameOf(framed(noted().notes))).toEqual(frameOf(framed()));
   });
 });

@@ -41,7 +41,7 @@ describe("test ids", () => {
       "canvas-undo",
       "canvas-redo",
       "canvas-delete",
-      "canvas-wrap",
+      "session-chip",
       "canvas-zoom-in",
       "canvas-zoom-out",
       "canvas-fit",
@@ -49,7 +49,11 @@ describe("test ids", () => {
     ]);
   });
 
-  it("lists the two readouts", () => {
-    expect(Object.values(readoutTestIds)).toEqual(["canvas-flow", "canvas-selection"]);
+  it("lists the readouts", () => {
+    expect(Object.values(readoutTestIds)).toEqual([
+      "canvas-flow",
+      "canvas-selection",
+      "canvas-selected-wires",
+    ]);
   });
 });

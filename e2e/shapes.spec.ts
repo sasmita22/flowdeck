@@ -45,7 +45,7 @@ const everyShape = () => {
     ],
     [],
   );
-  return { ...seeded, session: { ...seeded.session, frame: { nodes: ["loop"] } } };
+  return seeded;
 };
 
 const parallelShapes = () =>
@@ -120,7 +120,6 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     seedFlow(home, everyShape());
     launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), colorScheme });
     const { window } = launched;
-    await expect(window.getByTestId("session-frame")).toBeVisible();
     for (const id of nodeShots) {
       await expect(window.getByTestId(`node-${id}`)).toBeVisible();
     }
@@ -134,9 +133,6 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect
       .soft(window.getByTestId("loop-frame-loop"))
       .toHaveScreenshot(`${colorScheme}-loop.png`, exact);
-    await expect
-      .soft(window.getByTestId("session-frame"))
-      .toHaveScreenshot(`${colorScheme}-session.png`, exact);
   });
 }
 

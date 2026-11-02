@@ -145,6 +145,18 @@ describe("session settings", () => {
     expect(shell.getState().sessionSettingsOpen).toBe(false);
   });
 
+  it("opens on request and stays open when asked again, clearing the node selection", () => {
+    const canvas = twoNodes();
+    canvas.getState().select(["gate-1"]);
+    const shell = newShell(canvas);
+
+    shell.getState().openSessionSettings();
+    shell.getState().openSessionSettings();
+
+    expect(shell.getState().sessionSettingsOpen).toBe(true);
+    expect(canvas.getState().selection).toEqual([]);
+  });
+
   it("closes when the empty canvas is clicked", () => {
     const shell = newShell();
     shell.getState().toggleSessionSettings();

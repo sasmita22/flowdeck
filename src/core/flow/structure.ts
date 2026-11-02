@@ -8,6 +8,7 @@ export type BodyProblem = {
   message: string;
   parentMissing?: true;
   outOfPlace?: true;
+  nested?: true;
 };
 
 const isContainer = (node: StructureNode) => node.type === "loop" || node.type === "foreach";
@@ -30,6 +31,7 @@ export function bodyProblems(nodes: readonly StructureNode[]): BodyProblem[] {
         problems.push({
           node: node.id,
           message: `${named} is inside ${parentType} ${node.parent}`,
+          nested: true,
         });
       }
     }

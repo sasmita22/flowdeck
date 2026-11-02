@@ -5,6 +5,8 @@ import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.j
 import type { BuildResult } from "../../core/compiler/build.js";
 import { buildVersion } from "../../core/compiler/build-version.js";
 import { resolveConnectors } from "../../core/compiler/connectors.js";
+import { plainProblems, type Problem } from "../../core/compiler/problems.js";
+import type { ValidationError } from "../../core/compiler/validate.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
 import type { OpenedFlow } from "../../core/flow/flow-store.js";
 import { parseFlow, type Flow } from "../../core/flow/schema.js";
@@ -41,7 +43,13 @@ import type {
   ListedRun,
   LoadedRun,
 } from "../../core/run/listing.js";
-import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
+import { runSnapshot, type SnapshotStatus, type StartRunResult } from "../../core/run/snapshot.js";
+import {
+  keptNotice,
+  removesWorktree,
+  runWorktree,
+  type RunWorktree,
+} from "../../core/run/worktree-cleanup.js";
 import { waitAnswerSchema } from "../../core/run/wait.js";
 import type { ConnectorSource } from "../../ports/connector-source.js";
 import type { FileSystem } from "../../ports/file-system.js";
@@ -49,6 +57,7 @@ import type { FlowStore, SaveFlowResult, SavedFlowRef } from "../../ports/flow-s
 import type { GitState } from "../../ports/git-state.js";
 import type { RunSummary, Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
+import { feedOf, type ActivityEntry } from "../../core/run/activity.js";
 import { createActivityTracker } from "./activity-tracker.js";
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult } from "./hooks.js";
@@ -106,6 +115,8 @@ const inputsSchema = z.record(z.string(), z.string());
 const buildVersionPayload = z.object({ flowId: z.string(), version: z.number().int() });
 
 const buildFilesPayload = z.object({ hash: z.string() });
+
+const listBranchesPayload = z.object({ repo: z.string() });
 
 const savePayload = z.object({
   flowId: z.string().nullable(),
@@ -186,8 +197,15 @@ const saveTo = (
   flow: Flow,
 ): SavedFlowRef => flows.save(flow, flowId ?? { name: name ?? "Untitled" });
 
-const problemsOf = (result: Extract<BuildResult, { ok: false }>) =>
-  result.errors.map((error) => `${error.rule}: ${error.message}`).join("\n");
+const problemText = ({ node, text }: Problem) => (node === undefined ? text : `${node}: ${text}`);
+
+const problemsOf = (result: { errors: readonly ValidationError[] }) =>
+  plainProblems(result.errors).map(problemText).join("\n");
+
+const refusedBuild = (result: Extract<BuildResult, { ok: false }>): BuildVersionResult => {
+  const problems = plainProblems(result.errors);
+  return { kind: "error", message: problems.map(problemText).join("\n"), problems };
+};
 
 function announced(
   opened: OpenedSession,
@@ -275,7 +293,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       home: options.home,
       connectors: options.connectors,
     });
-    if (!result.ok) return { kind: "error", message: problemsOf(result) };
+    if (!result.ok) return refusedBuild(result);
     for (const { path, problem } of result.restored) {
       console.log(`engine: build ${result.hash} restored ${path} (${problem})`);
     }
@@ -421,19 +439,54 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       .catch((error: unknown) => {
         console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
       })
-      .finally(() => {
+      .finally(async () => {
         if (isDetached()) return;
         options.waits?.drop();
         active = undefined;
+        let status: SnapshotStatus | undefined;
         try {
-          console.log(`engine: run ${runId} ${runs.findRun(runId)?.status ?? "unknown"}`);
+          status = runs.findRun(runId)?.status;
+          console.log(`engine: run ${runId} ${status ?? "unknown"}`);
         } catch (error) {
           console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
+        }
+        const worktree = runWorktree(manifest.session.workingFolder, options.home, claudeSessionId);
+        if (worktree !== undefined && status !== undefined && removesWorktree(status)) {
+          await removeWorktree(runId, worktree, runs);
         }
       });
     active = run;
     console.log(`engine: run ${runId} started`);
     return { kind: "started", runId };
+  };
+
+  const removeWorktree = async (
+    runId: string,
+    worktree: RunWorktree,
+    activity: Pick<Store, "recordActivity" | "activity">,
+  ): Promise<void> => {
+    try {
+      const removal = await options.worktree.remove(worktree);
+      const notice = keptNotice(worktree, removal);
+      if (notice === undefined) {
+        console.log(
+          `engine: run ${runId} removed worktree ${worktree.path} and ${worktree.branch}`,
+        );
+        return;
+      }
+      console.log(`engine: run ${runId} ${notice}`);
+      const entry: ActivityEntry = {
+        id: feedOf(activity.activity(runId)).nextId,
+        nodeId: "",
+        at: options.run.now(),
+        kind: "kept",
+        summary: notice,
+      };
+      activity.recordActivity(runId, entry);
+      options.publish({ push: "activity", value: { runId, entry } });
+    } catch (error) {
+      console.log(`engine: run ${runId} kept worktree ${worktree.path} (${messageOf(error)})`);
+    }
   };
 
   const sessionOptions = async (
@@ -485,19 +538,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const socket = runSocketPath(options.home, sessionName);
     if (socket.kind === "error") return failure(socket.message);
     const claudeSessionId = randomUUID();
-    let cwd: string;
-    if (folder.kind === "worktree") {
-      const id8 = claudeSessionId.slice(0, 8);
-      cwd = join(options.home, "worktrees", id8);
-      await options.worktree.add({
-        repo: folder.repo ?? "",
-        base: folder.branch,
-        branch: `flowdeck/${id8}`,
-        path: cwd,
-      });
+    let cwd = folder.kind === "path" ? folder.path : "";
+    const worktree = runWorktree(folder, options.home, claudeSessionId);
+    if (folder.kind === "worktree" && worktree !== undefined) {
+      cwd = worktree.path;
+      await options.worktree.add(worktree);
       if (!options.isFolder(cwd)) return failure(`Working folder not found: ${cwd}`);
-    } else {
-      cwd = folder.path;
     }
     const nodeIds = manifest.nodes.map((node) => node.id);
     const declared = runChoices(manifest).flags;
@@ -935,6 +981,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "run-cost":
           return parsedAnswer(request, runIdPayload, ({ runId }) =>
             runCost(storesOrThrow(), runId),
+          );
+        case "list-branches":
+          return parsedAnswer(request, listBranchesPayload, ({ repo }) =>
+            options.gitState.branches(repo),
           );
         case "workspace-info": {
           const parsed = workspaceInfoPayload.safeParse(request.payload);

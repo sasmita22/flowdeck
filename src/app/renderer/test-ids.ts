@@ -22,7 +22,7 @@ export const controlTestIds = {
   undo: "canvas-undo",
   redo: "canvas-redo",
   delete: "canvas-delete",
-  wrap: "canvas-wrap",
+  sessionChip: "session-chip",
   zoomIn: "canvas-zoom-in",
   zoomOut: "canvas-zoom-out",
   fit: "canvas-fit",
@@ -32,6 +32,7 @@ export const controlTestIds = {
 export const readoutTestIds = {
   flow: "canvas-flow",
   selection: "canvas-selection",
+  wires: "canvas-selected-wires",
 } as const;
 
 export const pageTestIds = {

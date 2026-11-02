@@ -6,12 +6,16 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore as useFlowStore,
   type Connection,
+  type EdgeChange,
+  type FinalConnectionState,
   type NodeChange,
   type ReactFlowProps,
+  type ReactFlowState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useMemo, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type DragEvent, type ReactNode } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeTypes } from "../nodes/node-types.js";
@@ -20,19 +24,22 @@ import type { RunView } from "../run-store.js";
 import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-store.js";
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
+import { BranchEdge } from "./branch-edge.js";
 import { FileEdge } from "./file-edge.js";
 import { FileNamePrompt } from "./file-name-prompt.js";
+import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
-import { shortcutFor } from "./shortcuts.js";
+import { RenameField } from "./rename-field.js";
+import { SessionChip } from "./session-chip.js";
+import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasStoreContext } from "./status.js";
-import { isCanvasItemType, selectCanvasEmpty, wrappableIds, type CanvasState } from "./store.js";
+import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
 import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
-const startViewport = { x: 24, y: 56, zoom: 1 };
 const proOptions = { hideAttribution: true };
-const edgeTypes = { aligned: AlignedEdge, file: FileEdge };
+const edgeTypes = { aligned: AlignedEdge, file: FileEdge, branch: BranchEdge };
 
 const containerOfFrame = (node: ViewNode): string | undefined =>
   node.type === "loop-frame"
@@ -49,12 +56,11 @@ const viewing = {
   fitViewOptions: { maxZoom: 1 },
 } satisfies Partial<ReactFlowProps>;
 
-function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
+function Toolbar({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreApi<ShellState> }) {
   const canUndo = useStore(store, (state) => state.undoStack.length > 0);
   const canRedo = useStore(store, (state) => state.redoStack.length > 0);
-  const canDelete = useStore(store, (state) => state.selection.length > 0);
-  const canWrap = useStore(store, (state) => wrappableIds(state.flow, state.selection).length > 0);
-  const { undo, redo, deleteSelection, wrapSelection } = store.getState();
+  const canDelete = useStore(store, selectCanDelete);
+  const { undo, redo, deleteSelection } = store.getState();
   return (
     <div className="fd-canvas-tools" role="toolbar" aria-label="Canvas">
       <button
@@ -81,14 +87,7 @@ function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
       >
         Delete
       </button>
-      <button
-        className="fd-btn"
-        data-testid={controlTestIds.wrap}
-        disabled={!canWrap}
-        onClick={wrapSelection}
-      >
-        Wrap in session
-      </button>
+      <SessionChip canvas={store} shell={shell} />
     </div>
   );
 }
@@ -178,19 +177,101 @@ function EmptyHint({
   );
 }
 
+function CanvasMessage({ store }: { store: StoreApi<CanvasState> }) {
+  const message = useStore(store, (state) => state.message);
+  if (message === null) return null;
+  return (
+    <div className="fd-canvas-toast" data-testid="canvas-message" role="status">
+      {message}
+    </div>
+  );
+}
+
+const allMeasured = ({ nodeLookup }: ReactFlowState) =>
+  nodeLookup.size > 0 &&
+  [...nodeLookup.values()].every(({ measured }) => (measured.width ?? 0) > 0);
+
+function useFitOnOpen(store: StoreApi<CanvasState>) {
+  const opened = useStore(store, (state) => state.opened);
+  const initialized = useFlowStore(allMeasured);
+  const width = useFlowStore((state) => state.width);
+  const height = useFlowStore((state) => state.height);
+  const { getNodes, getNodesBounds, setViewport } = useReactFlow();
+  const fitted = useRef<number | null>(null);
+  useEffect(() => {
+    if (fitted.current === opened || width === 0 || height === 0) return;
+    const nodes = getNodes();
+    if (nodes.length > 0 && !initialized) return;
+    fitted.current = opened;
+    if (nodes.length === 0) return;
+    void setViewport(openingViewport(getNodesBounds(nodes), { width, height }));
+  }, [opened, initialized, width, height, getNodes, getNodesBounds, setViewport]);
+}
+
+function useFocus(store: StoreApi<CanvasState>) {
+  const focus = useStore(store, (state) => state.focus);
+  const { getInternalNode, getZoom, setCenter } = useReactFlow();
+  useEffect(() => {
+    if (focus === null) return;
+    const node = getInternalNode(focus.node);
+    if (node === undefined) return;
+    const { x, y } = node.internals.positionAbsolute;
+    const width = node.measured.width ?? 0;
+    const height = node.measured.height ?? 0;
+    void setCenter(x + width / 2, y + height / 2, { zoom: getZoom(), duration: 200 });
+  }, [focus, getInternalNode, getZoom, setCenter]);
+}
+
+function useCanvasKeys(store: StoreApi<CanvasState>, onSave: (() => void) | undefined) {
+  const { zoomIn, zoomOut, zoomTo } = useReactFlow();
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const shortcut = shortcutFor(event);
+      if (shortcut === null) return;
+      const state = store.getState();
+      if (shortcut === "rename" && (state.selection.length !== 1 || state.renaming !== null)) {
+        return;
+      }
+      if (!claimsShortcut(shortcut, state)) return;
+      event.preventDefault();
+      if (shortcut === "save") onSave?.();
+      else if (shortcut === "zoomIn") void zoomIn();
+      else if (shortcut === "zoomOut") void zoomOut();
+      else if (shortcut === "zoomReset") void zoomTo(1);
+      else if (shortcut === "rename") state.startRename();
+      else state[shortcut]();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [store, onSave, zoomIn, zoomOut, zoomTo]);
+}
+
+const renameOnDoubleClick = (store: StoreApi<CanvasState>) => (event: MouseEvent) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const id = target?.closest(".react-flow__node")?.getAttribute("data-id");
+  if (id === null || id === undefined) return;
+  if (!store.getState().flow.nodes.some((node) => node.id === id)) return;
+  // d3-zoom zooms on a dblclick at the pane before React's root listener would see it.
+  event.stopPropagation();
+  store.getState().startRename(id);
+};
+
 function Board({
   store,
   shell,
   run,
   readOnly,
+  onSave,
 }: {
   store: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
   run: StoreApi<RunView>;
   readOnly: boolean;
+  onSave: (() => void) | undefined;
 }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
+  const selectedWires = useStore(store, (state) => state.selectedWires);
   const dragPositions = useStore(store, (state) => state.dragPositions);
   const highlighted = useStore(store, (state) => state.highlighted);
   const noteBoxes = useStore(store, (state) => state.noteBoxes);
@@ -198,8 +279,17 @@ function Board({
     () => toViewNodes(flow, selection, dragPositions, highlighted, noteBoxes),
     [flow, selection, dragPositions, highlighted, noteBoxes],
   );
-  const edges = useMemo(() => toViewEdges(flow), [flow]);
+  const edges = useMemo(() => toViewEdges(flow, selectedWires), [flow, selectedWires]);
   const { screenToFlowPosition } = useReactFlow();
+  const board = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = board.current;
+    if (readOnly || element === null) return;
+    const onDoubleClick = renameOnDoubleClick(store);
+    element.addEventListener("dblclick", onDoubleClick, true);
+    return () => element.removeEventListener("dblclick", onDoubleClick, true);
+  }, [store, readOnly]);
 
   const onNodesChange = (changes: NodeChange[]) => {
     const { selection: current, select, dragTo } = store.getState();
@@ -217,11 +307,28 @@ function Board({
     if (selectionChanged) select([...selected]);
   };
 
+  const onEdgesChange = (changes: EdgeChange[]) => {
+    const { selectedWires: current, selectWires } = store.getState();
+    const selected = new Set(current);
+    let selectionChanged = false;
+    for (const change of changes) {
+      if (change.type !== "select") continue;
+      selectionChanged = true;
+      if (change.selected) selected.add(change.id);
+      else selected.delete(change.id);
+    }
+    if (selectionChanged) selectWires([...selected]);
+  };
+
   const onConnect = ({ source, sourceHandle, target, targetHandle }: Connection) => {
     if (sourceHandle === null || targetHandle === null) return;
     store
       .getState()
       .connect({ node: source, port: sourceHandle }, { node: target, port: targetHandle });
+  };
+
+  const onConnectEnd = (_event: MouseEvent | TouchEvent, connection: FinalConnectionState) => {
+    if (connection.isValid === false) store.getState().refuseConnection();
   };
 
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
@@ -240,6 +347,7 @@ function Board({
   const editing: Partial<ReactFlowProps<ViewNode, ViewEdge>> = {
     deleteKeyCode: deleteKeys,
     onNodesChange,
+    onEdgesChange,
     onNodeDragStop: (_, __, dragged) => store.getState().endDrag(dragged.map((n) => n.id)),
     onBeforeDelete: async () => {
       store.getState().deleteSelection();
@@ -254,12 +362,13 @@ function Board({
       shell.getState().closeSessionSettings();
     },
     onConnect,
+    onConnectEnd,
     onDragOver,
     onDrop,
   };
 
   return (
-    <div className="fd-canvas" data-testid="canvas">
+    <div className="fd-canvas" data-testid="canvas" ref={board}>
       <CanvasStoreContext.Provider value={store}>
         <ReactFlow
           nodes={nodes}
@@ -283,24 +392,41 @@ function Board({
           <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
           <ZoomControls />
           {!readOnly && <FileNamePrompt store={store} />}
+          {!readOnly && <RenameField store={store} />}
+          {!readOnly && <EditorEffects store={store} onSave={onSave} />}
         </ReactFlow>
       </CanvasStoreContext.Provider>
       <PanelShowButtons
         shell={shell}
         run={run}
-        toolbar={readOnly ? null : <Toolbar store={store} />}
+        toolbar={readOnly ? null : <Toolbar store={store} shell={shell} />}
         readOnly={readOnly}
       />
       {!readOnly && <EmptyHint store={store} shell={shell} />}
       {!readOnly && <NodeMenu store={store} />}
+      {!readOnly && <CanvasMessage store={store} />}
       <Readout store={store} />
     </div>
   );
 }
 
+function EditorEffects({
+  store,
+  onSave,
+}: {
+  store: StoreApi<CanvasState>;
+  onSave: (() => void) | undefined;
+}) {
+  useFitOnOpen(store);
+  useFocus(store);
+  useCanvasKeys(store, onSave);
+  return null;
+}
+
 function Readout({ store }: { store: StoreApi<CanvasState> }) {
   const flow = useStore(store, (state) => state.flow);
   const selection = useStore(store, (state) => state.selection);
+  const selectedWires = useStore(store, (state) => state.selectedWires);
   return (
     <>
       <pre className="fd-visually-hidden" data-testid={readoutTestIds.flow}>
@@ -308,6 +434,9 @@ function Readout({ store }: { store: StoreApi<CanvasState> }) {
       </pre>
       <pre className="fd-visually-hidden" data-testid={readoutTestIds.selection}>
         {JSON.stringify(selection)}
+      </pre>
+      <pre className="fd-visually-hidden" data-testid={readoutTestIds.wires}>
+        {JSON.stringify(selectedWires)}
       </pre>
     </>
   );
@@ -326,24 +455,10 @@ export function Canvas({
   onSave?: () => void;
   readOnly?: boolean;
 }) {
-  useEffect(() => {
-    if (readOnly) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      const shortcut = shortcutFor(event);
-      if (shortcut === null) return;
-      event.preventDefault();
-      const state = store.getState();
-      if (shortcut === "save") onSave?.();
-      else state[shortcut]();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [store, onSave, readOnly]);
-
   return (
     <ReactFlowProvider>
       {!readOnly && <Palette canvas={store} shell={shell} run={run} />}
-      <Board store={store} shell={shell} run={run} readOnly={readOnly} />
+      <Board store={store} shell={shell} run={run} readOnly={readOnly} onSave={onSave} />
     </ReactFlowProvider>
   );
 }

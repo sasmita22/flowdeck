@@ -4,6 +4,7 @@ import type { StoreApi } from "zustand/vanilla";
 import type { Actions } from "./actions.js";
 import { AppMenu } from "./app-menu.js";
 import type { AppState } from "./app-store.js";
+import type { BranchState } from "./branch-store.js";
 import type { CanvasState } from "./canvas/store.js";
 import { ClosePrompt } from "./close-prompt.js";
 import type { InspectorState } from "./inspector/store.js";
@@ -40,22 +41,77 @@ export type AppStores = {
   workspace: StoreApi<WorkspaceState>;
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
+  branches: StoreApi<BranchState>;
   actions: Actions;
 };
 
-function Errors({ canvas, save, run, library }: AppStores) {
+function Problems({
+  canvas,
+  run,
+  shell,
+  nav,
+}: Pick<AppStores, "canvas" | "run" | "shell" | "nav">) {
+  const problems = useStore(run, (state) => state.problems);
+  const nodes = useStore(canvas, (state) => state.flow.nodes);
+  if (problems === null) return null;
+  const labelOf = (id: string) => nodes.find((node) => node.id === id)?.label ?? id;
+  const open = (node: string | undefined) => {
+    nav.getState().go({ name: "editor" });
+    if (node === undefined) shell.getState().openSessionSettings();
+    else {
+      canvas.getState().focusNode(node);
+      shell.getState().showInspector();
+    }
+  };
+  const count = problems.length === 1 ? "1 problem" : `${problems.length} problems`;
+  return (
+    <section className="fd-problems" data-testid="build-problems" aria-label="Build problems">
+      <div className="fd-problems-head">
+        <strong>Can't build yet: {count} to fix</strong>
+        <button
+          className="fd-btn"
+          data-testid="build-problems-dismiss"
+          onClick={() => run.getState().dismissProblems()}
+        >
+          Dismiss
+        </button>
+      </div>
+      <ul className="fd-problems-list">
+        {problems.map(({ node, text }, index) => (
+          <li key={`${node ?? "session"}-${index}`}>
+            <button
+              className="fd-problem"
+              data-testid={`build-problem-${index}`}
+              data-node={node}
+              title={node === undefined ? "Open the session settings" : "Select this node"}
+              onClick={() => open(node)}
+            >
+              <span className="fd-problem-where">
+                {node === undefined ? "Session" : labelOf(node)}
+              </span>
+              <span>{text}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Errors(stores: AppStores) {
+  const { save, run, library } = stores;
   const error = useStore(save, (state) => state.error);
   const runError = useStore(run, (state) => state.error);
-  const message = useStore(canvas, (state) => state.message);
+  const problems = useStore(run, (state) => state.problems);
   const libraryError = useStore(library, (state) => state.error);
-  if (error === null && runError === null && message === null && libraryError === null) {
+  if (error === null && runError === null && problems === null && libraryError === null) {
     return null;
   }
   return (
     <div className="fd-errors" data-testid="app-errors" role="status">
       {error !== null && <span data-testid="flow-error">{error}</span>}
       {runError !== null && <span data-testid="run-error">{runError}</span>}
-      {message !== null && <span data-testid="canvas-message">{message}</span>}
+      <Problems {...stores} />
       {libraryError !== null && <span data-testid="library-error">{libraryError}</span>}
     </div>
   );
@@ -169,6 +225,7 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         shell={stores.shell}
         nav={stores.nav}
         actions={stores.actions}
+        branches={stores.branches}
       />
     );
   }

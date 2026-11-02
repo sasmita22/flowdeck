@@ -1,7 +1,6 @@
 import type { NodeTypes } from "@xyflow/react";
 import { ForEachFrame } from "../canvas/foreach-frame.js";
 import { LoopFrame } from "../canvas/loop-frame.js";
-import { SessionFrame } from "../canvas/session.js";
 import { AgentNode } from "./agent.js";
 import { AskNode } from "./ask.js";
 import { BranchNode } from "./branch.js";
@@ -31,7 +30,6 @@ export const nodeTypes: NodeTypes = {
   join: JoinNode,
   branch: BranchNode,
   output: OutputNode,
-  session: SessionFrame,
   "loop-frame": LoopFrame,
   "foreach-frame": ForEachFrame,
   note: NoteNode,

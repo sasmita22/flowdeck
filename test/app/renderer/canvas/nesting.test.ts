@@ -5,7 +5,6 @@ import {
   flow,
   forEach,
   gate,
-  hardstop,
   loop,
   output,
   prompt,
@@ -74,9 +73,9 @@ describe("dropping a new node onto a frame", () => {
   });
 
   it.each([
-    ["trigger", "Trigger", "trigger-1"],
-    ["output", "Output", "output-1"],
-  ] as const)("refuses a %s dropped on a frame, and says why", (type, label, id) => {
+    ["trigger", "Trigger"],
+    ["output", "Output"],
+  ] as const)("refuses a %s dropped on a frame, and says why", (type, label) => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
     const before = store.getState().flow;
 
@@ -85,7 +84,7 @@ describe("dropping a new node onto a frame", () => {
     expect(store.getState().flow).toBe(before);
     expect(store.getState().undoStack).toEqual([]);
     expect(store.getState().message).toBe(
-      `Can't drop ${label} into L: ${id} cannot be inside loop L.`,
+      `Can't drop ${label} into L: ${label} cannot be inside loop L.`,
     );
   });
 
@@ -260,24 +259,5 @@ describe("deleting a container", () => {
 
     store.getState().redo();
     expect(store.getState().flow).toEqual(after);
-  });
-
-  it("keeps a container whose body holds a Hard stop, and says it is locked", () => {
-    const store = loaded(
-      flow(
-        [
-          at(loop("L"), 0, 0),
-          at(prompt("P", { parent: "L" }), 0, 80),
-          hardstop("H", { parent: "L" }),
-        ],
-        [],
-      ),
-    );
-    const before = store.getState().flow;
-
-    store.getState().deleteNodes(["L"]);
-
-    expect(store.getState().flow).toBe(before);
-    expect(store.getState().message).toBe("Hard stop is locked");
   });
 });

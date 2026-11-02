@@ -118,13 +118,10 @@ describe("createWorkspaceStore", () => {
     });
   });
 
-  it("shows a new worktree's base branch for a flow that starts one", async () => {
+  it("says the folder is not set for a new blueprint", async () => {
     const { label } = await loaded({});
 
-    expect(label()).toEqual({
-      folder: { name: "repository not set", title: "" },
-      branch: "new worktree from main",
-    });
+    expect(label()).toEqual({ folder: { name: "folder not set", title: "" }, branch: "" });
   });
 
   it("asks again when the working folder changes, without showing the old branch meanwhile", async () => {

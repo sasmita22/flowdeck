@@ -9,8 +9,8 @@ type Position = { x: number; y: number };
 
 type Indexed<T> = { index: number; item: T };
 
-const indexed = <T>(items: readonly T[], keep: (item: T) => boolean): Indexed<T>[] =>
-  items.flatMap((item, index) => (keep(item) ? [{ index, item }] : []));
+const indexed = <T>(items: readonly T[], keep: (item: T, index: number) => boolean): Indexed<T>[] =>
+  items.flatMap((item, index) => (keep(item, index) ? [{ index, item }] : []));
 
 const reinsert = <T>(items: readonly T[], removed: readonly Indexed<T>[]): T[] => {
   const result = [...items];
@@ -91,6 +91,42 @@ export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => {
   };
 };
 
+export const deleteWires = (flow: Flow, indexes: readonly number[]): Command => {
+  const places = new Set(indexes);
+  const wires = indexed(flow.wires, (_wire, index) => places.has(index));
+  return {
+    do: (current) => ({ ...current, wires: without(current.wires, wires) }),
+    undo: (current) => ({ ...current, wires: reinsert(current.wires, wires) }),
+  };
+};
+
+export type Items = {
+  nodes: readonly Node[];
+  wires: readonly Wire[];
+  notes: readonly CanvasNote[];
+};
+
+export const addItems = (items: Items): Command => ({
+  do: (flow) =>
+    withNotes(
+      {
+        ...flow,
+        nodes: [...flow.nodes, ...items.nodes],
+        wires: [...flow.wires, ...items.wires],
+      },
+      [...notesOf(flow), ...items.notes],
+    ),
+  undo: (flow) =>
+    withNotes(
+      {
+        ...flow,
+        nodes: flow.nodes.slice(0, flow.nodes.length - items.nodes.length),
+        wires: flow.wires.slice(0, flow.wires.length - items.wires.length),
+      },
+      notesOf(flow).slice(0, notesOf(flow).length - items.notes.length),
+    ),
+});
+
 export type Move = {
   id: string;
   from: Position;
@@ -129,30 +165,6 @@ export const moveNodes = (moves: readonly Move[]): Command => ({
 });
 
 const withSession = (flow: Flow, session: Session): Flow => ({ ...flow, session });
-
-export const wrappableIds = (flow: Flow, ids: readonly string[]): string[] => {
-  const members = new Set(flow.session.frame?.nodes);
-  const topLevel = new Set(
-    flow.nodes.filter((node) => node.parent === undefined).map((node) => node.id),
-  );
-  return ids.filter((id) => topLevel.has(id) && !members.has(id));
-};
-
-export const wrapInSession = (ids: readonly string[]): Command => {
-  let previous: Session | undefined;
-  return {
-    do: (flow) => {
-      const added = wrappableIds(flow, ids);
-      if (added.length === 0) return flow;
-      previous = flow.session;
-      return withSession(flow, {
-        ...flow.session,
-        frame: { nodes: [...(flow.session.frame?.nodes ?? []), ...added] },
-      });
-    },
-    undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
-  };
-};
 
 export const updateSession = (next: Session): Command => {
   let previous: Session | undefined;

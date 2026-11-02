@@ -233,7 +233,7 @@ test("A Prompt dropped onto a Loop frame is in its body after save and reload, a
 
   await expect.poll(() => parentIn(window, "prompt-1")).toBeUndefined();
   await expect(window.getByTestId("node-issue-loop-1")).toHaveText(
-    "has no prompt or agent in its body.",
+    "Has no prompt or agent in its body.",
   );
 
   await window.getByTestId(controlTestIds.undo).click();
@@ -309,8 +309,11 @@ test("A fresh Loop says on the canvas that its body needs a Prompt or Agent", as
 
   await dropOn(window, "loop", 500, 300);
 
-  await expect(window.getByTestId("node-issue-loop-1")).toHaveText(
-    "has no prompt or agent in its body.",
+  const issue = window.getByTestId("node-issue-loop-1");
+  await expect(issue).toHaveText("2 problems");
+  await expect(issue).toHaveAttribute(
+    "title",
+    "Write when the loop is done.\nHas no prompt or agent in its body.",
   );
   await expect(window.getByText("LOOP · max 3")).toBeVisible();
 });
@@ -395,7 +398,16 @@ for (const container of ["loop", "foreach"] as const) {
     const id = `${container}-1`;
     await dropInFrame(window, "prompt", window.getByTestId(`${container}-frame-${id}`));
     await expect.poll(() => parentIn(window, "prompt-1")).toBe(id);
+    if (container === "loop") {
+      await window.getByTestId(`node-${id}`).click();
+      await window.getByTestId("node-setting-condition").fill("The work is done.");
+      await window.getByTestId("node-setting-condition").blur();
+    }
+    await window.getByTestId("node-prompt-1").click();
+    await window.getByTestId("node-setting-instructions").fill("Say done.");
+    await window.getByTestId("node-setting-instructions").blur();
     await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
+    await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
 
     await window.getByTestId(controlTestIds.run).click();
 

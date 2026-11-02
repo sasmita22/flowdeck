@@ -14,7 +14,7 @@ describe("prompt defaults", () => {
     expect(settings.parse(defaultSettings)).toEqual(defaultSettings);
   });
 
-  it("makes a node that parses in a flow and passes validation", () => {
+  it("makes a node that parses in a flow and is flagged until its instructions is written", () => {
     const node = {
       id: "prompt-1",
       type: "prompt",
@@ -23,6 +23,8 @@ describe("prompt defaults", () => {
       settings: defaultSettings,
     };
 
-    expect(validate(flow([node], []))).toEqual([]);
+    expect(validate(flow([node], [])).map(({ rule, field }) => ({ rule, field }))).toEqual([
+      { rule: "required-settings", field: "instructions" },
+    ]);
   });
 });

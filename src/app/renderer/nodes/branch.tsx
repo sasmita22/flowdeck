@@ -27,7 +27,16 @@ export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
           type={direction === "in" ? "target" : "source"}
           position={placement[name]}
           data-testid={`port-${id}-${name}`}
-        />
+        >
+          {direction === "out" && (
+            <span
+              className={`fd-port-label fd-port-label-${name}`}
+              data-testid={`port-label-${id}-${name}`}
+            >
+              {name}
+            </span>
+          )}
+        </Handle>
       ))}
     >
       <TagPill type="branch" />

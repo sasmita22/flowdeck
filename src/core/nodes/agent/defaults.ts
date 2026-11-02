@@ -3,7 +3,7 @@ import type { settings } from "./settings.js";
 
 export const defaultSettings: z.infer<typeof settings> = {
   role: "",
-  instructions: "Describe the agent's task.",
+  instructions: "",
   model: "sonnet",
   tools: [],
 };

@@ -12,6 +12,7 @@ import { rule as parallelSection } from "./rules/parallel-section.js";
 import { rule as ports } from "./rules/ports.js";
 import { rule as references } from "./rules/references.js";
 import { rule as requiredSettings } from "./rules/required-settings.js";
+import { rule as sessionFolder } from "./rules/session-folder.js";
 
 export type ValidationError = {
   rule: string;
@@ -41,6 +42,7 @@ export const rules = [
   bodyNodes,
   branchFlag,
   fileWires,
+  sessionFolder,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

@@ -11,10 +11,8 @@ import {
   selectFieldIssues,
   selectNodeIssues,
   selectSelectedNode,
-  wrappableIds,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
-import { SESSION_FRAME_ID, toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { NodeType, parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
 import {
@@ -31,13 +29,18 @@ import {
   trigger,
 } from "../../../fixtures/flow-builders.js";
 
+const unfinished = new Set(["required-settings", "session-folder"]);
+
 type Store = ReturnType<typeof createCanvasStore>;
 
 const nodeIdRule = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
+const structural = (current: Flow) =>
+  validate(current).filter((error) => !unfinished.has(error.rule));
+
 const expectValid = (current: Flow) => {
   expect(parseFlow(current)).toEqual(current);
-  expect(validate(current)).toEqual([]);
+  expect(structural(current)).toEqual([]);
 };
 
 const act = (store: Store, action: (state: ReturnType<Store["getState"]>) => unknown) => {
@@ -80,10 +83,11 @@ const buildAt3 = () => {
 };
 
 describe("createCanvasStore", () => {
-  it("starts with an empty valid flow, no selection and empty stacks", () => {
+  it("starts with an empty flow, no selection and empty stacks", () => {
     const state = createCanvasStore().getState();
 
-    expect(state.flow).toEqual(flow([], []));
+    expect(state.flow).toEqual(newCanvasFlow());
+    expect(state.flow.nodes).toEqual([]);
     expect(state.selection).toEqual([]);
     expect(state.undoStack).toEqual([]);
     expect(state.redoStack).toEqual([]);
@@ -262,8 +266,6 @@ describe("delete", () => {
   });
 });
 
-const locked = "Hard stop is locked";
-
 const guarded = () => {
   const store = createCanvasStore({ ready: false });
   store
@@ -277,75 +279,56 @@ const guarded = () => {
   return store;
 };
 
-describe("hard stop lock", () => {
+const refuseSelfLoop = (s: ReturnType<Store["getState"]>) =>
+  s.connect(end("P", "out"), end("P", "in"));
+
+describe("deleting a hard stop", () => {
   it("starts with no message", () => {
     expect(createCanvasStore().getState().message).toBeNull();
   });
 
-  it("keeps a hard stop deleted by id, shows the locked message and records nothing", () => {
+  it("deletes a hard stop by id with its wires, as one undoable step and no message", () => {
     const store = guarded();
-    const before = store.getState();
+    const before = store.getState().flow;
 
     act(store, (s) => s.deleteNodes(["H"]));
 
     const after = store.getState();
-    expect(after.flow).toEqual(before.flow);
-    expect(after.message).toBe(locked);
-    expect(after.undoStack).toBe(before.undoStack);
-    expect(after.redoStack).toBe(before.redoStack);
+    expect(after.flow.nodes.map((node) => node.id)).toEqual(["T", "P", "O"]);
+    expect(after.flow.wires).toEqual([then("T", "P")]);
+    expect(after.message).toBeNull();
+    expect(after.undoStack).toHaveLength(1);
+
+    act(store, (s) => s.undo());
+    expect(store.getState().flow).toEqual(before);
   });
 
-  it("deletes the rest of a mixed selection as one undoable command and keeps the hard stop", () => {
+  it("deletes a hard stop with the rest of a mixed selection as one undoable command", () => {
     const store = guarded();
     const before = store.getState().flow;
     act(store, (s) => s.select(["P", "H"]));
 
     act(store, (s) => s.deleteSelection());
 
-    const after = store.getState();
-    expect(after.flow.nodes.map((node) => node.id)).toEqual(["T", "H", "O"]);
-    expect(after.flow.wires).toEqual([then("H", "O")]);
-    expect(after.message).toBe(locked);
-    expect(after.undoStack).toHaveLength(1);
-
+    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual(["T", "O"]);
+    expect(store.getState().undoStack).toHaveLength(1);
     act(store, (s) => s.undo());
-
     expect(store.getState().flow).toEqual(before);
   });
 
-  it("leaves only the hard stop when every node is selected and deleted", () => {
+  it("clears a refusal message on the next successful edit", () => {
     const store = guarded();
-    act(store, (s) => s.select(s.flow.nodes.map((node) => node.id)));
-
-    act(store, (s) => s.deleteSelection());
-
-    const after = store.getState();
-    expect(after.flow.nodes.map((node) => node.id)).toEqual(["H"]);
-    expect(after.flow.wires).toEqual([]);
-    expect(after.message).toBe(locked);
-    expect(after.undoStack).toHaveLength(1);
-  });
-
-  it("shows no message for a delete without a hard stop", () => {
-    const store = guarded();
-
-    act(store, (s) => s.deleteNodes(["P"]));
-
-    expect(store.getState().message).toBeNull();
-  });
-
-  it("clears the message on the next successful edit", () => {
-    const store = guarded();
-    act(store, (s) => s.deleteNodes(["H"]));
+    act(store, refuseSelfLoop);
+    expect(store.getState().message).not.toBeNull();
 
     act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
 
     expect(store.getState().message).toBeNull();
   });
 
-  it("clears the message when the selection changes", () => {
+  it("clears a refusal message when the selection changes", () => {
     const store = guarded();
-    act(store, (s) => s.deleteNodes(["H"]));
+    act(store, refuseSelfLoop);
 
     act(store, (s) => s.select(["P"]));
 
@@ -621,7 +604,6 @@ describe("edit gate", () => {
     ["deleteNodes", (s) => s.deleteNodes(["prompt-1"])],
     ["dragTo", (s) => s.dragTo("prompt-1", { x: 50, y: 50 })],
     ["endDrag", (s) => s.endDrag(["prompt-1"])],
-    ["wrapSelection", (s) => s.wrapSelection()],
     ["updateSession", (s) => s.updateSession({ ...s.flow.session, model: "haiku" })],
     [
       "updateNode",
@@ -806,94 +788,6 @@ describe("markSaved", () => {
   });
 });
 
-const framed = (source: Flow, nodes: string[]): Flow => ({
-  ...source,
-  session: { ...source.session, frame: { nodes } },
-});
-
-const loopWithBody = () => flow([loop("L"), prompt("X", { parent: "L" }), prompt("A")], []);
-
-describe("wrappableIds", () => {
-  it("returns the selected top-level ids that are not members yet, in selection order", () => {
-    const source = framed(
-      flow([loop("L"), prompt("X", { parent: "L" }), prompt("A"), prompt("B")], []),
-      ["B"],
-    );
-
-    expect(wrappableIds(source, ["A", "X", "B", "ghost", "L"])).toEqual(["A", "L"]);
-  });
-
-  it("is empty for an empty selection", () => {
-    expect(wrappableIds(loopWithBody(), [])).toEqual([]);
-  });
-
-  it("is empty when only loop-body nodes are selected", () => {
-    expect(wrappableIds(loopWithBody(), ["X"])).toEqual([]);
-  });
-});
-
-describe("wrapSelection", () => {
-  it("frames the four selected nodes as one undo step and undo leaves the canvas clean", () => {
-    const store = createCanvasStore();
-    const { a, b, c, d } = dropFour(store);
-    store.getState().markSaved(store.getState().flow);
-    act(store, (s) => s.select([a, b, c, d]));
-    const depth = store.getState().undoStack.length;
-
-    act(store, (s) => s.wrapSelection());
-
-    expect(store.getState().flow.session.frame).toEqual({ nodes: [a, b, c, d] });
-    expect(store.getState().undoStack).toHaveLength(depth + 1);
-    expect(selectDirty(store.getState())).toBe(true);
-
-    act(store, (s) => s.undo());
-
-    expect(Object.hasOwn(store.getState().flow.session, "frame")).toBe(false);
-    expect(selectDirty(store.getState())).toBe(false);
-  });
-
-  it("records nothing when the selection is empty", () => {
-    const store = createCanvasStore();
-    dropFour(store);
-    act(store, (s) => s.select([]));
-    const before = store.getState();
-
-    act(store, (s) => s.wrapSelection());
-
-    expect(store.getState().undoStack).toBe(before.undoStack);
-    expect(store.getState().flow).toBe(before.flow);
-  });
-
-  it("never reuses the id of a deleted frame member for a new node", () => {
-    const store = createCanvasStore();
-    const { a, b, c, d } = dropFour(store);
-    act(store, (s) => s.select([a]));
-    act(store, (s) => s.wrapSelection());
-    act(store, (s) => s.deleteNodes([a]));
-
-    act(store, (s) => s.drop("prompt", { x: 600, y: 600 }));
-
-    const { flow } = store.getState();
-    const added = flow.nodes.map((node) => node.id).filter((id) => ![b, c, d].includes(id));
-    expect(added).toHaveLength(1);
-    expect(added).not.toContain(a);
-    expect(flow.session.frame).toEqual({ nodes: [a] });
-    expect(toViewNodes(flow, [], {}, null).map((node) => node.id)).not.toContain(SESSION_FRAME_ID);
-  });
-
-  it("records nothing when only loop-body nodes are selected", () => {
-    const store = createCanvasStore({ ready: false });
-    store.getState().load(loopWithBody());
-    store.getState().select(["X"]);
-    const before = store.getState();
-
-    store.getState().wrapSelection();
-
-    expect(store.getState().undoStack).toBe(before.undoStack);
-    expect(store.getState().flow).toBe(before.flow);
-  });
-});
-
 describe("updateSession", () => {
   const edited: Session = {
     name: "main",
@@ -926,11 +820,17 @@ describe("updateSession", () => {
 });
 
 describe("newCanvasFlow", () => {
-  it("defaults to a worktree folder on main and no frame", () => {
+  it("defaults to an existing folder still to be chosen, and no frame", () => {
     const { session } = newCanvasFlow();
 
-    expect(session.workingFolder).toEqual({ kind: "worktree", branch: "main" });
+    expect(session.workingFolder).toEqual({ kind: "path", path: "" });
     expect(Object.hasOwn(session, "frame")).toBe(false);
+  });
+
+  it("is refused at build only for its folder, which the session settings ask for", () => {
+    expect(validate(newCanvasFlow())).toEqual([
+      expect.objectContaining({ rule: "session-folder", field: "workingFolder.path" }),
+    ]);
   });
 });
 
@@ -1037,7 +937,7 @@ describe("connect beside an invalid node", () => {
     expect(store.getState().connect(end("agent-1", "out"), end("join-1", "in"))).toBe(true);
     expect(store.getState().connect(end("agent-2", "out"), end("join-1", "in"))).toBe(true);
     expect(store.getState().flow.wires).toHaveLength(4);
-    expect(validate(store.getState().flow)).toEqual([]);
+    expect(structural(store.getState().flow)).toEqual([]);
   });
 });
 
@@ -1156,7 +1056,7 @@ describe("selectNodeIssues", () => {
 
     expect(message).toBe("fork-1 has 0 branches; a parallel start needs two or more.");
     expect(selectNodeIssues(current)).toEqual({
-      "fork-1": "has 0 branches; a parallel start needs two or more.",
+      "fork-1": ["Has 0 branches; a parallel start needs two or more."],
     });
   });
 
@@ -1164,7 +1064,7 @@ describe("selectNodeIssues", () => {
     const current = flow([forEach("foreach-1")], []);
 
     expect(selectNodeIssues(current)).toEqual({
-      "foreach-1": "has no prompt or agent in its body.",
+      "foreach-1": ["Has no prompt or agent in its body."],
     });
   });
 
@@ -1175,7 +1075,7 @@ describe("selectNodeIssues", () => {
   it("maps an agent with empty instructions to its reason", () => {
     const current = flow([agent("agent-1", { settings: { instructions: "" } })], []);
 
-    expect(selectNodeIssues(current)).toEqual({ "agent-1": "Agent has no instructions." });
+    expect(selectNodeIssues(current)).toEqual({ "agent-1": ["Write what the agent should do."] });
   });
 
   it("returns the same map for the same flow", () => {
@@ -1252,7 +1152,7 @@ describe("selectFieldIssues", () => {
       onCap: "Loop has no action for when its cap is reached.",
     });
     expect(selectFieldIssues(current, "agent-1")).toEqual({
-      instructions: "Agent has no instructions.",
+      instructions: "Write what the agent should do.",
     });
   });
 

@@ -34,6 +34,13 @@ describe("workspaceLabel for an existing folder", () => {
     });
   });
 
+  it("says the folder is not set while its path is blank, whatever git said", () => {
+    expect(workspaceLabel({ kind: "path", path: " " }, { kind: "missing" })).toEqual({
+      folder: { name: "folder not set", title: "" },
+      branch: "",
+    });
+  });
+
   it("names the root folder by its path", () => {
     expect(workspaceLabel({ kind: "path", path: "/" }).folder.name).toBe("/");
   });

@@ -52,7 +52,15 @@ export const buildVersionResultSchema = z.discriminatedUnion("kind", [
     reused: z.boolean(),
     restored: z.array(z.object({ path: z.string(), problem: z.string() })),
   }),
-  z.object({ kind: z.literal("error"), message: z.string() }),
+  z.object({
+    kind: z.literal("error"),
+    message: z.string(),
+    problems: z
+      .array(
+        z.object({ node: z.string().optional(), field: z.string().optional(), text: z.string() }),
+      )
+      .optional(),
+  }),
 ]);
 
 export type BuildVersionResult = z.infer<typeof buildVersionResultSchema>;

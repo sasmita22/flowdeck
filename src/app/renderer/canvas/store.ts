@@ -1,6 +1,8 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
 import { validate, type ValidationError } from "../../../core/compiler/validate.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
+import { bodyProblems } from "../../../core/flow/structure.js";
 import {
   NodeType,
   parseFlow,
@@ -36,21 +38,21 @@ import {
   withPositions,
 } from "./frames.js";
 import {
+  addItems,
   addNode,
   addNote,
   addWire,
   deleteNodes as deleteNodesCommand,
+  deleteWires,
   moveNodes,
   updateNode as updateNodeCommand,
   updateNote,
   updateSession,
-  wrapInSession,
-  wrappableIds,
   type Command,
+  type Items,
   type Move,
 } from "./commands.js";
-
-export { wrappableIds };
+import { edgeId } from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
 
@@ -87,13 +89,14 @@ export type NodeMenu = { nodeId: string; x: number; y: number };
 
 export type Naming = { from: WireEnd; to: WireEnd };
 
-const lockedMessage = "Hard stop is locked";
+export type Focus = { node: string; seq: number };
 
 export interface CanvasState {
   flow: Flow;
   saved: Flow;
   ready: boolean;
   selection: string[];
+  selectedWires: string[];
   highlighted: string | null;
   undoStack: Command[];
   redoStack: Command[];
@@ -102,24 +105,37 @@ export interface CanvasState {
   message: string | null;
   menu: NodeMenu | null;
   naming: Naming | null;
+  clipboard: Items | null;
+  pastes: number;
+  renaming: string | null;
+  focus: Focus | null;
+  opened: number;
   drop(type: CanvasItemType, position: Position): void;
   addNext(type: CanvasItemType): void;
   editNoteText(id: string, text: string): void;
   resizeNoteLive(id: string, box: NoteBox): void;
   resizeNote(id: string, box: NoteBox): void;
   connect(from: WireEnd, to: WireEnd): boolean;
+  refuseConnection(): void;
   nameFile(file: string): boolean;
   cancelNaming(): void;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
+  selectWires(ids: readonly string[]): void;
   selectAll(): void;
+  copy(): void;
+  paste(): void;
+  duplicate(): void;
+  startRename(id?: string): void;
+  rename(label: string): void;
+  cancelRename(): void;
+  focusNode(id: string): void;
   openNodeMenu(nodeId: string, at: Position): void;
   closeNodeMenu(): void;
   highlight(id: string | null): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
-  wrapSelection(): void;
   updateSession(next: Session): void;
   updateNode(next: Node): void;
   undo(): void;
@@ -133,7 +149,7 @@ export const newCanvasFlow = (): Flow => ({
   wires: [],
   session: {
     name: "main",
-    workingFolder: { kind: "worktree", branch: "main" },
+    workingFolder: { kind: "path", path: "" },
     model: "sonnet",
     allowedTools: [],
     permissionMode: "default",
@@ -142,11 +158,7 @@ export const newCanvasFlow = (): Flow => ({
 });
 
 export const nextNodeId = (type: NodeType, flow: Flow): string => {
-  const used = new Set(
-    [...flow.nodes.map((node) => node.id), ...(flow.session.frame?.nodes ?? [])].map((id) =>
-      id.toLowerCase(),
-    ),
-  );
+  const used = new Set(flow.nodes.map((node) => node.id.toLowerCase()));
   let n = 1;
   while (used.has(`${type}-${n}`)) n += 1;
   return `${type}-${n}`;
@@ -236,24 +248,20 @@ const newErrors = (before: Flow, after: Flow) => {
   return validate(after).filter((error) => !known.some((old) => sameError(old, error)));
 };
 
-const issuesByFlow = new WeakMap<Flow, Record<string, string>>();
+const issuesByFlow = new WeakMap<Flow, Record<string, string[]>>();
 
-const typeTags = new RegExp(` \\((?:${NodeType.options.join("|")})\\)`, "g");
+const reasonOf = (flow: Flow, error: ValidationError) =>
+  reasonNaming(error.node, error.message, labelOf(flow, error.node ?? ""));
 
-const plainReason = (nodeId: string, message: string) => {
-  const untagged = message.replace(typeTags, "");
-  return untagged.startsWith(`${nodeId} `) ? untagged.slice(nodeId.length + 1) : untagged;
-};
+const labelOf = (flow: Flow, id: string) => flow.nodes.find((node) => node.id === id)?.label ?? id;
 
-const reasonOf = (error: ValidationError) => error.message.replace(typeTags, "");
-
-export const selectNodeIssues = (flow: Flow): Record<string, string> => {
+export const selectNodeIssues = (flow: Flow): Record<string, string[]> => {
   const cached = issuesByFlow.get(flow);
   if (cached !== undefined) return cached;
-  const issues: Record<string, string> = {};
+  const issues: Record<string, string[]> = {};
   for (const error of validate(flow)) {
-    if (error.node !== undefined && !(error.node in issues))
-      issues[error.node] = plainReason(error.node, error.message);
+    if (error.node !== undefined)
+      (issues[error.node] ??= []).push(plainReason(error.node, error.message));
   }
   issuesByFlow.set(flow, issues);
   return issues;
@@ -273,6 +281,19 @@ export const selectFieldIssues = (flow: Flow, nodeId: string): Record<string, st
     fieldIssuesByFlow.set(flow, byNode);
   }
   return byNode[nodeId] ?? {};
+};
+
+const sessionIssuesByFlow = new WeakMap<Flow, Record<string, string>>();
+
+export const selectSessionIssues = (flow: Flow): Record<string, string> => {
+  const cached = sessionIssuesByFlow.get(flow);
+  if (cached !== undefined) return cached;
+  const issues: Record<string, string> = {};
+  for (const { node, field, message } of validate(flow)) {
+    if (node === undefined && field !== undefined && !(field in issues)) issues[field] = message;
+  }
+  sessionIssuesByFlow.set(flow, issues);
+  return issues;
 };
 
 export const selectSelectedNode = (state: Pick<CanvasState, "flow" | "selection">): Node | null => {
@@ -298,8 +319,11 @@ const portKind = (flow: Flow, end: WireEnd, direction: Port["direction"]) => {
   return ports.find((port) => port.name === end.port && port.direction === direction)?.kind;
 };
 
-const cannotConnect = (from: WireEnd, to: WireEnd, reason: string) =>
-  `Can't connect ${from.node} to ${to.node}: ${reason}`;
+const cannotConnect = (flow: Flow, from: WireEnd, to: WireEnd, reason: string) =>
+  `Can't connect ${labelOf(flow, from.node)} to ${labelOf(flow, to.node)}: ${reason}`;
+
+const wrongWay =
+  "Can't connect those ports: drag from a node's output on its right to another node's input on its left.";
 
 const alreadyJoined = "they are already joined.";
 
@@ -315,6 +339,26 @@ const noteIn = (flow: Flow, id: string) => flow.notes?.find((note) => note.id ==
 const positionOf = (flow: Flow, id: string) =>
   (flow.nodes.find((node) => node.id === id) ?? noteIn(flow, id))?.position;
 
+export const selectCanDelete = (state: Pick<CanvasState, "selection" | "selectedWires">) =>
+  state.selection.length > 0 || state.selectedWires.length > 0;
+
+const keptWires = (selected: readonly string[], flow: Flow) => {
+  const present = new Set(flow.wires.map(edgeId));
+  return selected.filter((id) => present.has(id));
+};
+
+const both = (first: Command, second: Command): Command => ({
+  do: (flow) => second.do(first.do(flow)),
+  undo: (flow) => first.undo(second.undo(flow)),
+});
+
+const pasteGap = 32;
+
+const shifted = (position: Position, by: Position): Position => ({
+  x: position.x + by.x,
+  y: position.y + by.y,
+});
+
 export const selectDirty = (state: Pick<CanvasState, "flow" | "saved">): boolean =>
   !flowsEqual(state.flow, state.saved);
 
@@ -327,55 +371,154 @@ export function createCanvasStore(
     const ready = () => get().ready;
 
     const run = (command: Command, selection = get().selection) => {
-      const { flow, undoStack } = get();
+      const { flow, undoStack, selectedWires } = get();
       const next = command.do(flow);
       set({
         flow: next,
         undoStack: [...undoStack, command],
         redoStack: [],
         selection: kept(selection, next),
+        selectedWires: keptWires(selectedWires, next),
         message: null,
       });
     };
 
-    const deleteNodes = (ids: readonly string[]) => {
-      if (!ready()) return;
-      set({ menu: null });
-      const { flow } = get();
+    const nodeDeletion = (flow: Flow, ids: readonly string[]): Command | undefined => {
       const present = flow.nodes.filter((node) => ids.includes(node.id));
-      const holdsLock = (node: Node) =>
-        isContainer(node) && bodyOf(flow, node.id).some((child) => child.type === "hardstop");
-      const kept = new Set(present.filter(holdsLock).map((node) => node.id));
       const doomed = new Set(
         present
-          .filter((node) => !kept.has(node.id))
           .flatMap((node) => [node, ...(isContainer(node) ? bodyOf(flow, node.id) : [])])
-          .filter((node) => node.type !== "hardstop")
           .map((node) => node.id),
       );
       const deletable = [
         ...flow.nodes.filter((node) => doomed.has(node.id)).map((node) => node.id),
         ...(flow.notes ?? []).filter((note) => ids.includes(note.id)).map((note) => note.id),
       ];
-      if (deletable.length > 0) run(deleteNodesCommand(flow, deletable));
-      if (kept.size > 0 || present.some((node) => node.type === "hardstop")) {
-        set({ message: lockedMessage });
-      }
+      return deletable.length > 0 ? deleteNodesCommand(flow, deletable) : undefined;
+    };
+
+    const wireDeletion = (flow: Flow, edgeIds: readonly string[]): Command | undefined => {
+      const doomed = new Set(edgeIds);
+      const places = flow.wires.flatMap((wire, index) => (doomed.has(edgeId(wire)) ? [index] : []));
+      return places.length > 0 ? deleteWires(flow, places) : undefined;
+    };
+
+    const deleteNodes = (ids: readonly string[]) => {
+      if (!ready()) return;
+      set({ menu: null });
+      const command = nodeDeletion(get().flow, ids);
+      if (command !== undefined) run(command);
+    };
+
+    const deleteSelection = () => {
+      if (!ready()) return;
+      set({ menu: null });
+      const { flow, selection, selectedWires } = get();
+      const nodes = nodeDeletion(flow, selection);
+      const afterNodes = nodes?.do(flow) ?? flow;
+      const wires = wireDeletion(afterNodes, selectedWires);
+      const command =
+        nodes !== undefined && wires !== undefined ? both(nodes, wires) : (nodes ?? wires);
+      if (command !== undefined) run(command);
     };
 
     const addChecked = (wire: Wire): boolean => {
       const { flow } = get();
       if (flow.wires.some((existing) => sameWire(existing, wire))) {
-        set({ message: cannotConnect(wire.from, wire.to, alreadyJoined) });
+        set({ message: cannotConnect(flow, wire.from, wire.to, alreadyJoined) });
         return false;
       }
       const command = addWire(wire);
       const [error] = newErrors(flow, command.do(flow));
       if (error !== undefined) {
-        set({ message: cannotConnect(wire.from, wire.to, reasonOf(error)) });
+        set({ message: cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error)) });
         return false;
       }
       run(command);
+      return true;
+    };
+
+    const copied = (flow: Flow, ids: readonly string[]): Items | null => {
+      const chosen = new Set(ids);
+      const nodes = flow.nodes.filter(
+        (node) => chosen.has(node.id) || (node.parent !== undefined && chosen.has(node.parent)),
+      );
+      const notes = (flow.notes ?? []).filter((note) => chosen.has(note.id));
+      if (nodes.length === 0 && notes.length === 0) return null;
+      const inside = new Set(nodes.map((node) => node.id));
+      const wires = flow.wires.filter(
+        (wire) => inside.has(wire.from.node) && inside.has(wire.to.node),
+      );
+      return structuredClone({ nodes, wires, notes });
+    };
+
+    const placed = (flow: Flow, items: Items, offset: Position): Items => {
+      const target = selectSelectedNode({ flow, selection: get().selection });
+      const into = target !== null && isContainer(target) ? target : undefined;
+      let grown = flow;
+      const renamed = new Map<string, string>();
+      for (const node of items.nodes) {
+        const id = nextId(node.type, grown);
+        renamed.set(node.id, id);
+        grown = { ...grown, nodes: [...grown.nodes, { ...node, id }] };
+      }
+      const exists = (id: string) => flow.nodes.some((node) => node.id === id);
+      const parentOf = (node: Node): string | undefined => {
+        if (node.parent !== undefined && renamed.has(node.parent)) return renamed.get(node.parent);
+        if (into !== undefined && !isContainer(node)) return into.id;
+        return node.parent !== undefined && exists(node.parent) ? node.parent : undefined;
+      };
+      const nodes = items.nodes.map((node): Node => {
+        const rest = { ...node };
+        delete rest.parent;
+        const parent = parentOf(node);
+        return {
+          ...rest,
+          id: renamed.get(node.id) ?? node.id,
+          position: shifted(node.position, offset),
+          ...(parent === undefined ? {} : { parent }),
+        } as Node;
+      });
+      const wires = items.wires.map((wire) => ({
+        ...wire,
+        from: { ...wire.from, node: renamed.get(wire.from.node) ?? wire.from.node },
+        to: { ...wire.to, node: renamed.get(wire.to.node) ?? wire.to.node },
+      }));
+      let withNotes: Flow = grown;
+      const notes = items.notes.map((note) => {
+        const id = nextNoteId(withNotes);
+        const moved = { ...note, id, position: shifted(note.position, offset) };
+        withNotes = { ...withNotes, notes: [...(withNotes.notes ?? []), moved] };
+        return moved;
+      });
+      return { nodes, wires, notes };
+    };
+
+    const pasteItems = (items: Items, offset: Position): boolean => {
+      const { flow } = get();
+      const target = selectSelectedNode({ flow, selection: get().selection });
+      const pasted = placed(flow, items, offset);
+      const command = addItems(pasted);
+      const after = command.do(flow);
+      const pastedIds = new Set(pasted.nodes.map(({ id }) => id));
+      const misplaced = bodyProblems(after.nodes).find(
+        (problem) =>
+          pastedIds.has(problem.node) && (problem.outOfPlace === true || problem.nested === true),
+      );
+      if (misplaced !== undefined) {
+        const into = target !== null && isContainer(target) ? ` into ${target.label}` : "";
+        const reason = reasonNaming(
+          misplaced.node,
+          `${misplaced.message}.`,
+          labelOf(after, misplaced.node),
+        );
+        set({ message: `Can't paste${into}: ${reason}` });
+        return false;
+      }
+      run(
+        command,
+        [...pasted.nodes, ...pasted.notes].map(({ id }) => id),
+      );
       return true;
     };
 
@@ -386,6 +529,7 @@ export function createCanvasStore(
       saved: start,
       ready: deps.ready ?? true,
       selection: [],
+      selectedWires: [],
       highlighted: null,
       undoStack: [],
       redoStack: [],
@@ -394,6 +538,11 @@ export function createCanvasStore(
       message: null,
       menu: null,
       naming: null,
+      clipboard: null,
+      pastes: 0,
+      renaming: null,
+      focus: null,
+      opened: 0,
 
       drop: (type, position) => {
         if (!ready()) return;
@@ -412,7 +561,7 @@ export function createCanvasStore(
         );
         if (misplaced !== undefined) {
           set({
-            message: `Can't drop ${nodeDefaults[type].label} into ${parent ?? ""}: ${reasonOf(misplaced)}`,
+            message: `Can't drop ${nodeDefaults[type].label} into ${labelOf(flow, parent ?? "")}: ${reasonOf(command.do(flow), misplaced)}`,
           });
           return;
         }
@@ -456,7 +605,9 @@ export function createCanvasStore(
         const kinds = [portKind(flow, from, "out"), portKind(flow, to, "in")];
         if (kinds.includes("file")) {
           if (kinds[0] !== kinds[1]) {
-            set({ message: cannotConnect(from, to, "a file port joins only another file port.") });
+            set({
+              message: cannotConnect(flow, from, to, "a file port joins only another file port."),
+            });
             return false;
           }
           set({ naming: { from: { ...from }, to: { ...to } }, message: null });
@@ -478,16 +629,70 @@ export function createCanvasStore(
         return added;
       },
 
+      refuseConnection: () => {
+        if (ready()) set({ message: wrongWay });
+      },
+
       cancelNaming: () => set({ naming: null }),
 
       deleteNodes,
 
-      deleteSelection: () => deleteNodes(get().selection),
+      deleteSelection,
 
       select: (ids) => set({ selection: [...ids], message: null, menu: null }),
+
+      selectWires: (ids) => set({ selectedWires: [...ids], message: null, menu: null }),
+
       selectAll: () => {
         const { flow, select } = get();
         select([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id));
+      },
+
+      copy: () => {
+        if (!ready()) return;
+        const items = copied(get().flow, get().selection);
+        if (items !== null) set({ clipboard: items, pastes: 0 });
+      },
+
+      paste: () => {
+        const { clipboard, pastes } = get();
+        if (!ready() || clipboard === null) return;
+        const step = (pastes + 1) * pasteGap;
+        if (pasteItems(clipboard, { x: step, y: step })) set({ pastes: pastes + 1 });
+      },
+
+      duplicate: () => {
+        if (!ready()) return;
+        const items = copied(get().flow, get().selection);
+        if (items !== null) pasteItems(items, { x: pasteGap, y: pasteGap });
+      },
+
+      startRename: (id) => {
+        if (!ready()) return;
+        const { flow, selection } = get();
+        const target = id ?? (selection.length === 1 ? selection[0] : undefined);
+        if (target === undefined || !flow.nodes.some((node) => node.id === target)) return;
+        set({ renaming: target, selection: [target], menu: null });
+      },
+
+      rename: (label) => {
+        const { renaming, flow } = get();
+        set({ renaming: null });
+        const node = flow.nodes.find((candidate) => candidate.id === renaming);
+        const name = label.trim();
+        if (!ready() || node === undefined || name === "" || name === node.label) return;
+        run(updateNodeCommand({ ...node, label: name }));
+      },
+
+      cancelRename: () => set({ renaming: null }),
+
+      focusNode: (id) => {
+        set({
+          selection: [id],
+          selectedWires: [],
+          menu: null,
+          focus: { node: id, seq: (get().focus?.seq ?? 0) + 1 },
+        });
       },
 
       openNodeMenu: (nodeId, { x, y }) => set({ menu: { nodeId, x, y } }),
@@ -537,17 +742,13 @@ export function createCanvasStore(
           if (error !== undefined) {
             const { from, to } = nested.parent;
             const where = to === undefined ? `out of ${from ?? ""}` : `into ${to}`;
-            set({ message: `Can't move ${nested.id} ${where}: ${reasonOf(error)}` });
+            set({
+              message: `Can't move ${labelOf(flow, nested.id)} ${where}: ${reasonOf(command.do(flow), error)}`,
+            });
             return;
           }
         }
         run(command);
-      },
-
-      wrapSelection: () => {
-        if (!ready()) return;
-        const ids = wrappableIds(get().flow, get().selection);
-        if (ids.length > 0) run(wrapInSession(ids));
       },
 
       updateSession: (next) => {
@@ -574,6 +775,7 @@ export function createCanvasStore(
           undoStack: undoStack.slice(0, -1),
           redoStack: [...redoStack, command],
           selection: kept(selection, next),
+          selectedWires: keptWires(get().selectedWires, next),
         });
       },
 
@@ -588,6 +790,7 @@ export function createCanvasStore(
           undoStack: [...undoStack, command],
           redoStack: redoStack.slice(0, -1),
           selection: kept(selection, next),
+          selectedWires: keptWires(get().selectedWires, next),
         });
       },
 
@@ -598,10 +801,14 @@ export function createCanvasStore(
           saved: flow,
           ready: true,
           selection: [],
+          selectedWires: [],
           undoStack: [],
           redoStack: [],
           dragPositions: {},
           noteBoxes: {},
+          renaming: null,
+          focus: null,
+          opened: get().opened + 1,
         });
       },
 

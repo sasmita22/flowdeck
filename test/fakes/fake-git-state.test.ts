@@ -23,4 +23,17 @@ describe("FakeGitState", () => {
     await expect(git.read("/a")).rejects.toThrow("git not found");
     expect(git.reads).toEqual(["/a"]);
   });
+
+  it("answers each repository with its scripted branches, and none for any other", async () => {
+    const git = new FakeGitState({}, { branches: { "/repo": ["dev", "main"] } });
+
+    expect(await git.branches("/repo")).toEqual(["dev", "main"]);
+    expect(await git.branches("/other")).toEqual([]);
+  });
+
+  it("rejects a branch listing with the scripted failure", async () => {
+    await expect(
+      new FakeGitState({}, { failWith: "git not found" }).branches("/r"),
+    ).rejects.toThrow("git not found");
+  });
 });
