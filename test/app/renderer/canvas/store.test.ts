@@ -1050,6 +1050,15 @@ describe("selectCanvasEmpty", () => {
 
     expect(selectCanvasEmpty(store.getState())).toBe(false);
   });
+
+  it("is false when the canvas holds only a note", () => {
+    const store = createCanvasStore();
+
+    store.getState().drop("note", { x: 0, y: 0 });
+
+    expect(store.getState().flow.nodes).toEqual([]);
+    expect(selectCanvasEmpty(store.getState())).toBe(false);
+  });
 });
 
 const promptWidth = nodeLook("prompt").box.width;

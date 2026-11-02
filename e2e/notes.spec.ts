@@ -199,3 +199,46 @@ test("A note sits beside the nodes, calm and readable, and never joins the sessi
     })
     .toEqual({ nodes: ["plan"] });
 });
+
+test("Cmd+A on the empty canvas selects every node and every note, and Wrap takes only the nodes", async () => {
+  seedFlow(home, {
+    ...flow([{ ...prompt("plan"), position: { x: 40, y: 60 } }], []),
+    notes: [
+      { id: "n1", text: "Why", position: { x: 300, y: 60 }, size: { width: 220, height: 110 } },
+    ],
+  });
+  const { window } = await launch();
+  await expect(window.getByTestId("note-n1")).toBeVisible();
+
+  await window.getByTestId("canvas").click({ position: { x: 600, y: 400 } });
+  await window.keyboard.press("Meta+a");
+
+  await expect
+    .poll(async () =>
+      JSON.parse((await window.getByTestId(readoutTestIds.selection).textContent()) ?? ""),
+    )
+    .toEqual(["plan", "n1"]);
+  await expect(window.locator(".react-flow__node.selected")).toHaveCount(2);
+
+  await window.getByTestId(controlTestIds.wrap).click();
+  await expect
+    .poll(
+      async () =>
+        ((await readout(window)) as Readout & { session: { frame?: unknown } }).session.frame,
+    )
+    .toEqual({ nodes: ["plan"] });
+});
+
+test("A canvas holding only a note shows no start hint", async () => {
+  const { window } = await launch();
+  const hint = window.getByTestId("canvas-empty-hint");
+  await expect(hint).toBeVisible();
+
+  await window.getByTestId(paletteTestId("note")).dragTo(window.getByTestId("canvas"), {
+    targetPosition: { x: 260, y: 180 },
+  });
+
+  await expect(window.getByTestId("note-n1")).toBeVisible();
+  expect((await readout(window)).nodes).toEqual([]);
+  await expect(hint).toHaveCount(0);
+});
