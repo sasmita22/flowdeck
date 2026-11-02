@@ -307,7 +307,7 @@ test("Cmd+Z in a settings field undoes the typing and leaves the canvas alone", 
   await shown.click();
   await window.keyboard.type("Check the plan");
   await expect(shown).toHaveValue("Check the plan");
-  await window.keyboard.press("Meta+z");
+  await window.keyboard.press("ControlOrMeta+z");
 
   await expect(shown).toHaveValue("");
   await expect(shown).toBeFocused();
