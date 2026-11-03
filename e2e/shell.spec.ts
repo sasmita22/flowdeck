@@ -581,8 +581,9 @@ test("Branch shown", async () => {
   await expect(window.getByTestId("workspace-branch")).toHaveAttribute("title", "fd-demo");
 
   await window.getByTestId(controlTestIds.sessionSettings).click();
-  await window.getByTestId(buildConfigTestIds.base).fill("fd-next");
-  await window.getByTestId(buildConfigTestIds.base).press("Enter");
+  const base = window.getByTestId(buildConfigTestIds.base);
+  await expect(base.locator("option", { hasText: "fd-next" })).toHaveCount(1);
+  await base.selectOption("fd-next");
 
   await expect(window.getByTestId("workspace-branch")).toHaveText("fd-next");
 });
