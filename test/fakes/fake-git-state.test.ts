@@ -36,4 +36,17 @@ describe("FakeGitState", () => {
       new FakeGitState({}, { failWith: "git not found" }).branches("/r"),
     ).rejects.toThrow("git not found");
   });
+
+  it("answers each repository with its scripted default branch", async () => {
+    const git = new FakeGitState({}, { defaultBranches: { "/repo": "dev", "/other": "main" } });
+
+    expect(await git.defaultBranch("/repo")).toBe("dev");
+    expect(await git.defaultBranch("/other")).toBe("main");
+  });
+
+  it("rejects a default-branch lookup with the scripted failure", async () => {
+    await expect(
+      new FakeGitState({}, { failWith: "git not found" }).defaultBranch("/r"),
+    ).rejects.toThrow("git not found");
+  });
 });

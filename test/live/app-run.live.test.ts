@@ -1,8 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { statSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { spawn as spawnPty } from "node-pty";
@@ -37,6 +46,8 @@ const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", impo
 const askFixturePath = fileURLToPath(new URL("../fixtures/prompt-then-ask.json", import.meta.url));
 const runDeadlineMs = 240_000;
 const promptIds = ["p1", "p2", "p3"];
+const buildName = "live-app-run";
+const slugOf = (folder: string) => folder.replace(/[^a-zA-Z0-9]/g, "-");
 const activityFiles = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
 const activityPrompt = `Use the Read tool once on each of these five files, one call at a time: ${activityFiles.map((file) => `{{repo}}/${file}`).join(", ")}. Then use the Agent tool once with the prompt "Reply ok". Use no other tools. Then reply DONE.`;
 
@@ -132,9 +143,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
   beforeEach(async () => {
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
-    home = await mkdtemp(join(tmpdir(), "fd-l-"));
-    repo = await createTmpRepo();
-    projectFolder = join(homedir(), ".claude", "projects", repo.path.replace(/[^a-zA-Z0-9]/g, "-"));
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
+    repo = await createTmpRepo({ commit: true });
+    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
   });
 
   afterEach(async () => {
@@ -182,9 +193,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     path: string,
     publish: (push: EnginePush) => void,
     instructions: Record<string, string> = {},
-  ): Promise<void> {
+    beforeRun?: (workFolder: string) => Promise<void>,
+  ): Promise<string> {
     const fixture = parseFlow(JSON.parse(await readFile(path, "utf8")));
-    await startSavedFlow(
+    const { runId } = await startSavedFlow(
       {
         ...fixture,
         nodes: fixture.nodes.map((node) =>
@@ -194,7 +206,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
                 settings: {
                   instructions: (instructions[node.id] ?? node.settings.instructions).replaceAll(
                     "{{repo}}",
-                    repo.path,
+                    ".",
                   ),
                 },
               }
@@ -202,16 +214,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
         ),
       },
       publish,
+      beforeRun,
     );
+    return runId;
   }
 
   async function startSavedFlow(
     fixture: Flow,
     publish: (push: EnginePush) => void,
+    beforeRun?: (workFolder: string) => Promise<void>,
   ): Promise<{ runId: string; runs: SqliteStore }> {
     const flow: Flow = {
       ...fixture,
-      session: { ...fixture.session, workingFolder: { kind: "path", path: repo.path } },
+      session: { ...fixture.session, buildConfig: { repo: repo.path, variables: [] } },
     };
 
     const db = openDatabase({ path: join(home, "flowdeck.db") });
@@ -236,9 +251,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       transcriptTurns: async () => [],
     });
 
-    const built = await handler.handle({ id: 1, type: "build-version", payload: savedRef });
-    const { hash } = (built as { value: { hash: string } }).value;
-    const response = await handler.handle({ id: 2, type: "run-build", payload: { hash } });
+    const built = await handler.handle({
+      id: 1,
+      type: "build-version",
+      payload: { ...savedRef, name: buildName, values: {} },
+    });
+    const { id: buildId, dir } = (built as { value: { id: string; dir: string } }).value;
+    const workFolder = join(dir, basename(repo.path));
+    projectFolder = join(homedir(), ".claude", "projects", slugOf(workFolder));
+    await beforeRun?.(workFolder);
+    const response = await handler.handle({ id: 2, type: "run-build", payload: { buildId } });
     expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
     const { runId } = (response as { value: { runId: string } }).value;
     return { runId, runs: stores.runs };
@@ -281,7 +303,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     async () => {
       const snapshots: RunSnapshot[] = [];
       const arrivals: { entry: ActivityEntry; receivedAt: number }[] = [];
-      for (const file of activityFiles) await writeFile(join(repo.path, file), `${file}\n`);
       await startFlow(
         fixturePath,
         (push) => {
@@ -290,6 +311,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
           } else if (push.push === "run-state") snapshots.push(push.value);
         },
         { p2: activityPrompt },
+        async (workFolder) => {
+          for (const file of activityFiles) await writeFile(join(workFolder, file), `${file}\n`);
+        },
       );
       await vi.waitFor(
         () => {
@@ -344,16 +368,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       const live = createTerminal({
         spawn: countingSpawn,
         env: process.env,
-        sendStatus: (status) => statuses.push(status),
-        sendData: (data) => output.push(data),
+        sendStatus: (_runId, status) => statuses.push(status),
+        sendData: (_runId, data) => output.push(data),
       });
       terminal = live;
       let announced = false;
-      await startFlow(askFixturePath, (push) => {
+      const runId = await startFlow(askFixturePath, (push) => {
         if (push.push === "run-state") snapshots.push(push.value);
         else if (push.push === "session") {
           announced = push.value !== null;
-          live.setSession(push.value);
+          live.setSession(push.runId, push.value);
         }
       });
 
@@ -373,35 +397,35 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       );
       expect(spawns).toBe(0);
       expect(await clients()).toEqual([]);
-      expect(live.status()).toEqual({ available: true, attached: false });
+      expect(live.status(runId)).toEqual({ available: true, attached: false });
 
-      expect(live.open({ cols: 100, rows: 30 })).toBe(true);
+      expect(live.open(runId, { cols: 100, rows: 30 })).toBe(true);
       await vi.waitFor(async () => {
         expect(await clients()).toHaveLength(1);
         expect(output.join("")).not.toBe("");
       });
 
-      live.write("fdterm");
+      live.write(runId, "fdterm");
       await vi.waitFor(async () => expect(await pane()).toContain("fdterm"), { timeout: 10_000 });
 
       const clientSize = () =>
         tmux("list-clients", "-t", target, "-F", "#{client_width}x#{client_height}");
       await vi.waitFor(async () => expect(await clientSize()).toBe("100x30"));
-      live.resize({ cols: 90, rows: 25 });
+      live.resize(runId, { cols: 90, rows: 25 });
       await vi.waitFor(async () => {
         expect(await clientSize()).toBe("90x25");
         expect(await tmux("display", "-p", "-t", `${target}:`, "#{window_width}")).toBe("90");
       });
 
-      expect(live.open({ cols: 100, rows: 30 })).toBe(true);
+      expect(live.open(runId, { cols: 100, rows: 30 })).toBe(true);
       expect(spawns).toBe(1);
 
-      live.close();
+      live.close(runId);
       await vi.waitFor(async () => expect(await clients()).toEqual([]));
       await expect(tmux("has-session", "-t", target)).resolves.toBe("");
       expect(latest()?.status).toBe("running");
 
-      expect(live.open({ cols: 100, rows: 30 })).toBe(true);
+      expect(live.open(runId, { cols: 100, rows: 30 })).toBe(true);
       expect(spawns).toBe(2);
       await vi.waitFor(async () => expect(await clients()).toHaveLength(1));
       expect(await pane()).toContain("fdterm");

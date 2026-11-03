@@ -25,7 +25,7 @@ export class ResumeError extends Error {
 }
 
 type ResumeInput = {
-  manifest: { hash: string; nodes: readonly ManifestNode[] };
+  manifest: { hash: string; prefix: string; nodes: readonly ManifestNode[] };
   events: readonly StoredEvent[];
   turns: readonly TranscriptTurn[];
   rejoinScripts?: boolean;
@@ -34,20 +34,20 @@ type ResumeInput = {
 
 const humanTypes = new Set<ManifestNode["type"]>(["gate", "ask", "hardstop", "loop"]);
 
-function turnMarker(node: ManifestNode, hash: string): string {
+function turnMarker(node: ManifestNode, prefix: string): string {
   return node.type === "agent"
-    ? `subagent_type "${agentType(hash, node.id)}"`
-    : `<command-name>/${hash}:${node.id}</command-name>`;
+    ? `subagent_type "${agentType(prefix, node.id)}"`
+    : `<command-name>/${prefix}:${node.id}</command-name>`;
 }
 
 function settleTurn(
   node: ManifestNode,
-  hash: string,
+  prefix: string,
   events: readonly StoredEvent[],
   turns: readonly TranscriptTurn[],
 ): ResumeAction {
   const sends = events.filter((event) => event.kind === "sent").length;
-  const marker = turnMarker(node, hash);
+  const marker = turnMarker(node, prefix);
   const matching = turns.filter((turn) => turn.userText.includes(marker));
   if (matching.length === sends - 1) return { kind: "send" };
   const last = matching.at(-1);
@@ -112,7 +112,7 @@ export function decideResume({
       continue;
     }
     if (inTurn(node, status)) {
-      const settled = settleTurn(node, manifest.hash, own, turns);
+      const settled = settleTurn(node, manifest.prefix, own, turns);
       actions[node.id] = sessionRestarted && settled.kind === "wait" ? cutOff(node.id) : settled;
     }
     if (status === "running" && node.type === "script") {

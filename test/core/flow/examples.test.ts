@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { order } from "../../../src/core/flow/order.js";
 import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
+import { upgradeFlow } from "../../../src/core/flow/upgrade.js";
 
 const readExample = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
@@ -43,5 +44,34 @@ describe("examples", () => {
   it("uses every node type in all-types.json", () => {
     const types = parseFlow(readExample("all-types.json")).nodes.map((node) => node.type);
     expect(new Set(types)).toEqual(new Set(NodeType.options));
+  });
+});
+
+const flowFolders = ["examples/", "test/fixtures/", "test/fixtures/broken/"];
+
+const storedFlows = flowFolders.flatMap((folder) => {
+  const url = new URL(`../../../${folder}`, import.meta.url);
+  return readdirSync(url)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => ({
+      file: `${folder}${name}`,
+      raw: JSON.parse(readFileSync(new URL(name, url), "utf8")) as unknown,
+    }))
+    .filter(({ raw }) => typeof raw === "object" && raw !== null && "session" in raw);
+});
+
+describe("stored flows", () => {
+  it("finds the example and fixture flows", () => {
+    expect(storedFlows.map(({ file }) => file)).toEqual(
+      expect.arrayContaining([
+        "examples/all-types.json",
+        "test/fixtures/prompt-then-ask.json",
+        "test/fixtures/broken/no-cycle.json",
+      ]),
+    );
+  });
+
+  it.each(storedFlows)("$file is already in the current shape", ({ raw }) => {
+    expect(upgradeFlow(structuredClone(raw))).toEqual(raw);
   });
 });

@@ -54,8 +54,13 @@ export function DoctorPage({
   const name =
     flowId === null ? openName : (flows.find((flow) => flow.flowId === flowId)?.name ?? "");
 
+  const worktrees = useStore(library, (state) => state.worktrees);
+
   const check = () => void library.getState().diagnose(flowId, openConnectors);
   useEffect(check, [library, flowId, openConnectors]);
+  useEffect(() => {
+    void library.getState().listWorktrees();
+  }, [library]);
 
   return (
     <>
@@ -136,6 +141,24 @@ export function DoctorPage({
                 </span>
               </div>
               <Settings settings={connector.settings} />
+            </li>
+          ))}
+        </ul>
+      </section>
+      <section className="fd-section" data-testid={pageTestIds.doctorWorktrees}>
+        <div className="fd-section-head">
+          <h2>Worktrees left by older builds</h2>
+        </div>
+        <p className="fd-page-note">
+          Folders under worktrees/ that runs made before builds had their own workspace. Flowdeck no
+          longer uses them and never removes them; delete them yourself once nothing in them is
+          needed.
+        </p>
+        {worktrees !== null && worktrees.length === 0 && <Empty>None.</Empty>}
+        <ul className="fd-doctor-list">
+          {worktrees?.map((path) => (
+            <li key={path} className="fd-doctor-row">
+              <code>{path}</code>
             </li>
           ))}
         </ul>

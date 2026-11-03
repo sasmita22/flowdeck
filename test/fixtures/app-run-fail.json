@@ -17,9 +17,9 @@
   "wires": [],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "worktree",
-      "branch": "main"
+    "buildConfig": {
+      "base": "main",
+      "variables": []
     },
     "model": "haiku",
     "allowedTools": [],

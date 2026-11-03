@@ -1,3 +1,4 @@
+import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
 import type { RunEvent } from "./run-events.js";
 
@@ -8,7 +9,7 @@ export type NewRun = {
   inputs: Record<string, unknown>;
   nodeIds: string[];
   session: { tmuxName: string; cwd: string; claudeSessionId: string };
-  buildHash: string;
+  buildId: string;
 };
 
 export type BuildSource = { flowId: string; version: number };
@@ -18,25 +19,41 @@ export type BuildFileRecord = { path: string; sha256: string };
 export type BuildNodeRecord = { nodeId: string; type: string; config: unknown; file?: string };
 
 export type NewBuild = {
+  id: string;
   hash: string;
+  name: string;
+  repo: string;
+  base: string;
+  values: VariableValues;
   dir: string;
   source?: BuildSource;
   files: BuildFileRecord[];
   nodes: BuildNodeRecord[];
 };
 
-export type BuildRecord = { hash: string; dir: string; createdAt: number; source?: BuildSource };
+export type BuildRecord = {
+  id: string;
+  hash: string;
+  name: string | null;
+  repo: string | null;
+  base: string | null;
+  values: VariableValues | null;
+  deletedAt: number | null;
+  dir: string;
+  createdAt: number;
+  source?: BuildSource;
+};
 
-export type RunRecord = Omit<NewRun, "buildHash"> & {
+export type RunRecord = Omit<NewRun, "buildId"> & {
   id: string;
   status: RunStatus;
-  buildHash?: string;
+  buildId?: string;
 };
 
 export type RunSummary = {
   id: string;
   status: RunStatus;
-  buildHash?: string;
+  buildId?: string;
   createdAt: string;
   endedAt: string | null;
   totalCost: number | null;
@@ -47,6 +64,13 @@ export type RunSummary = {
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
 
 export type EventEntry = { nodeId: string; event: RunEvent };
+
+export class BuildRunningError extends Error {
+  constructor(buildId: string) {
+    super(`build ${buildId} is running`);
+    this.name = "BuildRunningError";
+  }
+}
 
 export interface Store {
   createRun(run: NewRun): RunRecord;
@@ -61,8 +85,11 @@ export interface Store {
   recordActivity(runId: string, entry: ActivityEntry): void;
   activity(runId: string): ActivityEntry[];
   recordCost(runId: string, totalCost: number): void;
+  stopRun(runId: string): void;
   recordBuild(build: NewBuild): void;
-  findBuild(hash: string): BuildRecord | undefined;
+  findBuild(id: string): BuildRecord | undefined;
+  findBuildByName(name: string): BuildRecord | undefined;
+  deleteBuild(id: string): void;
   listBuilds(): BuildRecord[];
-  buildFiles(hash: string): BuildFileRecord[];
+  buildFiles(id: string): BuildFileRecord[];
 }

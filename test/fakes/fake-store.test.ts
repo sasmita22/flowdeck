@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
+import { BuildRunningError } from "../../src/core/run/store.js";
 import type { NewBuild, NewRun } from "../../src/ports/store.js";
 import { FakeStore } from "./fake-store.js";
 
-const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
-  buildDir: "/fd/builds/abc",
-  inputs: { cwd: "/repo" },
+const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
+  buildDir: `/fd/workspaces/${buildId}`,
+  inputs: {},
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
-  buildHash: "h1",
+  buildId,
 });
 
-const build = (hash: string): NewBuild => ({
+const build = (id: string, name = `build-${id}`, hash = "h1"): NewBuild => ({
+  id,
   hash,
-  dir: `/fd/builds/${hash}`,
+  name,
+  repo: "/repo",
+  base: "main",
+  values: {},
+  dir: `/fd/workspaces/${id}`,
   files: [
     { path: "manifest.json", sha256: "m" },
     { path: "commands/p1.md", sha256: "c" },
@@ -25,7 +31,7 @@ describe("FakeStore", () => {
     const store = new FakeStore();
 
     const first = store.createRun(newRun());
-    const second = store.createRun(newRun());
+    const second = store.createRun(newRun(["p1"], "b2"));
 
     expect(first.id).not.toBe(second.id);
     expect(first).toEqual({ ...newRun(), id: first.id, status: "running" });
@@ -148,40 +154,150 @@ describe("FakeStore", () => {
     expect(store.findRun(id)?.status).toBe("done");
   });
 
-  it("keeps the first record of a hash however often it is recorded", () => {
+  it("keeps two builds of one hash under two ids and names", () => {
     const store = new FakeStore();
 
-    store.recordBuild(build("h1"));
-    store.recordBuild({ ...build("h1"), dir: "/elsewhere" });
+    store.recordBuild(build("b1", "fix-login"));
+    store.recordBuild(build("b2", "fix-signup"));
 
-    expect(store.builds()).toEqual([build("h1")]);
+    expect(store.builds()).toEqual([build("b1", "fix-login"), build("b2", "fix-signup")]);
   });
 
-  it("lists builds newest first, finds one by hash, and reads its files in path order", () => {
+  it("lists builds newest first, finds one by id and by name, and reads its files in path order", () => {
     const store = new FakeStore();
-    store.recordBuild({ ...build("h1"), source: { flowId: "f1", version: 2 } });
-    store.recordBuild(build("h2"));
+    store.recordBuild({ ...build("b1", "fix-login"), source: { flowId: "f1", version: 2 } });
+    store.recordBuild(build("b2", "fix-signup"));
 
     expect(store.listBuilds()).toEqual([
-      { hash: "h2", dir: "/fd/builds/h2", createdAt: 2 },
-      { hash: "h1", dir: "/fd/builds/h1", createdAt: 1, source: { flowId: "f1", version: 2 } },
+      expect.objectContaining({ id: "b2", hash: "h1", name: "fix-signup", createdAt: 2 }),
+      expect.objectContaining({
+        id: "b1",
+        hash: "h1",
+        name: "fix-login",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: "/fd/workspaces/b1",
+        createdAt: 1,
+        source: { flowId: "f1", version: 2 },
+      }),
     ]);
-    expect(store.findBuild("h1")).toEqual(store.listBuilds()[1]);
-    expect(store.findBuild("nope")).toBeUndefined();
-    expect(store.buildFiles("h1")).toEqual([
+    expect(store.findBuild("b1")).toEqual(store.listBuilds()[1]);
+    expect(store.findBuild("h1")).toBeUndefined();
+    expect(store.findBuildByName("fix-signup")).toEqual(store.listBuilds()[0]);
+    expect(store.findBuildByName("nope")).toBeUndefined();
+    expect(store.buildFiles("b1")).toEqual([
       { path: "commands/p1.md", sha256: "c" },
       { path: "manifest.json", sha256: "m" },
     ]);
     expect(store.buildFiles("nope")).toEqual([]);
   });
 
-  it("keeps the build hash a run was created with", () => {
+  it("keeps the build id a run was created with", () => {
     const store = new FakeStore();
 
     const run = store.createRun(newRun());
 
-    expect(run.buildHash).toBe("h1");
-    expect(store.findRun(run.id)?.buildHash).toBe("h1");
+    expect(run.buildId).toBe("b1");
+    expect(store.findRun(run.id)?.buildId).toBe("b1");
+  });
+
+  describe("mirrors the database rules", () => {
+    it("refuses a second running run of a build with a BuildRunningError, keeping only the first", () => {
+      const store = new FakeStore();
+      const first = store.createRun(newRun());
+
+      expect(() => store.createRun(newRun())).toThrow(BuildRunningError);
+      expect(store.runs.map((run) => run.id)).toEqual([first.id]);
+    });
+
+    it("runs another build, or the same build again once its run has finished", () => {
+      const store = new FakeStore();
+      const first = store.createRun(newRun());
+
+      store.createRun(newRun(["p1"], "b2"));
+      store.finishRun(first.id, "done");
+
+      expect(store.createRun(newRun()).status).toBe("running");
+    });
+
+    it("refuses to reopen a run while another run of its build is running", () => {
+      const store = new FakeStore();
+      const first = store.createRun(newRun());
+      store.finishRun(first.id, "stopped");
+      store.createRun(newRun());
+
+      expect(() => store.reopenRun(first.id)).toThrow(BuildRunningError);
+      expect(store.findRun(first.id)?.status).toBe("stopped");
+    });
+
+    it("refuses a second build with the name of one not deleted, and takes it once that one is deleted", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1", "fix-login"));
+
+      expect(() => store.recordBuild(build("b2", "fix-login"))).toThrow();
+
+      store.deleteBuild("b1");
+      store.recordBuild(build("b3", "fix-login"));
+      expect(store.findBuildByName("fix-login")).toMatchObject({ id: "b3" });
+    });
+
+    it("refuses to record a build over one with the same id", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1", "fix-login"));
+
+      expect(() => store.recordBuild({ ...build("b1", "other"), dir: "/elsewhere" })).toThrow();
+      expect(store.builds()).toEqual([build("b1", "fix-login")]);
+    });
+
+    it("refuses to delete a build twice", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+      store.deleteBuild("b1");
+
+      expect(() => store.deleteBuild("b1")).toThrow();
+    });
+
+    it("gives no way to change a build through what it returns", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1", "fix-login"));
+
+      const found = store.findBuild("b1");
+      Object.assign(found ?? {}, { name: "other", dir: "/x" });
+
+      expect(store.findBuild("b1")).toMatchObject({ name: "fix-login", dir: "/fd/workspaces/b1" });
+    });
+
+    it("hides a deleted build and its runs from every list", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1", "fix-login"));
+      store.recordBuild(build("b2", "fix-signup"));
+      const gone = store.createRun(newRun(["p1"]));
+      store.finishRun(gone.id, "done");
+      const kept = store.createRun(newRun(["p1"], "b2"));
+
+      store.deleteBuild("b1");
+
+      expect(store.listBuilds().map((each) => each.id)).toEqual(["b2"]);
+      expect(store.findBuildByName("fix-login")).toBeUndefined();
+      expect(store.listRuns().map((run) => run.id)).toEqual([kept.id]);
+      expect(store.runs).toHaveLength(2);
+    });
+
+    it("marks an interrupted run stopped, so its build can run again, and leaves a finished one", () => {
+      const store = new FakeStore();
+      const interrupted = store.createRun(newRun());
+      store.recordBuild(build("b2"));
+      const finished = store.createRun(newRun(["p1"], "b2"));
+      store.finishRun(finished.id, "done");
+
+      store.stopRun(interrupted.id);
+      store.stopRun(finished.id);
+
+      expect(store.findRun(interrupted.id)?.status).toBe("stopped");
+      expect(store.findRun(finished.id)?.status).toBe("done");
+      expect(store.createRun(newRun()).status).toBe("running");
+    });
   });
 
   it("keeps the total cost written for a run", () => {
@@ -209,7 +325,7 @@ describe("FakeStore", () => {
 
   it("lists runs running first, then newest, with cost, end and the blueprint version built", () => {
     const store = new FakeStore();
-    store.recordBuild({ ...build("h1"), source: { flowId: "flow-1", version: 2 } });
+    store.recordBuild({ ...build("b1"), source: { flowId: "flow-1", version: 2 } });
     const done = store.createRun(newRun(["p1"]));
     store.append(done.id, "p1", { kind: "done" });
     store.recordCost(done.id, 0.5);
@@ -221,7 +337,7 @@ describe("FakeStore", () => {
       expect.objectContaining({
         id: done.id,
         status: "done",
-        buildHash: "h1",
+        buildId: "b1",
         totalCost: 0.5,
         endedAt: new Date(0).toISOString(),
         nodeCount: 1,

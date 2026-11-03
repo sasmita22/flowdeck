@@ -3,7 +3,7 @@ import { createWindowGuard, type SenderFrame } from "../../../src/app/main/windo
 import { workspaceInfoHandler } from "../../../src/app/main/workspace.js";
 
 const appUrl = "file:///Applications/Flowdeck.app/renderer/main_window/index.html";
-const workingFolder = { kind: "path", path: "/code/shop" };
+const buildConfig = { repo: "/code/shop", base: "main", variables: [] };
 
 const setup = () => {
   const request = vi.fn(async () => ({ kind: "branch", name: "fd-demo" }));
@@ -16,9 +16,9 @@ describe("workspaceInfoHandler", () => {
     const { request, handler } = setup();
 
     await expect(
-      handler({ senderFrame: { url: appUrl, parent: null } }, workingFolder),
+      handler({ senderFrame: { url: appUrl, parent: null } }, buildConfig),
     ).resolves.toEqual({ kind: "branch", name: "fd-demo" });
-    expect(request).toHaveBeenCalledExactlyOnceWith("workspace-info", { workingFolder });
+    expect(request).toHaveBeenCalledExactlyOnceWith("workspace-info", { buildConfig });
   });
 
   it.each<[string, SenderFrame]>([
@@ -28,7 +28,7 @@ describe("workspaceInfoHandler", () => {
   ])("refuses %s without asking the engine", (_label, senderFrame) => {
     const { request, handler } = setup();
 
-    expect(() => handler({ senderFrame }, workingFolder)).toThrow("IPC sender is not the app page");
+    expect(() => handler({ senderFrame }, buildConfig)).toThrow("IPC sender is not the app page");
     expect(request).not.toHaveBeenCalled();
   });
 });

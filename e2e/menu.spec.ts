@@ -1,10 +1,11 @@
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildDialogTestIds,
   controlTestIds,
   pageTestIds,
   paletteTestId,
@@ -12,14 +13,16 @@ import {
 } from "../src/app/renderer/test-ids.js";
 import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun, buildIdNamed } from "./build-run.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 
 const secret = "xoxb-fd59-never-shown";
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let claudeConfig: string;
 let launched: LaunchedApp | undefined;
 
@@ -110,7 +113,7 @@ const dbRows = <T>(sql: string): T[] => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-menu-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-menu-wf-")));
+  repo = await createTmpRepo({ commit: true });
   claudeConfig = join(home, "claude.json");
   await writeFile(
     claudeConfig,
@@ -125,7 +128,7 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
@@ -192,22 +195,30 @@ test("Two blueprints each keep their own canvas, after a reload too", async () =
   ]);
 });
 
+const confirmBuild = async (window: Page, name: string) => {
+  await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeVisible();
+  await window.getByTestId(buildDialogTestIds.name).fill(name);
+  await window.getByTestId(buildDialogTestIds.confirm).click();
+  await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+};
+
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
   const testInfo = test.info();
-  const planner = seedBlueprint(home, "Planner", withConnectors(["slack"]), folder);
-  seedBlueprint(home, "Scripts", twoScripts(), folder);
+  const planner = seedBlueprint(home, "Planner", withConnectors(["slack"]), repo.path);
+  seedBlueprint(home, "Scripts", twoScripts(), repo.path);
   const target = await launch();
   const { window } = target;
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Scripts");
 
   await window.getByTestId(controlTestIds.back).click();
   await window.getByTestId(pageTestIds.blueprintBuild(planner.flowId)).click();
-  await expect(window.getByTestId(pageTestIds.title)).toContainText("Planner v1");
+  await confirmBuild(window, "plan-it");
+  await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText('"slack"');
-  await window.getByTestId(pageTestIds.buildFile("commands/p1.md")).click();
+  await window.getByTestId(pageTestIds.buildFile("plugin/commands/p1.md")).click();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText("Do the work.");
-  await expect(window.getByTestId(pageTestIds.buildFile("commands/p1.md"))).toHaveAttribute(
+  await expect(window.getByTestId(pageTestIds.buildFile("plugin/commands/p1.md"))).toHaveAttribute(
     "aria-current",
     "true",
   );
@@ -224,19 +235,16 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await window.getByTestId("menu-blueprints").click();
   await byPrefix(window, "blueprint-open-", "Scripts").click();
   await window.getByTestId(controlTestIds.build).click();
-  await expect(window.getByTestId(controlTestIds.built)).toHaveText(/^Built v1 · [0-9a-f]{7}$/);
-  const shortScriptsHash = ((await window.getByTestId(controlTestIds.built).textContent()) ?? "")
-    .split(" · ")
-    .at(-1);
+  await confirmBuild(window, "run-scripts");
+  await expect(window.getByTestId(pageTestIds.title)).toHaveText("run-scripts v1");
+  const scriptsBuild = buildIdNamed(home, "run-scripts");
 
-  await window.getByTestId(controlTestIds.back).click();
-  await window.getByTestId("menu-builds").click();
+  await window.getByTestId(pageTestIds.buildBack).click();
   await expect(byPrefix(window, "build-card-")).toHaveCount(2);
-  const scriptsCard = byPrefix(window, "build-card-", "Scripts");
-  await expect(scriptsCard).toContainText("v1");
-  await expect(scriptsCard).toContainText(shortScriptsHash ?? "missing");
+  const scriptsCard = window.getByTestId(pageTestIds.buildCard(scriptsBuild));
+  await expect(scriptsCard).toContainText("run-scripts Scripts v1");
   await shot(target, testInfo, "builds");
-  await scriptsCard.locator('[data-testid^="build-run-"]').click();
+  await window.getByTestId(pageTestIds.buildRun(scriptsBuild)).click();
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
     "data-status",
@@ -249,10 +257,11 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(window.getByTestId(controlTestIds.undo)).toHaveCount(0);
 
   await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-runs").click();
   const runCard = byPrefix(window, "run-card-", "Scripts");
   await expect(runCard).toHaveCount(1);
   await expect(runCard.locator('[data-testid^="run-result-"]')).toHaveText("done");
-  await expect(runCard).toContainText(`v1 · ${shortScriptsHash}`);
+  await expect(runCard).toContainText("Scripts v1");
   await shot(target, testInfo, "runs");
 
   await window.getByTestId("menu-blueprints").click();
@@ -276,53 +285,54 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
 
   await window.getByTestId(pageTestIds.runAgain).click();
   await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-runs").click();
   await expect(byPrefix(window, "run-result-")).toHaveText(["done", "done"], { timeout: 20_000 });
 
   await closeApp();
-  const runs = dbRows<{ id: string; build_hash: string }>("SELECT id, build_hash FROM runs");
-  const scriptsBuilds = dbRows<{ hash: string; version: number }>(
-    "SELECT hash, version FROM builds JOIN flows ON flows.id = builds.flow_id WHERE flows.name = 'Scripts'",
+  const runs = dbRows<{ id: string; build_id: string }>("SELECT id, build_id FROM runs");
+  const scriptsBuilds = dbRows<{ id: string; version: number }>(
+    "SELECT builds.id, version FROM builds JOIN flows ON flows.id = builds.flow_id WHERE flows.name = 'Scripts'",
   );
-  expect(scriptsBuilds.map((build) => build.version)).toEqual([1]);
-  const [scriptsBuild] = scriptsBuilds;
+  expect(scriptsBuilds).toEqual([{ id: scriptsBuild, version: 1 }]);
   expect(runs).toHaveLength(2);
   expect(new Set(runs.map((run) => run.id)).size).toBe(2);
-  expect(runs.map((run) => run.build_hash)).toEqual([scriptsBuild?.hash, scriptsBuild?.hash]);
-  expect(scriptsBuild?.hash.startsWith(shortScriptsHash ?? "missing")).toBe(true);
+  expect(runs.map((run) => run.build_id)).toEqual([scriptsBuild, scriptsBuild]);
 });
 
-test("Build & run records a build in Builds and reuses it while the version is unchanged", async () => {
-  seedFlow(home, twoScripts(), folder);
+test("Run again on a finished run runs the same build, so Builds keeps one card for both runs", async () => {
+  seedFlow(home, twoScripts(), repo.path);
   const { window } = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  const buildId = await buildAndRun(window, home, "twice");
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
     "data-status",
     "done",
     { timeout: 20_000 },
   );
-  await window.getByTestId(pageTestIds.runOpenBlueprint).click();
-  await window.getByTestId(controlTestIds.run).click();
+  await window.getByTestId(pageTestIds.runAgain).click();
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toBeVisible();
 
   await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-runs").click();
   await expect(byPrefix(window, "run-result-")).toHaveText(["done", "done"], { timeout: 20_000 });
   await window.getByTestId("menu-builds").click();
   await expect(byPrefix(window, "build-card-")).toHaveCount(1);
-  await expect(byPrefix(window, "build-card-")).toContainText("Untitled v1");
+  await expect(window.getByTestId(pageTestIds.buildCard(buildId))).toContainText(
+    "twice Untitled v1",
+  );
 
   await closeApp();
-  const builds = dbRows<{ hash: string; version: number }>("SELECT hash, version FROM builds");
-  expect(builds).toEqual([{ hash: expect.any(String), version: 1 }]);
-  expect(dbRows<{ build_hash: string }>("SELECT build_hash FROM runs")).toEqual([
-    { build_hash: builds[0]?.hash },
-    { build_hash: builds[0]?.hash },
+  const builds = dbRows<{ id: string; version: number }>("SELECT id, version FROM builds");
+  expect(builds).toEqual([{ id: buildId, version: 1 }]);
+  expect(dbRows<{ build_id: string }>("SELECT build_id FROM runs")).toEqual([
+    { build_id: buildId },
+    { build_id: buildId },
   ]);
 });
 
 test("Doctor shows an installed connector and a missing one with its fix, and no secret", async () => {
   const testInfo = test.info();
-  seedBlueprint(home, "Notifier", withConnectors(["slack", "linear"]), folder);
+  seedBlueprint(home, "Notifier", withConnectors(["slack", "linear"]), repo.path);
   const target = await launch();
   const { window } = target;
 
@@ -349,7 +359,7 @@ test("Doctor shows an installed connector and a missing one with its fix, and no
 });
 
 test("Escape in the blueprint's name field keeps its old name", async () => {
-  seedBlueprint(home, "Alpha", flow([prompt("p1")], []), folder);
+  seedBlueprint(home, "Alpha", flow([prompt("p1")], []), repo.path);
   const { window } = await launch();
   const title = window.getByTestId(controlTestIds.title);
   await expect(title).toHaveValue("Alpha");
@@ -365,18 +375,29 @@ test("Escape in the blueprint's name field keeps its old name", async () => {
 });
 
 test("A run left running by an earlier session shows as interrupted, never live", async () => {
-  const alpha = seedBlueprint(home, "Alpha", flow([prompt("p1")], []), folder);
+  const alpha = seedBlueprint(home, "Alpha", flow([prompt("p1")], []), repo.path);
   const db = openDatabase({ path: join(home, "flowdeck.db") });
   let stale: string;
   try {
     const runs = new SqliteStore({ db });
-    runs.recordBuild({ hash: "stalehash", dir: "/nowhere", source: alpha, files: [], nodes: [] });
+    runs.recordBuild({
+      id: "stale-build",
+      hash: "stalehash",
+      name: "stale",
+      repo: repo.path,
+      base: "main",
+      values: {},
+      dir: "/nowhere",
+      source: alpha,
+      files: [],
+      nodes: [],
+    });
     stale = runs.createRun({
       buildDir: "/nowhere",
       inputs: {},
       nodeIds: ["p1"],
-      session: { tmuxName: "fd-run-gone", cwd: folder, claudeSessionId: "gone" },
-      buildHash: "stalehash",
+      session: { tmuxName: "fd-run-gone", cwd: repo.path, claudeSessionId: "gone" },
+      buildId: "stale-build",
     }).id;
   } finally {
     db.close();
@@ -412,11 +433,11 @@ test("The status bar takes you from the editor to the live run that needs you", 
       ],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
-    folder,
+    repo.path,
   );
   const { window } = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "gated");
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
   await window.getByTestId(pageTestIds.runBack).click();
   await expect(window.getByRole("button", { name: /^Runs\s?, 1 running$/ })).toBeVisible();

@@ -1,11 +1,18 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { readFile, mkdtemp, realpath, rm } from "node:fs/promises";
+import { readFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
+import {
+  branchVariableTestId,
+  buildConfigTestIds,
+  buildDialogTestIds,
+  controlTestIds,
+  paletteTestId,
+  readoutTestIds,
+} from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import {
   branch,
@@ -19,6 +26,7 @@ import {
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun } from "./build-run.js";
 
 const git = async (repo: string, ...args: string[]) =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -89,28 +97,23 @@ const reviewShot = async (window: Page, name: string) => {
   await test.info().attach(`${name}.png`, { path, contentType: "image/png" });
 };
 
-const twoScripts = (folder: string) => {
-  const seeded = flow(
+const twoScripts = () =>
+  flow(
     [
       at(script("s1", { settings: { command: "echo", args: ["one"] } }), 80, 120, "One"),
       at(script("s2", { settings: { command: "echo", args: ["two"] } }), 380, 120, "Two"),
     ],
     [thenWire("s1", "s2")],
   );
-  return {
-    ...seeded,
-    session: { ...seeded.session, workingFolder: { kind: "path", path: folder } },
-  };
-};
 
-const tempFolder = async () => {
-  const folder = await realpath(await mkdtemp(join(tmpdir(), "fd-ed-wf-")));
-  cleanups.push(() => rm(folder, { recursive: true, force: true }));
-  return folder;
+const tempRepo = async () => {
+  const repo: TmpRepo = await createTmpRepo({ commit: true });
+  cleanups.push(() => repo.cleanup());
+  return repo;
 };
 
 test("A wire can be selected, deleted with Delete, and brought back with Undo", async () => {
-  seedFlow(home, twoScripts(await tempFolder()));
+  seedFlow(home, twoScripts());
   const window = await launch("dark");
   const edge = window.getByTestId("rf__edge-s1:out->s2:in");
   await expect(edge).toBeAttached();
@@ -147,21 +150,24 @@ test("Wiring a Fork to a Prompt is refused with a plain reason", async () => {
 });
 
 test("A refused Build lists every problem in plain words, and a click selects its node", async () => {
-  const folder = await tempFolder();
-  const seeded = flow(
-    [
-      at(prompt("p1", { settings: { instructions: "" } }), 80, 120, "Draft the plan"),
-      at(script("s1", { settings: { command: "" } }), 900, 700, "Run the tests"),
-    ],
-    [thenWire("p1", "s1")],
+  const repo = await tempRepo();
+  seedFlow(
+    home,
+    flow(
+      [
+        at(prompt("p1", { settings: { instructions: "" } }), 80, 120, "Draft the plan"),
+        at(script("s1", { settings: { command: "" } }), 900, 700, "Run the tests"),
+      ],
+      [thenWire("p1", "s1")],
+    ),
+    repo.path,
   );
-  seedFlow(home, {
-    ...seeded,
-    session: { ...seeded.session, workingFolder: { kind: "path", path: folder } },
-  });
   const window = await launch("dark");
 
   await window.getByTestId(controlTestIds.build).click();
+  await window.getByTestId(buildDialogTestIds.name).fill("refused");
+  await window.getByTestId(buildDialogTestIds.confirm).click();
+  await window.getByTestId(buildDialogTestIds.cancel).click();
 
   const problems = window.getByTestId("build-problems");
   await expect(problems).toContainText("2 problems");
@@ -189,23 +195,33 @@ test("A refused Build lists every problem in plain words, and a click selects it
   expect(node.width).toBeGreaterThan(0);
 });
 
-test("A Branch picks its flag from the Trigger's flags, and its wires say yes and no", async () => {
-  seedFlow(
-    home,
-    flow(
-      [
-        at(trigger("t", { settings: { flags: { e2e: true, docs: false } } }), 40, 120),
-        at(branch("b", "e2e"), 240, 120),
-        at(script("y"), 460, 60),
-        at(script("n"), 460, 260),
-      ],
-      [
-        thenWire("t", "b"),
-        { kind: "then", from: { node: "b", port: "yes" }, to: { node: "y", port: "in" } },
-        { kind: "then", from: { node: "b", port: "no" }, to: { node: "n", port: "in" } },
-      ],
-    ),
+test("A Branch picks a yes/no variable, and its wires say yes and no", async () => {
+  const seeded = flow(
+    [
+      at(trigger("t"), 40, 120),
+      at(branch("b", "e2e"), 240, 120),
+      at(script("y"), 460, 60),
+      at(script("n"), 460, 260),
+    ],
+    [
+      thenWire("t", "b"),
+      { kind: "then", from: { node: "b", port: "yes" }, to: { node: "y", port: "in" } },
+      { kind: "then", from: { node: "b", port: "no" }, to: { node: "n", port: "in" } },
+    ],
   );
+  seedFlow(home, {
+    ...seeded,
+    session: {
+      ...seeded.session,
+      buildConfig: {
+        variables: [
+          { name: "e2e", kind: "yesno", default: true },
+          { name: "ticket", kind: "text" },
+          { name: "docs", kind: "yesno", default: false },
+        ],
+      },
+    },
+  });
   const window = await launch();
 
   await expect(window.getByTestId("port-label-b-yes")).toHaveText("yes");
@@ -214,12 +230,12 @@ test("A Branch picks its flag from the Trigger's flags, and its wires say yes an
   await expect(window.getByTestId("branch-wire-b-no")).toHaveText("no");
 
   await window.getByTestId("node-b").click();
-  const flag = window.getByTestId("node-setting-flag");
-  await expect(flag.locator("option")).toHaveText(["e2e (on by default)", "docs (off by default)"]);
-  await flag.selectOption("docs");
+  const variable = window.getByTestId(branchVariableTestId);
+  await expect(variable.locator("option")).toHaveText(["e2e", "docs"]);
+  await variable.selectOption("docs");
   await expect
     .poll(async () => (await readout(window)).nodes.find((node) => node.id === "b")?.settings)
-    .toEqual({ flag: "docs" });
+    .toEqual({ variable: "docs" });
   await expect(window.getByTestId("node-type-description")).not.toContainText("verdict");
 });
 
@@ -355,8 +371,8 @@ test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", asyn
   await expect.poll(() => zoomOf(window)).toBeLessThan(1);
 });
 
-test("A new blueprint with one Script asks for its folder at Build, then runs", async () => {
-  const folder = await tempFolder();
+test("A new blueprint with one Script asks for its repository at Build, then runs", async () => {
+  const repo = await tempRepo();
   const window = await launch();
   await window.getByTestId(paletteTestId("script")).dragTo(window.getByTestId("canvas"), {
     targetPosition: { x: 300, y: 200 },
@@ -365,18 +381,18 @@ test("A new blueprint with one Script asks for its folder at Build, then runs", 
   await window.getByTestId("node-setting-command").fill("pwd");
   await window.getByTestId("node-setting-command").press("Enter");
 
-  await window.getByTestId(controlTestIds.run).click();
+  await window.getByTestId(controlTestIds.build).click();
 
-  await expect(window.getByTestId("build-problem-0")).toHaveText(
-    "SessionChoose the folder this blueprint works in, in the session settings.",
-  );
+  await expect(window.getByTestId(buildDialogTestIds.repo)).toHaveValue("");
+  await window.getByTestId(buildDialogTestIds.name).fill("pwd");
+  await expect(window.getByTestId(buildDialogTestIds.confirm)).toBeDisabled();
+  await window.getByTestId(buildDialogTestIds.cancel).click();
+  await window.getByTestId(controlTestIds.sessionChip).click();
   await expect(window.getByTestId("session-settings")).toBeVisible();
-  await expect(window.getByTestId("session-working-folder-kind")).toHaveValue("path");
-  await expect(window.getByTestId("session-working-folder-path-issue")).toBeVisible();
-  await window.getByTestId("session-working-folder-path").fill(folder);
-  await window.getByTestId("session-working-folder-path").press("Enter");
+  await window.getByTestId(buildConfigTestIds.repo).fill(repo.path);
+  await window.getByTestId(buildConfigTestIds.repo).press("Enter");
 
-  await window.getByTestId(controlTestIds.run).click();
+  const buildId = await buildAndRun(window, home, "pwd");
 
   await expect(window.getByTestId("node-status-script-1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
@@ -389,31 +405,26 @@ test("A new blueprint with one Script asks for its folder at Build, then runs", 
     expect(db.prepare("SELECT node_id, finished_at FROM run_nodes").all()).toEqual([
       { node_id: "script-1", finished_at: expect.any(String) },
     ]);
-    expect(db.prepare("SELECT cwd FROM run_sessions").all()).toEqual([{ cwd: folder }]);
+    const [session] = db.prepare("SELECT cwd FROM run_sessions").all() as { cwd: string }[];
+    expect(await realpath(session?.cwd ?? "")).toBe(
+      await realpath(join(home, "workspaces", buildId, basename(repo.path))),
+    );
   } finally {
     db.close();
   }
 });
 
-test("The gear picks the model, permission mode and the repository's branch", async () => {
-  const repo: TmpRepo = await createTmpRepo({ commit: true });
-  cleanups.push(() => repo.cleanup());
+test("The gear picks the model, permission mode and the repository's base branch", async () => {
+  const repo = await tempRepo();
   await git(repo.path, "branch", "dev");
-  const seeded = flow([at(script("s1"), 80, 120)], []);
-  seedFlow(home, {
-    ...seeded,
-    session: {
-      ...seeded.session,
-      workingFolder: { kind: "worktree", branch: "main", repo: repo.path },
-    },
-  });
+  seedFlow(home, flow([at(script("s1"), 80, 120)], []), repo.path);
   const window = await launch("dark");
 
   await window.getByTestId(controlTestIds.sessionChip).click();
   await expect(window.getByTestId("session-settings")).toBeVisible();
   await expect(window.getByTestId("session-name")).toHaveValue("main");
-  const branchPick = window.getByTestId("session-working-folder-branch");
-  await expect(branchPick.locator("option")).toHaveText(["dev", "main"]);
+  const basePick = window.getByTestId(buildConfigTestIds.base);
+  await expect(basePick.locator("option")).toHaveText(["dev", "main"]);
   await expect(window.getByTestId("session-model").locator("option").first()).toHaveText(
     "Sonnet (latest)",
   );
@@ -425,7 +436,7 @@ test("The gear picks the model, permission mode and the repository's branch", as
   ]);
   await reviewShot(window, "gear");
 
-  await branchPick.selectOption("dev");
+  await basePick.selectOption("dev");
   await window.getByTestId("session-model").selectOption("haiku");
   await window.getByTestId("session-permission-mode").selectOption("acceptEdits");
   await expect
@@ -433,65 +444,47 @@ test("The gear picks the model, permission mode and the repository's branch", as
     .toMatchObject({
       model: "haiku",
       permissionMode: "acceptEdits",
-      workingFolder: { kind: "worktree", branch: "dev", repo: repo.path },
+      buildConfig: { repo: repo.path, base: "dev" },
     });
   await expect(window.getByTestId("session-chip")).toContainText("Haiku (latest)");
 });
 
-const runInWorktree = async (command: string) => {
-  const repo: TmpRepo = await createTmpRepo({ commit: true });
-  cleanups.push(() => repo.cleanup());
-  const seeded = flow(
-    [at(script("s1", { settings: { command: "sh", args: ["-c", command] } }), 80, 120)],
-    [],
+const runInBuild = async (command: string) => {
+  const repo = await tempRepo();
+  seedFlow(
+    home,
+    flow([at(script("s1", { settings: { command: "sh", args: ["-c", command] } }), 80, 120)], []),
+    repo.path,
   );
-  seedFlow(home, {
-    ...seeded,
-    session: {
-      ...seeded.session,
-      workingFolder: { kind: "worktree", branch: "main", repo: repo.path },
-    },
-  });
   const window = await launch();
-  await window.getByTestId(controlTestIds.run).click();
+  const buildId = await buildAndRun(window, home, "wt");
   await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
-  return { window, repo };
+  const path = join(home, "workspaces", buildId, basename(repo.path));
+  return { window, repo, path, branch: `flowdeck/wt-${buildId.slice(0, 8)}` };
 };
 
 const appLog = () => readFile(test.info().outputPath("app.log"), "utf8");
 
-test("A finished worktree run that changed nothing leaves no flowdeck branch or worktree behind", async () => {
-  const { repo } = await runInWorktree("echo unchanged");
+test("A finished run that changed nothing leaves its build's worktree and branch in place", async () => {
+  const { repo, path, branch } = await runInBuild("echo unchanged");
 
-  await expect
-    .poll(async () => (await git(repo.path, "branch", "--list", "flowdeck/*")).trim())
-    .toBe("");
   expect(
-    (await git(repo.path, "worktree", "list", "--porcelain")).match(/^worktree /gm),
-  ).toHaveLength(1);
-  await expect
-    .poll(appLog)
-    .toMatch(/removed worktree .*worktrees\/[0-9a-f]{8} and flowdeck\/[0-9a-f]{8}/);
+    (await git(repo.path, "branch", "--list", "--format=%(refname:short)", "flowdeck/*")).trim(),
+  ).toBe(branch);
+  const worktrees = await git(repo.path, "worktree", "list", "--porcelain");
+  expect(worktrees.match(/^worktree /gm)).toHaveLength(2);
+  expect(worktrees).toContain(`worktree ${await realpath(path)}`);
+  expect(await appLog()).not.toMatch(/removed worktree/);
 });
 
-test("A finished worktree run that wrote a file keeps its branch and worktree, and the Activity says where", async () => {
-  const { window, repo } = await runInWorktree("echo made > made.txt");
+test("A run that wrote a file leaves it in its build's worktree, not the repo, and the Activity has no kept line", async () => {
+  const { window, repo, path } = await runInBuild("echo made > made.txt");
 
-  await expect.poll(appLog).toMatch(/Kept the worktree/);
-  const branch = (
-    await git(repo.path, "branch", "--list", "--format=%(refname:short)", "flowdeck/*")
-  ).trim();
-  expect(branch).toMatch(/^flowdeck\/[0-9a-f]{8}$/);
-  const id8 = branch.slice("flowdeck/".length);
-  const path = join(home, "worktrees", id8);
-  expect(await git(repo.path, "worktree", "list", "--porcelain")).toContain(
-    `worktree ${await realpath(path)}`,
-  );
   expect(await readFile(join(path, "made.txt"), "utf8")).toBe("made\n");
+  await expect(stat(join(repo.path, "made.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   await window.getByTestId("run-tab-activity").click();
-  await expect(window.locator('[data-kind="kept"]')).toHaveText(
-    `Kept the worktree ${path} and branch ${branch}: they hold this run's changes.`,
-  );
+  await expect(window.getByTestId("inspector-node-s1")).toHaveAttribute("data-status", "done");
+  await expect(window.locator('[data-kind="kept"]')).toHaveCount(0);
 });

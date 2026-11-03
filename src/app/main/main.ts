@@ -16,7 +16,7 @@ import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { loginPath } from "./login-path.js";
-import { createTerminal, type Terminal } from "./pty.js";
+import { createTerminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { answerWait, createWaitRelay } from "./wait.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
@@ -125,64 +125,73 @@ const toEveryWindow = (channel: string, value: unknown) => {
   }
 };
 
-function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard): Terminal {
+function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard) {
   const terminal = createTerminal({
     spawn,
     env: process.env,
-    sendStatus: (status) => toEveryWindow(bridgeChannels.terminalStatus, status),
-    sendData: (data) => toEveryWindow(bridgeChannels.terminalData, data),
+    sendStatus: (runId, status) => toEveryWindow(bridgeChannels.terminalStatus, { runId, status }),
+    sendData: (runId, data) => toEveryWindow(bridgeChannels.terminalData, { runId, data }),
   });
-  let popOut: BrowserWindow | null = null;
+  const runIds = new Set<string>();
+  const popOuts = new Map<string, BrowserWindow>();
+  const closeAll = () => {
+    for (const runId of runIds) terminal.close(runId);
+  };
   ipcMain.handle(
     bridgeChannels.popOutTerminal,
-    windowGuard.handle(() => {
-      if (!terminal.status().available) return false;
-      if (popOut !== null && !popOut.isDestroyed()) {
-        popOut.focus();
+    windowGuard.handle((runId: string) => {
+      if (!terminal.status(runId).available) return false;
+      const existing = popOuts.get(runId);
+      if (existing !== undefined && !existing.isDestroyed()) {
+        existing.focus();
         return true;
       }
-      terminal.close();
+      terminal.close(runId);
       const opened = appWindow(
         windowGuard,
         { title: "Flowdeck terminal", width: 900, height: 560, minWidth: 360, minHeight: 200 },
-        "terminal",
+        `terminal/${encodeURIComponent(runId)}`,
       );
-      popOut = opened;
-      terminal.setPoppedOut(true);
+      popOuts.set(runId, opened);
+      terminal.setPoppedOut(runId, true);
       opened.on("closed", () => {
-        popOut = null;
-        terminal.close();
-        terminal.setPoppedOut(false);
+        popOuts.delete(runId);
+        terminal.close(runId);
+        terminal.setPoppedOut(runId, false);
       });
       return true;
     }),
   );
   window.on("closed", () => {
-    if (popOut !== null && !popOut.isDestroyed()) popOut.close();
+    for (const popOut of popOuts.values()) if (!popOut.isDestroyed()) popOut.close();
   });
   ipcMain.handle(
     bridgeChannels.openTerminal,
-    windowGuard.handle((size: unknown) => terminal.open(size)),
+    windowGuard.handle((runId: string, size: unknown) => terminal.open(runId, size)),
   );
   ipcMain.handle(
     bridgeChannels.getTerminalStatus,
-    windowGuard.handle(() => terminal.status()),
+    windowGuard.handle((runId: string) => terminal.status(runId)),
   );
   ipcMain.on(
     bridgeChannels.terminalInput,
-    windowGuard.listen((data: unknown) => terminal.write(data)),
+    windowGuard.listen((runId: string, data: unknown) => terminal.write(runId, data)),
   );
   ipcMain.on(
     bridgeChannels.terminalResize,
-    windowGuard.listen((size: unknown) => terminal.resize(size)),
+    windowGuard.listen((runId: string, size: unknown) => terminal.resize(runId, size)),
   );
   ipcMain.on(
     bridgeChannels.closeTerminal,
-    windowGuard.listen(() => terminal.close()),
+    windowGuard.listen((runId: string) => terminal.close(runId)),
   );
-  window.webContents.on("did-navigate", () => terminal.close());
-  window.webContents.on("render-process-gone", () => terminal.close());
-  return terminal;
+  window.webContents.on("did-navigate", closeAll);
+  window.webContents.on("render-process-gone", closeAll);
+  const setSession = (runId: string, name: string | null) => {
+    runIds.add(runId);
+    terminal.setSession(runId, name);
+  };
+  return { setSession, dispose: () => terminal.dispose() };
 }
 
 function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
@@ -250,19 +259,19 @@ void app.whenReady().then(async () => {
   client.onPush(wait.onPush);
   const terminal = wireTerminal(window, windowGuard);
   client.onPush((push) => {
-    if (push.push === "session") terminal.setSession(push.value);
+    if (push.push === "session") terminal.setSession(push.runId, push.value);
   });
   ipcMain.handle(
     bridgeChannels.getRunState,
-    windowGuard.handle(() => relay.latest()),
+    windowGuard.handle((runId: string) => relay.latest(runId)),
   );
   ipcMain.handle(
     bridgeChannels.getActivity,
-    windowGuard.handle(() => activity.feed()),
+    windowGuard.handle((runId: string) => activity.feed(runId)),
   );
   ipcMain.handle(
     bridgeChannels.getWait,
-    windowGuard.handle(() => wait.latest()),
+    windowGuard.handle((runId: string) => wait.latest(runId)),
   );
   ipcMain.handle(
     bridgeChannels.answerWait,

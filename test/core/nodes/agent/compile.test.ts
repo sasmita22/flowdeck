@@ -27,9 +27,23 @@ const agentNode = (
 describe("compileAgent", () => {
   it("writes an agent file with name, description, tools and model", () => {
     expect(compileAgent(agentNode())).toEqual({
-      path: "agents/reviewer.md",
+      path: "plugin/agents/reviewer.md",
       content:
         '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n',
+    });
+  });
+
+  it("fills the build's values into the instructions", () => {
+    expect(
+      compileAgent(
+        agentNode({ instructions: "Review {{ticket}} on {{ base }}." }),
+        { given: [], writes: [] },
+        { ticket: "FD-99", base: "main" },
+      ),
+    ).toEqual({
+      path: "plugin/agents/reviewer.md",
+      content:
+        '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview FD-99 on main.\n',
     });
   });
 

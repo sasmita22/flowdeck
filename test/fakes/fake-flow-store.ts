@@ -114,7 +114,7 @@ export class FakeFlowStore implements FlowStore {
       createdAt: blueprint.createdAt,
       versions: saved.length,
       lastSavedAt: latest === undefined ? null : blueprint.createdAt,
-      workingFolder: latest?.flow.session.workingFolder ?? null,
+      buildConfig: latest?.flow.session.buildConfig ?? null,
     };
   }
 }

@@ -36,7 +36,7 @@ type Case = {
   settings: z.ZodType;
   ports: readonly unknown[];
   valid: Record<string, unknown>;
-  bad: Record<string, unknown>;
+  bad: unknown;
   badPath: (string | number)[];
   expectedPorts: unknown[];
 };
@@ -116,9 +116,9 @@ const cases: Case[] = [
     type: "trigger",
     settings: triggerSettings,
     ports: triggerPorts,
-    valid: { inputs: ["ticket"], flags: { dryRun: false } },
-    bad: { inputs: ["ticket"], flags: { dryRun: [] } },
-    badPath: ["flags", "dryRun"],
+    valid: {},
+    bad: "ticket",
+    badPath: [],
     expectedPorts: [outPort],
   },
   {
@@ -261,14 +261,14 @@ describe("foreach settings", () => {
 });
 
 describe("branch node", () => {
-  it("accepts a flag name unchanged", () => {
-    expect(registry.branch.settings.safeParse({ flag: "e2e" }).data).toEqual({ flag: "e2e" });
+  it.each(["proceed-e2e", ""])("accepts the variable %j unchanged", (variable) => {
+    expect(registry.branch.settings.safeParse({ variable }).data).toEqual({ variable });
   });
 
-  it.each([{}, { flag: "" }])("refuses the settings %j at the flag", (settings) => {
+  it.each([{}, { variable: 1 }])("refuses the settings %j at the variable", (settings) => {
     const result = registry.branch.settings.safeParse(settings);
     expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.path).toEqual(["flag"]);
+    expect(result.error?.issues[0]?.path).toEqual(["variable"]);
   });
 
   it("has an in port and yes and no out ports", () => {

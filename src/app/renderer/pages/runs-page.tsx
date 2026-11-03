@@ -1,6 +1,6 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { formatCost, formatDuration, formatWhen, shortHash } from "../format.js";
+import { formatCost, formatDuration, formatWhen } from "../format.js";
 import { selectRunCards, type LibraryState, type RunCard } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
 import { selectLiveBadge, type RunState } from "../run-store.js";
@@ -33,7 +33,7 @@ export function RunsPage({
   const flows = useStore(library, (state) => state.flows);
   const runs = useStore(library, (state) => state.runs);
   const loaded = useStore(library, (state) => state.loaded);
-  const live = useStore(run, (state) => state.snapshot);
+  const snapshots = useStore(run, (state) => state.snapshots);
   const query = useStore(nav, (state) => state.query);
   const sort = useStore(nav, (state) => state.sort);
   const cards = arrange(selectRunCards({ flows, runs }), { query, sort }, (card) => card.name);
@@ -41,14 +41,12 @@ export function RunsPage({
   return (
     <>
       <PageHead title="Runs" nav={nav} searchLabel="Search runs" />
-      {loaded && runs.length === 0 && (
-        <Empty>No runs yet. Run a build from Builds, or use Build &amp; run in the editor.</Empty>
-      )}
+      {loaded && runs.length === 0 && <Empty>No runs yet. Run a build from Builds.</Empty>}
       <div className="fd-cards">
         {cards.map((card) => {
-          const isLive = live?.runId === card.id;
-          const status = isLive ? live.status : card.status;
-          const badge = (isLive ? selectLiveBadge(live) : null) ?? status;
+          const live = snapshots[card.id] ?? null;
+          const status = live?.status ?? card.status;
+          const badge = selectLiveBadge(live) ?? status;
           return (
             <article key={card.id} className="fd-card" data-testid={pageTestIds.runCard(card.id)}>
               <div className="fd-card-top">
@@ -61,7 +59,6 @@ export function RunsPage({
                   {card.name}{" "}
                   <span className="fd-muted">
                     {card.version === null ? "" : `v${card.version}`}
-                    {card.buildHash === undefined ? "" : ` · ${shortHash(card.buildHash)}`}
                   </span>
                 </button>
                 <span

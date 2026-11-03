@@ -1,13 +1,13 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { build } from "../../src/core/compiler/build.js";
+import { realDeps } from "../../src/cli/main.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -17,6 +17,7 @@ const tsx = join(root, "node_modules", ".bin", "tsx");
 const runDeadlineMs = 240_000;
 const transcriptSettleMs = 10_000;
 const promptIds = ["p1", "p2", "p3"];
+const buildName = "live-run";
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
   error instanceof Error && "code" in error && codes.includes(error.code as string | number);
@@ -44,7 +45,7 @@ function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Exit> {
   });
 }
 
-function turnSequence(entries: Entry[], hash: string): string[] {
+function turnSequence(entries: Entry[], prefix: string): string[] {
   const tokens: string[] = [];
   for (const entry of entries) {
     const content = JSON.stringify(entry.message?.content ?? "");
@@ -54,12 +55,12 @@ function turnSequence(entries: Entry[], hash: string): string[] {
       if (tokens.at(-1) !== "end_turn") tokens.push("end_turn");
     }
   }
-  return tokens.filter((token) => token === "end_turn" || token.startsWith(`command ${hash}:`));
+  return tokens.filter((token) => token === "end_turn" || token.startsWith(`command ${prefix}:`));
 }
 
-function expectOneTurnPerPromptInOrder(entries: Entry[], hash: string): void {
-  expect(turnSequence(entries, hash)).toEqual(
-    promptIds.flatMap((id) => [`command ${hash}:${id}`, "end_turn"]),
+function expectOneTurnPerPromptInOrder(entries: Entry[], prefix: string): void {
+  expect(turnSequence(entries, prefix)).toEqual(
+    promptIds.flatMap((id) => [`command ${prefix}:${id}`, "end_turn"]),
   );
 }
 
@@ -74,10 +75,10 @@ async function readTranscript(path: string): Promise<Entry[]> {
     .map((line) => JSON.parse(line) as Entry);
 }
 
-async function settledTranscript(path: string, hash: string): Promise<Entry[]> {
+async function settledTranscript(path: string, prefix: string): Promise<Entry[]> {
   const deadline = Date.now() + transcriptSettleMs;
   let entries = await readTranscript(path);
-  while (turnSequence(entries, hash).length < promptIds.length * 2 && Date.now() < deadline) {
+  while (turnSequence(entries, prefix).length < promptIds.length * 2 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     entries = await readTranscript(path);
   }
@@ -150,13 +151,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
   const sessionName = `fd-live-run-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let slug: string;
   let projectFolder: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
-    slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
+    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
     projectFolder = join(homedir(), ".claude", "projects", slug);
   });
 
@@ -208,34 +211,37 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
             ? {
                 ...node,
                 settings: {
-                  instructions: node.settings.instructions.replaceAll("{{repo}}", repo.path),
+                  instructions: node.settings.instructions.replaceAll(
+                    "{{repo}}",
+                    workspace.workFolder,
+                  ),
                 },
               }
             : node,
         ),
       };
-      const built = await build(flow, {
-        fs: new NodeFileSystem(),
-        home,
-      });
-      if (!built.ok) throw new Error(`fixture does not build: ${JSON.stringify(built.errors)}`);
       const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
+      await cliBuild(flow, { name: buildName, repo: repo.path, vars: ["ticket=FD-1"] }, workspace, {
+        ...realDeps(),
+        env,
+      });
       delete env.TMUX;
       delete env.TMUX_PANE;
 
       const exit = await runCliProcess(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
+        ["run", buildName, "--session", sessionName, "--model", "haiku"],
         env,
       );
 
-      const porcelain = (await run("git", ["status", "--porcelain"], { cwd: repo.path })).stdout;
+      const porcelain = (await run("git", ["status", "--porcelain"], { cwd: workspace.workFolder }))
+        .stdout;
       const transcripts = await transcriptsIn(projectFolder);
       for (const transcript of transcripts) {
         await waitForClaudeToExit(transcript.replace(/\.jsonl$/, ""));
       }
       const entries =
         transcripts.length === 1
-          ? await settledTranscript(join(projectFolder, transcripts[0] ?? ""), built.hash)
+          ? await settledTranscript(join(projectFolder, transcripts[0] ?? ""), buildName)
           : [];
       try {
         expect(exit.code).toBe(0);
@@ -244,7 +250,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
         );
         expectOnlyOkWritten(porcelain);
         expect(transcripts).toHaveLength(1);
-        expectOneTurnPerPromptInOrder(entries, built.hash);
+        expectOneTurnPerPromptInOrder(entries, buildName);
       } catch (error) {
         console.error(await diagnostics(exit, porcelain, projectFolder));
         throw error;

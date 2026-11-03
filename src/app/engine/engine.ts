@@ -18,9 +18,12 @@ import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
 import { openDatabase } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
-import type { RunEnvironment } from "../../core/run/execute.js";
 import { createAppWaiter } from "./app-waiter.js";
-import { createEngineHandler, type EngineStores } from "./engine-handler.js";
+import {
+  createEngineHandler,
+  type EngineHandlerOptions,
+  type EngineStores,
+} from "./engine-handler.js";
 import { prepareHooks } from "./hooks.js";
 import type { EngineMessage, EngineRequest } from "./protocol.js";
 
@@ -54,11 +57,10 @@ const usage = new TranscriptUsage({
   findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
 });
 
-const run: RunEnvironment & { now: () => number } = {
+const run: EngineHandlerOptions["run"] = {
   fs,
   now: Date.now,
   scripts: new NodeProcessRunner(),
-  waiter: waits,
   startEvents: async (socketPath) => {
     await mkdir(dirname(socketPath), { recursive: true });
     const server = new HookSocketServer({ socketPath });
@@ -102,6 +104,7 @@ const handler = createEngineHandler({
   worktree: new GitWorktree(),
   gitState: new GitFolderState(),
   sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
+  endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
   homeLock,
   transcriptTurns: async (claudeSessionId) => {
     const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(

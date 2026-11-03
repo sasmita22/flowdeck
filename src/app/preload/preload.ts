@@ -28,7 +28,7 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerClose: (answer) => ipcRenderer.send(bridgeChannels.closeAnswer, answer),
-  getRunState: () => ipcRenderer.invoke(bridgeChannels.getRunState),
+  getRunState: (runId) => ipcRenderer.invoke(bridgeChannels.getRunState, runId),
   onRunState: (listener) => {
     const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
     ipcRenderer.on(bridgeChannels.runState, handler);
@@ -36,12 +36,12 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.runState, handler);
     };
   },
-  openTerminal: (size) => ipcRenderer.invoke(bridgeChannels.openTerminal, size),
-  getTerminalStatus: () => ipcRenderer.invoke(bridgeChannels.getTerminalStatus),
-  writeTerminal: (data) => ipcRenderer.send(bridgeChannels.terminalInput, data),
-  resizeTerminal: (size) => ipcRenderer.send(bridgeChannels.terminalResize, size),
-  closeTerminal: () => ipcRenderer.send(bridgeChannels.closeTerminal),
-  popOutTerminal: () => ipcRenderer.invoke(bridgeChannels.popOutTerminal),
+  openTerminal: (runId, size) => ipcRenderer.invoke(bridgeChannels.openTerminal, runId, size),
+  getTerminalStatus: (runId) => ipcRenderer.invoke(bridgeChannels.getTerminalStatus, runId),
+  writeTerminal: (runId, data) => ipcRenderer.send(bridgeChannels.terminalInput, runId, data),
+  resizeTerminal: (runId, size) => ipcRenderer.send(bridgeChannels.terminalResize, runId, size),
+  closeTerminal: (runId) => ipcRenderer.send(bridgeChannels.closeTerminal, runId),
+  popOutTerminal: (runId) => ipcRenderer.invoke(bridgeChannels.popOutTerminal, runId),
   onTerminalStatus: (listener) => {
     const handler = (_event: unknown, status: unknown) => listener(status);
     ipcRenderer.on(bridgeChannels.terminalStatus, handler);
@@ -56,7 +56,7 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.terminalData, handler);
     };
   },
-  getActivity: () => ipcRenderer.invoke(bridgeChannels.getActivity),
+  getActivity: (runId) => ipcRenderer.invoke(bridgeChannels.getActivity, runId),
   onActivity: (listener) => {
     const handler = (_event: unknown, update: unknown) => listener(update);
     ipcRenderer.on(bridgeChannels.activity, handler);
@@ -64,7 +64,7 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.activity, handler);
     };
   },
-  getWait: () => ipcRenderer.invoke(bridgeChannels.getWait),
+  getWait: (runId) => ipcRenderer.invoke(bridgeChannels.getWait, runId),
   onWait: (listener) => {
     const handler = (_event: unknown, value: unknown) => listener(value);
     ipcRenderer.on(bridgeChannels.wait, handler);
@@ -73,7 +73,7 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerWait: (answer) => ipcRenderer.invoke(bridgeChannels.answerWait, answer) as Promise<boolean>,
-  workspaceInfo: (workingFolder) => ipcRenderer.invoke(bridgeChannels.workspaceInfo, workingFolder),
+  workspaceInfo: (buildConfig) => ipcRenderer.invoke(bridgeChannels.workspaceInfo, buildConfig),
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

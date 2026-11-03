@@ -112,7 +112,7 @@ describe("loop-body", () => {
     ],
   ])("finds exactly the problems the runner refuses (case %#)", (nodes, wires) => {
     const built = flow(nodes, wires);
-    const { manifest } = lower(built);
+    const { manifest } = lower(built, { name: "fix-login", values: {} });
     const runner = structureProblems(manifest.nodes, manifest.wires);
 
     expect(rule.check(built).map(({ message }) => message.replace(/\.$/, ""))).toEqual(runner);

@@ -1,20 +1,21 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
-import { build } from "../../src/core/compiler/build.js";
+import { realDeps } from "../../src/cli/main.js";
 import { flow, prompt, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const mainPath = fileURLToPath(new URL("../../src/cli/main.ts", import.meta.url));
+const buildName = "live-resume";
 const watchdogMs = 180_000;
 const words = { p1: "ALPHA", p2: "BRAVO", p3: "CHARLIE" };
 
@@ -74,7 +75,7 @@ async function entriesOf(path: string): Promise<Entry[]> {
   });
 }
 
-const commandOf = (hash: string, id: string) => `<command-name>/${hash}:${id}</command-name>`;
+const commandOf = (prefix: string, id: string) => `<command-name>/${prefix}:${id}</command-name>`;
 
 const userIndexes = (entries: Entry[], marker: string) =>
   entries.flatMap((entry, i) =>
@@ -107,6 +108,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
   const sessionName = `fd-live-resume-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let projectFolder: string;
   let slug: string;
   const children: ChildProcess[] = [];
@@ -114,8 +116,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
-    slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
+    slug = workspace.workFolder.replace(home, await realpath(home)).replace(/[^a-zA-Z0-9]/g, "-");
     projectFolder = join(homedir(), ".claude", "projects", slug);
   });
 
@@ -156,17 +159,18 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
     "resumes a run killed during node 2 without resending it, and runs node 3",
     { timeout: watchdogMs + 30_000 },
     async () => {
-      const built = await build(
+      const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
+      await cliBuild(
         flow(
           (["p1", "p2", "p3"] as const).map((id) =>
             prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
           ),
           [thenWire("p1", "p2"), thenWire("p2", "p3")],
         ),
-        { fs: new NodeFileSystem(), home },
+        { name: buildName, repo: repo.path },
+        workspace,
+        { ...realDeps(), env },
       );
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-      const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
       delete env.TMUX;
       delete env.TMUX_PANE;
       let transcriptPath = "";
@@ -176,10 +180,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
         console.error(`transcript tail:\n${(await transcriptTail(transcriptPath)).join("\n")}`);
       };
 
-      const first = startCli(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
-        env,
-      );
+      const first = startCli(["run", buildName, "--session", sessionName, "--model", "haiku"], env);
       children.push(first.child);
       const runId = await withWatchdog(
         until(() => /^run (\S+)$/m.exec(first.stderr())?.[1]),
@@ -194,7 +195,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
         until(async () => {
           const sent = store.events(runId).some((e) => e.nodeId === "p2" && e.kind === "sent");
           const delivered =
-            userIndexes(await entriesOf(transcriptPath), commandOf(built.hash, "p2")).length > 0;
+            userIndexes(await entriesOf(transcriptPath), commandOf(buildName, "p2")).length > 0;
           return sent && delivered ? true : undefined;
         }),
         120_000,
@@ -223,8 +224,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
         await sleep(100);
       }
       const entries = await entriesOf(transcriptPath);
-      const p2Turns = userIndexes(entries, commandOf(built.hash, "p2"));
-      const p3Turns = userIndexes(entries, commandOf(built.hash, "p3"));
+      const p2Turns = userIndexes(entries, commandOf(buildName, "p2"));
+      const p3Turns = userIndexes(entries, commandOf(buildName, "p3"));
       const p3Ended = entries
         .slice((p3Turns[0] ?? entries.length) + 1)
         .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
@@ -240,10 +241,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
       const paneLines = lastPane.split("\n").map((line) => line.trim());
       expect(code, report).toBe(0);
       expect(
-        paneLines.filter((line) => line === `❯ /${built.hash}:p2`),
+        paneLines.filter((line) => line === `❯ /${buildName}:p2`),
         report,
       ).toHaveLength(1);
-      expect(paneLines, report).toContain(`❯ /${built.hash}:p3`);
+      expect(paneLines, report).toContain(`❯ /${buildName}:p3`);
       expect(p2Turns, report).toHaveLength(1);
       expect(p3Turns, report).toHaveLength(1);
       expect(p3Ended, report).toBe(true);

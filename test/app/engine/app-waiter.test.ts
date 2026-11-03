@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createAppWaiter, type AppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { PendingWait, WaitAnswer, WaitReply } from "../../../src/core/run/wait.js";
+import type { Waiter } from "../../../src/ports/waiter.js";
 import { budget, gate, permission, pick } from "../../fixtures/waits.js";
 
 const pending = Symbol("pending");
@@ -14,12 +15,17 @@ const settled = async (promise: Promise<WaitReply>) => {
   return result;
 };
 
+const runId = "r1";
+
 describe("createAppWaiter", () => {
   let pushes: EnginePush[];
   let waiter: AppWaiter;
+  let run: Waiter;
 
-  const waitPushes = () =>
-    pushes.flatMap((push) => (push.push === "wait" ? [push.value] : [])) as (PendingWait | null)[];
+  const waitPushes = (of = runId) =>
+    pushes.flatMap((push) =>
+      push.push === "wait" && push.runId === of ? [push.value] : [],
+    ) as (PendingWait | null)[];
 
   const opened = (index = 0) => {
     const value = waitPushes().filter((push) => push !== null)[index];
@@ -30,19 +36,20 @@ describe("createAppWaiter", () => {
   beforeEach(() => {
     pushes = [];
     waiter = createAppWaiter({ push: (message) => pushes.push(message) });
+    run = waiter.forRun(runId);
   });
 
   it("pushes the wait with its request and keeps the reply pending", async () => {
-    const reply = waiter.wait(gate);
+    const reply = run.wait(gate);
 
     expect(pushes).toEqual([
-      { push: "wait", value: { waitId: expect.any(String), request: gate } },
+      { push: "wait", runId, value: { waitId: expect.any(String), request: gate } },
     ]);
     expect(await settled(reply)).toBe(pending);
   });
 
   it("resolves the wait with a fitting reply to its id, then pushes it cleared", async () => {
-    const reply = waiter.wait(gate);
+    const reply = run.wait(gate);
 
     expect(waiter.answer({ waitId: opened().waitId, reply: { decision: "approve" } })).toBe(true);
 
@@ -51,7 +58,7 @@ describe("createAppWaiter", () => {
   });
 
   it("refuses an answer with a stale id and keeps the wait pending", async () => {
-    const reply = waiter.wait(gate);
+    const reply = run.wait(gate);
 
     expect(
       waiter.answer({ waitId: `${opened().waitId}-old`, reply: { decision: "approve" } }),
@@ -62,11 +69,11 @@ describe("createAppWaiter", () => {
   });
 
   it("refuses a second answer to a wait already resolved", async () => {
-    const first = waiter.wait(gate);
+    const first = run.wait(gate);
     const { waitId } = opened();
     waiter.answer({ waitId, reply: { decision: "approve" } });
     await first;
-    const second = waiter.wait(gate);
+    const second = run.wait(gate);
 
     expect(waiter.answer({ waitId, reply: { decision: "reject", reason: "" } })).toBe(false);
 
@@ -74,7 +81,7 @@ describe("createAppWaiter", () => {
   });
 
   it("refuses a decision of another kind and keeps the wait pending", async () => {
-    const reply = waiter.wait(gate);
+    const reply = run.wait(gate);
 
     expect(waiter.answer({ waitId: opened().waitId, reply: { decision: "continue" } })).toBe(false);
 
@@ -82,7 +89,7 @@ describe("createAppWaiter", () => {
   });
 
   it("refuses an ask answer outside its options and keeps the wait pending", async () => {
-    const reply = waiter.wait(pick);
+    const reply = run.wait(pick);
 
     expect(
       waiter.answer({ waitId: opened().waitId, reply: { decision: "answer", answer: "teal" } }),
@@ -97,7 +104,7 @@ describe("createAppWaiter", () => {
   ])(
     "drops a $request.kind wait without resolving it, pushes it cleared, and refuses a later answer",
     async ({ request, fitting }) => {
-      const reply = waiter.wait(request);
+      const reply = run.wait(request);
       let outcome: unknown = pending;
       reply.then(
         (value) => (outcome = value),
@@ -105,7 +112,7 @@ describe("createAppWaiter", () => {
       );
       const { waitId } = opened();
 
-      waiter.drop();
+      waiter.drop(runId);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(outcome).toBe(pending);
@@ -116,17 +123,17 @@ describe("createAppWaiter", () => {
   );
 
   it("pushes nothing when dropped with no wait open", () => {
-    waiter.drop();
+    waiter.drop(runId);
 
     expect(pushes).toEqual([]);
   });
 
   it("gives two waits for the same node different ids", async () => {
-    const first = waiter.wait(pick);
+    const first = run.wait(pick);
     const firstId = opened(0).waitId;
     waiter.answer({ waitId: firstId, reply: { decision: "answer", answer: "red" } });
     await first;
-    waiter.wait(pick);
+    run.wait(pick);
 
     expect(opened(1).waitId).not.toBe(firstId);
   });
@@ -137,8 +144,8 @@ describe("createAppWaiter", () => {
     let second: Promise<WaitReply>;
 
     beforeEach(() => {
-      first = waiter.wait(gate);
-      second = waiter.wait(pick);
+      first = run.wait(gate);
+      second = run.wait(pick);
     });
 
     it("keeps pushing the first", () => {
@@ -177,10 +184,10 @@ describe("createAppWaiter", () => {
   });
 
   it("drops a queued permission wait by resolving it closed and pushes null", async () => {
-    const node = waiter.wait(gate);
-    const asked = waiter.wait(permission);
+    const node = run.wait(gate);
+    const asked = run.wait(permission);
 
-    waiter.drop();
+    waiter.drop(runId);
 
     expect(await settled(asked)).toEqual({ decision: "closed" });
     expect(await settled(node)).toBe(pending);
@@ -190,8 +197,8 @@ describe("createAppWaiter", () => {
 
   it("withdraws an aborted head wait as closed and pushes the next one", async () => {
     const hook = new AbortController();
-    const asked = waiter.wait(permission, hook.signal);
-    const next = waiter.wait(gate);
+    const asked = run.wait(permission, hook.signal);
+    const next = run.wait(gate);
 
     hook.abort();
 
@@ -202,12 +209,79 @@ describe("createAppWaiter", () => {
   });
 
   it("drops an open permission wait by resolving it closed", async () => {
-    const asked = waiter.wait(permission);
+    const asked = run.wait(permission);
     const { waitId } = opened();
 
-    waiter.drop();
+    waiter.drop(runId);
 
     expect(await settled(asked)).toEqual({ decision: "closed" });
     expect(waitPushes()).toEqual([{ waitId, request: permission }, null]);
+  });
+  describe("with two runs waiting at once", () => {
+    const otherRun = "r2";
+    let other: Waiter;
+
+    beforeEach(() => {
+      other = waiter.forRun(otherRun);
+    });
+
+    it("pushes each run's wait under its own run id", () => {
+      run.wait(gate);
+      other.wait(pick);
+
+      expect(waitPushes(runId)).toEqual([{ waitId: "w1", request: gate }]);
+      expect(waitPushes(otherRun)).toEqual([{ waitId: "w2", request: pick }]);
+    });
+
+    it("keeps another run's open wait pushed while this run's queue moves on", async () => {
+      const mine = run.wait(gate);
+      other.wait(pick);
+
+      waiter.answer({ waitId: "w1", reply: { decision: "approve" } });
+
+      expect(await settled(mine)).toEqual({ decision: "approve" });
+      expect(waitPushes(runId).at(-1)).toBeNull();
+      expect(waitPushes(otherRun)).toEqual([{ waitId: "w2", request: pick }]);
+    });
+
+    it("answers another run's wait by its id while this run's wait stays open", async () => {
+      const mine = run.wait(gate);
+      const theirs = other.wait(pick);
+
+      expect(waiter.answer({ waitId: "w2", reply: { decision: "answer", answer: "red" } })).toBe(
+        true,
+      );
+
+      expect(await settled(theirs)).toEqual({ decision: "answer", answer: "red" });
+      expect(await settled(mine)).toBe(pending);
+      expect(waitPushes(runId)).toEqual([{ waitId: "w1", request: gate }]);
+    });
+
+    it("drops only the finished run's waits, leaving the other run's open and answerable", async () => {
+      const mine = run.wait(permission);
+      const theirs = other.wait(gate);
+      const theirPermission = other.wait(permission);
+      const otherPushesBefore = waitPushes(otherRun);
+
+      waiter.drop(runId);
+
+      expect(await settled(mine)).toEqual({ decision: "closed" });
+      expect(waitPushes(runId).at(-1)).toBeNull();
+      expect(waitPushes(otherRun)).toEqual(otherPushesBefore);
+      expect(await settled(theirs)).toBe(pending);
+      expect(await settled(theirPermission)).toBe(pending);
+      expect(waiter.answer({ waitId: "w2", reply: { decision: "approve" } })).toBe(true);
+      expect(await settled(theirs)).toEqual({ decision: "approve" });
+      expect(waitPushes(otherRun).at(-1)).toEqual({ waitId: "w3", request: permission });
+    });
+
+    it("pushes nothing for a run dropped with no wait open, while another run waits", () => {
+      other.wait(gate);
+      const before = pushes.length;
+
+      waiter.drop(runId);
+
+      expect(pushes).toHaveLength(before);
+    });
   });
 });

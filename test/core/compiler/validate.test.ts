@@ -26,6 +26,33 @@ describe("validate", () => {
     expect(new Set(ruleIds)).toEqual(new Set([name.replace(/\.json$/, "")]));
   });
 
+  it("runs the variable and repository rules in place of branch-flag and session-folder", () => {
+    const ids = rules.map((rule) => rule.id);
+
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "undeclared-variable",
+        "variable-names",
+        "branch-variable",
+        "repo-required",
+      ]),
+    );
+    expect(ids).not.toContain("branch-flag");
+    expect(ids).not.toContain("session-folder");
+    expect(brokenFixtures).not.toContain("branch-flag.json");
+    expect(brokenFixtures).not.toContain("session-folder.json");
+  });
+
+  it.each(["undeclared-variable", "variable-names", "branch-variable", "repo-required"])(
+    "reports exactly %s for its broken fixture",
+    (ruleId) => {
+      const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
+
+      expect(errors.length).toBeGreaterThan(0);
+      expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
+    },
+  );
+
   it("has one broken fixture per rule", () => {
     const fixtureIds = brokenFixtures.map((name) => name.replace(/\.json$/, ""));
     expect(new Set(fixtureIds)).toEqual(new Set(rules.map((rule) => rule.id)));
@@ -63,9 +90,11 @@ describe("validate", () => {
   });
 
   it.each(["all-types.json", "loop-review.json", "three-prompts.json"])(
-    "accepts examples/%s",
+    "reports only the missing repository for examples/%s",
     (name) => {
-      expect(validate(parseFlow(readJson(examplesDir, name)))).toEqual([]);
+      expect(validate(parseFlow(readJson(examplesDir, name))).map(({ rule }) => rule)).toEqual([
+        "repo-required",
+      ]);
     },
   );
 
@@ -81,7 +110,7 @@ describe("validate", () => {
     const noted = (flow: typeof valid) => parseFlow({ ...flow, notes });
     expect(noted(valid).notes).toHaveLength(2);
 
-    expect(validate(noted(valid))).toEqual([]);
+    expect(validate(noted(valid))).toEqual(validate(valid));
     expect(validate(noted(broken))).toEqual(validate(broken));
   });
 });

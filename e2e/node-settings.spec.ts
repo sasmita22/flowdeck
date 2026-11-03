@@ -2,7 +2,13 @@ import { expect, test, type Locator, type Page, type TestInfo } from "@playwrigh
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
+import {
+  branchVariableTestId,
+  buildConfigTestIds,
+  controlTestIds,
+  paletteTestId,
+  readoutTestIds,
+} from "../src/app/renderer/test-ids.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
@@ -223,7 +229,7 @@ test("Session settings open from the gear and never mix with a node's settings",
   await window.getByTestId("node-gate-1").click();
   await expect(window.getByTestId("node-setting-shown")).toBeVisible();
   await expect(sessionFields).toHaveCount(0);
-  await expect(window.getByTestId("session-working-folder-kind")).toHaveCount(0);
+  await expect(window.getByTestId(buildConfigTestIds.repo)).toHaveCount(0);
   await expect(window.getByTestId("session-model")).toHaveCount(0);
   await expect(gear).toHaveAttribute("aria-pressed", "false");
   await showAt1280(target);
@@ -233,7 +239,7 @@ test("Session settings open from the gear and never mix with a node's settings",
   await expect(gear).toHaveAttribute("aria-pressed", "true");
   await expect(window.getByTestId("node-settings")).toHaveCount(0);
   await expect(sessionFields).toBeVisible();
-  await expect(window.getByTestId("session-working-folder-kind")).toBeVisible();
+  await expect(window.getByTestId(buildConfigTestIds.repo)).toBeVisible();
   await expect(window.locator(".react-flow__node.selected")).toHaveCount(0);
   await window.mouse.move(1, 1);
   await reviewShot(window, test.info(), "session-settings-open");
@@ -271,33 +277,34 @@ test("Session settings open from the gear and never mix with a node's settings",
   await expect(reopened.getByTestId("session-model")).toHaveValue("claude-haiku-4-5");
 });
 
-test("A Branch's flag comes from the Trigger's flags", async () => {
+test("A Branch's variable comes from the session's yes/no variables", async () => {
   const { window } = await launch();
   await drop(window, "trigger", 120);
   await drop(window, "branch", 420);
   const branchIssue = window.getByTestId("node-issue-branch-1");
   await expect(branchIssue).toBeVisible();
+  await window.getByTestId("node-branch-1").click();
+  await expect(window.getByTestId("branch-no-variables")).toBeVisible();
 
-  await window.getByTestId("node-trigger-1").click();
-  await window.getByTestId("node-setting-flags-add").click();
-  await expect(window.getByTestId("node-setting-flags-name-0")).toHaveValue("flag");
-  await expect(branchIssue).toHaveCount(0);
-
-  await setText(window.getByTestId("node-setting-flags-name-0"), "deep");
-  await window.getByTestId("node-setting-flags-on-0").check();
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await window.getByTestId(buildConfigTestIds.addVariable).click();
+  await setText(window.getByTestId(buildConfigTestIds.variableName(0)), "deep");
+  await window.getByTestId(buildConfigTestIds.variableKind(0)).selectOption("yesno");
+  await window.getByTestId(buildConfigTestIds.variableDefault(0)).selectOption("yes");
+  await window.getByTestId(buildConfigTestIds.addVariable).click();
+  await setText(window.getByTestId(buildConfigTestIds.variableName(1)), "ticket");
   await expect(branchIssue).toBeVisible();
-  await expect
-    .poll(() => nodeIn(window, "trigger-1"))
-    .toMatchObject({ settings: { flags: { deep: true } } });
 
   await window.getByTestId("node-branch-1").click();
-  await expect(window.getByTestId("node-setting-flag").locator("option")).toContainText([
-    "deep (on by default)",
-  ]);
-  await window.getByTestId("node-setting-flag").selectOption("deep");
+  await expect(window.getByTestId("branch-no-variables")).toHaveCount(0);
+  const variable = window.getByTestId(branchVariableTestId);
+  await expect(variable.locator("option:not([disabled])")).toHaveText(["deep"]);
+  await variable.selectOption("deep");
 
   await expect(branchIssue).toHaveCount(0);
-  await expect.poll(() => nodeIn(window, "branch-1")).toMatchObject({ settings: { flag: "deep" } });
+  await expect
+    .poll(() => nodeIn(window, "branch-1"))
+    .toMatchObject({ settings: { variable: "deep" } });
 });
 
 test("Cmd+Z in a settings field undoes the typing and leaves the canvas alone", async () => {

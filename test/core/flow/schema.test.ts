@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import { FlowParseError, NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import { forEach } from "../../fixtures/flow-builders.js";
 
-const session = (workingFolder: Record<string, unknown>) => ({
+const sessionBase = {
   name: "main",
-  workingFolder,
   model: "sonnet",
   allowedTools: [],
   permissionMode: "default",
   connectors: [],
+};
+
+const session = (buildConfig: Record<string, unknown> = { base: "main", variables: [] }) => ({
+  ...sessionBase,
+  buildConfig,
 });
 
 const promptNode = {
@@ -19,10 +23,26 @@ const promptNode = {
   settings: { instructions: "Hi" },
 };
 
+const triggerNode = (settings: Record<string, unknown>) => ({
+  id: "start",
+  label: "Start",
+  position: { x: 0, y: 0 },
+  type: "trigger",
+  settings,
+});
+
+const branchNode = (settings: Record<string, unknown>) => ({
+  id: "b",
+  label: "E2E?",
+  position: { x: 0, y: 0 },
+  type: "branch",
+  settings,
+});
+
 const flowWith = (overrides: Record<string, unknown>) => ({
   nodes: [promptNode],
   wires: [],
-  session: session({ kind: "worktree", branch: "main" }),
+  session: session(),
   ...overrides,
 });
 
@@ -37,50 +57,92 @@ function parseError(input: unknown): FlowParseError {
 }
 
 describe("parseFlow", () => {
-  it.each([
-    { kind: "worktree", branch: "main" },
-    { kind: "path", path: "/tmp/repo" },
-  ])("parses a minimal flow with a $kind working folder", (workingFolder) => {
-    const flow = flowWith({ session: session(workingFolder) });
-    expect(() => parseFlow(flow)).not.toThrow();
+  it("parses a minimal flow with a Build configuration", () => {
+    const flow = flowWith({
+      session: session({
+        repo: "/tmp/repo",
+        base: "main",
+        variables: [
+          { name: "ticket", kind: "text" },
+          { name: "e2e", kind: "yesno", default: true },
+          { name: "env", kind: "text", default: "staging" },
+        ],
+      }),
+    });
+
     expect(parseFlow(flow)).toEqual(flow);
   });
 
   it("keeps the session frame's members", () => {
-    const flow = flowWith({
-      session: { ...session({ kind: "worktree", branch: "main" }), frame: { nodes: ["a", "b"] } },
-    });
+    const flow = flowWith({ session: { ...session(), frame: { nodes: ["a", "b"] } } });
 
     expect(parseFlow(flow).session.frame).toEqual({ nodes: ["a", "b"] });
   });
 
-  it.each(["/r", ""])("keeps a worktree folder's repo %j", (repo) => {
-    const flow = flowWith({ session: session({ kind: "worktree", branch: "main", repo }) });
+  it.each(["/r", ""])("keeps a Build configuration's repo %j", (repo) => {
+    const flow = flowWith({ session: session({ repo, base: "main", variables: [] }) });
 
-    expect(parseFlow(flow).session.workingFolder).toEqual({
-      kind: "worktree",
-      branch: "main",
-      repo,
-    });
+    expect(parseFlow(flow).session.buildConfig).toEqual({ repo, base: "main", variables: [] });
   });
 
-  it("adds no frame or repo key to a session that has neither", () => {
-    const parsed = parseFlow(flowWith({}));
+  it("gives a Build configuration with no variables an empty list", () => {
+    expect(parseFlow(flowWith({ session: session({ base: "main" }) })).session.buildConfig).toEqual(
+      { base: "main", variables: [] },
+    );
+  });
 
-    expect(parsed.session).not.toHaveProperty("frame");
-    expect(parsed.session.workingFolder).not.toHaveProperty("repo");
+  it("parses a Build configuration with no repo and no base, adding neither key", () => {
+    const { buildConfig } = parseFlow(flowWith({ session: session({ variables: [] }) })).session;
+
+    expect(buildConfig).toEqual({ variables: [] });
+    expect(buildConfig).not.toHaveProperty("repo");
+    expect(buildConfig).not.toHaveProperty("base");
+  });
+
+  it("adds no frame key to a session that has none", () => {
+    expect(parseFlow(flowWith({})).session).not.toHaveProperty("frame");
+  });
+
+  it("moves an old blueprint's Trigger inputs, flags and worktree folder into the Build configuration", () => {
+    const old = {
+      nodes: [
+        triggerNode({ inputs: ["ticket"], flags: { e2e: true } }),
+        branchNode({ flag: "e2e" }),
+      ],
+      wires: [],
+      session: { ...sessionBase, workingFolder: { kind: "worktree", branch: "dev", repo: "/r" } },
+    };
+
+    const parsed = parseFlow(old);
+
+    expect(parsed.session.buildConfig).toEqual({
+      repo: "/r",
+      base: "dev",
+      variables: expect.arrayContaining([
+        { name: "ticket", kind: "text" },
+        { name: "e2e", kind: "yesno", default: true },
+      ]) as unknown,
+    });
+    expect(parsed.session.buildConfig.variables).toHaveLength(2);
+    expect(parsed.session).not.toHaveProperty("workingFolder");
+    expect(parsed.nodes[0]?.settings).toEqual({});
+    expect(parsed.nodes[1]?.settings).toEqual({ variable: "e2e" });
+  });
+
+  it("parses a Trigger with no inputs or flags", () => {
+    const flow = flowWith({ nodes: [triggerNode({}), promptNode] });
+
+    expect(parseFlow(flow)).toEqual(flow);
   });
 
   it("keeps a session budget", () => {
-    const flow = flowWith({ session: { ...session({ kind: "path", path: "/r" }), budget: 1 } });
+    const flow = flowWith({ session: { ...session(), budget: 1 } });
 
     expect(parseFlow(flow).session.budget).toBe(1);
   });
 
   it.each([0, -1, "1"])("rejects a session budget of %j at its path", (budget) => {
-    const error = parseError(
-      flowWith({ session: { ...session({ kind: "path", path: "/r" }), budget } }),
-    );
+    const error = parseError(flowWith({ session: { ...session(), budget } }));
 
     expect(error.issues.map((issue) => issue.path)).toContainEqual(["session", "budget"]);
   });
@@ -161,17 +223,16 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("parses a branch on a flag", () => {
-    const branch = {
-      id: "b",
-      label: "E2E?",
-      position: { x: 0, y: 0 },
-      type: "branch",
-      settings: { flag: "e2e" },
-    };
-    const flow = flowWith({ nodes: [promptNode, branch] });
+  it("parses a branch on a variable", () => {
+    const flow = flowWith({ nodes: [promptNode, branchNode({ variable: "e2e" })] });
 
     expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("parses a branch with the old flag key into a branch on the variable", () => {
+    const parsed = parseFlow(flowWith({ nodes: [promptNode, branchNode({ flag: "e2e" })] }));
+
+    expect(parsed.nodes[1]?.settings).toEqual({ variable: "e2e" });
   });
 
   it("lists the thirteen node types", () => {

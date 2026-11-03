@@ -1,6 +1,5 @@
 import { MarkerType } from "@xyflow/react";
 import type { CanvasNote, Flow, Node, Wire } from "../../../core/flow/schema.js";
-import { branchSwitch, triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { nodeLook } from "../nodes/look.js";
 import {
   bodyFrameBounds,
@@ -168,10 +167,7 @@ export const toViewNodes = (
       toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
     ),
     ...live.nodes.map((node) => {
-      const sub =
-        node.type === "branch"
-          ? branchSwitch(node.settings.flag, triggerFlags(flow.nodes))
-          : containerSub(node);
+      const sub = node.type === "branch" ? node.settings.variable : containerSub(node);
       return {
         id: node.id,
         type: node.type,

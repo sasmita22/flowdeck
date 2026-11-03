@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { WorktreeRemoval } from "../../core/run/worktree-cleanup.js";
+import type { WorktreeRemoval } from "../../core/run/workspace.js";
 import type { Worktree, WorktreeAddOptions, WorktreeRemoveOptions } from "../../ports/worktree.js";
 
 const run = promisify(execFile);
@@ -62,5 +62,33 @@ export class GitWorktree implements Worktree {
       });
     }
     return { worktree: "removed", branch: "removed" };
+  }
+
+  async isDirty(path: string): Promise<boolean> {
+    const { stdout } = await run("git", ["-C", path, "status", "--porcelain"]);
+    return stdout.trim() !== "";
+  }
+
+  async hasUnpushed(repo: string, branch: string, base: string): Promise<boolean> {
+    const { stdout } = await run("git", [
+      "-C",
+      repo,
+      "rev-list",
+      `refs/heads/${branch}`,
+      "--not",
+      base,
+      "--remotes",
+    ]);
+    return stdout.trim() !== "";
+  }
+
+  async deleteBranch(repo: string, branch: string): Promise<void> {
+    try {
+      await run("git", ["-C", repo, "branch", "-D", branch]);
+    } catch (error) {
+      throw new Error(stderrOf(error) || `git branch -D ${branch} failed in ${repo}`, {
+        cause: error,
+      });
+    }
   }
 }

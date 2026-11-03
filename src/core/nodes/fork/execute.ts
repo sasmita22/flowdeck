@@ -122,8 +122,8 @@ export function parallelSections(
   };
 }
 
-export function forkTurnText(hash: string, branches: readonly string[]): string {
-  const types = branches.map((branch) => `"${agentType(hash, branch)}"`).join(", ");
+export function forkTurnText(prefix: string, branches: readonly string[]): string {
+  const types = branches.map((branch) => `"${agentType(prefix, branch)}"`).join(", ");
   return `Use the Agent tool once for each of these subagent_types, each with the prompt "Go": ${types}. Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next.`;
 }
 

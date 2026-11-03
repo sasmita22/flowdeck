@@ -3,7 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { CanvasState } from "../canvas/store.js";
 import { formatCost, formatDuration, formatTokens } from "../format.js";
-import type { RunState } from "../run-store.js";
+import { selectRunSnapshot, type RunState } from "../run-store.js";
 
 const cell: CSSProperties = { padding: "4px 4px", textAlign: "right", whiteSpace: "nowrap" };
 const nameCell: CSSProperties = {
@@ -26,9 +26,7 @@ export function CostTab({
   canvas: StoreApi<CanvasState>;
 }) {
   const report = useStore(run, (state) => (state.cost?.runId === runId ? state.cost.report : null));
-  const changed = useStore(run, (state) =>
-    state.snapshot?.runId === runId ? JSON.stringify(state.snapshot) : "",
-  );
+  const changed = useStore(run, (state) => JSON.stringify(selectRunSnapshot(state, runId)));
   const nodes = useStore(canvas, (state) => state.flow.nodes);
 
   useEffect(() => {

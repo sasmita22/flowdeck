@@ -9,8 +9,8 @@ import { plainProblems, type Problem } from "../../core/compiler/problems.js";
 import type { ValidationError } from "../../core/compiler/validate.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
 import type { OpenedFlow } from "../../core/flow/flow-store.js";
-import { parseFlow, type Flow } from "../../core/flow/schema.js";
-import { workingFolderSchema, type FolderState } from "../../core/flow/workspace-info.js";
+import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
+import type { VariableValues } from "../../core/flow/variables.js";
 import { SessionGoneError } from "../../adapters/claude/claude-session.js";
 import { agentNodes, chargeUsage, costReport, type CostReport } from "../../core/run/cost.js";
 import {
@@ -28,36 +28,29 @@ import {
 import {
   optionsClash,
   runChoices,
-  runOptionsSchema,
   storedAuto,
   storedFlags,
   storedOptions,
   type RunChoices,
 } from "../../core/run/options.js";
+import { deleteBuild, type DeleteBuildResult } from "../../core/run/delete-build.js";
 import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
 import { resumeEntries, retryEntries } from "../../core/run/retry.js";
-import type { EventEntry, StoredEvent } from "../../core/run/store.js";
+import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
 import type {
   BuildFileContent,
   BuildVersionResult,
   ListedRun,
   LoadedRun,
 } from "../../core/run/listing.js";
-import { runSnapshot, type SnapshotStatus, type StartRunResult } from "../../core/run/snapshot.js";
-import {
-  keptNotice,
-  removesWorktree,
-  runWorktree,
-  type RunWorktree,
-} from "../../core/run/worktree-cleanup.js";
-import { waitAnswerSchema } from "../../core/run/wait.js";
+import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
+import { waitAnswerSchema, type HumanWaiter } from "../../core/run/wait.js";
 import type { ConnectorSource } from "../../ports/connector-source.js";
 import type { FileSystem } from "../../ports/file-system.js";
 import type { FlowStore, SaveFlowResult, SavedFlowRef } from "../../ports/flow-store.js";
 import type { GitState } from "../../ports/git-state.js";
 import type { RunSummary, Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
-import { feedOf, type ActivityEntry } from "../../core/run/activity.js";
 import { createActivityTracker } from "./activity-tracker.js";
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult } from "./hooks.js";
@@ -76,13 +69,14 @@ export type EngineHandlerOptions = {
   isFolder: (path: string) => boolean;
   fs: FileSystem;
   connectors: ConnectorSource;
-  run: RunEnvironment & { now: () => number };
+  run: Omit<RunEnvironment, "waiter"> & { waiter?: HumanWaiter; now: () => number };
   newSessionName?: () => string;
-  waits?: Pick<AppWaiter, "answer" | "drop">;
+  waits?: AppWaiter;
   worktree: Worktree;
   gitState: GitState;
   transcriptTurns: (claudeSessionId: string) => Promise<TranscriptTurn[]>;
   sessionAlive?: (sessionName: string) => Promise<boolean>;
+  endSession?: (sessionName: string) => Promise<void>;
   homeLock?: { acquire(): Promise<boolean> };
 };
 
@@ -95,6 +89,7 @@ export type EngineHandler = {
 
 type ActiveRun = {
   runId: string;
+  buildId: string;
   done: Promise<void>;
   interrupt?: (code: number) => void;
   stopRequested?: number;
@@ -108,15 +103,20 @@ type Opened = { kind: "ready"; stores: EngineStores } | { kind: "error"; message
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const workspaceInfoPayload = z.object({ workingFolder: workingFolderSchema });
+const workspaceInfoPayload = z.object({ buildConfig: BuildConfig });
 
-const inputsSchema = z.record(z.string(), z.string());
+const buildVersionPayload = z.object({
+  flowId: z.string(),
+  version: z.number().int(),
+  name: z.string(),
+  repo: z.string().optional(),
+  base: z.string().optional(),
+  values: z.record(z.string(), z.union([z.string(), z.boolean()])),
+});
 
-const buildVersionPayload = z.object({ flowId: z.string(), version: z.number().int() });
+const buildIdPayload = z.object({ buildId: z.string() });
 
-const buildFilesPayload = z.object({ hash: z.string() });
-
-const listBranchesPayload = z.object({ repo: z.string() });
+const repoPayload = z.object({ repo: z.string() });
 
 const savePayload = z.object({
   flowId: z.string().nullable(),
@@ -132,10 +132,7 @@ const loadRunPayload = z.object({ runId: z.string() });
 
 const doctorPayload = z.object({ connectors: z.array(z.string()) });
 
-const runBuildPayload = runOptionsSchema.extend({
-  hash: z.string(),
-  inputs: inputsSchema.optional(),
-});
+const runBuildPayload = z.object({ buildId: z.string(), auto: z.boolean().optional() });
 
 const runIdPayload = z.object({ runId: z.string() });
 
@@ -161,10 +158,12 @@ function detachable(store: Store, detached: () => boolean): Store {
     listRuns: () => store.listRuns(),
     events: (id) => store.events(id),
     activity: (id) => store.activity(id),
-    findBuild: (hash) => store.findBuild(hash),
+    findBuild: (id) => store.findBuild(id),
+    findBuildByName: (name) => store.findBuildByName(name),
     listBuilds: () => store.listBuilds(),
-    buildFiles: (hash) => store.buildFiles(hash),
+    buildFiles: (id) => store.buildFiles(id),
     recordBuild: (build) => store.recordBuild(build),
+    deleteBuild: (id) => store.deleteBuild(id),
     append(id, nodeId, event) {
       if (!detached()) store.append(id, nodeId, event);
     },
@@ -177,6 +176,9 @@ function detachable(store: Store, detached: () => boolean): Store {
     reopenRun(id) {
       if (!detached()) store.reopenRun(id);
     },
+    stopRun(id) {
+      if (!detached()) store.stopRun(id);
+    },
     recordActivity(id, entry) {
       if (!detached()) store.recordActivity(id, entry);
     },
@@ -188,7 +190,13 @@ function detachable(store: Store, detached: () => boolean): Store {
 
 type Continuation = { kind: "retry"; nodeId: string } | { kind: "resume" };
 
-export type { BuildFileContent, BuildVersionResult };
+export type BuiltVersion =
+  | { kind: "built"; id: string; hash: string; dir: string }
+  | Extract<BuildVersionResult, { kind: "error" }>;
+
+export type ListedBuild = BuildRecord & { old: boolean };
+
+export type { BuildFileContent };
 
 const saveTo = (
   flows: FlowStore,
@@ -202,19 +210,24 @@ const problemText = ({ node, text }: Problem) => (node === undefined ? text : `$
 const problemsOf = (result: { errors: readonly ValidationError[] }) =>
   plainProblems(result.errors).map(problemText).join("\n");
 
-const refusedBuild = (result: Extract<BuildResult, { ok: false }>): BuildVersionResult => {
+const refusedBuild = (result: Extract<BuildResult, { ok: false }>): BuiltVersion => {
   const problems = plainProblems(result.errors);
   return { kind: "error", message: problems.map(problemText).join("\n"), problems };
 };
 
+const isOld = (build: BuildRecord) => build.name === null;
+
+const isRepo = (state: { kind: string }) => state.kind === "branch" || state.kind === "detached";
+
 function announced(
   opened: OpenedSession,
+  runId: string,
   sessionName: string,
   publish: (push: EnginePush) => void,
   running = false,
 ): OpenedSession {
   let isAnnounced = running;
-  if (running) publish({ push: "session", value: sessionName });
+  if (running) publish({ push: "session", runId, value: sessionName });
   return {
     ...opened,
     session: {
@@ -222,11 +235,11 @@ function announced(
         await opened.session.ensureStarted();
         if (isAnnounced) return;
         isAnnounced = true;
-        publish({ push: "session", value: sessionName });
+        publish({ push: "session", runId, value: sessionName });
       },
     },
     async stop() {
-      if (isAnnounced) publish({ push: "session", value: null });
+      if (isAnnounced) publish({ push: "session", runId, value: null });
       await opened.stop();
     },
   };
@@ -263,42 +276,66 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const newSessionName = options.newSessionName ?? (() => `fd-run-${randomUUID().slice(0, 8)}`);
-  let active: ActiveRun | undefined;
-  let starting: Promise<StartRunResult> | undefined;
+  const active = new Map<string, ActiveRun>();
+  const starting = new Map<string, Promise<StartRunResult>>();
+  const deleting = new Set<string>();
   const notes = new Map<string, string>();
   const sessionAlive = options.sessionAlive ?? (async () => false);
 
   const failure = (message: string): StartRunResult => ({ kind: "error", message });
 
-  const oneAtATime = async (launch: () => Promise<StartRunResult>): Promise<StartRunResult> => {
-    if (active !== undefined || starting !== undefined) {
-      return failure("A run is already in progress");
+  const oneAtATime = async (
+    buildId: string,
+    launch: () => Promise<StartRunResult>,
+  ): Promise<StartRunResult> => {
+    if (active.has(buildId) || starting.has(buildId)) {
+      return failure("A run of this build is already in progress");
     }
-    starting = launch();
+    if (deleting.has(buildId)) return failure("This build is being deleted");
+    const launching = launch();
+    starting.set(buildId, launching);
     try {
-      return await starting;
+      return await launching;
     } finally {
-      starting = undefined;
+      starting.delete(buildId);
     }
+  };
+
+  const startsSettled = () => Promise.allSettled(starting.values());
+
+  const activeRun = (runId: string) => [...active.values()].find((run) => run.runId === runId);
+
+  const waiterFor = (runId: string): HumanWaiter => {
+    const waiter = options.waits?.forRun(runId) ?? options.run.waiter;
+    if (waiter === undefined) throw new Error("The engine has no waiter for a run's questions");
+    return waiter;
   };
 
   const buildFlowVersion = async (
     stores: EngineStores,
-    ref: SavedFlowRef,
-  ): Promise<BuildVersionResult> => {
-    const result = await buildVersion(ref, {
-      flows: stores.flows,
-      store: stores.runs,
-      fs: options.fs,
-      home: options.home,
-      connectors: options.connectors,
-    });
+    { flowId, version, ...request }: z.infer<typeof buildVersionPayload>,
+  ): Promise<BuiltVersion> => {
+    const result = await buildVersion(
+      { flowId, version },
+      {
+        name: request.name,
+        values: request.values as VariableValues,
+        ...(request.repo === undefined ? {} : { repo: request.repo }),
+        ...(request.base === undefined ? {} : { base: request.base }),
+      },
+      {
+        flows: stores.flows,
+        store: stores.runs,
+        fs: options.fs,
+        home: options.home,
+        connectors: options.connectors,
+        gitState: options.gitState,
+        worktree: options.worktree,
+        newId: randomUUID,
+      },
+    );
     if (!result.ok) return refusedBuild(result);
-    for (const { path, problem } of result.restored) {
-      console.log(`engine: build ${result.hash} restored ${path} (${problem})`);
-    }
-    const { hash, dir, reused, restored } = result;
-    return { kind: "built", hash, dir, reused, restored };
+    return { kind: "built", id: result.record.id, hash: result.hash, dir: result.dir };
   };
 
   const withStores = async <T extends { kind: string }>(
@@ -316,6 +353,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   type Execution = {
     stores: EngineStores;
     runId: string;
+    buildId: string;
     manifest: LoadedBuild;
     nodeIds: readonly string[];
     cwd: string;
@@ -329,6 +367,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const startExecution = (launch: Execution): StartRunResult => {
     const run: ActiveRun = {
       runId: launch.runId,
+      buildId: launch.buildId,
       done: Promise.resolve(),
       claudeCalls: new Set(),
     };
@@ -368,6 +407,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     run.done = execute(
       {
         ...options.run,
+        waiter: waiterFor(runId),
         store,
         scripts: {
           run: (command, args, cwd, signal, job) =>
@@ -439,54 +479,19 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       .catch((error: unknown) => {
         console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
       })
-      .finally(async () => {
+      .finally(() => {
         if (isDetached()) return;
-        options.waits?.drop();
-        active = undefined;
-        let status: SnapshotStatus | undefined;
+        options.waits?.drop(runId);
+        if (active.get(run.buildId) === run) active.delete(run.buildId);
         try {
-          status = runs.findRun(runId)?.status;
-          console.log(`engine: run ${runId} ${status ?? "unknown"}`);
+          console.log(`engine: run ${runId} ${runs.findRun(runId)?.status ?? "unknown"}`);
         } catch (error) {
           console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
         }
-        const worktree = runWorktree(manifest.session.workingFolder, options.home, claudeSessionId);
-        if (worktree !== undefined && status !== undefined && removesWorktree(status)) {
-          await removeWorktree(runId, worktree, runs);
-        }
       });
-    active = run;
+    active.set(run.buildId, run);
     console.log(`engine: run ${runId} started`);
     return { kind: "started", runId };
-  };
-
-  const removeWorktree = async (
-    runId: string,
-    worktree: RunWorktree,
-    activity: Pick<Store, "recordActivity" | "activity">,
-  ): Promise<void> => {
-    try {
-      const removal = await options.worktree.remove(worktree);
-      const notice = keptNotice(worktree, removal);
-      if (notice === undefined) {
-        console.log(
-          `engine: run ${runId} removed worktree ${worktree.path} and ${worktree.branch}`,
-        );
-        return;
-      }
-      console.log(`engine: run ${runId} ${notice}`);
-      const entry: ActivityEntry = {
-        id: feedOf(activity.activity(runId)).nextId,
-        nodeId: "",
-        at: options.run.now(),
-        kind: "kept",
-        summary: notice,
-      };
-      activity.recordActivity(runId, entry);
-      options.publish({ push: "activity", value: { runId, entry } });
-    } catch (error) {
-      console.log(`engine: run ${runId} kept worktree ${worktree.path} (${messageOf(error)})`);
-    }
   };
 
   const sessionOptions = async (
@@ -499,38 +504,42 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   ) => ({
     ...session,
     buildDir,
+    layout: manifest.layout,
     model: manifest.session.model,
     hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
     ...(await writeSessionMcpConfig(options.fs, runMcpConfigPath(options.home, runId), servers)),
   });
 
-  type RunBuildOptions = z.infer<typeof runOptionsSchema>;
+  type RunBuildOptions = Omit<z.infer<typeof runBuildPayload>, "buildId">;
 
-  const runBuild = (hash: string, choices: RunBuildOptions): Promise<StartRunResult> =>
-    oneAtATime(() => withStores((stores) => launchBuild(stores, hash, choices)));
+  const runBuild = (buildId: string, choices: RunBuildOptions): Promise<StartRunResult> =>
+    oneAtATime(buildId, () => withStores((stores) => launchBuild(stores, buildId, choices)));
 
   const launchBuild = async (
     stores: EngineStores,
-    hash: string,
+    buildId: string,
     choices: RunBuildOptions,
   ): Promise<StartRunResult> => {
     const { runs } = stores;
-    const built = runs.findBuild(hash);
-    if (built === undefined) return failure(`No build ${hash}`);
-    const loaded = await loadBuild(built.dir, { fs: options.fs });
+    const built = runs.findBuild(buildId);
+    if (built === undefined) return failure(`No build ${buildId}`);
+    if (built.deletedAt !== null) return failure(`Build ${built.name ?? buildId} was deleted.`);
+    if (isOld(built)) {
+      return failure(
+        "This build was made before builds had names and a workspace. Make a new build from this blueprint to run it.",
+      );
+    }
+    if (runs.listRuns().some((run) => run.buildId === buildId && run.status === "running")) {
+      return failure("This build has a run left going. Stop or resume it first.");
+    }
+    const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
-    const clash = optionsClash(manifest);
-    if (clash !== undefined) return failure(clash);
     const connectors = await resolveConnectors(manifest.session.connectors, options.connectors);
     if (!connectors.ok) return failure(problemsOf(connectors));
-    const folder = manifest.session.workingFolder;
-    if (folder.kind === "worktree") {
-      if (!folder.repo) {
-        return failure("Set the session's repository before running a fresh worktree");
-      }
-    } else if (!options.isFolder(folder.path)) {
-      return failure(`Working folder not found: ${folder.path}`);
+    const cwd = manifest.worktree;
+    if (cwd === undefined || !options.isFolder(cwd)) {
+      return failure(`Working folder not found: ${cwd ?? built.dir}`);
     }
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failure(hooks.message);
@@ -538,29 +547,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const socket = runSocketPath(options.home, sessionName);
     if (socket.kind === "error") return failure(socket.message);
     const claudeSessionId = randomUUID();
-    let cwd = folder.kind === "path" ? folder.path : "";
-    const worktree = runWorktree(folder, options.home, claudeSessionId);
-    if (folder.kind === "worktree" && worktree !== undefined) {
-      cwd = worktree.path;
-      await options.worktree.add(worktree);
-      if (!options.isFolder(cwd)) return failure(`Working folder not found: ${cwd}`);
-    }
     const nodeIds = manifest.nodes.map((node) => node.id);
-    const declared = runChoices(manifest).flags;
-    const flags = Object.fromEntries(
-      Object.entries(choices.flags ?? {}).filter(([name]) => name in declared),
-    );
-    const stored = storedOptions({
-      inputs: choices.inputs ?? {},
-      flags,
-      auto: choices.auto ?? false,
-    });
+    const stored = storedOptions({ inputs: {}, flags: {}, auto: choices.auto ?? false });
     const { id: runId } = runs.createRun({
       buildDir: built.dir,
       inputs: stored,
       nodeIds,
       session: { tmuxName: sessionName, cwd, claudeSessionId },
-      buildHash: built.hash,
+      buildId,
     });
     options.publish({
       push: "run-state",
@@ -570,6 +564,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return startExecution({
       stores,
       runId,
+      buildId,
       manifest,
       nodeIds,
       cwd,
@@ -589,6 +584,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
                   connectors.servers,
                 ),
               ),
+              runId,
               sessionName,
               options.publish,
             )
@@ -596,12 +592,24 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     });
   };
 
-  const continueRun = (runId: string, how: Continuation): Promise<StartRunResult> =>
-    oneAtATime(() => withStores((stores) => launchContinuation(stores, runId, how)));
+  const continueRun = async (runId: string, how: Continuation): Promise<StartRunResult> => {
+    let buildId: string | undefined;
+    try {
+      buildId = storesOrThrow().runs.findRun(runId)?.buildId;
+    } catch (error) {
+      return failure(messageOf(error));
+    }
+    if (buildId === undefined) return failure(`No run ${runId}`);
+    const ofBuild = buildId;
+    return oneAtATime(ofBuild, () =>
+      withStores((stores) => launchContinuation(stores, runId, ofBuild, how)),
+    );
+  };
 
   const launchContinuation = async (
     stores: EngineStores,
     runId: string,
+    buildId: string,
     how: Continuation,
   ): Promise<StartRunResult> => {
     const { runs } = stores;
@@ -612,7 +620,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (how.kind === "resume" && status !== "stopped" && status !== "interrupted") {
       return failure("Only a stopped or interrupted run can be resumed");
     }
-    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+    const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
     const events = runs.events(runId);
@@ -672,6 +680,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             ...(attach ? { attach: true } : {}),
             ...(restart ? { resume: true } : {}),
           }),
+          runId,
           sessionName,
           options.publish,
           attach,
@@ -695,6 +704,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return startExecution({
       stores,
       runId,
+      buildId,
       manifest,
       nodeIds: record.nodeIds,
       cwd,
@@ -717,11 +727,21 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const left = runs
       .listRuns()
       .filter((run) => run.status === "running" && !isActive(run.id))
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
-    const record = left === undefined ? undefined : runs.findRun(left.id);
-    if (record === undefined) return;
-    const runId = record.id;
-    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    for (const { id: runId } of left) {
+      try {
+        await reattachRun(runs, runId);
+      } catch (error) {
+        console.log(`engine: run ${runId} not reattached (${messageOf(error)})`);
+        notes.set(runId, `${closedNote} It could not be picked up again: ${messageOf(error)}`);
+      }
+    }
+  };
+
+  const reattachRun = async (runs: Store, runId: string): Promise<void> => {
+    const record = runs.findRun(runId);
+    if (record?.buildId === undefined) return;
+    const loaded = await loadBuild(record.buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") {
       notes.set(runId, `${closedNote} Its build cannot be read: ${loaded.message}`);
       return;
@@ -758,12 +778,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const detach = async (): Promise<void> => {
-    await starting;
-    const run = active;
-    if (run === undefined) return;
-    run.detached = true;
-    await claudeCallsSettled(run);
-    await run.stopEvents?.();
+    await startsSettled();
+    await Promise.all(
+      [...active.values()].map(async (run) => {
+        run.detached = true;
+        await claudeCallsSettled(run);
+        await run.stopEvents?.();
+      }),
+    );
   };
 
   const stopActive = async (run: ActiveRun): Promise<void> => {
@@ -773,17 +795,25 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const stopRun = async (runId: string): Promise<{ stopped: boolean }> => {
-    await starting;
-    const run = active;
-    if (run?.runId !== runId) return { stopped: false };
-    await stopActive(run);
+    await startsSettled();
+    const run = activeRun(runId);
+    if (run !== undefined) {
+      await stopActive(run);
+      return { stopped: true };
+    }
+    const { runs } = storesOrThrow();
+    const record = runs.findRun(runId);
+    if (record?.status !== "running") return { stopped: false };
+    runs.stopRun(runId);
+    const { tmuxName } = record.session;
+    if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
+      await options.endSession?.(tmuxName);
+    }
     return { stopped: true };
   };
 
-  const choicesOf = async ({ runs }: EngineStores, hash: string): Promise<RunChoices> => {
-    const built = runs.findBuild(hash);
-    if (built === undefined) throw new Error(`No build ${hash}`);
-    const loaded = await loadBuild(built.dir, { fs: options.fs });
+  const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
+    const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") throw new Error(loaded.message);
     const clash = optionsClash(loaded.build);
     if (clash !== undefined) throw new Error(clash);
@@ -792,8 +822,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const runCost = async ({ runs }: EngineStores, runId: string): Promise<CostReport> => {
     const record = runs.findRun(runId);
-    if (record === undefined) throw new Error(`No run ${runId}`);
-    const loaded = await loadBuild(record.buildDir, { fs: options.fs });
+    if (record?.buildId === undefined) throw new Error(`No run ${runId}`);
+    const loaded = await loadBuild(record.buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") throw new Error(loaded.message);
     const events = runs.events(runId);
     const live = isActive(runId);
@@ -812,11 +842,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return costReport({ nodeIds: record.nodeIds, events, pending, now });
   };
 
-  const buildFiles = async (stores: EngineStores, hash: string): Promise<BuildFileContent[]> => {
-    const built = stores.runs.findBuild(hash);
-    if (built === undefined) throw new Error(`No build ${hash}`);
+  const buildFiles = async (stores: EngineStores, buildId: string): Promise<BuildFileContent[]> => {
+    const built = stores.runs.findBuild(buildId);
+    if (built === undefined) throw new Error(`No build ${buildId}`);
     return Promise.all(
-      stores.runs.buildFiles(hash).map(async (file) => ({
+      stores.runs.buildFiles(buildId).map(async (file) => ({
         ...file,
         content: await options.fs.readFile(`${built.dir}/${file.path}`),
       })),
@@ -841,7 +871,45 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return { flowId, name: found.name, version: null, flow: null };
   };
 
-  const isActive = (runId: string) => runId === active?.runId;
+  const isActive = (runId: string) => activeRun(runId) !== undefined;
+
+  const listBuilds = (runs: Store): ListedBuild[] =>
+    runs.listBuilds().map((build) => ({ ...build, old: isOld(build) }));
+
+  const removeBuild = async (
+    { runs }: EngineStores,
+    buildId: string,
+  ): Promise<DeleteBuildResult> => {
+    if (active.has(buildId) || starting.has(buildId)) {
+      return {
+        ok: false,
+        message: "A run of this build is in progress. Stop it before deleting the build.",
+      };
+    }
+    deleting.add(buildId);
+    try {
+      return await deleteBuild(
+        { store: runs, worktree: options.worktree, fs: options.fs, home: options.home },
+        buildId,
+      );
+    } finally {
+      deleting.delete(buildId);
+    }
+  };
+
+  const leftWorktrees = async (): Promise<string[]> => {
+    const folder = join(options.home, "worktrees");
+    return (await options.fs.folders(folder)).map((name) => join(folder, name));
+  };
+
+  const workspaceInfo = async ({ repo, base }: BuildConfig) => {
+    if (!repo) return null;
+    const state = await options.gitState.read(repo);
+    return {
+      state,
+      base: base ?? (isRepo(state) ? await options.gitState.defaultBranch(repo) : null),
+    };
+  };
 
   const listed = (summary: RunSummary): ListedRun =>
     summary.status === "running" && !isActive(summary.id)
@@ -902,9 +970,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     detach,
     reattach,
     async stop() {
-      await starting;
-      const run = active;
-      if (run !== undefined) await stopActive(run);
+      await startsSettled();
+      await Promise.all([...active.values()].map(stopActive));
     },
     async handle(request) {
       switch (request.type) {
@@ -939,34 +1006,25 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return { id: request.id, ok: true, value };
         }
         case "list-builds":
-          try {
-            return { id: request.id, ok: true, value: storesOrThrow().runs.listBuilds() };
-          } catch (error) {
-            return { id: request.id, ok: false, error: messageOf(error) };
-          }
-        case "build-files": {
-          const parsed = buildFilesPayload.safeParse(request.payload);
-          if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
-          try {
-            return {
-              id: request.id,
-              ok: true,
-              value: await buildFiles(storesOrThrow(), parsed.data.hash),
-            };
-          } catch (error) {
-            return { id: request.id, ok: false, error: messageOf(error) };
-          }
-        }
+          return answer(request.id, () => listBuilds(storesOrThrow().runs));
+        case "build-files":
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            buildFiles(storesOrThrow(), buildId),
+          );
+        case "delete-build":
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            removeBuild(storesOrThrow(), buildId),
+          );
         case "run-build": {
           const parsed = runBuildPayload.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
-          const { hash, ...choices } = parsed.data;
-          const value = await runBuild(hash, choices);
+          const { buildId, ...choices } = parsed.data;
+          const value = await runBuild(buildId, choices);
           return { id: request.id, ok: true, value };
         }
         case "run-options":
-          return parsedAnswer(request, buildFilesPayload, ({ hash }) =>
-            choicesOf(storesOrThrow(), hash),
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            choicesOf(storesOrThrow(), buildId),
           );
         case "stop-run":
           return parsedAnswer(request, runIdPayload, ({ runId }) => stopRun(runId));
@@ -983,21 +1041,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             runCost(storesOrThrow(), runId),
           );
         case "list-branches":
-          return parsedAnswer(request, listBranchesPayload, ({ repo }) =>
-            options.gitState.branches(repo),
+          return parsedAnswer(request, repoPayload, ({ repo }) => options.gitState.branches(repo));
+        case "workspace-info":
+          return parsedAnswer(request, workspaceInfoPayload, ({ buildConfig }) =>
+            workspaceInfo(buildConfig),
           );
-        case "workspace-info": {
-          const parsed = workspaceInfoPayload.safeParse(request.payload);
-          if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };
-          const folder = parsed.data.workingFolder;
-          try {
-            const value: FolderState | null =
-              folder.kind === "path" ? await options.gitState.read(folder.path) : null;
-            return { id: request.id, ok: true, value };
-          } catch (error) {
-            return { id: request.id, ok: false, error: messageOf(error) };
-          }
-        }
+        case "doctor-worktrees":
+          return answer(request.id, leftWorktrees);
+        case "default-branch":
+          return parsedAnswer(request, repoPayload, ({ repo }) =>
+            options.gitState.defaultBranch(repo),
+          );
         case "answer-wait": {
           const parsed = waitAnswerSchema.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

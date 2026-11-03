@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { CliWaiter } from "../../src/cli/cli-waiter.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { transcriptTail } from "../fixtures/live-evidence.js";
 import {
@@ -20,8 +18,10 @@ import {
   type ContentBlock,
   type TranscriptEntry,
 } from "../fixtures/live-claude.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
+const buildName = "live-permission";
 const questionWithinMs = 120_000;
 const unattendedHoldMs = 5000;
 
@@ -40,7 +40,7 @@ function liveFlow(instructions: string) {
         label: "Start",
         type: "trigger",
         position: at(0),
-        settings: { inputs: [], flags: {} },
+        settings: {},
       },
       { id: "p1", label: "Run", type: "prompt", position: at(1), settings: { instructions } },
       {
@@ -54,7 +54,7 @@ function liveFlow(instructions: string) {
     wires: [then("t", "p1"), then("p1", "o")],
     session: {
       name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
+      buildConfig: { base: "main", variables: [] },
       model: "haiku",
       allowedTools: ["Read", "Edit"],
       permissionMode: "default",
@@ -78,17 +78,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
   const claude = new ClaudeCli({ sessions: new TmuxSessionHost() });
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let sessionIds: string[];
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
     sessionIds = [];
   });
 
   afterEach(async () => {
     await killTmuxServer(sessionName);
-    await removeClaudeSessions(repo.path, sessionIds);
+    await removeClaudeSessions(workspace.workFolder, sessionIds);
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -98,17 +100,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
     { timeout: 420_000 },
     async () => {
       const token = `fd-perm-${randomUUID().slice(0, 8)}`;
-
-      const built = await build(
-        liveFlow(
-          `Run the Bash command \`node -e "console.log('${token}')"\` and reply with its output.`,
-        ),
-        {
-          fs: new NodeFileSystem(),
-          home,
-        },
-      );
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
 
       const transcript = async () => {
         const sessionId = sessionIds[0];
@@ -150,10 +141,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
         },
       };
 
-      const exit = runCli(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
+      await cliBuild(
+        liveFlow(
+          `Run the Bash command \`node -e "console.log('${token}')"\` and reply with its output.`,
+        ),
+        { name: buildName, repo: repo.path },
+        workspace,
         deps,
       );
+
+      const exit = runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps);
       const noQuestion = sleep(questionWithinMs).then(() => "none" as const);
       const first = await Promise.race([question.then(() => "asked" as const), noQuestion]);
       if (first === "none") {

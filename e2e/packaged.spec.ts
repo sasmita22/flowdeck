@@ -13,6 +13,7 @@ import { flow, script, thenWire, trigger } from "../test/fixtures/flow-builders.
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
+import { buildAndRun } from "./build-run.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultAppPath = join(repoRoot, "out", "Flowdeck-darwin-arm64", "Flowdeck.app");
@@ -181,7 +182,7 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   test.setTimeout(120_000);
   const home = await mkdtemp(join(tmpdir(), "fd-packaged-home-"));
   tempDirs.push(home);
-  const repo = await createTmpRepo();
+  const repo = await createTmpRepo({ commit: true });
   tempDirs.push(repo.path);
   seedFlow(
     home,
@@ -193,8 +194,8 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   );
 
   const { window, quit: quitCopy } = await launchCopy(home);
-  await expect(window.getByTestId("canvas-run")).toBeVisible();
-  await window.getByTestId("canvas-run").click();
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
+  await buildAndRun(window, home, "packaged");
 
   const runError = window.getByTestId("run-error");
   const scriptStatus = window.getByTestId("node-status-s");

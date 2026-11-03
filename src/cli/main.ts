@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeCli } from "../adapters/claude/claude-cli.js";
@@ -14,19 +14,20 @@ import { TranscriptUsage } from "../adapters/claude/transcript-usage.js";
 import { CliWaiter, stdinLines } from "./cli-waiter.js";
 import { HookSocketServer } from "../adapters/hook-socket/hook-socket-server.js";
 import { openClaudeSession } from "../adapters/claude/claude-session.js";
+import { GitFolderState } from "../adapters/git/git-state.js";
+import { GitWorktree } from "../adapters/git/worktree.js";
 import { NodeFileSystem } from "../adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../adapters/sqlite/flows.js";
 import { openDatabase } from "../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../adapters/sqlite/sqlite-store.js";
 import { assertSessionName, TmuxSessionHost } from "../adapters/tmux/tmux-session-host.js";
-import { build, type BuildResult } from "../core/compiler/build.js";
-import { buildVersion } from "../core/compiler/build-version.js";
+import type { BuildResult } from "../core/compiler/build.js";
+import { buildFlow, buildVersion } from "../core/compiler/build-version.js";
 import { resolveConnectors, type McpServer } from "../core/compiler/connectors.js";
 import type { HookPaths } from "../core/compiler/hook-settings.js";
-import { buildRecord } from "../core/compiler/record.js";
-import { FlowParseError, parseFlow } from "../core/flow/schema.js";
-import { triggerFlags } from "../core/nodes/branch/execute.js";
+import { FlowParseError, parseFlow, type BuildConfig, type Flow } from "../core/flow/schema.js";
+import type { VariableValues } from "../core/flow/variables.js";
 import {
   execute,
   loadBuild,
@@ -38,17 +39,20 @@ import {
   type OpenedSession,
   type OpenSessionOptions,
 } from "../core/run/execute.js";
-import { storedAuto } from "../core/run/options.js";
+import { storedAuto, storedFlags } from "../core/run/options.js";
+import { BuildRunningError } from "../core/run/store.js";
 import { decideResume, type TranscriptTurn } from "../core/run/resume.js";
 import type { TurnEvents } from "../core/run/turns.js";
 import type { ConnectorSource } from "../ports/connector-source.js";
 import type { FileSystem } from "../ports/file-system.js";
 import type { FlowStore } from "../ports/flow-store.js";
+import type { GitState } from "../ports/git-state.js";
 import type { ProcessRunner } from "../ports/process-runner.js";
 import type { Store } from "../ports/store.js";
 import type { PermissionSource } from "../ports/permission-source.js";
 import type { UsageSource } from "../ports/usage-source.js";
 import type { Waiter } from "../ports/waiter.js";
+import type { Worktree } from "../ports/worktree.js";
 
 export type CliDeps = {
   env: Record<string, string | undefined>;
@@ -66,15 +70,21 @@ export type CliDeps = {
   connectors: ConnectorSource;
   openStore(path: string): { runs: Store; flows: FlowStore };
   transcriptTurns(claudeSessionId: string): Promise<TranscriptTurn[]>;
+  gitState: GitState;
+  worktree: Worktree;
+  newId: () => string;
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
 };
 
+const buildOptions =
+  "--name <build-name> [--repo <repo>] [--base <branch>] [--var <name=value>]...";
+
 const usage = [
   "Usage:",
-  "  flowdeck build <flow.json>",
-  "  flowdeck build --flow <id> --version <n>",
-  "  flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
+  `  flowdeck build <flow.json> ${buildOptions}`,
+  `  flowdeck build --flow <id> --version <n> ${buildOptions}`,
+  "  flowdeck run <build-name> [--session <fd-name>] [--model <model>] [--auto]",
   "  flowdeck resume <id> [--auto | --no-auto]",
 ];
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -96,44 +106,101 @@ const report = (result: BuildResult, deps: CliDeps): number => {
     for (const error of result.errors) deps.stderr(`${error.rule}: ${error.message}`);
     return 2;
   }
-  for (const { path, problem } of result.restored) deps.stderr(`restored ${path} (${problem})`);
   deps.stdout(`hash ${result.hash}`);
   deps.stdout(`dir ${result.dir}`);
   return 0;
 };
+
+function splitVars(vars: readonly string[]): [string, string][] {
+  return vars.map((entry) => {
+    const at = entry.indexOf("=");
+    if (at <= 0) throw new UsageError();
+    return [entry.slice(0, at), entry.slice(at + 1)];
+  });
+}
+
+function variableValues(
+  vars: readonly [string, string][],
+  buildConfig: BuildConfig | undefined,
+): { values: VariableValues } | { error: string } {
+  const values: Record<string, string | boolean> = {};
+  for (const [name, text] of vars) {
+    const declared = buildConfig?.variables.find((variable) => variable.name === name);
+    if (buildConfig !== undefined && declared === undefined) {
+      const names = buildConfig.variables.map((variable) => variable.name);
+      return {
+        error: `build-values: ${name} is not a variable of this blueprint; it declares ${names.length === 0 ? "none" : names.join(", ")}.`,
+      };
+    }
+    if (declared?.kind !== "yesno") {
+      values[name] = text;
+    } else if (text === "yes" || text === "no") {
+      values[name] = text === "yes";
+    } else {
+      return {
+        error: `build-values: ${name} is a yes/no variable; give yes or no, not "${text}".`,
+      };
+    }
+  }
+  return { values };
+}
 
 async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
     strict: true,
-    options: { flow: { type: "string" }, version: { type: "string" } },
+    options: {
+      flow: { type: "string" },
+      version: { type: "string" },
+      name: { type: "string" },
+      repo: { type: "string" },
+      base: { type: "string" },
+      var: { type: "string", multiple: true },
+    },
   });
-  const home = flowdeckHome(deps.env);
-  if (values.flow !== undefined || values.version !== undefined) {
-    const version = Number(values.version);
-    if (values.flow === undefined || positionals.length > 0 || !Number.isInteger(version)) {
-      throw new UsageError();
-    }
-    const { runs, flows } = deps.openStore(storePath(deps.env));
-    const result = await buildVersion(
-      { flowId: values.flow, version },
-      { flows, store: runs, fs: deps.fs, home, connectors: deps.connectors },
-    );
-    return report(result, deps);
-  }
+  const byVersion = values.flow !== undefined || values.version !== undefined;
+  const version = Number(values.version);
   const [flowPath, ...rest] = positionals;
-  if (flowPath === undefined || rest.length > 0) throw new UsageError();
-  let flow;
-  try {
-    flow = parseFlow(JSON.parse(await deps.fs.readFile(flowPath)));
-  } catch (error) {
-    if (!(error instanceof SyntaxError || error instanceof FlowParseError)) throw error;
-    deps.stderr(`${flowPath}: ${error.message}`);
+  const misused = byVersion
+    ? values.flow === undefined || positionals.length > 0 || !Number.isInteger(version)
+    : flowPath === undefined || rest.length > 0;
+  if (misused || values.name === undefined) throw new UsageError();
+  const vars = splitVars(values.var ?? []);
+  const { runs, flows } = deps.openStore(storePath(deps.env));
+  const buildDeps = {
+    ...deps,
+    home: flowdeckHome(deps.env),
+    store: runs,
+    flows,
+  };
+  let flow: Flow | undefined;
+  if (!byVersion) {
+    try {
+      flow = parseFlow(JSON.parse(await deps.fs.readFile(flowPath ?? "")));
+    } catch (error) {
+      if (!(error instanceof SyntaxError || error instanceof FlowParseError)) throw error;
+      deps.stderr(`${flowPath}: ${error.message}`);
+      return 2;
+    }
+  }
+  const ref = { flowId: values.flow ?? "", version };
+  const buildConfig = (flow ?? flows.load(ref)?.flow)?.session.buildConfig;
+  const parsed = variableValues(vars, buildConfig);
+  if ("error" in parsed) {
+    deps.stderr(parsed.error);
     return 2;
   }
-  const result = await build(flow, { fs: deps.fs, home, connectors: deps.connectors });
-  if (result.ok) deps.openStore(storePath(deps.env)).runs.recordBuild(result.record);
+  const request = {
+    name: values.name,
+    values: parsed.values,
+    ...(values.repo === undefined ? {} : { repo: values.repo }),
+    ...(values.base === undefined ? {} : { base: values.base }),
+  };
+  const result =
+    flow === undefined
+      ? await buildVersion(ref, request, buildDeps)
+      : await buildFlow(flow, request, buildDeps);
   return report(result, deps);
 }
 
@@ -142,40 +209,6 @@ const executeDeps = (deps: CliDeps, store: Store) => ({ ...deps, store, onChange
 const writeLines = (write: (line: string) => void, text: string) => {
   for (const line of text.split("\n")) write(line);
 };
-
-const runOptions = {
-  cwd: { type: "string" },
-  session: { type: "string" },
-  model: { type: "string" },
-  auto: { type: "boolean" },
-} as const;
-
-function parseRun(args: string[], flagNames: readonly string[]) {
-  const { positionals, values, tokens } = parseArgs({
-    args,
-    allowPositionals: true,
-    strict: true,
-    allowNegative: true,
-    tokens: true,
-    options: {
-      ...Object.fromEntries(flagNames.map((name) => [name, { type: "boolean" as const }])),
-      ...runOptions,
-    },
-  });
-  const negatedBuiltIn = tokens.some(
-    (token) =>
-      token.kind === "option" && token.name in runOptions && token.rawName.startsWith("--no-"),
-  );
-  if (negatedBuiltIn) throw new UsageError();
-  const parsed: Record<string, string | boolean | undefined> = values;
-  const flags = Object.fromEntries(
-    flagNames.flatMap((name) => {
-      const value = parsed[name];
-      return typeof value === "boolean" ? [[name, value]] : [];
-    }),
-  );
-  return { positionals, values, flags };
-}
 
 async function connectorsOrReport(
   manifest: LoadedBuild,
@@ -188,25 +221,18 @@ async function connectorsOrReport(
 }
 
 async function runCommand(args: string[], deps: CliDeps): Promise<number> {
-  const [looseBuildArg] = parseArgs({
+  const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
-    strict: false,
-    options: runOptions,
-  }).positionals;
-  const loaded =
-    looseBuildArg === undefined ? undefined : await loadBuild(resolve(looseBuildArg), deps);
-  const declared = loaded?.kind === "loaded" ? triggerFlags(loaded.build.nodes) : {};
-  const clash = Object.keys(declared).find((name) => name in runOptions);
-  if (clash !== undefined) {
-    deps.stderr(`Trigger flag "${clash}" clashes with the built-in option --${clash}`);
-    return 2;
-  }
-  const { positionals, values, flags } = parseRun(args, Object.keys(declared));
-  const [buildArg, ...rest] = positionals;
-  if (buildArg === undefined || rest.length > 0 || values.cwd === undefined) throw new UsageError();
-  const buildDir = resolve(buildArg);
-  const cwd = resolve(values.cwd);
+    strict: true,
+    options: {
+      session: { type: "string" },
+      model: { type: "string" },
+      auto: { type: "boolean" },
+    },
+  });
+  const [buildName, ...rest] = positionals;
+  if (buildName === undefined || rest.length > 0) throw new UsageError();
   const sessionName = values.session ?? `fd-run-${randomUUID().slice(0, 8)}`;
   try {
     assertSessionName(sessionName);
@@ -220,23 +246,50 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     return 2;
   }
   const socketPath = socket.path;
-  if (loaded === undefined || loaded.kind === "error") {
-    writeLines(deps.stderr, loaded?.message ?? "");
+  const store = deps.openStore(storePath(deps.env)).runs;
+  const built = store.findBuildByName(buildName) ?? store.findBuild(buildName);
+  if (built === undefined) {
+    deps.stderr(`No build named ${buildName}`);
+    return 2;
+  }
+  if (built.deletedAt !== null) {
+    deps.stderr(`Build ${built.name ?? buildName} was deleted.`);
+    return 2;
+  }
+  if (built.name === null) {
+    deps.stderr(
+      "This build was made before builds had names and a workspace. Make a new build from this blueprint to run it.",
+    );
+    return 2;
+  }
+  const loaded = await loadBuild(built.id, { fs: deps.fs, store });
+  if (loaded.kind === "error") {
+    writeLines(deps.stderr, loaded.message);
     return 2;
   }
   const manifest = loaded.build;
+  const cwd = manifest.worktree;
+  if (cwd === undefined) {
+    deps.stderr(`Working folder not found for build ${buildName}`);
+    return 2;
+  }
   const servers = await connectorsOrReport(manifest, deps);
   if (servers === undefined) return 2;
-  const store = deps.openStore(storePath(deps.env)).runs;
-  store.recordBuild(buildRecord(buildDir, await deps.fs.readFile(`${buildDir}/manifest.json`)));
   const claudeSessionId = randomUUID();
-  const run = store.createRun({
-    buildDir,
-    inputs: { ...values },
-    nodeIds: manifest.nodes.map((node) => node.id),
-    session: { tmuxName: sessionName, cwd, claudeSessionId },
-    buildHash: manifest.hash,
-  });
+  let run;
+  try {
+    run = store.createRun({
+      buildDir: built.dir,
+      inputs: { ...values },
+      nodeIds: manifest.nodes.map((node) => node.id),
+      session: { tmuxName: sessionName, cwd, claudeSessionId },
+      buildId: built.id,
+    });
+  } catch (error) {
+    if (!(error instanceof BuildRunningError)) throw error;
+    deps.stderr(`Build ${buildName} has a run left running. Stop or resume it first.`);
+    return 2;
+  }
   deps.stderr(`run ${run.id}`);
   return execute(executeDeps(deps, store), {
     store,
@@ -244,13 +297,13 @@ async function runCommand(args: string[], deps: CliDeps): Promise<number> {
     manifest,
     cwd,
     auto: values.auto ?? false,
-    flags,
     socketPath,
     open: async () =>
       needsClaude(manifest)
         ? deps.openSession({
             sessionName,
-            buildDir,
+            buildDir: built.dir,
+            layout: manifest.layout,
             model: values.model ?? manifest.session.model,
             socketPath,
             cwd,
@@ -286,7 +339,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     deps.stderr(`run ${runId} already ${run.status}`);
     return 0;
   }
-  const loaded = await loadBuild(run.buildDir, deps);
+  const loaded = await loadBuild(run.buildId ?? "", { fs: deps.fs, store });
   if (loaded.kind === "error") {
     writeLines(deps.stderr, loaded.message);
     return 2;
@@ -294,12 +347,6 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
   const manifest = loaded.build;
   const servers = await connectorsOrReport(manifest, deps);
   if (servers === undefined) return 2;
-  const flags = Object.fromEntries(
-    Object.keys(triggerFlags(manifest.nodes)).flatMap((name) => {
-      const value = run.inputs[name];
-      return typeof value === "boolean" ? [[name, value]] : [];
-    }),
-  );
   const { tmuxName: sessionName, cwd, claudeSessionId } = run.session;
   const socketPath = `${flowdeckHome(deps.env)}/sockets/${sessionName}.sock`;
   const model = run.inputs["model"];
@@ -308,6 +355,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     ? await deps.openSession({
         sessionName,
         buildDir: run.buildDir,
+        layout: manifest.layout,
         model: typeof model === "string" ? model : manifest.session.model,
         socketPath,
         cwd,
@@ -327,7 +375,7 @@ async function resumeCommand(args: string[], deps: CliDeps): Promise<number> {
     manifest,
     cwd,
     auto: values.auto ?? storedAuto(run.inputs),
-    flags,
+    flags: storedFlags(run.inputs, manifest),
     socketPath,
     open: async () => opened,
     actions: async () =>
@@ -363,6 +411,9 @@ export function realDeps(): CliDeps {
     stdout: (line) => process.stdout.write(`${line}\n`),
     stderr: (line) => process.stderr.write(`${line}\n`),
     fs: new NodeFileSystem(),
+    gitState: new GitFolderState(),
+    worktree: new GitWorktree(),
+    newId: randomUUID,
     scripts: new NodeProcessRunner(),
     waiter: new CliWaiter({
       readLine: stdinLines(process.stdin),

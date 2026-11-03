@@ -420,15 +420,16 @@ describe("selectNodeIssues", () => {
 describe("selectSessionIssues", () => {
   it("maps each session field the validator names to its message", () => {
     expect(selectSessionIssues(newCanvasFlow())).toEqual({
-      "workingFolder.path": "Choose the folder this blueprint works in, in the session settings.",
+      "buildConfig.repo":
+        "Choose the repository this blueprint builds from, in the session settings. Build is refused until one is set.",
     });
   });
 
-  it("is empty once the folder is set", () => {
+  it("is empty once the repository is set", () => {
     const base = newCanvasFlow();
     const set = {
       ...base,
-      session: { ...base.session, workingFolder: { kind: "path" as const, path: "/w" } },
+      session: { ...base.session, buildConfig: { repo: "/w", variables: [] } },
     };
 
     expect(selectSessionIssues(set)).toEqual({});

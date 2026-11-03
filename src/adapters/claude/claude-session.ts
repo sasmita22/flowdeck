@@ -20,6 +20,7 @@ export async function openClaudeSession(
     model,
     socketPath,
     cwd,
+    layout,
     hooks,
     mcpConfigPath,
     attach,
@@ -30,6 +31,10 @@ export async function openClaudeSession(
   if (attach === true && !(await sessions.has(sessionName))) {
     throw new SessionGoneError(sessionName);
   }
+  const buildFiles =
+    layout === "workspace"
+      ? { settingsPath: "../settings.json", pluginDir: "../plugin", addDir: ".." }
+      : { settingsPath: join(buildDir, "settings.json"), pluginDir: buildDir };
   let closed = false;
   let started = attach === true;
   let starting: Promise<void> | undefined;
@@ -40,8 +45,7 @@ export async function openClaudeSession(
         cwd,
         { sessionId, model, ...(resume === true ? { resume } : {}) },
         {
-          settingsPath: join(buildDir, "settings.json"),
-          pluginDir: buildDir,
+          ...buildFiles,
           ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }),
           env: {
             FLOWDECK_SOCK: socketPath,

@@ -5,7 +5,11 @@ export class FakeGitState implements GitState {
 
   constructor(
     private readonly states: Record<string, FolderState> = {},
-    private readonly options: { failWith?: string; branches?: Record<string, string[]> } = {},
+    private readonly options: {
+      failWith?: string;
+      branches?: Record<string, string[]>;
+      defaultBranches?: Record<string, string>;
+    } = {},
   ) {}
 
   async read(folder: string): Promise<FolderState> {
@@ -17,5 +21,10 @@ export class FakeGitState implements GitState {
   async branches(repo: string): Promise<string[]> {
     if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
     return this.options.branches?.[repo] ?? [];
+  }
+
+  async defaultBranch(repo: string): Promise<string> {
+    if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
+    return this.options.defaultBranches?.[repo] ?? "main";
   }
 }

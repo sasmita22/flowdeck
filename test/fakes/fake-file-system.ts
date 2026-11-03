@@ -1,7 +1,15 @@
 import type { FileSystem } from "../../src/ports/file-system.js";
 
 export type FileSystemCall = {
-  method: "exists" | "writeFile" | "writePrivateFile" | "readFile" | "list" | "remove";
+  method:
+    | "exists"
+    | "writeFile"
+    | "writePrivateFile"
+    | "readFile"
+    | "list"
+    | "folders"
+    | "remove"
+    | "removeTree";
   path: string;
 };
 
@@ -38,7 +46,9 @@ export class FakeFileSystem implements FileSystem {
   async readFile(path: string): Promise<string> {
     this.calls.push({ method: "readFile", path });
     const content = this.files.get(path);
-    if (content === undefined) throw new Error(`No such file: ${path}`);
+    if (content === undefined) {
+      throw Object.assign(new Error(`No such file: ${path}`), { code: "ENOENT" });
+    }
     return content;
   }
 
@@ -46,6 +56,16 @@ export class FakeFileSystem implements FileSystem {
     this.calls.push({ method: "remove", path });
     this.files.delete(path);
     this.privatePaths.delete(path);
+  }
+
+  async removeTree(path: string, { keep }: { keep?: string } = {}): Promise<void> {
+    this.calls.push({ method: "removeTree", path });
+    for (const child of this.under(path)) {
+      const file = `${path}/${child}`;
+      if (keep !== undefined && file.startsWith(`${keep}/`)) continue;
+      this.files.delete(file);
+      this.privatePaths.delete(file);
+    }
   }
 
   async list(dir: string): Promise<string[]> {
@@ -57,6 +77,15 @@ export class FakeFileSystem implements FileSystem {
       });
     }
     return files.sort();
+  }
+
+  async folders(dir: string): Promise<string[]> {
+    this.calls.push({ method: "folders", path: dir });
+    const names = this.under(dir).flatMap((path) => {
+      const slash = path.indexOf("/");
+      return slash === -1 ? [] : [path.slice(0, slash)];
+    });
+    return [...new Set(names)].sort();
   }
 
   private under(dir: string): string[] {

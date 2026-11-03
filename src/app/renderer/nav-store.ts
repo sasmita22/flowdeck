@@ -3,7 +3,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 export type Page =
   | { name: "editor" }
   | { name: "blueprints" }
-  | { name: "builds"; hash?: string }
+  | { name: "builds"; buildId?: string }
   | { name: "runs" }
   | { name: "run"; runId: string }
   | { name: "doctor" };
@@ -48,7 +48,7 @@ export const selectMenuItem = (page: Page): MenuItemId => {
 export const isListPage = (page: Page): boolean =>
   page.name === "blueprints" ||
   page.name === "runs" ||
-  (page.name === "builds" && page.hash === undefined);
+  (page.name === "builds" && page.buildId === undefined);
 
 export function arrange<T>(
   items: readonly T[],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { saveFlowResultSchema } from "../../../src/core/flow/flow-store.js";
+import { flowSummarySchema, saveFlowResultSchema } from "../../../src/core/flow/flow-store.js";
 
 describe("saveFlowResultSchema", () => {
   it.each([
@@ -19,5 +19,44 @@ describe("saveFlowResultSchema", () => {
     ["a string", "saved"],
   ])("rejects %s", (_, input) => {
     expect(saveFlowResultSchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe("flowSummarySchema", () => {
+  const summary = {
+    flowId: "f1",
+    name: "Bugfix",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    versions: 2,
+    lastSavedAt: "2026-01-02T00:00:00.000Z",
+  };
+
+  it("keeps the repo, base and variables of the latest version's Build configuration", () => {
+    const buildConfig = {
+      repo: "/r/shop",
+      base: "dev",
+      variables: [{ name: "ticket", kind: "text" }],
+    };
+
+    expect(flowSummarySchema.parse({ ...summary, buildConfig })).toEqual({
+      ...summary,
+      buildConfig,
+    });
+  });
+
+  it("accepts a blueprint with no saved version and so no Build configuration", () => {
+    const empty = { ...summary, versions: 0, lastSavedAt: null, buildConfig: null };
+
+    expect(flowSummarySchema.parse(empty)).toEqual(empty);
+  });
+
+  it("carries no working folder", () => {
+    const parsed = flowSummarySchema.parse({
+      ...summary,
+      buildConfig: { base: "main", variables: [] },
+      workingFolder: { kind: "worktree", branch: "main" },
+    });
+
+    expect(parsed).not.toHaveProperty("workingFolder");
   });
 });

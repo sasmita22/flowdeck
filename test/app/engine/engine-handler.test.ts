@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { appendFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
@@ -17,8 +17,9 @@ import {
 } from "../../../src/app/engine/engine-handler.js";
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
+import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
+import { hashBuild } from "../../../src/core/compiler/hash.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import type { BuildVersionResult } from "../../../src/core/run/listing.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -52,6 +53,11 @@ const branches = (repo: string): Promise<string> =>
   git(repo, "branch", "--list", "--format=%(refname:short)");
 
 const stores = (flows = new FakeFlowStore()) => ({ runs: new FakeStore(), flows });
+
+const gitAt = (...repos: string[]) =>
+  new FakeGitState(
+    Object.fromEntries(repos.map((repo) => [repo, { kind: "branch" as const, name: "main" }])),
+  );
 
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
@@ -394,18 +400,27 @@ describe("createEngineHandler", async () => {
       flows.create("Report");
       const { version } = flows.save(flow([script("s1"), script("s2")], []), "flow-a");
       runs.recordBuild({
+        id: "b1",
         hash: "h1",
-        dir: "/fd-home/builds/h1",
+        name: "report",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: "/fd-home/workspaces/b1",
         source: { flowId: "flow-a", version },
         files: [],
         nodes: [],
       });
       const { id } = runs.createRun({
-        buildDir: "/fd-home/builds/h1",
+        buildDir: "/fd-home/workspaces/b1",
         inputs: {},
         nodeIds: ["s1", "s2"],
-        session: { tmuxName: "fd-run-x", cwd: "/repo", claudeSessionId: "c1" },
-        buildHash: "h1",
+        session: {
+          tmuxName: "fd-run-x",
+          cwd: "/fd-home/workspaces/b1/repo",
+          claudeSessionId: "c1",
+        },
+        buildId: "b1",
       });
       runs.append(id, "s1", { kind: "sent" });
       runs.append(id, "s1", { kind: "done" });
@@ -413,7 +428,7 @@ describe("createEngineHandler", async () => {
       return { flows, runs, runId: id };
     };
 
-    it("lists runs with the blueprint version their build came from", async () => {
+    it("lists runs with the build and the blueprint version they came from", async () => {
       const { flows, runs, runId } = seededRun();
       const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
 
@@ -424,7 +439,7 @@ describe("createEngineHandler", async () => {
           expect.objectContaining({
             id: runId,
             status: "failed",
-            buildHash: "h1",
+            buildId: "b1",
             source: { flowId: "flow-a", version: 1 },
           }),
         ],
@@ -454,11 +469,15 @@ describe("createEngineHandler", async () => {
     it("shows a run left running by an earlier session as interrupted, in the list and on its own", async () => {
       const { flows, runs } = seededRun();
       const { id: stale } = runs.createRun({
-        buildDir: "/fd-home/builds/h1",
+        buildDir: "/fd-home/workspaces/b1",
         inputs: {},
         nodeIds: ["s1", "s2"],
-        session: { tmuxName: "fd-run-y", cwd: "/repo", claudeSessionId: "c2" },
-        buildHash: "h1",
+        session: {
+          tmuxName: "fd-run-y",
+          cwd: "/fd-home/workspaces/b1/repo",
+          claudeSessionId: "c2",
+        },
+        buildId: "b1",
       });
       runs.append(stale, "s1", { kind: "sent" });
       const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
@@ -533,13 +552,14 @@ describe("createEngineHandler", async () => {
     let pushes: EnginePush[];
     let handler: ReturnType<typeof createEngineHandler>;
     let nextId: number;
+    let names: number;
 
-    const inFolder = (input: Flow, workingFolder: Flow["session"]["workingFolder"]): Flow => ({
+    const inFolder = (input: Flow, buildConfig: Flow["session"]["buildConfig"]): Flow => ({
       ...input,
-      session: { ...input.session, workingFolder },
+      session: { ...input.session, buildConfig },
     });
 
-    const atRepo = (input: Flow): Flow => inFolder(input, { kind: "path", path: repo.path });
+    const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path, variables: [] });
 
     const twoScripts = () =>
       atRepo(
@@ -572,42 +592,53 @@ describe("createEngineHandler", async () => {
             nodePath: process.execPath,
             hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
           }),
+          gitState: gitAt(repo.path),
           ...overrides,
         }),
       );
 
     type Started = { kind: "started"; runId: string } | { kind: "error"; message: string };
 
-    const latestBuild = async (): Promise<BuildVersionResult> => {
+    type Built =
+      | { kind: "built"; id: string; hash: string; dir: string }
+      | { kind: "error"; message: string; problems?: unknown[] };
+
+    const buildLatest = async (request: Record<string, unknown> = {}): Promise<Built> => {
       const opened = await handler.handle({ id: nextId++, type: "open-flow", payload: {} });
       const { flowId, version } = (opened as { value: { flowId: string; version: number } }).value;
       const built = await handler.handle({
         id: nextId++,
         type: "build-version",
-        payload: { flowId, version },
+        payload: { flowId, version, name: `build-${++names}`, values: {}, ...request },
       });
-      return (built as { value: BuildVersionResult }).value;
+      return (built as { value: Built }).value;
     };
 
-    const builtHash = async () => {
-      const built = await latestBuild();
+    const builtId = async (request: Record<string, unknown> = {}) => {
+      const built = await buildLatest(request);
       if (built.kind === "error") throw new Error(`did not build: ${built.message}`);
-      return built.hash;
+      return built.id;
     };
 
-    const runBuild = async (hash: string, inputs?: Record<string, string>) => {
+    const runBuild = async (buildId: string, extra: Record<string, unknown> = {}) => {
       const response = await handler.handle({
         id: nextId,
         type: "run-build",
-        payload: inputs === undefined ? { hash } : { hash, inputs },
+        payload: { buildId, ...extra },
       });
       expect(response).toMatchObject({ id: nextId++, ok: true });
       return (response as { value: unknown }).value as Started;
     };
 
-    const startRun = async (inputs?: Record<string, string>): Promise<Started> => {
-      const built = await latestBuild();
-      return built.kind === "error" ? built : runBuild(built.hash, inputs);
+    const startedOn = async (buildId: string) => {
+      const result = await runBuild(buildId);
+      if (result.kind !== "started") throw new Error(`run did not start: ${result.message}`);
+      return result.runId;
+    };
+
+    const startRun = async (): Promise<Started> => {
+      const built = await buildLatest();
+      return built.kind === "error" ? built : runBuild(built.id);
     };
 
     const startedRunId = async () => {
@@ -616,12 +647,24 @@ describe("createEngineHandler", async () => {
       return result.runId;
     };
 
+    const buildDirOf = (buildId: string) => {
+      const built = runs.findBuild(buildId);
+      if (built === undefined) throw new Error(`no build ${buildId}`);
+      return built.dir;
+    };
+
+    const worktreeOf = (buildId: string, from = repo.path) =>
+      join(buildDirOf(buildId), basename(from));
+
     const snapshotsOf = (runId: string) =>
       pushes.flatMap((push) =>
         push.push === "run-state" && push.value.runId === runId ? [push.value] : [],
       );
 
-    const sessionPushes = () => pushes.filter((push) => push.push === "session");
+    const sessionPushes = (runId?: string) =>
+      pushes.filter(
+        (push) => push.push === "session" && (runId === undefined || push.runId === runId),
+      );
 
     const untilFinished = async (runId: string) => {
       await vi.waitFor(
@@ -642,6 +685,13 @@ describe("createEngineHandler", async () => {
       expect(runs.runs).toEqual([]);
     };
 
+    const listedStatus = async (runId: string) => {
+      const listed = await handler.handle({ id: nextId++, type: "list-runs" });
+      return (listed as { value: { id: string; status: string }[] }).value.find(
+        (run) => run.id === runId,
+      )?.status;
+    };
+
     beforeEach(async () => {
       home = await mkdtemp(join(tmpdir(), "fd-home-"));
       repo = await createTmpRepo();
@@ -649,6 +699,7 @@ describe("createEngineHandler", async () => {
       flows = new FakeFlowStore();
       pushes = [];
       nextId = 1;
+      names = 0;
       handler = handlerWith();
     });
 
@@ -658,19 +709,19 @@ describe("createEngineHandler", async () => {
       await rm(home, { recursive: true, force: true });
     });
 
-    it("reuses one build for two runs of an unchanged flow, and points both runs at it", async () => {
+    it("runs a build again and again from its one workspace", async () => {
       flows.save(twoScripts());
+      const buildId = await builtId();
 
-      const first = await startedRunId();
+      const first = await startedOn(buildId);
       await untilFinished(first);
-      const second = await startedRunId();
+      const second = await startedOn(buildId);
       await untilFinished(second);
 
-      const builds = runs.builds();
-      expect(builds).toHaveLength(1);
-      expect(runs.runs.map((run) => [run.id, run.buildHash])).toEqual([
-        [first, builds[0]?.hash],
-        [second, builds[0]?.hash],
+      expect(runs.builds()).toHaveLength(1);
+      expect(runs.runs.map((run) => [run.id, run.buildId, run.status])).toEqual([
+        [first, buildId, "done"],
+        [second, buildId, "done"],
       ]);
     });
 
@@ -707,20 +758,20 @@ describe("createEngineHandler", async () => {
       expect(runs.findRun(runId)?.status).toBe("done");
     });
 
-    it("lists only the active run as running and first, and an older run left running as interrupted", async () => {
-      const seed = (status?: "done") => {
+    it("lists the active run as running and first, and an older run left running as interrupted", async () => {
+      const seed = (buildId: string, status?: "done") => {
         const { id } = runs.createRun({
           buildDir: "/nowhere",
           inputs: {},
           nodeIds: ["nap"],
           session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "old" },
-          buildHash: "old",
+          buildId,
         });
         if (status !== undefined) runs.finishRun(id, status);
         return id;
       };
-      const stale = seed();
-      const finished = seed("done");
+      const stale = seed("old-1");
+      const finished = seed("old-2", "done");
       flows.save(sleeper());
       const active = await startedRunId();
 
@@ -737,47 +788,124 @@ describe("createEngineHandler", async () => {
       });
     });
 
-    it("refuses a second run while one is active and creates no run for it", async () => {
-      flows.save(sleeper());
-      await startedRunId();
+    describe("one run at a time per build", () => {
+      it("refuses a second run of a running build and creates no run for it", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+        await startedOn(buildId);
 
-      expect(await startRun()).toEqual({
-        kind: "error",
-        message: "A run is already in progress",
+        expect(await runBuild(buildId)).toMatchObject({ kind: "error" });
+        expect(runs.runs).toHaveLength(1);
       });
-      expect(runs.runs).toHaveLength(1);
+
+      it("refuses a run of a build whose earlier run was left interrupted", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+        runs.createRun({
+          buildDir: buildDirOf(buildId),
+          inputs: {},
+          nodeIds: ["nap"],
+          session: { tmuxName: "fd-run-old", cwd: worktreeOf(buildId), claudeSessionId: "old" },
+          buildId,
+        });
+
+        expect(await runBuild(buildId)).toMatchObject({ kind: "error" });
+        expect(runs.runs).toHaveLength(1);
+      });
+
+      it("starts a run of a second build while the first build runs, each with its own session", async () => {
+        flows.save(sleeper());
+        const first = await builtId();
+        const second = await builtId();
+
+        const a = await startedOn(first);
+        const b = await startedOn(second);
+
+        expect(a).not.toBe(b);
+        expect(await listedStatus(a)).toBe("running");
+        expect(await listedStatus(b)).toBe("running");
+        expect(runs.findRun(a)?.session.tmuxName).not.toBe(runs.findRun(b)?.session.tmuxName);
+        expect(runs.findRun(a)?.session.cwd).toBe(worktreeOf(first));
+        expect(runs.findRun(b)?.session.cwd).toBe(worktreeOf(second));
+      });
+
+      it("accepts only one of two run-builds of one build sent together", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+
+        const responses = await Promise.all([
+          handler.handle({ id: 1, type: "run-build", payload: { buildId } }),
+          handler.handle({ id: 2, type: "run-build", payload: { buildId } }),
+        ]);
+
+        const values = responses.map((response) => (response as { value: { kind: string } }).value);
+        expect(values.filter((value) => value.kind === "started")).toHaveLength(1);
+        expect(values.filter((value) => value.kind === "error")).toHaveLength(1);
+        expect(runs.runs).toHaveLength(1);
+      });
+
+      it("accepts both of two run-builds of different builds sent together", async () => {
+        flows.save(sleeper());
+        const first = await builtId();
+        const second = await builtId();
+
+        const responses = await Promise.all([
+          handler.handle({ id: 1, type: "run-build", payload: { buildId: first } }),
+          handler.handle({ id: 2, type: "run-build", payload: { buildId: second } }),
+        ]);
+
+        expect(
+          responses.map((response) => (response as { value: { kind: string } }).value.kind),
+        ).toEqual(["started", "started"]);
+        expect(runs.runs).toHaveLength(2);
+      });
+
+      it("stops every active run when the engine stops", async () => {
+        flows.save(sleeper());
+        const a = await startedOn(await builtId());
+        const b = await startedOn(await builtId());
+
+        await handler.stop();
+
+        expect(runs.findRun(a)?.status).toBe("stopped");
+        expect(runs.findRun(b)?.status).toBe("stopped");
+      });
     });
 
-    it("refuses a working folder path that is not a folder", async () => {
-      const missing = join(repo.path, "missing");
-      flows.save(inFolder(twoScripts(), { kind: "path", path: missing }));
-
-      await expectErrorAndNoRun(`Working folder not found: ${missing}`);
-    });
-
-    describe("with a fresh worktree folder", () => {
+    describe("in the build's worktree", () => {
       let source: TmpRepo;
 
-      const promptAt = (workingFolder: Flow["session"]["workingFolder"]) =>
+      const promptAt = () =>
+        inFolder(flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]), {
+          repo: source.path,
+          base: "main",
+          variables: [],
+        });
+
+      const scriptsIn = (...steps: string[]) =>
         inFolder(
-          flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]),
-          workingFolder,
+          flow(
+            steps.map((command, index) =>
+              script(`s${index + 1}`, { settings: { command: "sh", args: ["-c", command] } }),
+            ),
+            steps.slice(1).map((_, index) => thenWire(`s${index + 1}`, `s${index + 2}`)),
+          ),
+          { repo: source.path, base: "main", variables: [] },
         );
 
-      const seenAtOpen = async (opening: OpenSessionOptions) => ({
-        cwd: opening.cwd,
-        id8: opening.claudeSessionId.slice(0, 8),
-        worktrees: await worktreePaths(source.path),
-        branches: await branches(source.path),
-      });
+      const sourceWorktreeOf = (buildId: string) => worktreeOf(buildId, source.path);
 
-      const withRealWorktree = (seen: Awaited<ReturnType<typeof seenAtOpen>>[]) =>
+      const flowdeckBranches = async () =>
+        (await branches(source.path)).split("\n").filter((name) => name.startsWith("flowdeck/"));
+
+      const withRealWorktree = (seen: OpenSessionOptions[] = []) =>
         handlerWith({
           worktree: new GitWorktree(),
+          gitState: gitAt(source.path),
           run: {
             ...runEnvironment(new NodeFileSystem()),
             openSession: async (opening) => {
-              seen.push(await seenAtOpen(opening));
+              seen.push(opening);
               throw new Error("seen");
             },
           },
@@ -792,44 +920,47 @@ describe("createEngineHandler", async () => {
         await source.cleanup();
       });
 
-      it("creates the worktree and its branch before node 1 and runs the session inside it", async () => {
-        const seen: Awaited<ReturnType<typeof seenAtOpen>>[] = [];
+      it("runs the session in the build's worktree with the workspace layout, adding no worktree", async () => {
+        const seen: OpenSessionOptions[] = [];
         handler = withRealWorktree(seen);
-        flows.save(promptAt({ kind: "worktree", repo: source.path, branch: "main" }));
+        flows.save(promptAt());
+        const buildId = await builtId({ name: "fix-login" });
+        const worktreesAtBuild = await worktreePaths(source.path);
 
-        const runId = await startedRunId();
+        const runId = await startedOn(buildId);
         await untilFinished(runId);
 
-        const [atOpen] = seen;
-        if (atOpen === undefined) throw new Error("Claude never started");
-        const path = join(home, "worktrees", atOpen.id8);
-        expect(atOpen.worktrees).toContain(await realpath(path));
-        expect(atOpen.branches).toContain(`flowdeck/${atOpen.id8}`);
-        expect(atOpen.cwd).toBe(path);
-        expect(runs.findRun(runId)?.session.cwd).toBe(path);
-        expect((await git(path, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(
-          `flowdeck/${atOpen.id8}`,
-        );
+        const worktree = sourceWorktreeOf(buildId);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toMatchObject({
+          cwd: worktree,
+          buildDir: runs.findBuild(buildId)?.dir,
+          layout: "workspace",
+        });
+        expect(runs.findRun(runId)?.session.cwd).toBe(worktree);
+        expect(await worktreePaths(source.path)).toEqual(worktreesAtBuild);
+        expect(await flowdeckBranches()).toEqual([`flowdeck/fix-login-${buildId.slice(0, 8)}`]);
       });
 
-      it("gives two runs of the same flow their own branch and folder", async () => {
-        const seen: Awaited<ReturnType<typeof seenAtOpen>>[] = [];
-        handler = withRealWorktree(seen);
-        flows.save(promptAt({ kind: "worktree", repo: source.path, branch: "main" }));
+      it("gives two runs of one build the same worktree", async () => {
+        handler = withRealWorktree();
+        flows.save(promptAt());
+        const buildId = await builtId();
 
-        await untilFinished(await startedRunId());
-        await untilFinished(await startedRunId());
+        await untilFinished(await startedOn(buildId));
+        await untilFinished(await startedOn(buildId));
 
-        const cwds = runs.runs.map((run) => run.session.cwd);
-        expect(cwds).toHaveLength(2);
-        expect(new Set(cwds).size).toBe(2);
-        expect(await worktreePaths(source.path)).toHaveLength(3);
-        expect((await branches(source.path)).match(/^flowdeck\//gm)).toHaveLength(2);
+        expect(runs.runs.map((run) => run.session.cwd)).toEqual([
+          sourceWorktreeOf(buildId),
+          sourceWorktreeOf(buildId),
+        ]);
+        expect(await worktreePaths(source.path)).toHaveLength(2);
+        expect(await flowdeckBranches()).toHaveLength(1);
       });
 
       it("writes nothing from the run back into the saved flow", async () => {
-        handler = withRealWorktree([]);
-        const saved = promptAt({ kind: "worktree", repo: source.path, branch: "main" });
+        handler = withRealWorktree();
+        const saved = promptAt();
         flows.save(saved);
 
         await untilFinished(await startedRunId());
@@ -837,128 +968,48 @@ describe("createEngineHandler", async () => {
         expect(flows.loadLatest()?.flow).toEqual(saved);
       });
 
-      it("creates no worktree or branch for an existing folder, and runs in that folder", async () => {
-        const worktree = new FakeWorktree();
-        handler = handlerWith({ worktree });
-        flows.save(inFolder(twoScripts(), { kind: "path", path: source.path }));
-        const worktreesBefore = await worktreePaths(source.path);
-        const branchesBefore = await branches(source.path);
-
-        const runId = await startedRunId();
-        await untilFinished(runId);
-
-        expect(worktree.calls).toEqual([]);
-        expect(await worktreePaths(source.path)).toEqual(worktreesBefore);
-        expect(await branches(source.path)).toBe(branchesBefore);
-        expect(runs.findRun(runId)?.session.cwd).toBe(source.path);
-        expect(await stat(join(home, "worktrees")).catch(() => undefined)).toBeUndefined();
-      });
-
-      it.each<[string, Flow["session"]["workingFolder"]]>([
-        ["no repo", { kind: "worktree", branch: "main" }],
-        ["an empty repo", { kind: "worktree", branch: "main", repo: "" }],
+      it.each([
+        ["changed nothing", ["echo one", "true"], "done"],
+        ["wrote a file", ["echo one > made.txt", "test -f made.txt"], "done"],
+        ["failed", ["echo half > made.txt; exit 3"], "failed"],
       ])(
-        "refuses a worktree folder with %s and never calls the worktree port",
-        async (_, folder) => {
-          const worktree = new FakeWorktree();
-          handler = handlerWith({ worktree });
-          flows.save(inFolder(twoScripts(), folder));
+        "keeps the build's worktree and branch after a run that %s, writing no kept notice",
+        async (_, steps, status) => {
+          handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
+          flows.save(scriptsIn(...steps));
+          const buildId = await builtId();
 
-          await expectErrorAndNoRun(/repositor/i);
-          expect(worktree.calls).toEqual([]);
+          const runId = await startedOn(buildId);
+          await untilFinished(runId);
+          await handler.stop();
+
+          expect(runs.findRun(runId)?.status).toBe(status);
+          expect(await worktreePaths(source.path)).toContain(
+            await realpath(sourceWorktreeOf(buildId)),
+          );
+          expect(await flowdeckBranches()).toHaveLength(1);
+          expect(runs.activity(runId).filter((entry) => entry.kind === "kept")).toEqual([]);
+          expect(
+            pushes.filter((push) => push.push === "activity" && push.value.entry.kind === "kept"),
+          ).toEqual([]);
         },
       );
 
-      it("returns the worktree port's failure and creates no run", async () => {
-        const worktree = new FakeWorktree({ failWith: "git worktree add exploded" });
-        handler = handlerWith({ worktree });
-        flows.save(inFolder(twoScripts(), { kind: "worktree", repo: source.path, branch: "main" }));
-
-        await expectErrorAndNoRun(/git worktree add exploded/);
-        expect(worktree.calls).toHaveLength(1);
-      });
-
-      const scriptsIn = (...steps: string[]) =>
-        inFolder(
-          flow(
-            steps.map((command, index) =>
-              script(`s${index + 1}`, { settings: { command: "sh", args: ["-c", command] } }),
-            ),
-            steps.slice(1).map((_, index) => thenWire(`s${index + 1}`, `s${index + 2}`)),
-          ),
-          { kind: "worktree", repo: source.path, branch: "main" },
-        );
-
-      const flowdeckBranches = async () =>
-        (await branches(source.path)).split("\n").filter((name) => name.startsWith("flowdeck/"));
-
-      it("removes the worktree and its branch once a run that changed nothing is done", async () => {
-        handler = handlerWith({ worktree: new GitWorktree() });
-        flows.save(scriptsIn("echo one", "true"));
-
-        const runId = await startedRunId();
-        await untilFinished(runId);
-
-        expect(runs.findRun(runId)?.status).toBe("done");
-        await vi.waitFor(async () => expect(await flowdeckBranches()).toEqual([]));
-        expect(await worktreePaths(source.path)).toEqual([source.path]);
-        expect(await stat(runs.findRun(runId)?.session.cwd ?? "").catch(() => undefined)).toBe(
-          undefined,
-        );
-        expect(runs.activity(runId).filter((entry) => entry.kind === "kept")).toEqual([]);
-      });
-
-      it("keeps the worktree and branch of a done run that wrote a file, and says where in the Activity", async () => {
-        handler = handlerWith({ worktree: new GitWorktree() });
-        flows.save(scriptsIn("echo one > made.txt", "test -f made.txt"));
-
-        const runId = await startedRunId();
-        await untilFinished(runId);
-        await handler.stop();
-
-        expect(runs.findRun(runId)?.status).toBe("done");
-        const cwd = runs.findRun(runId)?.session.cwd ?? "";
-        const branch = `flowdeck/${cwd.split("/").at(-1) ?? ""}`;
-        expect(await flowdeckBranches()).toEqual([branch]);
-        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
-        const summary = `Kept the worktree ${cwd} and branch ${branch}: they hold this run's changes.`;
-        expect(runs.activity(runId)).toContainEqual(
-          expect.objectContaining({ kind: "kept", summary }),
-        );
-        expect(pushes).toContainEqual({
-          push: "activity",
-          value: { runId, entry: expect.objectContaining({ kind: "kept", summary }) },
+      it("answers the worktree port's failure when building, recording no build", async () => {
+        handler = handlerWith({
+          worktree: new FakeWorktree({ failWith: "git worktree add exploded" }),
+          gitState: gitAt(source.path),
         });
-      });
+        flows.save(scriptsIn("true"));
 
-      it("keeps the worktree and its branch when the run fails, so it can be looked at and retried", async () => {
-        handler = handlerWith({ worktree: new GitWorktree() });
-        flows.save(scriptsIn("echo half > made.txt; exit 3"));
+        const built = await buildLatest();
 
-        const runId = await startedRunId();
-        await untilFinished(runId);
-        await handler.stop();
-
-        expect(runs.findRun(runId)?.status).toBe("failed");
-        const cwd = runs.findRun(runId)?.session.cwd ?? "";
-        expect(await flowdeckBranches()).toEqual([`flowdeck/${cwd.split("/").at(-1) ?? ""}`]);
-        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
-      });
-
-      it("keeps the worktree and its branch when the run is stopped, so it can be resumed", async () => {
-        handler = handlerWith({ worktree: new GitWorktree() });
-        flows.save(scriptsIn("exec sleep 30", "true"));
-
-        const runId = await startedRunId();
-        expect(
-          await handler.handle({ id: nextId++, type: "stop-run", payload: { runId } }),
-        ).toMatchObject({ ok: true, value: { stopped: true } });
-        await handler.stop();
-
-        expect(runs.findRun(runId)?.status).toBe("stopped");
-        const cwd = runs.findRun(runId)?.session.cwd ?? "";
-        expect(await flowdeckBranches()).toHaveLength(1);
-        expect(await worktreePaths(source.path)).toContain(await realpath(cwd));
+        expect(built).toMatchObject({
+          kind: "error",
+          message: expect.stringMatching(/git worktree add exploded/),
+        });
+        expect(runs.listBuilds()).toEqual([]);
+        expect(runs.runs).toEqual([]);
       });
     });
 
@@ -991,7 +1042,7 @@ describe("createEngineHandler", async () => {
         ),
       );
 
-      const built = await latestBuild();
+      const built = await buildLatest();
 
       expect(built).toEqual({
         kind: "error",
@@ -1006,28 +1057,6 @@ describe("createEngineHandler", async () => {
       });
     });
 
-    it("restores a cached build that changed on disk since its first run, and runs it", async () => {
-      flows.save(twoScripts());
-      const first = await startedRunId();
-      await untilFinished(first);
-      const [cached] = runs.builds();
-      const settingsPath = join(cached?.dir ?? "", "settings.json");
-      const original = await new NodeFileSystem().readFile(settingsPath);
-      await appendFile(settingsPath, "\n");
-      const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-      const second = await startedRunId();
-      await untilFinished(second);
-
-      expect(await new NodeFileSystem().readFile(settingsPath)).toBe(original);
-      expect(runs.findRun(second)?.status).toBe("done");
-      expect(runs.findRun(second)?.buildHash).toBe(cached?.hash);
-      expect(logged).toHaveBeenCalledWith(
-        `engine: build ${cached?.hash} restored settings.json (changed)`,
-      );
-      logged.mockRestore();
-    });
-
     it("records the build with the version it was made from", async () => {
       flows.save(twoScripts());
       flows.save(twoScripts());
@@ -1037,10 +1066,8 @@ describe("createEngineHandler", async () => {
 
       const [built] = runs.listBuilds();
       expect(built?.source).toEqual({ flowId: "flow-1", version: 2 });
-      expect(runs.findRun(runId)?.buildHash).toBe(built?.hash);
-      expect(runs.buildFiles(built?.hash ?? "").map((file) => file.path)).toContain(
-        "manifest.json",
-      );
+      expect(runs.findRun(runId)?.buildId).toBe(built?.id);
+      expect(runs.buildFiles(built?.id ?? "").map((file) => file.path)).toContain("manifest.json");
     });
 
     it("leaves a run that joins in SQL to its build, its build nodes, and the flow version", async () => {
@@ -1058,19 +1085,19 @@ describe("createEngineHandler", async () => {
 
         const rows = db
           .prepare(
-            `SELECT flows.id AS flow, flow_versions.version, builds.hash, builds.dir,
+            `SELECT flows.id AS flow, flow_versions.version, builds.id, builds.dir,
                     run_nodes.node_id, build_nodes.type
                FROM runs
-               JOIN builds ON builds.hash = runs.build_hash
+               JOIN builds ON builds.id = runs.build_id
                JOIN flow_versions ON flow_versions.flow_id = builds.flow_id
                                  AND flow_versions.version = builds.version
                JOIN flows ON flows.id = flow_versions.flow_id
                JOIN run_nodes ON run_nodes.run_id = runs.id
-               JOIN build_nodes ON build_nodes.build_hash = builds.hash
+               JOIN build_nodes ON build_nodes.build_id = builds.id
                                AND build_nodes.node_id = run_nodes.node_id
               WHERE runs.id = ? ORDER BY build_nodes.ordinal`,
           )
-          .all(runId) as { hash: string; dir: string }[];
+          .all(runId) as { id: string; dir: string }[];
         expect(rows).toEqual([
           expect.objectContaining({
             flow: "flow-sql",
@@ -1085,36 +1112,42 @@ describe("createEngineHandler", async () => {
             type: "script",
           }),
         ]);
-        expect(rows[0]?.dir).toBe(join(home, "builds", rows[0]?.hash ?? ""));
+        expect(rows[0]?.dir).toBe(join(home, "workspaces", rows[0]?.id ?? ""));
       } finally {
         await handler.stop();
         db.close();
       }
     });
 
-    it("keeps the inputs a run is started with", async () => {
+    it("keeps automatic mode with the run, and nothing else it is sent", async () => {
       flows.save(twoScripts());
+      const buildId = await builtId();
 
-      const started = await startRun({ ticket: "FD-1" });
+      const started = await runBuild(buildId, {
+        auto: true,
+        inputs: { ticket: "FD-1" },
+        flags: { deep: true },
+      });
       if (started.kind === "error") throw new Error(started.message);
-      const { runId } = started;
-      await untilFinished(runId);
+      await untilFinished(started.runId);
 
-      expect(runs.findRun(runId)?.inputs).toEqual({ ticket: "FD-1" });
+      expect(runs.findRun(started.runId)?.inputs).toEqual({ auto: true });
     });
 
-    it("refuses inputs that are not text", async () => {
+    it("refuses a run-build without a build id", async () => {
       flows.save(twoScripts());
-      const hash = await builtHash();
+      await builtId();
 
       expect(
-        await handler.handle({ id: 4, type: "run-build", payload: { hash, inputs: { n: 1 } } }),
+        await handler.handle({ id: 4, type: "run-build", payload: { hash: "anything" } }),
       ).toMatchObject({ id: 4, ok: false });
       expect(runs.runs).toEqual([]);
     });
 
     describe("builds", () => {
-      it("builds a chosen version, lists it, reads its files, and runs it", async () => {
+      it("builds a chosen version under a name, lists it, reads its files, and runs it", async () => {
+        const worktree = new FakeWorktree();
+        handler = handlerWith({ worktree });
         flows.save(twoScripts());
         const v1 = twoScripts();
         flows.save({ ...v1, nodes: v1.nodes.filter((node) => node.id === "write"), wires: [] });
@@ -1122,31 +1155,42 @@ describe("createEngineHandler", async () => {
         const built = await handler.handle({
           id: 1,
           type: "build-version",
-          payload: { flowId: "flow-1", version: 1 },
+          payload: { flowId: "flow-1", version: 1, name: "fix-login", base: "main", values: {} },
         });
-        const { hash, dir } = (built as { value: { hash: string; dir: string } }).value;
-        expect(built).toEqual({
-          id: 1,
-          ok: true,
-          value: { kind: "built", hash, dir, reused: false, restored: [] },
-        });
+        const { id, dir } = (built as { value: { id: string; dir: string } }).value;
+        expect(built).toMatchObject({ id: 1, ok: true, value: { kind: "built", id, dir } });
+        expect(dir).toBe(join(home, "workspaces", id));
+        expect(worktree.calls).toEqual([
+          {
+            repo: repo.path,
+            base: "main",
+            branch: `flowdeck/fix-login-${id.slice(0, 8)}`,
+            path: join(dir, basename(repo.path)),
+          },
+        ]);
 
         expect(await handler.handle({ id: 2, type: "list-builds" })).toEqual({
           id: 2,
           ok: true,
           value: [
-            {
-              hash,
+            expect.objectContaining({
+              id,
+              name: "fix-login",
+              old: false,
               dir,
               createdAt: expect.any(Number),
               source: { flowId: "flow-1", version: 1 },
-            },
+            }),
           ],
         });
 
-        const files = await handler.handle({ id: 3, type: "build-files", payload: { hash } });
+        const files = await handler.handle({
+          id: 3,
+          type: "build-files",
+          payload: { buildId: id },
+        });
         const listed = (files as { value: { path: string; content: string }[] }).value;
-        expect(listed.map((file) => file.path)).toEqual(runs.buildFiles(hash).map((f) => f.path));
+        expect(listed.map((file) => file.path)).toEqual(runs.buildFiles(id).map((f) => f.path));
         expect(listed.find((file) => file.path === "manifest.json")?.content).toBe(
           await new NodeFileSystem().readFile(`${dir}/manifest.json`),
         );
@@ -1154,16 +1198,34 @@ describe("createEngineHandler", async () => {
         const started = await handler.handle({
           id: 4,
           type: "run-build",
-          payload: { hash, inputs: { ticket: "FD-2" } },
+          payload: { buildId: id },
         });
         const { runId } = (started as { value: { runId: string } }).value;
         await untilFinished(runId);
         expect(runs.findRun(runId)).toMatchObject({
-          buildHash: hash,
+          buildId: id,
           nodeIds: ["write", "check"],
-          inputs: { ticket: "FD-2" },
           status: "done",
         });
+      });
+
+      it("builds one version twice under two names as two builds", async () => {
+        flows.save(twoScripts());
+
+        const first = await builtId({ name: "first" });
+        const second = await builtId({ name: "second" });
+
+        expect(first).not.toBe(second);
+        const listed = await handler.handle({ id: 9, type: "list-builds" });
+        expect(
+          (listed as { value: { id: string; name: string }[] }).value.map((b) => [b.id, b.name]),
+        ).toEqual(
+          expect.arrayContaining([
+            [first, "first"],
+            [second, "second"],
+          ]),
+        );
+        expect(runs.findBuild(first)?.dir).not.toBe(runs.findBuild(second)?.dir);
       });
 
       it("answers an unsaved version, an unknown build and a bad payload with errors", async () => {
@@ -1173,7 +1235,7 @@ describe("createEngineHandler", async () => {
           await handler.handle({
             id: 1,
             type: "build-version",
-            payload: { flowId: "flow-1", version: 5 },
+            payload: { flowId: "flow-1", version: 5, name: "fix-login", values: {} },
           }),
         ).toEqual({
           id: 1,
@@ -1185,16 +1247,189 @@ describe("createEngineHandler", async () => {
           },
         });
         expect(
-          await handler.handle({ id: 2, type: "run-build", payload: { hash: "nope" } }),
+          await handler.handle({ id: 2, type: "run-build", payload: { buildId: "nope" } }),
         ).toEqual({ id: 2, ok: true, value: { kind: "error", message: "No build nope" } });
         expect(
-          await handler.handle({ id: 3, type: "build-files", payload: { hash: "nope" } }),
+          await handler.handle({ id: 3, type: "build-files", payload: { buildId: "nope" } }),
         ).toEqual({ id: 3, ok: false, error: "No build nope" });
         expect(await handler.handle({ id: 4, type: "build-version", payload: {} })).toMatchObject({
           id: 4,
           ok: false,
         });
         expect(runs.runs).toEqual([]);
+      });
+    });
+
+    describe("delete-build", () => {
+      const deleteBuild = async (buildId: string) => {
+        const response = await handler.handle({
+          id: nextId++,
+          type: "delete-build",
+          payload: { buildId },
+        });
+        expect(response).toMatchObject({ ok: true });
+        return (response as { value: unknown }).value;
+      };
+
+      it("is refused while the build's run is going, and keeps the build", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+        await startedOn(buildId);
+
+        expect(await deleteBuild(buildId)).toMatchObject({
+          ok: false,
+          message: expect.any(String),
+        });
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+      });
+
+      it("is refused while the build's run is starting, and keeps the build", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+
+        const starting = handler.handle({ id: nextId++, type: "run-build", payload: { buildId } });
+        const deleting = deleteBuild(buildId);
+
+        expect(await deleting).toMatchObject({ ok: false, message: expect.any(String) });
+        expect(await starting).toMatchObject({ value: { kind: "started" } });
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+      });
+
+      it("refuses a run of the build while its delete is going, and creates no run", async () => {
+        let release: () => void = () => undefined;
+        const checked = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        class SlowWorktree extends FakeWorktree {
+          override async isDirty(path: string): Promise<boolean> {
+            await checked;
+            return super.isDirty(path);
+          }
+        }
+        handler = handlerWith({ worktree: new SlowWorktree() });
+        flows.save(twoScripts());
+        const buildId = await builtId();
+
+        const deleting = deleteBuild(buildId);
+        const running = runBuild(buildId);
+        const refused = await running;
+        release();
+
+        expect(refused).toEqual({ kind: "error", message: expect.any(String) });
+        expect(await deleting).toEqual({ ok: true });
+        expect(runs.runs).toHaveLength(0);
+      });
+
+      it("refuses a run of a deleted build and creates no run for it", async () => {
+        flows.save(twoScripts());
+        const buildId = await builtId();
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+
+        expect(await runBuild(buildId)).toEqual({
+          kind: "error",
+          message: expect.stringContaining("was deleted"),
+        });
+        expect(runs.runs).toHaveLength(0);
+      });
+
+      it("hides the build and answers the path of a worktree that holds work", async () => {
+        const source = await createTmpRepo({ commit: true });
+        try {
+          handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
+          flows.save(inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }));
+          const buildId = await builtId();
+          const worktree = worktreeOf(buildId, source.path);
+          await writeFile(join(worktree, "work.txt"), "kept\n");
+
+          expect(await deleteBuild(buildId)).toEqual({
+            ok: true,
+            kept: { kind: "worktree", path: worktree },
+          });
+          expect(await handler.handle({ id: nextId++, type: "list-builds" })).toMatchObject({
+            value: [],
+          });
+        } finally {
+          await source.cleanup();
+        }
+      });
+    });
+
+    describe("an old hash-named build", () => {
+      const legacyManifest = {
+        version: 1,
+        session: {
+          name: "main",
+          workingFolder: { kind: "worktree", branch: "main" },
+          model: "sonnet",
+          allowedTools: [],
+          permissionMode: "default",
+          connectors: [],
+        },
+        nodes: [{ id: "s1", type: "script", label: "s1", settings: { command: "true" } }],
+        wires: [],
+        files: {},
+      };
+
+      let db: ReturnType<typeof openDatabase>;
+      let store: SqliteStore;
+      let hash: string;
+
+      beforeEach(async () => {
+        db = openDatabase({ path: join(home, "flowdeck.db") });
+        store = new SqliteStore({ db });
+        hash = hashBuild([{ path: "manifest.json", content: canonicalJson(legacyManifest) }]);
+        const dir = join(home, "builds", hash);
+        await new NodeFileSystem().writeFile(
+          join(dir, "manifest.json"),
+          canonicalJson({ ...legacyManifest, hash }),
+        );
+        db.prepare("INSERT INTO builds (id, hash, dir, created_at) VALUES (?, ?, ?, ?)").run(
+          hash,
+          hash,
+          dir,
+          1,
+        );
+        handler = handlerWith({
+          openStores: () => ({ runs: store, flows: new SqliteFlowStore({ db }) }),
+        });
+      });
+
+      afterEach(async () => {
+        await handler.stop();
+        db.close();
+      });
+
+      it("is listed and marked old", async () => {
+        expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
+          id: 1,
+          ok: true,
+          value: [expect.objectContaining({ id: hash, name: null, old: true })],
+        });
+      });
+
+      it("refuses a new run, pointing to a new build, and starts nothing", async () => {
+        expect(await runBuild(hash)).toEqual({
+          kind: "error",
+          message: expect.stringContaining("Make a new build from this blueprint"),
+        });
+        expect(store.listRuns()).toEqual([]);
+      });
+
+      it("resumes a stopped run of it to the end", async () => {
+        const { id: runId } = store.createRun({
+          buildDir: join(home, "builds", hash),
+          inputs: {},
+          nodeIds: ["s1"],
+          session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "c-old" },
+          buildId: hash,
+        });
+        store.finishRun(runId, "stopped");
+
+        expect(
+          await handler.handle({ id: 1, type: "resume-run", payload: { runId } }),
+        ).toMatchObject({ ok: true, value: { kind: "started", runId } });
+
+        await vi.waitFor(() => expect(store.findRun(runId)?.status).toBe("done"));
       });
     });
 
@@ -1229,28 +1464,11 @@ describe("createEngineHandler", async () => {
       throw new Error("socket in use");
     };
 
-    it("accepts only one of two run-builds sent together, and creates one run", async () => {
-      flows.save(sleeper());
-      const hash = await builtHash();
-
-      const responses = await Promise.all([
-        handler.handle({ id: 1, type: "run-build", payload: { hash } }),
-        handler.handle({ id: 2, type: "run-build", payload: { hash } }),
-      ]);
-
-      const values = responses.map((response) => (response as { value: { kind: string } }).value);
-      expect(values.filter((value) => value.kind === "started")).toHaveLength(1);
-      expect(values.filter((value) => value.kind === "error")).toEqual([
-        { kind: "error", message: "A run is already in progress" },
-      ]);
-      expect(runs.runs).toHaveLength(1);
-    });
-
     it("stops a run whose start is still in progress once it has started", async () => {
       flows.save(sleeper());
-      const hash = await builtHash();
+      const buildId = await builtId();
 
-      const starting = handler.handle({ id: 1, type: "run-build", payload: { hash } });
+      const starting = handler.handle({ id: 1, type: "run-build", payload: { buildId } });
       await handler.stop();
       const { value } = (await starting) as { value: { kind: string; runId: string } };
 
@@ -1278,10 +1496,11 @@ describe("createEngineHandler", async () => {
       expect(snapshotsOf(runId).at(-1)?.status).toBe("stopped");
     });
 
-    it("records the run failed when execution rejects, and accepts a later run", async () => {
+    it("records the run failed when execution rejects, and accepts a later run of its build", async () => {
       handler = withStartEvents(failingStartEvents);
       flows.save(twoScripts());
-      const runId = await startedRunId();
+      const buildId = await builtId();
+      const runId = await startedOn(buildId);
 
       await vi.waitFor(() => {
         expect(runs.findRun(runId)?.status).toBe("failed");
@@ -1289,19 +1508,21 @@ describe("createEngineHandler", async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(snapshotsOf(runId).at(-1)?.status).toBe("failed");
-      expect((await startRun()).kind).toBe("started");
+      expect((await runBuild(buildId)).kind).toBe("started");
     });
 
-    it("frees the run slot and resolves stop when recording a failed run throws", async () => {
+    it("frees the build's run slot and resolves stop when recording a failed run throws", async () => {
       handler = withStartEvents(failingStartEvents);
       runs.finishRun = () => {
         throw new Error("database is locked");
       };
       flows.save(twoScripts());
-      await startedRunId();
+      const buildId = await builtId();
+      const first = await startedOn(buildId);
+      runs.stopRun(first);
 
       await vi.waitFor(async () => {
-        expect((await startRun()).kind).toBe("started");
+        expect((await runBuild(buildId)).kind).toBe("started");
       });
 
       await expect(handler.stop()).resolves.toBeUndefined();
@@ -1317,27 +1538,50 @@ describe("createEngineHandler", async () => {
       stop: async () => undefined,
     });
 
-    const withClaude = (opened: OpenedSession) =>
+    const withClaude = (opened: OpenedSession, sessionName = () => "fd-run-test") =>
       handlerWith({
-        newSessionName: () => "fd-run-test",
+        newSessionName: sessionName,
         run: { ...runEnvironment(new NodeFileSystem()), openSession: async () => opened },
       });
 
-    it("announces the session name once Claude starts, and null when the run stops", async () => {
+    it("announces the run's session name once Claude starts, and null when the run stops", async () => {
       handler = withClaude(claudeSession(async () => undefined));
       flows.save(promptFlow());
-      await startedRunId();
+      const runId = await startedRunId();
 
       await vi.waitFor(() => {
-        expect(sessionPushes()).toEqual([{ push: "session", value: "fd-run-test" }]);
+        expect(sessionPushes()).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
       });
 
       await handler.stop();
 
       expect(sessionPushes()).toEqual([
-        { push: "session", value: "fd-run-test" },
-        { push: "session", value: null },
+        { push: "session", runId, value: "fd-run-test" },
+        { push: "session", runId, value: null },
       ]);
+    });
+
+    it("ends only the stopped run's session, leaving another build's session announced", async () => {
+      let sessions = 0;
+      handler = withClaude(
+        claudeSession(async () => undefined),
+        () => `fd-run-${++sessions}`,
+      );
+      flows.save(promptFlow());
+      const a = await startedOn(await builtId());
+      const b = await startedOn(await builtId());
+      await vi.waitFor(() => {
+        expect(sessionPushes(a)).toHaveLength(1);
+        expect(sessionPushes(b)).toHaveLength(1);
+      });
+
+      await handler.handle({ id: nextId++, type: "stop-run", payload: { runId: a } });
+
+      expect(sessionPushes(a).at(-1)).toEqual({ push: "session", runId: a, value: null });
+      expect(sessionPushes(b)).toEqual([
+        { push: "session", runId: b, value: runs.findRun(b)?.session.tmuxName },
+      ]);
+      expect(runs.findRun(b)?.status).toBe("running");
     });
 
     it("announces no session while Claude is still starting", async () => {
@@ -1353,7 +1597,7 @@ describe("createEngineHandler", async () => {
         ),
       );
       flows.save(promptFlow());
-      await startedRunId();
+      const runId = await startedRunId();
 
       await vi.waitFor(() => {
         expect(starting).toBe(true);
@@ -1364,7 +1608,7 @@ describe("createEngineHandler", async () => {
       started();
 
       await vi.waitFor(() => {
-        expect(sessionPushes()).toEqual([{ push: "session", value: "fd-run-test" }]);
+        expect(sessionPushes()).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
       });
     });
 
@@ -1401,7 +1645,7 @@ describe("createEngineHandler", async () => {
       const files = await handler.handle({
         id: 90,
         type: "build-files",
-        payload: { hash: built?.hash },
+        payload: { buildId: built?.id },
       });
       const listed = (files as { value: { path: string; content: string }[] }).value;
       expect(listed.map((file) => file.path)).not.toContain("mcp.json");
@@ -1412,12 +1656,7 @@ describe("createEngineHandler", async () => {
       const opened: OpenSessionOptions[] = [];
       const base = promptFlow();
       flows.save({ ...base, session: { ...base.session, connectors: ["jira"] } });
-      const built = await handler.handle({
-        id: 1,
-        type: "build-version",
-        payload: { flowId: "flow-1", version: 1 },
-      });
-      const { hash } = (built as { value: { hash: string } }).value;
+      const buildId = await builtId();
       handler = handlerWith({
         connectors: new FakeConnectorSource(),
         run: {
@@ -1429,7 +1668,7 @@ describe("createEngineHandler", async () => {
         },
       });
 
-      expect(await handler.handle({ id: 2, type: "run-build", payload: { hash } })).toEqual({
+      expect(await handler.handle({ id: 2, type: "run-build", payload: { buildId } })).toEqual({
         id: 2,
         ok: true,
         value: {
@@ -1441,7 +1680,7 @@ describe("createEngineHandler", async () => {
       expect(opened).toEqual([]);
     });
 
-    it("builds the same hash for a version whatever node and hook paths this machine has", async () => {
+    it("opens one build's sessions from its folder whatever node and hook paths this machine has", async () => {
       const openings: OpenSessionOptions[] = [];
       const machine = (nodePath: string) =>
         handlerWith({
@@ -1455,19 +1694,19 @@ describe("createEngineHandler", async () => {
           },
         });
       flows.save(promptFlow());
+      const buildId = await builtId();
 
       handler = machine("/usr/local/bin/node");
-      await startedRunId();
+      await startedOn(buildId);
       await vi.waitFor(() => expect(openings).toHaveLength(1));
       await handler.stop();
       handler = machine("/Users/someone/.nvm/versions/node/v24/bin/node");
-      await startedRunId();
+      await startedOn(buildId);
       await vi.waitFor(() => expect(openings).toHaveLength(2));
 
-      expect(runs.builds()).toHaveLength(1);
       expect(openings.map((opening) => opening.buildDir)).toEqual([
-        runs.builds()[0]?.dir,
-        runs.builds()[0]?.dir,
+        runs.findBuild(buildId)?.dir,
+        runs.findBuild(buildId)?.dir,
       ]);
       expect(openings.map((opening) => opening.hooks.nodePath)).toEqual([
         "/usr/local/bin/node",
@@ -1485,11 +1724,15 @@ describe("createEngineHandler", async () => {
     });
 
     const startActivityRun = async (
-      toolCall: Record<string, unknown> = { tool_name: "Bash", tool_input: { command: "ls" } },
+      toolCall: (cwd: string) => Record<string, unknown> = () => ({
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+      }),
     ) => {
       let clock = 1000;
       const source = new FakeEventSource();
       let claudeSessionId = "";
+      let cwd = "";
       const hook = (kind: "PreToolUse" | "Stop", sessionId: string, at: number) =>
         source.publish({
           kind,
@@ -1498,7 +1741,7 @@ describe("createEngineHandler", async () => {
             hook_event_name: kind,
             session_id: sessionId,
             flowdeck_hook_at: at,
-            ...(kind === "PreToolUse" ? toolCall : { last_assistant_message: "OK" }),
+            ...(kind === "PreToolUse" ? toolCall(cwd) : { last_assistant_message: "OK" }),
           },
         });
       handler = handlerWith({
@@ -1509,6 +1752,7 @@ describe("createEngineHandler", async () => {
           startEvents: async () => ({ events: source, stop: async () => undefined }),
           openSession: async (opening) => {
             claudeSessionId = opening.claudeSessionId;
+            cwd = opening.cwd;
             return {
               sessionId: claudeSessionId,
               session: { ensureStarted: async () => undefined },
@@ -1561,10 +1805,12 @@ describe("createEngineHandler", async () => {
       ["src/a.ts", "src/a.ts"],
       ["/Users/me/.claude/notes.md", "outside the working folder: ~/.claude/notes.md"],
     ])(
-      "shows a file the run wrote at %s as %s, against the run's working folder and home",
+      "shows a file the run wrote at %s as %s, against the build's worktree and home",
       async (path, shown) => {
-        const filePath = path.startsWith("/") ? path : `${repo.path}/${path}`;
-        await startActivityRun({ tool_name: "Write", tool_input: { file_path: filePath } });
+        await startActivityRun((cwd) => ({
+          tool_name: "Write",
+          tool_input: { file_path: path.startsWith("/") ? path : `${cwd}/${path}` },
+        }));
 
         expect(activityPushes()[0]?.value).toMatchObject({ entry: { kind: "tool", path: shown } });
       },
@@ -1640,21 +1886,17 @@ describe("createEngineHandler", async () => {
         ),
       );
 
-    const withAppWaiter = () => {
-      const waiter = createAppWaiter({ push: collectInto(pushes) });
-      return handlerWith({
-        run: { ...runEnvironment(new NodeFileSystem()), waiter },
-        waits: waiter,
-      });
-    };
+    const withAppWaiter = () =>
+      handlerWith({ waits: createAppWaiter({ push: collectInto(pushes) }) });
 
-    const waitPushes = () => pushes.flatMap((push) => (push.push === "wait" ? [push.value] : []));
+    const waitPushes = (runId: string) =>
+      pushes.flatMap((push) => (push.push === "wait" && push.runId === runId ? [push.value] : []));
 
-    const openedWaitId = async (nodeId: string) => {
+    const openedWaitId = async (runId: string, nodeId: string) => {
       await vi.waitFor(() => {
-        expect(waitPushes().at(-1)?.request.nodeId).toBe(nodeId);
+        expect(waitPushes(runId).at(-1)?.request.nodeId).toBe(nodeId);
       });
-      const opened = waitPushes().at(-1);
+      const opened = waitPushes(runId).at(-1);
       if (!opened) throw new Error(`no wait open for ${nodeId}`);
       return opened.waitId;
     };
@@ -1675,7 +1917,7 @@ describe("createEngineHandler", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const runId = await startedRunId();
-      const waitId = await openedWaitId("g1");
+      const waitId = await openedWaitId(runId, "g1");
 
       expect(await answerWait({ waitId, reply: { decision: "approve" } })).toEqual({
         id: nextId - 1,
@@ -1698,6 +1940,31 @@ describe("createEngineHandler", async () => {
       );
     });
 
+    it("keeps one build's open wait when another build's run finishes, and still takes its answer", async () => {
+      handler = withAppWaiter();
+      flows.save(gated());
+      const parkedBuild = await builtId();
+      flows.save(twoScripts());
+      const otherBuild = await builtId();
+      const parked = await startedOn(parkedBuild);
+      const waitId = await openedWaitId(parked, "g1");
+
+      const other = await startedOn(otherBuild);
+      await untilFinished(other);
+
+      expect(snapshotsOf(other).at(-1)?.status).toBe("done");
+      expect(waitPushes(parked).at(-1)).toEqual({
+        waitId,
+        request: expect.objectContaining({ nodeId: "g1" }),
+      });
+      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toMatchObject({
+        ok: true,
+        value: { accepted: true },
+      });
+      await untilFinished(parked);
+      expect(snapshotsOf(parked).at(-1)?.status).toBe("done");
+    });
+
     it.each([
       ["a closed decision", (waitId: string) => ({ waitId, reply: { decision: "closed" } })],
       ["a malformed payload", (waitId: string) => ({ waitId, reply: "approve" })],
@@ -1706,7 +1973,7 @@ describe("createEngineHandler", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const runId = await startedRunId();
-      const waitId = await openedWaitId("g1");
+      const waitId = await openedWaitId(runId, "g1");
 
       expect(await answerWait(payloadFor(waitId))).toEqual({
         id: nextId - 1,
@@ -1721,7 +1988,7 @@ describe("createEngineHandler", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const runId = await startedRunId();
-      const waitId = await openedWaitId("g1");
+      const waitId = await openedWaitId(runId, "g1");
 
       expect(await answerWait({ waitId: `${waitId}-old`, reply: { decision: "approve" } })).toEqual(
         { id: nextId - 1, ok: true, value: { accepted: false } },
@@ -1734,11 +2001,11 @@ describe("createEngineHandler", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const runId = await startedRunId();
-      const waitId = await openedWaitId("g1");
+      const waitId = await openedWaitId(runId, "g1");
 
       await handler.stop();
 
-      expect(waitPushes().at(-1)).toBeNull();
+      expect(waitPushes(runId).at(-1)).toBeNull();
       expect(runs.findRun(runId)?.status).toBe("stopped");
       const eventsAtStop = runs.events(runId);
 
@@ -1794,32 +2061,50 @@ describe("workspace-info", () => {
   const ask = (gitState: FakeGitState, payload: unknown) =>
     createEngineHandler(options({ gitState })).handle({ id: 9, type: "workspace-info", payload });
 
-  it("answers an existing folder with its git state", async () => {
-    const gitState = new FakeGitState({ "/code/shop": { kind: "branch", name: "fd-demo" } });
+  it("answers the repository's git state and the default branch when no base is set", async () => {
+    const gitState = new FakeGitState(
+      { "/code/shop": { kind: "branch", name: "fd-demo" } },
+      { defaultBranches: { "/code/shop": "dev" } },
+    );
 
-    expect(await ask(gitState, { workingFolder: { kind: "path", path: "/code/shop" } })).toEqual({
+    expect(await ask(gitState, { buildConfig: { repo: "/code/shop", variables: [] } })).toEqual({
       id: 9,
       ok: true,
-      value: { kind: "branch", name: "fd-demo" },
+      value: { state: { kind: "branch", name: "fd-demo" }, base: "dev" },
     });
     expect(gitState.reads).toEqual(["/code/shop"]);
   });
 
-  it("answers a new worktree with no state and reads no git", async () => {
-    const gitState = new FakeGitState();
+  it("answers the base the build configuration sets", async () => {
+    const gitState = new FakeGitState(
+      { "/code/shop": { kind: "branch", name: "fd-demo" } },
+      { defaultBranches: { "/code/shop": "dev" } },
+    );
 
     expect(
-      await ask(gitState, {
-        workingFolder: { kind: "worktree", branch: "main", repo: "/code/shop" },
-      }),
-    ).toEqual({ id: 9, ok: true, value: null });
+      await ask(gitState, { buildConfig: { repo: "/code/shop", base: "main", variables: [] } }),
+    ).toEqual({
+      id: 9,
+      ok: true,
+      value: { state: { kind: "branch", name: "fd-demo" }, base: "main" },
+    });
+  });
+
+  it("answers no repository with no state and reads no git", async () => {
+    const gitState = new FakeGitState();
+
+    expect(await ask(gitState, { buildConfig: { variables: [] } })).toEqual({
+      id: 9,
+      ok: true,
+      value: null,
+    });
     expect(gitState.reads).toEqual([]);
   });
 
-  it("refuses a payload that is not a working folder and reads no git", async () => {
+  it("refuses a payload that is not a build configuration and reads no git", async () => {
     const gitState = new FakeGitState();
 
-    expect(await ask(gitState, { workingFolder: { kind: "path" } })).toMatchObject({
+    expect(await ask(gitState, { buildConfig: { repo: 5 } })).toMatchObject({
       id: 9,
       ok: false,
     });
@@ -1829,7 +2114,7 @@ describe("workspace-info", () => {
   it("answers a git failure as an error instead of throwing", async () => {
     const gitState = new FakeGitState({}, { failWith: "spawn git ENOENT" });
 
-    expect(await ask(gitState, { workingFolder: { kind: "path", path: "/code/shop" } })).toEqual({
+    expect(await ask(gitState, { buildConfig: { repo: "/code/shop", variables: [] } })).toEqual({
       id: 9,
       ok: false,
       error: "spawn git ENOENT",
@@ -1860,5 +2145,66 @@ describe("list-branches", () => {
       error: "/code/shop is not a git repository",
     });
     expect(await ask(new FakeGitState(), {})).toMatchObject({ id: 7, ok: false });
+  });
+});
+
+describe("doctor-worktrees", () => {
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("lists the per-run worktree folders an earlier Flowdeck left, and removes none", async () => {
+    await mkdir(join(home, "worktrees", "1a2b3c4d"), { recursive: true });
+    await mkdir(join(home, "worktrees", "5e6f7a8b"), { recursive: true });
+    await writeFile(join(home, "worktrees", "5e6f7a8b", "work.txt"), "kept\n");
+    const handler = createEngineHandler(options({ home }));
+
+    const answer = await handler.handle({ id: 3, type: "doctor-worktrees" });
+
+    expect(answer).toEqual({
+      id: 3,
+      ok: true,
+      value: [join(home, "worktrees", "1a2b3c4d"), join(home, "worktrees", "5e6f7a8b")],
+    });
+    expect((await stat(join(home, "worktrees", "1a2b3c4d"))).isDirectory()).toBe(true);
+    expect((await stat(join(home, "worktrees", "5e6f7a8b", "work.txt"))).isFile()).toBe(true);
+  });
+
+  it("lists nothing when no worktree folder was left", async () => {
+    const handler = createEngineHandler(options({ home }));
+
+    expect(await handler.handle({ id: 4, type: "doctor-worktrees" })).toEqual({
+      id: 4,
+      ok: true,
+      value: [],
+    });
+  });
+});
+
+describe("default-branch", () => {
+  const ask = (gitState: FakeGitState, payload: unknown) =>
+    createEngineHandler(options({ gitState })).handle({ id: 6, type: "default-branch", payload });
+
+  it("answers a repository's default branch through the git state", async () => {
+    const gitState = new FakeGitState({}, { defaultBranches: { "/code/shop": "dev" } });
+
+    expect(await ask(gitState, { repo: "/code/shop" })).toEqual({ id: 6, ok: true, value: "dev" });
+  });
+
+  it("answers a git failure and a bad payload as errors", async () => {
+    const failing = new FakeGitState({}, { failWith: "/code/shop is not a git repository" });
+
+    expect(await ask(failing, { repo: "/code/shop" })).toEqual({
+      id: 6,
+      ok: false,
+      error: "/code/shop is not a git repository",
+    });
+    expect(await ask(new FakeGitState(), {})).toMatchObject({ id: 6, ok: false });
   });
 });

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  branchVariableTestId,
+  buildConfigTestIds,
+  buildDialogTestIds,
   controlTestIds,
+  dialogTestIds,
+  pageTestIds,
   paletteTestId,
   readoutTestIds,
 } from "../../../src/app/renderer/test-ids.js";
@@ -23,7 +28,6 @@ describe("test ids", () => {
   it("lists every control id", () => {
     expect(Object.values(controlTestIds)).toEqual([
       "canvas-save",
-      "canvas-run",
       "canvas-build",
       "editor-built",
       "nav-back",
@@ -55,5 +59,75 @@ describe("test ids", () => {
       "canvas-selection",
       "canvas-selected-wires",
     ]);
+  });
+
+  it("names the Build dialog's controls, one per declared variable", () => {
+    expect(buildDialogTestIds).toMatchObject({
+      dialog: "build-dialog",
+      name: "build-dialog-name",
+      repo: "build-dialog-repo",
+      base: "build-dialog-base",
+      confirm: "build-dialog-confirm",
+      cancel: "build-dialog-cancel",
+      error: "build-dialog-error",
+    });
+    expect(buildDialogTestIds.variable("ticket")).toBe("build-dialog-variable-ticket");
+  });
+
+  it("names each build card's controls by the build's id", () => {
+    const id = "0f3a9c2e-1111-2222-3333-444455556666";
+
+    expect([
+      pageTestIds.buildCard(id),
+      pageTestIds.buildOpen(id),
+      pageTestIds.buildRun(id),
+      pageTestIds.buildResume(id),
+      pageTestIds.buildStop(id),
+      pageTestIds.buildDelete(id),
+      pageTestIds.buildOld(id),
+      pageTestIds.buildKept(id),
+    ]).toEqual([
+      `build-card-${id}`,
+      `build-open-${id}`,
+      `build-run-${id}`,
+      `build-resume-${id}`,
+      `build-stop-${id}`,
+      `build-delete-${id}`,
+      `build-old-${id}`,
+      `build-kept-${id}`,
+    ]);
+  });
+
+  it("names the Build configuration fields as the session form draws them", () => {
+    expect(buildConfigTestIds).toMatchObject({
+      repo: "session-build-config-repo",
+      base: "session-build-config-base",
+      addVariable: "build-config-add-variable",
+    });
+    expect(buildConfigTestIds.variable("deep")).toBe("build-config-variable-deep");
+  });
+
+  it("names the Branch variable picker and the Doctor's worktree list", () => {
+    expect(branchVariableTestId).toBe("node-setting-variable");
+    expect(pageTestIds.doctorWorktrees).toBe("doctor-worktrees");
+  });
+
+  it("gives every control its own id, and a parameterised id its own id per value", () => {
+    const groups = [
+      controlTestIds,
+      readoutTestIds,
+      pageTestIds,
+      dialogTestIds,
+      buildDialogTestIds,
+      buildConfigTestIds,
+      { branchVariableTestId },
+    ];
+    const ids = groups.flatMap((group) =>
+      Object.values(group).flatMap((id: string | ((value: string) => string)) =>
+        typeof id === "string" ? [id] : [id("a"), id("b")],
+      ),
+    );
+
+    expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([]);
   });
 });

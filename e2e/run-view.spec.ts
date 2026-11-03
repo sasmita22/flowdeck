@@ -1,10 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
+import { GitFolderState } from "../src/adapters/git/git-state.js";
+import { GitWorktree } from "../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../src/adapters/node-fs/node-file-system.js";
 import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
@@ -26,7 +28,9 @@ import {
   wire,
 } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 
 const laidOut = (nodes: unknown[], wires: unknown[]) =>
   flow(
@@ -40,7 +44,7 @@ const laidOut = (nodes: unknown[], wires: unknown[]) =>
 const run = promisify(execFile);
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let bin: string;
 let launched: LaunchedApp | undefined;
 
@@ -73,7 +77,7 @@ draw();
 
 const launch = async (env: Record<string, string> = {}) => {
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), env });
-  await expect(launched.window.getByTestId(controlTestIds.run)).toBeVisible();
+  await expect(launched.window.getByTestId(controlTestIds.build)).toBeVisible();
   return launched.window;
 };
 
@@ -134,6 +138,8 @@ const killTmux = async () => {
   }
 };
 
+const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
+
 const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
 
 const darkShot = async (window: Page, name: string) => {
@@ -144,7 +150,7 @@ const darkShot = async (window: Page, name: string) => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-rv-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-rv-wf-")));
+  repo = await createTmpRepo({ commit: true });
   bin = join(home, "bin");
 });
 
@@ -154,23 +160,24 @@ test.afterEach(async () => {
   } finally {
     await killTmux();
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
 test("A script that exits 3 says so on its node and in the inspector, and Retry after the fix goes on to done", async () => {
-  await writeFile(join(folder, "code.txt"), "3");
   seedFlow(
     home,
     laidOut(
       [sh("s1", "exit $(cat code.txt)", "Run tests"), sh("s2", "echo shipped", "Ship")],
       [thenWire("s1", "s2")],
     ),
-    folder,
+    repo.path,
   );
   const window = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  const folder = workFolder(await buildOnCanvas(window, home, "exit-three"));
+  await writeFile(join(folder, "code.txt"), "3");
+  await runFromDetail(window);
 
   await expect(window.getByTestId("node-reason-s1")).toHaveText("Script exited with code 3", {
     timeout: 20_000,
@@ -206,10 +213,10 @@ test("Stop ends a long script and marks the run stopped, and Resume skips the fi
       ],
       [thenWire("s1", "s2"), thenWire("s2", "s3")],
     ),
-    folder,
+    repo.path,
   );
   const window = await launch();
-  await window.getByTestId(controlTestIds.run).click();
+  const folder = workFolder(await buildAndRun(window, home, "long"));
   await expect(status(window, "s2")).toHaveAttribute("data-status", "running", {
     timeout: 20_000,
   });
@@ -259,11 +266,12 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
       ],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
-    folder,
+    repo.path,
   );
   const window = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  await buildOnCanvas(window, home, "gated");
+  await window.getByTestId(pageTestIds.buildDetailRun).click();
   const dialog = window.getByTestId("run-dialog");
   await expect(dialog).toBeVisible({ timeout: 20_000 });
   await expect(dialog).toContainText(
@@ -289,38 +297,43 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
 });
 
-test("Turning a flag off for one run takes Branch's no path", async () => {
+test("A build whose yes/no value is no takes Branch's no path", async () => {
+  const branched = laidOut(
+    [trigger("t"), branch("b", "deep"), sh("yes", "echo deep"), sh("no", "echo quick")],
+    [thenWire("t", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+  );
   seedFlow(
     home,
-    laidOut(
-      [
-        trigger("t", { settings: { inputs: [], flags: { deep: true } } }),
-        branch("b", "deep"),
-        sh("yes", "echo deep"),
-        sh("no", "echo quick"),
-      ],
-      [thenWire("t", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
-    ),
-    folder,
+    {
+      ...branched,
+      session: {
+        ...branched.session,
+        buildConfig: {
+          ...branched.session.buildConfig,
+          variables: [{ name: "deep", kind: "yesno", default: true }],
+        },
+      },
+    },
+    repo.path,
   );
   const window = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
-  await expect(window.getByTestId("run-dialog-flag-deep")).toBeChecked({ timeout: 20_000 });
-  await window.getByTestId("run-dialog-flag-deep").uncheck();
-  await window.getByTestId("run-dialog-start").click();
+  const buildId = await buildAndRun(window, home, "quick", { deep: false });
 
   await expect(status(window, "no")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(status(window, "yes")).toHaveAttribute("data-status", "skipped");
   await expect(status(window, "t")).toHaveAttribute("data-status", "done");
-  expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({ deep: false });
+  expect(rows<{ values: string }>('SELECT "values" FROM builds WHERE id = ?', buildId)).toEqual([
+    { values: JSON.stringify({ deep: false }) },
+  ]);
+  expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({});
 });
 
 test("Script output shows in Activity and is still there after the run page is opened again", async () => {
-  seedFlow(home, laidOut([sh("s1", "echo hello from s1; echo careful >&2")], []), folder);
+  seedFlow(home, laidOut([sh("s1", "echo hello from s1; echo careful >&2")], []), repo.path);
   const window = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "talk");
   const output = window.locator('[data-kind="output"][data-node-id="s1"]');
   await expect(output).toHaveText(["s1 Errors: careful", "s1 Output: hello from s1"], {
     timeout: 20_000,
@@ -349,10 +362,10 @@ test("A gate's question shows on the run page while the inspector is hidden", as
       [sh("s1", "echo one"), gate("g1"), sh("s2", "echo two")],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
-    folder,
+    repo.path,
   );
   const window = await launch();
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "gated");
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
 
   await window.getByTestId(controlTestIds.inspectorHide).click();
@@ -381,27 +394,38 @@ test("The Cost tab shows each node's tokens, cost and time, and a session line t
       ],
       [thenWire("p1", "s1"), thenWire("s1", "p2")],
     ),
-    folder,
+    repo.path,
   );
   const db = openDatabase({ path: join(home, "flowdeck.db") });
   let runId: string;
   try {
     let clock = Date.parse("2026-11-02T10:00:00Z");
     const runs = new SqliteStore({ db, now: () => new Date(clock) });
-    const built = await buildVersion(source, {
-      flows: new SqliteFlowStore({ db }),
-      store: runs,
-      fs: new NodeFileSystem(),
-      home,
-      connectors: new FakeConnectorSource(),
-    });
+    const built = await buildVersion(
+      source,
+      { name: "plan-and-build", values: {} },
+      {
+        flows: new SqliteFlowStore({ db }),
+        store: runs,
+        fs: new NodeFileSystem(),
+        home,
+        connectors: new FakeConnectorSource(),
+        gitState: new GitFolderState(),
+        worktree: new GitWorktree(),
+        newId: () => "0f3a9c2e-0000-4000-8000-000000000000",
+      },
+    );
     if (!built.ok) throw new Error("the seeded flow did not build");
     runId = runs.createRun({
       buildDir: built.dir,
       inputs: {},
       nodeIds: ["p1", "s1", "p2"],
-      session: { tmuxName: "fd-run-seeded", cwd: folder, claudeSessionId: "seeded" },
-      buildHash: built.hash,
+      session: {
+        tmuxName: "fd-run-seeded",
+        cwd: workFolder(built.record.id),
+        claudeSessionId: "seeded",
+      },
+      buildId: built.record.id,
     }).id;
     const at = (seconds: number, nodeId: string, event: Parameters<SqliteStore["append"]>[2]) => {
       clock = Date.parse("2026-11-02T10:00:00Z") + seconds * 1000;
@@ -445,17 +469,17 @@ test("Fork and Join show their status during a parallel run, and Stop ends the r
       [fork("f"), agent("a"), agent("b"), joinNode("j")],
       [thenWire("f", "a"), thenWire("f", "b"), thenWire("a", "j"), thenWire("b", "j")],
     ),
-    folder,
+    repo.path,
   );
   const window = await withFakeClaude();
 
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "parallel");
 
   await expect(status(window, "f")).toHaveAttribute("data-status", "sent", { timeout: 30_000 });
   await expect(status(window, "j")).toHaveAttribute("data-status", "running");
   await expect(status(window, "a")).toHaveAttribute("data-status", "sent");
   const session = latestRun()?.tmux_name ?? "";
-  expect(await tmuxAlive(session)).toBe(true);
+  await expect.poll(() => tmuxAlive(session), { timeout: 15_000 }).toBe(true);
 
   await window.getByTestId(pageTestIds.runStop).click();
 
@@ -466,9 +490,9 @@ test("Fork and Join show their status during a parallel run, and Stop ends the r
 });
 
 test("Pop out opens the terminal in its own window, attached to the run's session", async () => {
-  seedFlow(home, laidOut([prompt("p1")], []), folder);
+  seedFlow(home, laidOut([prompt("p1")], []), repo.path);
   const window = await withFakeClaude();
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "pop-out");
   await expect(status(window, "p1")).toHaveAttribute("data-status", "sent", { timeout: 30_000 });
   const session = latestRun()?.tmux_name ?? "";
 

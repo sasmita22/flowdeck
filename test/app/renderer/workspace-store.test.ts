@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
-import { createRunStore, type RunBridge } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import {
   createWorkspaceStore,
@@ -20,16 +19,15 @@ const deferred = <T>() => {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const shop = { kind: "path", path: "/code/shop" } as const;
-const blog = { kind: "path", path: "/code/blog" } as const;
+const shop = { repo: "/code/shop", variables: [] };
+const blog = { repo: "/code/blog", variables: [] };
 
-const atFolder = (workingFolder: Flow["session"]["workingFolder"]): Flow => {
+const atFolder = (buildConfig: Flow["session"]["buildConfig"]): Flow => {
   const base = flow([prompt("prompt-1")], []);
-  return { ...base, session: { ...base.session, workingFolder } };
+  return { ...base, session: { ...base.session, buildConfig } };
 };
 
 const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
-  let pushRun: (value: unknown) => void = () => undefined;
   const saveBridge = {
     saveFlow: vi.fn<(flow: unknown) => Promise<unknown>>(async () =>
       options.saveFails === true
@@ -48,54 +46,27 @@ const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
     onCloseRequest: vi.fn(() => () => {}),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
   } satisfies SaveBridge;
-  const runBridge = {
-    buildVersion: vi.fn<(ref: { flowId: string; version: number }) => Promise<unknown>>(
-      async () => ({
-        kind: "built",
-        hash: "h1",
-        dir: "/fd/builds/h1",
-        reused: false,
-        restored: [],
-      }),
-    ),
-    runBuild: vi.fn<(payload: { hash: string }) => Promise<unknown>>(async () => ({
-      kind: "started",
-      runId: "run-1",
-    })),
-    getRunState: vi.fn<() => Promise<unknown>>(async () => null),
-    onRunState: vi.fn((listener: (value: unknown) => void) => {
-      pushRun = listener;
-      return () => {};
-    }),
-    runOptions: vi.fn(async () => ({ inputs: [], flags: {}, automatic: false })),
-    stopRun: vi.fn(async () => ({ stopped: false })),
-    retryNode: vi.fn(async () => null),
-    resumeRun: vi.fn(async () => null),
-    runCost: vi.fn(async () => null),
-  } satisfies RunBridge;
   const bridge = {
-    workspaceInfo: vi.fn<(workingFolder: unknown) => Promise<unknown>>(async (folder) =>
-      (folder as { path?: string }).path === shop.path
-        ? { kind: "branch", name: "fd-demo" }
-        : { kind: "not-a-repo" },
+    workspaceInfo: vi.fn<(buildConfig: unknown) => Promise<unknown>>(async (folder) =>
+      (folder as { repo?: string }).repo === undefined
+        ? null
+        : (folder as { repo?: string }).repo === shop.repo
+          ? { state: { kind: "branch", name: "fd-demo" }, base: "main" }
+          : { state: { kind: "not-a-repo" }, base: null },
     ),
   } satisfies Pick<FlowdeckBridge, "workspaceInfo">;
 
   const canvas = createCanvasStore({ ready: false });
   const save = createSaveStore({ bridge: saveBridge, canvas });
-  const run = createRunStore({ bridge: runBridge, save, canvas });
-  const workspace = createWorkspaceStore({ bridge, canvas, save, run });
+  const workspace = createWorkspaceStore({ bridge, canvas, save });
   const label = () => selectWorkspaceLabel(workspace.getState());
-  const runStarts = (runId: string) =>
-    pushRun({ runId, status: "running", nodes: { "prompt-1": "waiting" } });
 
-  return { bridge, canvas, save, run, workspace, label, runStarts, runBridge };
+  return { bridge, canvas, save, workspace, label };
 };
 
 const loaded = async (options: Parameters<typeof setup>[0]) => {
   const parts = setup(options);
   await parts.save.getState().open();
-  await parts.run.getState().connect();
   await settle();
   return parts;
 };
@@ -108,39 +79,42 @@ describe("createWorkspaceStore", () => {
     expect(bridge.workspaceInfo).not.toHaveBeenCalled();
   });
 
-  it("asks for the loaded flow's folder and shows its name and branch", async () => {
+  it("asks for the loaded flow's repo and shows its folder name and base branch", async () => {
     const { bridge, label } = await loaded({ latest: atFolder(shop) });
 
     expect(bridge.workspaceInfo).toHaveBeenCalledExactlyOnceWith(shop);
     expect(label()).toEqual({
       folder: { name: "shop", title: "/code/shop" },
-      branch: "fd-demo",
+      branch: "main",
     });
   });
 
-  it("says the folder is not set for a new blueprint", async () => {
+  it("says the repo is not set for a new blueprint, which starts from the default branch", async () => {
     const { label } = await loaded({});
 
-    expect(label()).toEqual({ folder: { name: "folder not set", title: "" }, branch: "" });
+    expect(label()).toEqual({
+      folder: { name: "repo not set", title: "" },
+      branch: "default branch",
+    });
   });
 
-  it("asks again when the working folder changes, without showing the old branch meanwhile", async () => {
+  it("asks again when the repo changes, without showing the old base branch meanwhile", async () => {
     const { bridge, canvas, label } = await loaded({ latest: atFolder(shop) });
     const answer = deferred<unknown>();
     bridge.workspaceInfo.mockReturnValueOnce(answer.promise);
 
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, workingFolder: blog });
+    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
 
     expect(bridge.workspaceInfo).toHaveBeenLastCalledWith(blog);
     expect(label()).toEqual({ folder: { name: "blog", title: "/code/blog" }, branch: "" });
 
-    answer.resolve({ kind: "not-a-repo" });
+    answer.resolve({ state: { kind: "not-a-repo" }, base: null });
     await settle();
 
-    expect(label()?.branch).toBe("not a git repo");
+    expect(label()?.branch).toBe("default branch");
   });
 
-  it("does not ask again for an edit that leaves the working folder alone", async () => {
+  it("does not ask again for an edit that leaves the repo and base alone", async () => {
     const { bridge, canvas } = await loaded({ latest: atFolder(shop) });
 
     canvas.getState().drop("script", { x: 300, y: 0 });
@@ -170,38 +144,28 @@ describe("createWorkspaceStore", () => {
     expect(bridge.workspaceInfo).toHaveBeenCalledTimes(1);
   });
 
-  it("asks again when a run starts, and not for later states of the same run", async () => {
-    const { bridge, runStarts } = await loaded({ latest: atFolder(shop) });
-
-    runStarts("run-1");
-    runStarts("run-1");
-    await settle();
-
-    expect(bridge.workspaceInfo).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps the newest answer when an older one arrives late", async () => {
     const { bridge, canvas, label } = await loaded({ latest: atFolder(shop) });
     const late = deferred<unknown>();
     bridge.workspaceInfo.mockReturnValueOnce(late.promise);
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, workingFolder: blog });
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, workingFolder: shop });
+    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
+    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: shop });
     await settle();
 
-    late.resolve({ kind: "missing" });
+    late.resolve({ state: { kind: "missing" }, base: "stale" });
     await settle();
 
-    expect(label()).toEqual({ folder: { name: "shop", title: "/code/shop" }, branch: "fd-demo" });
+    expect(label()).toEqual({ folder: { name: "shop", title: "/code/shop" }, branch: "main" });
   });
 
   it.each([
-    ["an answer that is not a folder state", async () => ({ kind: "sideways" })],
+    ["an answer that is not a workspace state", async () => ({ state: { kind: "sideways" } })],
     ["a failed request", async () => Promise.reject(new Error("engine gone"))],
   ])("shows no branch for %s", async (_case, answer) => {
     const { bridge, canvas, label } = await loaded({ latest: atFolder(shop) });
     bridge.workspaceInfo.mockImplementationOnce(answer);
 
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, workingFolder: blog });
+    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
     await settle();
 
     expect(label()).toEqual({ folder: { name: "blog", title: "/code/blog" }, branch: "" });

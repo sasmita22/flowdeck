@@ -11,8 +11,10 @@ export type InspectorBridge = Pick<FlowdeckBridge, "getActivity" | "onActivity">
 type Feed = { runId: string; entries: ActivityEntry[] };
 
 export type InspectorState = {
+  runId: string | null;
   feed: Feed | null;
   connect(): Promise<void>;
+  view(runId: string): Promise<void>;
 };
 
 const merge = (older: readonly ActivityEntry[], newer: readonly ActivityEntry[]) => {
@@ -86,19 +88,24 @@ export const createInspectorStore = ({
   bridge: InspectorBridge;
 }): StoreApi<InspectorState> =>
   createStore<InspectorState>()((set, get) => ({
+    runId: null,
     feed: null,
 
     connect: async () => {
       bridge.onActivity((value) => {
         const parsed = activityUpdateSchema.safeParse(value);
-        if (!parsed.success) return;
+        if (!parsed.success || parsed.data.runId !== get().runId) return;
         const { runId, entry } = parsed.data;
         const { feed } = get();
         const kept = feed?.runId === runId ? feed.entries : [];
         set({ feed: { runId, entries: merge(kept, [entry]) } });
       });
-      const fetched = activityFeedSchema.safeParse(await bridge.getActivity());
-      if (!fetched.success) return;
+    },
+
+    view: async (runId) => {
+      set({ runId, feed: null });
+      const fetched = activityFeedSchema.safeParse(await bridge.getActivity(runId));
+      if (!fetched.success || get().runId !== runId) return;
       const { feed } = get();
       if (feed === null) set({ feed: fetched.data });
       else if (feed.runId === fetched.data.runId)

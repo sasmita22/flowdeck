@@ -5,18 +5,19 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
-import { build } from "../../src/core/compiler/build.js";
+import { realDeps } from "../../src/cli/main.js";
 import { nodeStatus } from "../../src/core/run/run-events.js";
 import * as builders from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const tsx = join(root, "node_modules", ".bin", "tsx");
+const buildName = "live-turn-error";
 const runDeadlineMs = 60_000;
 const notLoggedIn = "Not logged in · Please run /login";
 
@@ -53,11 +54,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
   const sessionName = `fd-live-turn-error-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let sessionIds: string[];
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
     sessionIds = [];
   });
 
@@ -76,7 +79,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
       console.error(`no pane of ${sessionName} to capture: ${String(error)}`);
     }
     await killTmuxServer(sessionName);
-    await removeClaudeSessions(repo.path, sessionIds);
+    await removeClaudeSessions(workspace.workFolder, sessionIds);
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -89,14 +92,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
         [builders.trigger("t"), builders.prompt("p1", { settings: { instructions: "Say hi." } })],
         [builders.thenWire("t", "p1")],
       );
-      const built = await build(flow, {
-        fs: new NodeFileSystem(),
-        home,
+      await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, {
+        ...realDeps(),
+        env: { ...process.env, FLOWDECK_HOME: home },
       });
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
 
       const exit = await runCliProcess(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
+        ["run", buildName, "--session", sessionName, "--model", "haiku"],
         loggedOutEnv(home),
       );
 

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,8 @@ import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const deadlineMs = 180_000;
+const buildName = "live-resume-dead";
+const slugOf = (folder: string) => folder.replace(/[^a-zA-Z0-9]/g, "-");
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
   error instanceof Error && "code" in error && codes.includes(error.code as string | number);
@@ -81,9 +83,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
   beforeEach(async () => {
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
-    home = await mkdtemp(join(tmpdir(), "fd-l-"));
-    repo = await createTmpRepo();
-    projectFolder = join(homedir(), ".claude", "projects", repo.path.replace(/[^a-zA-Z0-9]/g, "-"));
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
+    repo = await createTmpRepo({ commit: true });
+    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
     handlers = [];
   });
 
@@ -133,7 +135,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         session: {
           ...base.session,
           model: "haiku",
-          workingFolder: { kind: "path", path: repo.path },
+          buildConfig: { repo: repo.path, variables: [] },
         },
       };
       const db = openDatabase({ path: join(home, "flowdeck.db") });
@@ -159,7 +161,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
             fs,
             now: Date.now,
             scripts: new NodeProcessRunner(),
-            waiter,
             startEvents: async (socketPath) => {
               await mkdir(dirname(socketPath), { recursive: true });
               const server = new HookSocketServer({ socketPath });
@@ -206,8 +207,18 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
 
       const first = engine();
       const ref = stores.flows.save(saved);
-      const { hash } = (await ask(first.handler, "build-version", ref)) as { hash: string };
-      const { runId } = (await ask(first.handler, "run-build", { hash })) as { runId: string };
+      const { id: buildId, dir } = (await ask(first.handler, "build-version", {
+        ...ref,
+        name: buildName,
+        values: {},
+      })) as { id: string; dir: string };
+      projectFolder = join(
+        homedir(),
+        ".claude",
+        "projects",
+        slugOf(join(dir, basename(repo.path))),
+      );
+      const { runId } = (await ask(first.handler, "run-build", { buildId })) as { runId: string };
       await vi.waitFor(() => expect(statusOf(runId, "g1")).toBe("needs-you"), {
         timeout: deadlineMs,
         interval: 500,
@@ -262,8 +273,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
       const transcript = await transcriptOf(claudeSessionId);
       if (transcript === undefined) throw new Error("the resumed session wrote no transcript");
       const turns = parseTranscriptTurns(await readFile(transcript, "utf8"));
-      expect(turns.map((turn) => turn.userText.includes(`/${hash}:p2`))).toContain(true);
-      expect(turns.map((turn) => turn.userText.includes(`/${hash}:p1`))).toContain(true);
+      expect(turns.map((turn) => turn.userText.includes(`/${buildName}:p2`))).toContain(true);
+      expect(turns.map((turn) => turn.userText.includes(`/${buildName}:p1`))).toContain(true);
     },
   );
 });

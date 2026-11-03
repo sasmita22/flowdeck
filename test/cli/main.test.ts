@@ -1,23 +1,32 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GitFolderState } from "../../src/adapters/git/git-state.js";
+import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { SessionGoneError } from "../../src/adapters/claude/claude-session.js";
 import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
-import type { Flow } from "../../src/core/flow/schema.js";
+import { buildVersion } from "../../src/core/compiler/build-version.js";
+import { canonicalJson } from "../../src/core/compiler/canonical-json.js";
+import { hashBuild } from "../../src/core/compiler/hash.js";
+import type { BuildConfig, Flow } from "../../src/core/flow/schema.js";
+import type { VariableValues } from "../../src/core/flow/variables.js";
 import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { RunEvent } from "../../src/core/run/run-events.js";
+import type { FlowStore } from "../../src/ports/flow-store.js";
 import type { ProcessResult } from "../../src/ports/process-runner.js";
+import type { Store } from "../../src/ports/store.js";
 import type { WaitReply } from "../../src/ports/waiter.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
-import { FakeFileSystem } from "../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../fakes/fake-flow-store.js";
 import { FakeProcessRunner } from "../fakes/fake-process-runner.js";
 import { FakeStore } from "../fakes/fake-store.js";
@@ -36,16 +45,71 @@ import {
   trigger,
   wire,
 } from "../fixtures/flow-builders.js";
+import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+
+const git = promisify(execFile);
 
 const shScript = (id: string) => script(id, { settings: { command: "sh" } });
 
-const home = "/fd-home";
-const repo = "/repo";
 const sessionId = "s1";
 const hooks = { nodePath: "/n", hookScriptPath: "/h" };
-const flows = new FakeFlowStore();
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 const ok: ProcessResult = { code: 0, stdout: "", stderr: "" };
+const failed: ProcessResult = { code: 1, stdout: "", stderr: "" };
+
+let home: string;
+let repo: TmpRepo;
+
+beforeEach(async () => {
+  home = await mkdtemp(join(tmpdir(), "fd-home-"));
+  repo = await createTmpRepo({ commit: true });
+});
+
+afterEach(async () => {
+  await repo.cleanup();
+  await rm(home, { recursive: true, force: true });
+});
+
+const idSequence = () => {
+  let next = 0;
+  return () => `${String(++next).padStart(8, "0")}-0000-4000-8000-000000000000`;
+};
+
+type Variable = BuildConfig["variables"][number];
+
+const withConfig = (
+  input: Flow,
+  config: { variables?: Variable[]; base?: string | null; connectors?: string[] },
+): Flow => {
+  const buildConfig = { ...input.session.buildConfig };
+  if (config.base === null) delete buildConfig.base;
+  else if (config.base !== undefined) buildConfig.base = config.base;
+  if (config.variables !== undefined) buildConfig.variables = config.variables;
+  return {
+    ...input,
+    session: {
+      ...input.session,
+      ...(config.connectors === undefined ? {} : { connectors: config.connectors }),
+      buildConfig,
+    },
+  };
+};
+
+const isPrivate = async (path: string) => ((await stat(path)).mode & 0o777) === 0o600;
+
+const exists = async (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+
+const branchOf = async (folder: string) =>
+  (await git("git", ["-C", folder, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+
+const toplevelOf = async (folder: string) =>
+  (await git("git", ["-C", folder, "rev-parse", "--show-toplevel"])).stdout.trim();
+
+type Seeded = { id: string; hash: string; dir: string; worktree: string };
 
 type Recorded = {
   startEvents: string[];
@@ -60,7 +124,6 @@ type Recorded = {
 };
 
 function stubDeps(
-  fs: CliDeps["fs"],
   options: {
     env?: Record<string, string>;
     results?: ProcessResult[];
@@ -68,14 +131,18 @@ function stubDeps(
     waiter?: FakeWaiter;
     turns?: TranscriptTurn[];
     sessionGone?: boolean;
-    flows?: FakeFlowStore;
     connectors?: FakeConnectorSource;
+    stores?: { runs: Store; flows: FlowStore };
   } = {},
 ) {
   const source = new FakeEventSource();
   const store = new FakeStore();
-  const flowStore = options.flows ?? new FakeFlowStore();
+  const stores = options.stores ?? { runs: store, flows: new FakeFlowStore() };
   const scripts = new FakeProcessRunner(options.results ?? []);
+  const fs = new NodeFileSystem();
+  const newId = idSequence();
+  const gitState = new GitFolderState();
+  const worktree = new GitWorktree();
   const recorded: Recorded = {
     startEvents: [],
     openSession: [],
@@ -95,10 +162,13 @@ function stubDeps(
     scripts,
     hooks,
     connectors: options.connectors ?? new FakeConnectorSource({ jira }),
+    gitState,
+    worktree,
+    newId,
     waiter: options.waiter ?? new FakeWaiter([]),
     openStore: (path) => {
       recorded.storePaths.push(path);
-      return { runs: store, flows: flowStore };
+      return stores;
     },
     transcriptTurns: async (claudeSessionId) => {
       recorded.order.push(`transcript ${claudeSessionId}`);
@@ -144,13 +214,34 @@ function stubDeps(
       };
     },
   };
-  return { deps, recorded, scripts, store, source };
-}
-
-async function built(fs: FakeFileSystem, input: Flow): Promise<{ dir: string; hash: string }> {
-  const result = await build(input, { fs, home, connectors: new FakeConnectorSource({ jira }) });
-  if (!result.ok) throw new Error("build failed");
-  return result;
+  const seed = async (
+    input: Flow,
+    request: { name?: string; values?: VariableValues } = {},
+  ): Promise<Seeded> => {
+    const ref = stores.flows.save(input);
+    const result = await buildVersion(
+      ref,
+      { name: request.name ?? "x", repo: repo.path, values: request.values ?? {} },
+      {
+        flows: stores.flows,
+        store: stores.runs,
+        fs,
+        home,
+        connectors: new FakeConnectorSource({ jira }),
+        gitState,
+        worktree,
+        newId,
+      },
+    );
+    if (!result.ok) throw new Error(`seed build failed: ${JSON.stringify(result.errors)}`);
+    return {
+      id: result.record.id,
+      hash: result.hash,
+      dir: result.dir,
+      worktree: join(result.dir, basename(repo.path)),
+    };
+  };
+  return { deps, recorded, scripts, store, source, seed };
 }
 
 const promptThenScript = () =>
@@ -166,131 +257,113 @@ const nothingStarted = (recorded: Recorded, scripts: FakeProcessRunner) => {
 };
 
 describe("runCli run", () => {
-  let fs: FakeFileSystem;
-  let dir: string;
-  let hash: string;
-
-  beforeEach(async () => {
-    fs = new FakeFileSystem();
-    ({ dir, hash } = await built(fs, promptThenScript()));
-  });
-
   it.each([
     [[]],
     [["launch"]],
     [["run"]],
-    [["run", "/fd-home/builds/x"]],
-    [["run", "--cwd", repo]],
-    [["run", "/fd-home/builds/x", "--cwd", repo, "--colour"]],
+    [["run", "x", "y"]],
+    [["run", "x", "--cwd", "/somewhere"]],
+    [["run", "x", "--colour"]],
+    [["run", "x", "--e2e"]],
+    [["run", "x", "--no-e2e"]],
+    [["run", "x", "--no-auto"]],
   ])("refuses the arguments %j with usage and exit 2", async (argv) => {
-    const { deps, recorded, scripts } = stubDeps(fs);
+    const { deps, recorded, scripts, store, seed } = stubDeps();
+    await seed(withConfig(promptThenScript(), { variables: [{ name: "e2e", kind: "yesno" }] }), {
+      values: { e2e: true },
+    });
 
     expect(await runCli(argv, deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain("Usage:");
     nothingStarted(recorded, scripts);
+    expect(store.runs).toEqual([]);
+  });
+
+  it("refuses a name no build has, naming it, and starts nothing", async () => {
+    const { deps, recorded, scripts, store, seed } = stubDeps();
+    await seed(promptThenScript());
+
+    expect(await runCli(["run", "nope"], deps)).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("nope");
+    nothingStarted(recorded, scripts);
+    expect(store.runs).toEqual([]);
   });
 
   it("refuses a session name outside fd-", async () => {
-    const { deps, recorded, scripts } = stubDeps(fs);
+    const { deps, recorded, scripts, seed } = stubDeps();
+    await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo, "--session", "mine"], deps)).toBe(2);
+    expect(await runCli(["run", "x", "--session", "mine"], deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain("mine");
     nothingStarted(recorded, scripts);
   });
 
   it("names the session fd-run-<short id> by default", async () => {
-    const { deps, recorded } = stubDeps(fs, { results: [ok] });
+    const { deps, recorded, seed } = stubDeps({ results: [ok] });
+    await seed(promptThenScript());
 
-    await runCli(["run", dir, "--cwd", repo], deps);
+    await runCli(["run", "x"], deps);
 
     expect(recorded.openSession[0]?.sessionName).toMatch(/^fd-run-[0-9a-f]{8}$/);
   });
 
   it("refuses a hook socket path longer than the platform limit", async () => {
     const longHome = `/${"h".repeat(120)}`;
-    const { deps, recorded, scripts } = stubDeps(fs, { env: { FLOWDECK_HOME: longHome } });
+    const { deps, recorded, scripts, seed } = stubDeps();
+    await seed(promptThenScript());
+    deps.env = { FLOWDECK_HOME: longHome };
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(2);
+    expect(await runCli(["run", "x"], deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain("longer than 104");
     nothingStarted(recorded, scripts);
   });
 
   it("puts the hook socket under ~/.flowdeck when FLOWDECK_HOME is unset", async () => {
-    const { deps, recorded } = stubDeps(fs, { env: {}, results: [ok] });
+    const { deps, recorded, seed } = stubDeps({ results: [ok] });
+    await seed(promptThenScript());
+    deps.env = {};
 
-    await runCli(["run", dir, "--cwd", repo, "--session", "fd-x"], deps);
+    await runCli(["run", "x", "--session", "fd-x"], deps);
 
     expect(recorded.startEvents).toEqual([join(homedir(), ".flowdeck", "sockets", "fd-x.sock")]);
   });
 
   it("refuses a tampered build before starting anything, printing each problem", async () => {
-    await fs.writeFile(`${dir}/commands/p1.md`, "tampered\n");
-    await fs.writeFile(`${dir}/extra.md`, "extra\n");
-    const { deps, recorded, scripts } = stubDeps(fs);
+    const { deps, recorded, scripts, store, seed } = stubDeps();
+    const { dir } = await seed(promptThenScript());
+    await writeFile(join(dir, "plugin", "commands", "p1.md"), "tampered\n");
+    await writeFile(join(dir, "plugin", "commands", "extra.md"), "extra\n");
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(2);
+    expect(await runCli(["run", "x"], deps)).toBe(2);
     expect(recorded.stderr).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("commands/p1.md: changed"),
-        expect.stringContaining("extra.md: extra"),
+        expect.stringContaining("plugin/commands/p1.md: changed"),
+        expect.stringContaining("plugin/commands/extra.md: extra"),
       ]),
     );
     expect(recorded.stdout).toEqual([]);
     nothingStarted(recorded, scripts);
+    expect(store.runs).toEqual([]);
   });
-
-  it.each([
-    ["an empty body", flow([prompt("p1"), loop("l1")], [thenWire("p1", "l1")])],
-    [
-      "a Script-only body",
-      flow([loop("l1"), script("s1", { parent: "l1" })], [thenWire("l1", "s1")]),
-    ],
-  ])(
-    "refuses to build a loop with %s, the same way the runner refuses it",
-    async (_name, input) => {
-      const result = await build(input, {
-        fs: new FakeFileSystem(),
-        home,
-        connectors: new FakeConnectorSource({ jira }),
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        errors: [
-          {
-            rule: "loop-body",
-            node: "l1",
-            message: "l1 (loop) has no prompt or agent in its body.",
-          },
-        ],
-      });
-    },
-  );
 
   describe("gates and asks", () => {
     const echoed = (text: string): ProcessResult => ({ code: 0, stdout: `${text}\n`, stderr: "" });
     const approve: WaitReply = { decision: "approve" };
 
-    async function gateBuild(skippable = false) {
-      const other = new FakeFileSystem();
-      const { dir: gateDir } = await built(
-        other,
-        flow(
-          [script("s1"), gate("g1", { settings: { skippable } }), script("s2")],
-          [thenWire("s1", "g1"), thenWire("g1", "s2")],
-        ),
+    const gateFlow = (skippable = false) =>
+      flow(
+        [script("s1"), gate("g1", { settings: { skippable } }), script("s2")],
+        [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
-      return { other, gateDir };
-    }
 
     it("runs past an approved Gate without starting Claude", async () => {
-      const { other, gateDir } = await gateBuild();
-      const { deps, recorded } = stubDeps(other, {
+      const { deps, recorded, seed } = stubDeps({
         results: [echoed("one"), echoed("two")],
         waiter: new FakeWaiter([approve]),
       });
+      await seed(gateFlow());
 
-      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(0);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
       expect(recorded.stdout).toEqual([
         "s1 started",
         "  one",
@@ -304,128 +377,129 @@ describe("runCli run", () => {
     });
 
     it("exits 1 at a rejected Gate, printing the reason, and runs nothing after it", async () => {
-      const { other, gateDir } = await gateBuild();
-      const { deps, recorded, scripts } = stubDeps(other, {
+      const { deps, recorded, scripts, seed } = stubDeps({
         results: [echoed("one"), echoed("two")],
         waiter: new FakeWaiter([{ decision: "reject", reason: "wrong scope" }]),
       });
+      await seed(gateFlow());
 
-      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(1);
+      expect(await runCli(["run", "x"], deps)).toBe(1);
       expect(recorded.stdout.at(-1)).toBe("g1 failed: rejected: wrong scope");
       expect(scripts.calls).toHaveLength(1);
     });
 
     it("passes --auto to the run, so a skippable Gate is skipped without asking", async () => {
-      const { other, gateDir } = await gateBuild(true);
       const waiter = new FakeWaiter([]);
-      const { deps, recorded } = stubDeps(other, { results: [ok, ok], waiter });
+      const { deps, recorded, seed } = stubDeps({ results: [ok, ok], waiter });
+      await seed(gateFlow(true));
 
-      expect(await runCli(["run", gateDir, "--cwd", repo, "--auto"], deps)).toBe(0);
+      expect(await runCli(["run", "x", "--auto"], deps)).toBe(0);
       expect(recorded.stdout).toContain("g1 skipped");
       expect(waiter.calls).toEqual([]);
     });
 
     it("asks at a skippable Gate without --auto", async () => {
-      const { other, gateDir } = await gateBuild(true);
       const waiter = new FakeWaiter([approve]);
-      const { deps } = stubDeps(other, { results: [ok, ok], waiter });
+      const { deps, seed } = stubDeps({ results: [ok, ok], waiter });
+      await seed(gateFlow(true));
 
-      expect(await runCli(["run", gateDir, "--cwd", repo], deps)).toBe(0);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
       expect(waiter.calls).toHaveLength(1);
     });
 
     it("answers an Ask before a Script without starting Claude", async () => {
-      const other = new FakeFileSystem();
-      const { dir: askDir } = await built(
-        other,
-        flow([ask("q1"), script("s1")], [thenWire("q1", "s1")]),
-      );
-      const { deps, recorded } = stubDeps(other, {
+      const { deps, recorded, seed } = stubDeps({
         results: [ok],
         waiter: new FakeWaiter([{ decision: "answer", answer: "blue" }]),
       });
+      await seed(flow([ask("q1"), script("s1")], [thenWire("q1", "s1")]));
 
-      expect(await runCli(["run", askDir, "--cwd", repo], deps)).toBe(0);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
       expect(recorded.stdout).toEqual(["q1 answered: blue", "s1 started", "s1 done"]);
       expect(recorded.openSession).toEqual([]);
     });
 
-    it("shows --auto in the run usage", async () => {
-      const { deps, recorded } = stubDeps(fs);
+    it("shows the build-name form of run in the usage, with no --cwd", async () => {
+      const { deps, recorded } = stubDeps();
 
       await runCli(["run"], deps);
 
-      expect(recorded.stderr.join("\n")).toContain(
-        "flowdeck run <buildDir> --cwd <repo> [--session <fd-name>] [--model <model>] [--auto]",
-      );
+      const usage = recorded.stderr.join("\n");
+      expect(usage).toContain("flowdeck run <build-name>");
+      expect(usage).toContain("[--auto]");
+      expect(usage).not.toContain("--cwd");
     });
   });
 
   it("starts Claude and runs an agent-only build", async () => {
-    const other = new FakeFileSystem();
-    const { dir: agentDir, hash: agentHash } = await built(
-      other,
+    const { deps, recorded, seed } = stubDeps({ subagents: ["x:a1"] });
+    await seed(
       flow([trigger("t"), agent("a1"), output("o")], [thenWire("t", "a1"), thenWire("a1", "o")]),
     );
-    const { deps, recorded } = stubDeps(other, { subagents: [`${agentHash}:a1`] });
 
-    expect(await runCli(["run", agentDir, "--cwd", repo, "--session", "fd-a"], deps)).toBe(0);
+    expect(await runCli(["run", "x", "--session", "fd-a"], deps)).toBe(0);
     expect(recorded.openSession).toHaveLength(1);
     expect(recorded.stdout).toEqual(["a1 started", "a1 done", "o done"]);
   });
 
-  it("runs the build, exits 0 and passes the build, model and socket to the session", async () => {
-    const { deps, recorded, scripts } = stubDeps(fs, { results: [ok] });
+  it("runs the build in its own worktree, passing the workspace, model and socket to the session", async () => {
+    const { deps, recorded, scripts, seed } = stubDeps({ results: [ok] });
+    const { dir, worktree } = await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo, "--session", "fd-a"], deps)).toBe(0);
+    expect(await runCli(["run", "x", "--session", "fd-a"], deps)).toBe(0);
     expect(recorded.openSession).toEqual([
       {
         sessionName: "fd-a",
         buildDir: dir,
+        layout: "workspace",
         model: "sonnet",
-        socketPath: "/fd-home/sockets/fd-a.sock",
-        cwd: repo,
+        socketPath: join(home, "sockets", "fd-a.sock"),
+        cwd: worktree,
         claudeSessionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         hooks,
       },
     ]);
-    expect(recorded.sends).toEqual([`/${hash}:p1`]);
-    expect(scripts.calls).toEqual([{ command: "npm", args: ["test"], cwd: repo }]);
+    expect(recorded.sends).toEqual(["/x:p1"]);
+    expect(scripts.calls).toEqual([{ command: "npm", args: ["test"], cwd: worktree }]);
     expect(recorded.stdout).toEqual(["p1 started", "p1 done", "s1 started", "s1 done"]);
   });
 
-  it("starts the session with the run's own private MCP config when the build has connectors", async () => {
-    const other = new FakeFileSystem();
-    const base = promptThenScript();
-    const { dir: mcpDir } = await built(other, {
-      ...base,
-      session: { ...base.session, connectors: ["jira"] },
-    });
-    const { deps, recorded } = stubDeps(other, { results: [ok] });
+  it("runs each build in its own worktree, never the target repo", async () => {
+    const { deps, scripts, seed } = stubDeps({ results: [ok, ok] });
+    const a = await seed(flow([script("s1")], []), { name: "a" });
+    const b = await seed(flow([script("s1")], []), { name: "b" });
 
-    expect(await runCli(["run", mcpDir, "--cwd", repo], deps)).toBe(0);
+    expect(await runCli(["run", "b"], deps)).toBe(0);
+    expect(await runCli(["run", "a"], deps)).toBe(0);
+
+    expect(scripts.calls.map((call) => call.cwd)).toEqual([b.worktree, a.worktree]);
+    expect(await toplevelOf(b.worktree)).toBe(await realpath(b.worktree));
+    expect(await branchOf(b.worktree)).toBe(`flowdeck/b-${b.id.slice(0, 8)}`);
+    expect(scripts.calls.map((call) => call.cwd)).not.toContain(repo.path);
+  });
+
+  it("starts the session with the run's own private MCP config when the build has connectors", async () => {
+    const { deps, recorded, seed } = stubDeps({ results: [ok] });
+    const { dir } = await seed(withConfig(promptThenScript(), { connectors: ["jira"] }));
+
+    expect(await runCli(["run", "x"], deps)).toBe(0);
 
     const runId = recorded.stderr[0]?.replace(/^run /, "");
-    const runtimePath = `${home}/runs/${runId}/mcp.json`;
+    const runtimePath = join(home, "runs", runId ?? "", "mcp.json");
     expect(recorded.openSession[0]?.mcpConfigPath).toBe(runtimePath);
-    expect(other.isPrivate(runtimePath)).toBe(true);
-    expect(JSON.parse(await other.readFile(runtimePath))).toEqual({ mcpServers: { jira } });
-    expect(await other.list(mcpDir)).not.toContain("mcp.json");
+    expect(await isPrivate(runtimePath)).toBe(true);
+    expect(JSON.parse(await deps.fs.readFile(runtimePath))).toEqual({ mcpServers: { jira } });
+    expect(await readdir(dir)).not.toContain("mcp.json");
   });
 
   it("refuses to run a build whose connector Claude Code no longer has, before anything starts", async () => {
-    const other = new FakeFileSystem();
-    const base = promptThenScript();
-    const { dir: mcpDir } = await built(other, {
-      ...base,
-      session: { ...base.session, connectors: ["jira"] },
-    });
-    const { deps, recorded, scripts } = stubDeps(other, {
+    const { deps, recorded, scripts, seed } = stubDeps({
       results: [ok],
       connectors: new FakeConnectorSource(),
     });
+    await seed(withConfig(promptThenScript(), { connectors: ["jira"] }));
 
-    expect(await runCli(["run", mcpDir, "--cwd", repo], deps)).toBe(2);
+    expect(await runCli(["run", "x"], deps)).toBe(2);
 
     expect(recorded.stderr).toEqual([
       expect.stringMatching(/^connectors: Connector "jira" is not set up in Claude Code/),
@@ -434,34 +508,38 @@ describe("runCli run", () => {
   });
 
   it("starts the session with the --model value when given", async () => {
-    const { deps, recorded } = stubDeps(fs, { results: [ok] });
+    const { deps, recorded, seed } = stubDeps({ results: [ok] });
+    await seed(promptThenScript());
 
-    await runCli(["run", dir, "--cwd", repo, "--model", "haiku"], deps);
+    await runCli(["run", "x", "--model", "haiku"], deps);
 
     expect(recorded.openSession[0]?.model).toBe("haiku");
   });
 
   it("exits 1 when a node fails", async () => {
-    const { deps, recorded } = stubDeps(fs, { results: [{ code: 1, stdout: "", stderr: "" }] });
+    const { deps, recorded, seed } = stubDeps({ results: [failed] });
+    await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(1);
+    expect(await runCli(["run", "x"], deps)).toBe(1);
     expect(recorded.stdout.at(-1)).toBe("s1 failed: exit code 1");
   });
 
   describe("cleanup", () => {
     it.each([
       ["success", [ok], 0],
-      ["a failed node", [{ code: 1, stdout: "", stderr: "" }], 1],
+      ["a failed node", [failed], 1],
     ] as const)("stops the session and the events after %s", async (_, results, code) => {
-      const { deps, recorded } = stubDeps(fs, { results: [...results] });
+      const { deps, recorded, seed } = stubDeps({ results: [...results] });
+      await seed(promptThenScript());
 
-      expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(code);
+      expect(await runCli(["run", "x"], deps)).toBe(code);
       expect(recorded.sessionStops).toBe(1);
       expect(recorded.eventStops).toBe(1);
     });
 
     it("stops the session and the events when the runner throws", async () => {
-      const { deps, recorded } = stubDeps(fs, { results: [ok] });
+      const { deps, recorded, seed } = stubDeps({ results: [ok] });
+      await seed(promptThenScript());
       const throwing: CliDeps = {
         ...deps,
         stdout: () => {
@@ -469,11 +547,183 @@ describe("runCli run", () => {
         },
       };
 
-      expect(await runCli(["run", dir, "--cwd", repo], throwing)).toBe(1);
+      expect(await runCli(["run", "x"], throwing)).toBe(1);
       expect(recorded.stderr.join("\n")).toContain("stdout closed");
       expect(recorded.sessionStops).toBe(1);
       expect(recorded.eventStops).toBe(1);
     });
+  });
+});
+
+describe("runCli run of a build that already has a run going", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = openDatabase({ path: join(home, "flowdeck.db") });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const sqliteDeps = (results: ProcessResult[] = []) => {
+    const runs = new SqliteStore({ db });
+    const flows = new SqliteFlowStore({ db });
+    return { runs, ...stubDeps({ results, stores: { runs, flows } }) };
+  };
+
+  const runsOf = (buildId: string) =>
+    db.prepare("SELECT id, status FROM runs WHERE build_id = ? ORDER BY rowid").all(buildId);
+
+  const leaveRunning = (runs: SqliteStore, build: Seeded) =>
+    runs.createRun({
+      buildDir: build.dir,
+      inputs: {},
+      nodeIds: ["s1"],
+      session: { tmuxName: "fd-left", cwd: build.worktree, claudeSessionId: "c0" },
+      buildId: build.id,
+    });
+
+  it("is refused with exit 2 and starts nothing, leaving only the run already going", async () => {
+    const { runs, deps, recorded, scripts, seed } = sqliteDeps([ok]);
+    const x = await seed(flow([script("s1")], []));
+    const left = leaveRunning(runs, x);
+
+    expect(await runCli(["run", "x"], deps)).toBe(2);
+
+    expect(recorded.stderr.join("\n")).toMatch(/running/);
+    nothingStarted(recorded, scripts);
+    expect(runsOf(x.id)).toEqual([{ id: left.id, status: "running" }]);
+  });
+
+  it("does not hold back a different build, which runs side by side", async () => {
+    const { runs, deps, scripts, seed } = sqliteDeps([ok]);
+    const x = await seed(flow([script("s1")], []), { name: "x" });
+    const y = await seed(flow([script("s1")], []), { name: "y" });
+    leaveRunning(runs, x);
+
+    expect(await runCli(["run", "y"], deps)).toBe(0);
+
+    expect(scripts.calls.map((call) => call.cwd)).toEqual([y.worktree]);
+    expect(runsOf(y.id)).toEqual([{ id: expect.any(String), status: "done" }]);
+  });
+
+  it("refuses a run of a deleted build named by its id with exit 2, and records no run", async () => {
+    const { runs, deps, recorded, scripts, seed } = sqliteDeps([ok]);
+    const x = await seed(flow([script("s1")], []));
+    runs.deleteBuild(x.id);
+
+    expect(await runCli(["run", x.id], deps)).toBe(2);
+
+    expect(recorded.stderr.join("\n")).toContain("was deleted");
+    nothingStarted(recorded, scripts);
+    expect(runsOf(x.id)).toEqual([]);
+  });
+
+  it("runs again once the run going has been stopped", async () => {
+    const { runs, deps, seed } = sqliteDeps([ok]);
+    const x = await seed(flow([script("s1")], []));
+    const left = leaveRunning(runs, x);
+    runs.stopRun(left.id);
+
+    expect(await runCli(["run", "x"], deps)).toBe(0);
+    expect(runsOf(x.id)).toHaveLength(2);
+  });
+});
+
+describe("runCli and old builds", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = openDatabase({ path: join(home, "flowdeck.db") });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const step = (id: string) => ({ id, type: "script", label: id, settings: { command: id } });
+
+  async function oldBuild() {
+    const manifestWithoutHash = {
+      version: 1,
+      session: {
+        name: "main",
+        workingFolder: { kind: "worktree", branch: "main" },
+        model: "sonnet",
+        allowedTools: [],
+        permissionMode: "default",
+        connectors: [],
+      },
+      nodes: [
+        { id: "t", type: "trigger", label: "t", settings: { inputs: [], flags: { e2e: true } } },
+        step("s0"),
+        { id: "b", type: "branch", label: "b", settings: { flag: "e2e" } },
+        step("e2e"),
+        step("quick"),
+        step("finish"),
+      ],
+      wires: [
+        thenWire("t", "s0"),
+        thenWire("s0", "b"),
+        wire("b", "yes", "e2e", "in"),
+        wire("b", "no", "quick", "in"),
+        thenWire("e2e", "finish"),
+        thenWire("quick", "finish"),
+      ],
+      files: {},
+    };
+    const hash = hashBuild([
+      { path: "manifest.json", content: canonicalJson(manifestWithoutHash) },
+    ]);
+    const dir = join(home, "builds", hash);
+    const fs = new NodeFileSystem();
+    await fs.writeFile(join(dir, "manifest.json"), canonicalJson({ ...manifestWithoutHash, hash }));
+    db.prepare("INSERT INTO builds (id, hash, dir, created_at) VALUES (?, ?, ?, ?)").run(
+      hash,
+      hash,
+      dir,
+      1,
+    );
+    return { hash, dir };
+  }
+
+  const sqliteDeps = (results: ProcessResult[] = []) => {
+    const runs = new SqliteStore({ db });
+    return { runs, ...stubDeps({ results, stores: { runs, flows: new SqliteFlowStore({ db }) } }) };
+  };
+
+  it("refuses to start a run of an old build, pointing at a new build, and records no run", async () => {
+    const { hash } = await oldBuild();
+    const { deps, recorded, scripts } = sqliteDeps([ok, ok, ok, ok]);
+
+    expect(await runCli(["run", hash], deps)).toBe(2);
+
+    expect(recorded.stderr.join("\n")).toContain("Make a new build from this blueprint");
+    nothingStarted(recorded, scripts);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 0 });
+  });
+
+  it("resumes a run of an old build, reapplying the flag stored on the run", async () => {
+    const { hash, dir } = await oldBuild();
+    const { runs, deps, scripts } = sqliteDeps([ok, ok]);
+    const { id } = runs.createRun({
+      buildDir: dir,
+      inputs: { e2e: false },
+      nodeIds: ["t", "s0", "b", "e2e", "quick", "finish"],
+      session: { tmuxName: "fd-a", cwd: repo.path, claudeSessionId: "c1" },
+      buildId: hash,
+    });
+    runs.append(id, "s0", { kind: "running" });
+    runs.append(id, "s0", { kind: "done" });
+
+    expect(await runCli(["resume", id], deps)).toBe(0);
+
+    expect(scripts.calls.map((call) => [call.command, call.cwd])).toEqual([
+      ["quick", repo.path],
+      ["finish", repo.path],
+    ]);
+    expect(runs.findRun(id)?.status).toBe("done");
   });
 });
 
@@ -487,24 +737,17 @@ describe("runCli interrupted", () => {
   }
 
   async function interruptibleDeps(input: Flow, scriptRun: Promise<ProcessResult>) {
-    const fs = new FakeFileSystem();
-    const { dir } = await built(fs, input);
+    const stub = stubDeps({ connectors: new FakeConnectorSource() });
+    const built = await stub.seed(input);
     const log: string[] = [];
     const start = deferred<undefined>();
-    const store = new FakeStore();
     let interrupt: (code: number) => void = () => undefined;
     const deps: CliDeps = {
-      env: { FLOWDECK_HOME: home },
-      openStore: () => ({ runs: store, flows }),
-      hooks,
-      connectors: new FakeConnectorSource(),
-      transcriptTurns: async () => [],
+      ...stub.deps,
       stdout: (line) => {
         log.push(`line ${line}`);
       },
       stderr: () => undefined,
-      fs,
-      waiter: new FakeWaiter([]),
       scripts: {
         run: () => {
           log.push("script run");
@@ -543,17 +786,17 @@ describe("runCli interrupted", () => {
         return () => (interrupt = () => undefined);
       },
     };
-    return { deps, dir, log, start, store };
+    return { deps, built, log, start, store: stub.store };
   }
 
   it("never starts Claude for a prompt reached after the run was stopped", async () => {
     const blocked = deferred<ProcessResult>();
-    const { deps, dir, log } = await interruptibleDeps(
+    const { deps, log } = await interruptibleDeps(
       flow([shScript("s1"), prompt("p1")], [thenWire("s1", "p1")]),
       blocked.promise,
     );
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(130);
+    expect(await runCli(["run", "x"], deps)).toBe(130);
     blocked.resolve(ok);
     await settle();
 
@@ -563,12 +806,12 @@ describe("runCli interrupted", () => {
 
   it("never runs a script reached after the run was stopped", async () => {
     const blocked = deferred<ProcessResult>();
-    const { deps, dir, log } = await interruptibleDeps(
+    const { deps, log } = await interruptibleDeps(
       flow([shScript("s1"), shScript("s2")], [thenWire("s1", "s2")]),
       blocked.promise,
     );
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(130);
+    expect(await runCli(["run", "x"], deps)).toBe(130);
     blocked.resolve(ok);
     await settle();
 
@@ -576,12 +819,12 @@ describe("runCli interrupted", () => {
   });
 
   it("stops a session whose start finishes after the run was stopped, and sends nothing", async () => {
-    const { deps, dir, log, start } = await interruptibleDeps(
+    const { deps, log, start } = await interruptibleDeps(
       flow([prompt("p1")], []),
       Promise.resolve(ok),
     );
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(130);
+    expect(await runCli(["run", "x"], deps)).toBe(130);
     start.resolve(undefined);
     await settle();
 
@@ -591,12 +834,12 @@ describe("runCli interrupted", () => {
 
   it("records the run as stopped when interrupted", async () => {
     const blocked = deferred<ProcessResult>();
-    const { deps, dir, store } = await interruptibleDeps(
+    const { deps, store } = await interruptibleDeps(
       flow([shScript("s1"), shScript("s2")], [thenWire("s1", "s2")]),
       blocked.promise,
     );
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(130);
+    expect(await runCli(["run", "x"], deps)).toBe(130);
     blocked.resolve(ok);
     await settle();
 
@@ -604,16 +847,16 @@ describe("runCli interrupted", () => {
   });
 
   it("stops the attached session when a resume is interrupted", async () => {
-    const { deps, dir, log, store, start } = await interruptibleDeps(
+    const { deps, built, log, store, start } = await interruptibleDeps(
       flow([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")]),
       Promise.resolve(ok),
     );
     const { id } = store.createRun({
-      buildDir: dir,
-      inputs: { cwd: repo },
+      buildDir: built.dir,
+      inputs: {},
       nodeIds: ["p1", "p2"],
-      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
-      buildHash: "h",
+      session: { tmuxName: "fd-a", cwd: built.worktree, claudeSessionId: "c1" },
+      buildId: built.id,
     });
     store.append(id, "p1", { kind: "sent" });
 
@@ -628,158 +871,349 @@ describe("runCli interrupted", () => {
 });
 
 describe("runCli build", () => {
-  let tempHome: string;
+  const writeFlow = async (input: unknown, name = "flow.json") => {
+    const path = join(home, name);
+    await writeFile(path, JSON.stringify(input));
+    return path;
+  };
 
-  beforeEach(async () => {
-    tempHome = await mkdtemp(join(tmpdir(), "fd-home-"));
+  const printed = (stdout: string[]) => {
+    const hash = stdout.find((line) => line.startsWith("hash "))?.slice(5) ?? "";
+    const dir = stdout.find((line) => line.startsWith("dir "))?.slice(4) ?? "";
+    return { hash, dir, id: basename(dir) };
+  };
+
+  const workspaces = async () => readdir(join(home, "workspaces")).catch(() => []);
+
+  it("builds a flow file under the name given, into its own workspace and worktree", async () => {
+    const flowPath = await writeFlow(promptThenScript());
+    const { deps, recorded, store } = stubDeps();
+
+    expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(0);
+
+    const { hash, dir, id } = printed(recorded.stdout);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(dir).toBe(join(home, "workspaces", id));
+    expect(await exists(join(dir, "manifest.json"))).toBe(true);
+    const worktree = join(dir, basename(repo.path));
+    expect(await toplevelOf(worktree)).toBe(await realpath(worktree));
+    expect(await branchOf(worktree)).toBe(`flowdeck/x-${id.slice(0, 8)}`);
+    expect(store.findBuildByName("x")).toMatchObject({
+      id,
+      hash,
+      name: "x",
+      repo: repo.path,
+      base: "main",
+      values: {},
+      dir,
+    });
+    expect(store.findBuildByName("x")?.source).toBeUndefined();
+    expect(recorded.storePaths).toEqual([join(home, "flowdeck.db")]);
   });
 
-  afterEach(async () => {
-    await rm(tempHome, { recursive: true, force: true });
+  it("builds a saved flow version under the name given and records that version", async () => {
+    const flows = new FakeFlowStore({ newId: () => "flow-1" });
+    flows.save(flow([prompt("p1")], []));
+    flows.save(promptThenScript());
+    const store = new FakeStore();
+    const { deps, recorded } = stubDeps({ stores: { runs: store, flows } });
+
+    expect(
+      await runCli(
+        ["build", "--flow", "flow-1", "--version", "2", "--name", "x", "--repo", repo.path],
+        deps,
+      ),
+    ).toBe(0);
+
+    const { dir, id } = printed(recorded.stdout);
+    expect(dir).toBe(join(home, "workspaces", id));
+    expect(store.findBuildByName("x")?.source).toEqual({ flowId: "flow-1", version: 2 });
   });
 
-  const realDepsWith = (fs: NodeFileSystem) => stubDeps(fs, { env: { FLOWDECK_HOME: tempHome } });
+  it("records the --base given", async () => {
+    await git("git", ["-C", repo.path, "branch", "dev"]);
+    const flowPath = await writeFlow(promptThenScript());
+    const { deps, store } = stubDeps();
 
-  it("builds a valid flow and prints its hash and build folder", async () => {
-    const flowPath = join(tempHome, "flow.json");
-    await writeFile(flowPath, JSON.stringify(promptThenScript()));
-    const nodeFs = new NodeFileSystem();
-    const { deps, recorded } = realDepsWith(nodeFs);
-
-    expect(await runCli(["build", flowPath], deps)).toBe(0);
-    const [hashLine, dirLine] = recorded.stdout;
-    const printedHash = hashLine?.replace(/^hash /, "") ?? "";
-    expect(printedHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(dirLine).toBe(`dir ${join(tempHome, "builds", printedHash)}`);
-    expect(await nodeFs.exists(join(tempHome, "builds", printedHash, "manifest.json"))).toBe(true);
+    expect(
+      await runCli(["build", flowPath, "--name", "x", "--repo", repo.path, "--base", "dev"], deps),
+    ).toBe(0);
+    expect(store.findBuildByName("x")?.base).toBe("dev");
   });
 
-  it("records the build it made from a flow file, with no flow version", async () => {
-    const flowPath = join(tempHome, "flow.json");
-    await writeFile(flowPath, JSON.stringify(promptThenScript()));
-    const { deps, recorded, store } = realDepsWith(new NodeFileSystem());
+  it("takes the repo's default branch as the base when neither --base nor the blueprint names one", async () => {
+    await git("git", ["-C", repo.path, "checkout", "--quiet", "-b", "trunk"]);
+    const flowPath = await writeFlow(withConfig(promptThenScript(), { base: null }));
+    const { deps, store } = stubDeps();
 
-    expect(await runCli(["build", flowPath], deps)).toBe(0);
-
-    const printedHash = recorded.stdout[0]?.replace(/^hash /, "");
-    expect(store.listBuilds()).toEqual([
-      { hash: printedHash, dir: join(tempHome, "builds", printedHash ?? ""), createdAt: 1 },
-    ]);
-    expect(store.buildFiles(printedHash ?? "").map((file) => file.path)).toContain("manifest.json");
-    expect(recorded.storePaths).toEqual([join(tempHome, "flowdeck.db")]);
+    expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(0);
+    expect(store.findBuildByName("x")?.base).toBe("trunk");
   });
 
-  it("builds a saved flow version and records the build with that version", async () => {
-    const saved = new FakeFlowStore({ newId: () => "flow-1" });
-    saved.save(flow([prompt("p1")], []));
-    saved.save(promptThenScript());
-    const { deps, recorded, store } = stubDeps(new NodeFileSystem(), {
-      env: { FLOWDECK_HOME: tempHome },
-      flows: saved,
+  describe("--var", () => {
+    const declared = withConfig(promptThenScript(), {
+      variables: [
+        { name: "ticket", kind: "text" },
+        { name: "query", kind: "text", default: "none" },
+        { name: "e2e", kind: "yesno" },
+      ],
     });
 
-    expect(await runCli(["build", "--flow", "flow-1", "--version", "2"], deps)).toBe(0);
+    const buildWith = async (vars: string[]) => {
+      const flowPath = await writeFlow(declared);
+      const stub = stubDeps();
+      const code = await runCli(
+        [
+          "build",
+          flowPath,
+          "--name",
+          "x",
+          "--repo",
+          repo.path,
+          ...vars.flatMap((v) => ["--var", v]),
+        ],
+        stub.deps,
+      );
+      return { code, ...stub };
+    };
 
-    const printedHash = recorded.stdout[0]?.replace(/^hash /, "") ?? "";
-    expect(store.findBuild(printedHash)?.source).toEqual({ flowId: "flow-1", version: 2 });
-    expect(recorded.stdout[1]).toBe(`dir ${join(tempHome, "builds", printedHash)}`);
+    it.each([
+      [["ticket=FD-1", "e2e=yes"], { ticket: "FD-1", query: "none", e2e: true }],
+      [["ticket=FD-1", "e2e=no", "query=a=b"], { ticket: "FD-1", query: "a=b", e2e: false }],
+    ])("records the values of %j", async (vars, values) => {
+      const { code, store } = await buildWith(vars);
+
+      expect(code).toBe(0);
+      expect(store.findBuildByName("x")?.values).toEqual(values);
+    });
+
+    it("refuses a yes/no value other than yes or no, naming the variable, and builds nothing", async () => {
+      const { code, recorded, store } = await buildWith(["ticket=FD-1", "e2e=maybe"]);
+
+      expect(code).toBe(2);
+      expect(recorded.stderr.join("\n")).toContain("e2e");
+      expect(store.listBuilds()).toEqual([]);
+      expect(await workspaces()).toEqual([]);
+    });
+
+    it("refuses a build that leaves a variable unset, naming it, and builds nothing", async () => {
+      const { code, recorded, store } = await buildWith(["e2e=yes"]);
+
+      expect(code).toBe(2);
+      expect(recorded.stderr.join("\n")).toContain("ticket");
+      expect(store.listBuilds()).toEqual([]);
+      expect(await workspaces()).toEqual([]);
+    });
+
+    it("refuses a --var the blueprint does not declare, naming it and every declared one, and builds nothing", async () => {
+      const { code, recorded, store } = await buildWith(["ticket=FD-1", "e2e=yes", "tikcet=FD-2"]);
+
+      expect(code).toBe(2);
+      const stderr = recorded.stderr.join("\n");
+      expect(stderr).toContain("tikcet");
+      for (const name of ["ticket", "query", "e2e"]) expect(stderr).toContain(name);
+      expect(store.listBuilds()).toEqual([]);
+      expect(await workspaces()).toEqual([]);
+    });
+
+    it("refuses a --var with no = as a usage error", async () => {
+      const { code, recorded, store } = await buildWith(["ticket", "e2e=yes"]);
+
+      expect(code).toBe(2);
+      expect(recorded.stderr.join("\n")).toContain("Usage:");
+      expect(store.listBuilds()).toEqual([]);
+    });
+  });
+
+  it("refuses a name that is not kebab-case, naming it, and builds nothing", async () => {
+    const flowPath = await writeFlow(promptThenScript());
+    const { deps, recorded, store } = stubDeps();
+
+    expect(
+      await runCli(["build", flowPath, "--name", "Fix-Login", "--repo", repo.path], deps),
+    ).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("Fix-Login");
+    expect(store.listBuilds()).toEqual([]);
+    expect(await workspaces()).toEqual([]);
+  });
+
+  it("refuses a target that is not a git repository, naming it, and builds nothing", async () => {
+    const plain = await mkdtemp(join(tmpdir(), "fd-plain-"));
+    try {
+      const flowPath = await writeFlow(promptThenScript());
+      const { deps, recorded, store } = stubDeps();
+
+      expect(await runCli(["build", flowPath, "--name", "x", "--repo", plain], deps)).toBe(2);
+      expect(recorded.stderr.join("\n")).toContain(plain);
+      expect(store.listBuilds()).toEqual([]);
+      expect(await workspaces()).toEqual([]);
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a name an existing build already has, naming it", async () => {
+    const flowPath = await writeFlow(promptThenScript());
+    const { deps, recorded, store } = stubDeps();
+    expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(0);
+
+    expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(2);
+    expect(recorded.stderr.join("\n")).toContain("x already exists");
+    expect(store.listBuilds()).toHaveLength(1);
   });
 
   it.each([
-    [["build", "--flow", "flow-1", "--version", "9"], "flow-1 has no saved version 9"],
-    [["build", "--flow", "flow-1", "--version", "two"], "Usage:"],
-    [["build", "--flow", "flow-1"], "Usage:"],
-    [["build", "f.json", "--flow", "flow-1", "--version", "1"], "Usage:"],
+    [
+      ["build", "--flow", "flow-1", "--version", "9", "--name", "x"],
+      "flow-1 has no saved version 9",
+    ],
+    [["build", "--flow", "flow-1", "--version", "two", "--name", "x"], "Usage:"],
+    [["build", "--flow", "flow-1", "--name", "x"], "Usage:"],
+    [["build", "--flow", "flow-1", "--version", "1"], "Usage:"],
+    [["build", "f.json", "--flow", "flow-1", "--version", "1", "--name", "x"], "Usage:"],
+    [["build", "f.json"], "Usage:"],
   ])("refuses %j with exit 2", async (argv, message) => {
-    const saved = new FakeFlowStore({ newId: () => "flow-1" });
-    saved.save(promptThenScript());
-    const { deps, recorded, store } = stubDeps(new NodeFileSystem(), {
-      env: { FLOWDECK_HOME: tempHome },
-      flows: saved,
-    });
+    const flows = new FakeFlowStore({ newId: () => "flow-1" });
+    flows.save(promptThenScript());
+    const store = new FakeStore();
+    const { deps, recorded } = stubDeps({ stores: { runs: store, flows } });
 
     expect(await runCli(argv, deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain(message);
     expect(store.listBuilds()).toEqual([]);
   });
 
-  it("looks up the flow's connectors when it builds, and refuses one Claude Code lacks", async () => {
-    const flowPath = join(tempHome, "flow.json");
-    const base = promptThenScript();
-    await writeFile(
-      flowPath,
-      JSON.stringify({ ...base, session: { ...base.session, connectors: ["jira", "slack"] } }),
-    );
-    const { deps, recorded, store } = realDepsWith(new NodeFileSystem());
+  it("shows --name, --repo, --base and --var in the build usage", async () => {
+    const { deps, recorded } = stubDeps();
 
-    expect(await runCli(["build", flowPath], deps)).toBe(2);
+    await runCli(["build"], deps);
+
+    const usage = recorded.stderr.join("\n");
+    for (const option of ["--name", "--repo", "--base", "--var"]) {
+      expect(usage).toContain(option);
+    }
+  });
+
+  it("looks up the flow's connectors when it builds, and refuses one Claude Code lacks", async () => {
+    const flowPath = await writeFlow(
+      withConfig(promptThenScript(), { connectors: ["jira", "slack"] }),
+    );
+    const { deps, recorded, store } = stubDeps();
+
+    expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(2);
     expect(recorded.stderr).toEqual([
       expect.stringMatching(/^connectors: Connector "slack" is not set up in Claude Code/),
     ]);
     expect(store.listBuilds()).toEqual([]);
   });
 
+  it.each([
+    ["an empty body", flow([prompt("p1"), loop("l1")], [thenWire("p1", "l1")])],
+    [
+      "a Script-only body",
+      flow([loop("l1"), script("s1", { parent: "l1" })], [thenWire("l1", "s1")]),
+    ],
+  ])(
+    "refuses to build a loop with %s, the same way the runner refuses it",
+    async (_name, input) => {
+      const flowPath = await writeFlow(input);
+      const { deps, recorded, store } = stubDeps();
+
+      expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(2);
+      expect(recorded.stderr).toEqual(["loop-body: l1 (loop) has no prompt or agent in its body."]);
+      expect(store.listBuilds()).toEqual([]);
+    },
+  );
+
+  it("prints each problem of an invalid flow and exits 2", async () => {
+    const broken = fileURLToPath(new URL("../fixtures/broken/references.json", import.meta.url));
+    const { deps, recorded } = stubDeps();
+
+    expect(await runCli(["build", broken, "--name", "x", "--repo", repo.path], deps)).toBe(2);
+    expect(recorded.stderr.length).toBeGreaterThan(0);
+    expect(recorded.stderr.join("\n")).toContain("references");
+    expect(recorded.stdout).toEqual([]);
+  });
+
   it("leaves a run of a built version that joins in SQL to its build and flow version", async () => {
-    const db = openDatabase({ path: join(tempHome, "flowdeck.db") });
+    const db = openDatabase({ path: join(home, "flowdeck.db") });
     try {
       const sqlFlows = new SqliteFlowStore({ db, newId: () => "flow-sql" });
       sqlFlows.save(flow([shScript("s1")], []));
-      const { deps, recorded } = stubDeps(new NodeFileSystem(), {
-        env: { FLOWDECK_HOME: tempHome },
+      const { deps, recorded } = stubDeps({
         results: [ok],
+        stores: { runs: new SqliteStore({ db }), flows: sqlFlows },
       });
-      deps.openStore = () => ({ runs: new SqliteStore({ db }), flows: sqlFlows });
 
-      expect(await runCli(["build", "--flow", "flow-sql", "--version", "1"], deps)).toBe(0);
-      const builtDir = recorded.stdout[1]?.replace(/^dir /, "") ?? "";
-      expect(await runCli(["run", builtDir, "--cwd", tempHome], deps)).toBe(0);
+      expect(
+        await runCli(
+          ["build", "--flow", "flow-sql", "--version", "1", "--name", "x", "--repo", repo.path],
+          deps,
+        ),
+      ).toBe(0);
+      const builtDir = printed(recorded.stdout).dir;
+      expect(await runCli(["run", "x"], deps)).toBe(0);
 
       const runId = recorded.stderr.find((line) => line.startsWith("run "))?.slice(4);
       expect(
         db
           .prepare(
-            `SELECT flows.id AS flow, flow_versions.version, builds.dir, build_nodes.type
+            `SELECT flows.id AS flow, flow_versions.version, builds.dir, builds.name, build_nodes.type
                FROM runs
-               JOIN builds ON builds.hash = runs.build_hash
+               JOIN builds ON builds.id = runs.build_id
                JOIN flow_versions ON flow_versions.flow_id = builds.flow_id
                                  AND flow_versions.version = builds.version
                JOIN flows ON flows.id = flow_versions.flow_id
                JOIN run_nodes ON run_nodes.run_id = runs.id
-               JOIN build_nodes ON build_nodes.build_hash = builds.hash
+               JOIN build_nodes ON build_nodes.build_id = builds.id
                                AND build_nodes.node_id = run_nodes.node_id
               WHERE runs.id = ?`,
           )
           .all(runId),
-      ).toEqual([{ flow: "flow-sql", version: 1, dir: builtDir, type: "script" }]);
+      ).toEqual([{ flow: "flow-sql", version: 1, dir: builtDir, name: "x", type: "script" }]);
     } finally {
       db.close();
     }
   });
 
-  it("prints each problem of an invalid flow and exits 2", async () => {
-    const broken = fileURLToPath(new URL("../fixtures/broken/references.json", import.meta.url));
-    const { deps, recorded } = realDepsWith(new NodeFileSystem());
+  it("builds with --name, --repo and --var, then runs that build by name in its worktree", async () => {
+    const db = openDatabase({ path: join(home, "flowdeck.db") });
+    try {
+      const flowPath = await writeFlow(
+        withConfig(flow([script("s1")], []), { variables: [{ name: "ticket", kind: "text" }] }),
+      );
+      const runs = new SqliteStore({ db });
+      const { deps, recorded, scripts } = stubDeps({
+        results: [ok],
+        stores: { runs, flows: new SqliteFlowStore({ db }) },
+      });
 
-    expect(await runCli(["build", broken], deps)).toBe(2);
-    expect(recorded.stderr.length).toBeGreaterThan(0);
-    expect(recorded.stderr.join("\n")).toContain("references");
-    expect(recorded.stdout).toEqual([]);
+      expect(
+        await runCli(
+          ["build", flowPath, "--name", "x", "--repo", repo.path, "--var", "ticket=FD-1"],
+          deps,
+        ),
+      ).toBe(0);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
+
+      const { dir, id } = printed(recorded.stdout);
+      const worktree = join(dir, basename(repo.path));
+      expect(scripts.calls.map((call) => call.cwd)).toEqual([worktree]);
+      expect(await branchOf(worktree)).toBe(`flowdeck/x-${id.slice(0, 8)}`);
+      expect(runs.findBuildByName("x")?.values).toEqual({ ticket: "FD-1" });
+      expect(runs.listRuns().map((run) => run.buildId)).toEqual([id]);
+    } finally {
+      db.close();
+    }
   });
 });
 
 describe("runCli run state", () => {
-  let fs: FakeFileSystem;
-  let dir: string;
-
-  beforeEach(async () => {
-    fs = new FakeFileSystem();
-    ({ dir } = await built(fs, promptThenScript()));
-  });
-
   it("prints the run id first on stderr and stores the run, its session and its build", async () => {
-    const { deps, recorded, store } = stubDeps(fs, { results: [ok] });
+    const { deps, recorded, store, seed } = stubDeps({ results: [ok] });
+    const { id, dir, worktree } = await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo, "--session", "fd-a"], deps)).toBe(0);
+    expect(await runCli(["run", "x", "--session", "fd-a"], deps)).toBe(0);
 
     const [run] = store.runs;
     expect(store.runs).toHaveLength(1);
@@ -787,73 +1221,68 @@ describe("runCli run state", () => {
     expect(recorded.stdout).toEqual(["p1 started", "p1 done", "s1 started", "s1 done"]);
     expect(run).toMatchObject({
       buildDir: dir,
+      buildId: id,
       status: "done",
       session: {
         tmuxName: "fd-a",
-        cwd: repo,
+        cwd: worktree,
         claudeSessionId: recorded.openSession[0]?.claudeSessionId,
       },
     });
     expect(store.nodes.map((node) => node.nodeId)).toEqual(["p1", "s1"]);
   });
 
-  it("records the build it runs, and the run names it", async () => {
-    const { deps, store } = stubDeps(fs, { results: [ok] });
-    const manifest = JSON.parse(await fs.readFile(`${dir}/manifest.json`));
+  it("names the build it runs without recording it again", async () => {
+    const { deps, store, seed } = stubDeps({ results: [ok] });
+    const { id } = await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(0);
+    expect(await runCli(["run", "x"], deps)).toBe(0);
 
-    expect(store.builds().map((build) => build.hash)).toEqual([manifest.hash]);
-    expect(store.builds()[0]?.nodes.map((node) => node.nodeId)).toEqual(["p1", "s1"]);
-    expect(store.runs[0]?.buildHash).toBe(manifest.hash);
+    expect(store.builds().map((build) => build.id)).toEqual([id]);
+    expect(store.runs[0]?.buildId).toBe(id);
   });
 
   it("opens the store at FLOWDECK_HOME/flowdeck.db", async () => {
-    const { deps, recorded } = stubDeps(fs, { results: [ok] });
+    const { deps, recorded, seed } = stubDeps({ results: [ok] });
+    await seed(promptThenScript());
 
-    await runCli(["run", dir, "--cwd", repo], deps);
+    await runCli(["run", "x"], deps);
 
-    expect(recorded.storePaths).toEqual(["/fd-home/flowdeck.db"]);
+    expect(recorded.storePaths).toEqual([join(home, "flowdeck.db")]);
   });
 
   it("records a run that ends at a failed node as failed", async () => {
-    const { deps, store } = stubDeps(fs, { results: [{ code: 1, stdout: "", stderr: "" }] });
+    const { deps, store, seed } = stubDeps({ results: [failed] });
+    await seed(promptThenScript());
 
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(1);
+    expect(await runCli(["run", "x"], deps)).toBe(1);
     expect(store.runs[0]?.status).toBe("failed");
   });
 });
 
 describe("runCli resume", () => {
-  let fs: FakeFileSystem;
-  let dir: string;
-  let hash: string;
   const nodeIds = ["p1", "p2", "p3"];
-
-  beforeEach(async () => {
-    fs = new FakeFileSystem();
-    ({ dir, hash } = await built(
-      fs,
-      flow(
-        [prompt("p1"), prompt("p2"), prompt("p3")],
-        [thenWire("p1", "p2"), thenWire("p2", "p3")],
-      ),
-    ));
-  });
+  const threePrompts = () =>
+    flow([prompt("p1"), prompt("p2"), prompt("p3")], [thenWire("p1", "p2"), thenWire("p2", "p3")]);
 
   const turn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
-    userText: `<command-name>/${hash}:${id}</command-name>`,
+    userText: `<command-name>/x:${id}</command-name>`,
     ended,
     ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
   });
 
-  function seed(store: FakeStore, events: [string, RunEvent][], ids = nodeIds, buildDir = dir) {
+  function seedRun(
+    store: FakeStore,
+    built: Seeded,
+    events: [string, RunEvent][],
+    options: { ids?: string[]; inputs?: Record<string, unknown> } = {},
+  ) {
     const { id } = store.createRun({
-      buildDir,
-      inputs: { cwd: repo, session: "fd-a" },
-      nodeIds: ids,
-      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
-      buildHash: hash,
+      buildDir: built.dir,
+      inputs: options.inputs ?? {},
+      nodeIds: options.ids ?? nodeIds,
+      session: { tmuxName: "fd-a", cwd: built.worktree, claudeSessionId: "c1" },
+      buildId: built.id,
     });
     for (const [nodeId, event] of events) store.append(id, nodeId, event);
     return id;
@@ -866,7 +1295,7 @@ describe("runCli resume", () => {
   ];
 
   it("refuses an unknown run id without touching tmux", async () => {
-    const { deps, recorded, scripts } = stubDeps(fs);
+    const { deps, recorded, scripts } = stubDeps();
 
     expect(await runCli(["resume", "nope"], deps)).toBe(1);
     expect(recorded.stderr).toEqual(["no run nope"]);
@@ -874,8 +1303,8 @@ describe("runCli resume", () => {
   });
 
   it("sends nothing for a run that already finished", async () => {
-    const { deps, recorded, store, scripts } = stubDeps(fs);
-    const id = seed(store, []);
+    const { deps, recorded, store, scripts, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), []);
     store.finishRun(id, "done");
 
     expect(await runCli(["resume", id], deps)).toBe(0);
@@ -886,8 +1315,8 @@ describe("runCli resume", () => {
   });
 
   it("exits 1 naming the session when its tmux session is gone, starting and sending nothing", async () => {
-    const { deps, recorded, store } = stubDeps(fs, { sessionGone: true });
-    const id = seed(store, killedAtP2);
+    const { deps, recorded, store, seed } = stubDeps({ sessionGone: true });
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
 
     expect(await runCli(["resume", id], deps)).toBe(1);
     expect(recorded.stderr.join("\n")).toContain('"fd-a" is gone');
@@ -897,34 +1326,29 @@ describe("runCli resume", () => {
   });
 
   it("rewrites the run's private MCP config on resume", async () => {
-    const withJira = flow([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")]);
-    const jiraBuild = await built(fs, {
-      ...withJira,
-      session: { ...withJira.session, connectors: ["jira"] },
-    });
-    const { deps, recorded, store } = stubDeps(fs, { turns: [turn("p1", true, "A")] });
-    const { id } = store.createRun({
-      buildDir: jiraBuild.dir,
-      inputs: {},
-      nodeIds: ["p1", "p2"],
-      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
-      buildHash: jiraBuild.hash,
-    });
-    const runtimePath = `${home}/runs/${id}/mcp.json`;
-    await fs.writeFile(runtimePath, "stale");
+    const { deps, recorded, store, seed } = stubDeps({ turns: [turn("p1", true, "A")] });
+    const built = await seed(
+      withConfig(flow([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")]), {
+        connectors: ["jira"],
+      }),
+    );
+    const id = seedRun(store, built, [], { ids: ["p1", "p2"] });
+    const runtimePath = join(home, "runs", id, "mcp.json");
+    await deps.fs.writeFile(runtimePath, "stale");
 
     await runCli(["resume", id], deps);
 
     expect(recorded.openSession[0]?.mcpConfigPath).toBe(runtimePath);
-    expect(fs.isPrivate(runtimePath)).toBe(true);
-    expect(JSON.parse(await fs.readFile(runtimePath))).toEqual({ mcpServers: { jira } });
+    expect(await isPrivate(runtimePath)).toBe(true);
+    expect(JSON.parse(await deps.fs.readFile(runtimePath))).toEqual({ mcpServers: { jira } });
   });
 
   it("listens before reading the transcript, completes node 2 without sending it and sends node 3 once", async () => {
-    const { deps, recorded, store } = stubDeps(fs, {
+    const { deps, recorded, store, seed } = stubDeps({
       turns: [turn("p1", true, "A"), turn("p2", true, "X")],
     });
-    const id = seed(store, killedAtP2);
+    const built = await seed(threePrompts());
+    const id = seedRun(store, built, killedAtP2);
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
@@ -932,16 +1356,17 @@ describe("runCli resume", () => {
     expect(recorded.openSession).toEqual([
       {
         sessionName: "fd-a",
-        buildDir: dir,
+        buildDir: built.dir,
+        layout: "workspace",
         model: "sonnet",
-        socketPath: "/fd-home/sockets/fd-a.sock",
-        cwd: repo,
+        socketPath: join(home, "sockets", "fd-a.sock"),
+        cwd: built.worktree,
         claudeSessionId: "c1",
         hooks,
         attach: true,
       },
     ]);
-    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -952,8 +1377,8 @@ describe("runCli resume", () => {
   });
 
   it("reads the transcript again when node 2's Stop arrives during the read, completing it without a send", async () => {
-    const { deps, recorded, store, source } = stubDeps(fs);
-    const id = seed(store, killedAtP2);
+    const { deps, recorded, store, source, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
     const reads = [
       () => {
         source.publish({ kind: "Stop", sessionId, payload: {} });
@@ -967,7 +1392,7 @@ describe("runCli resume", () => {
     expect(await runCli(["resume", id], deps)).toBe(0);
 
     expect(read).toBe(2);
-    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -975,8 +1400,8 @@ describe("runCli resume", () => {
   });
 
   it("does not settle node 3 with node 2's Stop arriving after the read showed node 2 ended", async () => {
-    const { deps, recorded, store, source } = stubDeps(fs);
-    const id = seed(store, killedAtP2);
+    const { deps, recorded, store, source, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
     let clock = 1;
     deps.now = () => clock;
     deps.transcriptTurns = async () => {
@@ -994,15 +1419,15 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p3")).not.toContainEqual(
       expect.objectContaining({ kind: "done", payload: { stopMessage: "X" } }),
     );
   });
 
   it("completes node 2 with the Stop seen during the first read when the re-read still shows it mid-turn", async () => {
-    const { deps, recorded, store, source } = stubDeps(fs);
-    const id = seed(store, killedAtP2);
+    const { deps, recorded, store, source, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
     const reads = [
       () => {
         source.publish({ kind: "Stop", sessionId, payload: { last_assistant_message: "X" } });
@@ -1015,7 +1440,7 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1023,8 +1448,8 @@ describe("runCli resume", () => {
   });
 
   it("completes node 2 with its own Stop stamped before the wait was armed", async () => {
-    const { deps, recorded, store, source } = stubDeps(fs);
-    const id = seed(store, killedAtP2);
+    const { deps, recorded, store, source, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
     let clock = 1;
     deps.now = () => clock;
     deps.transcriptTurns = async () => {
@@ -1042,7 +1467,7 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual([`/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1050,21 +1475,21 @@ describe("runCli resume", () => {
   });
 
   it("opens a new session lazily when the run never sent a Claude turn", async () => {
-    const { deps, recorded, store } = stubDeps(fs);
-    const id = seed(store, []);
+    const { deps, recorded, store, seed } = stubDeps();
+    const id = seedRun(store, await seed(threePrompts()), []);
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
     expect(recorded.openSession[0]?.attach).toBeUndefined();
-    expect(recorded.sends).toEqual([`/${hash}:p1`, `/${hash}:p2`, `/${hash}:p3`]);
+    expect(recorded.sends).toEqual(["/x:p1", "/x:p2", "/x:p3"]);
     expect(store.findRun(id)?.status).toBe("done");
   });
 
   it("exits 1 with nothing sent when the transcript disagrees with the stored events", async () => {
-    const { deps, recorded, store } = stubDeps(fs, {
+    const { deps, recorded, store, seed } = stubDeps({
       turns: [turn("p2", true, "X"), turn("p2", true, "Y")],
     });
-    const id = seed(store, killedAtP2);
+    const id = seedRun(store, await seed(threePrompts()), killedAtP2);
 
     expect(await runCli(["resume", id], deps)).toBe(1);
     expect(recorded.stderr.join("\n")).toContain("cannot resume p2");
@@ -1072,26 +1497,21 @@ describe("runCli resume", () => {
     expect(store.findRun(id)?.status).toBe("failed");
   });
 
+  const gateFlow = () =>
+    flow(
+      [script("s1"), gate("g1", { settings: { skippable: true } }), script("s2")],
+      [thenWire("s1", "g1"), thenWire("g1", "s2")],
+    );
+
+  const scriptDone: [string, RunEvent][] = [
+    ["s1", { kind: "running" }],
+    ["s1", { kind: "done" }],
+  ];
+
   it("passes --auto to the resumed run, so a skippable Gate is skipped without asking", async () => {
-    const other = new FakeFileSystem();
-    const { dir: gateDir } = await built(
-      other,
-      flow(
-        [script("s1"), gate("g1", { settings: { skippable: true } }), script("s2")],
-        [thenWire("s1", "g1"), thenWire("g1", "s2")],
-      ),
-    );
     const waiter = new FakeWaiter([]);
-    const { deps, recorded, store } = stubDeps(other, { results: [ok], waiter });
-    const id = seed(
-      store,
-      [
-        ["s1", { kind: "running" }],
-        ["s1", { kind: "done" }],
-      ],
-      ["s1", "g1", "s2"],
-      gateDir,
-    );
+    const { deps, recorded, store, seed } = stubDeps({ results: [ok], waiter });
+    const id = seedRun(store, await seed(gateFlow()), scriptDone, { ids: ["s1", "g1", "s2"] });
 
     expect(await runCli(["resume", id, "--auto"], deps)).toBe(0);
     expect(recorded.stdout).toEqual(["g1 skipped", "s2 started", "s2 done"]);
@@ -1100,25 +1520,12 @@ describe("runCli resume", () => {
 
   describe("with automatic mode stored on the run", () => {
     const resumeAtGate = async (args: string[]) => {
-      const other = new FakeFileSystem();
-      const { dir: gateDir } = await built(
-        other,
-        flow(
-          [script("s1"), gate("g1", { settings: { skippable: true } }), script("s2")],
-          [thenWire("s1", "g1"), thenWire("g1", "s2")],
-        ),
-      );
       const waiter = new FakeWaiter([{ decision: "approve" }]);
-      const { deps, recorded, store } = stubDeps(other, { results: [ok], waiter });
-      const { id } = store.createRun({
-        buildDir: gateDir,
+      const { deps, recorded, store, seed } = stubDeps({ results: [ok], waiter });
+      const id = seedRun(store, await seed(gateFlow()), scriptDone, {
+        ids: ["s1", "g1", "s2"],
         inputs: { auto: true },
-        nodeIds: ["s1", "g1", "s2"],
-        session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
-        buildHash: "h",
       });
-      store.append(id, "s1", { kind: "running" });
-      store.append(id, "s1", { kind: "done" });
       return { code: await runCli(["resume", id, ...args], deps), recorded, waiter };
     };
 
@@ -1139,17 +1546,15 @@ describe("runCli resume", () => {
   });
 
   it("shows resume in the usage", async () => {
-    const { deps, recorded } = stubDeps(fs);
+    const { deps, recorded } = stubDeps();
 
     expect(await runCli(["resume"], deps)).toBe(2);
     expect(recorded.stderr.join("\n")).toContain("flowdeck resume <id> [--auto | --no-auto]");
   });
 });
 
-describe("runCli branch flags", () => {
+describe("runCli branch variables", () => {
   const step = (id: string) => script(id, { settings: { command: id } });
-  const start = (flags: Record<string, boolean>) =>
-    trigger("t", { settings: { inputs: [], flags } });
   const ran = (scripts: FakeProcessRunner) => scripts.calls.map((call) => call.command);
   const kindsOf = (store: FakeStore, runId: string, nodeId: string) =>
     store
@@ -1157,103 +1562,51 @@ describe("runCli branch flags", () => {
       .filter((event) => event.nodeId === nodeId)
       .map((event) => event.kind);
 
-  async function branchBuild(e2e: boolean) {
-    const other = new FakeFileSystem();
-    const { dir } = await built(
-      other,
-      flow(
-        [
-          start({ e2e }),
-          step("s0"),
-          branch("b", "e2e"),
-          step("e2e"),
-          step("quick"),
-          step("finish"),
-        ],
-        [
-          thenWire("t", "s0"),
-          thenWire("s0", "b"),
-          wire("b", "yes", "e2e", "in"),
-          wire("b", "no", "quick", "in"),
-          thenWire("e2e", "finish"),
-          thenWire("quick", "finish"),
-        ],
-      ),
+  const branchFlow = (e2eDefault: boolean) =>
+    flow(
+      [
+        trigger("t", { settings: { inputs: [], flags: { e2e: e2eDefault } } }),
+        step("s0"),
+        branch("b", "e2e"),
+        step("e2e"),
+        step("quick"),
+        step("finish"),
+      ],
+      [
+        thenWire("t", "s0"),
+        thenWire("s0", "b"),
+        wire("b", "yes", "e2e", "in"),
+        wire("b", "no", "quick", "in"),
+        thenWire("e2e", "finish"),
+        thenWire("quick", "finish"),
+      ],
     );
-    return { other, dir };
-  }
 
-  async function flagsOnlyBuild(flags: Record<string, boolean>) {
-    const other = new FakeFileSystem();
-    const { dir } = await built(other, flow([start(flags), step("s0")], [thenWire("t", "s0")]));
-    return { other, dir };
-  }
+  it.each([
+    [true, {}, ["s0", "e2e", "finish"], "quick"],
+    [true, { e2e: false }, ["s0", "quick", "finish"], "e2e"],
+    [false, { e2e: true }, ["s0", "e2e", "finish"], "quick"],
+  ] as const)(
+    "with the default %s and the build's values %j, runs %j and skips %s",
+    async (e2eDefault, values, expected, skipped) => {
+      const { deps, scripts, store, seed } = stubDeps({ results: [ok, ok, ok, ok] });
+      await seed(branchFlow(e2eDefault), { values });
 
-  it("skips the e2e path under --no-e2e, runs the rest and stores the override", async () => {
-    const { other, dir } = await branchBuild(true);
-    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok, ok] });
-
-    expect(await runCli(["run", dir, "--cwd", repo, "--no-e2e"], deps)).toBe(0);
-    expect(ran(scripts)).toEqual(["s0", "quick", "finish"]);
-    const runId = store.runs[0]?.id ?? "";
-    expect(kindsOf(store, runId, "e2e")).toEqual(["skipped"]);
-    expect(store.runs[0]?.inputs).toMatchObject({ e2e: false });
-  });
-
-  it("runs the e2e path and skips quick without the flag", async () => {
-    const { other, dir } = await branchBuild(true);
-    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok, ok] });
-
-    expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(0);
-    expect(ran(scripts)).toEqual(["s0", "e2e", "finish"]);
-    expect(kindsOf(store, store.runs[0]?.id ?? "", "quick")).toEqual(["skipped"]);
-  });
-
-  it("runs the e2e path under --e2e when the Trigger defaults it to false", async () => {
-    const { other, dir } = await branchBuild(false);
-    const { deps, scripts } = stubDeps(other, { results: [ok, ok, ok, ok] });
-
-    expect(await runCli(["run", dir, "--cwd", repo, "--e2e"], deps)).toBe(0);
-    expect(ran(scripts)).toEqual(["s0", "e2e", "finish"]);
-  });
-
-  it("refuses --no-e2e with exit 2 when the Trigger does not declare e2e", async () => {
-    const { other, dir } = await flagsOnlyBuild({ lint: true });
-    const { deps, recorded, scripts } = stubDeps(other, { results: [ok] });
-
-    expect(await runCli(["run", dir, "--cwd", repo, "--no-e2e"], deps)).toBe(2);
-    nothingStarted(recorded, scripts);
-  });
-
-  it("refuses --no-auto with exit 2 on a build that declares flags", async () => {
-    const { other, dir } = await branchBuild(true);
-    const { deps, recorded, scripts } = stubDeps(other, { results: [ok, ok, ok] });
-
-    expect(await runCli(["run", dir, "--cwd", repo, "--no-auto"], deps)).toBe(2);
-    nothingStarted(recorded, scripts);
-  });
-
-  it.each(["auto", "cwd"])(
-    "refuses with exit 2 a Trigger flag named like the built-in option %s",
-    async (name) => {
-      const { other, dir } = await flagsOnlyBuild({ [name]: true });
-      const { deps, recorded, scripts } = stubDeps(other, { results: [ok] });
-
-      expect(await runCli(["run", dir, "--cwd", repo], deps)).toBe(2);
-      expect(recorded.stderr.join("\n")).toContain(name);
-      nothingStarted(recorded, scripts);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
+      expect(ran(scripts)).toEqual(expected);
+      expect(kindsOf(store, store.runs[0]?.id ?? "", skipped)).toEqual(["skipped"]);
     },
   );
 
-  it("reapplies a stored --no-e2e on resume, so e2e stays skipped and quick runs", async () => {
-    const { other, dir } = await branchBuild(true);
-    const { deps, scripts, store } = stubDeps(other, { results: [ok, ok, ok] });
+  it("takes the build's value on resume, so the path the build chose still runs", async () => {
+    const { deps, scripts, store, seed } = stubDeps({ results: [ok, ok, ok] });
+    const built = await seed(branchFlow(true), { values: { e2e: false } });
     const { id } = store.createRun({
-      buildDir: dir,
-      inputs: { cwd: repo, session: "fd-a", e2e: false },
+      buildDir: built.dir,
+      inputs: {},
       nodeIds: ["t", "s0", "b", "e2e", "quick", "finish"],
-      session: { tmuxName: "fd-a", cwd: repo, claudeSessionId: "c1" },
-      buildHash: "h",
+      session: { tmuxName: "fd-a", cwd: built.worktree, claudeSessionId: "c1" },
+      buildId: built.id,
     });
     store.append(id, "s0", { kind: "running" });
     store.append(id, "s0", { kind: "done" });

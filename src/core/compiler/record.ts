@@ -7,10 +7,21 @@ const manifestPath = "manifest.json";
 const byPath = (a: { path: string }, b: { path: string }) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
-export function buildRecord(dir: string, manifestContent: string): NewBuild {
+export type BuildIdentity = Pick<NewBuild, "id" | "name" | "repo" | "base" | "values">;
+
+export function buildRecord(
+  dir: string,
+  manifestContent: string,
+  { id, name, repo, base, values }: BuildIdentity,
+): NewBuild {
   const manifest = JSON.parse(manifestContent) as Manifest & { hash: string };
   return {
+    id,
     hash: manifest.hash,
+    name,
+    repo,
+    base,
+    values,
     dir,
     ...(manifest.source === undefined ? {} : { source: manifest.source }),
     files: [

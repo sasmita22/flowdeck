@@ -33,6 +33,7 @@ import * as builders from "../../fixtures/flow-builders.js";
 import { budget as budgetWait, permission as permissionWait } from "../../fixtures/waits.js";
 
 const hash = "abc123";
+const prefix = "fix-login";
 const sessionId = "s1";
 const cwd = "/repo";
 
@@ -43,7 +44,7 @@ const script = (id: string, settings: Record<string, unknown> = { command: "npm"
   node(id, "script", settings);
 const forEach = (id: string) => node(id, "foreach", { file: "plan.md" });
 const inEach = (child: ManifestNode, parent = "e1"): ManifestNode => ({ ...child, parent });
-const manifest = (...nodes: ManifestNode[]): RunnableManifest => ({ hash, nodes });
+const manifest = (...nodes: ManifestNode[]): RunnableManifest => ({ hash, prefix, nodes });
 const exit = (code: number | null, stdout = "", stderr = ""): ProcessResult => ({
   code,
   stdout,
@@ -57,7 +58,7 @@ const newRun = (m: RunnableManifest) => ({
   inputs: {},
   nodeIds: m.nodes.map((each) => each.id),
   session: { tmuxName: "fd-run", cwd, claudeSessionId: sessionId },
-  buildHash: hash,
+  buildId: hash,
 });
 
 function runOn(deps: TestDeps, m: RunnableManifest, options?: RunOptions) {
@@ -197,9 +198,9 @@ describe("Runner", () => {
 
     expect(result.outcome).toBe("done");
     expect(calls.filter((call) => call.startsWith("send"))).toEqual([
-      `send /${hash}:a`,
-      `send /${hash}:b`,
-      `send /${hash}:c`,
+      `send /${prefix}:a`,
+      `send /${prefix}:b`,
+      `send /${prefix}:c`,
     ]);
     expect(result.states).toEqual({ a: "done", b: "done", c: "done" });
   });
@@ -220,7 +221,7 @@ describe("Runner", () => {
 
     expect(result).toMatchObject({ outcome: "failed", failedNode: "a" });
     expect(result.states).toEqual({ a: "failed", b: "waiting" });
-    expect(calls).toEqual(["start", `send /${hash}:a`]);
+    expect(calls).toEqual(["start", `send /${prefix}:a`]);
     expect(lines.at(-1)).toMatch(/^a failed: .*no Stop for session s1 within 20 ms/);
   });
 
@@ -235,7 +236,7 @@ describe("Runner", () => {
       expect(result.outcome).toBe("done");
       expect(result.states).toEqual({ p: "done", o: "done" });
       expect(lines).toEqual(["p started", "p done", "o done"]);
-      expect(calls.filter((call) => call.startsWith("send"))).toEqual([`send /${hash}:p`]);
+      expect(calls.filter((call) => call.startsWith("send"))).toEqual([`send /${prefix}:p`]);
     });
 
     it("leaves an Output waiting when the run fails before it", async () => {
@@ -265,7 +266,7 @@ describe("Runner", () => {
     const run = async (results: (ProcessResult | Error)[]) => {
       const h = harness({ results });
       const result = await runOn(h.deps, manifest(script("s"), prompt("next")));
-      const nextRan = h.calls.includes(`send /${hash}:next`);
+      const nextRan = h.calls.includes(`send /${prefix}:next`);
       return { ...h, result, nextRan };
     };
 
@@ -338,7 +339,7 @@ describe("Runner", () => {
       expect(result.outcome).toBe("done");
       expect(scripts.calls).toHaveLength(2);
       expect(lines.slice(0, 3)).toEqual(["s started", "s retry", "s done"]);
-      expect(calls).toContain(`send /${hash}:next`);
+      expect(calls).toContain(`send /${prefix}:next`);
     });
 
     it("stops the run at exit 0 when the script names other success codes", async () => {
@@ -370,8 +371,8 @@ describe("Runner", () => {
 
   describe("a turn that fails", () => {
     it.each([
-      { name: "prompt", first: prompt("n1"), text: `/${hash}:n1` },
-      { name: "agent", first: agent("n1"), text: agentTurnText(hash, "n1") },
+      { name: "prompt", first: prompt("n1"), text: `/${prefix}:n1` },
+      { name: "agent", first: agent("n1"), text: agentTurnText(prefix, "n1") },
     ])(
       "fails the $name node with the session's message and sends nothing after it",
       async ({ first, text }) => {
@@ -394,7 +395,7 @@ describe("Runner", () => {
   });
 
   describe("agent nodes", () => {
-    const a1Type = `${hash}:a1`;
+    const a1Type = `${prefix}:a1`;
 
     it("is done when its SubagentStop and then Stop arrive during the send", async () => {
       const { deps, calls, lines } = turnHarness([[subagentStopped(a1Type), stopped]]);
@@ -402,7 +403,7 @@ describe("Runner", () => {
       const result = await runOn(deps, manifest(agent("a1")));
 
       expect(result).toEqual({ outcome: "done", states: { a1: "done" }, decisions: [] });
-      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+      expect(calls).toEqual(["start", `send ${agentTurnText(prefix, "a1")}`]);
       expect(lines).toEqual(["a1 started", "a1 done"]);
     });
 
@@ -413,7 +414,7 @@ describe("Runner", () => {
 
       expect(result).toMatchObject({ outcome: "failed", failedNode: "a1" });
       expect(result.states).toEqual({ a1: "failed", p2: "waiting" });
-      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+      expect(calls).toEqual(["start", `send ${agentTurnText(prefix, "a1")}`]);
       expect(lines).toEqual(["a1 started", `a1 failed: no SubagentStop for ${a1Type}`]);
     });
 
@@ -426,7 +427,7 @@ describe("Runner", () => {
       expect(lines.at(-1)).toMatch(/^a1 failed: .*no Stop for session s1 within 20 ms/);
     });
 
-    it.each(["general-purpose", `${hash}:other`])(
+    it.each(["general-purpose", `${prefix}:other`])(
       "fails when only a SubagentStop for %s arrives before Stop",
       async (otherType) => {
         const { deps, lines } = turnHarness([[subagentStopped(otherType), stopped]]);
@@ -477,7 +478,7 @@ describe("Runner", () => {
 
     it("does not carry a SubagentStop seen in one agent's turn into the next", async () => {
       const { deps, lines } = turnHarness([
-        [subagentStopped(a1Type), subagentStopped(`${hash}:a2`), stopped],
+        [subagentStopped(a1Type), subagentStopped(`${prefix}:a2`), stopped],
         [subagentStopped(a1Type), stopped],
       ]);
 
@@ -489,7 +490,7 @@ describe("Runner", () => {
         "a1 started",
         "a1 done",
         "a2 started",
-        `a2 failed: no SubagentStop for ${hash}:a2`,
+        `a2 failed: no SubagentStop for ${prefix}:a2`,
       ]);
     });
 
@@ -505,9 +506,9 @@ describe("Runner", () => {
       expect(result.outcome).toBe("done");
       expect(calls).toEqual([
         "start",
-        `send /${hash}:p1`,
-        `send ${agentTurnText(hash, "a1")}`,
-        `send /${hash}:p2`,
+        `send /${prefix}:p1`,
+        `send ${agentTurnText(prefix, "a1")}`,
+        `send /${prefix}:p2`,
       ]);
       expect(lines).toEqual([
         "p1 started",
@@ -524,7 +525,7 @@ describe("Runner", () => {
 
       await runOn(deps, manifest(node("t", "trigger"), agent("a1"), node("o", "output")));
 
-      expect(calls).toEqual(["start", `send ${agentTurnText(hash, "a1")}`]);
+      expect(calls).toEqual(["start", `send ${agentTurnText(prefix, "a1")}`]);
     });
   });
 
@@ -553,13 +554,13 @@ describe("Runner", () => {
       const running = runOn(deps, manifest(prompt("p1"), gate("g1"), prompt("p2")));
       await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
 
-      expect(sends(calls)).toEqual([`send /${hash}:p1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1`]);
       expect(waiter.calls).toEqual([{ nodeId: "g1", kind: "gate", shown: "Check the plan" }]);
       resolve(approve);
       const result = await running;
 
       expect(result.outcome).toBe("done");
-      expect(sends(calls)).toEqual([`send /${hash}:p1`, `send /${hash}:p2`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1`, `send /${prefix}:p2`]);
       expect(lines).toEqual(["p1 started", "p1 done", "g1 approved", "p2 started", "p2 done"]);
       expect(result.decisions).toEqual([{ nodeId: "g1", decision: "approved" }]);
       expect(result.states).toEqual({ p1: "done", g1: "done", p2: "done" });
@@ -574,7 +575,7 @@ describe("Runner", () => {
       expect(result).toMatchObject({ outcome: "failed", failedNode: "g1" });
       expect(result.states).toEqual({ p1: "done", g1: "failed", p2: "waiting" });
       expect(lines.at(-1)).toBe("g1 failed: rejected: wrong scope");
-      expect(sends(calls)).toEqual([`send /${hash}:p1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1`]);
       expect(result.decisions).toEqual([
         { nodeId: "g1", decision: "rejected", reason: "wrong scope" },
       ]);
@@ -599,7 +600,7 @@ describe("Runner", () => {
       expect(result.outcome).toBe("done");
       expect(waiter.calls).toEqual([]);
       expect(lines).toEqual(["p1 started", "p1 done", "g1 skipped", "p2 started", "p2 done"]);
-      expect(sends(calls)).toContain(`send /${hash}:p2`);
+      expect(sends(calls)).toContain(`send /${prefix}:p2`);
       expect(result.states["g1"]).toBe("skipped");
       expect(result.decisions).toEqual([{ nodeId: "g1", decision: "skipped" }]);
     });
@@ -661,7 +662,7 @@ describe("Runner", () => {
         const result = await runOn(deps, manifest(prompt("p1"), checking("h1"), prompt("p2")));
 
         expect(sends(calls)).toEqual([
-          `send /${hash}:p1`,
+          `send /${prefix}:p1`,
           `send ${hardstopCheckTurn("tests fail")}`,
         ]);
         expect(hardstopCheckTurn("tests fail")).toContain(verdictRequest("tests fail"));
@@ -682,7 +683,7 @@ describe("Runner", () => {
         expect(waiter.calls).toEqual([]);
         expect(result.states).toEqual({ p1: "done", h1: "done", p2: "done" });
         expect(lines).toContain("h1 condition not met");
-        expect(sends(calls).at(-1)).toBe(`send /${hash}:p2`);
+        expect(sends(calls).at(-1)).toBe(`send /${prefix}:p2`);
       });
 
       it("checks and stops under auto too", async () => {
@@ -740,7 +741,7 @@ describe("Runner", () => {
 
         expect(result.outcome).toBe("done");
         expect(waiter.calls).toEqual([]);
-        expect(sends(calls)).toEqual([`send /${hash}:p2`]);
+        expect(sends(calls)).toEqual([`send /${prefix}:p2`]);
       });
 
       it("sends no check for a Hard stop with no condition, and asks you", async () => {
@@ -749,7 +750,7 @@ describe("Runner", () => {
 
         await runOn(deps, manifest(hardstop("h1"), prompt("p2")));
 
-        expect(sends(calls)).toEqual([`send /${hash}:p2`]);
+        expect(sends(calls)).toEqual([`send /${prefix}:p2`]);
         expect(waiter.calls).toHaveLength(1);
       });
     });
@@ -762,7 +763,7 @@ describe("Runner", () => {
 
       expect(result).toMatchObject({ outcome: "failed", failedNode: "h1" });
       expect(lines.at(-1)).toBe("h1 failed: stopped: tests fail");
-      expect(sends(calls)).toEqual([`send /${hash}:p1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1`]);
       expect(result.decisions).toEqual([
         { nodeId: "h1", decision: "stopped", reason: "tests fail" },
       ]);
@@ -799,7 +800,7 @@ describe("Runner", () => {
       const result = await runOn(deps, manifest(ask("q1"), prompt("p1")));
 
       expect(lines).toEqual(["q1 answered: blue", "p1 started", "p1 done"]);
-      expect(sends(calls)).toEqual([`send /${hash}:p1 The user answered: blue`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1 The user answered: blue`]);
       expect(result.decisions).toEqual([{ nodeId: "q1", decision: "answered", answer: "blue" }]);
       expect(waiter.calls).toEqual([
         { nodeId: "q1", kind: "ask", question: "Pick a colour", options: ["red", "blue", "green"] },
@@ -812,7 +813,7 @@ describe("Runner", () => {
 
       await runOn(deps, manifest(ask("q1"), script("s1"), gate("g1"), prompt("p1")));
 
-      expect(sends(calls)).toEqual([`send /${hash}:p1 The user answered: blue`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1 The user answered: blue`]);
     });
 
     it("uses an answer once", async () => {
@@ -821,8 +822,8 @@ describe("Runner", () => {
       await runOn(deps, manifest(ask("q1"), prompt("p1"), prompt("p2")));
 
       expect(sends(calls)).toEqual([
-        `send /${hash}:p1 The user answered: blue`,
-        `send /${hash}:p2`,
+        `send /${prefix}:p1 The user answered: blue`,
+        `send /${prefix}:p2`,
       ]);
     });
 
@@ -833,21 +834,23 @@ describe("Runner", () => {
       await runOn(deps, manifest(ask("q1"), ask("q2"), prompt("p1")));
 
       expect(sends(calls)).toEqual([
-        `send /${hash}:p1 The user answered: red. The user answered: blue`,
+        `send /${prefix}:p1 The user answered: red. The user answered: blue`,
       ]);
     });
 
     it("puts an answer before the next Agent's turn text", async () => {
       const waiter = new FakeWaiter([answer("blue")]);
       const { deps, calls, lines } = turnHarness(
-        [[subagentStopped(`${hash}:a1`), stopped]],
+        [[subagentStopped(`${prefix}:a1`), stopped]],
         1000,
         waiter,
       );
 
       await runOn(deps, manifest(ask("q1"), agent("a1")));
 
-      expect(sends(calls)).toEqual([`send The user answered: blue. ${agentTurnText(hash, "a1")}`]);
+      expect(sends(calls)).toEqual([
+        `send The user answered: blue. ${agentTurnText(prefix, "a1")}`,
+      ]);
       expect(lines).toContain("a1 done");
     });
 
@@ -876,9 +879,9 @@ describe("Runner", () => {
     const answer = (text: string): WaitReply => ({ decision: "answer", answer: text });
     const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
     const rounds = (lines: string[]) => lines.filter((line) => /^l1 round \d+$/.test(line));
-    const sendR1 = `send /${hash}:r1`;
-    const sendF1 = `send /${hash}:f1 ${verdictRequest(condition)}`;
-    const sendP9 = `send /${hash}:p9`;
+    const sendR1 = `send /${prefix}:r1`;
+    const sendF1 = `send /${prefix}:f1 ${verdictRequest(condition)}`;
+    const sendP9 = `send /${prefix}:p9`;
 
     it("stops after exactly cap rounds that are never done and fails on cap fail", async () => {
       const waiter = new FakeWaiter([]);
@@ -1101,9 +1104,9 @@ describe("Runner", () => {
       await runOn(deps, reviewFix());
 
       expect(sends(calls)).toEqual([
-        `send /${hash}:r1`,
-        `send /${hash}:f1 ${verdictRequest(condition)}`,
-        `send /${hash}:p9`,
+        `send /${prefix}:r1`,
+        `send /${prefix}:f1 ${verdictRequest(condition)}`,
+        `send /${prefix}:p9`,
       ]);
       expect(sends(calls)[1]).toContain(`Condition: ${condition}`);
     });
@@ -1116,7 +1119,7 @@ describe("Runner", () => {
       await runOn(deps, manifest(loop("l1"), inLoop(ask), inLoop(prompt("f1")), prompt("p9")));
 
       expect(sends(calls)[0]).toBe(
-        `send /${hash}:f1 The user answered: blue ${verdictRequest(condition)}`,
+        `send /${prefix}:f1 The user answered: blue ${verdictRequest(condition)}`,
       );
     });
 
@@ -1151,14 +1154,14 @@ describe("Runner", () => {
     it("asks an Agent verdict turn for the verdict and reads it from the main Stop", async () => {
       const { deps, calls, lines } = turnHarness([
         [
-          { kind: "SubagentStop", agentType: `${hash}:a1`, reply: verdict(true) },
+          { kind: "SubagentStop", agentType: `${prefix}:a1`, reply: verdict(true) },
           { kind: "Stop", reply: verdict(false) },
         ],
       ]);
 
       await runOn(deps, manifest(loop("l1", { cap: 1 }), inLoop(agent("a1"))));
 
-      expect(calls).toEqual(["start", `send ${agentVerdictTurnText(hash, "a1", condition)}`]);
+      expect(calls).toEqual(["start", `send ${agentVerdictTurnText(prefix, "a1", condition)}`]);
       expect(calls[1]).not.toContain("Then reply DONE.");
       expect(calls[1]?.endsWith(`Condition: ${condition}`)).toBe(true);
       expect(lines.at(-1)).toBe("l1 failed: cap reached after 1 rounds");
@@ -1312,9 +1315,9 @@ describe("Runner", () => {
       prompt("after"),
     );
     const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
-    const sendP1 = (item: string) => `send /${hash}:p1 This round's item: ${item}`;
-    const sendP2 = `send /${hash}:p2`;
-    const sendAfter = `send /${hash}:after`;
+    const sendP1 = (item: string) => `send /${prefix}:p1 This round's item: ${item}`;
+    const sendP2 = `send /${prefix}:p2`;
+    const sendAfter = `send /${prefix}:after`;
     const allRounds = [
       sendP1("alpha"),
       sendP2,
@@ -1416,9 +1419,9 @@ describe("Runner", () => {
 
     describe("a body that starts with an Agent", () => {
       const agentFirst = manifest(forEach("e1"), inEach(agent("a1")), inEach(prompt("p2")));
-      const agentRound = [subagentStopped(`${hash}:a1`), stopped];
+      const agentRound = [subagentStopped(`${prefix}:a1`), stopped];
       const agentSend = (item: string) =>
-        `send Use the Agent tool with subagent_type "${hash}:a1" and the prompt ${JSON.stringify(`Go. This round's item: ${item}`)}. Then reply DONE.`;
+        `send Use the Agent tool with subagent_type "${prefix}:a1" and the prompt ${JSON.stringify(`Go. This round's item: ${item}`)}. Then reply DONE.`;
 
       it("hands each round's item to the agent and runs every round to done", async () => {
         const { deps, calls } = turnHarness(
@@ -1446,7 +1449,7 @@ describe("Runner", () => {
         await runOn(deps, agentFirst);
 
         expect(sends(calls)[0]).toBe(
-          `send Use the Agent tool with subagent_type "${hash}:a1" and the prompt "Go. This round's item: say \\"hi\\"". Then reply DONE.`,
+          `send Use the Agent tool with subagent_type "${prefix}:a1" and the prompt "Go. This round's item: say \\"hi\\"". Then reply DONE.`,
         );
       });
     });
@@ -1522,7 +1525,7 @@ describe("Runner", () => {
     );
 
     expect(result.outcome).toBe("done");
-    expect(calls).toEqual(["start", `send /${hash}:p`]);
+    expect(calls).toEqual(["start", `send /${prefix}:p`]);
     expect(lines).toEqual(["p started", "p done", "o done"]);
   });
 
@@ -1629,7 +1632,7 @@ describe("Runner run state", () => {
   });
 
   it("marks a Prompt and an Agent sent before each send, and done only after the turn ends", async () => {
-    const { deps } = turnHarness([[stopped], [subagentStopped(`${hash}:a1`), stopped]]);
+    const { deps } = turnHarness([[stopped], [subagentStopped(`${prefix}:a1`), stopped]]);
     const store = new FakeStore();
     const seenAtSend: string[][] = [];
     const watched: TestDeps = {
@@ -1777,7 +1780,7 @@ describe("Runner run state", () => {
       });
 
       expect(result.outcome).toBe("done");
-      expect(sends(calls)).toEqual([`send /${hash}:p3`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p3`]);
       expect(eventsOf(deps.store, "p2").slice(1)).toMatchObject([
         { kind: "done", payload: { stopMessage: "X" } },
       ]);
@@ -1797,7 +1800,7 @@ describe("Runner run state", () => {
       const result = await running;
 
       expect(result.outcome).toBe("done");
-      expect(sends(calls)).toEqual([`send /${hash}:p3`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p3`]);
       expect(kindsOf(deps.store, "p2")).toEqual(["sent", "done"]);
     });
 
@@ -1831,7 +1834,7 @@ describe("Runner run state", () => {
 
       await resume(deps, three, runId, { p2: { kind: "send" } });
 
-      expect(sends(calls)).toEqual([`send /${hash}:p2`, `send /${hash}:p3`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p2`, `send /${prefix}:p3`]);
       expect(kindsOf(deps.store, "p2")).toEqual(["sent", "done"]);
     });
 
@@ -1850,7 +1853,7 @@ describe("Runner run state", () => {
 
       await resume(deps, m, runId, { p1: { kind: "send" } });
 
-      expect(sends(calls)).toEqual([`send /${hash}:p1 The user answered: blue`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1 The user answered: blue`]);
     });
 
     it("keeps an answer given before the kill for the next Prompt", async () => {
@@ -1867,7 +1870,7 @@ describe("Runner run state", () => {
 
       await resume(deps, m, runId, {});
 
-      expect(sends(calls)).toEqual([`send /${hash}:p1 The user answered: blue`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1 The user answered: blue`]);
     });
 
     it("fails a Script that was running when the runner stopped, without running it", async () => {
@@ -1910,7 +1913,7 @@ describe("Runner run state", () => {
 
         expect(waiter.calls).toEqual([]);
         expect(kindsOf(deps.store, "g1")).toEqual(["needs-you", "decided", "done"]);
-        expect(sends(calls)).toEqual([`send /${hash}:p2`]);
+        expect(sends(calls)).toEqual([`send /${prefix}:p2`]);
         expect(result.decisions).toEqual([decision]);
       });
 
@@ -1977,7 +1980,7 @@ describe("Runner run state", () => {
       await resume(deps, m, runId, { q1: { kind: "reuse", decision } });
 
       expect(waiter.calls).toEqual([]);
-      expect(sends(calls)).toEqual([`send /${hash}:p1 The user answered: blue`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:p1 The user answered: blue`]);
     });
 
     const loopAnswered = (answer: string) =>
@@ -2057,9 +2060,9 @@ describe("Runner run state", () => {
       expect(rounds).toEqual([1, 2, 3]);
       expect(lines.filter((line) => /^l1 round/.test(line))).toEqual(["l1 round 3"]);
       expect(sends(calls)).toEqual([
-        `send /${hash}:r1`,
-        `send /${hash}:f1 ${verdictRequest(condition)}`,
-        `send /${hash}:p9`,
+        `send /${prefix}:r1`,
+        `send /${prefix}:f1 ${verdictRequest(condition)}`,
+        `send /${prefix}:p9`,
       ]);
       expect(result.outcome).toBe("done");
     });
@@ -2164,7 +2167,7 @@ describe("Runner permission requests", () => {
     const running = runOn(deps, manifest(agent("a1")));
     await vi.waitFor(() => expect(sends(calls)).toHaveLength(1));
     const decision = await permissions.ask(sessionId, bash("echo hi"));
-    events.publish({ kind: "SubagentStop", sessionId, payload: { agent_type: `${hash}:a1` } });
+    events.publish({ kind: "SubagentStop", sessionId, payload: { agent_type: `${prefix}:a1` } });
     events.publish({ kind: "Stop", sessionId, payload: {} });
     const result = await running;
 
@@ -2321,7 +2324,7 @@ describe("Runner budget", () => {
     await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
 
     expect(waiter.calls).toEqual([budgetWait]);
-    expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+    expect(sends(calls)).toEqual([`send /${prefix}:n1`]);
     expect(kindsOf(deps.store, "n2")).not.toContain("sent");
     resolve(stop);
     await running;
@@ -2334,7 +2337,7 @@ describe("Runner budget", () => {
     const result = await runOn(deps, twoPrompts);
 
     expect(result.outcome).toBe("done");
-    expect(sends(calls)).toEqual([`send /${hash}:n1`, `send /${hash}:n2`]);
+    expect(sends(calls)).toEqual([`send /${prefix}:n1`, `send /${prefix}:n2`]);
     expect(kindsOf(deps.store, "n1").filter((kind) => kind === "sent")).toHaveLength(1);
     expect(eventsOf(deps.store, "n2")).toMatchObject([
       { kind: "budget", payload: { step: "paused", spend: 1.2, budget: 1 } },
@@ -2421,7 +2424,7 @@ describe("Runner budget", () => {
 
       expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
       expect(result.states).toEqual({ n1: "done", n2: "waiting" });
-      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:n1`]);
       expect(eventsOf(deps.store, "n2").at(-1)).toMatchObject({
         kind: "budget",
         payload: { step: "stopped" },
@@ -2477,7 +2480,7 @@ describe("Runner budget", () => {
       await runOn(deps, twoPrompts);
 
       expect(waiter.calls).toEqual([budgetWait]);
-      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:n1`]);
       expect(kindsOf(deps.store, "n2")).not.toContain("sent");
     });
 
@@ -2578,7 +2581,7 @@ describe("Runner budget", () => {
       await runOn(deps, twoPrompts);
 
       expect(waiter.calls).toEqual([{ ...budgetWait, spend: 0, unconfirmed: true }]);
-      expect(sends(calls)).toEqual([`send /${hash}:n1`]);
+      expect(sends(calls)).toEqual([`send /${prefix}:n1`]);
       expect(eventsOf(deps.store, "n2")[0]).toMatchObject({
         kind: "budget",
         payload: { step: "paused", spend: 0, budget: 1, unconfirmed: true },
@@ -2612,9 +2615,9 @@ describe("Runner budget", () => {
 describe("Runner parallel section", () => {
   const quietMs = 30;
   const branchIds = ["a1", "a2", "a3"];
-  const typeOf = (id: string) => `${hash}:${id}`;
-  const forkSend = (ids = branchIds) => `send ${forkTurnText(hash, ids)}`;
-  const afterSend = `send /${hash}:after`;
+  const typeOf = (id: string) => `${prefix}:${id}`;
+  const forkSend = (ids = branchIds) => `send ${forkTurnText(prefix, ids)}`;
+  const afterSend = `send /${prefix}:after`;
   const approve: WaitReply = { decision: "approve" };
   const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
   const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
@@ -2657,8 +2660,8 @@ describe("Runner parallel section", () => {
         ...(withAfter ? [builders.thenWire("j", "after")] : []),
       ],
     );
-    const { nodes, wires } = lower(flow).manifest;
-    return { hash, nodes, wires };
+    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+    return { hash, prefix, nodes, wires };
   }
 
   type Session = {
@@ -2716,8 +2719,8 @@ describe("Runner parallel section", () => {
       prompts: {
         sendPrompt: async (text) => {
           calls.push(`send ${text}`);
-          if (text === forkTurnText(hash, branchIds)) onFork(session);
-          else if (text === `/${hash}:after`) session.stop("OK");
+          if (text === forkTurnText(prefix, branchIds)) onFork(session);
+          else if (text === `/${prefix}:after`) session.stop("OK");
         },
         interrupt: async () => {
           calls.push("interrupt");
@@ -2954,7 +2957,7 @@ describe("Runner parallel section", () => {
         after: "done",
       });
       expect(h.lines).toContain("a3 skipped");
-      expect(sends(h.calls)).toEqual([forkSend(), `send /${hash}:after`]);
+      expect(sends(h.calls)).toEqual([forkSend(), `send /${prefix}:after`]);
     });
 
     it("waits for first and skips both the unfinished and the unstarted branch when the Join says skip", async () => {
@@ -3262,7 +3265,7 @@ describe("Runner parallel section", () => {
   });
 });
 
-describe("Runner branch on a flag", () => {
+describe("Runner branch on a yes/no variable", () => {
   const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
   const kindsOf = (store: FakeStore, nodeId: string) =>
     store
@@ -3276,27 +3279,52 @@ describe("Runner branch on a flag", () => {
     builders.trigger("start", { settings: { inputs: [], flags: { e2e } } });
   const yes = (to: string) => builders.wire("b", "yes", to, "in");
   const no = (to: string) => builders.wire("b", "no", to, "in");
-  const toManifest = (nodes: unknown[], wires: unknown[]): RunnableManifest => {
-    const { nodes: lowered, wires: loweredWires } = lower(builders.flow(nodes, wires)).manifest;
-    return { hash, nodes: lowered, wires: loweredWires };
-  };
-  const twoPaths = (e2e = true) =>
-    toManifest(
-      [start(e2e), builders.branch("b", "e2e"), step("e2e"), step("quick"), step("finish")],
-      [
-        builders.thenWire("start", "b"),
-        yes("e2e"),
-        no("quick"),
-        builders.thenWire("e2e", "finish"),
-        builders.thenWire("quick", "finish"),
-      ],
+  const toManifest = (
+    nodes: unknown[],
+    wires: unknown[],
+    chosen: Record<string, boolean> = {},
+  ): RunnableManifest => {
+    const input = builders.flow(nodes, wires);
+    const defaults = Object.fromEntries(
+      input.session.buildConfig.variables.flatMap((variable) =>
+        variable.default === undefined ? [] : [[variable.name, variable.default]],
+      ),
     );
+    const { manifest: lowered } = lower(input, {
+      name: prefix,
+      values: { ...defaults, ...chosen },
+    });
+    return {
+      hash,
+      prefix: lowered.prefix,
+      layout: lowered.layout,
+      values: lowered.values,
+      nodes: lowered.nodes,
+      wires: lowered.wires,
+    };
+  };
+  const twoPathNodes = (e2e = true) => [
+    start(e2e),
+    builders.branch("b", "e2e"),
+    step("e2e"),
+    step("quick"),
+    step("finish"),
+  ];
+  const twoPathWires = [
+    builders.thenWire("start", "b"),
+    yes("e2e"),
+    no("quick"),
+    builders.thenWire("e2e", "finish"),
+    builders.thenWire("quick", "finish"),
+  ];
+  const twoPaths = (chosen: Record<string, boolean> = {}) =>
+    toManifest(twoPathNodes(), twoPathWires, chosen);
   const results = () => [exit(0), exit(0), exit(0), exit(0)];
 
-  it("skips the yes path and runs the no path and the rejoin when the run turns the flag off", async () => {
-    const { deps, scripts, lines } = harness({ results: results(), flags: { e2e: false } });
+  it("skips the yes path and runs the no path and the rejoin when the build's value is false", async () => {
+    const { deps, scripts, lines } = harness({ results: results() });
 
-    const result = await runOn(deps, twoPaths());
+    const result = await runOn(deps, twoPaths({ e2e: false }));
 
     expect(result.outcome).toBe("done");
     expect(ran(scripts)).toEqual(["quick", "finish"]);
@@ -3310,10 +3338,10 @@ describe("Runner branch on a flag", () => {
     });
   });
 
-  it("runs the yes path and skips the no path when the flag keeps its true default", async () => {
+  it("runs the yes path and skips the no path when the build's value is true", async () => {
     const { deps, scripts } = harness({ results: results() });
 
-    const result = await runOn(deps, twoPaths());
+    const result = await runOn(deps, twoPaths({ e2e: true }));
 
     expect(result.outcome).toBe("done");
     expect(ran(scripts)).toEqual(["e2e", "finish"]);
@@ -3326,13 +3354,46 @@ describe("Runner branch on a flag", () => {
     });
   });
 
-  it("runs the yes path when the run turns a false default on", async () => {
+  it("keeps the build's value over a run flag of the same name", async () => {
     const { deps, scripts } = harness({ results: results(), flags: { e2e: true } });
 
-    const result = await runOn(deps, twoPaths(false));
+    const result = await runOn(deps, twoPaths({ e2e: false }));
 
-    expect(ran(scripts)).toEqual(["e2e", "finish"]);
-    expect(result.states).toMatchObject({ b: "done", quick: "skipped" });
+    expect(ran(scripts)).toEqual(["quick", "finish"]);
+    expect(result.states).toMatchObject({ b: "done", e2e: "skipped" });
+  });
+
+  describe("in a hash-named build, whose manifest has Trigger flags and no values", () => {
+    const oldManifest = (e2e: boolean): RunnableManifest => ({
+      hash,
+      prefix: hash,
+      nodes: [
+        node("start", "trigger", { inputs: [], flags: { e2e } }),
+        node("b", "branch", { flag: "e2e" }),
+        script("e2e", { command: "e2e" }),
+        script("quick", { command: "quick" }),
+        script("finish", { command: "finish" }),
+      ],
+      wires: twoPathWires as NonNullable<RunnableManifest["wires"]>,
+    });
+
+    it("takes the Trigger flag's default", async () => {
+      const { deps, scripts } = harness({ results: results() });
+
+      const result = await runOn(deps, oldManifest(true));
+
+      expect(result.outcome).toBe("done");
+      expect(ran(scripts)).toEqual(["e2e", "finish"]);
+    });
+
+    it("takes the run's flag over the Trigger default", async () => {
+      const { deps, scripts } = harness({ results: results(), flags: { e2e: false } });
+
+      const result = await runOn(deps, oldManifest(true));
+
+      expect(result.outcome).toBe("done");
+      expect(ran(scripts)).toEqual(["quick", "finish"]);
+    });
   });
 
   it("writes the Branch's running and done and every skip in one batch", async () => {
@@ -3684,10 +3745,10 @@ describe("Runner compaction", () => {
 
     expect(result.outcome).toBe("done");
     expect(sends(calls)).toEqual([
-      `send /${hash}:n1`,
+      `send /${prefix}:n1`,
       "send /compact",
-      `send /${hash}:n2`,
-      `send /${hash}:n3`,
+      `send /${prefix}:n2`,
+      `send /${prefix}:n3`,
     ]);
     expect(eventsOf(deps.store, "n2")).toMatchObject([
       { kind: "compacted", payload: { tokens: 850_000 } },
@@ -3876,7 +3937,7 @@ describe("Runner File wires", () => {
         file: "plan.md",
       },
     ];
-    return { hash, nodes, wires };
+    return { hash, prefix, nodes, wires };
   };
 
   it("starts the next node once the file its wire names is in the working folder", async () => {
@@ -3888,7 +3949,7 @@ describe("Runner File wires", () => {
     const result = await runOn(deps, handoff(prompt("build")));
 
     expect(result.outcome).toBe("done");
-    expect(sends(calls)).toEqual([`send /${hash}:build`]);
+    expect(sends(calls)).toEqual([`send /${prefix}:build`]);
   });
 
   it("sees a file the producer wrote during its own step", async () => {
@@ -3907,7 +3968,7 @@ describe("Runner File wires", () => {
     const result = await runOn(writing, handoff(prompt("build")));
 
     expect(result.outcome).toBe("done");
-    expect(sends(calls)).toEqual([`send /${hash}:build`]);
+    expect(sends(calls)).toEqual([`send /${prefix}:build`]);
   });
 
   it("fails the next node, naming the file and its producer, when the file was not written", async () => {
@@ -3950,6 +4011,7 @@ describe("Runner File wires", () => {
     await files.writeFile(`${cwd}/notes.md`, "x");
     const m: RunnableManifest = {
       hash,
+      prefix,
       nodes: [forEach("e1"), inEach(prompt("p1")), inEach(script("s1"))],
       wires: [
         {
@@ -4001,12 +4063,36 @@ describe("Runner File wires", () => {
         builders.fileWire("plan", "a2", "plan.md"),
       ],
     );
-    const { nodes, wires } = lower(flow).manifest;
+    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
 
-    const result = await runOn(deps, { hash, nodes, wires });
+    const result = await runOn(deps, { hash, prefix, nodes, wires });
 
     expect(result).toMatchObject({ outcome: "failed", failedNode: "a2" });
     expect(lines.at(-1)).toBe("a2 failed: plan.md wasn't written by Planner");
     expect(sends(calls)).toEqual([]);
+  });
+});
+
+describe("Runner turn names", () => {
+  it("sends a prompt and an agent under the build's prefix, not its hash", async () => {
+    const { deps, calls } = turnHarness([[stopped], [subagentStopped("fix-login:a1"), stopped]]);
+
+    const result = await runOn(deps, manifest(prompt("p1"), agent("a1")));
+
+    expect(result.outcome).toBe("done");
+    expect(calls).toEqual([
+      "start",
+      "send /fix-login:p1",
+      `send ${agentTurnText("fix-login", "a1")}`,
+    ]);
+  });
+
+  it("keeps a hash-named build's old names when its prefix is its hash", async () => {
+    const { deps, calls } = turnHarness([[stopped], [subagentStopped(`${hash}:a1`), stopped]]);
+
+    const result = await runOn(deps, { hash, prefix: hash, nodes: [prompt("p1"), agent("a1")] });
+
+    expect(result.outcome).toBe("done");
+    expect(calls).toEqual(["start", `send /${hash}:p1`, `send ${agentTurnText(hash, "a1")}`]);
   });
 });

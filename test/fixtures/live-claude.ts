@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, rm, rmdir } from "node:fs/promises";
+import { readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -75,7 +75,8 @@ async function removeIfEmpty(folder: string): Promise<void> {
 }
 
 export async function removeClaudeSessions(repoPath: string, sessionIds: string[]): Promise<void> {
-  const slug = repoPath.replace(/[^a-zA-Z0-9]/g, "-");
+  const resolved = await realpath(repoPath).catch(() => repoPath);
+  const slug = resolved.replace(/[^a-zA-Z0-9]/g, "-");
   const projectFolder = join(homedir(), ".claude", "projects", slug);
   for (const sessionId of sessionIds) {
     await waitForClaudeToExit(sessionId);

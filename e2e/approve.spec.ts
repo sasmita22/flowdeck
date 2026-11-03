@@ -1,14 +1,16 @@
 import { expect, test } from "@playwright/test";
 import Database from "better-sqlite3";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flow, gate, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun } from "./build-run.js";
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const scriptThenGateThenScript = () =>
@@ -24,7 +26,7 @@ const scriptThenGateThenScript = () =>
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-ap-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-ap-wf-")));
+  repo = await createTmpRepo({ commit: true });
 });
 
 test.afterEach(async () => {
@@ -32,17 +34,17 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
 test("Approving a gate in the inspector lets the run carry on to the last script", async () => {
-  seedFlow(home, scriptThenGateThenScript(), folder);
+  seedFlow(home, scriptThenGateThenScript(), repo.path);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
-  await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
 
-  await window.getByTestId("canvas-run").click();
+  await buildAndRun(window, home, "approve");
 
   await expect(window.getByTestId("inspector-node-g1")).toHaveAttribute(
     "data-status",
@@ -93,14 +95,14 @@ test("Approving a gate in the inspector lets the run carry on to the last script
 });
 
 test("A gate's question shows on the run's page even when a node was selected in the editor", async () => {
-  seedFlow(home, scriptThenGateThenScript(), folder);
+  seedFlow(home, scriptThenGateThenScript(), repo.path);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
-  await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
 
   await window.getByTestId("node-s2").click();
   await expect(window.getByTestId("node-settings")).toBeVisible();
-  await window.getByTestId("canvas-run").click();
+  await buildAndRun(window, home, "approve");
 
   await expect(window.getByTestId("run-page-status")).toBeVisible();
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });

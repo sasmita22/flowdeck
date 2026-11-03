@@ -37,24 +37,67 @@ const manifestProblem = (problem: VerifyProblem["problem"]): VerifyResult => ({
   problems: [{ path: manifestPath, problem }],
 });
 
-const folderName = (dir: string): string => dir.replace(/\/+$/, "").split("/").at(-1) ?? "";
-
 const byPath = (a: VerifyProblem, b: VerifyProblem) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
-export async function verify(
-  buildDir: string,
-  deps: { fs: VerifyFileSystem },
-): Promise<VerifyResult> {
-  let listed: string[];
+export type VerifyLayout = "workspace" | "legacy";
+
+const pluginFolder = "plugin";
+const workspaceRootFiles = [manifestPath, "CLAUDE.md", "settings.json"];
+
+type Listing = { paths: string[]; read(path: string): Promise<string> };
+
+async function listOrMissing(fs: VerifyFileSystem, dir: string): Promise<string[] | undefined> {
   try {
-    listed = await deps.fs.list(buildDir);
+    return await fs.list(dir);
   } catch (error) {
-    if (hasCode(error, "ENOENT")) return manifestProblem("missing");
+    if (hasCode(error, "ENOENT")) return undefined;
     throw error;
   }
+}
+
+async function readOrMissing(fs: VerifyFileSystem, path: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(path);
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return undefined;
+    throw error;
+  }
+}
+
+async function legacyListing(dir: string, fs: VerifyFileSystem): Promise<Listing | undefined> {
+  const paths = await listOrMissing(fs, dir);
+  return paths === undefined ? undefined : { paths, read: (path) => fs.readFile(`${dir}/${path}`) };
+}
+
+async function workspaceListing(dir: string, fs: VerifyFileSystem): Promise<Listing | undefined> {
+  const plugin = await listOrMissing(fs, `${dir}/${pluginFolder}`);
+  if (plugin === undefined) return undefined;
+  const root = new Map<string, string>();
+  for (const path of workspaceRootFiles) {
+    const content = await readOrMissing(fs, `${dir}/${path}`);
+    if (content !== undefined) root.set(path, content);
+  }
+  return {
+    paths: [...root.keys(), ...plugin.map((path) => `${pluginFolder}/${path}`)],
+    read: async (path) => root.get(path) ?? fs.readFile(`${dir}/${path}`),
+  };
+}
+
+export async function verify(
+  buildDir: string,
+  expectedHash: string,
+  layout: VerifyLayout,
+  deps: { fs: VerifyFileSystem },
+): Promise<VerifyResult> {
+  const listing =
+    layout === "workspace"
+      ? await workspaceListing(buildDir, deps.fs)
+      : await legacyListing(buildDir, deps.fs);
+  if (listing === undefined) return manifestProblem("missing");
+  const listed = listing.paths;
   if (!listed.includes(manifestPath)) return manifestProblem("missing");
-  const manifestContent = await deps.fs.readFile(`${buildDir}/${manifestPath}`);
+  const manifestContent = await listing.read(manifestPath);
   const manifest = parseManifest(manifestContent);
   if (manifest === undefined) return manifestProblem("changed");
 
@@ -66,7 +109,7 @@ export async function verify(
       problems.push({ path, problem: "missing" });
       continue;
     }
-    const content = await deps.fs.readFile(`${buildDir}/${path}`);
+    const content = await listing.read(path);
     read.push({ path, content });
     if (sha256Hex(content) !== recorded) problems.push({ path, problem: "changed" });
   }
@@ -77,7 +120,7 @@ export async function verify(
   }
   const manifestChanged =
     Object.hasOwn(manifest.files, manifestPath) ||
-    manifest.hash !== folderName(buildDir) ||
+    manifest.hash !== expectedHash ||
     (problems.length === 0 && hashBuild(read) !== manifest.hash);
   if (manifestChanged) {
     problems.push({ path: manifestPath, problem: "changed" });

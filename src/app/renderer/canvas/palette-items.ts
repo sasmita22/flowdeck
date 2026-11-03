@@ -46,7 +46,7 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["join", "Control", "Waits for the branches before continuing."],
   ["loop", "Control", "Repeats its body until a condition holds, with a cap."],
   ["foreach", "Control", "Runs its body once per item in a list."],
-  ["branch", "Control", "Takes one path or the other, set by a flag on the Trigger."],
+  ["branch", "Control", "Takes one path or the other, set by a yes/no variable."],
   ["gate", "People and safety", "Pauses until you approve. A flag can switch it off."],
   [
     "hardstop",
@@ -54,7 +54,7 @@ const catalog: [NodeType, PaletteGroup, string][] = [
     "Stops the session and asks you when a condition is met. Nothing can switch it off.",
   ],
   ["ask", "People and safety", "Puts a question to you in the app and waits for the answer."],
-  ["trigger", "In and out", "Where a flow starts: the Run button, with its inputs."],
+  ["trigger", "In and out", "Where the flow starts when its build runs."],
   ["output", "In and out", "What the flow hands back to whoever used it."],
 ];
 

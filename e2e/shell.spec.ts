@@ -1,13 +1,18 @@
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
-import { NodeType } from "../src/core/flow/schema.js";
+import {
+  buildConfigTestIds,
+  controlTestIds,
+  paletteTestId,
+  readoutTestIds,
+} from "../src/app/renderer/test-ids.js";
+import { NodeType, parseFlow } from "../src/core/flow/schema.js";
 import {
   agent,
   flow,
@@ -18,13 +23,14 @@ import {
   thenWire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
-import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun } from "./build-run.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const darkBackground = "rgb(14, 17, 22)";
@@ -100,7 +106,6 @@ const titleAndCanvasControls = [
   controlTestIds.title,
   controlTestIds.save,
   controlTestIds.build,
-  controlTestIds.run,
   controlTestIds.more,
   controlTestIds.sessionSettings,
   controlTestIds.undo,
@@ -144,7 +149,7 @@ const reviewShot = async (window: Page, testInfo: TestInfo, name: string) => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-shell-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-shell-wf-")));
+  repo = await createTmpRepo({ commit: true });
 });
 
 test.afterEach(async () => {
@@ -152,7 +157,7 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
@@ -359,13 +364,12 @@ test("Panel buttons hand focus to their counterpart", async () => {
 });
 
 test("Panels appearing on their own leave focus alone", async () => {
-  seedFlow(home, twoScripts(), folder);
+  seedFlow(home, twoScripts(), repo.path);
   const { window } = await launch();
 
   await expect(window.getByTestId(controlTestIds.inspectorShow)).not.toBeFocused();
 
-  await window.getByTestId(controlTestIds.run).focus();
-  await window.keyboard.press("Enter");
+  await buildAndRun(window, home, "focus");
   await expect(window.getByTestId(controlTestIds.inspectorHide)).toBeVisible({ timeout: 20_000 });
   await expect(window.getByTestId(controlTestIds.inspectorHide)).not.toBeFocused();
 });
@@ -523,10 +527,10 @@ test("Review shots", async () => {
 
   await rm(home, { recursive: true, force: true });
   home = await mkdtemp(join(tmpdir(), "fd-shell-"));
-  seedFlow(home, twoScripts({ command: "sleep", args: ["5"] }), folder);
+  seedFlow(home, twoScripts({ command: "sleep", args: ["5"] }), repo.path);
   target = await launch();
   await showDark(target);
-  await target.window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(target.window, home, "running");
   await expect(target.window.getByTestId("run-status")).toHaveText(/^Running/, {
     timeout: 20_000,
   });
@@ -546,13 +550,13 @@ test("Review shots", async () => {
 });
 
 test("Run status and inspector", async () => {
-  seedFlow(home, twoScripts(), folder);
+  seedFlow(home, twoScripts(), repo.path);
   const { window } = await launch();
 
   await expect(window.getByTestId("run-status")).toHaveText("Idle");
   await expect(window.getByTestId("inspector")).toHaveCount(0);
 
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "status");
   await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
@@ -562,47 +566,32 @@ test("Run status and inspector", async () => {
 });
 
 test("Branch shown", async () => {
-  const repo = await createTmpRepo({ commit: true });
-  try {
-    await git(repo.path, "checkout", "--quiet", "-b", "fd-demo");
-    seedFlow(home, twoScripts(), repo.path);
-    const { window } = await launch();
+  await git(repo.path, "checkout", "--quiet", "-b", "fd-demo");
+  await git(repo.path, "branch", "fd-next");
+  const seeded = parseFlow(twoScripts());
+  seedFlow(home, {
+    ...seeded,
+    session: { ...seeded.session, buildConfig: { repo: repo.path, variables: [] } },
+  });
+  const { window } = await launch();
 
-    await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
-    await expect(window.getByTestId("workspace-folder")).toHaveAttribute("title", repo.path);
-    await expect(window.getByTestId("workspace-branch")).toHaveText("fd-demo");
-    await expect(window.getByTestId("workspace-branch")).toHaveAttribute("title", "fd-demo");
+  await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
+  await expect(window.getByTestId("workspace-folder")).toHaveAttribute("title", repo.path);
+  await expect(window.getByTestId("workspace-branch")).toHaveText("fd-demo");
+  await expect(window.getByTestId("workspace-branch")).toHaveAttribute("title", "fd-demo");
 
-    await git(repo.path, "checkout", "--quiet", "-b", "fd-next");
-    await window.getByTestId(controlTestIds.run).click();
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await window.getByTestId(buildConfigTestIds.base).fill("fd-next");
+  await window.getByTestId(buildConfigTestIds.base).press("Enter");
 
-    await expect(window.getByTestId("workspace-branch")).toHaveText("fd-next");
-    await expect(window.getByTestId("run-status")).toHaveText(/^Done/, { timeout: 20_000 });
-  } finally {
-    await launched?.close();
-    launched = undefined;
-    await repo.cleanup();
-  }
+  await expect(window.getByTestId("workspace-branch")).toHaveText("fd-next");
 });
 
-test("New worktree shows its base branch", async () => {
-  const repo = await createTmpRepo({ commit: true });
-  try {
-    const base = flow([prompt("prompt-1")], []);
-    seedFlow(home, {
-      ...base,
-      session: {
-        ...base.session,
-        workingFolder: { kind: "worktree", branch: "main", repo: repo.path },
-      },
-    });
-    const { window } = await launch();
+test("A blueprint's base branch shows in the status bar", async () => {
+  await git(repo.path, "checkout", "--quiet", "-b", "dev");
+  seedFlow(home, flow([prompt("prompt-1")], []), repo.path);
+  const { window } = await launch();
 
-    await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
-    await expect(window.getByTestId("workspace-branch")).toHaveText("new worktree from main");
-  } finally {
-    await launched?.close();
-    launched = undefined;
-    await repo.cleanup();
-  }
+  await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
+  await expect(window.getByTestId("workspace-branch")).toHaveText("main");
 });

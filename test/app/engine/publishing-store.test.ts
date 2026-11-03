@@ -6,17 +6,22 @@ import { FakeStore } from "../../fakes/fake-store.js";
 
 const nodeIds = ["p1", "p2"];
 
-const newRun = (): NewRun => ({
-  buildDir: "/fd/builds/abc",
+const newRun = (buildId = "b0"): NewRun => ({
+  buildDir: `/fd/workspaces/${buildId}`,
   inputs: {},
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
-  buildHash: "h0",
+  buildId,
 });
 
 const build: NewBuild = {
+  id: "b1",
   hash: "h1",
-  dir: "/fd/builds/h1",
+  name: "fix-login",
+  repo: "/repo",
+  base: "main",
+  values: {},
+  dir: "/fd/workspaces/b1",
   files: [{ path: "manifest.json", sha256: "m" }],
   nodes: [],
 };
@@ -91,7 +96,7 @@ describe("createPublishingStore", () => {
   it("delegates the other methods to the inner store and publishes nothing for them", () => {
     const { inner, runId, pushes, store } = setup();
 
-    const created = store.createRun(newRun());
+    const created = store.createRun(newRun("b1"));
     store.recordBuild(build);
     store.recordCost(runId, 0.25);
     const entry = {
@@ -111,13 +116,45 @@ describe("createPublishingStore", () => {
     expect(inner.builds()).toEqual([build]);
     expect(inner.costOf(runId)).toBe(0.25);
     expect(store.listBuilds()).toEqual(inner.listBuilds());
-    expect(store.findBuild("h1")).toEqual(inner.findBuild("h1"));
-    expect(store.buildFiles("h1")).toEqual(inner.buildFiles("h1"));
+    expect(store.findBuild("b1")).toEqual(inner.findBuild("b1"));
+    expect(store.findBuildByName("fix-login")).toEqual(inner.findBuildByName("fix-login"));
+    expect(store.findBuildByName("fix-login")).toMatchObject({ id: "b1" });
+    expect(store.buildFiles("b1")).toEqual(inner.buildFiles("b1"));
     expect(store.listRuns()).toEqual(inner.listRuns());
     expect(found).toEqual(inner.findRun(runId));
     expect(events).toEqual(inner.events(runId));
     expect(store.activity(runId)).toEqual([entry]);
     expect(inner.activity(runId)).toEqual([entry]);
+  });
+
+  it("deletes a build through the inner store, publishing no run state", () => {
+    const { inner, pushes, store } = setup();
+    inner.recordBuild(build);
+
+    store.deleteBuild("b1");
+
+    expect(inner.listBuilds()).toEqual([]);
+    expect(inner.findBuildByName("fix-login")).toBeUndefined();
+    expect(pushes).toEqual([]);
+  });
+
+  it("stops an interrupted run of another build through the inner store, publishing nothing for it", () => {
+    const { inner, pushes, store } = setup();
+    const other = inner.createRun(newRun("b1"));
+
+    store.stopRun(other.id);
+
+    expect(inner.findRun(other.id)?.status).toBe("stopped");
+    expect(pushes).toEqual([]);
+  });
+
+  it("publishes a stopped snapshot when its own run is stopped", () => {
+    const { inner, runId, pushes, store, expected } = setup();
+
+    store.stopRun(runId);
+
+    expect(inner.findRun(runId)?.status).toBe("stopped");
+    expect(pushes).toEqual([expected("stopped")]);
   });
 
   it("passes every write to the inner store unchanged", () => {

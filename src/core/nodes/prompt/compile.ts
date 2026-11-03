@@ -1,9 +1,11 @@
 import { handoffText, type Handoff } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
+import { fillVariables, type VariableValues } from "../../flow/variables.js";
 
 export function compilePrompt(
   node: Extract<Node, { type: "prompt" }>,
   wired: Handoff = { given: [], writes: [] },
+  values: VariableValues = {},
 ): {
   path: string;
   content: string;
@@ -14,7 +16,7 @@ export function compilePrompt(
       ? ""
       : `\nExpected output: ${expectedOutput}\n`;
   return {
-    path: `commands/${node.id}.md`,
-    content: `---\ndescription: ${JSON.stringify(node.label)}\n---\n${instructions}\n${expected}${handoffText(wired)}`,
+    path: `plugin/commands/${node.id}.md`,
+    content: `---\ndescription: ${JSON.stringify(node.label)}\n---\n${fillVariables(instructions, values)}\n${expected}${handoffText(wired)}`,
   };
 }

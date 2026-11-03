@@ -24,10 +24,11 @@ const browserStorage = () => {
   }
 };
 
-function renderTerminalWindow(root: HTMLElement) {
+function renderTerminalWindow(root: HTMLElement, runId: string) {
   document.title = "Flowdeck terminal";
   const terminal = createTerminalStore({ bridge: window.flowdeck });
   void terminal.getState().connect();
+  void terminal.getState().view(runId);
   createRoot(root).render(<TerminalWindow store={terminal} />);
 }
 
@@ -49,12 +50,15 @@ function renderApp(root: HTMLElement) {
   const syncWindowWidth = () => shell.getState().setWindowWidth(window.innerWidth);
   syncWindowWidth();
   window.addEventListener("resize", syncWindowWidth);
-  const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save, run });
+  const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save });
   const nav = createNavStore();
   const library = createLibraryStore({ bridge: window.flowdeck });
   void library.getState().refresh();
   run.subscribe((next, previous) => {
-    if (next.snapshot?.status !== previous.snapshot?.status) void library.getState().refresh();
+    const moved = Object.values(next.snapshots).some(
+      (snapshot) => previous.snapshots[snapshot.runId]?.status !== snapshot.status,
+    );
+    if (moved) void library.getState().refresh();
   });
   save.subscribe((next, previous) => {
     if (next.version !== previous.version || next.name !== previous.name) {
@@ -90,5 +94,6 @@ function renderApp(root: HTMLElement) {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("index.html has no #root element");
-if (window.location.hash === "#terminal") renderTerminalWindow(root);
+const terminalRun = /^#terminal\/(.+)$/.exec(window.location.hash)?.[1];
+if (terminalRun !== undefined) renderTerminalWindow(root, decodeURIComponent(terminalRun));
 else renderApp(root);

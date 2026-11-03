@@ -31,6 +31,32 @@ describe("FakeFileSystem", () => {
     expect(fs.isPrivate("a/open.md")).toBe(false);
   });
 
+  it("removes every file under a folder tree and records the call", async () => {
+    const fs = new FakeFileSystem({
+      "ws/b1/CLAUDE.md": "c",
+      "ws/b1/plugin/agents/a.md": "a",
+      "ws/b10/CLAUDE.md": "other",
+    });
+
+    await fs.removeTree("ws/b1");
+
+    expect(await fs.exists("ws/b1")).toBe(false);
+    expect(await fs.list("ws")).toEqual(["b10/CLAUDE.md"]);
+    expect(fs.calls).toContainEqual({ method: "removeTree", path: "ws/b1" });
+  });
+
+  it("removes a folder tree except the files under the kept child", async () => {
+    const fs = new FakeFileSystem({
+      "ws/b1/CLAUDE.md": "c",
+      "ws/b1/repo/src/work.ts": "w",
+      "ws/b1/repo2/x.md": "x",
+    });
+
+    await fs.removeTree("ws/b1", { keep: "ws/b1/repo" });
+
+    expect(await fs.list("ws/b1")).toEqual(["repo/src/work.ts"]);
+  });
+
   it("rejects reading a missing file", async () => {
     await expect(new FakeFileSystem().readFile("missing.md")).rejects.toThrow();
   });
@@ -54,6 +80,21 @@ describe("FakeFileSystem", () => {
     await fs.writeFile("other/x.md", "x");
 
     expect(await fs.list("root")).toEqual(["a/b.md", "z.md"]);
+  });
+
+  it("lists only the folders directly inside a folder, by name and sorted, and records the call", async () => {
+    const fs = new FakeFileSystem();
+    await fs.writeFile("root/z.md", "z");
+    await fs.writeFile("root/b/inner/c.md", "c");
+    await fs.writeFile("root/a/x.md", "x");
+    await fs.writeFile("rooted/d/y.md", "y");
+
+    expect(await fs.folders("root")).toEqual(["a", "b"]);
+    expect(await fs.folders("missing")).toEqual([]);
+    expect(fs.calls.filter((call) => call.method === "folders")).toEqual([
+      { method: "folders", path: "root" },
+      { method: "folders", path: "missing" },
+    ]);
   });
 
   it("rejects listing a missing folder", async () => {

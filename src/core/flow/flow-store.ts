@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Flow, Session } from "./schema.js";
+import { BuildConfig, Flow } from "./schema.js";
 
 export interface SavedFlowRef {
   flowId: string;
@@ -23,7 +23,7 @@ export const flowSummarySchema = z.object({
   createdAt: z.string(),
   versions: z.number().int(),
   lastSavedAt: z.string().nullable(),
-  workingFolder: Session.shape.workingFolder.nullable(),
+  buildConfig: BuildConfig.nullable(),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;

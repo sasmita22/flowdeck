@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { modelChoices, permissionModes, type Choice } from "../../../core/flow/choices.js";
-import { Session } from "../../../core/flow/schema.js";
+import { Session, type BuildConfig } from "../../../core/flow/schema.js";
 
 type Path = readonly string[];
 
@@ -28,7 +28,7 @@ type AnyObject = z.ZodObject<z.ZodRawShape>;
 
 export const sessionSettingsSchema = Session.pick({
   name: true,
-  workingFolder: true,
+  buildConfig: true,
   model: true,
   allowedTools: true,
   permissionMode: true,
@@ -47,10 +47,8 @@ export type Form = {
 
 const sessionLabels: Record<string, string> = {
   name: "Session name",
-  "workingFolder.kind": "Working folder",
-  "workingFolder.path": "Folder path",
-  "workingFolder.repo": "Repository",
-  "workingFolder.branch": "Start from branch",
+  "buildConfig.repo": "Repository",
+  "buildConfig.base": "Start from branch",
   model: "Model",
   allowedTools: "Allowed tools (one per line)",
   permissionMode: "Permission mode",
@@ -60,11 +58,8 @@ const sessionLabels: Record<string, string> = {
 const sessionForm: Form = {
   prefix: "session",
   labels: sessionLabels,
-  optionLabels: {
-    "workingFolder.kind": { path: "Existing folder", worktree: "New git worktree" },
-  },
+  optionLabels: {},
   choices: { model: modelChoices, permissionMode: permissionModes },
-  placeholders: { "workingFolder.path": "/Users/you/code/project" },
 };
 
 const labelOf = (form: Form, path: Path): string => {
@@ -219,11 +214,14 @@ export const withChoices = (
 const asChoices = (values: readonly string[]): Choice[] =>
   values.map((value) => ({ value, label: value }));
 
+export const yesNoChoices = (buildConfig: Pick<BuildConfig, "variables">): Choice[] =>
+  asChoices(buildConfig.variables.filter(({ kind }) => kind === "yesno").map(({ name }) => name));
+
 export const sessionFields = (branches?: readonly string[]): FieldDescription[] => {
   const fields = describeFields(sessionSettingsSchema);
   return branches === undefined
     ? fields
-    : withChoices(fields, "workingFolder.branch", asChoices(branches));
+    : withChoices(fields, "buildConfig.base", asChoices(branches));
 };
 
 const emptyVariant = (variant: AnyObject, discriminator: string, kind: string) =>

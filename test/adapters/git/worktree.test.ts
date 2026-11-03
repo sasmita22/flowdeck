@@ -9,6 +9,8 @@ import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 
+const committer = ["-c", "user.name=Flowdeck Test", "-c", "user.email=test@flowdeck.invalid"];
+
 async function git(repo: string, ...args: string[]): Promise<string> {
   const { stdout } = await run("git", ["-C", repo, ...args]);
   return stdout;
@@ -158,5 +160,103 @@ describe("GitWorktree", () => {
 
     expect(await worktreePaths(repo.path)).toEqual([repo.path, theirs]);
     expect(await branches(repo.path)).toBe("main\ntheir-work\n");
+  });
+
+  const commitIn = async (folder: string, file: string): Promise<void> => {
+    await writeFile(join(folder, file), `${file}\n`);
+    await git(folder, "add", file);
+    await git(folder, ...committer, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", file);
+  };
+
+  const addBuildWorktree = async () => {
+    const path = join(target, "1a2b3c4d", "repo");
+    const branch = "flowdeck/fix-login-1a2b3c4d";
+    await worktree.add({ repo: repo.path, base: "main", branch, path });
+    return { path, branch };
+  };
+
+  it("reads a fresh worktree as clean", async () => {
+    const { path } = await addBuildWorktree();
+
+    expect(await worktree.isDirty(path)).toBe(false);
+  });
+
+  it("reads a worktree holding an untracked file as dirty", async () => {
+    const { path } = await addBuildWorktree();
+    await writeFile(join(path, "made.txt"), "work\n");
+
+    expect(await worktree.isDirty(path)).toBe(true);
+  });
+
+  it("reads a worktree with a changed tracked file as dirty", async () => {
+    const { path } = await addBuildWorktree();
+    await commitIn(path, "made.txt");
+    await writeFile(join(path, "made.txt"), "changed\n");
+
+    expect(await worktree.isDirty(path)).toBe(true);
+  });
+
+  it("finds nothing unpushed on a branch with no commits of its own, in a repo with no remote", async () => {
+    const { branch } = await addBuildWorktree();
+
+    expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(false);
+  });
+
+  it("finds a commit of the branch's own as unpushed in a repo with no remote", async () => {
+    const { path, branch } = await addBuildWorktree();
+    await commitIn(path, "made.txt");
+
+    expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(true);
+  });
+
+  it("finds nothing unpushed once the branch's commits are on the base", async () => {
+    const { path, branch } = await addBuildWorktree();
+    await commitIn(path, "made.txt");
+    await git(repo.path, "merge", "--quiet", "--ff-only", branch);
+
+    expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(false);
+  });
+
+  describe("with a remote", () => {
+    let remote: string;
+
+    beforeEach(async () => {
+      remote = await realpath(await mkdtemp(join(tmpdir(), "fd-remote-")));
+      await run("git", ["init", "--quiet", "--bare", remote]);
+      await git(repo.path, "remote", "add", "origin", remote);
+      await git(repo.path, "push", "--quiet", "origin", "main");
+    });
+
+    afterEach(async () => {
+      await rm(remote, { recursive: true, force: true });
+    });
+
+    it("finds nothing unpushed once the branch's commits are on a remote ref", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "made.txt");
+      await git(path, "push", "--quiet", "origin", branch);
+
+      expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(false);
+    });
+
+    it("finds a commit made after the last push as unpushed", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "pushed.txt");
+      await git(path, "push", "--quiet", "origin", branch);
+      await commitIn(path, "local.txt");
+
+      expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(true);
+    });
+  });
+
+  it("deletes a branch holding commits of its own once its worktree is gone, leaving other branches", async () => {
+    const { path, branch } = await addBuildWorktree();
+    await commitIn(path, "made.txt");
+    await git(repo.path, "branch", "theirs");
+    await git(repo.path, "worktree", "remove", path);
+
+    await worktree.deleteBranch(repo.path, branch);
+
+    expect(await branches(repo.path)).toBe("main\ntheirs\n");
   });
 });

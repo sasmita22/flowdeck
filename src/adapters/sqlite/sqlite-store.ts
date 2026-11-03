@@ -1,7 +1,9 @@
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
+import type { VariableValues } from "../../core/flow/variables.js";
 import type { RunEvent } from "../../core/run/run-events.js";
+import { BuildRunningError } from "../../core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -28,13 +30,13 @@ type RunRow = {
   tmux_name: string;
   cwd: string;
   claude_session_id: string;
-  build_hash: string | null;
+  build_id: string | null;
 };
 
 type RunSummaryRow = {
   id: string;
   status: RunStatus;
-  build_hash: string | null;
+  build_id: string | null;
   created_at: string;
   ended_at: string | null;
   total_cost: number | null;
@@ -46,7 +48,7 @@ type RunSummaryRow = {
 const toRunSummary = (row: RunSummaryRow): RunSummary => ({
   id: row.id,
   status: row.status,
-  ...(row.build_hash === null ? {} : { buildHash: row.build_hash }),
+  ...(row.build_id === null ? {} : { buildId: row.build_id }),
   createdAt: row.created_at,
   endedAt: row.ended_at,
   totalCost: row.total_cost,
@@ -57,17 +59,30 @@ const toRunSummary = (row: RunSummaryRow): RunSummary => ({
 });
 
 type BuildRow = {
+  id: string;
   hash: string;
+  name: string | null;
+  repo: string | null;
+  base: string | null;
+  values: string | null;
+  deleted_at: number | null;
   dir: string;
   created_at: number;
   flow_id: string | null;
   version: number | null;
 };
 
-const buildColumns = "hash, dir, created_at, flow_id, version";
+const buildColumns =
+  'id, hash, name, repo, base, "values", deleted_at, dir, created_at, flow_id, version';
 
 const toBuild = (row: BuildRow): BuildRecord => ({
+  id: row.id,
   hash: row.hash,
+  name: row.name,
+  repo: row.repo,
+  base: row.base,
+  values: row.values === null ? null : (JSON.parse(row.values) as VariableValues),
+  deletedAt: row.deleted_at,
   dir: row.dir,
   createdAt: row.created_at,
   ...(row.flow_id === null || row.version === null
@@ -84,6 +99,15 @@ type EventRow = {
   cost: number | null;
   time: string;
 };
+
+const buildRunningMessage = "build is running";
+
+const asBuildRunning = (error: unknown, buildId: string | undefined): unknown =>
+  error instanceof Database.SqliteError &&
+  error.code === "SQLITE_CONSTRAINT_TRIGGER" &&
+  error.message === buildRunningMessage
+    ? new BuildRunningError(buildId ?? "")
+    : error;
 
 const nodeUpdates: Partial<Record<RunEvent["kind"], string>> = {
   sent: "started_at = coalesce(started_at, @time)",
@@ -106,12 +130,12 @@ export class SqliteStore implements Store {
 
   createRun(run: NewRun): RunRecord {
     const id = randomUUID();
-    this.db.transaction(() => {
+    this.guarded(run.buildId, () => {
       this.db
         .prepare(
-          "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash) VALUES (?, ?, ?, 'running', ?, ?)",
+          "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id) VALUES (?, ?, ?, 'running', ?, ?)",
         )
-        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildHash);
+        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildId);
       const session = this.db
         .prepare(
           "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
@@ -121,14 +145,14 @@ export class SqliteStore implements Store {
         "INSERT INTO run_nodes (run_id, node_id, session_id) VALUES (?, ?, ?)",
       );
       for (const nodeId of run.nodeIds) insertNode.run(id, nodeId, session.lastInsertRowid);
-    })();
+    });
     return { ...run, id, status: "running" };
   }
 
   findRun(id: string): RunRecord | undefined {
     const row = this.db
       .prepare(
-        `SELECT runs.id, runs.build_dir, runs.inputs, runs.status, runs.build_hash,
+        `SELECT runs.id, runs.build_dir, runs.inputs, runs.status, runs.build_id,
                 run_sessions.tmux_name, run_sessions.cwd, run_sessions.claude_session_id
            FROM runs JOIN run_sessions ON run_sessions.run_id = runs.id
           WHERE runs.id = ? ORDER BY run_sessions.id LIMIT 1`,
@@ -147,19 +171,20 @@ export class SqliteStore implements Store {
       nodeIds,
       session: { tmuxName: row.tmux_name, cwd: row.cwd, claudeSessionId: row.claude_session_id },
       status: row.status,
-      ...(row.build_hash === null ? {} : { buildHash: row.build_hash }),
+      ...(row.build_id === null ? {} : { buildId: row.build_id }),
     };
   }
 
   listRuns(): RunSummary[] {
     const rows = this.db
       .prepare(
-        `SELECT runs.id, runs.status, runs.build_hash, runs.created_at, runs.total_cost,
+        `SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
                 CASE WHEN runs.status = 'running' THEN NULL
                      ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
                 (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
                 builds.flow_id, builds.version
-           FROM runs LEFT JOIN builds ON builds.hash = runs.build_hash
+           FROM runs LEFT JOIN builds ON builds.id = runs.build_id
+          WHERE builds.deleted_at IS NULL
           ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
       )
       .all() as RunSummaryRow[];
@@ -227,9 +252,20 @@ export class SqliteStore implements Store {
   }
 
   reopenRun(runId: string): void {
-    this.db.transaction(() => {
+    this.guarded(this.findRun(runId)?.buildId, () => {
       this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(runId);
       this.db.prepare("UPDATE run_sessions SET status = 'open' WHERE run_id = ?").run(runId);
+    });
+  }
+
+  stopRun(runId: string): void {
+    this.db.transaction(() => {
+      const stopped = this.db
+        .prepare("UPDATE runs SET status = 'stopped' WHERE id = ? AND status = 'running'")
+        .run(runId);
+      if (stopped.changes > 0) {
+        this.db.prepare("UPDATE run_sessions SET status = 'closed' WHERE run_id = ?").run(runId);
+      }
     })();
   }
 
@@ -260,17 +296,16 @@ export class SqliteStore implements Store {
 
   recordBuild(build: NewBuild): void {
     this.db.transaction(() => {
-      if (this.findBuild(build.hash) !== undefined) return;
       const insertFile = this.db.prepare(
-        "INSERT INTO build_files (build_hash, path, sha256) VALUES (?, ?, ?)",
+        "INSERT INTO build_files (build_id, path, sha256) VALUES (?, ?, ?)",
       );
-      for (const file of build.files) insertFile.run(build.hash, file.path, file.sha256);
+      for (const file of build.files) insertFile.run(build.id, file.path, file.sha256);
       const insertNode = this.db.prepare(
-        "INSERT INTO build_nodes (build_hash, ordinal, node_id, type, config, file) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file) VALUES (?, ?, ?, ?, ?, ?)",
       );
       build.nodes.forEach((node, ordinal) => {
         insertNode.run(
-          build.hash,
+          build.id,
           ordinal,
           node.nodeId,
           node.type,
@@ -280,10 +315,15 @@ export class SqliteStore implements Store {
       });
       this.db
         .prepare(
-          "INSERT INTO builds (hash, dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?)",
+          'INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         )
         .run(
+          build.id,
           build.hash,
+          build.name,
+          build.repo,
+          build.base,
+          JSON.stringify(build.values),
           build.dir,
           this.now().getTime(),
           build.source?.flowId ?? null,
@@ -292,27 +332,48 @@ export class SqliteStore implements Store {
     })();
   }
 
-  findBuild(hash: string): BuildRecord | undefined {
-    const row = this.db.prepare(`SELECT ${buildColumns} FROM builds WHERE hash = ?`).get(hash) as
+  findBuild(id: string): BuildRecord | undefined {
+    const row = this.db.prepare(`SELECT ${buildColumns} FROM builds WHERE id = ?`).get(id) as
       BuildRow | undefined;
     return row === undefined ? undefined : toBuild(row);
   }
 
+  findBuildByName(name: string): BuildRecord | undefined {
+    const row = this.db
+      .prepare(`SELECT ${buildColumns} FROM builds WHERE name = ? AND deleted_at IS NULL`)
+      .get(name) as BuildRow | undefined;
+    return row === undefined ? undefined : toBuild(row);
+  }
+
+  deleteBuild(id: string): void {
+    this.db.prepare("UPDATE builds SET deleted_at = ? WHERE id = ?").run(this.now().getTime(), id);
+  }
+
   listBuilds(): BuildRecord[] {
     const rows = this.db
-      .prepare(`SELECT ${buildColumns} FROM builds ORDER BY created_at DESC, rowid DESC`)
+      .prepare(
+        `SELECT ${buildColumns} FROM builds WHERE deleted_at IS NULL ORDER BY created_at DESC, rowid DESC`,
+      )
       .all() as BuildRow[];
     return rows.map(toBuild);
   }
 
-  buildFiles(hash: string): BuildFileRecord[] {
+  buildFiles(id: string): BuildFileRecord[] {
     return this.db
-      .prepare("SELECT path, sha256 FROM build_files WHERE build_hash = ? ORDER BY path")
-      .all(hash) as BuildFileRecord[];
+      .prepare("SELECT path, sha256 FROM build_files WHERE build_id = ? ORDER BY path")
+      .all(id) as BuildFileRecord[];
   }
 
   close(): void {
     this.db.close();
+  }
+
+  private guarded(buildId: string | undefined, write: () => void): void {
+    try {
+      this.db.transaction(write)();
+    } catch (error) {
+      throw asBuildRunning(error, buildId);
+    }
   }
 
   private time(): string {

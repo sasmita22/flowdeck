@@ -1,15 +1,17 @@
 import { expect, test } from "@playwright/test";
 import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeStatus, type RunEvent } from "../src/core/run/run-events.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun } from "./build-run.js";
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const twoScripts = () =>
@@ -20,7 +22,7 @@ const twoScripts = () =>
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-r-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-r-wf-")));
+  repo = await createTmpRepo({ commit: true });
 });
 
 test.afterEach(async () => {
@@ -28,21 +30,21 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
-test("Run saves the edit first, builds it, runs it and shows each node's status", async () => {
-  seedFlow(home, twoScripts(), folder);
+test("Build saves the edit first, the build runs, and the run shows each node's status", async () => {
+  seedFlow(home, twoScripts(), repo.path);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
-  await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
 
   await window.getByTestId("node-s2").click();
   await window.getByTestId("canvas-delete").click();
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
 
-  await window.getByTestId("canvas-run").click();
+  const buildId = await buildAndRun(window, home, "edited");
 
   await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
@@ -57,16 +59,15 @@ test("Run saves the edit first, builds it, runs it and shows each node's status"
   try {
     expect(db.prepare("SELECT count(*) AS n FROM flow_versions").get()).toEqual({ n: 2 });
 
-    const builds = db.prepare("SELECT hash, dir FROM builds").all() as {
-      hash: string;
+    const builds = db.prepare("SELECT id, dir FROM builds").all() as {
+      id: string;
       dir: string;
     }[];
-    expect(builds).toHaveLength(1);
-    const [build] = builds;
+    expect(builds).toEqual([{ id: buildId, dir: join(home, "workspaces", buildId) }]);
     const run = db
-      .prepare("SELECT id, build_hash, build_dir FROM runs ORDER BY created_at DESC, rowid DESC")
-      .get() as { id: string; build_hash: string | null; build_dir: string };
-    expect(run).toMatchObject({ build_hash: build?.hash, build_dir: build?.dir });
+      .prepare("SELECT id, build_id, build_dir FROM runs ORDER BY created_at DESC, rowid DESC")
+      .get() as { id: string; build_id: string | null; build_dir: string };
+    expect(run).toMatchObject({ build_id: buildId, build_dir: builds[0]?.dir });
 
     expect(
       db.prepare("SELECT node_id, finished_at FROM run_nodes WHERE run_id = ?").all(run.id),
@@ -89,15 +90,15 @@ test("Run saves the edit first, builds it, runs it and shows each node's status"
 });
 
 test("A script-only run has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
-  seedFlow(home, twoScripts(), folder);
+  seedFlow(home, twoScripts(), repo.path);
   launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
-  await expect(window.getByTestId("canvas-run")).toBeVisible();
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
   await window.getByTestId("menu-more").click();
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
   await window.keyboard.press("Escape");
 
-  await window.getByTestId("canvas-run").click();
+  await buildAndRun(window, home, "scripts");
 
   await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,

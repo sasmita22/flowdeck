@@ -92,6 +92,26 @@ describe("claudeCommand", () => {
     );
   });
 
+  it("adds a folder for claude to read, quoted as one shell word", () => {
+    const command = claudeCommand(
+      { sessionId, model: "haiku" },
+      "../settings.json",
+      "../plugin",
+      undefined,
+      "../fd home",
+    );
+
+    expect(command).toContain(" --add-dir '../fd home'");
+    expect(command).toContain(" --settings '../settings.json'");
+    expect(command).toContain(" --plugin-dir '../plugin'");
+  });
+
+  it("adds no folder without one", () => {
+    expect(
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/b", "/m.json"),
+    ).not.toContain("--add-dir");
+  });
+
   it("keeps the user's telemetry setting", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain(
       "CLAUDE_CODE_ENABLE_TELEMETRY",

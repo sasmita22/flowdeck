@@ -1,22 +1,22 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { EventLog } from "../../src/adapters/jsonl/event-log.js";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const runTimeoutMs = 300_000;
+const buildName = "live-agent";
 const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
@@ -39,7 +39,7 @@ function liveFlow(secret: string) {
         label: "Start",
         type: "trigger",
         position: at(0),
-        settings: { inputs: [], flags: {} },
+        settings: {},
       },
       {
         id: "p1",
@@ -81,7 +81,7 @@ function liveFlow(secret: string) {
     wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
     session: {
       name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
+      buildConfig: { base: "main", variables: [] },
       model: "haiku",
       allowedTools: [],
       permissionMode: "acceptEdits",
@@ -159,15 +159,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
   const sessionName = `fd-live-agent-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let slug: string;
   let claudeTmp: string;
   let projectFolder: string;
   let sessionIds: string[];
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
-    slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
+    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
     claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
     projectFolder = join(homedir(), ".claude", "projects", slug);
     sessionIds = [];
@@ -202,17 +204,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
     { timeout: runTimeoutMs },
     async () => {
       const secret = `s${randomBytes(5).toString("hex")}`;
-      const built = await build(liveFlow(secret), {
-        fs: new NodeFileSystem(),
-        home,
-      });
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-      const notesPath = join(repo.path, "notes.md");
-      const controlPath = join(repo.path, "control.md");
-      await rm(notesPath, { force: true });
-      expect(await readOrMissing(notesPath)).toBeUndefined();
-      expect(await readFile(join(built.dir, "agents", "a1.md"), "utf8")).not.toContain(secret);
-      expect(agentTurnText(built.hash, "a1")).not.toContain(secret);
 
       const logPath = join(home, "runs", "agent", "events.jsonl");
       const recorded: HookEvent[] = [];
@@ -244,8 +235,23 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
         },
       };
 
+      const built = await cliBuild(
+        liveFlow(secret),
+        { name: buildName, repo: repo.path },
+        workspace,
+        deps,
+      );
+      const notesPath = join(workspace.workFolder, "notes.md");
+      const controlPath = join(workspace.workFolder, "control.md");
+      await rm(notesPath, { force: true });
+      expect(await readOrMissing(notesPath)).toBeUndefined();
+      expect(
+        await readFile(join(workspace.dir, "plugin", "agents", "a1.md"), "utf8"),
+      ).not.toContain(secret);
+      expect(agentTurnText(buildName, "a1")).not.toContain(secret);
+
       const code = await runCli(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
+        ["run", buildName, "--session", sessionName, "--model", "haiku"],
         deps,
       );
 
@@ -261,7 +267,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
           `stderr:\n${stderr.join("\n")}`,
           `notes.md: ${JSON.stringify(notes)}`,
           `control.md: ${JSON.stringify(control)}`,
-          `git status --porcelain:\n${(await run("git", ["status", "--porcelain"], { cwd: repo.path })).stdout}`,
+          `git status --porcelain:\n${(await run("git", ["status", "--porcelain"], { cwd: workspace.workFolder })).stdout}`,
           `files under ${claudeTmp}: ${JSON.stringify(await listRecursive(claudeTmp))}`,
           `hook events in order:\n${recorded.map(describeEvent).join("\n")}`,
         ].join("\n"),
@@ -277,7 +283,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
           log.filter((line) => line.kind === "SubagentStop").map((line) => line.agent_type),
           "a SubagentStop for the build's agent",
         )
-        .toContain(`${built.hash}:a1`);
+        .toContain(`${buildName}:a1`);
       expect.soft(notes ?? "", "the subagent does not know the secret").not.toContain(secret);
       expect.soft(control ?? "", "positive control: the main session knows it").toContain(secret);
     },

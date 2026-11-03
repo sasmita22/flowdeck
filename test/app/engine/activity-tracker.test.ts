@@ -50,7 +50,7 @@ describe("createActivityTracker", () => {
       inputs: {},
       nodeIds: ["p1", "p2"],
       session: { tmuxName: "fd-run-test", cwd: "/repo", claudeSessionId: session },
-      buildHash: "b1",
+      buildId: "b1",
     }).id;
     const tracker = createActivityTracker({
       runId,
@@ -83,7 +83,17 @@ describe("createActivityTracker", () => {
 
   it("forwards the rest of the store to the inner store", () => {
     store.finishRun(runId, "done");
-    const build = { hash: "h1", dir: "/fd-home/builds/b1", files: [], nodes: [] };
+    const build = {
+      id: "h1",
+      hash: "h1",
+      name: "b1",
+      repo: "/repo",
+      base: "main",
+      values: {},
+      dir: "/fd-home/workspaces/h1",
+      files: [],
+      nodes: [],
+    };
     store.recordBuild(build);
     store.recordCost(runId, 0.25);
 
@@ -93,6 +103,7 @@ describe("createActivityTracker", () => {
     expect(inner.costOf(runId)).toBe(0.25);
     expect(store.listBuilds()).toEqual(inner.listBuilds());
     expect(store.findBuild("h1")).toEqual(inner.findBuild("h1"));
+    expect(store.findBuildByName("b1")).toEqual(inner.findBuildByName("b1"));
     expect(store.buildFiles("h1")).toEqual(inner.buildFiles("h1"));
     expect(store.listRuns()).toEqual(inner.listRuns());
     expect(store.events(runId)).toEqual(inner.events(runId));
@@ -261,7 +272,7 @@ describe("createActivityTracker", () => {
       inputs: {},
       nodeIds: ["p1"],
       session: { tmuxName: "fd-run-test", cwd: "/repo", claudeSessionId: session },
-      buildHash: "b1",
+      buildId: "b1",
     }).id;
     stored.recordActivity(id, { id: 7, nodeId: "p1", at: 1, kind: "turn", summary: "old" });
     const tracker = createActivityTracker({

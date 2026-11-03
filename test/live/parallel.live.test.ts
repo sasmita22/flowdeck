@@ -5,12 +5,11 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
+import { cliBuild, plannedWorkspace } from "../fixtures/cli-build.js";
 import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js";
 import {
   agent,
@@ -24,6 +23,7 @@ import {
 } from "../fixtures/flow-builders.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
 
+const buildName = "live-parallel";
 const runTimeoutMs = 420_000;
 const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
 
@@ -95,19 +95,14 @@ async function runLive(
   const recorded: HookEvent[] = [];
   const sessionIds: string[] = [];
   const home = await mkdtemp(join(tmpdir(), "fd-home-"));
-  const repo = await createTmpRepo();
+  const repo = await createTmpRepo({ commit: true });
+  const workspace = plannedWorkspace(home, repo.path);
   const cleanup = async () => {
     await killTmuxServer(sessionName);
-    await removeClaudeSessions(repo.path, sessionIds);
+    await removeClaudeSessions(workspace.workFolder, sessionIds);
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   };
-  const built = await build(parsed, {
-    fs: new NodeFileSystem(),
-    home,
-  });
-  if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-
   let server: HookSocketServer | undefined;
   const real = realDeps();
   const stdout: string[] = [];
@@ -135,10 +130,8 @@ async function runLive(
     },
   };
 
-  const code = await runCli(
-    ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
-    deps,
-  );
+  const built = await cliBuild(parsed, { name: buildName, repo: repo.path }, workspace, deps);
+  const code = await runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps);
 
   const runId = stderr.map((line) => /^run (\S+)/.exec(line)?.[1]).find(Boolean);
   const store = new SqliteStore({ path: join(home, "flowdeck.db") });

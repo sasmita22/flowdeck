@@ -63,4 +63,30 @@ describe("FakeWorktree", () => {
     expect(worktree.removed).toEqual([options]);
     expect(await exists(path)).toBe(false);
   });
+
+  it("reads a scripted folder as dirty and any other as clean", async () => {
+    const worktree = new FakeWorktree({ dirty: ["/w/a"] });
+
+    expect(await worktree.isDirty("/w/a")).toBe(true);
+    expect(await worktree.isDirty("/w/b")).toBe(false);
+  });
+
+  it("finds a scripted branch unpushed and any other not", async () => {
+    const worktree = new FakeWorktree({ unpushed: ["flowdeck/a"] });
+
+    expect(await worktree.hasUnpushed("/r", "flowdeck/a", "main")).toBe(true);
+    expect(await worktree.hasUnpushed("/r", "flowdeck/b", "main")).toBe(false);
+  });
+
+  it("records each deleted branch in order", async () => {
+    const worktree = new FakeWorktree();
+
+    await worktree.deleteBranch("/r", "flowdeck/a");
+    await worktree.deleteBranch("/s", "flowdeck/b");
+
+    expect(worktree.deletedBranches).toEqual([
+      { repo: "/r", branch: "flowdeck/a" },
+      { repo: "/s", branch: "flowdeck/b" },
+    ]);
+  });
 });

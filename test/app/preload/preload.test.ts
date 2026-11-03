@@ -1,5 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
+import { beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
+import {
+  engineCalls,
+  type EngineCalls,
+  type FlowdeckBridge,
+} from "../../../src/app/preload/bridge.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => void;
 
@@ -51,10 +55,26 @@ describe("preload run-state wiring", () => {
     ["openFlow", "flowdeck:open-flow", { flowId: "flow-a" }],
     ["listFlows", "flowdeck:list-flows", undefined],
     ["renameFlow", "flowdeck:rename-flow", { flowId: "flow-a", name: "Weekly" }],
-    ["buildVersion", "flowdeck:build-version", { flowId: "flow-a", version: 2 }],
+    [
+      "buildVersion",
+      "flowdeck:build-version",
+      {
+        flowId: "flow-a",
+        version: 2,
+        name: "fix-login",
+        repo: "/code/shop",
+        base: "main",
+        values: { ticket: "FD-1", deep: true },
+      },
+    ],
     ["listBuilds", "flowdeck:list-builds", undefined],
-    ["buildFiles", "flowdeck:build-files", { hash: "abc" }],
-    ["runBuild", "flowdeck:run-build", { hash: "abc" }],
+    ["buildFiles", "flowdeck:build-files", { buildId: "b1" }],
+    ["runBuild", "flowdeck:run-build", { buildId: "b1", auto: true }],
+    ["runOptions", "flowdeck:run-options", { buildId: "b1" }],
+    ["stopRun", "flowdeck:stop-run", { runId: "run-1" }],
+    ["deleteBuild", "flowdeck:delete-build", { buildId: "b1" }],
+    ["doctorWorktrees", "flowdeck:doctor-worktrees", undefined],
+    ["defaultBranch", "flowdeck:default-branch", { repo: "/code/shop" }],
     ["listRuns", "flowdeck:list-runs", undefined],
     ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
     ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
@@ -68,19 +88,44 @@ describe("preload run-state wiring", () => {
     },
   );
 
-  it("invokes flowdeck:get-run-state for getRunState and returns its answer", async () => {
-    await expect(bridge.getRunState()).resolves.toBe("answer for flowdeck:get-run-state");
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-run-state");
+  it.each([
+    ["delete-build", "deleteBuild"],
+    ["doctor-worktrees", "doctorWorktrees"],
+    ["default-branch", "defaultBranch"],
+  ] as const)(
+    "relays %s as an engine call, so main guards it like every engine call",
+    (request, method) => {
+      expect(engineCalls[method]).toEqual({ channel: `flowdeck:${request}`, request });
+    },
+  );
+
+  it("types each build call's payload as the engine reads it", () => {
+    expectTypeOf<Parameters<EngineCalls["buildVersion"]>[0]>().toEqualTypeOf<{
+      flowId: string;
+      version: number;
+      name: string;
+      repo?: string;
+      base?: string;
+      values: Record<string, string | boolean>;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["buildFiles"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["runBuild"]>[0]>().toEqualTypeOf<{
+      buildId: string;
+      auto?: boolean;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["runOptions"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["deleteBuild"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();
+    expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
   });
 
-  it("invokes flowdeck:get-activity for getActivity and returns its answer", async () => {
-    await expect(bridge.getActivity()).resolves.toBe("answer for flowdeck:get-activity");
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-activity");
-  });
-
-  it("invokes flowdeck:get-wait for getWait and returns its answer", async () => {
-    await expect(bridge.getWait()).resolves.toBe("answer for flowdeck:get-wait");
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-wait");
+  it.each([
+    ["getRunState", "flowdeck:get-run-state"],
+    ["getActivity", "flowdeck:get-activity"],
+    ["getWait", "flowdeck:get-wait"],
+  ] as const)("%s invokes %s for the given run and returns its answer", async (method, channel) => {
+    await expect(bridge[method]("run-2")).resolves.toBe(`answer for ${channel}`);
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, "run-2");
   });
 
   it("invokes flowdeck:answer-wait with the answer for answerWait and returns its answer", async () => {
@@ -142,49 +187,79 @@ describe("preload terminal wiring", () => {
     bridge = electron.exposed["flowdeck"] as FlowdeckBridge;
   });
 
-  it("invokes flowdeck:open-terminal with the size for openTerminal and returns its answer", async () => {
-    await expect(bridge.openTerminal({ cols: 80, rows: 24 })).resolves.toBe(
+  it("invokes flowdeck:open-terminal with the run and the size for openTerminal and returns its answer", async () => {
+    await expect(bridge.openTerminal("run-2", { cols: 80, rows: 24 })).resolves.toBe(
       "answer for flowdeck:open-terminal",
     );
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:open-terminal", {
-      cols: 80,
-      rows: 24,
-    });
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+      "flowdeck:open-terminal",
+      "run-2",
+      {
+        cols: 80,
+        rows: 24,
+      },
+    );
   });
 
-  it("invokes flowdeck:get-terminal-status for getTerminalStatus and returns its answer", async () => {
-    await expect(bridge.getTerminalStatus()).resolves.toBe(
+  it("invokes flowdeck:get-terminal-status for the run for getTerminalStatus and returns its answer", async () => {
+    await expect(bridge.getTerminalStatus("run-2")).resolves.toBe(
       "answer for flowdeck:get-terminal-status",
     );
-    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith("flowdeck:get-terminal-status");
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+      "flowdeck:get-terminal-status",
+      "run-2",
+    );
   });
 
-  it("sends flowdeck:terminal-input with the data for writeTerminal", () => {
-    bridge.writeTerminal("a");
-
-    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith("flowdeck:terminal-input", "a");
+  it("invokes flowdeck:pop-out-terminal for the run for popOutTerminal", async () => {
+    await expect(bridge.popOutTerminal("run-2")).resolves.toBe(
+      "answer for flowdeck:pop-out-terminal",
+    );
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+      "flowdeck:pop-out-terminal",
+      "run-2",
+    );
   });
 
-  it("sends flowdeck:terminal-resize with the size for resizeTerminal", () => {
-    bridge.resizeTerminal({ cols: 120, rows: 40 });
+  it("sends flowdeck:terminal-input with the run and the data for writeTerminal", () => {
+    bridge.writeTerminal("run-2", "a");
 
-    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith("flowdeck:terminal-resize", {
-      cols: 120,
-      rows: 40,
-    });
+    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith(
+      "flowdeck:terminal-input",
+      "run-2",
+      "a",
+    );
   });
 
-  it("sends flowdeck:close-terminal for closeTerminal", () => {
-    bridge.closeTerminal();
+  it("sends flowdeck:terminal-resize with the run and the size for resizeTerminal", () => {
+    bridge.resizeTerminal("run-2", { cols: 120, rows: 40 });
 
-    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith("flowdeck:close-terminal");
+    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith(
+      "flowdeck:terminal-resize",
+      "run-2",
+      { cols: 120, rows: 40 },
+    );
+  });
+
+  it("sends flowdeck:close-terminal with the run for closeTerminal", () => {
+    bridge.closeTerminal("run-2");
+
+    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith("flowdeck:close-terminal", "run-2");
   });
 
   it.each([
-    ["onTerminalStatus", "flowdeck:terminal-status", { available: true, attached: false }],
-    ["onTerminalData", "flowdeck:terminal-data", "output"],
+    [
+      "onTerminalStatus",
+      "flowdeck:terminal-status",
+      { runId: "run-1", status: { available: true, attached: false } },
+    ],
+    ["onTerminalData", "flowdeck:terminal-data", { runId: "run-1", data: "output" }],
     ["onActivity", "flowdeck:activity", { runId: "run-1", entry: { id: 1 } }],
-    ["onWait", "flowdeck:wait", { waitId: "wait-1", request: { nodeId: "gate" } }],
+    [
+      "onWait",
+      "flowdeck:wait",
+      { runId: "run-1", value: { waitId: "wait-1", request: { nodeId: "gate" } } },
+    ],
   ] as const)(
     "%s hands each %s payload to the listener without the event, and stops after unsubscribe",
     (method, channel, payload) => {

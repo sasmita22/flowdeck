@@ -1,19 +1,36 @@
 import Database from "better-sqlite3";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
-import type { NewRun } from "../../../src/ports/store.js";
+import type { NewBuild, NewRun } from "../../../src/ports/store.js";
+
+const migrationsDir = fileURLToPath(
+  new URL("../../../src/adapters/sqlite/migrations/", import.meta.url),
+);
 
 const newRun = (): NewRun => ({
-  buildDir: "/fd/builds/abc",
-  inputs: { cwd: "/repo", auto: true },
+  buildDir: "/fd/workspaces/b1",
+  inputs: { auto: true },
   nodeIds: ["p1", "p2"],
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
-  buildHash: "abc",
+  buildId: "b1",
 });
+
+const newBuild: NewBuild = {
+  id: "b1",
+  hash: "abc",
+  name: "fix-login",
+  repo: "/repo",
+  base: "main",
+  values: {},
+  dir: "/fd/workspaces/b1",
+  files: [],
+  nodes: [],
+};
 
 const allMigrations = [
   { name: "001_runs.sql" },
@@ -23,21 +40,47 @@ const allMigrations = [
   { name: "005_notes.sql" },
   { name: "006_build_lineage.sql" },
   { name: "007_activity.sql" },
+  { name: "008_named_builds.sql" },
 ];
+
+const noTransaction = "-- flowdeck:no-transaction\n";
+
+const parentAndChild = `
+CREATE TABLE parent (id TEXT PRIMARY KEY);
+CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));
+`;
+
+const danglingChildRemoved = `
+INSERT INTO child (id, parent_id) VALUES ('c1', 'ghost');
+DELETE FROM child;
+`;
 
 describe("openDatabase", () => {
   let folder: string;
   let path: string;
   const opened: { close(): void }[] = [];
 
-  const open = () => {
-    const db = openDatabase({ path });
+  const open = (dir?: string) => {
+    const db = openDatabase(dir === undefined ? { path } : { path, migrationsDir: dir });
+    opened.push(db);
+    return db;
+  };
+
+  const raw = () => {
+    const db = new Database(path);
     opened.push(db);
     return db;
   };
 
   const migrations = (db: Database.Database) =>
     db.prepare("SELECT name FROM migrations ORDER BY name").all();
+
+  const migrationFolder = async (name: string, files: Record<string, string>) => {
+    const dir = join(folder, name);
+    await mkdir(dir);
+    for (const [file, sql] of Object.entries(files)) await writeFile(join(dir, file), sql);
+    return dir;
+  };
 
   beforeEach(async () => {
     folder = await mkdtemp(join(tmpdir(), "fd-open-db-"));
@@ -49,7 +92,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies every migration, 001 to 007, to a new database file", () => {
+  it("applies every migration, 001 to 008, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
@@ -67,7 +110,7 @@ describe("openDatabase", () => {
 
   it("gives a connection a SqliteStore can create runs and append events on", () => {
     const store = new SqliteStore({ db: open() });
-    store.recordBuild({ hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] });
+    store.recordBuild(newBuild);
     const { id } = store.createRun(newRun());
 
     store.append(id, "p1", { kind: "sent" });
@@ -83,9 +126,234 @@ describe("openDatabase", () => {
   it("leaves a SqliteStore opened by path migrating its own database", () => {
     const store = new SqliteStore({ path });
     opened.push(store);
-    const db = new Database(path);
-    opened.push(db);
 
-    expect(migrations(db)).toEqual(allMigrations);
+    expect(migrations(raw())).toEqual(allMigrations);
+  });
+
+  describe("a migration marked to run outside a transaction", () => {
+    it("runs an unmarked migration with foreign keys on, so a dangling row is refused at once", async () => {
+      const dir = await migrationFolder("unmarked", {
+        "001_tables.sql": parentAndChild,
+        "002_dangling.sql": danglingChildRemoved,
+      });
+
+      expect(() => open(dir)).toThrow(/FOREIGN KEY/);
+    });
+
+    it("runs a marked migration with foreign keys off, records it, then turns them back on", async () => {
+      const dir = await migrationFolder("marked", {
+        "001_tables.sql": parentAndChild,
+        "002_dangling.sql": noTransaction + danglingChildRemoved,
+        "003_after.sql": "CREATE TABLE after_marked (id TEXT);",
+      });
+
+      const db = open(dir);
+
+      expect(migrations(db)).toEqual([
+        { name: "001_tables.sql" },
+        { name: "002_dangling.sql" },
+        { name: "003_after.sql" },
+      ]);
+      expect(db.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 0 });
+      expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(() =>
+        db.prepare("INSERT INTO child (id, parent_id) VALUES ('c1', 'ghost')").run(),
+      ).toThrow(/FOREIGN KEY/);
+    });
+
+    it("aborts a marked migration that leaves a dangling reference, recording and keeping none of it", async () => {
+      const dir = await migrationFolder("dangling", {
+        "001_tables.sql": parentAndChild,
+        "002_dangling.sql": noTransaction + danglingChildRemoved,
+        "003_dangling.sql": `${noTransaction}INSERT INTO child (id, parent_id) VALUES ('c2', 'ghost');`,
+      });
+
+      expect(() => open(dir)).toThrow();
+
+      const db = raw();
+      expect(migrations(db)).toEqual([{ name: "001_tables.sql" }, { name: "002_dangling.sql" }]);
+      expect(db.prepare("SELECT count(*) AS n FROM child").get()).toEqual({ n: 0 });
+      expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+    });
+  });
+
+  describe("migrating a database made by 001 to 007 to 008", () => {
+    const stage = async (name: string, before: string) => {
+      const dir = join(folder, name);
+      await mkdir(dir);
+      for (const file of (await readdir(migrationsDir)).filter((each) => each < before)) {
+        await copyFile(join(migrationsDir, file), join(dir, file));
+      }
+      return dir;
+    };
+
+    const tables = [
+      "flows",
+      "flow_versions",
+      "builds",
+      "build_files",
+      "build_nodes",
+      "runs",
+      "run_sessions",
+      "run_nodes",
+      "events",
+      "activity",
+    ];
+
+    const seedOldDatabase = async () => {
+      const beforeLineage = openDatabase({ path, migrationsDir: await stage("to-005", "006") });
+      beforeLineage.exec(`
+        INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Fix login', 't0');
+        INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('flow-1', 1, '{}', 't0');
+        INSERT INTO builds (hash, dir, created_at) VALUES ('old', '/fd/builds/old', 5);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash)
+          VALUES ('r-none', '/fd/builds/gone', '{"cwd":"/repo"}', 'done', 't1', NULL),
+                 ('r-old', '/fd/builds/old', '{}', 'failed', 't2', 'old');
+        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status)
+          VALUES (1, 'r-none', 'fd-a', '/repo', 'c1', 'closed'),
+                 (2, 'r-old', 'fd-b', '/repo', 'c2', 'closed');
+        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r-none', 'p1', 1), ('r-old', 'p1', 2);
+        INSERT INTO events (run_id, node_id, kind, time)
+          VALUES ('r-none', 'p1', 'sent', 't'), ('r-old', 'p1', 'failed', 't');
+      `);
+      beforeLineage.close();
+
+      const before008 = openDatabase({ path, migrationsDir: await stage("to-007", "008") });
+      before008.exec(`
+        BEGIN;
+        INSERT INTO build_files (build_hash, path, sha256)
+          VALUES ('h1', 'commands/p1.md', 'a1'), ('h1', 'manifest.json', 'm1');
+        INSERT INTO build_nodes (build_hash, ordinal, node_id, type, config, file)
+          VALUES ('h1', 0, 'p1', 'prompt', '{}', 'commands/p1.md'), ('h1', 1, 's1', 'script', '{}', NULL);
+        INSERT INTO builds (hash, dir, created_at, flow_id, version)
+          VALUES ('h1', '/fd/builds/h1', 9, 'flow-1', 1);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash)
+          VALUES ('r-a', '/fd/builds/h1', '{}', 'running', 't3', 'h1'),
+                 ('r-b', '/fd/builds/h1', '{}', 'running', 't4', 'h1');
+        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status)
+          VALUES (3, 'r-a', 'fd-c', '/repo', 'c3', 'open'), (4, 'r-b', 'fd-d', '/repo', 'c4', 'open');
+        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r-a', 'p1', 3), ('r-b', 's1', 4);
+        INSERT INTO activity (run_id, id, node_id, entry) VALUES ('r-a', 1, 'p1', '{}');
+        COMMIT;
+      `);
+      const before = Object.fromEntries(
+        tables.map((table) => [table, before008.prepare(`SELECT * FROM ${table}`).all()]),
+      ) as Record<string, Record<string, unknown>[]>;
+      before008.close();
+      return before;
+    };
+
+    const withBuildId = (rows: Record<string, unknown>[]) =>
+      rows.map(({ build_hash, ...rest }) => ({ ...rest, build_id: build_hash }));
+
+    it("records 008 and keeps every row, the build hash now the build id", async () => {
+      const before = await seedOldDatabase();
+
+      const db = open();
+
+      expect(migrations(db)).toEqual(allMigrations);
+      for (const table of [
+        "flows",
+        "flow_versions",
+        "run_sessions",
+        "run_nodes",
+        "events",
+        "activity",
+      ]) {
+        expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(before[table]);
+      }
+      for (const table of ["runs", "build_files", "build_nodes"]) {
+        expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(
+          withBuildId(before[table] ?? []),
+        );
+      }
+    });
+
+    it("gives every old build its hash as its id and no name, repo, base, values or deletion", async () => {
+      await seedOldDatabase();
+
+      const db = open();
+
+      expect(
+        db
+          .prepare(
+            `SELECT id, hash, name, repo, base, "values", deleted_at, dir, created_at, flow_id, version
+               FROM builds ORDER BY created_at`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "old",
+          hash: "old",
+          name: null,
+          repo: null,
+          base: null,
+          values: null,
+          deleted_at: null,
+          dir: "/fd/builds/old",
+          created_at: 5,
+          flow_id: null,
+          version: null,
+        },
+        {
+          id: "h1",
+          hash: "h1",
+          name: null,
+          repo: null,
+          base: null,
+          values: null,
+          deleted_at: null,
+          dir: "/fd/builds/h1",
+          created_at: 9,
+          flow_id: "flow-1",
+          version: 1,
+        },
+      ]);
+    });
+
+    it("keeps both running runs of one build running", async () => {
+      await seedOldDatabase();
+
+      const db = open();
+
+      expect(
+        db.prepare("SELECT id, status FROM runs WHERE build_id = 'h1' ORDER BY id").all(),
+      ).toEqual([
+        { id: "r-a", status: "running" },
+        { id: "r-b", status: "running" },
+      ]);
+    });
+
+    it("points runs, build files and build nodes at the build id, with foreign keys on and whole", async () => {
+      await seedOldDatabase();
+
+      const db = open();
+      const references = (table: string) =>
+        (
+          db.prepare(`SELECT "table", "from", "to" FROM pragma_foreign_key_list(?)`).all(table) as {
+            table: string;
+            from: string;
+            to: string;
+          }[]
+        ).map((key) => `${key.from} -> ${key.table}.${key.to}`);
+
+      expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(references("runs")).toEqual(["build_id -> builds.id"]);
+      expect(references("build_files")).toEqual(["build_id -> builds.id"]);
+      expect(references("build_nodes")).toEqual(
+        expect.arrayContaining(["build_id -> builds.id", "build_id -> build_files.build_id"]),
+      );
+      expect(references("run_sessions")).toContain("run_id -> runs.id");
+      expect(references("run_nodes")).toContain("run_id -> runs.id");
+      expect(references("activity")).toEqual(["run_id -> runs.id"]);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id) VALUES ('r-x', '/b', '{}', 'done', 't', 'ghost')",
+          )
+          .run(),
+      ).toThrow(/FOREIGN KEY/);
+    });
   });
 });

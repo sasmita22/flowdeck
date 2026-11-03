@@ -1,14 +1,13 @@
 import type { StoreApi } from "zustand/vanilla";
-import type { RunOptions } from "../../core/run/options.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
-import type { RunState } from "./run-store.js";
+import type { RunChoice, RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 
 export type ActionStores = {
   nav: StoreApi<NavState>;
   save: StoreApi<Pick<SaveState, "flowId" | "open" | "startNew" | "leave" | "rename">>;
-  run: StoreApi<Pick<RunState, "run" | "runBuild" | "start">>;
+  run: StoreApi<Pick<RunState, "runBuild" | "start" | "deleteBuild" | "stop">>;
   library: StoreApi<Pick<LibraryState, "refresh" | "rename">>;
 };
 
@@ -16,9 +15,10 @@ export type Actions = {
   newBlueprint(): Promise<void>;
   openBlueprint(flowId: string): Promise<void>;
   renameBlueprint(flowId: string, name: string): Promise<void>;
-  buildAndRun(): Promise<void>;
-  runBuild(hash: string): Promise<void>;
-  startRun(options: RunOptions): Promise<void>;
+  runBuild(buildId: string): Promise<void>;
+  startRun(choice: RunChoice): Promise<void>;
+  deleteBuild(buildId: string): Promise<void>;
+  stopRun(runId: string): Promise<void>;
 };
 
 export const createActions = ({ nav, save, run, library }: ActionStores): Actions => {
@@ -50,8 +50,15 @@ export const createActions = ({ nav, save, run, library }: ActionStores): Action
       if (save.getState().flowId === flowId) await save.getState().rename(name);
       else await library.getState().rename(flowId, name);
     },
-    buildAndRun: () => showRun(run.getState().run()),
-    runBuild: (hash) => showRun(run.getState().runBuild(hash)),
-    startRun: (options) => showRun(run.getState().start(options)),
+    runBuild: (buildId) => showRun(run.getState().runBuild(buildId)),
+    startRun: (choice) => showRun(run.getState().start(choice)),
+    deleteBuild: async (buildId) => {
+      await run.getState().deleteBuild(buildId);
+      await library.getState().refresh();
+    },
+    stopRun: async (runId) => {
+      await run.getState().stop(runId);
+      await library.getState().refresh();
+    },
   };
 };

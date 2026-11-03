@@ -35,11 +35,37 @@ export class NodeFileSystem implements FileSystem {
     await rm(path, { force: true });
   }
 
+  async removeTree(path: string, { keep }: { keep?: string } = {}): Promise<void> {
+    if (keep === undefined) {
+      await rm(path, { recursive: true, force: true });
+      return;
+    }
+    for (const name of await readdir(path)) {
+      const child = join(path, name);
+      if (child === keep) continue;
+      if (keep.startsWith(child + sep)) await this.removeTree(child, { keep });
+      else await rm(child, { recursive: true, force: true });
+    }
+  }
+
   async list(dir: string): Promise<string[]> {
     const entries = await readdir(dir, { recursive: true, withFileTypes: true });
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/"))
       .sort();
+  }
+
+  async folders(dir: string): Promise<string[]> {
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) return [];
+      throw error;
+    }
   }
 }

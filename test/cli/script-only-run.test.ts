@@ -1,11 +1,13 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GitFolderState } from "../../src/adapters/git/git-state.js";
+import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
 import { runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
+import { buildVersion } from "../../src/core/compiler/build-version.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakeFlowStore } from "../fakes/fake-flow-store.js";
@@ -20,7 +22,7 @@ describe("a script-only run", () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
+    repo = await createTmpRepo({ commit: true });
   });
 
   afterEach(async () => {
@@ -28,21 +30,29 @@ describe("a script-only run", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("runs the scripts in the repo and never starts Claude", async () => {
+  it("runs the scripts in the build's worktree, not the target repo, and never starts Claude", async () => {
     const fs = new NodeFileSystem();
-    const result = await build(
-      flow(
-        [
-          script("write", {
-            settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
-          }),
-          script("check", { settings: { command: "test", args: ["-f", "side-effect.txt"] } }),
-        ],
-        [thenWire("write", "check")],
+    const store = new FakeStore();
+    const flows = new FakeFlowStore();
+    const gitState = new GitFolderState();
+    const worktree = new GitWorktree();
+    const newId = () => "0f3a9c2e-0000-4000-8000-000000000000";
+    const result = await buildVersion(
+      flows.save(
+        flow(
+          [
+            script("write", {
+              settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
+            }),
+            script("check", { settings: { command: "test", args: ["-f", "side-effect.txt"] } }),
+          ],
+          [thenWire("write", "check")],
+        ),
       ),
-      { fs, home },
+      { name: "x", repo: repo.path, values: {} },
+      { flows, store, fs, home, gitState, worktree, newId },
     );
-    if (!result.ok) throw new Error("build failed");
+    if (!result.ok) throw new Error(`build failed: ${JSON.stringify(result.errors)}`);
     let openSessionCalls = 0;
     let eventStops = 0;
     const lines: string[] = [];
@@ -54,13 +64,16 @@ describe("a script-only run", () => {
       fs,
       scripts: new NodeProcessRunner(),
       waiter: new FakeWaiter([]),
+      gitState,
+      worktree,
+      newId,
       startEvents: async () => ({
         events: new FakeEventSource(),
         stop: async () => {
           eventStops++;
         },
       }),
-      openStore: () => ({ runs: new FakeStore(), flows: new FakeFlowStore() }),
+      openStore: () => ({ runs: store, flows }),
       hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
       connectors: new FakeConnectorSource(),
       transcriptTurns: async () => [],
@@ -70,8 +83,12 @@ describe("a script-only run", () => {
       },
     };
 
-    expect(await runCli(["run", result.dir, "--cwd", repo.path], deps)).toBe(0);
-    expect(await readFile(join(repo.path, "side-effect.txt"), "utf8")).toBe("ran\n");
+    expect(await runCli(["run", "x"], deps)).toBe(0);
+    const workFolder = join(result.dir, basename(repo.path));
+    expect(await readFile(join(workFolder, "side-effect.txt"), "utf8")).toBe("ran\n");
+    await expect(stat(join(repo.path, "side-effect.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(openSessionCalls).toBe(0);
     expect(eventStops).toBe(1);
     expect(lines).toEqual(["write started", "write done", "check started", "check done"]);

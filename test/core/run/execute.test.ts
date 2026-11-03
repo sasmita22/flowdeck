@@ -19,6 +19,7 @@ import {
   runSocketPath,
 } from "../../../src/core/run/execute.js";
 import type { ScriptResult } from "../../../src/core/run/runner.js";
+import type { BuildRecord } from "../../../src/core/run/store.js";
 import type { PermissionDecision } from "../../../src/ports/permission-source.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -49,10 +50,29 @@ const manifestWith = (types: string[]) =>
     nodes: types.map((type, index) => ({ id: `n${index}`, type })),
   }) as unknown as Manifest & { hash: string };
 
+const buildId = "b1111111-0000-4000-8000-000000000001";
+
+const oldRow = (hash: string, dir: string): BuildRecord => ({
+  id: hash,
+  hash,
+  name: null,
+  repo: null,
+  base: null,
+  values: null,
+  deletedAt: null,
+  dir,
+  createdAt: 0,
+});
+
+const rows = (...records: BuildRecord[]) => ({
+  findBuild: (id: string) => records.find((record) => record.id === id),
+});
+
 describe("the core run path", () => {
   let home: string;
   let repo: TmpRepo;
   let dir: string;
+  let store: FakeStore;
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
@@ -60,9 +80,12 @@ describe("the core run path", () => {
     const result = await build(scriptOnly(), {
       fs,
       home,
+      workspace: { id: buildId, name: "fix-login", repo: "/work/repo", base: "main", values: {} },
     });
     if (!result.ok) throw new Error("build failed");
     dir = result.dir;
+    store = new FakeStore();
+    store.recordBuild(result.record);
   });
 
   afterEach(async () => {
@@ -71,7 +94,7 @@ describe("the core run path", () => {
   });
 
   const loaded = async () => {
-    const result = await loadBuild(dir, { fs });
+    const result = await loadBuild(buildId, { fs, store });
     if (result.kind !== "loaded") throw new Error(`build not loaded: ${result.message}`);
     return result.build;
   };
@@ -89,25 +112,93 @@ describe("the core run path", () => {
     };
   };
 
+  const legacyBuild = async () => {
+    const manifestWithoutHash = {
+      version: 1,
+      session: { name: "main", workingFolder: { kind: "worktree", branch: "main" } },
+      nodes: [{ id: "s", type: "script", label: "s", settings: { command: "npm" } }],
+      wires: [],
+      files: {},
+    };
+    const hash = hashBuild([
+      { path: "manifest.json", content: canonicalJson(manifestWithoutHash) },
+    ]);
+    const legacyDir = join(home, "builds", hash);
+    await fs.writeFile(
+      join(legacyDir, "manifest.json"),
+      canonicalJson({ ...manifestWithoutHash, hash }),
+    );
+    return { hash, legacyDir };
+  };
+
   describe("loadBuild", () => {
-    it("loads a verified build with its manifest", async () => {
-      const result = await loadBuild(dir, { fs });
+    it("finds a build by its id and loads its verified manifest", async () => {
+      const result = await loadBuild(buildId, { fs, store });
 
       expect(result.kind).toBe("loaded");
       if (result.kind !== "loaded") return;
       expect(result.build.nodes.map((node) => node.id)).toEqual(["write", "check"]);
-      expect(result.build.hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.build.hash).toBe(store.findBuild(buildId)?.hash);
+    });
+
+    it("takes the prefix from the manifest, and gives a workspace build its worktree", async () => {
+      const build = await loaded();
+
+      expect(build.prefix).toBe("fix-login");
+      expect(build.layout).toBe("workspace");
+      expect(build.worktree).toBe(join(dir, "repo"));
+    });
+
+    it("ignores the files in the build's worktree", async () => {
+      await fs.writeFile(join(dir, "repo", "src", "login.ts"), "export {};\n");
+      await fs.writeFile(join(dir, "repo", ".git"), "gitdir: /work/repo/.git/worktrees/repo\n");
+
+      expect((await loadBuild(buildId, { fs, store })).kind).toBe("loaded");
     });
 
     it("refuses a build with a changed file, with the message the CLI prints", async () => {
-      const files = (await fs.list(dir)).filter((path) => path !== "manifest.json");
+      const files = (await fs.list(join(dir, "plugin"))).map((path) => `plugin/${path}`);
       const changed = files[0];
-      if (changed === undefined) throw new Error("the build has no file besides its manifest");
+      if (changed === undefined) throw new Error("the build has no plugin file");
       await writeFile(join(dir, changed), "tampered\n");
 
-      expect(await loadBuild(dir, { fs })).toEqual({
+      expect(await loadBuild(buildId, { fs, store })).toEqual({
         kind: "error",
         message: `${changed}: changed`,
+      });
+    });
+
+    it("verifies the folder against the hash its row records", async () => {
+      const row = store.findBuild(buildId);
+      if (row === undefined) throw new Error("the build is not recorded");
+      const otherHash = "0".repeat(64);
+
+      expect(await loadBuild(buildId, { fs, store: rows({ ...row, hash: otherHash }) })).toEqual({
+        kind: "error",
+        message: "manifest.json: changed",
+      });
+    });
+
+    it("loads an old hash-named build from its flat folder, with the hash as its prefix", async () => {
+      const { hash, legacyDir } = await legacyBuild();
+
+      const result = await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) });
+
+      expect(result.kind).toBe("loaded");
+      if (result.kind !== "loaded") return;
+      expect(result.build.hash).toBe(hash);
+      expect(result.build.prefix).toBe(hash);
+      expect(result.build.layout).toBe("legacy");
+      expect(result.build.worktree).toBeUndefined();
+    });
+
+    it("still names any file an old build did not write, anywhere in its folder", async () => {
+      const { hash, legacyDir } = await legacyBuild();
+      await fs.writeFile(join(legacyDir, "notes", ".DS_Store"), "");
+
+      expect(await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) })).toEqual({
+        kind: "error",
+        message: "notes/.DS_Store: extra",
       });
     });
 
@@ -120,9 +211,12 @@ describe("the core run path", () => {
           ),
         ),
       );
-      const files = emit(lower(broken));
+      const files = emit(lower(broken, { name: "fix-login", values: {} }), {
+        repo: "/work/repo",
+        base: "main",
+      });
       const hash = hashBuild(files);
-      const brokenDir = join(home, "builds", hash);
+      const brokenDir = join(home, "workspaces", "broken");
       for (const file of files) {
         const content =
           file.path === "manifest.json"
@@ -130,8 +224,9 @@ describe("the core run path", () => {
             : file.content;
         await fs.writeFile(join(brokenDir, file.path), content);
       }
+      const row = { ...oldRow(hash, brokenDir), id: "broken", name: "broken" };
 
-      const result = await loadBuild(brokenDir, { fs });
+      const result = await loadBuild("broken", { fs, store: rows(row) });
 
       expect(result.kind).toBe("error");
       expect(result.kind === "error" ? result.message : "").toMatch(
@@ -139,10 +234,16 @@ describe("the core run path", () => {
       );
     });
 
-    it("refuses a missing build folder", async () => {
-      const result = await loadBuild(join(home, "builds", "nope"), { fs });
+    it("refuses a build whose folder is gone", async () => {
+      const row = store.findBuild(buildId);
+      if (row === undefined) throw new Error("the build is not recorded");
+      const gone = { ...row, dir: join(home, "workspaces", "nope") };
 
-      expect(result.kind).toBe("error");
+      expect((await loadBuild(buildId, { fs, store: rows(gone) })).kind).toBe("error");
+    });
+
+    it("refuses an id no build has", async () => {
+      expect((await loadBuild("nope", { fs, store })).kind).toBe("error");
     });
   });
 
@@ -157,7 +258,7 @@ describe("the core run path", () => {
         inputs: {},
         nodeIds: build.nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-        buildHash: build.hash,
+        buildId,
       });
 
       const code = await execute(
@@ -202,7 +303,7 @@ describe("the core run path", () => {
         inputs: {},
         nodeIds: build.nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-        buildHash: build.hash,
+        buildId,
       });
 
       const code = await execute(
@@ -253,7 +354,7 @@ describe("the core run path", () => {
       inputs: {},
       nodeIds: build.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildHash: build.hash,
+      buildId,
     });
     const pidFile = join(repo.path, "pid");
     const runner = new NodeProcessRunner();
@@ -311,7 +412,7 @@ describe("the core run path", () => {
       inputs: {},
       nodeIds: build.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildHash: build.hash,
+      buildId,
     });
 
     await execute(
@@ -349,7 +450,7 @@ describe("the core run path", () => {
       inputs: {},
       nodeIds: build.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildHash: build.hash,
+      buildId,
     });
     store.append(id, "write", { kind: "running" });
     const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
@@ -397,7 +498,7 @@ describe("the core run path", () => {
       inputs: {},
       nodeIds: build.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildHash: build.hash,
+      buildId,
     });
     store.append(id, "write", { kind: "running" });
     const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
@@ -487,6 +588,7 @@ describe("execute wiring", () => {
   const promptBuild = (budget?: number) =>
     ({
       hash: "abc123",
+      prefix: "fix-login",
       session: budget === undefined ? {} : { budget },
       nodes: [{ id: "n1", type: "prompt", label: "n1", settings: { instructions: "Do it." } }],
     }) as unknown as LoadedBuild;
@@ -522,7 +624,7 @@ describe("execute wiring", () => {
       inputs: {},
       nodeIds: options.manifest.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
-      buildHash: options.manifest.hash,
+      buildId: options.manifest.hash,
     });
     const code = await execute(
       {
@@ -592,7 +694,7 @@ describe("execute wiring", () => {
       compacts: true,
     });
 
-    expect(sends).toEqual(["/compact", "/abc123:n1"]);
+    expect(sends).toEqual(["/compact", "/fix-login:n1"]);
     expect(code).toBe(0);
   });
 

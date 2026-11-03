@@ -1,7 +1,7 @@
+import { safeName } from "../../flow/variables.js";
 import type { Rule, ValidationError } from "../validate.js";
 
 const id = "node-ids";
-const safe = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 export const rule: Rule = {
   id,
@@ -23,7 +23,7 @@ export const rule: Rule = {
           },
         ];
       }
-      if (!safe.test(node.id)) {
+      if (!safeName.test(node.id)) {
         return [
           {
             rule: id,

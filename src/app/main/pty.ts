@@ -16,15 +16,17 @@ export type PtySpawn = (
 ) => PtyProcess;
 
 export type Terminal = {
-  setSession(name: string | null): void;
-  status(): TerminalStatus;
-  open(size: unknown): boolean;
-  write(data: unknown): void;
-  resize(size: unknown): void;
-  close(): void;
-  setPoppedOut(poppedOut: boolean): void;
+  setSession(runId: string, name: string | null): void;
+  status(runId: string): TerminalStatus;
+  open(runId: string, size: unknown): boolean;
+  write(runId: string, data: unknown): void;
+  resize(runId: string, size: unknown): void;
+  close(runId: string): void;
+  setPoppedOut(runId: string, poppedOut: boolean): void;
   dispose(): void;
 };
+
+type RunTerminal = { session: string | null; pty: PtyProcess | null; poppedOut: boolean };
 
 const isValidName = (name: string): boolean => {
   try {
@@ -46,43 +48,55 @@ const attachEnv = (env: Record<string, string | undefined>): Record<string, stri
 export function createTerminal(options: {
   spawn: PtySpawn;
   env: Record<string, string | undefined>;
-  sendStatus: (status: TerminalStatus) => void;
-  sendData: (data: string) => void;
+  sendStatus: (runId: string, status: TerminalStatus) => void;
+  sendData: (runId: string, data: string) => void;
 }): Terminal {
-  let session: string | null = null;
-  let pty: PtyProcess | null = null;
+  const runs = new Map<string, RunTerminal>();
   let disposed = false;
-  let poppedOut = false;
 
-  const status = (): TerminalStatus => ({
-    available: session !== null,
-    attached: pty !== null,
-    ...(poppedOut ? { poppedOut: true } : {}),
-  });
-  const report = () => options.sendStatus(status());
+  const runOf = (runId: string): RunTerminal => {
+    const existing = runs.get(runId);
+    if (existing !== undefined) return existing;
+    const created: RunTerminal = { session: null, pty: null, poppedOut: false };
+    runs.set(runId, created);
+    return created;
+  };
 
-  const close = () => {
-    const current = pty;
-    pty = null;
+  const status = (runId: string): TerminalStatus => {
+    const run = runs.get(runId);
+    return {
+      available: run?.session != null,
+      attached: run?.pty != null,
+      ...(run?.poppedOut === true ? { poppedOut: true } : {}),
+    };
+  };
+  const report = (runId: string) => options.sendStatus(runId, status(runId));
+
+  const close = (runId: string) => {
+    const run = runs.get(runId);
+    if (run === undefined) return;
+    const current = run.pty;
+    run.pty = null;
     current?.kill();
-    report();
+    report(runId);
   };
 
   return {
-    setSession(name) {
+    setSession(runId, name) {
       if (disposed) return;
-      session = name !== null && isValidName(name) ? name : null;
-      report();
+      runOf(runId).session = name !== null && isValidName(name) ? name : null;
+      report(runId);
     },
     status,
-    open(size) {
-      if (disposed || session === null) return false;
+    open(runId, size) {
+      const run = runs.get(runId);
+      if (disposed || run === undefined || run.session === null) return false;
       const parsed = terminalSizeSchema.safeParse(size);
       if (!parsed.success) return false;
-      if (pty !== null) return true;
+      if (run.pty !== null) return true;
       const spawned = options.spawn(
         "tmux",
-        ["-L", session, "attach-session", "-t", `=${session}`],
+        ["-L", run.session, "attach-session", "-t", `=${run.session}`],
         {
           name: "xterm-256color",
           cols: parsed.data.cols,
@@ -90,30 +104,30 @@ export function createTerminal(options: {
           env: attachEnv(options.env),
         },
       );
-      pty = spawned;
-      spawned.onData(options.sendData);
+      run.pty = spawned;
+      spawned.onData((data) => options.sendData(runId, data));
       spawned.onExit(() => {
-        if (pty !== spawned) return;
-        pty = null;
-        report();
+        if (run.pty !== spawned) return;
+        run.pty = null;
+        report(runId);
       });
-      report();
+      report(runId);
       return true;
     },
-    write(data) {
-      if (typeof data === "string") pty?.write(data);
+    write(runId, data) {
+      if (typeof data === "string") runs.get(runId)?.pty?.write(data);
     },
-    resize(size) {
+    resize(runId, size) {
       const parsed = terminalSizeSchema.safeParse(size);
-      if (parsed.success) pty?.resize(parsed.data.cols, parsed.data.rows);
+      if (parsed.success) runs.get(runId)?.pty?.resize(parsed.data.cols, parsed.data.rows);
     },
     close,
-    setPoppedOut(value) {
-      poppedOut = value;
-      report();
+    setPoppedOut(runId, value) {
+      runOf(runId).poppedOut = value;
+      report(runId);
     },
     dispose() {
-      close();
+      for (const runId of runs.keys()) close(runId);
       disposed = true;
     },
   };

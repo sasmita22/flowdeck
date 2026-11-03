@@ -12,6 +12,7 @@ import { settings as output } from "../nodes/output/settings.js";
 import { settings as prompt } from "../nodes/prompt/settings.js";
 import { settings as script } from "../nodes/script/settings.js";
 import { settings as trigger } from "../nodes/trigger/settings.js";
+import { upgradeFlow } from "./upgrade.js";
 
 export const NodeType = z.enum([
   "prompt",
@@ -46,12 +47,20 @@ export const Wire = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("event"), ...wireEnds }),
 ]);
 
+export const Variable = z.discriminatedUnion("kind", [
+  z.object({ name: z.string(), kind: z.literal("text"), default: z.string().optional() }),
+  z.object({ name: z.string(), kind: z.literal("yesno"), default: z.boolean().optional() }),
+]);
+
+export const BuildConfig = z.object({
+  repo: z.string().optional(),
+  base: z.string().optional(),
+  variables: z.array(Variable).default([]),
+});
+
 export const Session = z.object({
   name: z.string(),
-  workingFolder: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("path"), path: z.string() }),
-    z.object({ kind: z.literal("worktree"), branch: z.string(), repo: z.string().optional() }),
-  ]),
+  buildConfig: BuildConfig,
   model: z.string(),
   allowedTools: z.array(z.string()),
   permissionMode: z.string(),
@@ -101,6 +110,8 @@ export type NodeType = z.infer<typeof NodeType>;
 export type WireKind = z.infer<typeof WireKind>;
 export type Port = z.infer<typeof Port>;
 export type Wire = z.infer<typeof Wire>;
+export type Variable = z.infer<typeof Variable>;
+export type BuildConfig = z.infer<typeof BuildConfig>;
 export type Session = z.infer<typeof Session>;
 export type Node = z.infer<typeof Node>;
 export type CanvasNote = z.infer<typeof CanvasNote>;
@@ -117,7 +128,7 @@ export class FlowParseError extends Error {
 }
 
 export function parseFlow(input: unknown): Flow {
-  const result = Flow.safeParse(input);
+  const result = Flow.safeParse(upgradeFlow(input));
   if (!result.success) throw new FlowParseError(result.error);
   return result.data;
 }

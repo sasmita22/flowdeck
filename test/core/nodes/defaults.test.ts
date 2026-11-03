@@ -27,7 +27,7 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["fork", fork, "Fork", ["parallel-section"]],
   ["join", join, "Join", ["parallel-section"]],
   ["foreach", foreach, "For each", ["loop-body"]],
-  ["branch", branch, "Branch", ["branch-flag"]],
+  ["branch", branch, "Branch", ["branch-variable"]],
 ];
 
 describe("defaults for every node type", () => {

@@ -77,10 +77,10 @@ const forEachShapes = () =>
     [thenWire("first", "second")],
   );
 
-const branchShapes = () =>
-  flow(
+const branchShapes = () => {
+  const drawn = flow(
     [
-      at(trigger("trigger", { settings: { flags: { e2e: true } } }), 10, 10),
+      at(trigger("trigger"), 10, 10),
       at({ ...branch("branch", "e2e"), label: "E2E?" }, 220, 10),
       at(script("yes"), 400, 10),
       at(script("no"), 220, 120),
@@ -91,6 +91,17 @@ const branchShapes = () =>
       wire("branch", "no", "no", "in"),
     ],
   );
+  return {
+    ...drawn,
+    session: {
+      ...drawn.session,
+      buildConfig: {
+        ...drawn.session.buildConfig,
+        variables: [{ name: "e2e", kind: "yesno" as const, default: true }],
+      },
+    },
+  };
+};
 
 const pointsOf = async (polygon: Locator) =>
   ((await polygon.getAttribute("points")) ?? "")
@@ -199,7 +210,8 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     ]);
     await expect(node).toContainText("IF");
     await expect(node).toContainText("E2E?");
-    await expect(node).toContainText("--no-e2e");
+    await expect(node).toContainText("e2e");
+    await expect(node).not.toContainText("--no-");
 
     const port = (name: string) => window.getByTestId(`port-branch-${name}`);
     for (const name of ["in", "yes", "no"]) await expect(port(name)).toBeAttached();

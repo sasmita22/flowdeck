@@ -122,6 +122,7 @@ export class NodeProcessRunner implements ProcessRunner {
     signal?: AbortSignal,
   ): Promise<ProcessResult> {
     await mkdir(job, { recursive: true });
+    if (signal?.aborted === true) return killed;
     const child = spawn("sh", ["-c", jobScript, "sh", job, command, ...args], {
       cwd,
       detached: true,

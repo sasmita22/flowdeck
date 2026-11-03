@@ -5,27 +5,34 @@ import type { PendingWait } from "../../../src/core/run/wait.js";
 import { tool } from "../../fixtures/activity-entries.js";
 import { askWait, budget, gateWait, permission, unconfirmedBudget } from "../../fixtures/waits.js";
 
-const wait = (value: PendingWait | null): EnginePush => ({ push: "wait", value });
+const wait = (value: PendingWait | null, runId = "run-1"): EnginePush => ({
+  push: "wait",
+  runId,
+  value,
+});
 
 const setup = () => {
   const sent: unknown[] = [];
-  const relay = createWaitRelay({ send: (value) => sent.push(value) });
+  const relay = createWaitRelay({ send: (update) => sent.push(update) });
   return { relay, sent };
 };
 
 describe("createWaitRelay", () => {
-  it("has no wait before the first push", () => {
-    expect(setup().relay.latest()).toBeNull();
+  it("has no wait for a run before its first push", () => {
+    expect(setup().relay.latest("run-1")).toBeNull();
   });
 
-  it("sends each wait push unchanged and keeps it as the latest", () => {
+  it("sends each wait push with its run id and keeps it as the run's latest", () => {
     const { relay, sent } = setup();
 
     relay.onPush(wait(gateWait));
     relay.onPush(wait(askWait));
 
-    expect(sent).toEqual([gateWait, askWait]);
-    expect(relay.latest()).toEqual(askWait);
+    expect(sent).toEqual([
+      { runId: "run-1", value: gateWait },
+      { runId: "run-1", value: askWait },
+    ]);
+    expect(relay.latest("run-1")).toEqual(askWait);
   });
 
   it.each([permission, budget, unconfirmedBudget])("sends a $kind wait unchanged", (request) => {
@@ -34,18 +41,43 @@ describe("createWaitRelay", () => {
 
     relay.onPush(wait(pending));
 
-    expect(sent).toEqual([pending]);
-    expect(relay.latest()).toEqual(pending);
+    expect(sent).toEqual([{ runId: "run-1", value: pending }]);
+    expect(relay.latest("run-1")).toEqual(pending);
   });
 
-  it("sends a cleared wait and forgets the latest one", () => {
+  it("sends a cleared wait with its run id and forgets that run's latest one", () => {
     const { relay, sent } = setup();
 
     relay.onPush(wait(gateWait));
     relay.onPush(wait(null));
 
-    expect(sent).toEqual([gateWait, null]);
-    expect(relay.latest()).toBeNull();
+    expect(sent).toEqual([
+      { runId: "run-1", value: gateWait },
+      { runId: "run-1", value: null },
+    ]);
+    expect(relay.latest("run-1")).toBeNull();
+  });
+
+  it("keeps each run's wait when two runs push in turn", () => {
+    const { relay } = setup();
+
+    relay.onPush(wait(gateWait, "run-1"));
+    relay.onPush(wait(askWait, "run-2"));
+
+    expect(relay.latest("run-1")).toEqual(gateWait);
+    expect(relay.latest("run-2")).toEqual(askWait);
+  });
+
+  it("clears only the run whose wait is cleared", () => {
+    const { relay, sent } = setup();
+
+    relay.onPush(wait(gateWait, "run-1"));
+    relay.onPush(wait(askWait, "run-2"));
+    relay.onPush(wait(null, "run-2"));
+
+    expect(relay.latest("run-1")).toEqual(gateWait);
+    expect(relay.latest("run-2")).toBeNull();
+    expect(sent.at(-1)).toEqual({ runId: "run-2", value: null });
   });
 
   it("ignores run-state, session and activity pushes", () => {
@@ -53,25 +85,30 @@ describe("createWaitRelay", () => {
     relay.onPush(wait(gateWait));
 
     relay.onPush({ push: "run-state", value: { runId: "run-1", status: "running", nodes: {} } });
-    relay.onPush({ push: "session", value: null });
+    relay.onPush({ push: "session", runId: "run-1", value: null });
     relay.onPush({ push: "activity", value: { runId: "run-1", entry: tool(1) } });
 
-    expect(sent).toEqual([gateWait]);
-    expect(relay.latest()).toEqual(gateWait);
+    expect(sent).toEqual([{ runId: "run-1", value: gateWait }]);
+    expect(relay.latest("run-1")).toEqual(gateWait);
   });
 
   it("ignores a wait value that is not a pending wait", () => {
     const { relay, sent } = setup();
     relay.onPush(wait(gateWait));
 
-    relay.onPush({ push: "wait", value: { request: gateWait.request } } as unknown as EnginePush);
     relay.onPush({
       push: "wait",
+      runId: "run-1",
+      value: { request: gateWait.request },
+    } as unknown as EnginePush);
+    relay.onPush({
+      push: "wait",
+      runId: "run-1",
       value: { waitId: "wait-3", request: { nodeId: "x", kind: "vote" } },
     } as unknown as EnginePush);
 
-    expect(sent).toEqual([gateWait]);
-    expect(relay.latest()).toEqual(gateWait);
+    expect(sent).toEqual([{ runId: "run-1", value: gateWait }]);
+    expect(relay.latest("run-1")).toEqual(gateWait);
   });
 });
 

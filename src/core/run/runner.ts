@@ -1,7 +1,7 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
-import type { VerifyFileSystem } from "../compiler/verify.js";
+import type { VerifyFileSystem, VerifyLayout } from "../compiler/verify.js";
 import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
-import { branchSkips, branchTakes, triggerFlags } from "../nodes/branch/execute.js";
+import { branchDecision, branchSkips } from "../nodes/branch/execute.js";
 import {
   forkTurnText,
   parallelSections,
@@ -61,7 +61,11 @@ import { parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
 export type RunnableManifest = Pick<Manifest, "nodes"> &
-  Partial<Pick<Manifest, "wires">> & { hash: string };
+  Partial<Pick<Manifest, "wires" | "values">> & {
+    hash: string;
+    prefix: string;
+    layout?: VerifyLayout;
+  };
 
 export type ScriptResult = { code: number | null; stdout: string; stderr: string };
 
@@ -115,14 +119,14 @@ type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait; onBranchFail?: JoinOnBranchFail };
 type ForEachSettings = { file: string };
-type BranchSettings = { flag: string };
+type BranchSettings = { variable?: string; flag?: string };
 
 type StepOutcome = { status: "done"; line: string } | { status: "failed"; reason: string };
 type Failure = { nodeId: string; reason: string; halted?: boolean };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
 type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
 type RunContext = {
-  hash: string;
+  prefix: string;
   manifest: RunnableManifest;
   nodes: readonly ManifestNode[];
   sections: readonly ParallelSection[];
@@ -327,7 +331,7 @@ export class Runner {
     };
     const { sections } = parallelSections(manifest.nodes, manifest.wires ?? []);
     const context: RunContext = {
-      hash: manifest.hash,
+      prefix: manifest.prefix,
       manifest,
       nodes,
       sections,
@@ -452,7 +456,7 @@ export class Runner {
     if (settled !== undefined) return settled;
     const held = await this.holdForFiles(node.id, context);
     if (held !== undefined) return held;
-    const { hash, ensureStarted } = context;
+    const { prefix, ensureStarted } = context;
     let failure: string | undefined;
     let reply: string | undefined;
     let doneLine = "done";
@@ -484,8 +488,8 @@ export class Runner {
         const item = this.roundItem(node, context.nodes);
         turn =
           node.type === "prompt"
-            ? await this.runPrompt(node, hash, ensureStarted, condition, item)
-            : await this.runAgent(node, hash, ensureStarted, condition, item);
+            ? await this.runPrompt(node, prefix, ensureStarted, condition, item)
+            : await this.runAgent(node, prefix, ensureStarted, condition, item);
       } finally {
         this.inTurn = undefined;
       }
@@ -505,9 +509,8 @@ export class Runner {
 
   private runBranch(branch: ManifestNode, context: RunContext): void {
     const { manifest, nodes } = context;
-    const defaults = triggerFlags(manifest.nodes);
     const takes = (node: ManifestNode) =>
-      branchTakes((node.settings as BranchSettings).flag, defaults, this.deps.flags ?? {});
+      branchDecision(manifest, node.settings as BranchSettings, this.deps.flags ?? {});
     const decisions = new Map(
       nodes
         .filter(
@@ -798,7 +801,7 @@ export class Runner {
     context: RunContext,
   ): Promise<StepResult> {
     const { fork, join, branches } = section;
-    const branchOf = new Map(branches.map((id) => [agentType(context.hash, id), id]));
+    const branchOf = new Map(branches.map((id) => [agentType(context.prefix, id), id]));
     const branchTypes = [...branchOf.keys()];
     const stopped = new Set<string>();
     const timeoutMs = this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs;
@@ -839,7 +842,7 @@ export class Runner {
       let stopMessage: string | undefined;
       try {
         await context.ensureStarted();
-        const text = forkTurnText(context.hash, branches);
+        const text = forkTurnText(context.prefix, branches);
         if (wait === "first") {
           await this.deps.prompts.sendPrompt(text);
           await untilJoined();
@@ -1025,7 +1028,7 @@ export class Runner {
 
   private async runPrompt(
     node: ManifestNode,
-    hash: string,
+    prefix: string,
     ensureStarted: () => Promise<void>,
     condition?: string,
     item?: string,
@@ -1041,7 +1044,7 @@ export class Runner {
         this.emit(`${node.id} started`);
         await ensureStarted();
         const turnEnd = this.armTurnEnd(this.deps.now?.());
-        const turn = `/${hash}:${node.id}`;
+        const turn = `/${prefix}:${node.id}`;
         const command = withPromptContext(
           item === undefined ? turn : withItem(turn, item),
           answers,
@@ -1059,7 +1062,7 @@ export class Runner {
 
   private async runAgent(
     node: ManifestNode,
-    hash: string,
+    prefix: string,
     ensureStarted: () => Promise<void>,
     condition?: string,
     item?: string,
@@ -1084,8 +1087,8 @@ export class Runner {
       const turnEnd = this.armTurnEnd(armedAt);
       const turnText =
         condition === undefined
-          ? agentTurnText(hash, node.id, item)
-          : agentVerdictTurnText(hash, node.id, condition);
+          ? agentTurnText(prefix, node.id, item)
+          : agentVerdictTurnText(prefix, node.id, condition);
       await this.deps.prompts.sendPrompt(withAgentContext(turnText, answers));
       end = await turnEnd;
     } catch (error) {
@@ -1093,8 +1096,8 @@ export class Runner {
     } finally {
       subagents?.unsubscribe();
     }
-    if (agentOutcome(subagents.seen, hash, node.id) === "failed") {
-      return { failure: `no SubagentStop for ${agentType(hash, node.id)}` };
+    if (agentOutcome(subagents.seen, prefix, node.id) === "failed") {
+      return { failure: `no SubagentStop for ${agentType(prefix, node.id)}` };
     }
     return this.finishTurn(node.id, lastMessage(end), condition);
   }

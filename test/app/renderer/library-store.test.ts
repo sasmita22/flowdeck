@@ -14,25 +14,45 @@ const flows = [
     createdAt: "2026-01-01T00:00:00.000Z",
     versions: 2,
     lastSavedAt: "2026-01-02T00:00:00.000Z",
-    workingFolder: { kind: "path", path: "/code/shop" },
+    buildConfig: { repo: "/code/shop", variables: [] },
   },
 ];
 
 const builds = [
   {
-    hash: "abcdef1234",
-    dir: "/fd/builds/abcdef1234",
+    id: "b-fix",
+    name: "fix-login",
+    old: false,
+    dir: "/fd/workspaces/b-fix",
+    createdAt: 6,
+    source: { flowId: "flow-a", version: 2 },
+  },
+  {
+    id: "b-idle",
+    name: "docs",
+    old: false,
+    dir: "/fd/workspaces/b-idle",
     createdAt: 5,
     source: { flowId: "flow-a", version: 2 },
   },
-  { hash: "0123456789", dir: "/fd/builds/0123456789", createdAt: 4 },
+  { id: "0123456789", name: null, old: true, dir: "/fd/builds/0123456789", createdAt: 4 },
 ];
 
 const runs = [
   {
+    id: "run-2",
+    status: "interrupted",
+    buildId: "b-fix",
+    createdAt: "2026-01-04T00:00:00.000Z",
+    endedAt: null,
+    totalCost: null,
+    nodeCount: 2,
+    source: { flowId: "flow-a", version: 2 },
+  },
+  {
     id: "run-1",
     status: "done",
-    buildHash: "abcdef1234",
+    buildId: "b-fix",
     createdAt: "2026-01-03T00:00:00.000Z",
     endedAt: "2026-01-03T00:01:05.000Z",
     totalCost: 0.25,
@@ -60,7 +80,7 @@ const fakeBridge = () =>
         wires: [],
         session: {
           name: "main",
-          workingFolder: { kind: "worktree", branch: "main" },
+          buildConfig: { variables: [] },
           model: "sonnet",
           allowedTools: [],
           permissionMode: "default",
@@ -69,8 +89,9 @@ const fakeBridge = () =>
       },
     })),
     doctor: vi.fn(async () => ({ installed: [], needed: [] })),
+    doctorWorktrees: vi.fn(async () => []),
     loadRun: vi.fn(async () => ({
-      run: runs[0],
+      run: runs[1],
       name: "Report",
       flow: null,
       snapshot: { runId: "run-1", status: "done", nodes: { s1: "done" } },
@@ -112,15 +133,15 @@ describe("createLibraryStore", () => {
     expect(library.getState().error).toBe("A blueprint needs a name");
   });
 
-  it("opens a build's files with the manifest first and shows it", async () => {
+  it("opens a build's files by its id with the manifest first and shows it", async () => {
     const bridge = fakeBridge();
     const library = createLibraryStore({ bridge });
 
-    await library.getState().openFiles("abcdef1234");
+    await library.getState().openFiles("b-fix");
 
-    expect(bridge.buildFiles).toHaveBeenCalledWith({ hash: "abcdef1234" });
+    expect(bridge.buildFiles).toHaveBeenCalledWith({ buildId: "b-fix" });
     expect(library.getState().files).toEqual({
-      hash: "abcdef1234",
+      buildId: "b-fix",
       list: [
         { path: "manifest.json", sha256: "m", content: "{}" },
         { path: "commands/p1.md", sha256: "c", content: "do the thing" },
@@ -169,7 +190,7 @@ describe("an interrupted run", () => {
     const bridge = fakeBridge();
     const note = "Flowdeck closed while this run was going.";
     bridge.loadRun.mockResolvedValueOnce({
-      run: { ...runs[0], status: "interrupted", endedAt: null },
+      run: { ...runs[1], status: "interrupted", endedAt: null },
       name: "Report",
       flow: null,
       snapshot: { runId: "run-1", status: "interrupted", nodes: {} },
@@ -185,18 +206,40 @@ describe("an interrupted run", () => {
 });
 
 describe("cards", () => {
-  it("names each build's blueprint and version, and marks a build with no blueprint", async () => {
+  it("keys each build by its id, names it, marks an old one, and gives it its latest run", async () => {
     const library = createLibraryStore({ bridge: fakeBridge() });
     await library.getState().refresh();
 
     expect(selectBuildCards(library.getState())).toEqual([
-      { hash: "abcdef1234", name: "Report", version: 2, createdAt: 5, flowId: "flow-a" },
       {
-        hash: "0123456789",
+        id: "b-fix",
+        name: "fix-login",
+        blueprint: "Report",
+        version: 2,
+        createdAt: 6,
+        flowId: "flow-a",
+        old: false,
+        run: { id: "run-2", status: "interrupted" },
+      },
+      {
+        id: "b-idle",
+        name: "docs",
+        blueprint: "Report",
+        version: 2,
+        createdAt: 5,
+        flowId: "flow-a",
+        old: false,
+        run: null,
+      },
+      {
+        id: "0123456789",
         name: "Not from a blueprint",
+        blueprint: "Not from a blueprint",
         version: null,
         createdAt: 4,
         flowId: null,
+        old: true,
+        run: null,
       },
     ]);
   });
@@ -206,7 +249,8 @@ describe("cards", () => {
     await library.getState().refresh();
 
     expect(selectRunCards(library.getState())).toEqual([
-      expect.objectContaining({ id: "run-1", name: "Report", version: 2, buildHash: "abcdef1234" }),
+      expect.objectContaining({ id: "run-2", name: "Report", version: 2, buildId: "b-fix" }),
+      expect.objectContaining({ id: "run-1", name: "Report", version: 2, buildId: "b-fix" }),
     ]);
   });
 });

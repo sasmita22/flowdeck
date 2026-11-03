@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, rmdir } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const runDeadlineMs = 180_000;
+const slugOf = (folder: string) => folder.replace(/[^a-zA-Z0-9]/g, "-");
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
   error instanceof Error && "code" in error && codes.includes(error.code as string | number);
@@ -82,13 +83,11 @@ async function tmuxServerAlive(socketName: string): Promise<boolean> {
 
 function liveEnvironment(
   fs: NodeFileSystem,
-  waiter: RunEnvironment["waiter"],
-): RunEnvironment & { now: () => number } {
+): Omit<RunEnvironment, "waiter"> & { now: () => number } {
   return {
     fs,
     now: Date.now,
     scripts: new NodeProcessRunner(),
-    waiter,
     startEvents: async (socketPath) => {
       await mkdir(dirname(socketPath), { recursive: true });
       const server = new HookSocketServer({ socketPath });
@@ -118,9 +117,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
   beforeEach(async () => {
     delete process.env.TMUX;
     delete process.env.TMUX_PANE;
-    home = await mkdtemp(join(tmpdir(), "fd-l-"));
-    repo = await createTmpRepo();
-    projectFolder = join(homedir(), ".claude", "projects", repo.path.replace(/[^a-zA-Z0-9]/g, "-"));
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
+    repo = await createTmpRepo({ commit: true });
+    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
   });
 
   afterEach(async () => {
@@ -180,7 +179,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         session: {
           ...built.session,
           model: "haiku",
-          workingFolder: { kind: "path", path: repo.path },
+          buildConfig: { repo: repo.path, variables: [] },
         },
       };
 
@@ -220,7 +219,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         connectors: new FakeConnectorSource(),
         isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
         fs,
-        run: liveEnvironment(fs, appWaiter),
+        run: liveEnvironment(fs),
         worktree: new GitWorktree(),
         gitState: new GitFolderState(),
         waits: appWaiter,
@@ -228,9 +227,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         transcriptTurns: async () => [],
       });
 
-      const build = await handler.handle({ id: 10, type: "build-version", payload: savedRef });
-      const { hash } = (build as { value: { hash: string } }).value;
-      const response = await handler.handle({ id: 11, type: "run-build", payload: { hash } });
+      const build = await handler.handle({
+        id: 10,
+        type: "build-version",
+        payload: { ...savedRef, name: "live-answer", values: {} },
+      });
+      const { id: buildId, dir } = (build as { value: { id: string; dir: string } }).value;
+      projectFolder = join(
+        homedir(),
+        ".claude",
+        "projects",
+        slugOf(join(dir, basename(repo.path))),
+      );
+      const response = await handler.handle({ id: 11, type: "run-build", payload: { buildId } });
       expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
 
       await vi.waitFor(() => expect(answered).toBeDefined(), { timeout: 30_000, interval: 200 });

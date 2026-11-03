@@ -1,12 +1,18 @@
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { GitFolderState } from "../../src/adapters/git/git-state.js";
+import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { build } from "../../src/core/compiler/build.js";
+import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
+import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
+import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
+import { buildVersion } from "../../src/core/compiler/build-version.js";
 import { ask, flow, gate, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -66,7 +72,7 @@ describe("the flowdeck entry", () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
+    repo = await createTmpRepo({ commit: true });
   });
 
   afterEach(async () => {
@@ -87,12 +93,27 @@ describe("the flowdeck entry", () => {
   };
 
   async function buildFlow(nodes: unknown[], wires: unknown[]) {
-    const built = await build(flow(nodes, wires), {
-      fs: new NodeFileSystem(),
-      home,
-    });
-    if (!built.ok) throw new Error("build failed");
-    return built.dir;
+    const db = openDatabase({ path: join(home, "flowdeck.db") });
+    try {
+      const flows = new SqliteFlowStore({ db });
+      const built = await buildVersion(
+        flows.save(flow(nodes, wires)),
+        { name: "x", repo: repo.path, values: {} },
+        {
+          flows,
+          store: new SqliteStore({ db }),
+          fs: new NodeFileSystem(),
+          home,
+          gitState: new GitFolderState(),
+          worktree: new GitWorktree(),
+          newId: randomUUID,
+        },
+      );
+      if (!built.ok) throw new Error(`build failed: ${JSON.stringify(built.errors)}`);
+      return "x";
+    } finally {
+      db.close();
+    }
   }
 
   const buildScript = (args: string[]) =>
@@ -108,12 +129,12 @@ describe("the flowdeck entry", () => {
     "reads a Gate's and an Ask's answers from one piped write",
     { timeout: exitWithinMs + 10_000 },
     async () => {
-      const dir = await buildFlow(
+      const name = await buildFlow(
         [gate("g1"), ask("q1"), script("s1", { settings: { command: "echo", args: ["after"] } })],
         [thenWire("g1", "q1"), thenWire("q1", "s1")],
       );
 
-      const exit = await runEntry(["run", dir, "--cwd", repo.path], {
+      const exit = await runEntry(["run", name], {
         env: { ...process.env, FLOWDECK_HOME: home },
         stdin: "approve\n2\n",
       });
@@ -129,9 +150,9 @@ describe("the flowdeck entry", () => {
     "fails a Gate whose stdin closed before it asked, exiting 1",
     { timeout: exitWithinMs + 10_000 },
     async () => {
-      const dir = await gateThenScript();
+      const name = await gateThenScript();
 
-      const exit = await runEntry(["run", dir, "--cwd", repo.path], {
+      const exit = await runEntry(["run", name], {
         env: { ...process.env, FLOWDECK_HOME: home },
         stdin: "",
       });
@@ -146,9 +167,9 @@ describe("the flowdeck entry", () => {
     "on SIGINT while a Gate waits for an answer exits 130",
     { timeout: exitWithinMs + 10_000 },
     async () => {
-      const dir = await gateThenScript();
+      const name = await gateThenScript();
 
-      const exit = await runEntry(["run", dir, "--cwd", repo.path, "--session", "fd-wait"], {
+      const exit = await runEntry(["run", name, "--session", "fd-wait"], {
         env: { ...process.env, FLOWDECK_HOME: home },
         signal: { after: "approve, or reject <reason>: ", send: "SIGINT" },
       });
@@ -165,9 +186,9 @@ describe("the flowdeck entry", () => {
     async () => {
       const lingerPath = join(home, "linger.mjs");
       await writeFile(lingerPath, "setTimeout(() => undefined, 600_000);\n");
-      const dir = await buildScript(["true"]);
+      const name = await buildScript(["true"]);
 
-      const exit = await runEntry(["run", dir, "--cwd", repo.path], {
+      const exit = await runEntry(["run", name], {
         env: { ...process.env, FLOWDECK_HOME: home },
         imports: [lingerPath],
       });
@@ -185,9 +206,9 @@ describe("the flowdeck entry", () => {
     "on %s stops a blocked run and its script's children, removes its hook socket and exits %i",
     { timeout: exitWithinMs + 10_000 },
     async (signal, code) => {
-      const dir = await buildScript(["sh", "-c", `sleep ${sleepArg}; echo after`]);
+      const name = await buildScript(["sh", "-c", `sleep ${sleepArg}; echo after`]);
 
-      const exit = await runEntry(["run", dir, "--cwd", repo.path, "--session", "fd-signal"], {
+      const exit = await runEntry(["run", name, "--session", "fd-signal"], {
         env: { ...process.env, FLOWDECK_HOME: home },
         signal: { after: "s started", send: signal, once: sleepRunning },
       });

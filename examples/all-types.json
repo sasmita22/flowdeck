@@ -8,13 +8,7 @@
         "x": 0,
         "y": 0
       },
-      "settings": {
-        "inputs": ["ticket"],
-        "flags": {
-          "dryRun": false,
-          "e2e": true
-        }
-      }
+      "settings": {}
     },
     {
       "id": "plan",
@@ -119,7 +113,7 @@
         "y": 120
       },
       "settings": {
-        "flag": "e2e"
+        "variable": "e2e"
       }
     },
     {
@@ -409,9 +403,24 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "worktree",
-      "branch": "main"
+    "buildConfig": {
+      "base": "main",
+      "variables": [
+        {
+          "name": "ticket",
+          "kind": "text"
+        },
+        {
+          "name": "dryRun",
+          "kind": "yesno",
+          "default": false
+        },
+        {
+          "name": "e2e",
+          "kind": "yesno",
+          "default": true
+        }
+      ]
     },
     "model": "sonnet",
     "allowedTools": [],

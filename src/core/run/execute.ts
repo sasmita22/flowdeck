@@ -1,6 +1,6 @@
 import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
-import { verify, type VerifyFileSystem } from "../compiler/verify.js";
+import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
 import { agentNodes, chargeUsage } from "./cost.js";
@@ -16,6 +16,7 @@ import {
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
 import type { HumanWaiter } from "./wait.js";
+import { buildWorktree } from "./workspace.js";
 
 export type OpenSessionOptions = {
   sessionName: string;
@@ -23,6 +24,7 @@ export type OpenSessionOptions = {
   model: string;
   socketPath: string;
   cwd: string;
+  layout: VerifyLayout;
   claudeSessionId: string;
   hooks: HookPaths;
   mcpConfigPath?: string;
@@ -65,7 +67,12 @@ export type ExecuteDeps = {
 
 export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onOutput" | "onInterrupt">;
 
-export type LoadedBuild = Manifest & { hash: string };
+export type LoadedBuild = Omit<Manifest, "prefix" | "layout"> & {
+  hash: string;
+  prefix: string;
+  layout: VerifyLayout;
+  worktree?: string;
+};
 
 export type LoadBuildResult =
   { kind: "loaded"; build: LoadedBuild } | { kind: "error"; message: string };
@@ -108,20 +115,38 @@ export function runSocketPath(
 }
 
 export async function loadBuild(
-  buildDir: string,
-  deps: { fs: VerifyFileSystem },
+  buildId: string,
+  deps: { fs: VerifyFileSystem; store: Pick<Store, "findBuild"> },
 ): Promise<LoadBuildResult> {
-  const verified = await verify(buildDir, { fs: deps.fs });
+  const row = deps.store.findBuild(buildId);
+  if (row === undefined) return { kind: "error", message: `No build ${buildId}` };
+  const layout: VerifyLayout = row.name === null ? "legacy" : "workspace";
+  const verified = await verify(row.dir, row.hash, layout, { fs: deps.fs });
   if (!verified.ok) {
     return {
       kind: "error",
       message: verified.problems.map(({ path, problem }) => `${path}: ${problem}`).join("\n"),
     };
   }
-  const manifest = JSON.parse(await deps.fs.readFile(`${buildDir}/manifest.json`)) as LoadedBuild;
+  const manifest = JSON.parse(await deps.fs.readFile(`${row.dir}/manifest.json`)) as Manifest & {
+    hash: string;
+  };
   const problems = structureProblems(manifest.nodes, manifest.wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
-  return { kind: "loaded", build: manifest };
+  return {
+    kind: "loaded",
+    build: {
+      ...manifest,
+      prefix: manifest.prefix ?? row.hash,
+      layout,
+      ...(row.name !== null && row.repo !== null
+        ? {
+            worktree: buildWorktree({ id: row.id, name: row.name, repo: row.repo, dir: row.dir })
+              .path,
+          }
+        : {}),
+    },
+  };
 }
 
 export const runMcpConfigPath = (home: string, runId: string): string =>
@@ -130,7 +155,7 @@ export const runMcpConfigPath = (home: string, runId: string): string =>
 const checksACondition = (node: LoadedBuild["nodes"][number]) =>
   node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
 
-export const needsClaude = (manifest: LoadedBuild) =>
+export const needsClaude = (manifest: Pick<Manifest, "nodes">) =>
   manifest.nodes.some(
     (node) => node.type === "prompt" || node.type === "agent" || checksACondition(node),
   );
@@ -216,9 +241,12 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     activity: (id) => store.activity(id),
     recordCost: (id, totalCost) => store.recordCost(id, totalCost),
     recordBuild: (build) => store.recordBuild(build),
-    findBuild: (hash) => store.findBuild(hash),
+    stopRun: (id) => store.stopRun(id),
+    findBuild: (id) => store.findBuild(id),
+    findBuildByName: (name) => store.findBuildByName(name),
+    deleteBuild: (id) => store.deleteBuild(id),
     listBuilds: () => store.listBuilds(),
-    buildFiles: (hash) => store.buildFiles(hash),
+    buildFiles: (id) => store.buildFiles(id),
     append(id, nodeId, event) {
       if (!stopped()) store.append(id, nodeId, event);
     },

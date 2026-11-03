@@ -1,9 +1,11 @@
 import { handoffText, type Handoff } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
+import { fillVariables, type VariableValues } from "../../flow/variables.js";
 
 export function compileAgent(
   node: Extract<Node, { type: "agent" }>,
   wired: Handoff = { given: [], writes: [] },
+  values: VariableValues = {},
 ): {
   path: string;
   content: string;
@@ -24,7 +26,7 @@ export function compileAgent(
     writes: [...writes, ...wired.writes],
   });
   return {
-    path: `agents/${node.id}.md`,
-    content: `---\n${frontmatter}---\n${instructions}\n${handoff}`,
+    path: `plugin/agents/${node.id}.md`,
+    content: `---\n${frontmatter}---\n${fillVariables(instructions, values)}\n${handoff}`,
   };
 }

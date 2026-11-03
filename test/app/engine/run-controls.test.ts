@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGoneError } from "../../../src/adapters/claude/claude-session.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
@@ -29,7 +29,6 @@ import {
   prompt,
   script,
   thenWire,
-  trigger,
   wire,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
@@ -48,10 +47,13 @@ describe("run controls", () => {
   let pushes: EnginePush[];
   let handler: ReturnType<typeof createEngineHandler>;
   let nextId: number;
+  let names: number;
+  let alive: Set<string>;
+  let ended: string[];
 
   const atRepo = (input: Flow): Flow => ({
     ...input,
-    session: { ...input.session, workingFolder: { kind: "path", path: repo.path } },
+    session: { ...input.session, buildConfig: { ...input.session.buildConfig, repo: repo.path } },
   });
 
   const runEnvironment = (overrides: Partial<EngineHandlerOptions["run"]> = {}) => ({
@@ -82,8 +84,13 @@ describe("run controls", () => {
       connectors: new FakeConnectorSource(),
       run: runEnvironment(),
       worktree: new FakeWorktree(),
-      gitState: new FakeGitState(),
+      gitState: new FakeGitState({ [repo.path]: { kind: "branch", name: "main" } }),
       transcriptTurns: async () => [],
+      sessionAlive: async (name) => alive.has(name),
+      endSession: async (name) => {
+        ended.push(name);
+        alive.delete(name);
+      },
       ...overrides,
     });
 
@@ -97,15 +104,16 @@ describe("run controls", () => {
     return response.value as never;
   };
 
-  const builtHash = async (input: Flow) => {
+  const builtId = async (input: Flow, values: Record<string, unknown> = {}) => {
     const { flowId, version } = flows.save(atRepo(input));
-    const built = (await call("build-version", { flowId, version })) as {
-      kind: string;
-      hash: string;
-      message?: string;
-    };
+    const built = (await call("build-version", {
+      flowId,
+      version,
+      name: `build-${++names}`,
+      values,
+    })) as { kind: string; id: string; message?: string };
     if (built.kind !== "built") throw new Error(`did not build: ${built.message}`);
-    return built.hash;
+    return built.id;
   };
 
   const started = (result: { kind: string; runId?: string; message?: string }) => {
@@ -115,8 +123,25 @@ describe("run controls", () => {
     return result.runId;
   };
 
+  const startOn = async (buildId: string, options: Record<string, unknown> = {}) =>
+    started(await call("run-build", { buildId, ...options }));
+
   const start = async (input: Flow, options: Record<string, unknown> = {}) =>
-    started(await call("run-build", { hash: await builtHash(input), ...options }));
+    startOn(await builtId(input), options);
+
+  const cwdOf = (runId: string) => {
+    const cwd = runs.findRun(runId)?.session.cwd;
+    if (cwd === undefined || cwd === "") throw new Error(`run ${runId} has no folder`);
+    return cwd;
+  };
+
+  const buildDirOf = (buildId: string) => {
+    const built = runs.findBuild(buildId);
+    if (built === undefined) throw new Error(`no build ${buildId}`);
+    return built.dir;
+  };
+
+  const worktreeOf = (buildId: string) => join(buildDirOf(buildId), basename(repo.path));
 
   const statusOf = (runId: string, nodeId: string) =>
     nodeStatus(runs.events(runId).filter((event) => event.nodeId === nodeId));
@@ -136,6 +161,9 @@ describe("run controls", () => {
     flows = new FakeFlowStore();
     pushes = [];
     nextId = 1;
+    names = 0;
+    alive = new Set();
+    ended = [];
     handler = handlerWith();
   });
 
@@ -156,63 +184,29 @@ describe("run controls", () => {
         [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
 
-    const flagged = () =>
-      flow(
-        [
-          trigger("t", { settings: { inputs: ["ticket"], flags: { deep: true } } }),
-          branch("b", "deep"),
-          sh("yes", "true"),
-          sh("no", "true"),
-        ],
-        [thenWire("t", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+    const branchOn = (variable: string) => {
+      const base = flow(
+        [branch("b", variable), sh("yes", "true"), sh("no", "true")],
+        [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
+      return {
+        ...base,
+        session: {
+          ...base.session,
+          buildConfig: {
+            ...base.session.buildConfig,
+            variables: [{ name: variable, kind: "yesno" as const, default: true }],
+          },
+        },
+      };
+    };
 
-    it("tells what a build lets a run choose: inputs, flags and automatic mode", async () => {
-      expect(await call("run-options", { hash: await builtHash(flagged()) })).toEqual({
-        inputs: ["ticket"],
-        flags: { deep: true },
-        automatic: false,
-      });
-      expect(await call("run-options", { hash: await builtHash(skippableGate()) })).toEqual({
-        inputs: [],
-        flags: {},
+    it("lets a run choose only automatic mode, and only for a build with a skippable gate", async () => {
+      expect(await call("run-options", { buildId: await builtId(skippableGate()) })).toEqual({
         automatic: true,
       });
-    });
-
-    it("refuses run options and a run for a build whose Trigger flag is named auto", async () => {
-      const hash = await builtHash(
-        flow(
-          [trigger("t", { settings: { inputs: [], flags: { auto: true } } }), sh("s", "true")],
-          [thenWire("t", "s")],
-        ),
-      );
-      const clash = 'Trigger flag "auto" clashes with the built-in option --auto';
-
-      await expect(call("run-options", { hash })).rejects.toThrow(clash);
-      expect(await call("run-build", { hash, auto: true })).toEqual({
-        kind: "error",
-        message: clash,
-      });
-      expect(runs.listRuns()).toEqual([]);
-    });
-
-    it("refuses a run for a build whose Trigger input and flag share a name", async () => {
-      const hash = await builtHash(
-        flow(
-          [
-            trigger("t", { settings: { inputs: ["deep"], flags: { deep: true } } }),
-            sh("s", "true"),
-          ],
-          [thenWire("t", "s")],
-        ),
-      );
-      const clash = 'Trigger input "deep" clashes with the Trigger flag "deep"';
-
-      await expect(call("run-options", { hash })).rejects.toThrow(clash);
-      expect(await call("run-build", { hash, inputs: { deep: "x" } })).toEqual({
-        kind: "error",
-        message: clash,
+      expect(await call("run-options", { buildId: await builtId(branchOn("deep")) })).toEqual({
+        automatic: false,
       });
     });
 
@@ -225,8 +219,7 @@ describe("run controls", () => {
     });
 
     it("stops at a skippable gate in a normal run", async () => {
-      const waiter = createAppWaiter({ push: (push) => pushes.push(push) });
-      handler = handlerWith({ run: runEnvironment({ waiter }), waits: waiter });
+      handler = handlerWith({ waits: createAppWaiter({ push: (push) => pushes.push(push) }) });
 
       const runId = await start(skippableGate());
 
@@ -234,26 +227,15 @@ describe("run controls", () => {
       expect(runs.findRun(runId)?.inputs).toEqual({});
     });
 
-    it("takes Branch's no path when the run turns its flag off, and keeps inputs and flags", async () => {
-      const runId = await start(flagged(), { inputs: { ticket: "FD-1" }, flags: { deep: false } });
+    it("takes Branch's path from the build's yes/no value, ignoring Trigger flags and inputs sent with the run", async () => {
+      const buildId = await builtId(branchOn("deep"), { deep: false });
+
+      const runId = await startOn(buildId, { inputs: { ticket: "FD-1" }, flags: { deep: true } });
 
       expect(await finished(runId)).toBe("done");
       expect(statusOf(runId, "yes")).toBe("skipped");
       expect(statusOf(runId, "no")).toBe("done");
-      expect(runs.findRun(runId)?.inputs).toEqual({ ticket: "FD-1", deep: false });
-    });
-
-    it("refuses a flag that is not on or off", async () => {
-      const hash = await builtHash(flagged());
-
-      const response = await handler.handle({
-        id: nextId++,
-        type: "run-build",
-        payload: { hash, flags: { deep: "no" } },
-      });
-
-      expect(response.ok).toBe(false);
-      expect(runs.runs).toEqual([]);
+      expect(runs.findRun(runId)?.inputs).toEqual({});
     });
   });
 
@@ -263,9 +245,9 @@ describe("run controls", () => {
         flow([sh("s1", "echo $$ > pid; exec sleep 30"), sh("s2", "true")], [thenWire("s1", "s2")]),
       );
       await vi.waitFor(async () =>
-        expect(await readFile(join(repo.path, "pid"), "utf8")).not.toBe(""),
+        expect(await readFile(join(cwdOf(runId), "pid"), "utf8").catch(() => "")).not.toBe(""),
       );
-      const pid = Number(await readFile(join(repo.path, "pid"), "utf8"));
+      const pid = Number(await readFile(join(cwdOf(runId), "pid"), "utf8"));
 
       expect(await call("stop-run", { runId })).toEqual({ stopped: true });
 
@@ -277,8 +259,52 @@ describe("run controls", () => {
       ]);
     });
 
-    it("answers not stopped for a run that is not the active one", async () => {
+    it("answers not stopped for a run it does not know", async () => {
       expect(await call("stop-run", { runId: "nope" })).toEqual({ stopped: false });
+    });
+
+    describe("on a run left interrupted", () => {
+      const interrupted = async (tmuxName: string) => {
+        const buildId = await builtId(flow([sh("s1", "true")], []));
+        const { id } = runs.createRun({
+          buildDir: buildDirOf(buildId),
+          inputs: {},
+          nodeIds: ["s1"],
+          session: { tmuxName, cwd: repo.path, claudeSessionId: "c-left" },
+          buildId,
+        });
+        return { buildId, runId: id };
+      };
+
+      it("marks it stopped and ends its live session, after which its build runs again", async () => {
+        const { buildId, runId } = await interrupted("fd-run-left");
+        alive.add("fd-run-left");
+
+        expect(await call("stop-run", { runId })).toEqual({ stopped: true });
+
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+        expect(ended).toEqual(["fd-run-left"]);
+        expect(await finished(await startOn(buildId))).toBe("done");
+      });
+
+      it("marks it stopped without ending a session that has already ended", async () => {
+        const { runId } = await interrupted("fd-run-gone");
+
+        expect(await call("stop-run", { runId })).toEqual({ stopped: true });
+
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+        expect(ended).toEqual([]);
+      });
+
+      it("never ends a session that is not one of Flowdeck's own", async () => {
+        const { runId } = await interrupted("work");
+        alive.add("work");
+
+        await call("stop-run", { runId });
+
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+        expect(ended).toEqual([]);
+      });
     });
   });
 
@@ -287,10 +313,12 @@ describe("run controls", () => {
       flow([sh("s1", "exit $(cat code.txt)"), sh("s2", "echo after")], [thenWire("s1", "s2")]);
 
     it("sends a failed script again once its file is fixed, and the run goes on to done", async () => {
-      await writeFile(join(repo.path, "code.txt"), "3");
-      const runId = await start(readsCode());
+      const buildId = await builtId(readsCode());
+      const worktree = worktreeOf(buildId);
+      await writeFile(join(worktree, "code.txt"), "3");
+      const runId = await startOn(buildId);
       expect(await finished(runId)).toBe("failed");
-      await writeFile(join(repo.path, "code.txt"), "0");
+      await writeFile(join(worktree, "code.txt"), "0");
 
       expect(started(await call("retry-node", { runId, nodeId: "s1" }))).toBe(runId);
 
@@ -306,8 +334,9 @@ describe("run controls", () => {
     });
 
     it("refuses a node that has not failed, and a run that is still going", async () => {
-      await writeFile(join(repo.path, "code.txt"), "3");
-      const runId = await start(readsCode());
+      const buildId = await builtId(readsCode());
+      await writeFile(join(worktreeOf(buildId), "code.txt"), "3");
+      const runId = await startOn(buildId);
       await finished(runId);
 
       expect(await call("retry-node", { runId, nodeId: "s2" })).toEqual({
@@ -316,9 +345,8 @@ describe("run controls", () => {
       });
 
       const going = await start(flow([sh("nap", "sleep 30")], []));
-      expect(await call("retry-node", { runId: going, nodeId: "nap" })).toEqual({
+      expect(await call("retry-node", { runId: going, nodeId: "nap" })).toMatchObject({
         kind: "error",
-        message: "A run is already in progress",
       });
     });
   });
@@ -334,13 +362,26 @@ describe("run controls", () => {
       const runId = await start(stoppable());
       await vi.waitFor(() => expect(statusOf(runId, "s2")).toBe("running"));
       await call("stop-run", { runId });
-      await writeFile(join(repo.path, "go"), "");
+      await writeFile(join(cwdOf(runId), "go"), "");
 
       expect(started(await call("resume-run", { runId }))).toBe(runId);
 
       expect(await finished(runId)).toBe("done");
-      expect(await readFile(join(repo.path, "s1.log"), "utf8")).toBe("once\n");
+      expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8")).toBe("once\n");
       expect(["s1", "s2", "s3"].map((id) => statusOf(runId, id))).toEqual(["done", "done", "done"]);
+    });
+
+    it("refuses a stopped run while another run of its build is going, leaving it stopped", async () => {
+      const buildId = await builtId(flow([sh("s1", "test -f go || sleep 30")], []));
+      const first = await startOn(buildId);
+      await vi.waitFor(() => expect(statusOf(first, "s1")).toBe("running"));
+      await call("stop-run", { runId: first });
+      const second = await startOn(buildId);
+
+      expect(await call("resume-run", { runId: first })).toMatchObject({ kind: "error" });
+
+      expect(runs.findRun(first)?.status).toBe("stopped");
+      expect(runs.findRun(second)?.status).toBe("running");
     });
 
     it("refuses a run that is done", async () => {

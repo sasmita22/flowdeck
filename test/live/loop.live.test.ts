@@ -1,20 +1,20 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
 const watchdogMs = 240_000;
+const buildName = "live-loop";
 const runTimeoutMs = 300_000;
 const condition = "every error the review reported is fixed";
 const reviewText =
@@ -75,7 +75,7 @@ function liveFlow() {
         label: "Start",
         type: "trigger",
         position: at(0),
-        settings: { inputs: [], flags: {} },
+        settings: {},
       },
       {
         id: "l1",
@@ -111,7 +111,7 @@ function liveFlow() {
     wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
     session: {
       name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
+      buildConfig: { base: "main", variables: [] },
       model: "haiku",
       allowedTools: ["Bash(node --check:*)"],
       permissionMode: "acceptEdits",
@@ -146,15 +146,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
   const sessionName = `fd-live-loop-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let slug: string;
   let claudeTmp: string;
   let projectFolder: string;
   let sessionIds: string[];
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
-    slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
+    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
     claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
     projectFolder = join(homedir(), ".claude", "projects", slug);
     sessionIds = [];
@@ -188,26 +190,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
     "loops a reviewer and a fixer until the planted syntax error is fixed",
     { timeout: runTimeoutMs },
     async () => {
-      await mkdir(join(repo.path, "src"));
-      for (const [path, content] of Object.entries(files)) {
-        await writeFile(join(repo.path, path), content);
-      }
-      const built = await build(liveFlow(), {
-        fs: new NodeFileSystem(),
-        home,
-      });
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-      const before = await nodeIn(repo.path, "--check", "src/math.js");
-      console.log(`node --check src/math.js before: exit ${before.code}\n${before.stderr}`);
-      expect(before.code).not.toBe(0);
-      expect((await nodeIn(repo.path, "--check", "src/greet.js")).code).toBe(0);
-      expect((await nodeIn(repo.path, "--check", "src/total.js")).code).toBe(0);
-      expect(fixText).not.toMatch(namesTheError);
-      expect(condition).not.toMatch(namesTheError);
-      expect(await readFile(join(built.dir, "commands", "fix.md"), "utf8")).not.toMatch(
-        namesTheError,
-      );
-
       const real = realDeps();
       const stdout: string[] = [];
       const stderr: string[] = [];
@@ -247,11 +229,29 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
         },
       };
 
+      const built = await cliBuild(
+        liveFlow(),
+        { name: buildName, repo: repo.path },
+        workspace,
+        deps,
+      );
+      await mkdir(join(workspace.workFolder, "src"));
+      for (const [path, content] of Object.entries(files)) {
+        await writeFile(join(workspace.workFolder, path), content);
+      }
+      const before = await nodeIn(workspace.workFolder, "--check", "src/math.js");
+      console.log(`node --check src/math.js before: exit ${before.code}\n${before.stderr}`);
+      expect(before.code).not.toBe(0);
+      expect((await nodeIn(workspace.workFolder, "--check", "src/greet.js")).code).toBe(0);
+      expect((await nodeIn(workspace.workFolder, "--check", "src/total.js")).code).toBe(0);
+      expect(fixText).not.toMatch(namesTheError);
+      expect(condition).not.toMatch(namesTheError);
+      expect(
+        await readFile(join(workspace.dir, "plugin", "commands", "fix.md"), "utf8"),
+      ).not.toMatch(namesTheError);
+
       const code = await withWatchdog(
-        runCli(
-          ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
-          deps,
-        ),
+        runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps),
         watchdogMs,
         async () => {
           const transcripts = await Promise.all(
@@ -269,13 +269,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
       );
 
       const rounds = roundsOf(stdout);
-      const after = await nodeIn(repo.path, "--check", "src/math.js");
+      const after = await nodeIn(workspace.workFolder, "--check", "src/math.js");
       const adds = await nodeIn(
-        repo.path,
+        workspace.workFolder,
         "-e",
         "process.exit(require('./src/math.js').add(2, 3) === 5 ? 0 : 1)",
       );
-      const math = await readFile(join(repo.path, "src/math.js"), "utf8");
+      const math = await readFile(join(workspace.workFolder, "src/math.js"), "utf8");
       console.log(
         [
           `hash: ${built.hash}`,

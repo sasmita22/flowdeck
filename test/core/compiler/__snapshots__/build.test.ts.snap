@@ -2,7 +2,99 @@
 
 exports[`build > writes the same bytes as the recorded build 1`] = `
 {
-  "agents/a.md": "---
+  "CLAUDE.md": "# Build fix-login
+
+- Blueprint: Bugfix, version 3
+- Repository folder: carousell-web
+- Base branch: main
+
+## Standard rules
+
+1. Never assume: if the ticket, the code or an explicit answer can't settle what to do, stop and ask, even in auto mode.
+2. The target repo's own CLAUDE.md and the guides it names come first; read them at the point of use, never apply rules from memory.
+3. Investigate before changing: follow each behaviour past your own area, treat every claim as a question, trace each value to where it is used, search by concept before saying something is missing, and raise contradictions before acting.
+4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
+5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
+6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
+7. Any loop stops after 3 tries on the same issue and reports the blocker.
+8. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+9. State every change and every deviation from the instructions with its reason.
+10. Never rewrite shared history: no force pushes.
+",
+  "manifest.json": "{
+  "files": {
+    "CLAUDE.md": "231083556579d89de9d328bb7e8f318e56f68bfe798b1d427bafc5d2a9dc0756",
+    "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
+    "plugin/agents/a.md": "238d61888f0612fd74e1d6f0a26245167e3dee8bf3564cd6bcdfaa126fd7c95b",
+    "plugin/commands/p.md": "703684da25d686d4bda63b4abfc34d8e50f6ed561e3702f6f463da3dd9cf42f1",
+    "plugin/hooks/hooks.json": "3571ec12d8166b775efd0e8c58e15f545bb016b26e7d02c9f3a6ee5e95c73369",
+    "settings.json": "49a144a48736cdc6813ad746092c2c5f949092d3bfee8b489af474c71ed2f473"
+  },
+  "hash": "ad57d7b4cf53b4864f99857303f91363e2137baf74da98890cd0bf0b17591534",
+  "layout": "workspace",
+  "nodes": [
+    {
+      "file": "plugin/commands/p.md",
+      "id": "p",
+      "label": "p",
+      "settings": {
+        "instructions": "Do the work."
+      },
+      "type": "prompt"
+    },
+    {
+      "file": "plugin/agents/a.md",
+      "id": "a",
+      "label": "a",
+      "settings": {
+        "instructions": "Implement the plan.",
+        "model": "sonnet",
+        "role": "implementer",
+        "tools": [
+          "Grep"
+        ]
+      },
+      "type": "agent"
+    }
+  ],
+  "prefix": "fix-login",
+  "session": {
+    "allowedTools": [
+      "Read",
+      "Edit"
+    ],
+    "buildConfig": {
+      "base": "main",
+      "repo": "/work/repo",
+      "variables": []
+    },
+    "connectors": [],
+    "model": "sonnet",
+    "name": "main",
+    "permissionMode": "default"
+  },
+  "values": {},
+  "version": 1,
+  "wires": [
+    {
+      "from": {
+        "node": "p",
+        "port": "out"
+      },
+      "kind": "then",
+      "to": {
+        "node": "a",
+        "port": "in"
+      }
+    }
+  ]
+}
+",
+  "plugin/.claude-plugin/plugin.json": "{
+  "name": "fix-login"
+}
+",
+  "plugin/agents/a.md": "---
 name: "a"
 description: "implementer"
 tools: "Grep"
@@ -10,12 +102,12 @@ model: "sonnet"
 ---
 Implement the plan.
 ",
-  "commands/p.md": "---
+  "plugin/commands/p.md": "---
 description: "p"
 ---
 Do the work.
 ",
-  "hooks/hooks.json": "{
+  "plugin/hooks/hooks.json": "{
   "hooks": {
     "PermissionRequest": [
       {
@@ -79,69 +171,6 @@ Do the work.
       }
     ]
   }
-}
-",
-  "manifest.json": "{
-  "files": {
-    "agents/a.md": "238d61888f0612fd74e1d6f0a26245167e3dee8bf3564cd6bcdfaa126fd7c95b",
-    "commands/p.md": "703684da25d686d4bda63b4abfc34d8e50f6ed561e3702f6f463da3dd9cf42f1",
-    "hooks/hooks.json": "3571ec12d8166b775efd0e8c58e15f545bb016b26e7d02c9f3a6ee5e95c73369",
-    "settings.json": "49a144a48736cdc6813ad746092c2c5f949092d3bfee8b489af474c71ed2f473"
-  },
-  "hash": "d68bbcb3d4d7d22b6ac41c9bd024326297fd841e269924e70c362520b2fef134",
-  "nodes": [
-    {
-      "file": "commands/p.md",
-      "id": "p",
-      "label": "p",
-      "settings": {
-        "instructions": "Do the work."
-      },
-      "type": "prompt"
-    },
-    {
-      "file": "agents/a.md",
-      "id": "a",
-      "label": "a",
-      "settings": {
-        "instructions": "Implement the plan.",
-        "model": "sonnet",
-        "role": "implementer",
-        "tools": [
-          "Grep"
-        ]
-      },
-      "type": "agent"
-    }
-  ],
-  "session": {
-    "allowedTools": [
-      "Read",
-      "Edit"
-    ],
-    "connectors": [],
-    "model": "sonnet",
-    "name": "main",
-    "permissionMode": "default",
-    "workingFolder": {
-      "branch": "main",
-      "kind": "worktree"
-    }
-  },
-  "version": 1,
-  "wires": [
-    {
-      "from": {
-        "node": "p",
-        "port": "out"
-      },
-      "kind": "then",
-      "to": {
-        "node": "a",
-        "port": "in"
-      }
-    }
-  ]
 }
 ",
   "settings.json": "{

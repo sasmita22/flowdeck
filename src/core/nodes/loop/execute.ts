@@ -11,8 +11,8 @@ export function verdictRequest(condition: string): string {
   return `End your reply with a fenced code block tagged json that holds {"done": true} if this condition holds, else {"done": false}. Condition: ${condition.replace(/[\r\n]+/g, " ")}`;
 }
 
-export function agentVerdictTurnText(hash: string, id: string, condition: string): string {
-  return agentTurnText(hash, id).replace("Then reply DONE.", verdictRequest(condition));
+export function agentVerdictTurnText(prefix: string, id: string, condition: string): string {
+  return agentTurnText(prefix, id).replace("Then reply DONE.", verdictRequest(condition));
 }
 
 export function nextStep(round: number, cap: number, done: boolean): LoopStep {

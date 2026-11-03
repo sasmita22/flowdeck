@@ -2,13 +2,9 @@ import { z } from "zod";
 import type { Manifest } from "../compiler/lower.js";
 import { triggerFlags } from "../nodes/branch/execute.js";
 
-export type RunChoices = { inputs: string[]; flags: Record<string, boolean>; automatic: boolean };
+export type RunChoices = { automatic: boolean };
 
-export const runChoicesSchema = z.object({
-  inputs: z.array(z.string()),
-  flags: z.record(z.string(), z.boolean()),
-  automatic: z.boolean(),
-});
+export const runChoicesSchema = z.object({ automatic: z.boolean() });
 
 export type RunOptions = {
   inputs: Record<string, string>;
@@ -16,20 +12,12 @@ export type RunOptions = {
   auto: boolean;
 };
 
-export const runOptionsSchema = z.object({
-  inputs: z.record(z.string(), z.string()).optional(),
-  flags: z.record(z.string(), z.boolean()).optional(),
-  auto: z.boolean().optional(),
-});
-
 type ManifestPart = Pick<Manifest, "nodes"> & Partial<Pick<Manifest, "inputs">>;
 
 const skippable = (node: Manifest["nodes"][number]) =>
   node.type === "gate" && (node.settings as { skippable?: unknown }).skippable === true;
 
 export const runChoices = (manifest: ManifestPart): RunChoices => ({
-  inputs: [...(manifest.inputs ?? [])],
-  flags: triggerFlags(manifest.nodes),
   automatic: manifest.nodes.some(skippable),
 });
 
