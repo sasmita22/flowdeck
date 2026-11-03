@@ -6,11 +6,13 @@ import { bodyProblems } from "../../../core/flow/structure.js";
 import {
   NodeType,
   parseFlow,
+  type BuildConfig,
   type CanvasNote,
   type Flow,
   type Node,
   type Port,
   type Session,
+  type Variable,
   type Wire,
 } from "../../../core/flow/schema.js";
 import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
@@ -137,6 +139,11 @@ export interface CanvasState {
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
   updateSession(next: Session): void;
+  setRepo(repo: string): void;
+  setBase(base: string): void;
+  addVariable(): void;
+  updateVariable(index: number, variable: Variable): void;
+  removeVariable(index: number): void;
   updateNode(next: Node): void;
   undo(): void;
   redo(): void;
@@ -144,12 +151,19 @@ export interface CanvasState {
   markSaved(flow: Flow): void;
 }
 
+const freeVariableName = ({ variables }: BuildConfig) => {
+  const taken = new Set(variables.map(({ name }) => name));
+  let name = "variable";
+  for (let n = 2; taken.has(name); n += 1) name = `variable-${n}`;
+  return name;
+};
+
 export const newCanvasFlow = (): Flow => ({
   nodes: [],
   wires: [],
   session: {
     name: "main",
-    workingFolder: { kind: "path", path: "" },
+    buildConfig: { variables: [] },
     model: "sonnet",
     allowedTools: [],
     permissionMode: "default",
@@ -369,6 +383,12 @@ export function createCanvasStore(
 
   return createStore<CanvasState>()((set, get) => {
     const ready = () => get().ready;
+
+    const editBuildConfig = (edit: (config: BuildConfig) => BuildConfig) => {
+      if (!ready()) return;
+      const { session } = get().flow;
+      run(updateSession({ ...session, buildConfig: edit(session.buildConfig) }));
+    };
 
     const run = (command: Command, selection = get().selection) => {
       const { flow, undoStack, selectedWires } = get();
@@ -754,6 +774,33 @@ export function createCanvasStore(
       updateSession: (next) => {
         if (ready()) run(updateSession(next));
       },
+
+      setRepo: (repo) => editBuildConfig((config) => ({ ...config, repo })),
+
+      setBase: (base) =>
+        editBuildConfig(({ repo, variables }) => ({
+          ...(repo === undefined ? {} : { repo }),
+          ...(base === "" ? {} : { base }),
+          variables,
+        })),
+
+      addVariable: () =>
+        editBuildConfig((config) => ({
+          ...config,
+          variables: [...config.variables, { name: freeVariableName(config), kind: "text" }],
+        })),
+
+      updateVariable: (index, variable) =>
+        editBuildConfig((config) => ({
+          ...config,
+          variables: config.variables.map((current, at) => (at === index ? variable : current)),
+        })),
+
+      removeVariable: (index) =>
+        editBuildConfig((config) => ({
+          ...config,
+          variables: config.variables.filter((_variable, at) => at !== index),
+        })),
 
       updateNode: (next) => {
         if (!ready()) return;

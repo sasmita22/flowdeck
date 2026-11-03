@@ -5,4 +5,5 @@ export type { FolderState };
 export interface GitState {
   read(folder: string): Promise<FolderState>;
   branches(repo: string): Promise<string[]>;
+  defaultBranch(repo: string): Promise<string>;
 }

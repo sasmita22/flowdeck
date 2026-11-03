@@ -8,10 +8,7 @@
         "x": 0,
         "y": 0
       },
-      "settings": {
-        "inputs": ["ticket"],
-        "flags": {}
-      }
+      "settings": {}
     },
     {
       "id": "build",
@@ -68,9 +65,18 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "path",
-      "path": ""
+    "buildConfig": {
+      "repo": "/work/repo",
+      "variables": [
+        {
+          "name": "ticket",
+          "kind": "text"
+        },
+        {
+          "name": "bad name",
+          "kind": "text"
+        }
+      ]
     },
     "model": "sonnet",
     "allowedTools": [],

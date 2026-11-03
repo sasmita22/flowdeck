@@ -1,29 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun } from "./build-run.js";
 
 const run = promisify(execFile);
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let bin: string;
 let launched: LaunchedApp | undefined;
 
@@ -88,7 +81,7 @@ const launch = async (env: Record<string, string> = {}) => {
       ...env,
     },
   });
-  await expect(launched.window.getByTestId(controlTestIds.run)).toBeVisible();
+  await expect(launched.window.getByTestId(controlTestIds.build)).toBeVisible();
   return launched.window;
 };
 
@@ -217,9 +210,9 @@ const atGate = (last: unknown): Flow =>
   );
 
 const startAtGate = async (input: Flow) => {
-  seedFlow(home, input, folder);
+  seedFlow(home, input, repo.path);
   const window = await launch();
-  await window.getByTestId(controlTestIds.run).click();
+  await buildAndRun(window, home, "survive");
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 30_000 });
   await expect(status(window, "p1")).toHaveAttribute("data-status", "done");
   const started = latestRun();
@@ -230,7 +223,7 @@ const startAtGate = async (input: Flow) => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-rs-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-rs-wf-")));
+  repo = await createTmpRepo({ commit: true });
   bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
@@ -254,7 +247,7 @@ test.afterEach(async () => {
     await killOwnTmux();
     await killOwnScripts();
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
@@ -315,10 +308,11 @@ test("After a crash the script keeps running, and the relaunched app finishes th
       ],
       [thenWire("p1", "s1"), thenWire("s1", "s2")],
     ),
-    folder,
+    repo.path,
   );
   const first = await launch();
-  await first.getByTestId(controlTestIds.run).click();
+  const buildId = await buildAndRun(first, home, "crash");
+  const folder = join(home, "workspaces", buildId, basename(repo.path));
   await expect(status(first, "s1")).toHaveAttribute("data-status", "running", { timeout: 30_000 });
   const pidText = () => readFile(join(folder, "s1.pid"), "utf8").catch(() => "");
   await expect.poll(pidText).toMatch(/^\d+\n$/);
@@ -389,9 +383,16 @@ test("A run whose session ended while the app was closed shows interrupted, and 
   expect(launches).toHaveLength(2);
   const [firstLaunch, resumed] = launches;
   expect(firstLaunch).toEqual(expect.arrayContaining(["--session-id", claudeSessionId]));
-  expect(firstLaunch).toEqual(
-    expect.arrayContaining(["--plugin-dir", "--settings", "--mcp-config"]),
-  );
+  const valueOf = (flag: string) => {
+    const at = firstLaunch?.indexOf(flag) ?? -1;
+    return at === -1 ? undefined : firstLaunch?.[at + 1];
+  };
+  expect(["--add-dir", "--settings", "--plugin-dir"].map(valueOf)).toEqual([
+    "..",
+    "../settings.json",
+    "../plugin",
+  ]);
+  expect(firstLaunch).toContain("--mcp-config");
   expect(resumed).toEqual(firstLaunch?.map((arg) => (arg === "--session-id" ? "--resume" : arg)));
   expect(sentCount(runId, "p1")).toBe(1);
   expect(sentCount(runId, "p2")).toBe(1);

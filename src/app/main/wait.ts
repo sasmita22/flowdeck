@@ -2,26 +2,30 @@ import { pendingWaitSchema, waitAnswerSchema, type PendingWait } from "../../cor
 import type { EnginePush } from "../engine/protocol.js";
 import type { EngineClient } from "./engine-client.js";
 
+export type RunWait = { runId: string; value: PendingWait | null };
+
 export type WaitRelay = {
   onPush(push: EnginePush): void;
-  latest(): PendingWait | null;
+  latest(runId: string): PendingWait | null;
 };
 
-export function createWaitRelay(options: { send: (value: PendingWait | null) => void }): WaitRelay {
-  let latest: PendingWait | null = null;
+export function createWaitRelay(options: { send: (update: RunWait) => void }): WaitRelay {
+  const latest = new Map<string, PendingWait>();
   return {
     onPush(push) {
       if (push.push !== "wait") return;
+      const { runId } = push;
       if (push.value === null) {
-        latest = null;
-      } else {
-        const parsed = pendingWaitSchema.safeParse(push.value);
-        if (!parsed.success) return;
-        latest = parsed.data;
+        latest.delete(runId);
+        options.send({ runId, value: null });
+        return;
       }
-      options.send(latest);
+      const parsed = pendingWaitSchema.safeParse(push.value);
+      if (!parsed.success) return;
+      latest.set(runId, parsed.data);
+      options.send({ runId, value: parsed.data });
     },
-    latest: () => latest,
+    latest: (runId) => latest.get(runId) ?? null,
   };
 }
 

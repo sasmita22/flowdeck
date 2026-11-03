@@ -29,12 +29,30 @@ function migrate(db: Database.Database, migrationsDir: string, now: () => Date):
     .sort();
   for (const name of pending) {
     const sql = readFileSync(join(migrationsDir, name), "utf8");
-    db.transaction(() => {
+    const apply = () => {
       db.exec(sql);
       db.prepare("INSERT INTO migrations (name, applied_at) VALUES (?, ?)").run(
         name,
         now().toISOString(),
       );
+    };
+    if (sql.startsWith(noTransactionMarker)) applyWithForeignKeysOff(db, name, apply);
+    else db.transaction(apply)();
+  }
+}
+
+const noTransactionMarker = "-- flowdeck:no-transaction";
+
+function applyWithForeignKeysOff(db: Database.Database, name: string, apply: () => void): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      apply();
+      if ((db.pragma("foreign_key_check") as unknown[]).length > 0) {
+        throw new Error(`migration ${name} leaves a broken foreign key`);
+      }
     })();
+  } finally {
+    db.pragma("foreign_keys = ON");
   }
 }

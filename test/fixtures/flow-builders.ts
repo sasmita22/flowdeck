@@ -64,7 +64,7 @@ export const flow = (nodes: unknown[], wires: unknown[]): Flow =>
     wires,
     session: {
       name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
+      buildConfig: { repo: "/work/repo", base: "main", variables: [] },
       model: "sonnet",
       allowedTools: [],
       permissionMode: "default",

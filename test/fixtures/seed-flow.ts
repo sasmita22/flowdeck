@@ -4,15 +4,15 @@ import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 
-const inFolder = (flow: unknown, workingFolder: string | undefined) => {
+const inRepo = (flow: unknown, repo: string | undefined) => {
   const parsed = parseFlow(flow);
-  return workingFolder === undefined
+  return repo === undefined
     ? parsed
     : {
         ...parsed,
         session: {
           ...parsed.session,
-          workingFolder: { kind: "path" as const, path: workingFolder },
+          buildConfig: { ...parsed.session.buildConfig, repo },
         },
       };
 };
@@ -29,28 +29,26 @@ const withStore = <T>(home: string, use: (store: SqliteFlowStore) => T): T => {
 export function seedFlow(
   home: string,
   flow: unknown,
-  workingFolder?: string,
+  repo?: string,
 ): { flowId: string; version: number } {
-  return withStore(home, (store) => store.save(inFolder(flow, workingFolder)));
+  return withStore(home, (store) => store.save(inRepo(flow, repo)));
 }
 
 export function seedBlueprint(
   home: string,
   name: string,
   flow: unknown,
-  workingFolder?: string,
+  repo?: string,
 ): { flowId: string; version: number } {
-  return withStore(home, (store) =>
-    store.save(inFolder(flow, workingFolder), store.create(name).flowId),
-  );
+  return withStore(home, (store) => store.save(inRepo(flow, repo), store.create(name).flowId));
 }
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const [home, flowPath, workingFolder] = process.argv.slice(2);
+  const [home, flowPath, repo] = process.argv.slice(2);
   if (home === undefined || flowPath === undefined) {
-    throw new Error("usage: seed-flow.ts <home> <flow.json> [<workingFolder>]");
+    throw new Error("usage: seed-flow.ts <home> <flow.json> [<repo>]");
   }
-  const { version } = seedFlow(home, JSON.parse(readFileSync(flowPath, "utf8")), workingFolder);
+  const { version } = seedFlow(home, JSON.parse(readFileSync(flowPath, "utf8")), repo);
   writeSync(1, `seeded ${version}\n`);
 }

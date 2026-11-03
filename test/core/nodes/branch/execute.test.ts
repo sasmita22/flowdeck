@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { ManifestNode } from "../../../../src/core/compiler/lower.js";
 import {
+  branchDecision,
   branchSkips,
-  branchSwitch,
   branchTakes,
   triggerFlags,
 } from "../../../../src/core/nodes/branch/execute.js";
@@ -73,23 +74,44 @@ describe("branchTakes", () => {
   });
 });
 
+const oldTrigger = (id: string, flags: Record<string, unknown>): ManifestNode => ({
+  id,
+  type: "trigger",
+  label: id,
+  settings: { inputs: [], flags } as unknown as ManifestNode["settings"],
+});
+
+const oldNode = (id: string, type: "prompt" | "script"): ManifestNode => ({
+  id,
+  type,
+  label: id,
+  settings: (type === "prompt"
+    ? { instructions: "Go." }
+    : { command: "npm" }) as ManifestNode["settings"],
+});
+
 describe("triggerFlags", () => {
   it("returns the trigger's boolean flags", () => {
-    const { nodes } = flow([withFlags("start", { e2e: true, manual: false })], []);
-
-    expect(triggerFlags(nodes)).toEqual({ e2e: true, manual: false });
+    expect(triggerFlags([oldTrigger("start", { e2e: true, manual: false })])).toEqual({
+      e2e: true,
+      manual: false,
+    });
   });
 
   it("drops flags whose default is not a boolean", () => {
-    const { nodes } = flow([withFlags("start", { e2e: true, ticket: "FD-1", count: 2 })], []);
-
-    expect(triggerFlags(nodes)).toEqual({ e2e: true });
+    expect(triggerFlags([oldTrigger("start", { e2e: true, ticket: "FD-1", count: 2 })])).toEqual({
+      e2e: true,
+    });
   });
 
   it("ignores nodes that are not triggers", () => {
-    const { nodes } = flow([prompt("p"), withFlags("start", { e2e: true }), script("s")], []);
-
-    expect(triggerFlags(nodes)).toEqual({ e2e: true });
+    expect(
+      triggerFlags([
+        oldNode("p", "prompt"),
+        oldTrigger("start", { e2e: true }),
+        oldNode("s", "script"),
+      ]),
+    ).toEqual({ e2e: true });
   });
 
   it("returns no flags for a flow without a trigger", () => {
@@ -97,22 +119,76 @@ describe("triggerFlags", () => {
   });
 
   it("keeps the first trigger's default for a repeated flag", () => {
-    const { nodes } = flow(
-      [withFlags("first", { e2e: false }), withFlags("second", { e2e: true, manual: true })],
-      [],
-    );
-
-    expect(triggerFlags(nodes)).toEqual({ e2e: false, manual: true });
+    expect(
+      triggerFlags([
+        oldTrigger("first", { e2e: false }),
+        oldTrigger("second", { e2e: true, manual: true }),
+      ]),
+    ).toEqual({ e2e: false, manual: true });
   });
 });
 
-describe("branchSwitch", () => {
+describe("branchDecision", () => {
+  const workspaceManifest = (values: Record<string, string | boolean>) => ({
+    prefix: "fix-login",
+    layout: "workspace" as const,
+    values,
+    nodes: flow([trigger("start"), branch("b", "proceed-e2e")], [thenWire("start", "b")]).nodes,
+  });
+
+  it("takes yes when the build's value for the Branch's variable is true", () => {
+    expect(
+      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }, {}),
+    ).toBe("yes");
+  });
+
+  it("takes no when the build's value for the Branch's variable is false", () => {
+    expect(
+      branchDecision(workspaceManifest({ "proceed-e2e": false }), { variable: "proceed-e2e" }, {}),
+    ).toBe("no");
+  });
+
+  it("keeps the value written into the build over any run flag of the same name", () => {
+    expect(
+      branchDecision(
+        workspaceManifest({ "proceed-e2e": true }),
+        { variable: "proceed-e2e" },
+        { "proceed-e2e": false },
+      ),
+    ).toBe("yes");
+  });
+
   it.each([
-    ["e2e", { e2e: true }, "--no-e2e"],
-    ["manual-test", { "manual-test": false }, "--manual-test"],
-    ["e2e", {}, "e2e"],
-  ])("shows %s with defaults %j as %s", (flag, defaults, expected) => {
-    expect(branchSwitch(flag, defaults)).toBe(expected);
+    ["has no value", {}],
+    ["holds text", { "proceed-e2e": "yes" }],
+  ])("throws naming the variable when the build %s for it", (_, values) => {
+    expect(() =>
+      branchDecision(workspaceManifest(values), { variable: "proceed-e2e" }, {}),
+    ).toThrow(/proceed-e2e/);
+  });
+
+  describe("in an old build's manifest, with no prefix", () => {
+    const oldManifest = (e2e: boolean) => ({
+      nodes: [
+        oldTrigger("start", { e2e }),
+        {
+          id: "b",
+          type: "branch",
+          label: "b",
+          settings: { flag: "e2e" },
+        } as unknown as ManifestNode,
+      ],
+    });
+
+    it("takes the Trigger flag's default", () => {
+      expect(branchDecision(oldManifest(true), { flag: "e2e" }, {})).toBe("yes");
+      expect(branchDecision(oldManifest(false), { flag: "e2e" }, {})).toBe("no");
+    });
+
+    it("takes the run's stored flag over the Trigger default", () => {
+      expect(branchDecision(oldManifest(true), { flag: "e2e" }, { e2e: false })).toBe("no");
+      expect(branchDecision(oldManifest(false), { flag: "e2e" }, { e2e: true })).toBe("yes");
+    });
   });
 });
 

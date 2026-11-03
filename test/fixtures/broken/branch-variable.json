@@ -5,14 +5,14 @@
       "label": "Start",
       "type": "trigger",
       "position": { "x": 0, "y": 0 },
-      "settings": { "inputs": ["ticket"], "flags": {} }
+      "settings": {}
     },
     {
       "id": "ife2e",
       "label": "E2E?",
       "type": "branch",
       "position": { "x": 240, "y": 0 },
-      "settings": { "flag": "e2e" }
+      "settings": { "variable": "e2e" }
     },
     {
       "id": "done",
@@ -36,7 +36,11 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": { "kind": "worktree", "branch": "main" },
+    "buildConfig": {
+      "repo": "/work/repo",
+      "base": "main",
+      "variables": [{ "name": "ticket", "kind": "text" }]
+    },
     "model": "sonnet",
     "allowedTools": [],
     "permissionMode": "default",

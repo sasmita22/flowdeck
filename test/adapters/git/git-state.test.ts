@@ -75,6 +75,43 @@ describe("GitFolderState", () => {
     expect(await state.branches(repo.path)).toEqual(["dev", "feature/x", "main"]);
   });
 
+  const addRemote = async (): Promise<string> => {
+    const remote = await realpath(await mkdtemp(join(tmpdir(), "fd-remote-")));
+    await run("git", ["init", "--quiet", "--bare", remote]);
+    await git(repo.path, "remote", "add", "origin", remote);
+    await git(repo.path, "branch", "dev");
+    await git(repo.path, "push", "--quiet", "origin", "main", "dev");
+    return remote;
+  };
+
+  it("finds the default branch the remote's HEAD names, not the checked-out one", async () => {
+    const remote = await addRemote();
+    try {
+      await git(repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
+
+      expect(await state.defaultBranch(repo.path)).toBe("dev");
+    } finally {
+      await rm(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the checked-out branch when the remote names no HEAD", async () => {
+    const remote = await addRemote();
+    try {
+      await git(repo.path, "checkout", "--quiet", "-b", "feature/x");
+
+      expect(await state.defaultBranch(repo.path)).toBe("feature/x");
+    } finally {
+      await rm(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the checked-out branch in a repository with no remote", async () => {
+    await git(repo.path, "checkout", "--quiet", "-b", "feature/x");
+
+    expect(await state.defaultBranch(repo.path)).toBe("feature/x");
+  });
+
   it("refuses to list the branches of a folder that is not a repository, naming it", async () => {
     await expect(state.branches(plain)).rejects.toThrow(`${plain} is not a git repository`);
   });

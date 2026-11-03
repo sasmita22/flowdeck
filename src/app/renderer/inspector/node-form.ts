@@ -2,12 +2,12 @@ import type { z } from "zod";
 import { agentPlaceholder } from "../../../core/compiler/rules/required-settings.js";
 import { agentModelChoices } from "../../../core/flow/choices.js";
 import type { Flow, Node, NodeType } from "../../../core/flow/schema.js";
-import { triggerFlags } from "../../../core/nodes/branch/execute.js";
 import { registry } from "../../../core/nodes/registry.js";
 import {
   assignField,
   describeFields,
   withChoices,
+  yesNoChoices,
   type FieldDescription,
   type FieldValue,
   type Form,
@@ -87,10 +87,7 @@ const forms: Record<NodeType, Form> = {
       optionLabels: { onCap: { ask: "Ask me", fail: "Fail the run" } },
     },
   ),
-  trigger: typeForm({
-    inputs: "Inputs (one per line)",
-    flags: "Flags (ticked means on by default)",
-  }),
+  trigger: typeForm({}),
   output: typeForm({ name: "Output name", type: "Output type" }),
   fork: typeForm({}),
   join: typeForm(
@@ -107,7 +104,7 @@ const forms: Record<NodeType, Form> = {
     },
   ),
   foreach: typeForm({ file: "List file, one item per line" }),
-  branch: typeForm({ flag: "Flag on the Trigger" }),
+  branch: typeForm({ variable: "Yes/no variable" }),
 };
 
 const lockedMessage = "Hard stop is locked";
@@ -116,18 +113,14 @@ type SettingsSchema = z.ZodObject<z.ZodRawShape>;
 
 const schemaOf = (type: NodeType) => registry[type].settings as SettingsSchema;
 
-const flagChoices = (flow: Pick<Flow, "nodes"> | undefined) =>
-  Object.entries(triggerFlags(flow?.nodes ?? [])).map(([name, on]) => ({
-    value: name,
-    label: `${name} (${on ? "on" : "off"} by default)`,
-  }));
-
 export const describeNodeFields = (
   type: NodeType,
-  flow?: Pick<Flow, "nodes">,
+  flow?: Pick<Flow, "session">,
 ): FieldDescription[] => {
   const fields = describeFields(schemaOf(type), forms[type]);
-  return type === "branch" ? withChoices(fields, "flag", flagChoices(flow)) : fields;
+  return type === "branch"
+    ? withChoices(fields, "variable", yesNoChoices(flow?.session.buildConfig ?? { variables: [] }))
+    : fields;
 };
 
 export type SettingResult = { node: Node } | { error: string };

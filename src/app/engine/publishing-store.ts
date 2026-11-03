@@ -28,10 +28,12 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     events: (id) => store.events(id),
     recordCost: (id, totalCost) => store.recordCost(id, totalCost),
     recordBuild: (build) => store.recordBuild(build),
-    findBuild: (hash) => store.findBuild(hash),
+    findBuild: (id) => store.findBuild(id),
+    findBuildByName: (name) => store.findBuildByName(name),
+    deleteBuild: (id) => store.deleteBuild(id),
     listBuilds: () => store.listBuilds(),
     listRuns: () => store.listRuns(),
-    buildFiles: (hash) => store.buildFiles(hash),
+    buildFiles: (id) => store.buildFiles(id),
     recordActivity: (id, entry) => store.recordActivity(id, entry),
     activity: (id) => store.activity(id),
     append(id, nodeId, event) {
@@ -45,6 +47,11 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     reopenRun(id) {
       store.reopenRun(id);
       if (id === runId) status = "running";
+      publishFor(id);
+    },
+    stopRun(id) {
+      store.stopRun(id);
+      if (id === runId) status = store.findRun(id)?.status ?? status;
       publishFor(id);
     },
     finishRun(id, final) {

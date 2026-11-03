@@ -3,6 +3,7 @@ import {
   appMenuItems,
   arrange,
   createNavStore,
+  isListPage,
   selectMenuItem,
 } from "../../../src/app/renderer/nav-store.js";
 
@@ -27,11 +28,14 @@ describe("createNavStore", () => {
     nav.getState().go({ name: "builds" });
     nav.getState().setQuery("abc");
 
-    nav.getState().go({ name: "builds", hash: "abc123" });
+    nav.getState().go({ name: "builds", buildId: "b-0f3a9c2e" });
 
-    expect(nav.getState()).toMatchObject({ page: { name: "builds", hash: "abc123" }, query: "" });
+    expect(nav.getState()).toMatchObject({
+      page: { name: "builds", buildId: "b-0f3a9c2e" },
+      query: "",
+    });
     nav.getState().setQuery("x");
-    nav.getState().go({ name: "builds", hash: "abc123" });
+    nav.getState().go({ name: "builds", buildId: "b-0f3a9c2e" });
     expect(nav.getState().query).toBe("x");
   });
 
@@ -53,11 +57,27 @@ describe("createNavStore", () => {
   });
 });
 
+describe("isListPage", () => {
+  it("is true for the Builds list and false for one build's page, named by its id", () => {
+    expect(isListPage({ name: "builds" })).toBe(true);
+    expect(isListPage({ name: "builds", buildId: "b-0f3a9c2e" })).toBe(false);
+  });
+
+  it("opens search on the Builds list, not on one build's page", () => {
+    const nav = createNavStore();
+    nav.getState().go({ name: "builds", buildId: "b-0f3a9c2e" });
+
+    nav.getState().focusSearch();
+
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+});
+
 describe("selectMenuItem", () => {
   it("highlights the list a page belongs to", () => {
     expect(selectMenuItem({ name: "editor" })).toBe("blueprints");
     expect(selectMenuItem({ name: "blueprints" })).toBe("blueprints");
-    expect(selectMenuItem({ name: "builds", hash: "abc" })).toBe("builds");
+    expect(selectMenuItem({ name: "builds", buildId: "b-1" })).toBe("builds");
     expect(selectMenuItem({ name: "run", runId: "r" })).toBe("runs");
     expect(selectMenuItem({ name: "doctor" })).toBe("doctor");
   });

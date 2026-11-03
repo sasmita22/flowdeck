@@ -5,6 +5,13 @@ import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { flow, prompt } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
+const workspace = {
+  id: "b1111111-0000-4000-8000-000000000001",
+  name: "fix-login",
+  repo: "/work/repo",
+  base: "main",
+  values: {},
+};
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 const mocks = { type: "stdio", command: "npx", args: ["mock-server"], env: { PORT: "9" } };
 
@@ -18,7 +25,12 @@ describe("connectors in a build", () => {
     const fs = new FakeFileSystem();
     const connectors = new FakeConnectorSource({ jira, mocks });
 
-    const result = await build(withConnectors(["mocks", "jira"]), { fs, home, connectors });
+    const result = await build(withConnectors(["mocks", "jira"]), {
+      fs,
+      home,
+      connectors,
+      workspace,
+    });
 
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
     const files = await fs.list(result.dir);
@@ -38,6 +50,7 @@ describe("connectors in a build", () => {
         fs: new FakeFileSystem(),
         home,
         connectors: withToken(token),
+        workspace,
       });
       if (!result.ok) throw new Error(JSON.stringify(result.errors));
       return result.hash;
@@ -49,7 +62,7 @@ describe("connectors in a build", () => {
   it("writes no mcp.json for a session with no connectors", async () => {
     const fs = new FakeFileSystem();
 
-    const result = await build(withConnectors([]), { fs, home });
+    const result = await build(withConnectors([]), { fs, home, workspace });
 
     if (!result.ok) throw new Error("build failed");
     expect(await fs.list(result.dir)).not.toContain("mcp.json");
@@ -59,7 +72,12 @@ describe("connectors in a build", () => {
     const fs = new FakeFileSystem();
     const connectors = new FakeConnectorSource({ jira });
 
-    const result = await build(withConnectors(["jira", "slack"]), { fs, home, connectors });
+    const result = await build(withConnectors(["jira", "slack"]), {
+      fs,
+      home,
+      connectors,
+      workspace,
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -76,7 +94,11 @@ describe("connectors in a build", () => {
   });
 
   it("refuses every connector when nothing can look connectors up", async () => {
-    const result = await build(withConnectors(["jira"]), { fs: new FakeFileSystem(), home });
+    const result = await build(withConnectors(["jira"]), {
+      fs: new FakeFileSystem(),
+      home,
+      workspace,
+    });
 
     expect(result.ok ? [] : result.errors.map((error) => error.message)).toEqual([
       expect.stringContaining('Connector "jira" is not set up'),

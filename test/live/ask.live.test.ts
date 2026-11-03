@@ -1,17 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
+const buildName = "live-ask";
 const runTimeoutMs = 300_000;
 const colourWord = /\b(red|blue|green)\b/i;
 const promptText =
@@ -35,7 +35,7 @@ function liveFlow() {
         label: "Start",
         type: "trigger",
         position: at(0),
-        settings: { inputs: [], flags: {} },
+        settings: {},
       },
       {
         id: "q1",
@@ -62,7 +62,7 @@ function liveFlow() {
     wires: [then("t", "q1"), then("q1", "p1"), then("p1", "o")],
     session: {
       name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
+      buildConfig: { base: "main", variables: [] },
       model: "haiku",
       allowedTools: [],
       permissionMode: "acceptEdits",
@@ -110,15 +110,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
   const sessionName = `fd-live-ask-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let slug: string;
   let claudeTmp: string;
   let projectFolder: string;
   let sessionIds: string[];
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
-    slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
+    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
     claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
     projectFolder = join(homedir(), ".claude", "projects", slug);
     sessionIds = [];
@@ -152,16 +154,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
     "attaches the Ask's answer to the next Prompt, which writes it to colour.md",
     { timeout: runTimeoutMs },
     async () => {
-      const built = await build(liveFlow(), {
-        fs: new NodeFileSystem(),
-        home,
-      });
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-      const colourPath = join(repo.path, "colour.md");
-      expect(await readOrMissing(colourPath)).toBeUndefined();
-      expect(promptText).not.toMatch(colourWord);
-      expect(await readFile(join(built.dir, "commands", "p1.md"), "utf8")).not.toMatch(colourWord);
-
       const real = realDeps();
       const stdout: string[] = [];
       const stderr: string[] = [];
@@ -178,8 +170,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
         },
       };
 
+      const built = await cliBuild(
+        liveFlow(),
+        { name: buildName, repo: repo.path },
+        workspace,
+        deps,
+      );
+      const colourPath = join(workspace.workFolder, "colour.md");
+      expect(await readOrMissing(colourPath)).toBeUndefined();
+      expect(promptText).not.toMatch(colourWord);
+      expect(
+        await readFile(join(workspace.dir, "plugin", "commands", "p1.md"), "utf8"),
+      ).not.toMatch(colourWord);
+
       const code = await runCli(
-        ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
+        ["run", buildName, "--session", sessionName, "--model", "haiku"],
         deps,
       );
 

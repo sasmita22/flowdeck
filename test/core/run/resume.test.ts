@@ -7,6 +7,7 @@ import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
 const hash = "abc123";
+const prefix = "fix-login";
 
 const node = (id: string, type: ManifestNode["type"], parent?: string) =>
   ({
@@ -22,7 +23,7 @@ function stored(entries: [string, RunEvent][]): StoredEvent[] {
 }
 
 const promptTurn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
-  userText: `<command-message>${hash}:${id}</command-message> <command-name>/${hash}:${id}</command-name>`,
+  userText: `<command-message>${prefix}:${id}</command-message> <command-name>/${prefix}:${id}</command-name>`,
   ended,
   ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
 });
@@ -33,6 +34,7 @@ const done: RunEvent = { kind: "done" };
 describe("decideResume", () => {
   const manifest = {
     hash,
+    prefix,
     nodes: [node("p1", "prompt"), node("p2", "prompt"), node("p3", "prompt")],
   };
   const killedAtP2 = stored([
@@ -51,7 +53,7 @@ describe("decideResume", () => {
     ]);
     const nodes = [...manifest.nodes, node("p4", "prompt")];
 
-    expect(decideResume({ manifest: { hash, nodes }, events, turns: [] })).toEqual({});
+    expect(decideResume({ manifest: { hash, prefix, nodes }, events, turns: [] })).toEqual({});
   });
 
   it.each<[string, RunEvent[]]>([
@@ -104,9 +106,25 @@ describe("decideResume", () => {
     expect(actions).toEqual({ p2: { kind: "wait" } });
   });
 
+  it("settles a hash-named build's Prompt from a turn sent under its hash, its prefix", () => {
+    const oldTurn = (id: string, lastAssistantText: string): TranscriptTurn => ({
+      userText: `<command-message>${hash}:${id}</command-message> <command-name>/${hash}:${id}</command-name>`,
+      ended: true,
+      lastAssistantText,
+    });
+
+    const actions = decideResume({
+      manifest: { ...manifest, prefix: hash },
+      events: killedAtP2,
+      turns: [oldTurn("p1", "A"), oldTurn("p2", "X")],
+    });
+
+    expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "X" } });
+  });
+
   it("does not take p1's turn for p10's", () => {
     const actions = decideResume({
-      manifest: { hash, nodes: [node("p1", "prompt"), node("p10", "prompt")] },
+      manifest: { hash, prefix, nodes: [node("p1", "prompt"), node("p10", "prompt")] },
       events: stored([["p1", sent]]),
       turns: [promptTurn("p10", true, "A")],
     });
@@ -115,7 +133,7 @@ describe("decideResume", () => {
   });
 
   describe("a loop body node in round 2", () => {
-    const loopManifest = { hash, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] };
+    const loopManifest = { hash, prefix, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] };
     const round2 = stored([
       ["l1", { kind: "running" }],
       ["l1", { kind: "round", payload: { round: 1 } }],
@@ -160,10 +178,10 @@ describe("decideResume", () => {
   });
 
   it("settles an Agent on its main turn text", () => {
-    const agentManifest = { hash, nodes: [node("a1", "agent")] };
+    const agentManifest = { hash, prefix, nodes: [node("a1", "agent")] };
     const events = stored([["a1", sent]]);
     const turn = (ended: boolean): TranscriptTurn => ({
-      userText: `The user answered: blue. ${agentTurnText(hash, "a1")}`,
+      userText: `The user answered: blue. ${agentTurnText(prefix, "a1")}`,
       ended,
       ...(ended ? { lastAssistantText: "DONE" } : {}),
     });
@@ -182,6 +200,7 @@ describe("decideResume", () => {
   describe("a parallel section", () => {
     const sectionManifest = {
       hash,
+      prefix,
       nodes: [node("f", "fork"), node("a1", "agent"), node("a2", "agent"), node("j", "join")],
     };
     const interrupted = (id: string) => ({
@@ -190,13 +209,13 @@ describe("decideResume", () => {
     });
     const markerTurns: TranscriptTurn[] = [
       {
-        userText: `${agentTurnText(hash, "a1")} ${agentTurnText(hash, "a2")}`,
+        userText: `${agentTurnText(prefix, "a1")} ${agentTurnText(prefix, "a2")}`,
         ended: true,
         lastAssistantText: "DONE",
       },
     ];
     const transcripts: [string, TranscriptTurn[]][] = [
-      ["the fork turn", [{ userText: forkTurnText(hash, ["a1", "a2"]), ended: true }]],
+      ["the fork turn", [{ userText: forkTurnText(prefix, ["a1", "a2"]), ended: true }]],
       ["a turn holding both branch markers", markerTurns],
     ];
 
@@ -281,7 +300,7 @@ describe("decideResume", () => {
 
   it("waits for a Script still running in its own process when scripts can be rejoined", () => {
     const actions = decideResume({
-      manifest: { hash, nodes: [node("s1", "script")] },
+      manifest: { hash, prefix, nodes: [node("s1", "script")] },
       events: stored([["s1", { kind: "running" }]]),
       turns: [],
       rejoinScripts: true,
@@ -292,7 +311,7 @@ describe("decideResume", () => {
 
   it("fails a Script that was running and never reruns it", () => {
     const actions = decideResume({
-      manifest: { hash, nodes: [node("s1", "script")] },
+      manifest: { hash, prefix, nodes: [node("s1", "script")] },
       events: stored([["s1", { kind: "running" }]]),
       turns: [],
     });
@@ -312,6 +331,7 @@ describe("decideResume", () => {
       const kind = type === "gate" ? "decided" : "answered";
       const human = {
         hash,
+        prefix,
         nodes: [node("h1", type), node("p1", "prompt", type === "loop" ? "h1" : undefined)],
       };
       const asking: [string, RunEvent][] =
@@ -336,7 +356,7 @@ describe("decideResume", () => {
   );
 
   it("asks again at a hard stop that was checking its condition when the runner stopped", () => {
-    const manifest = { hash, nodes: [node("h1", "hardstop"), node("p1", "prompt")] };
+    const manifest = { hash, prefix, nodes: [node("h1", "hardstop"), node("p1", "prompt")] };
 
     expect(
       decideResume({ manifest, events: stored([["h1", { kind: "running" }]]), turns: [] }),
@@ -357,7 +377,7 @@ describe("decideResume", () => {
 
     expect(
       decideResume({
-        manifest: { hash, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] },
+        manifest: { hash, prefix, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] },
         events,
         turns: [],
       }),

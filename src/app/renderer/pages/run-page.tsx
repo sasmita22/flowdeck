@@ -5,15 +5,19 @@ import type { Actions } from "../actions.js";
 import { Canvas } from "../canvas/canvas.js";
 import { RunStoreContext } from "../canvas/status.js";
 import { createCanvasStore } from "../canvas/store.js";
-import { shortHash } from "../format.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
-import type { LibraryState } from "../library-store.js";
+import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
-import { selectLiveBadge, selectRunDisabled, type RunState, type RunView } from "../run-store.js";
-import type { SaveState } from "../save-store.js";
+import {
+  selectLiveBadge,
+  selectRunDisabled,
+  selectRunSnapshot,
+  type RunState,
+  type RunView,
+} from "../run-store.js";
 import { selectInspectorOpen, type ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
 import { pageTestIds } from "../test-ids.js";
@@ -31,7 +35,6 @@ export function RunPage({
   nav,
   library,
   run,
-  save,
   shell,
   inspector,
   wait,
@@ -42,7 +45,6 @@ export function RunPage({
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
-  save: StoreApi<SaveState>;
   shell: StoreApi<ShellState>;
   inspector: StoreApi<InspectorState>;
   wait: StoreApi<WaitState>;
@@ -52,15 +54,21 @@ export function RunPage({
   const loaded = useStore(library, (state) =>
     state.viewedRun?.run.id === runId ? state.viewedRun : null,
   );
-  const live = useStore(run, (state) => (state.snapshot?.runId === runId ? state.snapshot : null));
+  const live = useStore(run, (state) => selectRunSnapshot(state, runId));
+  const buildId = loaded?.run.buildId;
+  const flows = useStore(library, (state) => state.flows);
+  const builds = useStore(library, (state) => state.builds);
+  const runs = useStore(library, (state) => state.runs);
+  const card = selectBuildCards({ flows, builds, runs }).find((build) => build.id === buildId);
   const starting = useStore(run, (state) => state.starting);
-  const anySnapshot = useStore(run, (state) => state.snapshot);
-  const saving = useStore(save, (state) => state.saving);
-  const blocked = selectRunDisabled({ starting, snapshot: anySnapshot }, { saving });
 
   useEffect(() => {
     void library.getState().openRun(runId);
-  }, [library, runId]);
+    void run.getState().view(runId);
+    void terminal.getState().view(runId);
+    void inspector.getState().view(runId);
+    void wait.getState().view(runId);
+  }, [library, run, terminal, inspector, wait, runId]);
 
   const runCanvas = useMemo(() => {
     const store = createCanvasStore();
@@ -68,19 +76,20 @@ export function RunPage({
     return store;
   }, [loaded]);
 
-  const saved = useMemo(
-    () => createStore<RunView>()(() => ({ snapshot: loaded?.snapshot ?? null })),
-    [loaded],
-  );
-  const view: StoreApi<RunView> = live === null ? saved : run;
   const snapshot = live ?? loaded?.snapshot ?? null;
+  const view = useMemo(() => createStore<RunView>()(() => ({ snapshot: null })), []);
+  useEffect(() => {
+    view.setState({ snapshot });
+  }, [view, snapshot]);
   const status = snapshot?.status ?? "running";
+  const blocked = useStore(run, (state) =>
+    selectRunDisabled(state, card ?? { old: false, run: { id: runId, status } }),
+  );
   const badge = (live === null ? null : selectLiveBadge(live)) ?? status;
   const flowId = loaded?.run.source?.flowId;
-  const hash = loaded?.run.buildHash;
   const waiting = useStore(wait, (state) => state.pending !== null);
   const inspectorOpen = useStore(shell, (state) => selectInspectorOpen(state, { snapshot }));
-  const canGoOn = !blocked && (status === "stopped" || status === "interrupted");
+  const canGoOn = !starting && (status === "stopped" || status === "interrupted");
   const page =
     loaded === null
       ? undefined
@@ -89,7 +98,7 @@ export function RunPage({
           run,
           terminal,
           stored: loaded.activity,
-          canRetry: !blocked && status !== "running",
+          canRetry: !starting && status !== "running",
         };
 
   return (
@@ -108,7 +117,7 @@ export function RunPage({
             {loaded?.name ?? "Run"}
             {loaded?.run.source === undefined ? "" : ` v${loaded.run.source.version}`}
           </span>
-          {hash !== undefined && <code className="fd-hash">{shortHash(hash)}</code>}
+          {card !== undefined && <code className="fd-hash">{card.name}</code>}
         </nav>
         <span
           className={`fd-badge fd-badge-${badge === "needs you" ? "warn" : tone[status]}`}
@@ -147,13 +156,13 @@ export function RunPage({
               Resume
             </button>
           )}
-          {hash !== undefined && (
+          {buildId !== undefined && (
             <button
               className="fd-btn fd-btn-primary"
               data-testid={pageTestIds.runAgain}
               disabled={blocked}
               title="Run the same build again"
-              onClick={() => void actions.runBuild(hash)}
+              onClick={() => void actions.runBuild(buildId)}
             >
               Run again
             </button>

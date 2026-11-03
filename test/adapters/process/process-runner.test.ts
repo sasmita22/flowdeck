@@ -299,6 +299,18 @@ describe("NodeProcessRunner jobs", () => {
     }
   });
 
+  it("does not start a job whose signal aborts while its folder is being made", async () => {
+    const abort = new AbortController();
+    const running = runner.run("sh", ["-c", "echo started > marker"], cwd, abort.signal, job);
+    abort.abort();
+
+    expect(await running).toEqual({ code: null, stdout: "", stderr: "" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await readFile(join(cwd, "marker"), "utf8").catch(() => "never started")).toBe(
+      "never started",
+    );
+  });
+
   it("reports a job killed by its abort signal as code null", async () => {
     const abort = new AbortController();
     setTimeout(() => abort.abort(), 200);

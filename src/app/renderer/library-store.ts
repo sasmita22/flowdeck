@@ -26,12 +26,13 @@ export type LibraryBridge = Pick<
   | "openFlow"
   | "doctor"
   | "loadRun"
+  | "doctorWorktrees"
 >;
 
 type BuildRecord = z.infer<typeof buildRecordSchema>;
 type RunSummary = z.infer<typeof runSummarySchema>;
 
-export type BuildFiles = { hash: string; list: BuildFileContent[]; selected: string | null };
+export type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
 
 export type LibraryState = {
   flows: FlowSummary[];
@@ -41,23 +42,28 @@ export type LibraryState = {
   error: string | null;
   files: BuildFiles | null;
   doctor: DoctorReport | null;
+  worktrees: string[] | null;
   viewedRun: LoadedRun | null;
   refresh(): Promise<void>;
   openRun(runId: string): Promise<void>;
   rename(flowId: string, name: string): Promise<boolean>;
-  openFiles(hash: string): Promise<void>;
+  openFiles(buildId: string): Promise<void>;
   selectFile(path: string): void;
   diagnose(flowId: string | null, openConnectors: readonly string[]): Promise<void>;
+  listWorktrees(): Promise<void>;
 };
 
 export const noBlueprint = "Not from a blueprint";
 
 export type BuildCard = {
-  hash: string;
+  id: string;
   name: string;
+  blueprint: string;
   version: number | null;
   createdAt: number;
   flowId: string | null;
+  old: boolean;
+  run: Pick<RunSummary, "id" | "status"> | null;
 };
 
 export type RunCard = RunSummary & { name: string; version: number | null };
@@ -65,14 +71,27 @@ export type RunCard = RunSummary & { name: string; version: number | null };
 const nameIn = (flows: readonly FlowSummary[], flowId: string | undefined) =>
   flows.find((flow) => flow.flowId === flowId)?.name ?? noBlueprint;
 
-export const selectBuildCards = (state: Pick<LibraryState, "flows" | "builds">): BuildCard[] =>
-  state.builds.map((build) => ({
-    hash: build.hash,
-    name: nameIn(state.flows, build.source?.flowId),
-    version: build.source?.version ?? null,
-    createdAt: build.createdAt,
-    flowId: build.source?.flowId ?? null,
-  }));
+const latestRun = (runs: readonly RunSummary[], buildId: string) => {
+  const run = runs.find((listed) => listed.buildId === buildId);
+  return run === undefined ? null : { id: run.id, status: run.status };
+};
+
+export const selectBuildCards = (
+  state: Pick<LibraryState, "flows" | "builds" | "runs">,
+): BuildCard[] =>
+  state.builds.map((build) => {
+    const blueprint = nameIn(state.flows, build.source?.flowId);
+    return {
+      id: build.id,
+      name: build.name ?? blueprint,
+      blueprint,
+      version: build.source?.version ?? null,
+      createdAt: build.createdAt,
+      flowId: build.source?.flowId ?? null,
+      old: build.old,
+      run: latestRun(state.runs, build.id),
+    };
+  });
 
 export const selectRunCards = (state: Pick<LibraryState, "flows" | "runs">): RunCard[] =>
   state.runs.map((run) => ({
@@ -96,6 +115,7 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
     error: null,
     files: null,
     doctor: null,
+    worktrees: null,
     viewedRun: null,
 
     openRun: async (runId) => {
@@ -136,14 +156,14 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
       return true;
     },
 
-    openFiles: async (hash) => {
-      set({ files: { hash, list: [], selected: null } });
+    openFiles: async (buildId) => {
+      set({ files: { buildId, list: [], selected: null } });
       try {
         const list = z
           .array(buildFileContentSchema)
-          .parse(await bridge.buildFiles({ hash }))
+          .parse(await bridge.buildFiles({ buildId }))
           .sort(manifestFirst);
-        set({ files: { hash, list, selected: list[0]?.path ?? null }, error: null });
+        set({ files: { buildId, list, selected: list[0]?.path ?? null }, error: null });
       } catch (error) {
         set({ error: messageOf(error) });
       }
@@ -162,6 +182,14 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
             : (openedFlowSchema.parse(await bridge.openFlow({ flowId })).flow?.session.connectors ??
               []);
         set({ doctor: doctorReportSchema.parse(await bridge.doctor({ connectors })), error: null });
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
+    listWorktrees: async () => {
+      try {
+        set({ worktrees: z.array(z.string()).parse(await bridge.doctorWorktrees()), error: null });
       } catch (error) {
         set({ error: messageOf(error) });
       }

@@ -69,12 +69,12 @@ describe("flowsEqual", () => {
     ["a wire end", (f) => (nth(f.wires, 0).to = { node: "s1", port: "in" })],
     ["a removed wire", (f) => f.wires.pop()],
     ["a session value", (f) => (f.session.model = "haiku")],
-    ["a session working folder", (f) => (f.session.workingFolder = { kind: "path", path: "/x" })],
+    ["a session working folder", (f) => (f.session.buildConfig = { repo: "/x", variables: [] })],
     ["a session allowed tool", (f) => (f.session.allowedTools = ["Bash(npm test)"])],
     ["a session frame", (f) => (f.session.frame = { nodes: ["p1"] })],
     [
       "a worktree repo",
-      (f) => (f.session.workingFolder = { kind: "worktree", branch: "main", repo: "/r" }),
+      (f) => (f.session.buildConfig = { repo: "/r", base: "main", variables: [] }),
     ],
   ])("tells flows apart by %s", (_, edit) => {
     const other = edited(edit);

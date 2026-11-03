@@ -223,7 +223,7 @@ describe("addItems", () => {
 describe("updateSession", () => {
   const edited = (source: Flow): Session => ({
     name: source.session.name,
-    workingFolder: { kind: "worktree", branch: "dev", repo: "/r" },
+    buildConfig: { repo: "/r", base: "dev", variables: [] },
     model: "haiku",
     allowedTools: ["Read"],
     permissionMode: source.session.permissionMode,

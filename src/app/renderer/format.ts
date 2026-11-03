@@ -1,4 +1,4 @@
-import type { WorkingFolder } from "../../core/flow/workspace-info.js";
+import type { BuildConfig } from "../../core/flow/schema.js";
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 
@@ -34,8 +34,7 @@ const lastPart = (path: string) => {
   return trimmed.slice(trimmed.lastIndexOf("/") + 1) || path;
 };
 
-export const folderText = (folder: WorkingFolder | null): string => {
-  if (folder === null) return "No folder yet";
-  if (folder.kind === "path") return lastPart(folder.path);
-  return folder.repo ? `${lastPart(folder.repo)} · new worktree` : "New worktree";
+export const folderText = (buildConfig: BuildConfig | null): string => {
+  if (buildConfig === null) return "No folder yet";
+  return buildConfig.repo ? `${lastPart(buildConfig.repo)} · new worktree` : "New worktree";
 };

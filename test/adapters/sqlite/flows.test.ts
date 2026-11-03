@@ -430,7 +430,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
-          workingFolder: null,
+          buildConfig: null,
         },
         {
           flowId: "flow-a",
@@ -438,7 +438,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 0,
           lastSavedAt: null,
-          workingFolder: null,
+          buildConfig: null,
         },
       ]);
       expect(store.loadLatest("flow-a")).toBeNull();
@@ -463,7 +463,7 @@ describe("SqliteFlowStore", () => {
       expect(store.loadLatest()?.flowId).toBe("flow-a");
     });
 
-    it("lists the version count, last save and working folder of each, last saved first", () => {
+    it("lists the version count, last save and Build configuration of each, last saved first", () => {
       const times = [
         "2026-01-01T00:00:00.000Z",
         "2026-01-02T00:00:00.000Z",
@@ -480,7 +480,14 @@ describe("SqliteFlowStore", () => {
       store.create("B");
       const inRepo: Flow = {
         ...relabelled("a2"),
-        session: { ...roundTripFlow().session, workingFolder: { kind: "path", path: "/repo" } },
+        session: {
+          ...roundTripFlow().session,
+          buildConfig: {
+            repo: "/repo",
+            base: "dev",
+            variables: [{ name: "ticket", kind: "text" }],
+          },
+        },
       };
       store.save(relabelled("a1"), "flow-a");
       store.save(inRepo, "flow-a");
@@ -492,7 +499,11 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 2,
           lastSavedAt: times[3],
-          workingFolder: { kind: "path", path: "/repo" },
+          buildConfig: {
+            repo: "/repo",
+            base: "dev",
+            variables: [{ name: "ticket", kind: "text" }],
+          },
         },
         {
           flowId: "flow-b",
@@ -500,7 +511,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
-          workingFolder: null,
+          buildConfig: null,
         },
       ]);
     });
@@ -555,18 +566,107 @@ describe("SqliteFlowStore", () => {
     });
   });
 
+  describe("a version saved before Build configurations", () => {
+    const oldSession = {
+      name: "main",
+      workingFolder: { kind: "worktree", branch: "dev", repo: "/r/shop" },
+      model: "sonnet",
+      allowedTools: [],
+      permissionMode: "default",
+      connectors: [],
+    };
+    const movedConfig = {
+      repo: "/r/shop",
+      base: "dev",
+      variables: [
+        { name: "ticket", kind: "text" },
+        { name: "e2e", kind: "yesno", default: true },
+      ],
+    };
+
+    const storeOldVersion = () => {
+      open();
+      const db = raw();
+      db.transaction(() => {
+        db.prepare(
+          "INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Bugfix', 't')",
+        ).run();
+        const insertNode = db.prepare(
+          `INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
+           VALUES ('flow-1', 1, ?, ?, ?, ?, 0, 0, NULL, ?)`,
+        );
+        insertNode.run(
+          0,
+          "start",
+          "trigger",
+          "Start",
+          JSON.stringify({ inputs: ["ticket"], flags: { e2e: true } }),
+        );
+        insertNode.run(1, "ife2e", "branch", "E2E?", JSON.stringify({ flag: "e2e" }));
+        db.prepare(
+          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES ('flow-1', 1, ?, '[]', 't')",
+        ).run(JSON.stringify(oldSession));
+      })();
+    };
+
+    const expectMovedConfig = (buildConfig: unknown) => {
+      expect(buildConfig).toEqual({
+        ...movedConfig,
+        variables: expect.arrayContaining(movedConfig.variables) as unknown,
+      });
+      expect((buildConfig as { variables: unknown[] }).variables).toHaveLength(2);
+    };
+
+    const expectMoved = (flow: Flow | undefined) => {
+      expectMovedConfig(flow?.session.buildConfig);
+      expect(flow?.session).not.toHaveProperty("workingFolder");
+      expect(flow?.nodes.map((node) => node.settings)).toEqual([{}, { variable: "e2e" }]);
+    };
+
+    it("comes back moved from load", () => {
+      storeOldVersion();
+
+      expectMoved(open().load({ flowId: "flow-1", version: 1 })?.flow);
+    });
+
+    it("comes back moved from loadLatest", () => {
+      storeOldVersion();
+
+      expectMoved(open().loadLatest("flow-1")?.flow);
+    });
+
+    it("is listed with its moved Build configuration", () => {
+      storeOldVersion();
+
+      const [summary] = open().list();
+
+      expectMovedConfig(summary?.buildConfig);
+      expect(summary).not.toHaveProperty("workingFolder");
+    });
+  });
+
   it("shares one migrated connection with SqliteStore", () => {
     const db = connect();
     const runs = new SqliteStore({ db });
     const flows = new SqliteFlowStore({ db, newId: () => "flow-1" });
 
-    runs.recordBuild({ hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] });
+    runs.recordBuild({
+      id: "b1",
+      hash: "abc",
+      name: "fix-login",
+      repo: "/repo",
+      base: "main",
+      values: {},
+      dir: "/fd/workspaces/b1",
+      files: [],
+      nodes: [],
+    });
     const { id } = runs.createRun({
-      buildDir: "/fd/builds/abc",
+      buildDir: "/fd/workspaces/b1",
       inputs: {},
       nodeIds: ["p1"],
       session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
-      buildHash: "abc",
+      buildId: "b1",
     });
     runs.append(id, "p1", { kind: "sent" });
     flows.save(roundTripFlow());
@@ -581,6 +681,7 @@ describe("SqliteFlowStore", () => {
       { name: "005_notes.sql" },
       { name: "006_build_lineage.sql" },
       { name: "007_activity.sql" },
+      { name: "008_named_builds.sql" },
     ]);
   });
 });

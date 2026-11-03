@@ -92,13 +92,7 @@ describe("describeNodeFields", () => {
         ["select", "onCap", "node-setting-on-cap"],
       ],
     ],
-    [
-      "trigger",
-      [
-        ["list", "inputs", "node-setting-inputs"],
-        ["flags", "flags", "node-setting-flags"],
-      ],
-    ],
+    ["trigger", []],
     [
       "output",
       [
@@ -115,7 +109,7 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["foreach", [["text", "file", "node-setting-file"]]],
-    ["branch", [["select", "flag", "node-setting-flag"]]],
+    ["branch", [["select", "variable", "node-setting-variable"]]],
   ])("describes the %s settings", (type, expected) => {
     expect(describeNodeFields(type).map(summary)).toEqual(expected);
   });
@@ -170,28 +164,37 @@ describe("describeNodeFields", () => {
     ).toMatchObject({ placeholder: "Describe the agent's task." });
   });
 
-  it("picks a Branch flag from the Trigger's on/off flags in the flow", () => {
-    const current = flow(
-      [
-        trigger("T", { settings: { flags: { e2e: true, docs: false, depth: 3 } } }),
-        branch("B", "e2e"),
-      ],
-      [],
-    );
+  it("picks a Branch variable from the flow's declared yes/no variables, in place of a flag", () => {
+    const base = flow([trigger("T"), branch("B", "deep")], []);
+    const current = {
+      ...base,
+      session: {
+        ...base.session,
+        buildConfig: {
+          variables: [
+            { name: "ticket", kind: "text" as const },
+            { name: "deep", kind: "yesno" as const, default: true },
+            { name: "docs", kind: "yesno" as const },
+          ],
+        },
+      },
+    };
 
-    const [flag] = describeNodeFields("branch", current);
+    const fields = describeNodeFields("branch", current);
 
-    expect(flag).toMatchObject({
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({
       control: "select",
-      options: ["e2e", "docs"],
-      optionLabels: { e2e: "e2e (on by default)", docs: "docs (off by default)" },
+      path: ["variable"],
+      label: "Yes/no variable",
+      options: ["deep", "docs"],
     });
   });
 
-  it("offers no flags to pick when the Trigger has none", () => {
-    const [flag] = describeNodeFields("branch", flow([branch("B", "e2e")], []));
+  it("offers no variable to pick when none is yes/no", () => {
+    const [variable] = describeNodeFields("branch", flow([branch("B", "deep")], []));
 
-    expect(flag).toMatchObject({ control: "select", options: [] });
+    expect(variable).toMatchObject({ control: "select", options: [] });
   });
 
   it("gives a hard stop no switch to turn it off or unlock it", () => {
@@ -217,13 +220,11 @@ describe("applyNodeSetting", () => {
     ["hardstop", ["condition"], "tests fail", { condition: "tests fail", locked: true }],
     ["loop", ["cap"], "5", { cap: 5, onCap: "fail" }],
     ["loop", ["onCap"], "ask", { cap: 3, onCap: "ask" }],
-    ["trigger", ["inputs"], "ticket", { inputs: ["ticket"], flags: {} }],
-    ["trigger", ["flags"], { deep: true }, { inputs: [], flags: { deep: true } }],
     ["output", ["name"], "result", { name: "result", type: "" }],
     ["join", ["wait"], "first", { wait: "first" }],
     ["join", ["onBranchFail"], "skip", { wait: "all", onBranchFail: "skip" }],
     ["foreach", ["file"], "plan/units.txt", { file: "plan/units.txt" }],
-    ["branch", ["flag"], "deep", { flag: "deep" }],
+    ["branch", ["variable"], "deep", { variable: "deep" }],
   ])("sets %s %s and keeps the settings valid", (type, path, value, expected) => {
     const before = nodeOf(type);
 
@@ -236,7 +237,6 @@ describe("applyNodeSetting", () => {
   });
 
   it.each<[NodeType, string[], string, string]>([
-    ["branch", ["flag"], "", "Name a flag from the Trigger"],
     ["foreach", ["file"], "", "Name the list file"],
     ["foreach", ["file"], "/etc/items.txt", "must be relative to the session folder"],
     ["foreach", ["file"], "../items.txt", "must not contain .."],

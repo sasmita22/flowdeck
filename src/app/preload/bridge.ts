@@ -19,30 +19,38 @@ export const engineCalls = {
   resumeRun: { channel: "flowdeck:resume-run", request: "resume-run" },
   runCost: { channel: "flowdeck:run-cost", request: "run-cost" },
   listBranches: { channel: "flowdeck:list-branches", request: "list-branches" },
+  deleteBuild: { channel: "flowdeck:delete-build", request: "delete-build" },
+  doctorWorktrees: { channel: "flowdeck:doctor-worktrees", request: "doctor-worktrees" },
+  defaultBranch: { channel: "flowdeck:default-branch", request: "default-branch" },
 } as const;
 
 export type EngineCalls = {
   openFlow(payload: { flowId?: string }): Promise<unknown>;
   listFlows(): Promise<unknown>;
   renameFlow(payload: { flowId: string; name: string }): Promise<unknown>;
-  buildVersion(payload: { flowId: string; version: number }): Promise<unknown>;
-  listBuilds(): Promise<unknown>;
-  buildFiles(payload: { hash: string }): Promise<unknown>;
-  runBuild(payload: {
-    hash: string;
-    inputs?: Record<string, string>;
-    flags?: Record<string, boolean>;
-    auto?: boolean;
+  buildVersion(payload: {
+    flowId: string;
+    version: number;
+    name: string;
+    repo?: string;
+    base?: string;
+    values: Record<string, string | boolean>;
   }): Promise<unknown>;
+  listBuilds(): Promise<unknown>;
+  buildFiles(payload: { buildId: string }): Promise<unknown>;
+  runBuild(payload: { buildId: string; auto?: boolean }): Promise<unknown>;
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;
   doctor(payload: { connectors: string[] }): Promise<unknown>;
-  runOptions(payload: { hash: string }): Promise<unknown>;
+  runOptions(payload: { buildId: string }): Promise<unknown>;
   stopRun(payload: { runId: string }): Promise<unknown>;
   retryNode(payload: { runId: string; nodeId: string }): Promise<unknown>;
   resumeRun(payload: { runId: string }): Promise<unknown>;
   runCost(payload: { runId: string }): Promise<unknown>;
   listBranches(payload: { repo: string }): Promise<unknown>;
+  deleteBuild(payload: { buildId: string }): Promise<unknown>;
+  doctorWorktrees(): Promise<unknown>;
+  defaultBranch(payload: { repo: string }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {
@@ -52,22 +60,22 @@ export type FlowdeckBridge = EngineCalls & {
   setDirty(dirty: boolean): void;
   onCloseRequest(listener: () => void): () => void;
   answerClose(answer: CloseAnswer): void;
-  getRunState(): Promise<unknown>;
+  getRunState(runId: string): Promise<unknown>;
   onRunState(listener: (snapshot: unknown) => void): () => void;
-  openTerminal(size: { cols: number; rows: number }): Promise<unknown>;
-  getTerminalStatus(): Promise<unknown>;
-  writeTerminal(data: string): void;
-  resizeTerminal(size: { cols: number; rows: number }): void;
-  closeTerminal(): void;
-  popOutTerminal(): Promise<unknown>;
+  openTerminal(runId: string, size: { cols: number; rows: number }): Promise<unknown>;
+  getTerminalStatus(runId: string): Promise<unknown>;
+  writeTerminal(runId: string, data: string): void;
+  resizeTerminal(runId: string, size: { cols: number; rows: number }): void;
+  closeTerminal(runId: string): void;
+  popOutTerminal(runId: string): Promise<unknown>;
   onTerminalStatus(listener: (status: unknown) => void): () => void;
   onTerminalData(listener: (data: unknown) => void): () => void;
-  getActivity(): Promise<unknown>;
+  getActivity(runId: string): Promise<unknown>;
   onActivity(listener: (update: unknown) => void): () => void;
-  getWait(): Promise<unknown>;
+  getWait(runId: string): Promise<unknown>;
   onWait(listener: (value: unknown) => void): () => void;
   answerWait(answer: unknown): Promise<boolean>;
-  workspaceInfo(workingFolder: unknown): Promise<unknown>;
+  workspaceInfo(buildConfig: unknown): Promise<unknown>;
 };
 
 export const bridgeChannels = {

@@ -1,15 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import { build } from "../../src/core/compiler/build.js";
 import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { TurnEndEvent, TurnEvents } from "../../src/core/run/turns.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
+import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { flow, forEach, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
@@ -17,6 +16,7 @@ import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const watchdogMs = 240_000;
 const runTimeoutMs = 300_000;
+const buildName = "live-foreach";
 const longItem = `${"Check the long third unit of this plan and keep reading to its very end. ".repeat(4)}zulu-3`;
 const tokens = ["alpha-1", "bravo-2", "zulu-3"];
 const planText = `- alpha-1\n- bravo-2\n- ${longItem}\n`;
@@ -44,17 +44,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
   const sessionName = `fd-live-foreach-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
+  let workspace: PlannedWorkspace;
   let sessionIds: string[];
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo();
+    repo = await createTmpRepo({ commit: true });
+    workspace = plannedWorkspace(home, repo.path);
     sessionIds = [];
   });
 
   afterEach(async () => {
     await killTmuxServer(sessionName);
-    await removeClaudeSessions(repo.path, sessionIds);
+    await removeClaudeSessions(workspace.workFolder, sessionIds);
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -64,13 +66,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
     { timeout: runTimeoutMs },
     async () => {
       expect(longItem.length).toBeGreaterThan(290);
-      await writeFile(join(repo.path, "plan.md"), planText);
-      const built = await build(forEachFlow(), {
-        fs: new NodeFileSystem(),
-        home,
-      });
-      if (!built.ok) throw new Error(`flow does not build: ${JSON.stringify(built.errors)}`);
-
       const real = realDeps();
       const stdout: string[] = [];
       const stderr: string[] = [];
@@ -108,13 +103,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
         },
       };
 
-      const slug = repo.path.replace(/[^a-zA-Z0-9]/g, "-");
+      const built = await cliBuild(
+        forEachFlow(),
+        { name: buildName, repo: repo.path },
+        workspace,
+        deps,
+      );
+      await writeFile(join(workspace.workFolder, "plan.md"), planText);
+      const slug = (await realpath(workspace.workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
       const projectFolder = join(homedir(), ".claude", "projects", slug);
       const code = await withWatchdog(
-        runCli(
-          ["run", built.dir, "--cwd", repo.path, "--session", sessionName, "--model", "haiku"],
-          deps,
-        ),
+        runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps),
         watchdogMs,
         async () => {
           const transcripts = await Promise.all(
@@ -139,7 +138,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
       const turns: TranscriptTurn[] = (
         await Promise.all(sessionIds.map((id) => real.transcriptTurns(id)))
       ).flat();
-      const p1Turns = turns.filter((turn) => turn.userText.includes(`${built.hash}:p1`));
+      const p1Turns = turns.filter((turn) => turn.userText.includes(`${buildName}:p1`));
       const replies = stops.map((event) => String(event.payload["last_assistant_message"]));
       console.log(
         [

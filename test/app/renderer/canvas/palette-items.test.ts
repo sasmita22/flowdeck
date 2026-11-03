@@ -135,11 +135,19 @@ describe("groupPalette", () => {
 });
 
 describe("the Branch entry", () => {
-  it("says it follows a Trigger flag, and promises no verdict", () => {
+  it("says it follows a yes/no variable, and promises no verdict", () => {
     const { description } = itemOf("branch");
 
-    expect(description).toMatch(/Trigger/);
-    expect(description).toMatch(/flag/);
+    expect(description).toMatch(/yes\/no variable/);
+    expect(description).not.toMatch(/Trigger|flag/);
     expect(description).not.toMatch(/verdict/i);
+  });
+});
+
+describe("the Trigger entry", () => {
+  it("says it is where the flow starts, with no Run button or inputs", () => {
+    const { description } = itemOf("trigger");
+
+    expect(description).toBe("Where the flow starts when its build runs.");
   });
 });

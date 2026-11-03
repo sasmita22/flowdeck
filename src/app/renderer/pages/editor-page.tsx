@@ -1,16 +1,14 @@
 import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Actions } from "../actions.js";
 import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
-import { shortHash } from "../format.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
 import { MoreMenu } from "../more-menu.js";
 import type { NavState } from "../nav-store.js";
-import { selectRunDisabled, type RunState, type RunView } from "../run-store.js";
+import type { RunState, RunView } from "../run-store.js";
 import type { SaveState } from "../save-store.js";
 import { SessionSettingsButton } from "../session-settings-button.js";
 import type { ShellState } from "../shell-store.js";
@@ -64,7 +62,6 @@ function EditorTitleRow({
   terminal,
   shell,
   nav,
-  actions,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
@@ -72,14 +69,12 @@ function EditorTitleRow({
   terminal: StoreApi<TerminalState>;
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
-  actions: Actions;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
   const flowId = useStore(save, (state) => state.flowId);
   const starting = useStore(run, (state) => state.starting);
-  const runDisabled = useStore(run, (state) => selectRunDisabled(state, { saving }));
   const lastBuild = useStore(run, (state) => state.lastBuild);
   const built = lastBuild !== null && lastBuild.flowId === flowId ? lastBuild : null;
   return (
@@ -107,9 +102,9 @@ function EditorTitleRow({
             className="fd-link"
             data-testid={controlTestIds.built}
             title="See this build's files"
-            onClick={() => nav.getState().go({ name: "builds", hash: built.hash })}
+            onClick={() => nav.getState().go({ name: "builds", buildId: built.id })}
           >
-            Built v{built.version} · {shortHash(built.hash)}
+            Built v{built.version} · {built.name}
           </button>
         )}
         {ready && (
@@ -127,21 +122,10 @@ function EditorTitleRow({
             className="fd-btn"
             data-testid={controlTestIds.build}
             disabled={saving || starting}
-            title="Save if needed, then build a locked copy of this version"
-            onClick={() => void run.getState().build()}
+            title="Save if needed, then build a locked copy of this version under a name"
+            onClick={() => void run.getState().openBuild()}
           >
             Build
-          </button>
-        )}
-        {ready && (
-          <button
-            className="fd-btn fd-btn-primary"
-            data-testid={controlTestIds.run}
-            disabled={runDisabled}
-            title="Save if needed, build this version, and run that build"
-            onClick={() => void actions.buildAndRun()}
-          >
-            Build &amp; run
           </button>
         )}
         {ready && <SessionSettingsButton shell={shell} />}
@@ -159,7 +143,6 @@ export function EditorPage({
   inspector,
   shell,
   nav,
-  actions,
   branches,
 }: {
   canvas: StoreApi<CanvasState>;
@@ -169,7 +152,6 @@ export function EditorPage({
   inspector: StoreApi<InspectorState>;
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
-  actions: Actions;
   branches?: StoreApi<BranchState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
@@ -183,7 +165,6 @@ export function EditorPage({
         terminal={terminal}
         shell={shell}
         nav={nav}
-        actions={actions}
       />
       <div className="fd-main">
         {ready && <Canvas store={canvas} shell={shell} run={idle} onSave={onSave} />}

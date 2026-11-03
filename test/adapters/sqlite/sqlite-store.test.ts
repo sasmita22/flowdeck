@@ -5,20 +5,38 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
-import type { NewRun } from "../../../src/ports/store.js";
+import { BuildRunningError } from "../../../src/core/run/store.js";
+import type { NewBuild, NewRun } from "../../../src/ports/store.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { flow, script } from "../../fixtures/flow-builders.js";
 
-const newRun = (nodeIds = ["p1", "p2", "p3"]): NewRun => ({
-  buildDir: "/fd/builds/abc",
-  inputs: { cwd: "/repo", auto: true },
+const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
+  buildDir: `/fd/workspaces/${buildId}`,
+  inputs: { auto: true },
   nodeIds,
   session: { tmuxName: "fd-run", cwd: "/repo", claudeSessionId: "c1" },
-  buildHash: "abc",
+  buildId,
 });
 
-const build = { hash: "abc", dir: "/fd/builds/abc", files: [], nodes: [] };
+const build: NewBuild = {
+  id: "b1",
+  hash: "abc",
+  name: "fix-login",
+  repo: "/repo",
+  base: "main",
+  values: { ticket: "FD-1" },
+  dir: "/fd/workspaces/b1",
+  files: [],
+  nodes: [],
+};
+
+const another = (id: string, name: string): NewBuild => ({
+  ...build,
+  id,
+  name,
+  dir: `/fd/workspaces/${id}`,
+});
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -97,7 +115,7 @@ describe("SqliteStore", () => {
     const before = counts();
     store.close();
 
-    open();
+    opened.push(new SqliteStore({ path }));
 
     expect(tables).toEqual(
       expect.arrayContaining(["runs", "run_sessions", "run_nodes", "events", "builds"]),
@@ -110,9 +128,10 @@ describe("SqliteStore", () => {
       { name: "005_notes.sql" },
       { name: "006_build_lineage.sql" },
       { name: "007_activity.sql" },
+      { name: "008_named_builds.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 7]);
+    expect(before).toEqual([1, 1, 3, 1, 8]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -121,7 +140,7 @@ describe("SqliteStore", () => {
 
     expect(id).toMatch(uuid);
     expect(db.prepare("SELECT id, status, build_dir FROM runs").all()).toEqual([
-      { id, status: "running", build_dir: "/fd/builds/abc" },
+      { id, status: "running", build_dir: "/fd/workspaces/b1" },
     ]);
     expect(
       db
@@ -332,8 +351,9 @@ describe("SqliteStore", () => {
 
   it("keeps each run's activity, an entry written again read back as its latest state, in id order", () => {
     const store = open();
+    store.recordBuild(another("b2", "fix-signup"));
     const { id } = store.createRun(newRun());
-    const other = store.createRun(newRun()).id;
+    const other = store.createRun(newRun(["p1"], "b2")).id;
     const running = {
       id: 2,
       nodeId: "p2",
@@ -425,14 +445,156 @@ describe("SqliteStore", () => {
   it("stamps a build from now", () => {
     const store = open(() => new Date("2026-01-01T00:00:00Z"));
 
-    expect(raw().prepare("SELECT hash, dir, created_at FROM builds").all()).toEqual([
+    expect(raw().prepare("SELECT id, hash, dir, created_at FROM builds").all()).toEqual([
       {
+        id: "b1",
         hash: "abc",
-        dir: "/fd/builds/abc",
+        dir: "/fd/workspaces/b1",
         created_at: new Date("2026-01-01T00:00:00Z").getTime(),
       },
     ]);
-    expect(store.findRun(store.createRun(newRun()).id)?.buildHash).toBe("abc");
+    expect(store.findRun(store.createRun(newRun()).id)?.buildId).toBe("b1");
+  });
+
+  describe("builds by id", () => {
+    it("records one hash-equal version under two names as two builds", () => {
+      const store = open();
+
+      store.recordBuild(another("b2", "fix-signup"));
+
+      expect(raw().prepare("SELECT id, hash, name FROM builds ORDER BY id").all()).toEqual([
+        { id: "b1", hash: "abc", name: "fix-login" },
+        { id: "b2", hash: "abc", name: "fix-signup" },
+      ]);
+    });
+
+    it("finds a build by its id, with its name, target and values", () => {
+      const store = open(() => new Date(7));
+
+      expect(store.findBuild("b1")).toMatchObject({
+        id: "b1",
+        hash: "abc",
+        name: "fix-login",
+        repo: "/repo",
+        base: "main",
+        values: { ticket: "FD-1" },
+        dir: "/fd/workspaces/b1",
+        createdAt: 7,
+      });
+      expect(store.findBuild("abc")).toBeUndefined();
+    });
+
+    it("finds a build by its name", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+
+      expect(store.findBuildByName("fix-signup")).toMatchObject({ id: "b2", name: "fix-signup" });
+      expect(store.findBuildByName("nope")).toBeUndefined();
+    });
+  });
+
+  describe("deleting a build", () => {
+    it("hides the build from the list and from its name, keeping its row marked deleted", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+
+      store.deleteBuild("b1");
+
+      expect(store.listBuilds().map((each) => each.id)).toEqual(["b2"]);
+      expect(store.findBuildByName("fix-login")).toBeUndefined();
+      const rows = raw().prepare("SELECT id, deleted_at FROM builds ORDER BY id").all() as {
+        id: string;
+        deleted_at: unknown;
+      }[];
+      expect(rows.map((row) => row.id)).toEqual(["b1", "b2"]);
+      expect(rows[0]?.deleted_at).not.toBeNull();
+      expect(rows[1]?.deleted_at).toBeNull();
+    });
+
+    it("hides the deleted build's runs from the list, keeping their rows", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+      const gone = store.createRun(newRun(["p1"]));
+      store.finishRun(gone.id, "done");
+      const kept = store.createRun(newRun(["p1"], "b2"));
+
+      store.deleteBuild("b1");
+
+      expect(store.listRuns().map((run) => run.id)).toEqual([kept.id]);
+      expect(count(raw(), "runs")).toBe(2);
+    });
+
+    it("lets the name of a deleted build be used again, finding the new build by it", () => {
+      const store = open();
+      store.deleteBuild("b1");
+
+      store.recordBuild(another("b3", "fix-login"));
+
+      expect(store.findBuildByName("fix-login")).toMatchObject({ id: "b3" });
+    });
+
+    it("refuses a second build with the name of one not deleted", () => {
+      const store = open();
+
+      expect(() => store.recordBuild(another("b2", "fix-login"))).toThrow();
+      expect(count(raw(), "builds")).toBe(1);
+    });
+  });
+
+  describe("one running run per build", () => {
+    it("refuses a second running run of a build with a BuildRunningError, writing nothing of it", () => {
+      const store = open();
+      store.createRun(newRun());
+
+      expect(() => store.createRun(newRun())).toThrow(BuildRunningError);
+      const db = raw();
+      expect([count(db, "runs"), count(db, "run_sessions"), count(db, "run_nodes")]).toEqual([
+        1, 1, 3,
+      ]);
+    });
+
+    it("runs another build while the first is running", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+      store.createRun(newRun());
+
+      expect(store.createRun(newRun(["p1"], "b2")).status).toBe("running");
+    });
+
+    it("refuses to reopen a run while another run of its build is running, leaving it as it was", () => {
+      const store = open();
+      const first = store.createRun(newRun());
+      store.finishRun(first.id, "stopped");
+      store.createRun(newRun());
+
+      expect(() => store.reopenRun(first.id)).toThrow(BuildRunningError);
+      expect(store.findRun(first.id)?.status).toBe("stopped");
+      expect(
+        raw().prepare("SELECT status FROM run_sessions WHERE run_id = ?").get(first.id),
+      ).toEqual({ status: "closed" });
+    });
+  });
+
+  describe("stopRun", () => {
+    it("marks an interrupted run stopped, so its build can run again", () => {
+      const store = open();
+      const interrupted = store.createRun(newRun());
+
+      store.stopRun(interrupted.id);
+
+      expect(store.findRun(interrupted.id)?.status).toBe("stopped");
+      expect(store.createRun(newRun()).status).toBe("running");
+    });
+
+    it("leaves a run that is not running as it finished", () => {
+      const store = open();
+      const finished = store.createRun(newRun());
+      store.finishRun(finished.id, "done");
+
+      store.stopRun(finished.id);
+
+      expect(store.findRun(finished.id)?.status).toBe("done");
+    });
   });
 
   describe("listRuns", () => {
@@ -446,17 +608,17 @@ describe("SqliteStore", () => {
       store.append(first.id, "p1", { kind: "done" });
       store.recordCost(first.id, 0.25);
       store.finishRun(first.id, "done");
-      now = "2026-01-02T00:00:00.000Z";
-      const second = store.createRun(newRun(["p1", "p2"]));
       now = "2026-01-03T00:00:00.000Z";
       const third = store.createRun(newRun(["p1"]));
       store.finishRun(third.id, "stopped");
+      now = "2026-01-02T00:00:00.000Z";
+      const second = store.createRun(newRun(["p1", "p2"]));
 
       expect(store.listRuns()).toEqual([
         {
           id: second.id,
           status: "running",
-          buildHash: "abc",
+          buildId: "b1",
           createdAt: "2026-01-02T00:00:00.000Z",
           endedAt: null,
           totalCost: null,
@@ -465,7 +627,7 @@ describe("SqliteStore", () => {
         {
           id: third.id,
           status: "stopped",
-          buildHash: "abc",
+          buildId: "b1",
           createdAt: "2026-01-03T00:00:00.000Z",
           endedAt: null,
           totalCost: null,
@@ -474,7 +636,7 @@ describe("SqliteStore", () => {
         {
           id: first.id,
           status: "done",
-          buildHash: "abc",
+          buildId: "b1",
           createdAt: "2026-01-01T00:00:00.000Z",
           endedAt: "2026-01-01T00:00:09.000Z",
           totalCost: 0.25,
@@ -489,8 +651,8 @@ describe("SqliteStore", () => {
       const flows = new SqliteFlowStore({ db, newId: () => "flow-1" });
       const { version } = flows.save(flow([script("s1")], []));
       const store = new SqliteStore({ db });
-      store.recordBuild({ ...build, hash: "def", source: { flowId: "flow-1", version } });
-      const run = store.createRun({ ...newRun(["s1"]), buildHash: "def" });
+      store.recordBuild({ ...another("b2", "fix-signup"), source: { flowId: "flow-1", version } });
+      const run = store.createRun(newRun(["s1"], "b2"));
 
       expect(store.listRuns()).toEqual([
         expect.objectContaining({ id: run.id, source: { flowId: "flow-1", version: 1 } }),

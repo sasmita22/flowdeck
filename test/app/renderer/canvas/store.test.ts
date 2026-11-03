@@ -29,7 +29,7 @@ import {
   trigger,
 } from "../../../fixtures/flow-builders.js";
 
-const unfinished = new Set(["required-settings", "session-folder"]);
+const unfinished = new Set(["required-settings", "repo-required"]);
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -791,7 +791,7 @@ describe("markSaved", () => {
 describe("updateSession", () => {
   const edited: Session = {
     name: "main",
-    workingFolder: { kind: "path", path: "/tmp/x" },
+    buildConfig: { repo: "/tmp/x", variables: [] },
     model: "haiku",
     allowedTools: ["Read"],
     permissionMode: "default",
@@ -820,17 +820,136 @@ describe("updateSession", () => {
 });
 
 describe("newCanvasFlow", () => {
-  it("defaults to an existing folder still to be chosen, and no frame", () => {
+  it("names no repository and declares no variables yet, and has no frame", () => {
     const { session } = newCanvasFlow();
 
-    expect(session.workingFolder).toEqual({ kind: "path", path: "" });
+    expect(session.buildConfig).toEqual({ variables: [] });
     expect(Object.hasOwn(session, "frame")).toBe(false);
   });
 
-  it("is refused at build only for its folder, which the session settings ask for", () => {
+  it("is refused at build only for its repository, which the session settings ask for", () => {
     expect(validate(newCanvasFlow())).toEqual([
-      expect.objectContaining({ rule: "session-folder", field: "workingFolder.path" }),
+      expect.objectContaining({ rule: "repo-required", field: "buildConfig.repo" }),
     ]);
+  });
+});
+
+describe("the Build configuration", () => {
+  const configOf = (store: Store) => store.getState().flow.session.buildConfig;
+
+  const undoable = (store: Store, edit: (state: ReturnType<Store["getState"]>) => void) => {
+    const before = configOf(store);
+    act(store, edit);
+    const after = configOf(store);
+    expect(after).not.toEqual(before);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(selectDirty(store.getState())).toBe(true);
+    act(store, (s) => s.undo());
+    expect(configOf(store)).toEqual(before);
+    act(store, (s) => s.redo());
+    expect(configOf(store)).toEqual(after);
+    return after;
+  };
+
+  it("sets the repository as one undoable edit", () => {
+    expect(undoable(createCanvasStore(), (s) => s.setRepo("/code/shop"))).toEqual({
+      repo: "/code/shop",
+      variables: [],
+    });
+  });
+
+  it("sets the base branch as one undoable edit, and an empty base leaves it to the repository", () => {
+    const store = createCanvasStore();
+
+    expect(undoable(store, (s) => s.setBase("dev"))).toEqual({ base: "dev", variables: [] });
+
+    act(store, (s) => s.setBase(""));
+    expect(configOf(store)).toEqual({ variables: [] });
+  });
+
+  it("adds a text variable with a name not yet taken, as one undoable edit", () => {
+    const store = createCanvasStore();
+
+    expect(undoable(store, (s) => s.addVariable())).toEqual({
+      variables: [{ name: "variable", kind: "text" }],
+    });
+
+    act(store, (s) => s.addVariable());
+    expect(configOf(store).variables.map(({ name }) => name)).toEqual(["variable", "variable-2"]);
+  });
+
+  it("edits a variable in place as one undoable edit, keeping the others and their order", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.addVariable());
+    act(store, (s) => s.addVariable());
+    store.getState().markSaved(store.getState().flow);
+    store.setState({ undoStack: [], redoStack: [] });
+
+    expect(
+      undoable(store, (s) => s.updateVariable(0, { name: "deep", kind: "yesno", default: true })),
+    ).toEqual({
+      variables: [
+        { name: "deep", kind: "yesno", default: true },
+        { name: "variable-2", kind: "text" },
+      ],
+    });
+  });
+
+  it("removes a variable as one undoable edit", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.addVariable());
+    act(store, (s) => s.addVariable());
+    store.getState().markSaved(store.getState().flow);
+    store.setState({ undoStack: [], redoStack: [] });
+
+    expect(undoable(store, (s) => s.removeVariable(0))).toEqual({
+      variables: [{ name: "variable-2", kind: "text" }],
+    });
+  });
+
+  it("moves an imported old-shape flow into the Build configuration", () => {
+    const store = createCanvasStore({ ready: false });
+    const old = {
+      nodes: [
+        {
+          id: "T",
+          type: "trigger",
+          label: "Start",
+          position: { x: 0, y: 0 },
+          settings: { inputs: ["ticket"], flags: { deep: true } },
+        },
+        {
+          id: "B",
+          type: "branch",
+          label: "Deep?",
+          position: { x: 200, y: 0 },
+          settings: { flag: "deep" },
+        },
+      ],
+      wires: [],
+      session: {
+        name: "main",
+        workingFolder: { kind: "worktree", repo: "/code/shop", branch: "dev" },
+        model: "sonnet",
+        allowedTools: [],
+        permissionMode: "default",
+        connectors: [],
+      },
+    };
+
+    store.getState().load(old);
+
+    const { session, nodes } = store.getState().flow;
+    expect(session).not.toHaveProperty("workingFolder");
+    expect(session.buildConfig).toEqual({
+      repo: "/code/shop",
+      base: "dev",
+      variables: expect.arrayContaining([
+        { name: "ticket", kind: "text" },
+        { name: "deep", kind: "yesno", default: true },
+      ]),
+    });
+    expect(nodes.map((node) => node.settings)).toEqual([{}, { variable: "deep" }]);
   });
 });
 

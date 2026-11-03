@@ -91,4 +91,43 @@ describe("NodeFileSystem", () => {
   it("rejects listing a missing folder", async () => {
     await expect(fs.list(join(tmp, "missing"))).rejects.toThrow(/ENOENT/);
   });
+
+  it("lists only the folders directly inside a folder, by name and sorted", async () => {
+    await fs.writeFile(join(tmp, "z.md"), "z");
+    await fs.writeFile(join(tmp, "b/inner/c.md"), "c");
+    await mkdir(join(tmp, "a"));
+
+    expect(await fs.folders(tmp)).toEqual(["a", "b"]);
+  });
+
+  it("lists no folders inside a missing folder", async () => {
+    expect(await fs.folders(join(tmp, "missing"))).toEqual([]);
+  });
+
+  it("removes a whole folder tree", async () => {
+    const workspace = join(tmp, "workspaces/b1");
+    await fs.writeFile(join(workspace, "CLAUDE.md"), "c");
+    await fs.writeFile(join(workspace, "plugin/agents/a.md"), "a");
+    await fs.writeFile(join(tmp, "workspaces/b2/CLAUDE.md"), "other");
+
+    await fs.removeTree(workspace);
+
+    expect(await fs.exists(workspace)).toBe(false);
+    expect(await fs.list(tmp)).toEqual(["workspaces/b2/CLAUDE.md"]);
+  });
+
+  it("removes a folder tree except the kept child and everything inside it", async () => {
+    const workspace = join(tmp, "b1");
+    await fs.writeFile(join(workspace, "CLAUDE.md"), "c");
+    await fs.writeFile(join(workspace, "plugin/agents/a.md"), "a");
+    await fs.writeFile(join(workspace, "repo/src/work.ts"), "w");
+    await fs.writeFile(join(workspace, "repo2/x.md"), "x");
+    await mkdir(join(workspace, "repo/empty"));
+
+    await fs.removeTree(workspace, { keep: join(workspace, "repo") });
+
+    expect(await fs.list(workspace)).toEqual(["repo/src/work.ts"]);
+    expect(await fs.exists(join(workspace, "repo/empty"))).toBe(true);
+    expect(await fs.exists(join(workspace, "plugin"))).toBe(false);
+  });
 });

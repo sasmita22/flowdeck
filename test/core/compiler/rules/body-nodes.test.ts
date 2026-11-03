@@ -63,7 +63,7 @@ describe("body-nodes", () => {
       ],
       [],
     );
-    const { manifest } = lower(built);
+    const { manifest } = lower(built, { name: "fix-login", values: {} });
     const runner = structureProblems(manifest.nodes, manifest.wires);
 
     const validator = [...loopBody.check(built), ...rule.check(built)].map(({ message }) =>

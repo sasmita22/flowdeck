@@ -2,31 +2,47 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { createRunRelay, stopEngine } from "../../../src/app/main/run.js";
 
-const runState = (status: "running" | "done"): EnginePush => ({
+const runState = (status: "running" | "done", runId = "run-1"): EnginePush => ({
   push: "run-state",
-  value: { runId: "run-1", status, nodes: { p1: status === "done" ? "done" : "running" } },
+  value: { runId, status, nodes: { p1: status === "done" ? "done" : "running" } },
 });
 
+const snapshotOf = (push: EnginePush) => (push.push === "run-state" ? push.value : null);
+
 describe("createRunRelay", () => {
-  it("has no snapshot before the first push", () => {
+  it("has no snapshot for a run before its first push", () => {
     const relay = createRunRelay({ send: () => undefined });
 
-    expect(relay.latest()).toBeNull();
+    expect(relay.latest("run-1")).toBeNull();
   });
 
-  it("sends each pushed snapshot once and keeps the latest", () => {
+  it("sends each pushed snapshot once and keeps the run's latest", () => {
     const sent: unknown[] = [];
     const relay = createRunRelay({ send: (snapshot) => sent.push(snapshot) });
 
     relay.onPush(runState("running"));
 
-    expect(sent).toEqual([runState("running").value]);
-    expect(relay.latest()).toEqual(runState("running").value);
+    expect(sent).toEqual([snapshotOf(runState("running"))]);
+    expect(relay.latest("run-1")).toEqual(snapshotOf(runState("running")));
 
     relay.onPush(runState("done"));
 
-    expect(sent).toEqual([runState("running").value, runState("done").value]);
-    expect(relay.latest()).toEqual(runState("done").value);
+    expect(sent).toEqual([snapshotOf(runState("running")), snapshotOf(runState("done"))]);
+    expect(relay.latest("run-1")).toEqual(snapshotOf(runState("done")));
+  });
+
+  it("keeps each run's latest snapshot when two runs push in turn", () => {
+    const sent: unknown[] = [];
+    const relay = createRunRelay({ send: (snapshot) => sent.push(snapshot) });
+
+    relay.onPush(runState("running", "run-1"));
+    relay.onPush(runState("running", "run-2"));
+    relay.onPush(runState("done", "run-1"));
+
+    expect(relay.latest("run-1")).toEqual(snapshotOf(runState("done", "run-1")));
+    expect(relay.latest("run-2")).toEqual(snapshotOf(runState("running", "run-2")));
+    expect(relay.latest("run-3")).toBeNull();
+    expect(sent).toHaveLength(3);
   });
 
   it("ignores a session push, sending nothing and keeping the latest snapshot", () => {
@@ -34,10 +50,10 @@ describe("createRunRelay", () => {
     const relay = createRunRelay({ send: (snapshot) => sent.push(snapshot) });
 
     relay.onPush(runState("running"));
-    relay.onPush({ push: "session", value: "fd-run-x" });
+    relay.onPush({ push: "session", runId: "run-1", value: "fd-run-x" });
 
-    expect(sent).toEqual([runState("running").value]);
-    expect(relay.latest()).toEqual(runState("running").value);
+    expect(sent).toEqual([snapshotOf(runState("running"))]);
+    expect(relay.latest("run-1")).toEqual(snapshotOf(runState("running")));
   });
 });
 

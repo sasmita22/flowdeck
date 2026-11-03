@@ -25,7 +25,10 @@ export type EngineRequest = {
     | "run-cost"
     | "answer-wait"
     | "workspace-info"
-    | "list-branches";
+    | "list-branches"
+    | "delete-build"
+    | "doctor-worktrees"
+    | "default-branch";
   payload?: unknown;
 };
 
@@ -34,9 +37,9 @@ export type EngineResponse =
 
 export type EnginePush =
   | { push: "run-state"; value: RunSnapshot }
-  | { push: "session"; value: string | null }
+  | { push: "session"; runId: string; value: string | null }
   | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
-  | { push: "wait"; value: PendingWait | null };
+  | { push: "wait"; runId: string; value: PendingWait | null };
 
 export type EngineMessage = EngineResponse | EnginePush;
 

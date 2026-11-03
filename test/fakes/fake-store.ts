@@ -1,5 +1,6 @@
 import type { ActivityEntry } from "../../src/core/run/activity.js";
 import type { RunEvent } from "../../src/core/run/run-events.js";
+import { BuildRunningError } from "../../src/core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -20,6 +21,7 @@ export class FakeStore implements Store {
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: NewBuild[] = [];
+  private readonly deletedAt = new Map<string, number>();
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
   private readonly now: () => Date;
@@ -39,6 +41,7 @@ export class FakeStore implements Store {
   }
 
   createRun(run: NewRun): RunRecord {
+    this.refuseWhileRunning(run.buildId);
     const record: RunRecord = { ...copy(run), id: `run-${this.nextRun++}`, status: "running" };
     this.runRecords.push(record);
     for (const nodeId of run.nodeIds) this.nodeEntries.push({ runId: record.id, nodeId });
@@ -51,19 +54,21 @@ export class FakeStore implements Store {
   }
 
   listRuns(): RunSummary[] {
-    const summaries = this.runRecords.map((run, index): RunSummary => {
-      const source = this.buildRecords.find((known) => known.hash === run.buildHash)?.source;
+    const summaries = this.runRecords.flatMap((run, index): RunSummary[] => {
+      if (run.buildId !== undefined && this.deletedAt.has(run.buildId)) return [];
+      const source = this.buildRecords.find((known) => known.id === run.buildId)?.source;
       const last = this.events(run.id).at(-1);
-      return {
+      const summary: RunSummary = {
         id: run.id,
         status: run.status,
-        ...(run.buildHash === undefined ? {} : { buildHash: run.buildHash }),
+        ...(run.buildId === undefined ? {} : { buildId: run.buildId }),
         createdAt: new Date(index).toISOString(),
         endedAt: run.status === "running" ? null : (last?.time ?? null),
         totalCost: this.costs.get(run.id) ?? null,
         nodeCount: run.nodeIds.length,
         ...(source === undefined ? {} : { source: copy(source) }),
       };
+      return [summary];
     });
     return summaries
       .reverse()
@@ -97,27 +102,36 @@ export class FakeStore implements Store {
   }
 
   recordBuild(build: NewBuild): void {
-    if (this.buildRecords.some((known) => known.hash === build.hash)) return;
+    if (this.buildRecords.some((known) => known.id === build.id)) {
+      throw new Error(`FakeStore: builds are locked (${build.id} is recorded)`);
+    }
+    if (this.findBuildByName(build.name) !== undefined) {
+      throw new Error(`FakeStore: UNIQUE name ${build.name}`);
+    }
     this.buildRecords.push(copy(build));
   }
 
-  findBuild(hash: string): BuildRecord | undefined {
-    return this.listBuilds().find((build) => build.hash === hash);
+  findBuild(id: string): BuildRecord | undefined {
+    return this.allBuilds().find((build) => build.id === id);
+  }
+
+  findBuildByName(name: string): BuildRecord | undefined {
+    return this.listBuilds().find((build) => build.name === name);
+  }
+
+  deleteBuild(id: string): void {
+    if (this.deletedAt.has(id)) throw new Error(`FakeStore: builds are locked (${id} is deleted)`);
+    if (this.buildRecords.some((build) => build.id === id)) {
+      this.deletedAt.set(id, this.now().getTime());
+    }
   }
 
   listBuilds(): BuildRecord[] {
-    return this.buildRecords
-      .map(({ hash, dir, source }, index) => ({
-        hash,
-        dir,
-        createdAt: index + 1,
-        ...(source === undefined ? {} : { source: copy(source) }),
-      }))
-      .reverse();
+    return this.allBuilds().filter((build) => build.deletedAt === null);
   }
 
-  buildFiles(hash: string): BuildFileRecord[] {
-    const files = this.buildRecords.find((build) => build.hash === hash)?.files ?? [];
+  buildFiles(id: string): BuildFileRecord[] {
+    const files = this.buildRecords.find((build) => build.id === id)?.files ?? [];
     return copy(files).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
 
@@ -132,7 +146,13 @@ export class FakeStore implements Store {
   reopenRun(runId: string): void {
     const record = this.runRecords.find((run) => run.id === runId);
     if (!record) throw new Error(`FakeStore: no run ${runId}`);
+    if (record.status !== "running") this.refuseWhileRunning(record.buildId);
     record.status = "running";
+  }
+
+  stopRun(runId: string): void {
+    const record = this.runRecords.find((run) => run.id === runId);
+    if (record?.status === "running") record.status = "stopped";
   }
 
   recordActivity(runId: string, entry: ActivityEntry): void {
@@ -151,5 +171,31 @@ export class FakeStore implements Store {
     const record = this.runRecords.find((run) => run.id === runId);
     if (!record) throw new Error(`FakeStore: no run ${runId}`);
     record.status = status;
+  }
+
+  private allBuilds(): BuildRecord[] {
+    return this.buildRecords
+      .map(({ id, hash, name, repo, base, values, dir, source }, index): BuildRecord => ({
+        id,
+        hash,
+        name,
+        repo,
+        base,
+        values: copy(values),
+        deletedAt: this.deletedAt.get(id) ?? null,
+        dir,
+        createdAt: index + 1,
+        ...(source === undefined ? {} : { source: copy(source) }),
+      }))
+      .reverse();
+  }
+
+  private refuseWhileRunning(buildId: string | undefined): void {
+    if (
+      buildId !== undefined &&
+      this.runRecords.some((run) => run.buildId === buildId && run.status === "running")
+    ) {
+      throw new BuildRunningError(buildId);
+    }
   }
 }

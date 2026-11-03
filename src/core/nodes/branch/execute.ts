@@ -1,4 +1,5 @@
 import type { Node, Wire } from "../../flow/schema.js";
+import type { VariableValues } from "../../flow/variables.js";
 import type { SectionNode } from "../fork/execute.js";
 
 export type BranchPort = "yes" | "no";
@@ -28,11 +29,18 @@ export function branchTakes(
   return value ? "yes" : "no";
 }
 
-export function branchSwitch(flag: string, defaults: Readonly<Record<string, boolean>>): string {
-  const value = defaults[flag];
-  if (value === true) return `--no-${flag}`;
-  if (value === false) return `--${flag}`;
-  return flag;
+export function branchDecision(
+  manifest: { nodes: readonly Pick<Node, "type" | "settings">[]; values?: VariableValues },
+  settings: { variable?: string; flag?: string },
+  flags: Readonly<Record<string, boolean>>,
+): BranchPort {
+  const name = settings.variable ?? settings.flag ?? "";
+  if (manifest.values === undefined) return branchTakes(name, triggerFlags(manifest.nodes), flags);
+  const value = manifest.values[name];
+  if (typeof value !== "boolean") {
+    throw new Error(`Branch variable "${name}" has no yes/no value in this build.`);
+  }
+  return value ? "yes" : "no";
 }
 
 export function branchSkips(input: {

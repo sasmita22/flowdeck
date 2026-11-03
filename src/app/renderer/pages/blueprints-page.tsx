@@ -15,15 +15,11 @@ const versionsText = (count: number) => (count === 1 ? "1 version" : `${count} v
 
 function BlueprintCard({
   flow,
-  library,
   run,
-  nav,
   actions,
 }: {
   flow: FlowSummary;
-  library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
-  nav: StoreApi<NavState>;
   actions: Actions;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -43,11 +39,12 @@ function BlueprintCard({
     if (event.key === "Escape") setDraft(null);
   };
 
-  const build = async () => {
-    const hash = await run.getState().buildVersion({ flowId: flow.flowId, version: flow.versions });
-    await library.getState().refresh();
-    if (hash !== null) nav.getState().go({ name: "builds", hash });
-  };
+  const build = () =>
+    run.getState().openBuild({
+      flowId: flow.flowId,
+      version: flow.versions,
+      buildConfig: flow.buildConfig ?? { variables: [] },
+    });
 
   return (
     <article className="fd-card" data-testid={pageTestIds.blueprintCard(flow.flowId)}>
@@ -86,9 +83,9 @@ function BlueprintCard({
       <div className="fd-card-meta">
         <span>{flow.lastSavedAt === null ? "Never saved" : formatWhen(flow.lastSavedAt)}</span>
         <span>{versionsText(flow.versions)}</span>
-        <span className="fd-card-place" title={folderText(flow.workingFolder)}>
+        <span className="fd-card-place" title={folderText(flow.buildConfig)}>
           <Icon name="folder" />
-          <span className="fd-ellipsis">{folderText(flow.workingFolder)}</span>
+          <span className="fd-ellipsis">{folderText(flow.buildConfig)}</span>
         </span>
       </div>
       <div className="fd-card-actions">
@@ -144,14 +141,7 @@ export function BlueprintsPage({
       {flows.length > 0 && shown.length === 0 && <Empty>No blueprint matches “{query}”.</Empty>}
       <div className="fd-cards">
         {shown.map((flow) => (
-          <BlueprintCard
-            key={flow.flowId}
-            flow={flow}
-            library={library}
-            run={run}
-            nav={nav}
-            actions={actions}
-          />
+          <BlueprintCard key={flow.flowId} flow={flow} run={run} actions={actions} />
         ))}
       </div>
     </>

@@ -1,9 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   controlTestIds,
@@ -14,12 +14,14 @@ import {
 import type { Flow } from "../src/core/flow/schema.js";
 import { fileWire, flow, loop, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
+import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 
 const exec = promisify(execFile);
 
 let home: string;
-let folder: string;
+let repo: TmpRepo;
 let bin: string;
 let launched: LaunchedApp | undefined;
 
@@ -181,12 +183,14 @@ const exists = (path: string) =>
 
 const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
 
-const seed = (input: Flow) => seedFlow(home, input, folder);
+const seed = (input: Flow) => seedFlow(home, input, repo.path);
+
+const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
 
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-fs-"));
-  folder = await realpath(await mkdtemp(join(tmpdir(), "fd-fs-wf-")));
+  repo = await createTmpRepo({ commit: true });
   bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
@@ -205,7 +209,7 @@ test.afterEach(async () => {
   } finally {
     await killTmux();
     await rm(home, { recursive: true, force: true });
-    await rm(folder, { recursive: true, force: true });
+    await repo.cleanup();
   }
 });
 
@@ -366,7 +370,7 @@ test("A script-only run holds the next node on its File wire until the file is w
   );
   const window = await launch();
 
-  await window.getByTestId(controlTestIds.run).click();
+  const folder = workFolder(await buildAndRun(window, home, "file-wire"));
 
   await expect(window.getByTestId("node-reason-build")).toHaveText(
     "plan.md wasn't written by Planner",
@@ -390,8 +394,7 @@ test("A script-only run holds the next node on its File wire until the file is w
 });
 
 for (const container of ["loop", "foreach"] as const) {
-  test(`A ${container === "loop" ? "Loop" : "For each"} drawn in the app runs to done from Build & run`, async () => {
-    await writeFile(join(folder, "items.txt"), "- alpha\n- bravo\n");
+  test(`A ${container === "loop" ? "Loop" : "For each"} drawn in the app runs to done from its build`, async () => {
     seed(flow([], []));
     const window = await launch();
     await dropOn(window, container, 420, 260);
@@ -409,7 +412,9 @@ for (const container of ["loop", "foreach"] as const) {
     await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
     await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
 
-    await window.getByTestId(controlTestIds.run).click();
+    const buildId = await buildOnCanvas(window, home, container);
+    await writeFile(join(workFolder(buildId), "items.txt"), "- alpha\n- bravo\n");
+    await runFromDetail(window);
 
     await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
       timeout: 30_000,

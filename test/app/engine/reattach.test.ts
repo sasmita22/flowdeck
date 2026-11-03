@@ -21,6 +21,7 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeStore } from "../../fakes/fake-store.js";
+import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import { flow, gate, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
@@ -54,6 +55,7 @@ describe("an app restart", () => {
   let handlers: EngineHandler[];
   let nextId: number;
   let sending: { started: number; held?: Promise<void> };
+  let names: number;
 
   const fakeSession = (options: OpenSessionOptions): OpenedSession => ({
     sessionId: options.claudeSessionId,
@@ -96,7 +98,7 @@ describe("an app restart", () => {
         fs: new NodeFileSystem(),
         now: Date.now,
         scripts: new NodeProcessRunner(),
-        waiter,
+        waiter: new FakeWaiter([]),
         startEvents: async () => ({ events, stop: async () => undefined }),
         openSession: async (options) => {
           opened.push(options);
@@ -107,7 +109,7 @@ describe("an app restart", () => {
       waits: waiter,
       sessionAlive: async (name) => alive.has(name),
       worktree: new FakeWorktree(),
-      gitState: new FakeGitState(),
+      gitState: new FakeGitState({ [repo.path]: { kind: "branch", name: "main" } }),
       transcriptTurns: async () => [],
       ...overrides,
     });
@@ -128,10 +130,15 @@ describe("an app restart", () => {
   const start = async (handler: EngineHandler, input: Flow) => {
     const { flowId, version } = flows.save({
       ...input,
-      session: { ...input.session, workingFolder: { kind: "path", path: repo.path } },
+      session: { ...input.session, buildConfig: { repo: repo.path, variables: [] } },
     });
-    const built = (await call(handler, "build-version", { flowId, version })) as { hash: string };
-    const result = (await call(handler, "run-build", { hash: built.hash })) as {
+    const built = (await call(handler, "build-version", {
+      flowId,
+      version,
+      name: `build-${++names}`,
+      values: {},
+    })) as { id: string };
+    const result = (await call(handler, "run-build", { buildId: built.id })) as {
       kind: string;
       runId: string;
       message?: string;
@@ -147,8 +154,14 @@ describe("an app restart", () => {
       .events(runId)
       .filter((event) => event.nodeId === nodeId)
       .map((event) => event.kind);
-  const lastWait = () =>
-    pushes.findLast((push) => push.push === "wait")?.value as PendingWait | null | undefined;
+  const lastWait = (runId: string) =>
+    pushes.findLast((push) => push.push === "wait" && push.runId === runId)?.value as
+      PendingWait | null | undefined;
+  const cwdOf = (runId: string) => {
+    const cwd = runs.findRun(runId)?.session.cwd;
+    if (cwd === undefined || cwd === "") throw new Error(`run ${runId} has no folder`);
+    return cwd;
+  };
   const sessionName = (runId: string) => runs.findRun(runId)?.session.tmuxName ?? "";
 
   const askedAtGate = () =>
@@ -170,6 +183,7 @@ describe("an app restart", () => {
     handlers = [];
     nextId = 1;
     sending = { started: 0 };
+    names = 0;
   });
 
   afterEach(async () => {
@@ -233,7 +247,7 @@ describe("an app restart", () => {
     it("leaves a running script running", async () => {
       const first = newHandler();
       const runId = await start(first, flow([sh("s1", "echo $$ > s1.pid; exec sleep 30")], []));
-      const pidText = () => readFile(join(repo.path, "s1.pid"), "utf8").catch(() => "");
+      const pidText = () => readFile(join(cwdOf(runId), "s1.pid"), "utf8").catch(() => "");
       await vi.waitFor(async () => expect(await pidText()).toMatch(/^\d+\n$/));
 
       await first.detach();
@@ -259,13 +273,13 @@ describe("an app restart", () => {
       await second.reattach();
 
       expect(opened.at(-1)).toMatchObject({ attach: true, sessionName: sessionName(runId) });
-      expect(pushes).toContainEqual({ push: "session", value: sessionName(runId) });
-      await vi.waitFor(() => expect(lastWait()?.request).toMatchObject({ nodeId: "g1" }));
+      expect(pushes).toContainEqual({ push: "session", runId, value: sessionName(runId) });
+      await vi.waitFor(() => expect(lastWait(runId)?.request).toMatchObject({ nodeId: "g1" }));
       const runsListed = (await call(second, "list-runs")) as { id: string; status: string }[];
       expect(runsListed.find((run) => run.id === runId)?.status).toBe("running");
 
       expect(
-        waiter.answer({ waitId: lastWait()?.waitId ?? "", reply: { decision: "approve" } }),
+        waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } }),
       ).toBe(true);
 
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
@@ -289,16 +303,16 @@ describe("an app restart", () => {
         ),
       );
       await vi.waitFor(async () =>
-        expect(await readFile(join(repo.path, "s1.log"), "utf8").catch(() => "")).toBe("once\n"),
+        expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8").catch(() => "")).toBe("once\n"),
       );
       await first.detach();
 
       const second = newHandler();
       await second.reattach();
-      await writeFile(join(repo.path, "go"), "");
+      await writeFile(join(cwdOf(runId), "go"), "");
 
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"), { timeout: 5000 });
-      expect(await readFile(join(repo.path, "s1.log"), "utf8")).toBe("once\n");
+      expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8")).toBe("once\n");
       expect(kindsOf(runId, "s1")).toEqual(["running", "done"]);
     });
 
@@ -339,13 +353,75 @@ describe("an app restart", () => {
       pushes = [];
 
       expect(await call(second, "resume-run", { runId })).toEqual({ kind: "started", runId });
-      await vi.waitFor(() => expect(lastWait()?.request).toMatchObject({ nodeId: "g1" }));
-      waiter.answer({ waitId: lastWait()?.waitId ?? "", reply: { decision: "approve" } });
+      await vi.waitFor(() => expect(lastWait(runId)?.request).toMatchObject({ nodeId: "g1" }));
+      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } });
 
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
       expect(opened.at(-1)).toMatchObject({ resume: true, sessionName: sessionName(runId) });
       expect(opened.at(-1)?.attach).toBeUndefined();
       expect(kindsOf(runId, "p1").filter((kind) => kind === "sent")).toHaveLength(1);
+    });
+
+    it("reattaches every run left going, asks each one's question again, and finishes both", async () => {
+      const first = newHandler();
+      const one = await start(first, askedAtGate());
+      const two = await start(first, askedAtGate());
+      await vi.waitFor(() => {
+        expect(statusOf(one, "g1")).toBe("needs-you");
+        expect(statusOf(two, "g1")).toBe("needs-you");
+      });
+      await first.detach();
+      alive.add(sessionName(one));
+      alive.add(sessionName(two));
+      pushes = [];
+
+      const second = newHandler();
+      await second.reattach();
+
+      expect(opened.filter((options) => options.attach === true).map((o) => o.sessionName)).toEqual(
+        expect.arrayContaining([sessionName(one), sessionName(two)]),
+      );
+      await vi.waitFor(() => {
+        expect(lastWait(one)?.request).toMatchObject({ nodeId: "g1" });
+        expect(lastWait(two)?.request).toMatchObject({ nodeId: "g1" });
+      });
+      const listed = (await call(second, "list-runs")) as { id: string; status: string }[];
+      expect(
+        listed.filter((run) => run.id === one || run.id === two).map((run) => run.status),
+      ).toEqual(["running", "running"]);
+
+      for (const runId of [one, two]) {
+        expect(
+          waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } }),
+        ).toBe(true);
+      }
+
+      await vi.waitFor(() => {
+        expect(runs.findRun(one)?.status).toBe("done");
+        expect(runs.findRun(two)?.status).toBe("done");
+      });
+    });
+
+    it("still reattaches the other runs when one left going has lost its session", async () => {
+      const first = newHandler();
+      const ended = await start(first, askedAtGate());
+      const going = await start(first, askedAtGate());
+      await vi.waitFor(() => {
+        expect(statusOf(ended, "g1")).toBe("needs-you");
+        expect(statusOf(going, "g1")).toBe("needs-you");
+      });
+      await first.detach();
+      alive.add(sessionName(going));
+
+      const second = newHandler();
+      await second.reattach();
+
+      expect(opened.at(-1)).toMatchObject({ attach: true, sessionName: sessionName(going) });
+      await vi.waitFor(() => expect(lastWait(going)?.request).toMatchObject({ nodeId: "g1" }));
+      const loaded = (await call(second, "load-run", { runId: ended })) as {
+        run: { status: string };
+      };
+      expect(loaded.run.status).toBe("interrupted");
     });
 
     it("leaves every run alone while another Flowdeck holds the home", async () => {

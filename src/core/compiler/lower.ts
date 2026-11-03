@@ -1,6 +1,7 @@
 import { handoffOf } from "../flow/handoff.js";
 import { order } from "../flow/order.js";
 import type { Flow, Node, Session, Wire } from "../flow/schema.js";
+import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
 import { compilePrompt } from "../nodes/prompt/compile.js";
@@ -20,6 +21,9 @@ export type ManifestOutput = { node: string; name: string; type: string };
 
 export type Manifest = {
   version: 1;
+  prefix?: string;
+  layout?: "workspace";
+  values?: VariableValues;
   source?: BuildSource;
   inputs?: string[];
   outputs?: ManifestOutput[];
@@ -29,20 +33,25 @@ export type Manifest = {
   files: Record<string, string>;
 };
 
-const compile = (node: Node, wires: readonly Wire[]): BuildFile | undefined => {
+export type LowerInputs = { name: string; values: VariableValues };
+
+export type LoweredManifest = Omit<Manifest, "files"> &
+  Required<Pick<Manifest, "prefix" | "layout" | "values">>;
+
+const compile = (
+  node: Node,
+  wires: readonly Wire[],
+  values: VariableValues,
+): BuildFile | undefined => {
   switch (node.type) {
     case "prompt":
-      return compilePrompt(node, handoffOf(node.id, wires));
+      return compilePrompt(node, handoffOf(node.id, wires), values);
     case "agent":
-      return compileAgent(node, handoffOf(node.id, wires));
+      return compileAgent(node, handoffOf(node.id, wires), values);
     default:
       return undefined;
   }
 };
-
-const declaredInputs = (nodes: readonly Node[]): string[] => [
-  ...new Set(nodes.flatMap((node) => (node.type === "trigger" ? node.settings.inputs : []))),
-];
 
 const declaredOutputs = (nodes: readonly Node[]): ManifestOutput[] =>
   nodes.flatMap((node) =>
@@ -53,20 +62,22 @@ const declaredOutputs = (nodes: readonly Node[]): ManifestOutput[] =>
 
 export function lower(
   flow: Flow,
+  inputs: LowerInputs,
   source?: BuildSource,
-): { manifest: Omit<Manifest, "files">; nodeFiles: BuildFile[] } {
+): { manifest: LoweredManifest; nodeFiles: BuildFile[] } {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
-  const compiled = nodes.map((node) => ({ node, file: compile(node, flow.wires) }));
+  const compiled = nodes.map((node) => ({ node, file: compile(node, flow.wires, inputs.values) }));
   const session = { ...flow.session };
   delete session.frame;
-  const inputs = declaredInputs(nodes);
   const outputs = declaredOutputs(nodes);
   return {
     manifest: {
       version: 1,
+      prefix: inputs.name,
+      layout: "workspace",
+      values: inputs.values,
       ...(source === undefined ? {} : { source }),
-      ...(inputs.length === 0 ? {} : { inputs }),
       ...(outputs.length === 0 ? {} : { outputs }),
       session,
       nodes: compiled.map(({ node, file }) => ({

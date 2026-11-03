@@ -156,7 +156,8 @@ describe("chargeUsage in a parallel section", () => {
       entries,
       turnNodes: new Set(["f"]),
       agentNodes: agentNodes({
-        hash: "h",
+        hash: "abc123",
+        prefix: "h",
         nodes: [fork("f"), agent("a1"), agent("a2"), join_("j")],
       }),
     });
@@ -195,6 +196,20 @@ describe("chargeUsage in a parallel section", () => {
       ["p1", ["early"]],
     ]);
     expect(owners([...tied].reverse())).toEqual(owners(tied));
+  });
+});
+
+describe("agentNodes", () => {
+  it("names each agent node by the build's prefix, not its hash", () => {
+    expect(
+      agentNodes({ hash: "abc123", prefix: "fix-login", nodes: [fork("f"), agent("a1")] }),
+    ).toEqual(new Map([["fix-login:a1", "a1"]]));
+  });
+
+  it("names a hash-named build's agents by its hash, its prefix", () => {
+    expect(agentNodes({ hash: "abc123", prefix: "abc123", nodes: [agent("a1")] })).toEqual(
+      new Map([["abc123:a1", "a1"]]),
+    );
   });
 });
 

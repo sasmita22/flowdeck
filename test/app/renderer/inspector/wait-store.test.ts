@@ -25,8 +25,8 @@ const setup = () => {
   let pushListener: (value: unknown) => void = () => undefined;
 
   const bridge = {
-    getWait: vi.fn<() => Promise<unknown>>(async () => {
-      calls.push("getWait");
+    getWait: vi.fn<(runId: string) => Promise<unknown>>(async (runId) => {
+      calls.push(`getWait ${runId}`);
       return null;
     }),
     onWait: vi.fn((listener: (value: unknown) => void) => {
@@ -38,56 +38,61 @@ const setup = () => {
   } satisfies WaitBridge;
 
   const wait = createWaitStore({ bridge });
-  const push = (value: unknown) => pushListener(value);
+  const push = (value: unknown, runId = "run-1") => pushListener({ runId, value });
   const pending = () => wait.getState().pending;
 
   return { bridge, wait, calls, push, pending };
 };
 
-const connected = async () => {
+const connected = async (runId = "run-1") => {
   const context = setup();
   await context.wait.getState().connect();
+  await context.wait.getState().view(runId);
   return context;
 };
 
-describe("connect", () => {
-  it("subscribes to wait pushes before asking for the current wait", async () => {
-    const { calls } = await connected();
+describe("view", () => {
+  it("subscribes to wait pushes, then asks for the viewed run's wait", async () => {
+    const { calls, wait } = await connected("run-1");
 
-    expect(calls).toEqual(["onWait", "getWait"]);
+    expect(calls).toEqual(["onWait", "getWait run-1"]);
+    expect(wait.getState().runId).toBe("run-1");
   });
 
   it("shows the wait getWait returns when no push came first", async () => {
     const { bridge, wait, pending } = setup();
     bridge.getWait.mockResolvedValueOnce(gateWait);
-
     await wait.getState().connect();
+
+    await wait.getState().view("run-1");
 
     expect(pending()).toEqual(gateWait);
   });
 
   it("keeps a wait pushed before the fetch answered over the fetched one", async () => {
     const { bridge, wait, push, pending } = setup();
+    await wait.getState().connect();
     const answer = deferred<unknown>();
     bridge.getWait.mockReturnValueOnce(answer.promise);
 
-    const connecting = wait.getState().connect();
+    const viewing = wait.getState().view("run-1");
     push(askWait);
     answer.resolve(gateWait);
-    await connecting;
+    await viewing;
 
     expect(pending()).toEqual(askWait);
   });
 
   it("keeps a cleared wait pushed before the fetch answered over the fetched one", async () => {
     const { bridge, wait, push, pending } = setup();
+    await wait.getState().connect();
     const answer = deferred<unknown>();
     bridge.getWait.mockReturnValueOnce(answer.promise);
 
-    const connecting = wait.getState().connect();
+    const viewing = wait.getState().view("run-1");
     push(null);
     answer.resolve(gateWait);
-    await connecting;
+    await viewing;
 
     expect(pending()).toBeNull();
   });
@@ -95,8 +100,40 @@ describe("connect", () => {
   it("ignores a fetched value that is not a pending wait", async () => {
     const { bridge, wait, pending } = setup();
     bridge.getWait.mockResolvedValueOnce({ waitId: "wait-1", request: { kind: "vote" } });
-
     await wait.getState().connect();
+
+    await wait.getState().view("run-1");
+
+    expect(pending()).toBeNull();
+  });
+
+  it("shows only the viewed run's wait, and the other run's once switched to it", async () => {
+    const { bridge, wait, push, pending } = await connected("run-1");
+    push(gateWait, "run-1");
+
+    push(askWait, "run-2");
+    expect(pending()).toEqual(gateWait);
+
+    bridge.getWait.mockResolvedValueOnce(askWait);
+    await wait.getState().view("run-2");
+    expect(bridge.getWait).toHaveBeenLastCalledWith("run-2");
+    expect(pending()).toEqual(askWait);
+
+    push(null, "run-1");
+    expect(pending()).toEqual(askWait);
+  });
+
+  it("ignores a late wait for a run no longer viewed", async () => {
+    const { bridge, wait, pending } = setup();
+    await wait.getState().connect();
+    const late = deferred<unknown>();
+    bridge.getWait.mockReturnValueOnce(late.promise);
+    bridge.getWait.mockResolvedValueOnce(null);
+
+    const first = wait.getState().view("run-1");
+    await wait.getState().view("run-2");
+    late.resolve(gateWait);
+    await first;
 
     expect(pending()).toBeNull();
   });

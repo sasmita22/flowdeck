@@ -2,21 +2,39 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { build, type BuildFileSystem, type BuildResult } from "../../../src/core/compiler/build.js";
+import {
+  build,
+  type BuildDeps,
+  type BuildFileSystem,
+  type BuildResult,
+} from "../../../src/core/compiler/build.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
-import { verify } from "../../../src/core/compiler/verify.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
 const expectedFiles = [
-  "agents/a.md",
-  "commands/p.md",
-  "hooks/hooks.json",
+  "CLAUDE.md",
   "manifest.json",
+  "plugin/.claude-plugin/plugin.json",
+  "plugin/agents/a.md",
+  "plugin/commands/p.md",
+  "plugin/hooks/hooks.json",
   "settings.json",
 ];
+
+type Workspace = BuildDeps["workspace"];
+
+const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
+  id: "b1111111-0000-4000-8000-000000000001",
+  name: "fix-login",
+  repo: "/work/carousell-web",
+  base: "main",
+  values: {},
+  blueprint: { name: "Bugfix", version: 3 },
+  ...overrides,
+});
 
 const sample = (instructions = "Do the work."): Flow => {
   const base = flow(
@@ -26,7 +44,8 @@ const sample = (instructions = "Do the work."): Flow => {
   return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit"] } };
 };
 
-const run = (fs: FakeFileSystem, input: Flow = sample()) => build(input, { fs, home });
+const run = (fs: FakeFileSystem, input: Flow = sample(), named: Workspace = workspace()) =>
+  build(input, { fs, home, workspace: named });
 
 const succeeded = (result: BuildResult) => {
   expect(result.ok).toBe(true);
@@ -50,13 +69,12 @@ describe("build", () => {
     expect(new NodeFileSystem() satisfies BuildFileSystem).toBeInstanceOf(NodeFileSystem);
   });
 
-  it("writes exactly the build files into builds/<hash>, allowing only the session's tools", async () => {
+  it("writes exactly the workspace files into workspaces/<build id>, allowing only the session's tools", async () => {
     const fs = new FakeFileSystem();
 
     const result = succeeded(await run(fs));
 
-    expect(result.reused).toBe(false);
-    expect(result.dir).toBe(`/fd-home/builds/${result.hash}`);
+    expect(result.dir).toBe(`/fd-home/workspaces/${workspace().id}`);
     expect(await fs.list(result.dir)).toEqual(expectedFiles);
     const settings = JSON.parse(await fs.readFile(`${result.dir}/settings.json`));
     expect(settings.permissions.allow).toEqual(["Read", "Edit"]);
@@ -87,23 +105,73 @@ describe("build", () => {
     expect(manifest.files).toStrictEqual(expected);
   });
 
-  it("reuses the folder for the same flow without writing again", async () => {
+  it("builds one version under two names into two folders with two hashes", async () => {
     const fs = new FakeFileSystem();
-    const first = succeeded(await run(fs));
+    const source = { flowId: "f1", version: 1 };
+
+    const login = succeeded(
+      await build(sample(), {
+        fs,
+        home,
+        source,
+        workspace: workspace({ id: "b-1", name: "fix-login" }),
+      }),
+    );
+    const signup = succeeded(
+      await build(sample(), {
+        fs,
+        home,
+        source,
+        workspace: workspace({ id: "b-2", name: "fix-signup" }),
+      }),
+    );
+
+    expect(signup.hash).not.toBe(login.hash);
+    expect(signup.dir).not.toBe(login.dir);
+    expect(await fs.list(login.dir)).toEqual(expectedFiles);
+    expect(await fs.list(signup.dir)).toEqual(expectedFiles);
+    const pluginName = async (dir: string) =>
+      JSON.parse(await fs.readFile(`${dir}/plugin/.claude-plugin/plugin.json`)).name;
+    expect(await pluginName(login.dir)).toBe("fix-login");
+    expect(await pluginName(signup.dir)).toBe("fix-signup");
+  });
+
+  it("covers CLAUDE.md in the hash, so a build from another base has another hash", async () => {
+    const onMain = succeeded(
+      await run(new FakeFileSystem(), sample(), workspace({ base: "main" })),
+    );
+    const onRelease = succeeded(
+      await run(new FakeFileSystem(), sample(), workspace({ base: "release" })),
+    );
+
+    expect(onRelease.hash).not.toBe(onMain.hash);
+  });
+
+  it("writes every build afresh and never looks in builds/<hash>", async () => {
+    const fs = new FakeFileSystem();
+    const first = succeeded(await run(fs, sample(), workspace({ id: "b-1" })));
     const writesAfterFirst = writes(fs).length;
 
-    const second = succeeded(await run(fs));
+    const second = succeeded(await run(fs, sample(), workspace({ id: "b-2" })));
 
-    expect(second).toStrictEqual({ ...first, reused: true });
-    expect(writes(fs)).toHaveLength(writesAfterFirst);
+    expect(second.hash).toBe(first.hash);
+    expect(writes(fs).slice(writesAfterFirst).sort()).toEqual(
+      expectedFiles.map((path) => `${second.dir}/${path}`),
+    );
+    expect(fs.calls.filter((call) => call.path.startsWith(`${home}/builds/`))).toEqual([]);
+    expect(second).not.toHaveProperty("reused");
   });
 
   it("builds the same hash and bytes in two homes, naming neither", async () => {
     const first = new FakeFileSystem();
     const second = new FakeFileSystem();
 
-    const a = succeeded(await build(sample(), { fs: first, home: "/Users/a/.flowdeck" }));
-    const b = succeeded(await build(sample(), { fs: second, home: "/tmp/other home" }));
+    const a = succeeded(
+      await build(sample(), { fs: first, home: "/Users/a/.flowdeck", workspace: workspace() }),
+    );
+    const b = succeeded(
+      await build(sample(), { fs: second, home: "/tmp/other home", workspace: workspace() }),
+    );
 
     expect(b.hash).toBe(a.hash);
     const files = await readBack(first, a.dir);
@@ -142,24 +210,21 @@ describe("build", () => {
     expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["p", "a"]);
   });
 
-  it("returns the same record when it reuses the folder", async () => {
-    const fs = new FakeFileSystem();
-    const first = succeeded(await run(fs));
-
-    const second = succeeded(await run(fs));
-
-    expect(second.record).toEqual(first.record);
-  });
-
   it("names the saved flow version it was built from, so each version has its own hash", async () => {
     const v1 = { flowId: "f1", version: 1 };
-    const build1 = succeeded(await build(sample(), { fs: new FakeFileSystem(), home, source: v1 }));
-    const again = succeeded(await build(sample(), { fs: new FakeFileSystem(), home, source: v1 }));
+    const named = workspace();
+    const build1 = succeeded(
+      await build(sample(), { fs: new FakeFileSystem(), home, source: v1, workspace: named }),
+    );
+    const again = succeeded(
+      await build(sample(), { fs: new FakeFileSystem(), home, source: v1, workspace: named }),
+    );
     const build2 = succeeded(
       await build(sample(), {
         fs: new FakeFileSystem(),
         home,
         source: { flowId: "f1", version: 2 },
+        workspace: named,
       }),
     );
 
@@ -188,64 +253,6 @@ describe("build", () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? [] : result.errors).not.toEqual([]);
     expect(fs.calls).toEqual([]);
-  });
-
-  it("restores a tampered cached build to its recorded bytes, and says what it restored", async () => {
-    const fs = new FakeFileSystem();
-    const first = succeeded(await run(fs));
-    const original = await readBack(fs, first.dir);
-    await fs.writeFile(`${first.dir}/commands/p.md`, "tampered");
-    await fs.remove(`${first.dir}/agents/a.md`);
-    await fs.writeFile(`${first.dir}/.DS_Store`, "finder");
-
-    const second = succeeded(await run(fs));
-
-    expect(second).toMatchObject({ hash: first.hash, dir: first.dir, reused: true });
-    expect(second.restored).toEqual([
-      { path: ".DS_Store", problem: "extra" },
-      { path: "agents/a.md", problem: "missing" },
-      { path: "commands/p.md", problem: "changed" },
-    ]);
-    expect(await readBack(fs, first.dir)).toEqual(original);
-    expect(await verify(first.dir, { fs })).toEqual({ ok: true });
-  });
-
-  it("restores a file edited together with its sha in the manifest", async () => {
-    const fs = new FakeFileSystem();
-    const first = succeeded(await run(fs));
-    const original = await readBack(fs, first.dir);
-    const manifest = JSON.parse(await fs.readFile(`${first.dir}/manifest.json`));
-    manifest.files["commands/p.md"] = createHash("sha256").update("forged").digest("hex");
-    await fs.writeFile(`${first.dir}/commands/p.md`, "forged");
-    await fs.writeFile(`${first.dir}/manifest.json`, JSON.stringify(manifest));
-
-    const second = succeeded(await run(fs));
-
-    expect(second).toMatchObject({ hash: first.hash, reused: true });
-    expect(await readBack(fs, first.dir)).toEqual(original);
-    expect(await verify(first.dir, { fs })).toEqual({ ok: true });
-  });
-
-  it("restores nothing and writes nothing when the cached build is intact", async () => {
-    const fs = new FakeFileSystem();
-    succeeded(await run(fs));
-    const writesBefore = writes(fs).length;
-
-    const again = succeeded(await run(fs));
-
-    expect(again.restored).toEqual([]);
-    expect(writes(fs)).toHaveLength(writesBefore);
-    expect(fs.calls.some((call) => call.method === "remove")).toBe(false);
-  });
-
-  it("rebuilds a folder that has no manifest", async () => {
-    const { dir } = succeeded(await run(new FakeFileSystem()));
-    const fs = new FakeFileSystem({ [`${dir}/commands/p.md`]: "half written" });
-
-    const result = succeeded(await run(fs));
-
-    expect(result.reused).toBe(false);
-    expect(writes(fs).sort()).toEqual(expectedFiles.map((path) => `${dir}/${path}`));
   });
 
   it("writes the same bytes as the recorded build", async () => {

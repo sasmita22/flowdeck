@@ -48,4 +48,13 @@ export class GitFolderState implements GitState {
       .filter((name) => name !== "")
       .sort();
   }
+
+  async defaultBranch(repo: string): Promise<string> {
+    try {
+      const remoteHead = await git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
+      return remoteHead.replace(/^origin\//, "");
+    } catch {
+      return git(repo, "symbolic-ref", "--short", "HEAD");
+    }
+  }
 }

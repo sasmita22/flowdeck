@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { Actions } from "./actions.js";
 import { AppMenu } from "./app-menu.js";
+import { BuildDialog } from "./build-dialog.js";
 import type { AppState } from "./app-store.js";
 import type { BranchState } from "./branch-store.js";
 import type { CanvasState } from "./canvas/store.js";
@@ -19,7 +20,7 @@ import { EditorPage } from "./pages/editor-page.js";
 import { RunPage } from "./pages/run-page.js";
 import { RunsPage } from "./pages/runs-page.js";
 import { RunDialog } from "./run-dialog.js";
-import { selectRunSummary, type RunState } from "./run-store.js";
+import { selectLatestSnapshot, selectRunSummary, type RunState } from "./run-store.js";
 import type { SaveState } from "./save-store.js";
 import type { ShellState } from "./shell-store.js";
 import type { TerminalState } from "./terminal/store.js";
@@ -119,10 +120,13 @@ function Errors(stores: AppStores) {
 
 function RunSummary({ run, nav, wait }: Pick<AppStores, "run" | "nav" | "wait">) {
   const waiting = useStore(wait, (state) => state.pending !== null);
-  const summary = useStore(run, (state) => selectRunSummary(state, waiting));
-  const liveRunId = useStore(run, (state) =>
-    state.snapshot?.status === "running" ? state.snapshot.runId : null,
+  const summary = useStore(run, (state) =>
+    selectRunSummary({ snapshot: selectLatestSnapshot(state) }, waiting),
   );
+  const liveRunId = useStore(run, (state) => {
+    const latest = selectLatestSnapshot(state);
+    return latest?.status === "running" ? latest.runId : null;
+  });
   if (liveRunId === null) return <span data-testid="run-status">{summary}</span>;
   return (
     <button
@@ -140,8 +144,8 @@ function StatusBar({ store, run, workspace, nav, wait }: AppStores) {
   const version = useStore(store, (state) => state.version ?? state.versionError ?? "");
   const status = useStore(store, (state) => statusText(state.status));
   const folder = useStore(workspace, (state) => state.folder);
-  const folderState = useStore(workspace, (state) => state.state);
-  const label = selectWorkspaceLabel({ folder, state: folderState });
+  const info = useStore(workspace, (state) => state.info);
+  const label = selectWorkspaceLabel({ folder, info });
   return (
     <footer className="fd-status-bar">
       <RunSummary run={run} nav={nav} wait={wait} />
@@ -179,11 +183,10 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
     case "builds":
       return (
         <BuildsPage
-          hash={page.hash}
+          buildId={page.buildId}
           nav={nav}
           library={library}
           run={run}
-          save={save}
           actions={actions}
         />
       );
@@ -224,7 +227,6 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         inspector={stores.inspector}
         shell={stores.shell}
         nav={stores.nav}
-        actions={stores.actions}
         branches={stores.branches}
       />
     );
@@ -236,7 +238,6 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         nav={stores.nav}
         library={stores.library}
         run={stores.run}
-        save={stores.save}
         shell={stores.shell}
         inspector={stores.inspector}
         wait={stores.wait}
@@ -261,6 +262,7 @@ export function App(stores: AppStores) {
         </section>
       )}
       <StatusBar {...stores} />
+      <BuildDialog run={stores.run} nav={stores.nav} library={stores.library} />
       <RunDialog run={stores.run} actions={stores.actions} />
       <ClosePrompt store={stores.save} />
       <LeavePrompt store={stores.save} />

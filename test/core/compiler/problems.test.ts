@@ -44,17 +44,17 @@ describe("plainProblems", () => {
     }
   });
 
-  it("keeps a problem with no node, such as the session folder", () => {
+  it("keeps a problem with no node, such as the missing repository", () => {
     const base = flow([prompt("p")], []);
     const current = {
       ...base,
-      session: { ...base.session, workingFolder: { kind: "path" as const, path: "" } },
+      session: { ...base.session, buildConfig: { ...base.session.buildConfig, repo: "" } },
     };
 
     expect(plainProblems(validate(current))).toEqual([
       {
-        field: "workingFolder.path",
-        text: "Choose the folder this blueprint works in, in the session settings.",
+        field: "buildConfig.repo",
+        text: "Choose the repository this blueprint builds from, in the session settings. Build is refused until one is set.",
       },
     ]);
   });

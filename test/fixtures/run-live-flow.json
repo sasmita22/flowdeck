@@ -8,10 +8,7 @@
         "x": 0,
         "y": 0
       },
-      "settings": {
-        "inputs": ["ticket"],
-        "flags": {}
-      }
+      "settings": {}
     },
     {
       "id": "p1",
@@ -111,9 +108,15 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "worktree",
-      "branch": "main"
+    "buildConfig": {
+      "repo": "/work/repo",
+      "base": "main",
+      "variables": [
+        {
+          "name": "ticket",
+          "kind": "text"
+        }
+      ]
     },
     "model": "haiku",
     "allowedTools": [],

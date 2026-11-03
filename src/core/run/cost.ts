@@ -52,12 +52,13 @@ function ownerOf(starts: readonly TurnStart[], at: number | undefined): string |
 
 export const agentNodes = (manifest: {
   hash: string;
+  prefix: string;
   nodes: readonly { id: string; type: string }[];
 }): Map<string, string> =>
   new Map(
     manifest.nodes
       .filter((node) => node.type === "agent")
-      .map((node) => [agentType(manifest.hash, node.id), node.id]),
+      .map((node) => [agentType(manifest.prefix, node.id), node.id]),
   );
 
 export function chargeUsage(input: {

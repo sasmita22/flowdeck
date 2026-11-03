@@ -1,16 +1,20 @@
+import type { RunSnapshot } from "../../core/run/snapshot.js";
 import type { EnginePush } from "../engine/protocol.js";
 
-export type RunRelay = { onPush(push: EnginePush): void; latest(): unknown };
+export type RunRelay = {
+  onPush(push: EnginePush): void;
+  latest(runId: string): RunSnapshot | null;
+};
 
-export function createRunRelay(options: { send: (snapshot: unknown) => void }): RunRelay {
-  let latest: unknown = null;
+export function createRunRelay(options: { send: (snapshot: RunSnapshot) => void }): RunRelay {
+  const latest = new Map<string, RunSnapshot>();
   return {
     onPush(push) {
       if (push.push !== "run-state") return;
-      latest = push.value;
+      latest.set(push.value.runId, push.value);
       options.send(push.value);
     },
-    latest: () => latest,
+    latest: (runId) => latest.get(runId) ?? null,
   };
 }
 

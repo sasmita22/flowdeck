@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyField,
   sessionFields,
+  withChoices,
+  yesNoChoices,
   type FieldDescription,
 } from "../../../../src/app/renderer/inspector/schema-form.js";
 import { modelChoices, permissionModes } from "../../../../src/core/flow/choices.js";
@@ -25,7 +27,7 @@ const summary = (field: FieldDescription) => ({
 const worktreeSession = (): Session =>
   deepFreeze({
     name: "build",
-    workingFolder: { kind: "worktree", branch: "main", repo: "/r" },
+    buildConfig: { repo: "/r", base: "main", variables: [] },
     model: "sonnet",
     allowedTools: ["Read"],
     permissionMode: "default",
@@ -33,27 +35,12 @@ const worktreeSession = (): Session =>
     frame: { nodes: ["A", "B"] },
   });
 
-const pathSession = (): Session =>
-  deepFreeze({ ...worktreeSession(), workingFolder: { kind: "path", path: "/work" } });
-
-const kindField = (branches?: readonly string[]) => {
-  const field = sessionFields(branches).find(
-    (candidate) => candidate.testId === "session-working-folder-kind",
-  );
-  if (field?.control !== "select") throw new Error("expected the working folder kind select");
-  return field;
-};
-
 describe("describeFields", () => {
-  it("describes name, working folder, model, tools, permission mode and budget in schema order", () => {
+  it("describes name, repository, base branch, model, tools, permission mode and budget in schema order", () => {
     expect(sessionFields().map(summary)).toEqual([
       { control: "text", path: ["name"], testId: "session-name" },
-      {
-        control: "select",
-        path: ["workingFolder", "kind"],
-        testId: "session-working-folder-kind",
-        options: ["path", "worktree"],
-      },
+      { control: "text", path: ["buildConfig", "repo"], testId: "session-build-config-repo" },
+      { control: "text", path: ["buildConfig", "base"], testId: "session-build-config-base" },
       {
         control: "select",
         path: ["model"],
@@ -72,7 +59,7 @@ describe("describeFields", () => {
   });
 
   it("names each model and permission mode in plain words", () => {
-    const [, , model, , permission] = sessionFields();
+    const [, , , model, , permission] = sessionFields();
     if (model?.control !== "select" || permission?.control !== "select") {
       throw new Error("expected selects");
     }
@@ -81,86 +68,63 @@ describe("describeFields", () => {
     expect(permission.optionLabels["acceptEdits"]).toBe("Accept file edits without asking");
   });
 
-  it("picks the worktree's start branch from the repository's branches once they are known", () => {
-    expect(
-      kindField().variants.worktree?.find((field) => field.path[1] === "branch")?.control,
-    ).toBe("text");
-
-    const branch = kindField(["dev", "main"]).variants.worktree?.find(
-      (field) => field.path[1] === "branch",
+  it("picks the base branch from the repository's branches once they are known", () => {
+    const base = sessionFields(["dev", "main"]).find(
+      (field) => field.testId === "session-build-config-base",
     );
 
-    expect(branch).toMatchObject({
+    expect(base).toMatchObject({
       control: "select",
-      testId: "session-working-folder-branch",
+      path: ["buildConfig", "base"],
       options: ["dev", "main"],
       optionLabels: { dev: "dev", main: "main" },
     });
   });
 
-  it("hints at what to type for the folder path", () => {
-    expect(kindField().variants.path?.[0]).toMatchObject({
-      placeholder: "/Users/you/code/project",
-    });
-  });
-
-  it("describes the path variant's folder as a text field", () => {
-    expect(kindField().variants.path?.map(summary)).toEqual([
-      {
-        control: "text",
-        path: ["workingFolder", "path"],
-        testId: "session-working-folder-path",
-      },
-    ]);
-  });
-
-  it("describes the worktree variant's repo and base branch as text fields", () => {
-    const fields = kindField().variants.worktree?.map(summary);
-
-    expect(fields).toHaveLength(2);
-    expect(fields).toEqual(
-      expect.arrayContaining([
-        {
-          control: "text",
-          path: ["workingFolder", "repo"],
-          testId: "session-working-folder-repo",
-        },
-        {
-          control: "text",
-          path: ["workingFolder", "branch"],
-          testId: "session-working-folder-branch",
-        },
-      ]),
-    );
-  });
-
   it("labels every field in plain words", () => {
-    const kind = kindField();
-    const labelled = (field: FieldDescription) => [field.testId, field.label];
-
-    expect(sessionFields().map(labelled)).toEqual([
+    expect(sessionFields().map((field) => [field.testId, field.label])).toEqual([
       ["session-name", "Session name"],
-      ["session-working-folder-kind", "Working folder"],
+      ["session-build-config-repo", "Repository"],
+      ["session-build-config-base", "Start from branch"],
       ["session-model", "Model"],
       ["session-allowed-tools", "Allowed tools (one per line)"],
       ["session-permission-mode", "Permission mode"],
       ["session-budget", "Budget ($)"],
     ]);
-    expect(kind.variants.path?.map(labelled)).toEqual([
-      ["session-working-folder-path", "Folder path"],
+  });
+});
+
+describe("yesNoChoices", () => {
+  const config = {
+    variables: [
+      { name: "ticket", kind: "text" as const },
+      { name: "deep", kind: "yesno" as const, default: true },
+      { name: "docs", kind: "yesno" as const },
+    ],
+  };
+
+  it("offers the declared yes/no variables, and no text ones", () => {
+    expect(yesNoChoices(config)).toEqual([
+      { value: "deep", label: "deep" },
+      { value: "docs", label: "docs" },
     ]);
-    expect(kind.variants.worktree?.map(labelled)).toEqual(
-      expect.arrayContaining([
-        ["session-working-folder-repo", "Repository"],
-        ["session-working-folder-branch", "Start from branch"],
-      ]),
-    );
   });
 
-  it("names each working folder kind in plain words and keeps its value", () => {
-    expect(kindField().optionLabels).toEqual({
-      path: "Existing folder",
-      worktree: "New git worktree",
+  it("offers nothing when no yes/no variable is declared", () => {
+    expect(yesNoChoices({ variables: [{ name: "ticket", kind: "text" }] })).toEqual([]);
+  });
+
+  it("turns the Branch variable field into a pick from them", () => {
+    const [field] = withChoices(
+      [{ control: "text", path: ["variable"], testId: "node-setting-variable", label: "Variable" }],
+      "variable",
+      yesNoChoices(config),
+    );
+
+    expect(field).toMatchObject({
+      control: "select",
+      testId: "node-setting-variable",
+      options: ["deep", "docs"],
     });
   });
 });
@@ -181,9 +145,9 @@ describe("applyField", () => {
   it("sets a string inside the current working folder variant", () => {
     const before = worktreeSession();
 
-    const after = applyField(before, ["workingFolder", "repo"], "/other");
+    const after = applyField(before, ["buildConfig", "repo"], "/other");
 
-    expect(after.workingFolder).toEqual({ kind: "worktree", branch: "main", repo: "/other" });
+    expect(after.buildConfig).toEqual({ repo: "/other", base: "main", variables: [] });
     expect(after.frame).toEqual(before.frame);
     expectSession(after);
   });
@@ -221,23 +185,19 @@ describe("applyField", () => {
     expectSession(after);
   });
 
-  it("switches worktree to path with an empty path and no worktree keys", () => {
-    const before = worktreeSession();
+  it("sets the base branch and keeps the declared variables", () => {
+    const before = deepFreeze({
+      ...worktreeSession(),
+      buildConfig: { repo: "/r", variables: [{ name: "deep", kind: "yesno" as const }] },
+    });
 
-    const after = applyField(before, ["workingFolder", "kind"], "path");
+    const after = applyField(before, ["buildConfig", "base"], "dev");
 
-    expect(after.workingFolder).toStrictEqual({ kind: "path", path: "" });
-    expect(after.name).toBe("build");
-    expect(after.frame).toEqual({ nodes: ["A", "B"] });
-    expectSession(after);
-  });
-
-  it("switches path to worktree with an empty branch and no repo key", () => {
-    const after = applyField(pathSession(), ["workingFolder", "kind"], "worktree");
-
-    expect(after.workingFolder).toStrictEqual({ kind: "worktree", branch: "" });
-    expect(after.name).toBe("build");
-    expect(after.frame).toEqual({ nodes: ["A", "B"] });
+    expect(after.buildConfig).toEqual({
+      repo: "/r",
+      base: "dev",
+      variables: [{ name: "deep", kind: "yesno" }],
+    });
     expectSession(after);
   });
 });

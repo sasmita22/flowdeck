@@ -2,7 +2,6 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { paletteItems } from "../canvas/palette-items.js";
-import { triggerFlags } from "../../../core/nodes/branch/execute.js";
 import {
   selectFieldIssues,
   selectNodeIssues,
@@ -24,7 +23,9 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const fields = describeNodeFields(node.type, flow);
   const issues = selectFieldIssues(flow, node.id);
   const problems = selectNodeIssues(flow)[node.id] ?? [];
-  const noFlags = node.type === "branch" && Object.keys(triggerFlags(flow.nodes)).length === 0;
+  const noVariables =
+    node.type === "branch" &&
+    !flow.session.buildConfig.variables.some(({ kind }) => kind === "yesno");
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {
@@ -105,9 +106,9 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
           issues={issues}
         />
       ))}
-      {noFlags && (
-        <span className="fd-hint" data-testid="branch-no-flags">
-          The Trigger has no flags yet. Select the Trigger, add a flag under Flags, then pick it
+      {noVariables && (
+        <span className="fd-hint" data-testid="branch-no-variables">
+          No yes/no variable yet. Add one under Variables in the session settings, then pick it
           here.
         </span>
       )}

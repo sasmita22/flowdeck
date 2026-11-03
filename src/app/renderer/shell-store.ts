@@ -1,9 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { CanvasState } from "./canvas/store.js";
-import type { RunState } from "./run-store.js";
+import type { RunView } from "./run-store.js";
 import { controlTestIds } from "./test-ids.js";
-
-type RunView = Pick<RunState, "snapshot">;
 
 type SelectionView = Pick<CanvasState, "selection" | "select">;
 

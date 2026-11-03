@@ -3,7 +3,9 @@ import { createStore } from "zustand/vanilla";
 import { createActions, type ActionStores } from "../../../src/app/renderer/actions.js";
 import { createNavStore } from "../../../src/app/renderer/nav-store.js";
 
-const setup = (options: { flowId?: string | null; runId?: string | null } = {}) => {
+const setup = (
+  options: { flowId?: string | null; runId?: string | null; deleted?: boolean } = {},
+) => {
   const nav = createNavStore();
   nav.getState().go({ name: "blueprints" });
   const save = createStore(() => ({
@@ -14,9 +16,12 @@ const setup = (options: { flowId?: string | null; runId?: string | null } = {}) 
     rename: vi.fn(async () => undefined),
   }));
   const run = createStore(() => ({
-    run: vi.fn(async () => options.runId ?? null),
-    runBuild: vi.fn(async () => options.runId ?? null),
-    start: vi.fn(async () => options.runId ?? null),
+    runBuild: vi.fn<(buildId: string) => Promise<string | null>>(async () => options.runId ?? null),
+    start: vi.fn<(choice: { auto: boolean }) => Promise<string | null>>(
+      async () => options.runId ?? null,
+    ),
+    deleteBuild: vi.fn<(buildId: string) => Promise<boolean>>(async () => options.deleted ?? true),
+    stop: vi.fn<(runId: string) => Promise<void>>(async () => undefined),
   }));
   const library = createStore(() => ({
     refresh: vi.fn(async () => undefined),
@@ -56,35 +61,62 @@ describe("createActions", () => {
     expect(nav.getState().page).toEqual({ name: "editor" });
   });
 
-  it("opens the run page of a run that started, and refreshes the lists", async () => {
+  it("runs a build by its id, opens the run page of the run that started, and refreshes the lists", async () => {
     const { actions, nav, library, run } = setup({ runId: "run-7" });
-
-    await actions.buildAndRun();
-    expect(nav.getState().page).toEqual({ name: "run", runId: "run-7" });
-
     nav.getState().go({ name: "builds" });
-    await actions.runBuild("abc");
-    expect(run.getState().runBuild).toHaveBeenCalledWith("abc");
+
+    await actions.runBuild("b-0f3a9c2e");
+
+    expect(run.getState().runBuild).toHaveBeenCalledWith("b-0f3a9c2e");
     expect(nav.getState().page).toEqual({ name: "run", runId: "run-7" });
-    expect(library.getState().refresh).toHaveBeenCalledTimes(2);
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the run page once the run dialog starts a run", async () => {
+  it("opens the run page once the run dialog starts a run with its auto choice", async () => {
     const { actions, nav, run } = setup({ runId: "run-8" });
-    const options = { inputs: { ticket: "FD-1" }, flags: { deep: false }, auto: true };
 
-    await actions.startRun(options);
+    await actions.startRun({ auto: true });
 
-    expect(run.getState().start).toHaveBeenCalledWith(options);
+    expect(run.getState().start).toHaveBeenCalledWith({ auto: true });
     expect(nav.getState().page).toEqual({ name: "run", runId: "run-8" });
   });
 
   it("stays put when the run did not start", async () => {
     const { actions, nav } = setup({ runId: null });
 
-    await actions.runBuild("abc");
+    await actions.runBuild("b-0f3a9c2e");
 
     expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+
+  it("deletes a build by its id and refreshes the lists, staying on the page", async () => {
+    const { actions, nav, library, run } = setup();
+    nav.getState().go({ name: "builds" });
+
+    await actions.deleteBuild("b-0f3a9c2e");
+
+    expect(run.getState().deleteBuild).toHaveBeenCalledWith("b-0f3a9c2e");
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "builds" });
+  });
+
+  it("refreshes the lists after a refused delete too, so the card shows what is true", async () => {
+    const { actions, library } = setup({ deleted: false });
+
+    await actions.deleteBuild("b-0f3a9c2e");
+
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a run by its id and refreshes the lists, staying on the page", async () => {
+    const { actions, nav, library, run } = setup();
+    nav.getState().go({ name: "builds" });
+
+    await actions.stopRun("run-7");
+
+    expect(run.getState().stop).toHaveBeenCalledWith("run-7");
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "builds" });
   });
 
   it("renames the open blueprint through the editor, and any other one in the list", async () => {

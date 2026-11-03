@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { parseFlow, Session, type Flow } from "../../core/flow/schema.js";
+import { upgradeFlow } from "../../core/flow/upgrade.js";
 import { registry } from "../../core/nodes/registry.js";
 import type {
   FlowStore,
@@ -30,6 +31,7 @@ type SummaryRow = {
   created_at: string;
   versions: number;
   last_saved_at: string | null;
+  version: number | null;
   session: string | null;
 };
 
@@ -58,15 +60,6 @@ const cleanName = (name: string): string => {
   return trimmed;
 };
 
-const toSummary = (row: SummaryRow): FlowSummary => ({
-  flowId: row.id,
-  name: row.name,
-  createdAt: row.created_at,
-  versions: row.versions,
-  lastSavedAt: row.last_saved_at,
-  workingFolder: row.session === null ? null : Session.parse(JSON.parse(row.session)).workingFolder,
-});
-
 export class SqliteFlowStore implements FlowStore {
   private readonly db: Database.Database;
   private readonly now: () => Date;
@@ -89,14 +82,14 @@ export class SqliteFlowStore implements FlowStore {
       .prepare(
         `SELECT flows.id, flows.name, flows.created_at,
                 (SELECT count(*) FROM flow_versions WHERE flow_id = flows.id) AS versions,
-                latest.saved_at AS last_saved_at, latest.session
+                latest.saved_at AS last_saved_at, latest.version, latest.session
            FROM flows
            LEFT JOIN flow_versions AS latest ON latest.flow_id = flows.id
             AND latest.version = (SELECT MAX(version) FROM flow_versions WHERE flow_id = flows.id)
           ORDER BY COALESCE(latest.saved_at, flows.created_at) DESC, flows.rowid DESC`,
       )
       .all() as SummaryRow[];
-    return rows.map(toSummary);
+    return rows.map((row) => this.toSummary(row));
   }
 
   rename(flowId: string, name: string): void {
@@ -240,6 +233,35 @@ export class SqliteFlowStore implements FlowStore {
         ...(notes.length === 0 ? {} : { notes }),
       }),
     };
+  }
+
+  private toSummary(row: SummaryRow): FlowSummary {
+    return {
+      flowId: row.id,
+      name: row.name,
+      createdAt: row.created_at,
+      versions: row.versions,
+      lastSavedAt: row.last_saved_at,
+      buildConfig:
+        row.session === null || row.version === null
+          ? null
+          : this.upgradedSession(row.id, row.version, row.session).buildConfig,
+    };
+  }
+
+  private upgradedSession(flowId: string, version: number, session: string): Session {
+    const triggers = (
+      this.db
+        .prepare(
+          `SELECT type, settings FROM nodes
+            WHERE flow_id = ? AND version = ? AND type = 'trigger' ORDER BY ordinal`,
+        )
+        .all(flowId, version) as { type: string; settings: string }[]
+    ).map((row) => ({ type: row.type, settings: JSON.parse(row.settings) as unknown }));
+    const upgraded = upgradeFlow({ nodes: triggers, session: JSON.parse(session) as unknown }) as {
+      session: unknown;
+    };
+    return Session.parse(upgraded.session);
   }
 
   private currentFlowId(): string | undefined {

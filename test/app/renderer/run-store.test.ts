@@ -1,15 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
+import { noBlueprint } from "../../../src/app/renderer/library-store.js";
 import {
   createRunStore,
-  selectNodeDisplay,
-  selectLiveBadge,
-  selectRunDisabled,
-  selectRunSummary,
   needsSessionSetup,
+  selectCanBuild,
+  selectKeptNote,
+  selectLiveBadge,
+  selectNodeDisplay,
+  selectRunDisabled,
+  selectRunHint,
+  selectRunningCount,
+  selectRunSnapshot,
+  selectRunSummary,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
+import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 import { flow, prompt } from "../../fixtures/flow-builders.js";
 
@@ -24,9 +31,11 @@ type RunBridge = Pick<
   | "retryNode"
   | "resumeRun"
   | "runCost"
+  | "deleteBuild"
+  | "defaultBranch"
 >;
 
-const noChoices = { inputs: [], flags: {}, automatic: false };
+type Status = "running" | "done" | "failed" | "stopped" | "interrupted";
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -37,13 +46,34 @@ const deferred = <T>() => {
 };
 
 const snapshot = (
-  status: "running" | "done" | "failed" | "stopped",
+  status: Status,
   nodes: Record<string, NodeState> = { "prompt-1": "waiting" },
-) => ({ runId: "run-1", status, nodes });
+  runId = "run-1",
+) => ({ runId, status, nodes });
 
-const savedFlow = () => flow([prompt("prompt-1")], []);
+const configured = (buildConfig: BuildConfig): Flow => {
+  const base = flow([prompt("prompt-1")], []);
+  return { ...base, session: { ...base.session, buildConfig } };
+};
 
-const setup = async (options: { latest?: unknown; choices?: unknown } = {}) => {
+const declared: BuildConfig = {
+  repo: "/code/shop",
+  variables: [
+    { name: "ticket", kind: "text" },
+    { name: "deep", kind: "yesno", default: true },
+  ],
+};
+
+const built = { kind: "built", id: "b-0f3a9c2e", hash: "h1", dir: "/fd/workspaces/b-0f3a9c2e" };
+
+const setup = async (
+  options: {
+    latest?: Flow | null;
+    automatic?: boolean;
+    defaultBranch?: string;
+    runState?: Promise<unknown>;
+  } = {},
+) => {
   const calls: string[] = [];
   let pushListener: (value: unknown) => void = () => undefined;
 
@@ -66,42 +96,43 @@ const setup = async (options: { latest?: unknown; choices?: unknown } = {}) => {
   } satisfies SaveBridge;
 
   const bridge = {
-    buildVersion: vi.fn<(ref: { flowId: string; version: number }) => Promise<unknown>>(
-      async () => {
-        calls.push("buildVersion");
-        return { kind: "built", hash: "h1", dir: "/fd/builds/h1", reused: false, restored: [] };
-      },
-    ),
-    runBuild: vi.fn<(payload: { hash: string }) => Promise<unknown>>(async () => {
+    buildVersion: vi.fn<FlowdeckBridge["buildVersion"]>(async () => {
+      calls.push("buildVersion");
+      return built;
+    }),
+    runBuild: vi.fn<FlowdeckBridge["runBuild"]>(async () => {
       calls.push("runBuild");
       return { kind: "started", runId: "run-1" };
     }),
-    getRunState: vi.fn<() => Promise<unknown>>(async () => {
-      calls.push("getRunState");
-      return null;
-    }),
+    getRunState: vi.fn<FlowdeckBridge["getRunState"]>(
+      () => options.runState ?? Promise.resolve(null),
+    ),
     onRunState: vi.fn((listener: (value: unknown) => void) => {
       calls.push("onRunState");
       pushListener = listener;
       return () => {};
     }),
-    runOptions: vi.fn<(payload: { hash: string }) => Promise<unknown>>(
-      async () => options.choices ?? noChoices,
-    ),
-    stopRun: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async () => ({
-      stopped: true,
+    runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({
+      automatic: options.automatic ?? false,
     })),
-    retryNode: vi.fn<(payload: { runId: string; nodeId: string }) => Promise<unknown>>(
-      async ({ runId }) => ({ kind: "started", runId }),
-    ),
-    resumeRun: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async ({ runId }) => ({
+    stopRun: vi.fn<FlowdeckBridge["stopRun"]>(async () => ({ stopped: true })),
+    retryNode: vi.fn<FlowdeckBridge["retryNode"]>(async ({ runId }) => ({
       kind: "started",
       runId,
     })),
-    runCost: vi.fn<(payload: { runId: string }) => Promise<unknown>>(async () => ({
+    resumeRun: vi.fn<FlowdeckBridge["resumeRun"]>(async ({ runId }) => ({
+      kind: "started",
+      runId,
+    })),
+    runCost: vi.fn<FlowdeckBridge["runCost"]>(async () => ({
       nodes: [{ nodeId: "p1", tokens: 10, cost: 0.5, ms: 1000 }],
       total: { tokens: 10, cost: 0.5, ms: 1000 },
     })),
+    deleteBuild: vi.fn<FlowdeckBridge["deleteBuild"]>(async () => ({ ok: true })),
+    defaultBranch: vi.fn<FlowdeckBridge["defaultBranch"]>(async () => {
+      calls.push("defaultBranch");
+      return options.defaultBranch ?? "main";
+    }),
   } satisfies RunBridge;
 
   const canvas = createCanvasStore({ ready: false });
@@ -109,242 +140,279 @@ const setup = async (options: { latest?: unknown; choices?: unknown } = {}) => {
   await save.getState().open();
   const run = createRunStore({ bridge, save, canvas });
   const push = (value: unknown) => pushListener(value);
-  const disabled = () => selectRunDisabled(run.getState(), save.getState());
 
-  return { bridge, saveBridge, canvas, save, run, calls, push, disabled };
+  return { bridge, saveBridge, canvas, save, run, calls, push };
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
   canvas.getState().drop("script", { x: 200, y: 0 });
 
+const card = (
+  run: { id: string; status: Status } | null = null,
+  old = false,
+): { old: boolean; run: { id: string; status: Status } | null } => ({ old, run });
+
 describe("connect", () => {
-  it("subscribes to run-state pushes before asking for the current run state", async () => {
-    const { run, calls } = await setup();
-
+  it("keeps each pushed snapshot under its own run", async () => {
+    const { run, push } = await setup();
     await run.getState().connect();
 
-    expect(calls).toEqual(["onRunState", "getRunState"]);
-  });
+    push(snapshot("running", { a: "sent" }, "run-1"));
+    push(snapshot("running", { b: "running" }, "run-2"));
+    push(snapshot("done", { a: "done" }, "run-1"));
 
-  it("shows the snapshot getRunState returns when no push came first", async () => {
-    const { bridge, run } = await setup();
-    bridge.getRunState.mockResolvedValueOnce(snapshot("running"));
-
-    await run.getState().connect();
-
-    expect(run.getState().snapshot).toEqual(snapshot("running"));
-  });
-
-  it("replaces the snapshot with each pushed one", async () => {
-    const { bridge, run, push } = await setup();
-    bridge.getRunState.mockResolvedValueOnce(snapshot("running"));
-    await run.getState().connect();
-
-    push(snapshot("done", { "prompt-1": "done" }));
-
-    expect(run.getState().snapshot).toEqual(snapshot("done", { "prompt-1": "done" }));
-  });
-
-  it("keeps a push that arrived before getRunState answered", async () => {
-    const { bridge, run, push } = await setup();
-    const answer = deferred<unknown>();
-    bridge.getRunState.mockReturnValueOnce(answer.promise);
-
-    const connecting = run.getState().connect();
-    push(snapshot("done", { "prompt-1": "done" }));
-    answer.resolve(snapshot("running"));
-    await connecting;
-
-    expect(run.getState().snapshot).toEqual(snapshot("done", { "prompt-1": "done" }));
+    expect(selectRunSnapshot(run.getState(), "run-1")).toEqual(
+      snapshot("done", { a: "done" }, "run-1"),
+    );
+    expect(selectRunSnapshot(run.getState(), "run-2")).toEqual(
+      snapshot("running", { b: "running" }, "run-2"),
+    );
+    expect(selectRunSnapshot(run.getState(), "run-3")).toBeNull();
   });
 
   it("ignores payloads that are not run snapshots", async () => {
-    const { bridge, run, push } = await setup();
-    bridge.getRunState.mockResolvedValueOnce({ runId: "run-1", status: "sideways", nodes: {} });
+    const { run, push } = await setup();
     await run.getState().connect();
 
-    expect(run.getState().snapshot).toBeNull();
-
     push(snapshot("running"));
+    push({ runId: "run-1", status: "sideways", nodes: {} });
     push({ nodes: "none" });
     push("done");
 
-    expect(run.getState().snapshot).toEqual(snapshot("running"));
+    expect(selectRunSnapshot(run.getState(), "run-1")).toEqual(snapshot("running"));
   });
 });
 
-describe("run (Build & run)", () => {
-  it("builds the saved version and runs that build, without saving a clean canvas", async () => {
-    const { bridge, saveBridge, run, calls } = await setup({ latest: savedFlow() });
+describe("view", () => {
+  it("fetches the run's state once, for a run that pushed before the window subscribed", async () => {
+    const { bridge, run } = await setup({
+      runState: Promise.resolve(snapshot("running", { g1: "needs-you" }, "run-7")),
+    });
+    await run.getState().connect();
 
-    await expect(run.getState().run()).resolves.toBe("run-1");
+    await run.getState().view("run-7");
 
-    expect(saveBridge.saveFlow).not.toHaveBeenCalled();
-    expect(bridge.buildVersion).toHaveBeenCalledWith({ flowId: "flow-1", version: 1 });
-    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "h1" });
-    expect(calls).toEqual(["buildVersion", "runBuild"]);
-    expect(run.getState().lastBuild).toEqual({ hash: "h1", flowId: "flow-1", version: 1 });
+    expect(bridge.getRunState).toHaveBeenCalledExactlyOnceWith("run-7");
+    expect(selectRunSnapshot(run.getState(), "run-7")).toEqual(
+      snapshot("running", { g1: "needs-you" }, "run-7"),
+    );
   });
 
-  it("saves a dirty canvas first and builds the version that save made", async () => {
-    const { bridge, saveBridge, canvas, run, calls } = await setup({ latest: savedFlow() });
-    makeDirty(canvas);
-    const edited = canvas.getState().flow;
+  it("keeps a snapshot pushed while the fetch was out over the fetched one", async () => {
+    const fetched = deferred<unknown>();
+    const { run, push } = await setup({ runState: fetched.promise });
+    await run.getState().connect();
 
-    await run.getState().run();
+    const viewing = run.getState().view("run-7");
+    push(snapshot("done", { g1: "done" }, "run-7"));
+    fetched.resolve(snapshot("running", { g1: "needs-you" }, "run-7"));
+    await viewing;
 
-    expect(saveBridge.saveFlow).toHaveBeenCalledWith({
+    expect(selectRunSnapshot(run.getState(), "run-7")).toEqual(
+      snapshot("done", { g1: "done" }, "run-7"),
+    );
+  });
+
+  it("stores nothing when the run has no state or the answer is not a snapshot", async () => {
+    for (const answer of [null, { runId: "run-7", status: "sideways", nodes: {} }]) {
+      const { run } = await setup({ runState: Promise.resolve(answer) });
+      await run.getState().view("run-7");
+      expect(selectRunSnapshot(run.getState(), "run-7")).toBeNull();
+    }
+  });
+});
+
+describe("selectRunningCount", () => {
+  it("counts every run whose latest snapshot is running", async () => {
+    const { run, push } = await setup();
+    await run.getState().connect();
+    expect(selectRunningCount(run.getState())).toBe(0);
+
+    push(snapshot("running", {}, "run-1"));
+    push(snapshot("running", {}, "run-2"));
+    push(snapshot("done", {}, "run-3"));
+    expect(selectRunningCount(run.getState())).toBe(2);
+
+    push(snapshot("stopped", {}, "run-1"));
+    expect(selectRunningCount(run.getState())).toBe(1);
+  });
+});
+
+describe("the Build dialog", () => {
+  it("opens from the canvas on the saved version, prefilled with the blueprint's repo, base and defaults", async () => {
+    const { bridge, run, calls } = await setup({
+      latest: configured({ ...declared, base: "dev" }),
+    });
+
+    await run.getState().openBuild();
+
+    expect(calls).toEqual([]);
+    expect(bridge.defaultBranch).not.toHaveBeenCalled();
+    expect(run.getState().buildDialog).toEqual({
       flowId: "flow-1",
-      name: "Untitled",
-      flow: edited,
+      version: 1,
+      name: "",
+      repo: "/code/shop",
+      base: "dev",
+      variables: declared.variables,
+      values: { deep: true },
+      error: null,
     });
-    expect(bridge.buildVersion).toHaveBeenCalledWith({ flowId: "flow-1", version: 2 });
-    expect(calls).toEqual(["saveFlow", "buildVersion", "runBuild"]);
   });
 
-  it("force-saves a clean canvas that has never been saved, then builds and runs it", async () => {
-    const { saveBridge, canvas, run, calls } = await setup({ latest: null });
-    const fresh = canvas.getState().flow;
+  it("saves a dirty canvas first and opens on the version that save made", async () => {
+    const { canvas, run, calls } = await setup({ latest: configured(declared) });
+    makeDirty(canvas);
 
-    await run.getState().run();
+    await run.getState().openBuild();
 
-    expect(saveBridge.saveFlow).toHaveBeenCalledWith({
-      flowId: null,
-      name: "Untitled",
-      flow: fresh,
-    });
-    expect(calls).toEqual(["saveFlow", "buildVersion", "runBuild"]);
+    expect(calls).toEqual(["saveFlow", "defaultBranch"]);
+    expect(run.getState().buildDialog).toMatchObject({ flowId: "flow-1", version: 2 });
   });
 
-  it("neither builds nor runs when the save fails, and holds the save error", async () => {
-    const { bridge, saveBridge, canvas, run } = await setup({ latest: savedFlow() });
+  it("opens nothing and holds the save error when the save fails", async () => {
+    const { saveBridge, canvas, run } = await setup({ latest: configured(declared) });
     makeDirty(canvas);
     saveBridge.saveFlow.mockResolvedValueOnce({ kind: "error", message: "disk full" });
 
-    await expect(run.getState().run()).resolves.toBeNull();
+    await run.getState().openBuild();
 
-    expect(bridge.buildVersion).not.toHaveBeenCalled();
-    expect(bridge.runBuild).not.toHaveBeenCalled();
+    expect(run.getState().buildDialog).toBeNull();
     expect(run.getState().error).toBe("disk full");
   });
 
-  it("does not run when the build fails, and holds the build's problems", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "ports: p1 has no input" });
-
-    await run.getState().run();
-
-    expect(bridge.runBuild).not.toHaveBeenCalled();
-    expect(run.getState().error).toBe("ports: p1 has no input");
-  });
-
-  it("holds the message of an error result from runBuild", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.runBuild.mockResolvedValueOnce({
-      kind: "error",
-      message: "A run is already in progress",
-    });
-
-    await expect(run.getState().run()).resolves.toBeNull();
-
-    expect(run.getState().error).toBe("A run is already in progress");
-  });
-
-  it("holds an error when runBuild answers with something that is not a start result", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.runBuild.mockResolvedValueOnce({ kind: "begun" });
-
-    await run.getState().run();
-
-    expect(run.getState().error).toEqual(expect.any(String));
-    expect(run.getState().error).not.toBe("");
-  });
-
-  it("clears the error once a run starts", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.runBuild.mockResolvedValueOnce({ kind: "error", message: "boom" });
-    await run.getState().run();
-    expect(run.getState().error).toBe("boom");
-
-    await run.getState().run();
-
-    expect(run.getState().error).toBeNull();
-  });
-});
-
-describe("build", () => {
-  it("saves if needed, builds the saved version and keeps it as the last build, without running", async () => {
-    const { bridge, canvas, run, calls } = await setup({ latest: savedFlow() });
+  it("opens for a blueprint's latest version, starting from the repo's default branch when it names no base", async () => {
+    const { bridge, canvas, run, calls } = await setup({ defaultBranch: "trunk" });
     makeDirty(canvas);
 
-    await expect(run.getState().build()).resolves.toBe("h1");
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
 
-    expect(calls).toEqual(["saveFlow", "buildVersion"]);
-    expect(bridge.runBuild).not.toHaveBeenCalled();
-    expect(run.getState()).toMatchObject({
-      starting: false,
-      error: null,
-      lastBuild: { hash: "h1", flowId: "flow-1", version: 2 },
+    expect(calls).toEqual(["defaultBranch"]);
+    expect(bridge.defaultBranch).toHaveBeenCalledWith({ repo: "/code/shop" });
+    expect(run.getState().buildDialog).toMatchObject({
+      flowId: "flow-b",
+      version: 4,
+      repo: "/code/shop",
+      base: "trunk",
+      values: { deep: true },
     });
   });
 
-  it("holds the build's problems and no last build when it fails", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "no-cycle: loop" });
+  it("leaves the base empty when the blueprint names no repo", async () => {
+    const { bridge, run } = await setup();
 
-    await expect(run.getState().build()).resolves.toBeNull();
+    await run
+      .getState()
+      .openBuild({ flowId: "flow-b", version: 4, buildConfig: { variables: [] } });
 
-    expect(run.getState()).toMatchObject({ error: "no-cycle: loop", lastBuild: null });
+    expect(bridge.defaultBranch).not.toHaveBeenCalled();
+    expect(run.getState().buildDialog).toMatchObject({ repo: "", base: "" });
   });
-});
 
-describe("refused builds", () => {
-  const refused = {
-    kind: "error",
-    message: "P: Write what the prompt should do.\nChoose the folder.",
-    problems: [
-      { node: "P", field: "instructions", text: "Write what the prompt should do." },
-      { field: "workingFolder.path", text: "Choose the folder." },
+  it("cannot build until the name, repo, base and every value are set", async () => {
+    const { run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    const canBuild = () => selectCanBuild(run.getState());
+
+    expect(canBuild()).toBe(false);
+    run.getState().editBuild({ name: "fix-login" });
+    expect(canBuild()).toBe(false);
+    run.getState().setValue("ticket", "FD-1");
+    expect(canBuild()).toBe(true);
+    run.getState().setValue("ticket", "");
+    expect(canBuild()).toBe(false);
+    run.getState().setValue("ticket", "FD-1");
+    run.getState().editBuild({ base: "" });
+    expect(canBuild()).toBe(false);
+    run.getState().editBuild({ base: "main", repo: "" });
+    expect(canBuild()).toBe(false);
+  });
+
+  it("is false with no dialog open", async () => {
+    const { run } = await setup();
+
+    expect(selectCanBuild(run.getState())).toBe(false);
+  });
+
+  it("builds with the name, repo, base and values, closes, and keeps the build as the last one", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+    run.getState().setValue("ticket", "FD-1");
+
+    await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
+
+    expect(bridge.buildVersion).toHaveBeenCalledWith({
+      flowId: "flow-b",
+      version: 4,
+      name: "fix-login",
+      repo: "/code/shop",
+      base: "main",
+      values: { ticket: "FD-1", deep: true },
+    });
+    expect(run.getState()).toMatchObject({
+      buildDialog: null,
+      error: null,
+      lastBuild: { id: "b-0f3a9c2e", name: "fix-login", flowId: "flow-b", version: 4 },
+    });
+  });
+
+  it("does not build while it cannot", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+
+    await expect(run.getState().confirmBuild()).resolves.toBeNull();
+
+    expect(bridge.buildVersion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a name that is not kebab-case",
+      '"Fix Login" is not a build name: use lowercase letters, digits and single hyphens, like fix-login.',
     ],
-  };
+    ["a name already taken", "A build named fix-login already exists."],
+    ["a folder that is not a git repo", "/code/shop is not a git repository."],
+  ])("stays open on %s and shows the refusal", async (_case, message) => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+    run.getState().setValue("ticket", "FD-1");
+    bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message });
 
-  it("holds every problem of a refused Build, each with its node, instead of one error line", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce(refused);
+    await expect(run.getState().confirmBuild()).resolves.toBeNull();
 
-    await expect(run.getState().build()).resolves.toBeNull();
-
-    expect(run.getState()).toMatchObject({ error: null, problems: refused.problems });
+    expect(run.getState().buildDialog).toMatchObject({ name: "fix-login", error: message });
+    expect(run.getState().lastBuild).toBeNull();
   });
 
-  it("holds them for Build & run too, and runs nothing", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce(refused);
+  it("clears the refusal once the name is edited", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+    run.getState().setValue("ticket", "FD-1");
+    bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "taken" });
+    await run.getState().confirmBuild();
 
-    await run.getState().run();
+    run.getState().editBuild({ name: "fix-login-2" });
 
-    expect(bridge.runBuild).not.toHaveBeenCalled();
-    expect(run.getState().problems).toEqual(refused.problems);
+    expect(run.getState().buildDialog?.error).toBeNull();
   });
 
-  it("clears them once a build goes through, or when dismissed", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce(refused);
-    await run.getState().build();
+  it("cancel closes it without building", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
 
-    await run.getState().build();
-    expect(run.getState().problems).toBeNull();
+    run.getState().cancelBuild();
 
-    bridge.buildVersion.mockResolvedValueOnce(refused);
-    await run.getState().build();
-    run.getState().dismissProblems();
-    expect(run.getState().problems).toBeNull();
+    expect(run.getState().buildDialog).toBeNull();
+    expect(bridge.buildVersion).not.toHaveBeenCalled();
   });
 });
 
 describe("needsSessionSetup", () => {
-  it("is true when a problem is about the session's folder", () => {
-    expect(needsSessionSetup([{ field: "workingFolder.path", text: "Choose the folder." }])).toBe(
+  it("is true when a problem is about the session's Build configuration", () => {
+    expect(needsSessionSetup([{ field: "buildConfig.repo", text: "Choose the repository." }])).toBe(
       true,
     );
   });
@@ -357,95 +425,203 @@ describe("needsSessionSetup", () => {
   });
 });
 
-describe("buildVersion", () => {
-  it("builds a given saved version without saving the editor", async () => {
-    const { bridge, canvas, run, calls } = await setup({ latest: savedFlow() });
-    makeDirty(canvas);
-
-    await expect(run.getState().buildVersion({ flowId: "flow-b", version: 4 })).resolves.toBe("h1");
-
-    expect(bridge.buildVersion).toHaveBeenCalledWith({ flowId: "flow-b", version: 4 });
-    expect(calls).toEqual(["buildVersion"]);
-    expect(run.getState().lastBuild).toEqual({ hash: "h1", flowId: "flow-b", version: 4 });
-  });
-
-  it("shows another blueprint's refused build as plain text, not as editor problems", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
-    bridge.buildVersion.mockResolvedValueOnce({
-      kind: "error",
-      message: "p: Write what the prompt should do.",
-      problems: [{ node: "p", field: "instructions", text: "Write what the prompt should do." }],
-    });
-
-    await run.getState().buildVersion({ flowId: "flow-b", version: 4 });
-
-    expect(run.getState()).toMatchObject({
-      problems: null,
-      error: "p: Write what the prompt should do.",
-    });
-  });
-});
-
 describe("runBuild", () => {
-  it("runs the given build without saving or building", async () => {
-    const { bridge, canvas, run, calls } = await setup({ latest: savedFlow() });
+  it("runs the build by its id without saving or building, when it offers no auto mode", async () => {
+    const { bridge, canvas, run, calls } = await setup();
     makeDirty(canvas);
 
-    await expect(run.getState().runBuild("abc")).resolves.toBe("run-1");
+    await expect(run.getState().runBuild("b-1")).resolves.toBe("run-1");
 
-    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "abc" });
+    expect(bridge.runOptions).toHaveBeenCalledWith({ buildId: "b-1" });
+    expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1" });
     expect(calls).toEqual(["runBuild"]);
-  });
-
-  it("does nothing while a run is running", async () => {
-    const { bridge, run, push } = await setup({ latest: savedFlow() });
-    await run.getState().connect();
-    push(snapshot("running"));
-
-    await expect(run.getState().runBuild("abc")).resolves.toBeNull();
-
-    expect(bridge.runBuild).not.toHaveBeenCalled();
-  });
-});
-
-describe("the run dialog", () => {
-  const choices = { inputs: ["ticket"], flags: { deep: true }, automatic: true };
-
-  it("opens instead of starting when the build lets the run choose, then starts with the choices", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow(), choices });
-
-    await expect(run.getState().runBuild("abc")).resolves.toBeNull();
-
-    expect(bridge.runOptions).toHaveBeenCalledWith({ hash: "abc" });
-    expect(bridge.runBuild).not.toHaveBeenCalled();
-    expect(run.getState().dialog).toEqual({ hash: "abc", choices });
-
-    const chosen = { inputs: { ticket: "FD-1" }, flags: { deep: false }, auto: true };
-    await expect(run.getState().start(chosen)).resolves.toBe("run-1");
-
-    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "abc", ...chosen });
     expect(run.getState().dialog).toBeNull();
   });
 
-  it("starts at once when the build offers nothing to choose", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow() });
+  it("asks only for auto mode when the build offers it, then starts with that choice", async () => {
+    const { bridge, run } = await setup({ automatic: true });
 
-    await expect(run.getState().runBuild("abc")).resolves.toBe("run-1");
+    await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
 
-    expect(bridge.runBuild).toHaveBeenCalledWith({ hash: "abc" });
+    expect(bridge.runBuild).not.toHaveBeenCalled();
+    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+
+    await expect(run.getState().start({ auto: true })).resolves.toBe("run-1");
+
+    expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1", auto: true });
     expect(run.getState().dialog).toBeNull();
   });
 
-  it("opens after Build & run too, and cancel closes it without a run", async () => {
-    const { bridge, run } = await setup({ latest: savedFlow(), choices });
-
-    await expect(run.getState().run()).resolves.toBeNull();
-    expect(run.getState().dialog?.hash).toBe("h1");
+  it("cancel closes the run dialog without a run", async () => {
+    const { bridge, run } = await setup({ automatic: true });
+    await run.getState().runBuild("b-1");
 
     run.getState().cancelDialog();
 
     expect(run.getState().dialog).toBeNull();
     expect(bridge.runBuild).not.toHaveBeenCalled();
+  });
+
+  it("holds the message of a refused run, and clears it once a run starts", async () => {
+    const { bridge, run } = await setup();
+    bridge.runBuild.mockResolvedValueOnce({
+      kind: "error",
+      message: "A run of this build is already in progress",
+    });
+
+    await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
+    expect(run.getState().error).toBe("A run of this build is already in progress");
+
+    await run.getState().runBuild("b-1");
+    expect(run.getState().error).toBeNull();
+  });
+
+  it("holds an error when runBuild answers with something that is not a start result", async () => {
+    const { bridge, run } = await setup();
+    bridge.runBuild.mockResolvedValueOnce({ kind: "begun" });
+
+    await run.getState().runBuild("b-1");
+
+    expect(run.getState().error).toEqual(expect.any(String));
+    expect(run.getState().error).not.toBe("");
+  });
+
+  it("starts another build while one is running", async () => {
+    const { bridge, run, push } = await setup();
+    await run.getState().connect();
+    push(snapshot("running", {}, "run-1"));
+    bridge.runBuild.mockResolvedValueOnce({ kind: "started", runId: "run-2" });
+
+    await expect(run.getState().runBuild("b-2")).resolves.toBe("run-2");
+  });
+
+  it("does nothing while a run is starting", async () => {
+    const { bridge, run } = await setup();
+    const answer = deferred<unknown>();
+    bridge.runBuild.mockReturnValueOnce(answer.promise);
+
+    const first = run.getState().runBuild("b-1");
+    await vi.waitFor(() => expect(bridge.runBuild).toHaveBeenCalledTimes(1));
+
+    expect(run.getState().starting).toBe(true);
+    await expect(run.getState().runBuild("b-2")).resolves.toBeNull();
+    expect(bridge.runBuild).toHaveBeenCalledTimes(1);
+
+    answer.resolve({ kind: "started", runId: "run-1" });
+    await first;
+    expect(run.getState().starting).toBe(false);
+  });
+});
+
+describe("selectRunDisabled", () => {
+  it("is false for a build that has never run, or whose last run ended", async () => {
+    const { run } = await setup();
+
+    expect(selectRunDisabled(run.getState(), card())).toBe(false);
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "done" }))).toBe(false);
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "stopped" }))).toBe(false);
+  });
+
+  it("is true while the build's run is running or interrupted", async () => {
+    const { run } = await setup();
+
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "running" }))).toBe(true);
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "interrupted" }))).toBe(
+      true,
+    );
+  });
+
+  it("follows the live snapshot of the build's run over its listed status", async () => {
+    const { run, push } = await setup();
+    await run.getState().connect();
+
+    push(snapshot("running", {}, "run-1"));
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "done" }))).toBe(true);
+    expect(selectRunDisabled(run.getState(), card({ id: "run-2", status: "done" }))).toBe(false);
+
+    push(snapshot("done", {}, "run-1"));
+    expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "running" }))).toBe(false);
+  });
+
+  it("is true for an old build, which says to make a new build", async () => {
+    const { run } = await setup();
+
+    expect(selectRunDisabled(run.getState(), card(null, true))).toBe(true);
+    expect(selectRunHint({ old: true, blueprint: "review" })).toBe(
+      "Make a new build from this blueprint",
+    );
+    expect(selectRunHint({ old: false, blueprint: "review" })).toBeNull();
+  });
+
+  it("does not point an old build with no blueprint at one", () => {
+    expect(selectRunHint({ old: true, blueprint: noBlueprint })).toBe(
+      "Builds from before named builds can't run again.",
+    );
+    expect(selectRunHint({ old: false, blueprint: noBlueprint })).toBeNull();
+  });
+
+  it("is true for every build while a run is starting", async () => {
+    const { bridge, run } = await setup();
+    const answer = deferred<unknown>();
+    bridge.runBuild.mockReturnValueOnce(answer.promise);
+    const first = run.getState().runBuild("b-1");
+    await vi.waitFor(() => expect(bridge.runBuild).toHaveBeenCalledTimes(1));
+
+    expect(selectRunDisabled(run.getState(), card())).toBe(true);
+
+    answer.resolve({ kind: "started", runId: "run-1" });
+    await first;
+    expect(selectRunDisabled(run.getState(), card())).toBe(false);
+  });
+});
+
+describe("deleteBuild", () => {
+  it("deletes the build by its id and shows nothing kept when nothing was", async () => {
+    const { bridge, run } = await setup();
+
+    await expect(run.getState().deleteBuild("b-1")).resolves.toBe(true);
+
+    expect(bridge.deleteBuild).toHaveBeenCalledWith({ buildId: "b-1" });
+    expect(run.getState()).toMatchObject({ kept: null, error: null });
+  });
+
+  it.each([
+    [{ kind: "worktree", path: "/fd/workspaces/b-1/shop" }],
+    [{ kind: "branch", branch: "flowdeck/fix-login-b1" }],
+    [{ kind: "folder", path: "/elsewhere/builds/oldhash" }],
+  ] as const)("holds what it kept, %j, with the build id", async (kept) => {
+    const { bridge, run } = await setup();
+    bridge.deleteBuild.mockResolvedValueOnce({ ok: true, kept });
+
+    await run.getState().deleteBuild("b-1");
+
+    expect(run.getState().kept).toEqual({ buildId: "b-1", ...kept });
+  });
+
+  it.each([
+    [
+      { kind: "worktree", path: "/fd/workspaces/b-1/shop" },
+      "The build is deleted. Its worktree held work, so it was kept at /fd/workspaces/b-1/shop",
+    ],
+    [
+      { kind: "branch", branch: "flowdeck/fix-login-b1" },
+      "The build is deleted. Its branch flowdeck/fix-login-b1 holds commits, so it was kept.",
+    ],
+    [
+      { kind: "folder", path: "/elsewhere/builds/oldhash" },
+      "The build is deleted. Its folder /elsewhere/builds/oldhash is outside FLOWDECK_HOME, so it was left in place.",
+    ],
+  ] as const)("words what it kept, %j, by why it was kept", (kept, note) => {
+    expect(selectKeptNote({ buildId: "b-1", ...kept })).toBe(note);
+  });
+
+  it("holds the refusal and keeps nothing when the build cannot be deleted", async () => {
+    const { bridge, run } = await setup();
+    bridge.deleteBuild.mockResolvedValueOnce({ ok: false, message: "A run of b-1 is going" });
+
+    await expect(run.getState().deleteBuild("b-1")).resolves.toBe(false);
+
+    expect(run.getState()).toMatchObject({ kept: null, error: "A run of b-1 is going" });
   });
 });
 
@@ -460,6 +636,15 @@ describe("controls", () => {
     expect(bridge.stopRun).toHaveBeenCalledWith({ runId: "run-7" });
     expect(bridge.retryNode).toHaveBeenCalledWith({ runId: "run-7", nodeId: "s1" });
     expect(bridge.resumeRun).toHaveBeenCalledWith({ runId: "run-7" });
+  });
+
+  it("stops an interrupted run, with no live snapshot of it", async () => {
+    const { bridge, run } = await setup();
+
+    await run.getState().stop("run-interrupted");
+
+    expect(bridge.stopRun).toHaveBeenCalledWith({ runId: "run-interrupted" });
+    expect(run.getState().error).toBeNull();
   });
 
   it("holds the message when a retry or resume is refused", async () => {
@@ -486,140 +671,70 @@ describe("controls", () => {
   });
 });
 
-describe("selectRunDisabled", () => {
-  it("is false when nothing is starting, saving or running", async () => {
-    const { disabled } = await setup({ latest: savedFlow() });
-
-    expect(disabled()).toBe(false);
-  });
-
-  it("is true while a run is starting, and run does nothing then", async () => {
-    const { bridge, run, disabled } = await setup({ latest: savedFlow() });
-    const answer = deferred<unknown>();
-    bridge.runBuild.mockReturnValueOnce(answer.promise);
-
-    const first = run.getState().run();
-    await vi.waitFor(() => expect(bridge.runBuild).toHaveBeenCalledTimes(1));
-
-    expect(run.getState().starting).toBe(true);
-    expect(disabled()).toBe(true);
-    await run.getState().run();
-    expect(bridge.runBuild).toHaveBeenCalledTimes(1);
-
-    answer.resolve({ kind: "started", runId: "run-1" });
-    await first;
-    expect(run.getState().starting).toBe(false);
-  });
-
-  it("is true while the save store is saving, and run does nothing then", async () => {
-    const { bridge, saveBridge, canvas, save, run, disabled } = await setup({
-      latest: savedFlow(),
-    });
-    makeDirty(canvas);
-    const reply = deferred<unknown>();
-    saveBridge.saveFlow.mockReturnValueOnce(reply.promise);
-    const saving = save.getState().save();
-
-    expect(disabled()).toBe(true);
-    await run.getState().run();
-
-    expect(bridge.buildVersion).not.toHaveBeenCalled();
-    expect(saveBridge.saveFlow).toHaveBeenCalledTimes(1);
-    reply.resolve({ kind: "saved", flowId: "flow-1", version: 2 });
-    await saving;
-  });
-
-  it("is true while the snapshot is running, and run does nothing then", async () => {
-    const { bridge, run, push, disabled } = await setup({ latest: savedFlow() });
-    await run.getState().connect();
-    push(snapshot("running"));
-
-    expect(disabled()).toBe(true);
-    await run.getState().run();
-    expect(bridge.buildVersion).not.toHaveBeenCalled();
-
-    push(snapshot("done", { "prompt-1": "done" }));
-    expect(disabled()).toBe(false);
-  });
-});
-
 describe("selectNodeDisplay", () => {
-  it("is null before any snapshot", async () => {
-    const { run } = await setup();
-
-    expect(selectNodeDisplay(run.getState(), "prompt-1")).toBeNull();
+  it("is null before any snapshot", () => {
+    expect(selectNodeDisplay({ snapshot: null }, "prompt-1")).toBeNull();
   });
 
-  it("maps each node's state to its display status, and is null for ids not in the snapshot", async () => {
-    const { run, push } = await setup();
-    await run.getState().connect();
+  it("maps each node's state to its display status, and is null for ids not in the snapshot", () => {
+    const view = { snapshot: snapshot("running", { a: "sent", b: "needs-you", c: "skipped" }) };
 
-    push(snapshot("running", { a: "sent", b: "needs-you", c: "skipped" }));
-
-    expect(selectNodeDisplay(run.getState(), "a")).toBe("sent");
-    expect(selectNodeDisplay(run.getState(), "b")).toBe("needs you");
-    expect(selectNodeDisplay(run.getState(), "c")).toBe("skipped");
-    expect(selectNodeDisplay(run.getState(), "zz")).toBeNull();
+    expect(selectNodeDisplay(view, "a")).toBe("sent");
+    expect(selectNodeDisplay(view, "b")).toBe("needs you");
+    expect(selectNodeDisplay(view, "c")).toBe("skipped");
+    expect(selectNodeDisplay(view, "zz")).toBeNull();
   });
 });
 
 describe("selectRunSummary", () => {
-  const summaryOf = async (value: unknown) => {
-    const { run, push } = await setup();
-    await run.getState().connect();
-    push(value);
-    return selectRunSummary(run.getState());
-  };
+  const summaryOf = (value: ReturnType<typeof snapshot>, waiting = false) =>
+    selectRunSummary({ snapshot: value }, waiting);
 
-  it("is Idle before any snapshot", async () => {
-    const { run } = await setup();
-
-    expect(selectRunSummary(run.getState())).toBe("Idle");
+  it("is Idle before any snapshot", () => {
+    expect(selectRunSummary({ snapshot: null })).toBe("Idle");
   });
 
-  it("counts done nodes while running", async () => {
+  it("counts done nodes while running", () => {
     expect(
-      await summaryOf(
+      summaryOf(
         snapshot("running", { a: "done", b: "done", c: "done", d: "running", e: "waiting" }),
       ),
     ).toBe("Running · 3 of 5 nodes done");
   });
 
-  it("says Needs you when a node waits on the user", async () => {
-    expect(await summaryOf(snapshot("running", { a: "done", b: "needs-you" }))).toBe(
+  it("says Needs you when a node waits on the user", () => {
+    expect(summaryOf(snapshot("running", { a: "done", b: "needs-you" }))).toBe(
       "Needs you · 1 of 2 nodes done",
     );
   });
 
-  it("says Failed when a node failed", async () => {
-    expect(await summaryOf(snapshot("failed", { a: "done", b: "failed" }))).toBe(
+  it("says Failed when a node failed", () => {
+    expect(summaryOf(snapshot("failed", { a: "done", b: "failed" }))).toBe(
       "Failed · 1 of 2 nodes done",
     );
   });
 
-  it("puts Needs you before Failed", async () => {
-    expect(await summaryOf(snapshot("running", { a: "failed", b: "needs-you" }))).toBe(
+  it("puts Needs you before Failed", () => {
+    expect(summaryOf(snapshot("running", { a: "failed", b: "needs-you" }))).toBe(
       "Needs you · 0 of 2 nodes done",
     );
   });
 
-  it("says Needs you while a wait is open, though no node shows it", async () => {
-    const { run, push } = await setup();
-    await run.getState().connect();
-    push(snapshot("running", { a: "done", b: "waiting" }));
-
-    expect(selectRunSummary(run.getState(), true)).toBe("Needs you · 1 of 2 nodes done");
+  it("says Needs you while a wait is open, though no node shows it", () => {
+    expect(summaryOf(snapshot("running", { a: "done", b: "waiting" }), true)).toBe(
+      "Needs you · 1 of 2 nodes done",
+    );
   });
 
-  it("says Stopped for a stopped run", async () => {
-    expect(await summaryOf(snapshot("stopped", { a: "done", b: "running" }))).toBe(
+  it("says Stopped for a stopped run", () => {
+    expect(summaryOf(snapshot("stopped", { a: "done", b: "running" }))).toBe(
       "Stopped · 1 of 2 nodes done",
     );
   });
 
-  it("says Done once every node is done and the run stopped running", async () => {
+  it("says Done once every node is done and the run stopped running", () => {
     expect(
-      await summaryOf(snapshot("done", { a: "done", b: "done", c: "done", d: "done", e: "done" })),
+      summaryOf(snapshot("done", { a: "done", b: "done", c: "done", d: "done", e: "done" })),
     ).toBe("Done · 5 of 5 nodes done");
   });
 });

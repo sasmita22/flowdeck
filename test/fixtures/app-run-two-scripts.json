@@ -42,10 +42,7 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "worktree",
-      "branch": "main"
-    },
+    "buildConfig": { "repo": "/work/repo", "base": "main", "variables": [] },
     "model": "haiku",
     "allowedTools": [],
     "permissionMode": "default",

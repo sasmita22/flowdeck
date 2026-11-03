@@ -15,7 +15,7 @@ const promptNode = (
 describe("compilePrompt", () => {
   it("writes a command file with the label as its description", () => {
     expect(compilePrompt(promptNode("Plan it", { instructions: "Write the plan." }))).toEqual({
-      path: "commands/plan.md",
+      path: "plugin/commands/plan.md",
       content: '---\ndescription: "Plan it"\n---\nWrite the plan.\n',
     });
   });
@@ -42,6 +42,19 @@ describe("compilePrompt", () => {
     );
 
     expect(content).toBe('---\ndescription: "Plan it"\n---\nWrite the plan.\n');
+  });
+
+  it("fills the build's values into the instructions", () => {
+    expect(
+      compilePrompt(
+        promptNode("Fix it", { instructions: "Fix {{ticket}}" }),
+        { given: [], writes: [] },
+        { ticket: "FD-99" },
+      ),
+    ).toEqual({
+      path: "plugin/commands/plan.md",
+      content: '---\ndescription: "Fix it"\n---\nFix FD-99\n',
+    });
   });
 
   it("ends the command file with the files it is given and the files it writes", () => {

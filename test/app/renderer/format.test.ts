@@ -31,12 +31,12 @@ describe("format", () => {
     expect(formatCost(null)).toBe("No cost recorded");
   });
 
-  it("names a working folder by its last part, or a new worktree by its branch", () => {
-    expect(folderText({ kind: "path", path: "/code/shop/" })).toBe("shop");
-    expect(folderText({ kind: "worktree", branch: "main", repo: "/code/shop" })).toBe(
+  it("names the repository by its last part, built into a new worktree", () => {
+    expect(folderText({ repo: "/code/shop/", variables: [] })).toBe("shop · new worktree");
+    expect(folderText({ repo: "/code/shop", base: "main", variables: [] })).toBe(
       "shop · new worktree",
     );
-    expect(folderText({ kind: "worktree", branch: "main" })).toBe("New worktree");
+    expect(folderText({ base: "main", variables: [] })).toBe("New worktree");
     expect(folderText(null)).toBe("No folder yet");
   });
 });

@@ -8,10 +8,7 @@
         "x": 0,
         "y": 0
       },
-      "settings": {
-        "inputs": ["ticket"],
-        "flags": {}
-      }
+      "settings": {}
     },
     {
       "id": "review",
@@ -116,9 +113,14 @@
   ],
   "session": {
     "name": "main",
-    "workingFolder": {
-      "kind": "worktree",
-      "branch": "main"
+    "buildConfig": {
+      "base": "main",
+      "variables": [
+        {
+          "name": "ticket",
+          "kind": "text"
+        }
+      ]
     },
     "model": "sonnet",
     "allowedTools": [],

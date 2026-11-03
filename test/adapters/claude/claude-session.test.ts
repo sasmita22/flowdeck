@@ -16,6 +16,14 @@ const options = {
   cwd: "/repo",
   claudeSessionId: "s1",
   hooks: { nodePath: "/opt/my node/bin/node", hookScriptPath: "/fd/hooks/flowdeck-hook.cjs" },
+  layout: "legacy" as const,
+};
+
+const workspace = {
+  ...options,
+  buildDir: "/fd/workspaces/b1",
+  cwd: "/fd/workspaces/b1/carousell-web",
+  layout: "workspace" as const,
 };
 
 class SlowStartHost extends FakeSessionHost {
@@ -176,6 +184,64 @@ describe("openClaudeSession", () => {
     );
     expect(sessions.get("fd-run")?.env?.["FLOWDECK_SOCK"]).toBe("/fd/sockets/fd-run.sock");
     await opened.stop();
+  });
+
+  describe("for a workspace build", () => {
+    const openWorkspace = (overrides: { resume?: boolean } = {}) => {
+      const sessions = new SlowStartHost();
+      const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+      const opened = openClaudeSession(
+        { ...workspace, ...overrides },
+        { sessions, claude, sessionId: "s1" },
+      );
+      sessions.finishStart();
+      return { sessions, opened };
+    };
+
+    it("starts Claude in the worktree, reading the workspace above it", async () => {
+      const { sessions, opened } = openWorkspace();
+      const session = await opened;
+
+      await session.session.ensureStarted();
+
+      expect(sessions.get("fd-run")?.cwd).toBe("/fd/workspaces/b1/carousell-web");
+      const command = sessions.get("fd-run")?.command ?? "";
+      expect(command).toContain(" --add-dir '..'");
+      expect(command).toContain(" --settings '../settings.json'");
+      expect(command).toContain(" --plugin-dir '../plugin'");
+      expect(command).not.toContain("/fd/workspaces/b1");
+      await session.stop();
+    });
+
+    it("keeps the workspace flags when it resumes the conversation", async () => {
+      const { sessions, opened } = openWorkspace({ resume: true });
+      const session = await opened;
+
+      await session.session.ensureStarted();
+
+      const command = sessions.get("fd-run")?.command ?? "";
+      expect(command).toContain(" claude --resume s1 --model 'haiku'");
+      expect(command).toContain(" --add-dir '..'");
+      expect(command).toContain(" --plugin-dir '../plugin'");
+      await session.stop();
+    });
+  });
+
+  describe("for an old hash-named build", () => {
+    it("starts Claude with the build folder as plugin folder and its settings, adding no folder", async () => {
+      const sessions = new SlowStartHost();
+      const opened = await open(sessions);
+      sessions.finishStart();
+
+      await opened.session.ensureStarted();
+
+      const command = sessions.get("fd-run")?.command ?? "";
+      expect(sessions.get("fd-run")?.cwd).toBe("/repo");
+      expect(command).toContain(" --settings '/fd/builds/abc/settings.json'");
+      expect(command).toContain(" --plugin-dir '/fd/builds/abc'");
+      expect(command).not.toContain("--add-dir");
+      await opened.stop();
+    });
   });
 
   describe("attached to a session that is already running", () => {

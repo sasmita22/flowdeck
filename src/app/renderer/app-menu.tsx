@@ -4,7 +4,7 @@ import type { Actions } from "./actions.js";
 import { Icon, type IconName } from "./icons.js";
 import type { LibraryState } from "./library-store.js";
 import { appMenuItems, selectMenuItem, type MenuItemId, type NavState } from "./nav-store.js";
-import type { RunState } from "./run-store.js";
+import { selectRunningCount, type RunState } from "./run-store.js";
 import { pageTestIds } from "./test-ids.js";
 
 const menuIcons: Record<MenuItemId, IconName> = {
@@ -29,7 +29,7 @@ export function AppMenu({
 }) {
   const current = useStore(nav, (state) => selectMenuItem(state.page));
   const flows = useStore(library, (state) => state.flows);
-  const live = useStore(run, (state) => state.snapshot?.status === "running");
+  const running = useStore(run, selectRunningCount);
   const recent = flows.filter((flow) => flow.versions > 0).slice(0, recentCount);
   return (
     <nav className="fd-app-menu" aria-label="App">
@@ -63,10 +63,14 @@ export function AppMenu({
         >
           <Icon name={menuIcons[item.id]} />
           {item.label}
-          {item.id === "runs" && live && (
+          {item.id === "runs" && running > 0 && (
             <>
-              <span className="fd-live-dot" title="A run is running" aria-hidden="true" />
-              <span className="fd-visually-hidden">, 1 running</span>
+              <span
+                className="fd-live-dot"
+                title={running === 1 ? "A run is running" : `${running} runs are running`}
+                aria-hidden="true"
+              />
+              <span className="fd-visually-hidden">, {running} running</span>
             </>
           )}
         </button>

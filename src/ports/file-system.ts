@@ -4,5 +4,7 @@ export interface FileSystem {
   writePrivateFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string>;
   list(dir: string): Promise<string[]>;
+  folders(dir: string): Promise<string[]>;
   remove(path: string): Promise<void>;
+  removeTree(path: string, options?: { keep?: string }): Promise<void>;
 }

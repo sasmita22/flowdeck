@@ -28,14 +28,14 @@ describe("createActivityRelay", () => {
     const { relay, sent } = setup();
 
     relay.onPush({ push: "run-state", value: { runId: "run-1", status: "running", nodes: {} } });
-    relay.onPush({ push: "session", value: "fd-run-x" });
+    relay.onPush({ push: "session", runId: "run-1", value: "fd-run-x" });
 
     expect(sent).toEqual([]);
-    expect(relay.feed()).toBeNull();
+    expect(relay.feed("run-1")).toBeNull();
   });
 
-  it("has no feed before the first push", () => {
-    expect(setup().relay.feed()).toBeNull();
+  it("has no feed for a run before its first push", () => {
+    expect(setup().relay.feed("run-1")).toBeNull();
   });
 
   it("keeps the run's entries sorted by id ascending", () => {
@@ -45,7 +45,7 @@ describe("createActivityRelay", () => {
     relay.onPush(activity(tool(1)));
     relay.onPush(activity(tool(3)));
 
-    expect(relay.feed()).toEqual({ runId: "run-1", entries: [tool(1), tool(2), tool(3)] });
+    expect(relay.feed("run-1")).toEqual({ runId: "run-1", entries: [tool(1), tool(2), tool(3)] });
   });
 
   it("replaces an entry pushed again with the same id instead of adding one", () => {
@@ -55,20 +55,24 @@ describe("createActivityRelay", () => {
     relay.onPush(activity(subagent(2, "running")));
     relay.onPush(activity(subagent(2, "finished")));
 
-    expect(relay.feed()).toEqual({
+    expect(relay.feed("run-1")).toEqual({
       runId: "run-1",
       entries: [tool(1), subagent(2, "finished")],
     });
     expect(sent).toHaveLength(3);
   });
 
-  it("starts a new feed when a push carries a different run id", () => {
-    const { relay } = setup();
+  it("keeps each run's entries apart when two runs push in turn", () => {
+    const { relay, sent } = setup();
 
     relay.onPush(activity(tool(1), "run-1"));
     relay.onPush(activity(tool(2), "run-1"));
     relay.onPush(activity(tool(1), "run-2"));
+    relay.onPush(activity(tool(3), "run-1"));
 
-    expect(relay.feed()).toEqual({ runId: "run-2", entries: [tool(1)] });
+    expect(relay.feed("run-1")).toEqual({ runId: "run-1", entries: [tool(1), tool(2), tool(3)] });
+    expect(relay.feed("run-2")).toEqual({ runId: "run-2", entries: [tool(1)] });
+    expect(relay.feed("run-3")).toBeNull();
+    expect(sent).toHaveLength(4);
   });
 });

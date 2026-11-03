@@ -9,7 +9,6 @@ type Landing =
   | { file: string; shows: string }
   | { manifest: "node"; value: unknown }
   | { manifest: "session"; value: unknown }
-  | { manifest: "inputs"; value: unknown }
   | { manifest: "outputs"; value: unknown };
 
 const inFile = (file: string, shows: string): Landing => ({ file, shows });
@@ -17,16 +16,19 @@ const atRunTime = (value: unknown): Landing => ({ manifest: "node", value });
 
 const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
   prompt: {
-    instructions: ["M-prompt-instructions", inFile("commands/p.md", "M-prompt-instructions")],
-    expectedOutput: ["M-prompt-output", inFile("commands/p.md", "M-prompt-output")],
+    instructions: [
+      "M-prompt-instructions",
+      inFile("plugin/commands/p.md", "M-prompt-instructions"),
+    ],
+    expectedOutput: ["M-prompt-output", inFile("plugin/commands/p.md", "M-prompt-output")],
   },
   agent: {
-    role: ["M-agent-role", inFile("agents/a.md", "M-agent-role")],
-    instructions: ["M-agent-instructions", inFile("agents/a.md", "M-agent-instructions")],
-    model: ["M-agent-model", inFile("agents/a.md", "M-agent-model")],
-    tools: [["M-agent-tool"], inFile("agents/a.md", "M-agent-tool")],
-    given: [["M-agent-given.md"], inFile("agents/a.md", "M-agent-given.md")],
-    writes: [["M-agent-writes.md"], inFile("agents/a.md", "M-agent-writes.md")],
+    role: ["M-agent-role", inFile("plugin/agents/a.md", "M-agent-role")],
+    instructions: ["M-agent-instructions", inFile("plugin/agents/a.md", "M-agent-instructions")],
+    model: ["M-agent-model", inFile("plugin/agents/a.md", "M-agent-model")],
+    tools: [["M-agent-tool"], inFile("plugin/agents/a.md", "M-agent-tool")],
+    given: [["M-agent-given.md"], inFile("plugin/agents/a.md", "M-agent-given.md")],
+    writes: [["M-agent-writes.md"], inFile("plugin/agents/a.md", "M-agent-writes.md")],
   },
   script: {
     command: ["M-script-command", atRunTime("M-script-command")],
@@ -53,10 +55,7 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
     cap: [73, atRunTime(73)],
     onCap: ["ask", atRunTime("ask")],
   },
-  trigger: {
-    inputs: [["M-trigger-input"], { manifest: "inputs", value: ["M-trigger-input"] }],
-    flags: [{ "M-trigger-flag": true }, atRunTime({ "M-trigger-flag": true })],
-  },
+  trigger: {},
   output: {
     name: ["M-output-name", { manifest: "outputs", value: "M-output-name" }],
     type: ["M-output-type", { manifest: "outputs", value: "M-output-type" }],
@@ -70,15 +69,26 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
     file: ["M-foreach-file.md", atRunTime("M-foreach-file.md")],
   },
   branch: {
-    flag: ["M-trigger-flag", atRunTime("M-trigger-flag")],
+    variable: ["M-variable", atRunTime("M-variable")],
   },
 };
 
 const session: Record<string, [unknown, Landing]> = {
   name: ["M-session-name", { manifest: "session", value: "M-session-name" }],
-  workingFolder: [
-    { kind: "path", path: "/M-session-folder" },
-    { manifest: "session", value: { kind: "path", path: "/M-session-folder" } },
+  buildConfig: [
+    {
+      repo: "/M-session-repo",
+      base: "M-session-base",
+      variables: [{ name: "M-variable", kind: "yesno", default: true }],
+    },
+    {
+      manifest: "session",
+      value: {
+        repo: "/M-session-repo",
+        base: "M-session-base",
+        variables: [{ name: "M-variable", kind: "yesno", default: true }],
+      },
+    },
   ],
   model: ["M-session-model", { manifest: "session", value: "M-session-model" }],
   allowedTools: [["M-session-tool"], inFile("settings.json", "M-session-tool")],
@@ -120,7 +130,10 @@ const everyNode = () =>
   });
 
 const builtFiles = () => {
-  const files = emit(lower(everyNode()));
+  const files = emit(lower(everyNode(), { name: "M-build", values: { "M-variable": true } }), {
+    repo: "/M-build-repo",
+    base: "M-build-base",
+  });
   const byPath = new Map(files.map((file) => [file.path, file.content]));
   const manifest = JSON.parse(byPath.get("manifest.json") ?? "{}") as Manifest;
   return { byPath, manifest };
@@ -152,9 +165,6 @@ const landed = (
       expect((manifest.session as Record<string, unknown>)[field], `session.${field}`).toEqual(
         landing.value,
       );
-      return;
-    case "inputs":
-      expect(manifest.inputs, `${type}.${field}`).toEqual(landing.value);
       return;
     case "outputs":
       expect(manifest.outputs, `${type}.${field}`).toEqual([
