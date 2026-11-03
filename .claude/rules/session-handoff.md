@@ -2,7 +2,7 @@
 
 Work carries between sessions through the board's ticket notes, not chat or git history. They
 live in the shared database of the board artifact,
-https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W (work board: `#board`, one page per ticket):
+https://claude.ai/artifact/8eZ29Uq672kmaG3B6mxkSY (work board: `#board`, one page per ticket):
 collection `tickets`, one document per ticket (`t03` for FD-03), with `status` (`todo`, `doing`,
 `done`) and `notes`, a list of `{ date, text }`.
 

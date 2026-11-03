@@ -3,7 +3,7 @@
 A Mac app for building and running multi-step Claude Code work by drawing it: nodes, flows and
 session containers on a canvas, compiled into a build and run turn by turn.
 
-Design and architecture: https://claude.ai/artifact/1nmGgGy252pLGCnUyLdE4W (see `#arch`).
+Design and architecture: https://claude.ai/artifact/8eZ29Uq672kmaG3B6mxkSY (see `#arch`).
 
 These rules are this repo's engineering standards.
 
