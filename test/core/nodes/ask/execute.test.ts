@@ -75,12 +75,16 @@ describe("withPromptContext", () => {
 
 describe("withAgentContext", () => {
   it("leaves the turn text alone with no answers", () => {
-    expect(withAgentContext(agentTurnText("h1", "a1"), [])).toBe(agentTurnText("h1", "a1"));
+    expect(
+      withAgentContext(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }), []),
+    ).toBe(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }));
   });
 
   it("puts the answer before the turn text", () => {
-    expect(withAgentContext(agentTurnText("h1", "a1"), ["blue"])).toBe(
-      `The user answered: blue. ${agentTurnText("h1", "a1")}`,
+    expect(
+      withAgentContext(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }), ["blue"]),
+    ).toBe(
+      `The user answered: blue. ${agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] })}`,
     );
   });
 });

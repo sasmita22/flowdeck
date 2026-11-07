@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -18,15 +18,26 @@ import {
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
+import { workspaceDir } from "../../../src/core/compiler/build.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
+import { markerOf } from "../../../src/core/run/agent-calls.js";
+import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
+import type {
+  BuildAgents,
+  BuildAgentsOpenSpec,
+  BuildTurnResult,
+} from "../../../src/ports/build-agents.js";
+import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
+import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
+import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
@@ -39,6 +50,7 @@ import {
   trigger,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
+import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 
 const git = async (repo: string, ...args: string[]): Promise<string> =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -94,7 +106,9 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
       kind: "ok",
       nodePath: process.execPath,
       hookScriptPath: "/fd-home/hooks/flowdeck-hook.cjs",
+      guardScriptPath: "/fd-home/hooks/flowdeck-build-guard.cjs",
     }),
+    ...fakeEngineBuildOptions(fs),
     isFolder,
     fs,
     connectors: new FakeConnectorSource({ jira }),
@@ -591,6 +605,7 @@ describe("createEngineHandler", async () => {
             kind: "ok",
             nodePath: process.execPath,
             hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
+            guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
           }),
           gitState: gitAt(repo.path),
           ...overrides,
@@ -600,23 +615,49 @@ describe("createEngineHandler", async () => {
     type Started = { kind: "started"; runId: string } | { kind: "error"; message: string };
 
     type Built =
-      | { kind: "built"; id: string; hash: string; dir: string }
+      { kind: "built"; id: string } | { kind: "error"; message: string; problems?: unknown[] };
+
+    type BuildAnswer =
+      | { kind: "started"; pendingId: string }
       | { kind: "error"; message: string; problems?: unknown[] };
+
+    const buildEnd = (pendingId: string) =>
+      vi.waitFor(
+        () => {
+          const ended = pushes.findLast(
+            (push): push is Extract<EnginePush, { push: "build-progress" }> =>
+              push.push === "build-progress" &&
+              push.pendingId === pendingId &&
+              push.progress.outcomeLabel !== undefined,
+          );
+          if (ended === undefined) throw new Error(`build ${pendingId} still going`);
+          return ended;
+        },
+        { timeout: 5000 },
+      );
+
+    const builtFrom = async (answer: BuildAnswer): Promise<Built> => {
+      if (answer.kind === "error") return answer;
+      const { buildId, progress } = await buildEnd(answer.pendingId);
+      if (buildId !== undefined) return { kind: "built", id: buildId };
+      const failed = progress.steps.find((step) => step.status === "failed");
+      return { kind: "error", message: failed?.message ?? progress.chip };
+    };
 
     const buildLatest = async (request: Record<string, unknown> = {}): Promise<Built> => {
       const opened = await handler.handle({ id: nextId++, type: "open-flow", payload: {} });
       const { flowId, version } = (opened as { value: { flowId: string; version: number } }).value;
-      const built = await handler.handle({
+      const answered = await handler.handle({
         id: nextId++,
         type: "build-version",
         payload: { flowId, version, name: `build-${++names}`, values: {}, ...request },
       });
-      return (built as { value: Built }).value;
+      return builtFrom((answered as { value: BuildAnswer }).value);
     };
 
     const builtId = async (request: Record<string, unknown> = {}) => {
       const built = await buildLatest(request);
-      if (built.kind === "error") throw new Error(`did not build: ${built.message}`);
+      if (built.kind !== "built") throw new Error(`did not build: ${JSON.stringify(built)}`);
       return built.id;
     };
 
@@ -665,6 +706,20 @@ describe("createEngineHandler", async () => {
       pushes.filter(
         (push) => push.push === "session" && (runId === undefined || push.runId === runId),
       );
+
+    const isBuildSession = (push: EnginePush) =>
+      push.push === "session" &&
+      runs
+        .buildEvents(push.runId)
+        .some((event) => event.type === "session" && event.name === push.value);
+
+    const expectOnlyBuildSessionsBesides = (runId: string) => {
+      expect(
+        pushes.filter(
+          (push) => push.push === "session" && push.runId !== runId && !isBuildSession(push),
+        ),
+      ).toEqual([]);
+    };
 
     const untilFinished = async (runId: string) => {
       await vi.waitFor(
@@ -745,7 +800,14 @@ describe("createEngineHandler", async () => {
 
       const runId = await startedRunId();
 
-      expect(pushes[0]).toEqual({
+      expect(
+        pushes.find(
+          (push) =>
+            push.push !== "build-progress" &&
+            push.push !== "build-activity" &&
+            !isBuildSession(push),
+        ),
+      ).toEqual({
         push: "run-state",
         value: { runId, status: "running", nodes: { write: "waiting", check: "waiting" } },
       });
@@ -1152,13 +1214,16 @@ describe("createEngineHandler", async () => {
         const v1 = twoScripts();
         flows.save({ ...v1, nodes: v1.nodes.filter((node) => node.id === "write"), wires: [] });
 
-        const built = await handler.handle({
+        const answered = await handler.handle({
           id: 1,
           type: "build-version",
           payload: { flowId: "flow-1", version: 1, name: "fix-login", base: "main", values: {} },
         });
-        const { id, dir } = (built as { value: { id: string; dir: string } }).value;
-        expect(built).toMatchObject({ id: 1, ok: true, value: { kind: "built", id, dir } });
+        expect(answered).toMatchObject({ id: 1, ok: true, value: { kind: "started" } });
+        const built = await builtFrom((answered as { value: BuildAnswer }).value);
+        expect(built).toMatchObject({ kind: "built" });
+        const id = built.kind === "built" ? built.id : "";
+        const dir = buildDirOf(id);
         expect(dir).toBe(join(home, "workspaces", id));
         expect(worktree.calls).toEqual([
           {
@@ -1257,6 +1322,894 @@ describe("createEngineHandler", async () => {
           ok: false,
         });
         expect(runs.runs).toEqual([]);
+      });
+    });
+
+    describe("build-version in stages", () => {
+      class HeldWorktree extends FakeWorktree {
+        private gate: Promise<void> | undefined;
+        private open: () => void = () => undefined;
+
+        hold() {
+          this.gate = new Promise((resolve) => {
+            this.open = resolve;
+          });
+        }
+
+        release() {
+          this.open();
+          this.gate = undefined;
+        }
+
+        override async add(options: WorktreeAddOptions): Promise<void> {
+          await this.gate;
+          return super.add(options);
+        }
+      }
+
+      type ProgressPush = Extract<EnginePush, { push: "build-progress" }>;
+
+      let worktree: HeldWorktree;
+
+      const progressPushes = (pendingId: string) =>
+        pushes.filter(
+          (push): push is ProgressPush =>
+            push.push === "build-progress" && push.pendingId === pendingId,
+        );
+
+      const answeredWithin = async (pending: Promise<unknown>, ms = 1000) =>
+        Promise.race([
+          pending,
+          new Promise((resolve) => setTimeout(() => resolve("still building"), ms)),
+        ]);
+
+      const buildVersionOf = (flowId: string, name: string) =>
+        answeredWithin(
+          handler.handle({
+            id: nextId++,
+            type: "build-version",
+            payload: { flowId, version: 1, name, values: {} },
+          }),
+        );
+
+      const startedPendingId = async (flowId: string, name: string) => {
+        const answered = await buildVersionOf(flowId, name);
+        expect(answered).toMatchObject({
+          ok: true,
+          value: { kind: "started", pendingId: expect.any(String) },
+        });
+        return (answered as { value: { pendingId: string } }).value.pendingId;
+      };
+
+      const untilBuilt = (pendingId: string) =>
+        vi.waitFor(
+          () => {
+            expect(progressPushes(pendingId).at(-1)?.progress.chip).toBe("Built · v1");
+          },
+          { timeout: 3000 },
+        );
+
+      beforeEach(() => {
+        worktree = new HeldWorktree();
+        handler = handlerWith({ worktree });
+      });
+
+      afterEach(async () => {
+        worktree.release();
+        await vi.waitFor(() => {
+          expect(runs.listPendingBuilds()).toEqual([]);
+        });
+      });
+
+      it("answers started with the pending id before the build ends, recording no build yet", async () => {
+        flows.save(twoScripts());
+        worktree.hold();
+
+        const answered = await buildVersionOf("flow-1", "fix-login");
+
+        expect(answered).toEqual({
+          id: 1,
+          ok: true,
+          value: { kind: "started", pendingId: expect.any(String) },
+        });
+        const { pendingId } = (answered as { value: { pendingId: string } }).value;
+        expect(runs.listPendingBuilds()).toEqual([
+          expect.objectContaining({
+            id: pendingId,
+            flowId: "flow-1",
+            version: 1,
+            name: "fix-login",
+          }),
+        ]);
+        expect(runs.listBuilds()).toEqual([]);
+      });
+
+      it("pushes the build's progress once for each event, the last Built · v1 with the build id", async () => {
+        flows.save(twoScripts());
+
+        const pendingId = await startedPendingId("flow-1", "fix-login");
+        await untilBuilt(pendingId);
+
+        const sent = progressPushes(pendingId);
+        expect(runs.buildEvents(pendingId)).toHaveLength(19);
+        expect(sent.map((push) => push.progress.chip)).toEqual([
+          ...Array<string>(2).fill("Building · step 1 of 5"),
+          ...Array<string>(3).fill("Building · step 2 of 5"),
+          ...Array<string>(8).fill("Building · step 3 of 5"),
+          ...Array<string>(4).fill("Building · step 4 of 5"),
+          ...Array<string>(2).fill("Building · step 5 of 5"),
+          "Built · v1",
+        ]);
+        expect(sent.every((push) => push.flowId === "flow-1")).toBe(true);
+        const [built] = runs.listBuilds();
+        expect(built).toBeDefined();
+        expect(sent.at(-1)?.buildId).toBe(built?.id);
+      });
+
+      it("refuses a second build of the blueprint while it builds, reserving nothing for it", async () => {
+        flows.save(twoScripts());
+        worktree.hold();
+        const pendingId = await startedPendingId("flow-1", "fix-login");
+
+        const second = await buildVersionOf("flow-1", "fix-other");
+
+        expect(second).toMatchObject({
+          ok: true,
+          value: { kind: "error", message: expect.stringMatching(/already building/) },
+        });
+        expect(runs.listPendingBuilds().map((pending) => pending.id)).toEqual([pendingId]);
+      });
+
+      it("lists the open pending builds and each blueprint's latest finished one", async () => {
+        flows.save(twoScripts());
+        const other = flows.save(twoScripts(), { name: "Other" }).flowId;
+        const first = await startedPendingId("flow-1", "first");
+        await untilBuilt(first);
+        const second = await startedPendingId("flow-1", "second");
+        await untilBuilt(second);
+        const secondBuildId = progressPushes(second).at(-1)?.buildId;
+        worktree.hold();
+        const open = await startedPendingId(other, "third");
+        await vi.waitFor(() => {
+          expect(progressPushes(open).at(-1)?.progress.chip).toBe("Building · step 5 of 5");
+        });
+
+        const listed = await handler.handle({ id: nextId++, type: "build-progress-list" });
+
+        expect(listed).toMatchObject({ ok: true });
+        const value = (listed as { value: unknown[] }).value;
+        expect(value).toHaveLength(2);
+        expect(value).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              pendingId: second,
+              flowId: "flow-1",
+              buildId: secondBuildId,
+              progress: expect.objectContaining({ chip: "Built · v1" }),
+            }),
+            expect.objectContaining({
+              pendingId: open,
+              flowId: other,
+              progress: expect.objectContaining({ chip: "Building · step 5 of 5" }),
+            }),
+          ]),
+        );
+      });
+    });
+
+    describe("the build session", () => {
+      type OpenSpec = BuildAgentsOpenSpec & { claudeSessionId?: string };
+      type ProgressPush = Extract<EnginePush, { push: "build-progress" }>;
+
+      class WatchedBuildAgents implements BuildAgents {
+        readonly fake: FakeBuildAgents;
+        turnsStarted = 0;
+        private held = false;
+
+        constructor(
+          private readonly onOpen: (spec: OpenSpec) => void,
+          script?: FakeBuildScript,
+        ) {
+          this.fake = new FakeBuildAgents({
+            fs: new NodeFileSystem(),
+            ...(script === undefined ? {} : { script }),
+          });
+        }
+
+        holdTurns() {
+          this.held = true;
+        }
+
+        readonly open: BuildAgents["open"] = async (spec) => {
+          this.onOpen(spec);
+          return this.fake.open(spec);
+        };
+
+        readonly turn: BuildAgents["turn"] = async (sessionName, text, onCall) => {
+          this.turnsStarted += 1;
+          if (this.held) return new Promise<BuildTurnResult>(() => undefined);
+          return this.fake.turn(sessionName, text, onCall);
+        };
+
+        readonly alive: BuildAgents["alive"] = (sessionName) => this.fake.alive(sessionName);
+
+        readonly close: BuildAgents["close"] = (sessionName) => this.fake.close(sessionName);
+      }
+
+      const usageEntries: UsageEntry[] = [
+        {
+          messageId: "m1",
+          model: "claude-sonnet-5",
+          inputTokens: 1200,
+          outputTokens: 300,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
+          cacheReadTokens: 0,
+        },
+        {
+          messageId: "m2",
+          model: "claude-sonnet-5",
+          inputTokens: 800,
+          outputTokens: 200,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
+          cacheReadTokens: 0,
+        },
+      ];
+
+      let agents: WatchedBuildAgents;
+      let usage: FakeUsageSource;
+
+      const startedPendingId = async (name = "fix-login", extra: { buildModel?: string } = {}) => {
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "build-version",
+          payload: { flowId: "flow-1", version: 1, name, values: {}, ...extra },
+        });
+        expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+        return (answered as { value: { pendingId: string } }).value.pendingId;
+      };
+
+      const endPush = (pendingId: string) =>
+        vi.waitFor(
+          () => {
+            const ended = pushes.findLast(
+              (push): push is ProgressPush =>
+                push.push === "build-progress" &&
+                push.pendingId === pendingId &&
+                push.progress.outcomeLabel !== undefined,
+            );
+            if (ended === undefined) throw new Error(`build ${pendingId} still going`);
+            return ended;
+          },
+          { timeout: 3000 },
+        );
+
+      const piecesTurned = () =>
+        agents.fake.turns.flatMap(({ text }) =>
+          text.split("\n").flatMap((line) => {
+            const marker = markerOf(line);
+            return "piece" in marker ? [marker.piece] : [];
+          }),
+        );
+
+      const sessionEventName = (pendingId: string) =>
+        runs
+          .buildEvents(pendingId)
+          .flatMap((event) => (event.type === "session" ? [event.name] : []))
+          .at(0);
+
+      beforeEach(() => {
+        usage = new FakeUsageSource();
+        agents = new WatchedBuildAgents(({ claudeSessionId }) => {
+          if (claudeSessionId !== undefined) usage.setEntries(claudeSessionId, usageEntries);
+        });
+        handler = handlerWith({
+          buildAgents: agents,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        flows.save(twoScripts());
+      });
+
+      afterEach(async () => {
+        await vi.waitFor(() => {
+          expect(runs.listPendingBuilds()).toEqual([]);
+        });
+      });
+
+      it("opens the build session with the build model the request names", async () => {
+        const pendingId = await startedPendingId("fix-login", { buildModel: "haiku" });
+        await endPush(pendingId);
+
+        expect(agents.fake.opened.map((spec) => spec.model)).toEqual(["haiku"]);
+      });
+
+      it("opens the build session with the blueprint's own model when the request names none", async () => {
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        expect(agents.fake.opened.map((spec) => spec.model)).toEqual([undefined]);
+      });
+
+      it("announces the build session under the pending id", async () => {
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        const name = sessionEventName(pendingId);
+        expect(name).toMatch(/^fd-build-/);
+        expect(sessionPushes(pendingId)).toContainEqual({
+          push: "session",
+          runId: pendingId,
+          value: name,
+        });
+      });
+
+      it("stops a build mid-turn: closes its session, removes its workspace, ends it stopped and keeps its events", async () => {
+        agents.holdTurns();
+        const pendingId = await startedPendingId();
+        await vi.waitFor(() => {
+          expect(agents.turnsStarted).toBe(1);
+        });
+        const [opened] = agents.fake.opened;
+        if (opened === undefined) throw new Error("the build session never opened");
+        expect(await new NodeFileSystem().exists(opened.workspaceDir)).toBe(true);
+        expect(await new NodeFileSystem().exists(opened.settingsPath)).toBe(true);
+        const eventsBefore = runs.buildEvents(pendingId);
+
+        const stopped = await Promise.race([
+          handler.handle({ id: nextId++, type: "build-stop", payload: { pendingId } }),
+          new Promise((resolve) => setTimeout(() => resolve("still stopping"), 1000)),
+        ]);
+
+        expect(stopped).toMatchObject({ ok: true });
+        const ended = await endPush(pendingId);
+        expect(ended.progress).toMatchObject({ chip: "Failed", outcomeLabel: "Stopped" });
+        expect(runs.listPendingBuilds()).toEqual([]);
+        expect(agents.fake.closed).toEqual([opened.sessionName]);
+        expect(await new NodeFileSystem().exists(opened.workspaceDir)).toBe(false);
+        expect(await new NodeFileSystem().exists(dirname(opened.settingsPath))).toBe(false);
+        expect(runs.buildEvents(pendingId).slice(0, eventsBefore.length)).toEqual(eventsBefore);
+        expect(runs.listBuilds()).toEqual([]);
+      });
+
+      it("stops a build before its session opens: leaves neither its settings folder nor its workspace", async () => {
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const asked: string[] = [];
+        const gitState = gitAt(repo.path);
+        gitState.defaultBranch = async (repoPath: string) => {
+          asked.push(repoPath);
+          await gate;
+          return "main";
+        };
+        handler = handlerWith({
+          buildAgents: agents,
+          gitState,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId();
+        await vi.waitFor(() => {
+          expect(asked).toHaveLength(1);
+        });
+
+        const stopped = await handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        expect(stopped).toMatchObject({ ok: true });
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(runs.buildEvents(pendingId).some((entry) => entry.type === "session")).toBe(false);
+        expect(await readdir(join(home, "workspaces")).catch(() => [])).toEqual([]);
+        expect(await readdir(join(home, "build-sessions")).catch(() => [])).toEqual([]);
+        expect(agents.fake.opened).toEqual([]);
+      });
+
+      it("records the build session's transcript cost after each turn, read under its Claude session id", async () => {
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        const [opened] = agents.fake.opened as OpenSpec[];
+        const claudeSessionId = opened?.claudeSessionId;
+        expect(claudeSessionId).toEqual(expect.any(String));
+        expect(claudeSessionId).not.toBe(opened?.sessionName);
+        expect(usage.calls).toContain(claudeSessionId);
+        const costs = runs.buildEvents(pendingId).filter((event) => event.type === "cost");
+        expect(costs).toHaveLength(agents.fake.turns.length);
+        expect(costs.at(-1)).toMatchObject({
+          inputTokens: 2000,
+          outputTokens: 500,
+          usd: costOf(usageEntries),
+        });
+      });
+
+      it("folds each agent call of the build session into the build's Activity, owned by its piece", async () => {
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        const pieces = piecesTurned();
+        expect(pieces.length).toBeGreaterThan(0);
+        const activity = runs.buildActivity(pendingId);
+        const ownerById = new Map(activity.map((entry) => [entry.id, entry.nodeId]));
+        expect([...ownerById.values()].sort()).toEqual([...pieces].sort());
+      });
+
+      it("pushes each build activity entry under its pending id, and answers build-activity with them", async () => {
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        const stored = runs.buildActivity(pendingId);
+        expect(stored.length).toBeGreaterThan(0);
+        const pushed = pushes.flatMap((push) =>
+          push.push === "build-activity" && push.pendingId === pendingId ? [push.entry] : [],
+        );
+        expect(pushed).toEqual(stored);
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "build-activity",
+          payload: { pendingId },
+        });
+        expect(answered).toMatchObject({ ok: true, value: stored });
+      });
+
+      it("ends a build that asks with its questions on the last progress push", async () => {
+        const questions = [{ nodeId: "s1", text: "Who writes notes.md?", otherNodeId: "s2" }];
+        agents = new WatchedBuildAgents(() => undefined, { questions });
+        handler = handlerWith({
+          buildAgents: agents,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId();
+
+        const ended = await endPush(pendingId);
+
+        expect(ended.progress.chip).toBe("Needs you");
+        expect(ended.progress.questions).toEqual(questions);
+      });
+
+      it("lists a build that ended asking, with its questions, after the engine restarts", async () => {
+        const questions = [{ nodeId: "s1", text: "Who writes notes.md?", otherNodeId: "s2" }];
+        agents = new WatchedBuildAgents(() => undefined, { questions });
+        handler = handlerWith({
+          buildAgents: agents,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        const restarted = handlerWith({
+          buildAgents: agents,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const listed = await restarted.handle({ id: nextId++, type: "build-progress-list" });
+
+        expect(listed).toMatchObject({
+          ok: true,
+          value: [
+            {
+              pendingId,
+              flowId: "flow-1",
+              progress: expect.objectContaining({ chip: "Needs you", questions }),
+            },
+          ],
+        });
+      });
+
+      it("stops a build whose worktree is already cut: removes the worktree and its branch too", async () => {
+        const added: WorktreeAddOptions[] = [];
+        const source = await createTmpRepo({ commit: true });
+        onTestFinished(() => source.cleanup());
+        const git = new GitWorktree();
+        let releaseCut: () => void = () => undefined;
+        const cutGate = new Promise<void>((resolve) => {
+          releaseCut = resolve;
+        });
+        handler = handlerWith({
+          buildAgents: agents,
+          gitState: gitAt(source.path),
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+          worktree: {
+            add: async (options) => {
+              await git.add(options);
+              added.push(options);
+              await cutGate;
+            },
+            remove: (options) => git.remove(options),
+            isDirty: (path) => git.isDirty(path),
+            hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
+            deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+          },
+        });
+        const saved = flows.save(
+          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          "flow-1",
+        );
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "build-version",
+          payload: { ...saved, name: "cut-then-stop", values: {} },
+        });
+        expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+        const { pendingId } = (answered as { value: { pendingId: string } }).value;
+        await vi.waitFor(() => {
+          expect(added).toHaveLength(1);
+        });
+        const [cut] = added;
+        if (cut === undefined) throw new Error("no worktree was cut");
+        const cutPath = await realpath(cut.path);
+        expect(await worktreePaths(cut.repo)).toContain(cutPath);
+
+        const stopping = handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        releaseCut();
+
+        expect(await stopping).toMatchObject({ ok: true });
+        const ended = await endPush(pendingId);
+        expect(ended.progress).toMatchObject({ outcomeLabel: "Stopped" });
+        expect(await worktreePaths(cut.repo)).not.toContain(cutPath);
+        expect((await branches(cut.repo)).split("\n")).not.toContain(cut.branch);
+      });
+
+      it("records no build when its worktree is cut only after a stop, and removes that worktree and branch", async () => {
+        const source = await createTmpRepo({ commit: true });
+        onTestFinished(() => source.cleanup());
+        const git = new GitWorktree();
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const asked: WorktreeAddOptions[] = [];
+        const settled: WorktreeAddOptions[] = [];
+        handler = handlerWith({
+          buildAgents: agents,
+          gitState: gitAt(source.path),
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+          worktree: {
+            add: async (options) => {
+              asked.push(options);
+              await gate;
+              await git.add(options);
+              settled.push(options);
+            },
+            remove: (options) => git.remove(options),
+            isDirty: (path) => git.isDirty(path),
+            hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
+            deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+          },
+        });
+        const saved = flows.save(
+          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          "flow-1",
+        );
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "build-version",
+          payload: { ...saved, name: "stop-then-cut", values: {} },
+        });
+        expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+        const { pendingId } = (answered as { value: { pendingId: string } }).value;
+        await vi.waitFor(() => {
+          expect(asked).toHaveLength(1);
+        });
+        const [cut] = asked;
+        if (cut === undefined) throw new Error("no worktree was asked for");
+
+        const stopping = handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        release();
+        expect(await stopping).toMatchObject({ ok: true });
+        await vi.waitFor(() => {
+          expect(settled).toHaveLength(1);
+        });
+
+        await vi.waitFor(async () => {
+          expect((await branches(cut.repo)).split("\n")).not.toContain(cut.branch);
+        });
+        expect(runs.listBuilds()).toEqual([]);
+        expect(
+          pushes.findLast(
+            (push): push is ProgressPush =>
+              push.push === "build-progress" && push.pendingId === pendingId,
+          )?.progress.outcomeLabel,
+        ).toBe("Stopped");
+        expect(await worktreePaths(cut.repo)).toHaveLength(1);
+        expect(await new NodeFileSystem().exists(cut.path)).toBe(false);
+      });
+
+      it("closes the build session once when Stop lands during the worktree cut", async () => {
+        const source = await createTmpRepo({ commit: true });
+        onTestFinished(() => source.cleanup());
+        const git = new GitWorktree();
+        let releaseAdd: () => void = () => undefined;
+        const addGate = new Promise<void>((resolve) => {
+          releaseAdd = resolve;
+        });
+        let releaseClose: () => void = () => undefined;
+        const closeGate = new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        });
+        const asked: WorktreeAddOptions[] = [];
+        const closing: string[] = [];
+        handler = handlerWith({
+          buildAgents: {
+            open: agents.open,
+            turn: agents.turn,
+            alive: agents.alive,
+            close: async (sessionName) => {
+              closing.push(sessionName);
+              if (closing.length === 1) await closeGate;
+              return agents.close(sessionName);
+            },
+          },
+          gitState: gitAt(source.path),
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+          worktree: {
+            add: async (options) => {
+              asked.push(options);
+              await addGate;
+              await git.add(options);
+            },
+            remove: (options) => git.remove(options),
+            isDirty: (path) => git.isDirty(path),
+            hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
+            deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+          },
+        });
+        const saved = flows.save(
+          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          "flow-1",
+        );
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "build-version",
+          payload: { ...saved, name: "cut-while-stopping", values: {} },
+        });
+        expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+        const { pendingId } = (answered as { value: { pendingId: string } }).value;
+        await vi.waitFor(() => {
+          expect(asked).toHaveLength(1);
+        });
+        const session = runs.buildEvents(pendingId).find((entry) => entry.type === "session");
+        if (session === undefined) throw new Error("the build never reached its session");
+
+        const stopping = handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        releaseAdd();
+        await vi.waitFor(() => {
+          expect(closing).toHaveLength(1);
+        });
+        releaseClose();
+
+        expect(await stopping).toMatchObject({ ok: true });
+        const ended = await endPush(pendingId);
+        expect(ended.progress).toMatchObject({ outcomeLabel: "Stopped" });
+        expect(
+          runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
+        ).toBe("stopped");
+        expect(runs.listBuilds()).toEqual([]);
+        expect(closing).toHaveLength(1);
+        expect(await new NodeFileSystem().exists(workspaceDir(home, session.buildId))).toBe(false);
+      });
+
+      it("keeps a build recorded before a stop: its workspace stays and it ends built", async () => {
+        let releaseClose: () => void = () => undefined;
+        const closeGate = new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        });
+        const closing: string[] = [];
+        handler = handlerWith({
+          buildAgents: {
+            open: agents.open,
+            turn: agents.turn,
+            alive: agents.alive,
+            close: async (sessionName) => {
+              closing.push(sessionName);
+              if (closing.length === 1) await closeGate;
+              return agents.close(sessionName);
+            },
+          },
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("recorded-then-stopped");
+        await vi.waitFor(() => {
+          expect(closing).toHaveLength(1);
+        });
+        const [recorded] = runs.listBuilds();
+        if (recorded === undefined) throw new Error("the build was not recorded before the stop");
+
+        const stopped = await handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        releaseClose();
+
+        expect(stopped).toMatchObject({ ok: true });
+        await vi.waitFor(() => {
+          expect(runs.listPendingBuilds()).toEqual([]);
+        });
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([recorded.id]);
+        expect(await new NodeFileSystem().exists(workspaceDir(home, recorded.id))).toBe(true);
+        expect(
+          runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
+        ).toBe("built");
+        const ended = await endPush(pendingId);
+        expect(ended.progress.outcomeLabel).not.toBe("Stopped");
+      });
+
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+      it("stops a build while its session opens: sends no turn after the stop and closes the session", async () => {
+        let releaseOpen: () => void = () => undefined;
+        const openGate = new Promise<void>((resolve) => {
+          releaseOpen = resolve;
+        });
+        const opening: string[] = [];
+        handler = handlerWith({
+          buildAgents: {
+            open: async (spec) => {
+              opening.push(spec.sessionName);
+              await openGate;
+              return agents.open(spec);
+            },
+            turn: agents.turn,
+            alive: agents.alive,
+            close: agents.close,
+          },
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("stop-while-opening");
+        await vi.waitFor(() => {
+          expect(opening).toHaveLength(1);
+        });
+
+        const stopping = handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        releaseOpen();
+
+        expect(await stopping).toMatchObject({ ok: true });
+        const ended = await endPush(pendingId);
+        expect(ended.progress).toMatchObject({ outcomeLabel: "Stopped" });
+        await settle();
+        expect(agents.turnsStarted).toBe(0);
+        expect(agents.fake.closed).toEqual(opening);
+        expect(await agents.alive(opening[0] ?? "")).toBe(false);
+      });
+
+      it("ends a stopped build stopped and pushes Stopped even when its cleanup throws", async () => {
+        agents.holdTurns();
+        let closes = 0;
+        handler = handlerWith({
+          buildAgents: {
+            open: agents.open,
+            turn: agents.turn,
+            alive: agents.alive,
+            close: async (sessionName) => {
+              closes += 1;
+              if (closes === 1) throw new Error("close failed");
+              return agents.close(sessionName);
+            },
+          },
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("cleanup-throws");
+        await vi.waitFor(() => {
+          expect(agents.turnsStarted).toBe(1);
+        });
+        const [opened] = agents.fake.opened;
+        if (opened === undefined) throw new Error("the build session never opened");
+
+        const stopped = await handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+
+        expect(stopped).toMatchObject({ ok: false, error: "close failed" });
+        const ended = await endPush(pendingId);
+        expect(ended.progress).toMatchObject({ outcomeLabel: "Stopped" });
+        expect(runs.listPendingBuilds()).toEqual([]);
+        expect(
+          runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
+        ).toBe("stopped");
+        expect(await new NodeFileSystem().exists(opened.workspaceDir)).toBe(false);
+      });
+
+      it("pushes Built · v1 with the build id when the session of a recorded build fails to close", async () => {
+        handler = handlerWith({
+          buildAgents: {
+            open: agents.open,
+            turn: agents.turn,
+            alive: agents.alive,
+            close: () => Promise.reject(new Error("close failed")),
+          },
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("close-throws");
+
+        const ended = await endPush(pendingId);
+
+        const [built] = runs.listBuilds();
+        if (built === undefined) throw new Error("the build was not recorded");
+        expect(ended.progress.chip).toBe("Built · v1");
+        expect(ended.buildId).toBe(built.id);
+        expect(
+          runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
+        ).toBe("built");
+      });
+
+      it("pushes Failed and leaves no open build when the build session fails to open", async () => {
+        handler = handlerWith({
+          buildAgents: {
+            open: () => Promise.reject(new Error("open failed")),
+            turn: agents.turn,
+            alive: agents.alive,
+            close: agents.close,
+          },
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("open-throws");
+
+        const ended = await endPush(pendingId);
+
+        expect(ended.progress).toMatchObject({ chip: "Failed", outcomeLabel: "Failed" });
+        expect(runs.listPendingBuilds()).toEqual([]);
+        expect(
+          runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
+        ).toBe("failed");
+        expect(runs.listBuilds()).toEqual([]);
+      });
+
+      it("appends no build events after a stop", async () => {
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const asked: string[] = [];
+        const gitState = gitAt(repo.path);
+        gitState.defaultBranch = async (repoPath: string) => {
+          asked.push(repoPath);
+          await gate;
+          return "main";
+        };
+        handler = handlerWith({
+          buildAgents: agents,
+          gitState,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId("no-events-after-stop");
+        await vi.waitFor(() => {
+          expect(asked).toHaveLength(1);
+        });
+        const eventsAtStop = runs.buildEvents(pendingId);
+
+        const stopping = handler.handle({
+          id: nextId++,
+          type: "build-stop",
+          payload: { pendingId },
+        });
+        release();
+        expect(await stopping).toMatchObject({ ok: true });
+        await endPush(pendingId);
+        await settle();
+
+        expect(runs.buildEvents(pendingId)).toEqual(eventsAtStop);
       });
     });
 
@@ -1550,15 +2503,16 @@ describe("createEngineHandler", async () => {
       const runId = await startedRunId();
 
       await vi.waitFor(() => {
-        expect(sessionPushes()).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
+        expect(sessionPushes(runId)).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
       });
 
       await handler.stop();
 
-      expect(sessionPushes()).toEqual([
+      expect(sessionPushes(runId)).toEqual([
         { push: "session", runId, value: "fd-run-test" },
         { push: "session", runId, value: null },
       ]);
+      expectOnlyBuildSessionsBesides(runId);
     });
 
     it("ends only the stopped run's session, leaving another build's session announced", async () => {
@@ -1603,13 +2557,15 @@ describe("createEngineHandler", async () => {
         expect(starting).toBe(true);
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(sessionPushes()).toEqual([]);
+      expect(sessionPushes(runId)).toEqual([]);
+      expectOnlyBuildSessionsBesides(runId);
 
       started();
 
       await vi.waitFor(() => {
-        expect(sessionPushes()).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
+        expect(sessionPushes(runId)).toEqual([{ push: "session", runId, value: "fd-run-test" }]);
       });
+      expectOnlyBuildSessionsBesides(runId);
     });
 
     it("gives the session the hook paths of this machine and the run's own private MCP config", async () => {
@@ -1684,7 +2640,12 @@ describe("createEngineHandler", async () => {
       const openings: OpenSessionOptions[] = [];
       const machine = (nodePath: string) =>
         handlerWith({
-          prepareHooks: () => ({ kind: "ok", nodePath, hookScriptPath: `${nodePath}-hook.cjs` }),
+          prepareHooks: () => ({
+            kind: "ok",
+            nodePath,
+            hookScriptPath: `${nodePath}-hook.cjs`,
+            guardScriptPath: `${nodePath}-guard.cjs`,
+          }),
           run: {
             ...runEnvironment(new NodeFileSystem()),
             openSession: async (opening) => {
@@ -1720,7 +2681,8 @@ describe("createEngineHandler", async () => {
       const runId = await startedRunId();
       await untilFinished(runId);
 
-      expect(sessionPushes()).toEqual([]);
+      expect(sessionPushes(runId)).toEqual([]);
+      expectOnlyBuildSessionsBesides(runId);
     });
 
     const startActivityRun = async (

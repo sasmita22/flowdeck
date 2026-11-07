@@ -15,7 +15,9 @@ import type { Flow } from "../src/core/flow/schema.js";
 import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
+import { waitForBuilt } from "./build-run.js";
 
 const run = promisify(execFile);
 
@@ -81,11 +83,11 @@ const blueprint = (): Flow => {
 };
 
 const launch = async () => {
-  launched = await launchApp({
+  launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
+    ownBin: bin,
     env: {
-      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
       FAKE_CLAUDE_LOG: argvLog(),
       FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"),
     },
@@ -142,6 +144,7 @@ const build = async (window: Page, flowId: string, name: string, ticket: string)
   await window.getByTestId(buildDialogTestIds.variable("ticket")).fill(ticket);
   await window.getByTestId(buildDialogTestIds.confirm).click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+  await waitForBuilt(window, home, name);
   const [built] = buildNamed(name);
   if (built === undefined) throw new Error(`no build named ${name} was recorded`);
   return built.id;
@@ -238,6 +241,7 @@ test("Build asks for a name, repo, base and every value, and refuses a name alre
   await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+  await waitForBuilt(window, home, "fix-a");
   const [built] = buildNamed("fix-a");
   if (built === undefined) throw new Error("no build named fix-a was recorded");
   await toBuilds(window);

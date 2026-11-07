@@ -22,6 +22,9 @@ export const engineCalls = {
   deleteBuild: { channel: "flowdeck:delete-build", request: "delete-build" },
   doctorWorktrees: { channel: "flowdeck:doctor-worktrees", request: "doctor-worktrees" },
   defaultBranch: { channel: "flowdeck:default-branch", request: "default-branch" },
+  listBuildProgress: { channel: "flowdeck:build-progress-list", request: "build-progress-list" },
+  stopBuild: { channel: "flowdeck:build-stop", request: "build-stop" },
+  getBuildActivity: { channel: "flowdeck:build-activity", request: "build-activity" },
 } as const;
 
 export type EngineCalls = {
@@ -35,6 +38,7 @@ export type EngineCalls = {
     repo?: string;
     base?: string;
     values: Record<string, string | boolean>;
+    buildModel?: string;
   }): Promise<unknown>;
   listBuilds(): Promise<unknown>;
   buildFiles(payload: { buildId: string }): Promise<unknown>;
@@ -51,6 +55,9 @@ export type EngineCalls = {
   deleteBuild(payload: { buildId: string }): Promise<unknown>;
   doctorWorktrees(): Promise<unknown>;
   defaultBranch(payload: { repo: string }): Promise<unknown>;
+  listBuildProgress(): Promise<unknown>;
+  stopBuild(payload: { pendingId: string }): Promise<unknown>;
+  getBuildActivity(payload: { pendingId: string }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {
@@ -76,6 +83,8 @@ export type FlowdeckBridge = EngineCalls & {
   onWait(listener: (value: unknown) => void): () => void;
   answerWait(answer: unknown): Promise<boolean>;
   workspaceInfo(buildConfig: unknown): Promise<unknown>;
+  onBuildProgress(listener: (update: unknown) => void): () => void;
+  onBuildActivity(listener: (update: unknown) => void): () => void;
 };
 
 export const bridgeChannels = {
@@ -101,4 +110,6 @@ export const bridgeChannels = {
   wait: "flowdeck:wait",
   answerWait: "flowdeck:answer-wait",
   workspaceInfo: "flowdeck:workspace-info",
+  buildProgress: "flowdeck:build-progress",
+  buildActivity: "flowdeck:build-activity-push",
 } as const;

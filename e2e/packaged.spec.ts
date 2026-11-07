@@ -1,8 +1,9 @@
+import { listPackage } from "@electron/asar";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,7 +14,8 @@ import { flow, script, thenWire, trigger } from "../test/fixtures/flow-builders.
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
-import { buildAndRun } from "./build-run.js";
+import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultAppPath = join(repoRoot, "out", "Flowdeck-darwin-arm64", "Flowdeck.app");
@@ -24,6 +26,7 @@ const connectDeadlineMs = 30_000;
 const outputTailChars = 2_000;
 
 const executable = (app: string) => join(app, "Contents", "MacOS", "Flowdeck");
+const appAsar = (app: string) => join(app, "Contents", "Resources", "app.asar");
 const unpackedModules = (app: string) =>
   join(app, "Contents", "Resources", "app.asar.unpacked", "node_modules");
 
@@ -81,7 +84,31 @@ test.afterAll(async () => {
   tempDirs = [];
 });
 
-const launchCopy = async (home: string) => {
+const toolDir = (tool: string): string => {
+  const dir = (process.env["PATH"] ?? "")
+    .split(":")
+    .find((entry) => entry !== "" && existsSync(join(entry, tool)));
+  if (dir === undefined) throw new Error(`No ${tool} on the test's PATH`);
+  return dir;
+};
+
+const loginShell = async (home: string): Promise<string> => {
+  const shell = join(home, "login-shell");
+  const loginPath = [
+    join(home, "fake-claude-bin"),
+    dirname(process.execPath),
+    toolDir("tmux"),
+  ].join(":");
+  await writeFile(
+    shell,
+    `#!/bin/sh\nPATH="${loginPath}:$PATH"\nexport PATH\nexec /bin/sh -c "$2"\n`,
+  );
+  await chmod(shell, 0o755);
+  return shell;
+};
+
+const startCopy = async (home: string, env: Readonly<Record<string, string>> = {}) => {
+  const shell = await loginShell(home);
   const copyDir = await mkdtemp(join(tmpdir(), "fd-packaged-app-"));
   tempDirs.push(copyDir);
   const copy = join(copyDir, "Flowdeck.app");
@@ -95,8 +122,10 @@ const launchCopy = async (home: string) => {
     {
       env: {
         ...(hideWindow(process.env) && { FLOWDECK_HIDE_WINDOW: "1" }),
-        HOME: homedir(),
-        PATH: minimalPath,
+        HOME: home,
+        SHELL: shell,
+        PATH: env["PATH"] ?? minimalPath,
+        ...(env["FAKE_CLAUDE_LOG"] !== undefined && { FAKE_CLAUDE_LOG: env["FAKE_CLAUDE_LOG"] }),
         FLOWDECK_HOME: home,
       },
     },
@@ -127,6 +156,28 @@ const launchCopy = async (home: string) => {
   const context = launch.browser.contexts()[0];
   if (context === undefined) throw failure("CDP browser has no context");
   const window: Page = context.pages()[0] ?? (await context.waitForEvent("page"));
+  return { launch, window };
+};
+
+const launchCopy = async (home: string, env: Readonly<Record<string, string>> = {}) => {
+  let started: { launch: Launch; window: Page } | undefined;
+  const { window } = await launchWithFakeClaude({
+    home,
+    env,
+    logPath: test.info().outputPath("app.log"),
+    basePath: minimalPath,
+    launch: async (appHome, _colorScheme, env) => {
+      const copy = await startCopy(appHome, env);
+      started = copy;
+      return {
+        process: () => copy.launch.child,
+        firstWindow: () => Promise.resolve(copy.window),
+        evaluate: () => Promise.reject(new Error("a packaged copy has no main-process access")),
+      };
+    },
+  });
+  if (started === undefined) throw new Error("the packaged copy did not start");
+  const { launch } = started;
   return { window, quit: () => quit(launch) };
 };
 
@@ -196,6 +247,7 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   const { window, quit: quitCopy } = await launchCopy(home);
   await expect(window.getByTestId("canvas-build")).toBeVisible();
   await buildAndRun(window, home, "packaged");
+  expect(existsSync(fakeClaudeRan(home))).toBe(true);
 
   const runError = window.getByTestId("run-error");
   const scriptStatus = window.getByTestId("node-status-s");
@@ -216,4 +268,50 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   } finally {
     db.close();
   }
+});
+
+test("the kit ships inside app.asar", () => {
+  const skills = readdirSync(join(repoRoot, "kit", "skills"));
+  expect(skills).toHaveLength(10);
+  const listed = listPackage(appAsar(appPath), { isPack: false });
+  expect(listed).toEqual(
+    expect.arrayContaining([
+      "/.vite/build/kit/.claude-plugin/plugin.json",
+      ...skills.map((skill) => `/.vite/build/kit/skills/${skill}/SKILL.md`),
+    ]),
+  );
+});
+
+test("a copy copies the kit out under its home and its build session loads that kit", async () => {
+  test.setTimeout(120_000);
+  const home = await mkdtemp(join(tmpdir(), "fd-packaged-home-"));
+  tempDirs.push(home);
+  const repo = await createTmpRepo({ commit: true });
+  tempDirs.push(repo.path);
+  seedFlow(
+    home,
+    flow([script("s", { settings: { command: "echo", args: ["ok"] } })], []),
+    repo.path,
+  );
+  const argvLog = join(home, "argv.log");
+
+  const { window } = await launchCopy(home, { FAKE_CLAUDE_LOG: argvLog });
+  const kitRoot = join(home, "kit");
+  const versions = () =>
+    existsSync(kitRoot) ? readdirSync(kitRoot).filter((name) => /^[0-9a-f]{12}$/.test(name)) : [];
+  await expect.poll(versions, { timeout: 20_000 }).toHaveLength(1);
+  const [version] = versions();
+
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
+  await buildOnCanvas(window, home, "kit-check");
+  expect(existsSync(fakeClaudeRan(home))).toBe(true);
+
+  const launches = readFileSync(argvLog, "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as string[]);
+  const pluginDirs = launches.flatMap((argv) =>
+    argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [argv[at + 1]] : [])),
+  );
+  expect(pluginDirs).toContain(join(kitRoot, version ?? ""));
 });

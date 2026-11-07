@@ -4,12 +4,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
-import { build } from "../../../src/core/compiler/build.js";
+import { build, layDown, lockBuild } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
-import { emit } from "../../../src/core/compiler/emit.js";
+import { emit, reportPath } from "../../../src/core/compiler/emit.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
+import { pieceOf } from "../../../src/core/compiler/pieces.js";
+import { buildRecord } from "../../../src/core/compiler/record.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
+import { decideResume } from "../../../src/core/run/resume.js";
 import {
   execute,
   type LoadedBuild,
@@ -29,7 +32,7 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
-import { flow, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const fs = new NodeFileSystem();
@@ -149,6 +152,45 @@ describe("the core run path", () => {
       expect(build.worktree).toBe(join(dir, "repo"));
     });
 
+    it("keeps each node's piece and the kit version a build was made with", async () => {
+      const files = emit(lower(scriptOnly(), { name: "fix-login", values: {} }), {
+        repo: "/work/repo",
+        base: "main",
+      }).map((file) => {
+        if (file.path !== "manifest.json") return file;
+        const manifest = JSON.parse(file.content) as Manifest;
+        const nodes = manifest.nodes.map((node) => ({ ...node, piece: `piece-${node.id}` }));
+        return {
+          ...file,
+          content: canonicalJson({ ...manifest, nodes, kitVersion: "abc123def456" }),
+        };
+      });
+      const hash = hashBuild(files.filter((file) => file.path !== reportPath));
+      const pieceDir = join(home, "workspaces", "pieces");
+      for (const file of files) {
+        const content =
+          file.path === "manifest.json"
+            ? canonicalJson({ ...(JSON.parse(file.content) as object), hash })
+            : file.content;
+        await fs.writeFile(join(pieceDir, file.path), content);
+      }
+      const row = { ...oldRow(hash, pieceDir), id: "pieces", name: "pieces" };
+
+      const result = await loadBuild("pieces", { fs, store: rows(row) });
+
+      expect(result.kind).toBe("loaded");
+      if (result.kind !== "loaded") return;
+      expect(result.build.nodes.map(pieceOf)).toEqual(["piece-write", "piece-check"]);
+      expect(result.build.kitVersion).toBe("abc123def456");
+    });
+
+    it("falls back to the node id as the piece of a build that named none", async () => {
+      const build = await loaded();
+
+      expect(build.nodes.map(pieceOf)).toEqual(["write", "check"]);
+      expect(build.kitVersion).toBeUndefined();
+    });
+
     it("ignores the files in the build's worktree", async () => {
       await fs.writeFile(join(dir, "repo", "src", "login.ts"), "export {};\n");
       await fs.writeFile(join(dir, "repo", ".git"), "gitdir: /work/repo/.git/worktrees/repo\n");
@@ -215,7 +257,7 @@ describe("the core run path", () => {
         repo: "/work/repo",
         base: "main",
       });
-      const hash = hashBuild(files);
+      const hash = hashBuild(files.filter((file) => file.path !== reportPath));
       const brokenDir = join(home, "workspaces", "broken");
       for (const file of files) {
         const content =
@@ -694,7 +736,7 @@ describe("execute wiring", () => {
       compacts: true,
     });
 
-    expect(sends).toEqual(["/compact", "/fix-login:n1"]);
+    expect(sends).toEqual(["/compact", "/fix-login:n1 NODE n1"]);
     expect(code).toBe(0);
   });
 
@@ -791,5 +833,129 @@ describe("execute wiring", () => {
     expect(store.costOf(runId)).toBeUndefined();
     expect(store.findRun(runId)?.status).toBe("done");
     expect(lines).toContain("cost not recorded: transcript gone");
+  });
+});
+
+describe("AT-19: a build that named no pieces", () => {
+  const id = "b1111111-0000-4000-8000-000000000019";
+  const claudeSessionId = "c19";
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("runs, resumes and reports cost through loadBuild, decideResume and chargeUsage", async () => {
+    const store = new FakeStore();
+    const workspace = { id, name: "fix-login", repo: "/work/repo", base: "main", values: {} };
+    const laid = await layDown(
+      flow([prompt("p1"), agent("a1"), prompt("p2")], [thenWire("p1", "a1"), thenWire("a1", "p2")]),
+      { home, workspace },
+    );
+    if (!laid.ok) throw new Error("build failed");
+    const unnamed = laid.files.map((file) => {
+      if (file.path !== "manifest.json") return file;
+      const manifest = JSON.parse(file.content) as Manifest;
+      for (const node of manifest.nodes) delete node.piece;
+      return { ...file, content: canonicalJson(manifest) };
+    });
+    const dir = join(home, "workspaces", id);
+    const { manifest: locked } = await lockBuild(fs, dir, unnamed);
+    const built = { dir, record: buildRecord(dir, locked, workspace) };
+    store.recordBuild(built.record);
+    const loadedBuild = await loadBuild(id, { fs, store });
+    if (loadedBuild.kind !== "loaded") throw new Error(loadedBuild.message);
+    const manifest = loadedBuild.build;
+    expect(manifest.nodes.some((node) => node.piece !== undefined)).toBe(false);
+    const { id: runId } = store.createRun({
+      buildDir: built.dir,
+      inputs: {},
+      nodeIds: manifest.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-fd61", cwd: "/repo", claudeSessionId },
+      buildId: id,
+    });
+    store.append(runId, "p1", { kind: "sent" });
+    store.append(runId, "p1", { kind: "done" });
+    store.append(runId, "a1", { kind: "sent" });
+    const turns = [
+      {
+        userText:
+          "<command-message>fix-login:p1</command-message> <command-name>/fix-login:p1</command-name>",
+        ended: true,
+        lastAssistantText: "P1",
+      },
+      {
+        userText:
+          'Use the Agent tool with subagent_type "fix-login:a1" and the prompt "Go". Then reply DONE.',
+        ended: true,
+        lastAssistantText: "DONE",
+      },
+    ];
+    const usage = new FakeUsageSource();
+    const spend = (messageId: string, agentType?: string): UsageEntry => ({
+      messageId,
+      model: "claude-haiku-5-5",
+      inputTokens: 0,
+      outputTokens: 1000,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      cacheReadTokens: 0,
+      ...(agentType === undefined ? {} : { agentType }),
+    });
+    usage.setEntries(claudeSessionId, [spend("sub_a1", "fix-login:a1"), spend("main_p2")]);
+    const events = new FakeEventSource();
+    const sends: string[] = [];
+
+    const code = await execute(
+      {
+        fs,
+        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+        waiter: new FakeWaiter([]),
+        usage,
+        startEvents: async () => ({ events, stop: async () => undefined }),
+        openSession: async () => {
+          throw new Error("execute opens the session through the execution");
+        },
+        store,
+        onChange: () => undefined,
+      },
+      {
+        store,
+        runId,
+        manifest,
+        cwd: "/repo",
+        auto: false,
+        socketPath: "/fd/sockets/fd-run-fd61.sock",
+        actions: async () => decideResume({ manifest, events: store.events(runId), turns }),
+        open: async () => ({
+          sessionId: claudeSessionId,
+          session: { ensureStarted: async () => undefined },
+          prompts: {
+            interrupt: async () => undefined,
+            sendPrompt: async (text) => {
+              sends.push(text);
+              events.publish({ kind: "Stop", sessionId: claudeSessionId, payload: {} });
+            },
+          },
+          stop: async () => undefined,
+        }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(sends).toEqual(["/fix-login:p2 NODE p2"]);
+    expect(store.findRun(runId)?.status).toBe("done");
+    const charged = Object.fromEntries(
+      store
+        .events(runId)
+        .flatMap((event) =>
+          event.kind === "usage" ? [[event.nodeId, event.payload.messages]] : [],
+        ),
+    );
+    expect(charged).toEqual({ a1: ["sub_a1"], p2: ["main_p2"] });
   });
 });

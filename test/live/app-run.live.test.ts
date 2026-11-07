@@ -39,6 +39,7 @@ import type { TerminalStatus } from "../../src/core/run/terminal.js";
 import { flow as buildFlow, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -240,7 +241,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       openStores: () => stores,
       home,
       publish,
-      prepareHooks: () => ({ kind: "ok", nodePath: process.execPath, hookScriptPath }),
+      prepareHooks: () => ({
+        kind: "ok",
+        nodePath: process.execPath,
+        hookScriptPath,
+        guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+      }),
+      ...fakeEngineBuildOptions(fs),
       connectors: new FakeConnectorSource(),
       isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
       fs,
@@ -256,7 +263,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       type: "build-version",
       payload: { ...savedRef, name: buildName, values: {} },
     });
-    const { id: buildId, dir } = (built as { value: { id: string; dir: string } }).value;
+    expect(built).toMatchObject({ ok: true, value: { kind: "started" } });
+    const started = (built as { value: { pendingId: string } }).value;
+    await vi.waitFor(
+      () => {
+        expect(stores.runs.listPendingBuilds().map((open) => open.id)).not.toContain(
+          started.pendingId,
+        );
+      },
+      { timeout: 30_000 },
+    );
+    const record = stores.runs.findBuildByName(buildName);
+    if (record === undefined) throw new Error("the build did not finish built");
+    const { id: buildId, dir } = record;
     const workFolder = join(dir, basename(repo.path));
     projectFolder = join(homedir(), ".claude", "projects", slugOf(workFolder));
     await beforeRun?.(workFolder);

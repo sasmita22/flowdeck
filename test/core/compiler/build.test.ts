@@ -16,13 +16,19 @@ import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 const home = "/fd-home";
 const expectedFiles = [
   "CLAUDE.md",
+  "build-report.json",
   "manifest.json",
   "plugin/.claude-plugin/plugin.json",
   "plugin/agents/a.md",
-  "plugin/commands/p.md",
   "plugin/hooks/hooks.json",
+  "plugin/hooks/no-force-push.sh",
+  "plugin/hooks/rules-after-compact.sh",
+  "plugin/skills/p/SKILL.md",
+  "plugin/skills/run/SKILL.md",
   "settings.json",
 ];
+
+const reportPath = "build-report.json";
 
 type Workspace = BuildDeps["workspace"];
 
@@ -41,7 +47,7 @@ const sample = (instructions = "Do the work."): Flow => {
     [prompt("p", { settings: { instructions } }), agent("a", { settings: { tools: ["Grep"] } })],
     [thenWire("p", "a")],
   );
-  return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit"] } };
+  return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
 };
 
 const run = (fs: FakeFileSystem, input: Flow = sample(), named: Workspace = workspace()) =>
@@ -61,6 +67,9 @@ const readBack = async (fs: FakeFileSystem, dir: string) =>
     })),
   );
 
+const hashed = async (fs: FakeFileSystem, dir: string) =>
+  (await readBack(fs, dir)).filter(({ path }) => path !== reportPath);
+
 const writes = (fs: FakeFileSystem) =>
   fs.calls.filter((call) => call.method === "writeFile").map((call) => call.path);
 
@@ -77,10 +86,10 @@ describe("build", () => {
     expect(result.dir).toBe(`/fd-home/workspaces/${workspace().id}`);
     expect(await fs.list(result.dir)).toEqual(expectedFiles);
     const settings = JSON.parse(await fs.readFile(`${result.dir}/settings.json`));
-    expect(settings.permissions.allow).toEqual(["Read", "Edit"]);
+    expect(settings.permissions.allow).toEqual(["Read", "Edit", "Grep"]);
   });
 
-  it("writes the manifest last, recording a hash the written files reproduce", async () => {
+  it("writes the manifest last, recording a hash the written files but the report reproduce", async () => {
     const fs = new FakeFileSystem();
 
     const result = succeeded(await run(fs));
@@ -88,17 +97,17 @@ describe("build", () => {
     expect(writes(fs).at(-1)).toBe(`${result.dir}/manifest.json`);
     const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`));
     expect(manifest.hash).toBe(result.hash);
-    expect(hashBuild(await readBack(fs, result.dir))).toBe(result.hash);
+    expect(hashBuild(await hashed(fs, result.dir))).toBe(result.hash);
   });
 
-  it("records a sha256 of every other written file in the manifest", async () => {
+  it("records a sha256 of every other written file but the report in the manifest", async () => {
     const fs = new FakeFileSystem();
 
     const { dir } = succeeded(await run(fs));
 
     const manifest = JSON.parse(await fs.readFile(`${dir}/manifest.json`));
     const expected = Object.fromEntries(
-      (await readBack(fs, dir))
+      (await hashed(fs, dir))
         .filter(({ path }) => path !== "manifest.json")
         .map(({ path, content }) => [path, createHash("sha256").update(content).digest("hex")]),
     );
@@ -152,7 +161,7 @@ describe("build", () => {
     const first = succeeded(await run(fs, sample(), workspace({ id: "b-1" })));
     const writesAfterFirst = writes(fs).length;
 
-    const second = succeeded(await run(fs, sample(), workspace({ id: "b-2" })));
+    const second = succeeded(await run(fs, sample(), workspace({ id: "b-1" })));
 
     expect(second.hash).toBe(first.hash);
     expect(writes(fs).slice(writesAfterFirst).sort()).toEqual(
@@ -162,7 +171,7 @@ describe("build", () => {
     expect(second).not.toHaveProperty("reused");
   });
 
-  it("builds the same hash and bytes in two homes, naming neither", async () => {
+  it("builds the same bytes in two homes once the workspace folder is set aside, naming the home nowhere else", async () => {
     const first = new FakeFileSystem();
     const second = new FakeFileSystem();
 
@@ -173,11 +182,19 @@ describe("build", () => {
       await build(sample(), { fs: second, home: "/tmp/other home", workspace: workspace() }),
     );
 
-    expect(b.hash).toBe(a.hash);
-    const files = await readBack(first, a.dir);
-    expect(await readBack(second, b.dir)).toEqual(files);
-    for (const { content } of files) {
+    const outsideWorkspace = async (fs: FakeFileSystem, dir: string) =>
+      (await readBack(fs, dir)).map(({ path, content }) => ({
+        path,
+        content: content.replaceAll(dir, "<workspace>"),
+      }));
+    const files = await outsideWorkspace(first, a.dir);
+    const notManifest = ({ path }: { path: string }) => path !== "manifest.json";
+    expect((await outsideWorkspace(second, b.dir)).filter(notManifest)).toEqual(
+      files.filter(notManifest),
+    );
+    for (const { content } of [...files, ...(await outsideWorkspace(second, b.dir))]) {
       expect(content).not.toContain("/Users/a");
+      expect(content).not.toContain("/tmp/other home");
       expect(content).not.toContain("flowdeck-hook");
     }
   });
@@ -187,7 +204,7 @@ describe("build", () => {
 
     const result = succeeded(await run(fs));
 
-    const onDisk = await readBack(fs, result.dir);
+    const onDisk = await hashed(fs, result.dir);
     expect(result.record.files).toEqual(
       onDisk.map(({ path, content }) => ({
         path,

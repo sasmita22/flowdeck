@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -10,14 +10,14 @@ import type { Flow } from "../src/core/flow/schema.js";
 import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
 
 const run = promisify(execFile);
 
 let home: string;
 let repo: TmpRepo;
-let bin: string;
 let launched: LaunchedApp | undefined;
 
 const laidOut = (nodes: unknown[], wires: unknown[]) =>
@@ -32,50 +32,13 @@ const laidOut = (nodes: unknown[], wires: unknown[]) =>
 const sh = (id: string, command: string) =>
   script(id, { settings: { command: "sh", args: ["-c", command] } });
 
-const fakeClaude = `
-const { appendFileSync } = require("node:fs");
-const { connect } = require("node:net");
-const argv = process.argv.slice(2);
-appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(argv) + "\\n");
-const flag = (name) => { const at = argv.indexOf(name); return at === -1 ? undefined : argv[at + 1]; };
-const sessionId = flag("--session-id") ?? flag("--resume") ?? "";
-const sock = process.env.FLOWDECK_SOCK ?? "";
-const session = sock.slice(sock.lastIndexOf("/") + 1).replace(/\\.sock$/, "");
-let typed = "";
-const draw = () =>
-  process.stdout.write(
-    "\\x1b[2J\\x1b[HFake Claude in " + session + "\\r\\n────────\\r\\n❯ " + typed + "\\r\\n────────\\r\\n",
-  );
-const stop = () => {
-  const socket = connect(sock, () => {
-    socket.end(JSON.stringify({ hook_event_name: "Stop", session_id: sessionId, last_assistant_message: "ok" }) + "\\n");
-  });
-  socket.on("error", () => undefined);
-};
-process.stdout.on("resize", draw);
-process.stdin.setRawMode(true);
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  for (const key of chunk) {
-    if (key === "\\r" || key === "\\n") {
-      if (typed !== "") setTimeout(stop, 50);
-      typed = "";
-    } else if (key === "\\x7f") typed = typed.slice(0, -1);
-    else if (key !== "\\x1b") typed += key;
-  }
-  draw();
-});
-draw();
-`;
-
-const argvLog = () => join(bin, "argv.log");
+const argvLog = () => join(home, "argv.log");
 
 const launch = async (env: Record<string, string> = {}) => {
-  launched = await launchApp({
+  launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
     env: {
-      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
       FAKE_CLAUDE_LOG: argvLog(),
       FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"),
       ...env,
@@ -224,14 +187,6 @@ test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-rs-"));
   repo = await createTmpRepo({ commit: true });
-  bin = join(home, "bin");
-  await mkdir(bin, { recursive: true });
-  await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
-  await writeFile(
-    join(bin, "claude"),
-    `#!/bin/sh\nexec "${process.execPath}" "${join(bin, "fake-claude.cjs")}" "$@"\n`,
-  );
-  await chmod(join(bin, "claude"), 0o755);
   await writeFile(
     join(home, "claude.json"),
     JSON.stringify({ mcpServers: { jira: { command: "true" } } }),
@@ -379,7 +334,8 @@ test("A run whose session ended while the app was closed shows interrupted, and 
   const launches = (await readFile(argvLog(), "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as string[]);
+    .map((line) => JSON.parse(line) as string[])
+    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length < 2);
   expect(launches).toHaveLength(2);
   const [firstLaunch, resumed] = launches;
   expect(firstLaunch).toEqual(expect.arrayContaining(["--session-id", claudeSessionId]));

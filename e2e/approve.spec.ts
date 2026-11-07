@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { flow, gate, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
 
 let home: string;
@@ -40,7 +41,7 @@ test.afterEach(async () => {
 
 test("Approving a gate in the inspector lets the run carry on to the last script", async () => {
   seedFlow(home, scriptThenGateThenScript(), repo.path);
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
 
@@ -96,7 +97,7 @@ test("Approving a gate in the inspector lets the run carry on to the last script
 
 test("A gate's question shows on the run's page even when a node was selected in the editor", async () => {
   seedFlow(home, scriptThenGateThenScript(), repo.path);
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
 

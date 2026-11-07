@@ -15,6 +15,7 @@ import { FakeStore } from "../fakes/fake-store.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { flow, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { fakeBuildDeps, fakeCliBuild } from "../fixtures/fake-build-deps.js";
 
 describe("a script-only run", () => {
   let home: string;
@@ -50,7 +51,17 @@ describe("a script-only run", () => {
         ),
       ),
       { name: "x", repo: repo.path, values: {} },
-      { flows, store, fs, home, gitState, worktree, newId },
+      {
+        flows,
+        store,
+        fs,
+        home,
+        gitState,
+        worktree,
+        newId,
+        now: Date.now,
+        ...fakeBuildDeps(fs, home),
+      },
     );
     if (!result.ok) throw new Error(`build failed: ${JSON.stringify(result.errors)}`);
     let openSessionCalls = 0;
@@ -75,6 +86,7 @@ describe("a script-only run", () => {
       }),
       openStore: () => ({ runs: store, flows }),
       hooks: { nodePath: process.execPath, hookScriptPath: "/h" },
+      build: fakeCliBuild(fs),
       connectors: new FakeConnectorSource(),
       transcriptTurns: async () => [],
       openSession: async () => {

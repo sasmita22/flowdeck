@@ -61,9 +61,38 @@ async function deleteOldBuild(
   return deleted(deps, build.id);
 }
 
-const holdsWork = async (deps: DeleteBuildDeps, worktree: RunWorktree): Promise<boolean> =>
+export type TeardownDeps = Pick<DeleteBuildDeps, "worktree" | "fs">;
+
+const holdsWork = async (deps: TeardownDeps, worktree: RunWorktree): Promise<boolean> =>
   (await deps.worktree.isDirty(worktree.path)) ||
   (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base));
+
+export async function teardownWorkspace(
+  deps: TeardownDeps,
+  { dir, worktree }: { dir: string; worktree?: RunWorktree },
+): Promise<KeptAfterDelete | undefined> {
+  if (worktree === undefined) {
+    await deps.fs.removeTree(dir);
+    return undefined;
+  }
+  const present = await deps.fs.exists(worktree.path);
+  const keptWorktree: KeptAfterDelete = { kind: "worktree", path: worktree.path };
+  if (present && (await holdsWork(deps, worktree))) {
+    await deps.fs.removeTree(dir, { keep: worktree.path });
+    return keptWorktree;
+  }
+  const removal = await deps.worktree.remove(worktree);
+  if (removal.worktree === "kept") {
+    await deps.fs.removeTree(dir, { keep: worktree.path });
+    return keptWorktree;
+  }
+  if (present && removal.branch === "kept")
+    await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
+  await deps.fs.removeTree(dir);
+  return !present && removal.branch === "kept"
+    ? { kind: "branch", branch: worktree.branch }
+    : undefined;
+}
 
 export async function deleteBuild(
   deps: DeleteBuildDeps,
@@ -88,21 +117,5 @@ export async function deleteBuild(
     base: build.base,
     ...buildWorktree({ id: build.id, name: build.name, repo: build.repo, dir: build.dir }),
   };
-  const present = await deps.fs.exists(worktree.path);
-  const keptWorktree: KeptAfterDelete = { kind: "worktree", path: worktree.path };
-  if (present && (await holdsWork(deps, worktree))) {
-    await deps.fs.removeTree(build.dir, { keep: worktree.path });
-    return deleted(deps, build.id, keptWorktree);
-  }
-  const removal = await deps.worktree.remove(worktree);
-  if (removal.worktree === "kept") {
-    await deps.fs.removeTree(build.dir, { keep: worktree.path });
-    return deleted(deps, build.id, keptWorktree);
-  }
-  if (present && removal.branch === "kept")
-    await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
-  await deps.fs.removeTree(build.dir);
-  return !present && removal.branch === "kept"
-    ? deleted(deps, build.id, { kind: "branch", branch: worktree.branch })
-    : deleted(deps, build.id);
+  return deleted(deps, build.id, await teardownWorkspace(deps, { dir: build.dir, worktree }));
 }

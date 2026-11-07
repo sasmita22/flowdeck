@@ -15,6 +15,7 @@ import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { buildVersion } from "../../src/core/compiler/build-version.js";
 import { ask, flow, gate, script, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { fakeBuildDeps } from "../fixtures/fake-build-deps.js";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -107,6 +108,8 @@ describe("the flowdeck entry", () => {
           gitState: new GitFolderState(),
           worktree: new GitWorktree(),
           newId: randomUUID,
+          now: Date.now,
+          ...fakeBuildDeps(new NodeFileSystem(), home),
         },
       );
       if (!built.ok) throw new Error(`build failed: ${JSON.stringify(built.errors)}`);

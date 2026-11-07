@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { scopeLine } from "../../../../src/core/compiler/scope-line.js";
 import { compileAgent } from "../../../../src/core/nodes/agent/compile.js";
+import { bodyOf, frontmatter, sectionOf } from "../../../fixtures/frontmatter.js";
+
+const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
+const piece = "review-the-diff";
 
 const agentNode = (
   settings: Partial<{
@@ -24,90 +29,116 @@ const agentNode = (
   },
 });
 
+const compiled = (node = agentNode(), more: Partial<Parameters<typeof compileAgent>[1]> = {}) =>
+  compileAgent(node, { piece, scope, ...more });
+
+const afterScope = (content: string) => {
+  const description = String(frontmatter(content).description);
+  expect(description.startsWith(scopeLine(scope))).toBe(true);
+  return description.slice(scopeLine(scope).length).trim();
+};
+
+const lines = (content: string) => bodyOf(content).split("\n");
+
 describe("compileAgent", () => {
-  it("writes an agent file with name, description, tools and model", () => {
-    expect(compileAgent(agentNode())).toEqual({
-      path: "plugin/agents/reviewer.md",
-      content:
-        '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n',
-    });
+  it("writes plugin/agents/<piece>.md, named by its piece, not its node id", () => {
+    expect(compiled().path).toBe("plugin/agents/review-the-diff.md");
   });
 
-  it("fills the build's values into the instructions", () => {
-    expect(
-      compileAgent(
-        agentNode({ instructions: "Review {{ticket}} on {{ base }}." }),
-        { given: [], writes: [] },
-        { ticket: "FD-99", base: "main" },
-      ),
-    ).toEqual({
-      path: "plugin/agents/reviewer.md",
-      content:
-        '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview FD-99 on main.\n',
-    });
+  it("names the agent with the bare piece, leaving the plugin prefix to Claude Code", () => {
+    expect(frontmatter(compiled().content).name).toBe("review-the-diff");
   });
 
-  it("ends the agent file with the files it is given and the files it writes", () => {
-    const { content } = compileAgent(
-      agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] }),
-    );
-
-    expect(content).toMatch(
-      /---\nReview it\.\n\nYou are given: plan\.md, notes\.md\nWrite: review\.md\n$/,
-    );
+  it("opens the description with the scope line, followed by the role", () => {
+    expect(afterScope(compiled().content)).toBe("Checks the diff");
   });
 
-  it("adds the files its wires carry after its own, leaving its own entries as they are", () => {
-    const { content } = compileAgent(agentNode({ given: ["plan.md"], writes: ["review.md"] }), {
-      given: ["plan.md", "ticket.md"],
-      writes: ["notes.md"],
-    });
-
-    expect(content).toMatch(
-      /---\nReview it\.\n\nYou are given: plan\.md, plan\.md, ticket\.md\nWrite: review\.md, notes\.md\n$/,
-    );
-  });
-
-  it("keeps repeated entries of its own exactly as before File wires", () => {
-    const { content } = compileAgent(
-      agentNode({ given: ["plan.md", "plan.md"], writes: ["review.md", "review.md"] }),
-    );
-
-    expect(content).toBe(
-      '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n\nYou are given: plan.md, plan.md\nWrite: review.md, review.md\n',
-    );
-  });
-
-  it("names only the side that has files, and nothing for empty lists", () => {
-    expect(compileAgent(agentNode({ writes: ["review.md"] })).content).toMatch(
-      /---\nReview it\.\n\nWrite: review\.md\n$/,
-    );
-    expect(compileAgent(agentNode({ given: [], writes: [] })).content).toMatch(
-      /---\nReview it\.\n$/,
-    );
-  });
-
-  it("leaves the tools line out when the list is empty", () => {
-    expect(compileAgent(agentNode({ tools: [] })).content).toBe(
-      '---\nname: "reviewer"\ndescription: "Checks the diff"\nmodel: "haiku"\n---\nReview it.\n',
-    );
-  });
-
-  it("falls back to the label when the role is empty", () => {
-    expect(compileAgent(agentNode({ role: "" })).content).toBe(
-      '---\nname: "reviewer"\ndescription: "Review"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n',
-    );
-  });
-
-  it("leaves the model line out when the model is empty", () => {
-    expect(compileAgent(agentNode({ model: "" })).content).toBe(
-      '---\nname: "reviewer"\ndescription: "Checks the diff"\ntools: "Read, Grep"\n---\nReview it.\n',
-    );
+  it("falls back to the label after the scope line when the role is empty", () => {
+    expect(afterScope(compiled(agentNode({ role: "" })).content)).toBe("Review");
   });
 
   it("keeps a role with YAML-special characters on one quoted line", () => {
-    expect(compileAgent(agentNode({ role: 'a: b # "c"\nd' })).content).toBe(
-      '---\nname: "reviewer"\ndescription: "a: b # \\"c\\"\\nd"\ntools: "Read, Grep"\nmodel: "haiku"\n---\nReview it.\n',
+    expect(afterScope(compiled(agentNode({ role: 'a: b # "c"\nd' })).content)).toBe(
+      'a: b # "c"\nd',
     );
+  });
+
+  it("keeps the tools and the model", () => {
+    const fields = frontmatter(compiled().content);
+
+    expect(fields.tools).toBe("Read, Grep");
+    expect(fields.model).toBe("haiku");
+  });
+
+  it("leaves the tools line out when the list is empty and the model line out when it is empty", () => {
+    expect(frontmatter(compiled(agentNode({ tools: [] })).content)).not.toHaveProperty("tools");
+    expect(frontmatter(compiled(agentNode({ model: "" })).content)).not.toHaveProperty("model");
+  });
+
+  it("marks the body as a draft with an @unfilled line", () => {
+    expect(lines(compiled().content).some((line) => line.startsWith("@unfilled"))).toBe(true);
+  });
+
+  it("lists a file once when the node declares the file its File wire carries", () => {
+    const { content } = compiled(agentNode({ writes: ["review.md"], given: ["plan.md"] }), {
+      wired: { given: ["plan.md"], writes: ["review.md"] },
+    });
+
+    expect(content).toContain("Write: review.md\n");
+    expect(content).toContain("You are given: plan.md\n");
+  });
+
+  it("lays out the sections Role, Inputs, Steps, Output and When to stop, in that order", () => {
+    expect(lines(compiled().content).filter((line) => line.startsWith("## "))).toEqual([
+      "## Role",
+      "## Inputs",
+      "## Steps",
+      "## Output",
+      "## When to stop",
+    ]);
+  });
+
+  it("drafts from the instructions, with the build's values filled in", () => {
+    const body = bodyOf(
+      compiled(agentNode({ instructions: "Review {{ticket}} on {{ base }}." }), {
+        values: { ticket: "FD-99", base: "main" },
+      }).content,
+    );
+
+    expect(body).toContain("Review FD-99 on main.");
+    expect(body).not.toContain("{{");
+  });
+
+  it("carries the node's hand-off: the files it is given and the files it writes", () => {
+    const body = bodyOf(
+      compiled(agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] })).content,
+    );
+
+    expect(body).toContain("You are given: plan.md, notes.md\n");
+    expect(body).toContain("Write: review.md\n");
+  });
+
+  it("adds the files its wires carry after its own, each file once", () => {
+    const body = bodyOf(
+      compiled(agentNode({ given: ["plan.md"], writes: ["review.md", "review.md"] }), {
+        wired: { given: ["plan.md", "ticket.md"], writes: ["notes.md"] },
+      }).content,
+    );
+
+    expect(body).toContain("You are given: plan.md, ticket.md\n");
+    expect(body).toContain("Write: review.md, notes.md\n");
+  });
+
+  it("says under Inputs that hand-off files live in the repo folder inside the workspace", () => {
+    expect(sectionOf(compiled().content, /inputs/i)).toContain(
+      "Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace",
+    );
+  });
+
+  it("names no hand-off side that has no files", () => {
+    const body = bodyOf(compiled(agentNode({ given: [], writes: [] })).content);
+
+    expect(body).not.toContain("You are given:");
+    expect(body).not.toContain("Write:");
   });
 });

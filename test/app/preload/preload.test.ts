@@ -78,9 +78,13 @@ describe("preload run-state wiring", () => {
     ["listRuns", "flowdeck:list-runs", undefined],
     ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
     ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
+    ["listBuildProgress", "flowdeck:build-progress-list", undefined],
+    ["stopBuild", "flowdeck:build-stop", { pendingId: "pending-1" }],
+    ["getBuildActivity", "flowdeck:build-activity", { pendingId: "pending-1" }],
   ] as const)(
     "%s invokes %s with its payload and returns its answer",
     async (method, channel, payload) => {
+      expect(bridge[method]).toEqual(expect.any(Function));
       const call = bridge[method] as (payload?: unknown) => Promise<unknown>;
 
       await expect(call(payload)).resolves.toBe(`answer for ${channel}`);
@@ -92,6 +96,9 @@ describe("preload run-state wiring", () => {
     ["delete-build", "deleteBuild"],
     ["doctor-worktrees", "doctorWorktrees"],
     ["default-branch", "defaultBranch"],
+    ["build-progress-list", "listBuildProgress"],
+    ["build-stop", "stopBuild"],
+    ["build-activity", "getBuildActivity"],
   ] as const)(
     "relays %s as an engine call, so main guards it like every engine call",
     (request, method) => {
@@ -107,6 +114,7 @@ describe("preload run-state wiring", () => {
       repo?: string;
       base?: string;
       values: Record<string, string | boolean>;
+      buildModel?: string;
     }>();
     expectTypeOf<Parameters<EngineCalls["buildFiles"]>[0]>().toEqualTypeOf<{ buildId: string }>();
     expectTypeOf<Parameters<EngineCalls["runBuild"]>[0]>().toEqualTypeOf<{
@@ -117,6 +125,8 @@ describe("preload run-state wiring", () => {
     expectTypeOf<Parameters<EngineCalls["deleteBuild"]>[0]>().toEqualTypeOf<{ buildId: string }>();
     expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
+    expectTypeOf<Parameters<EngineCalls["listBuildProgress"]>>().toEqualTypeOf<[]>();
+    expectTypeOf<Parameters<EngineCalls["stopBuild"]>[0]>().toEqualTypeOf<{ pendingId: string }>();
   });
 
   it.each([
@@ -260,9 +270,20 @@ describe("preload terminal wiring", () => {
       "flowdeck:wait",
       { runId: "run-1", value: { waitId: "wait-1", request: { nodeId: "gate" } } },
     ],
+    [
+      "onBuildProgress",
+      "flowdeck:build-progress",
+      { pendingId: "pending-1", flowId: "flow-a", progress: { steps: [] } },
+    ],
+    [
+      "onBuildActivity",
+      "flowdeck:build-activity-push",
+      { pendingId: "pending-1", entry: { id: 1 } },
+    ],
   ] as const)(
     "%s hands each %s payload to the listener without the event, and stops after unsubscribe",
     (method, channel, payload) => {
+      expect(bridge[method]).toEqual(expect.any(Function));
       const listener = vi.fn();
       electron.ipcRenderer.on.mockClear();
       const unsubscribe = bridge[method](listener);

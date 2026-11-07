@@ -3,11 +3,13 @@ import {
   foldHookEvent,
   foldNodeEvent,
   foldOutput,
+  type ActivityEntry,
   type ActivityFeed,
   type ActivityHookEvent,
   type FoldResult,
   type WorkingPlace,
 } from "../../core/run/activity.js";
+import type { AgentCall } from "../../core/run/agent-calls.js";
 import { trackWindow, type NodeWindow } from "../../core/run/attribution.js";
 import type { TurnEvents } from "../../core/run/turns.js";
 import type { EventEntry, Store } from "../../ports/store.js";
@@ -78,6 +80,15 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       listBuilds: () => inner.listBuilds(),
       listRuns: () => inner.listRuns(),
       buildFiles: (id) => inner.buildFiles(id),
+      startPendingBuild: (build) => inner.startPendingBuild(build),
+      appendBuildEvent: (pendingId, event) => inner.appendBuildEvent(pendingId, event),
+      buildEvents: (pendingId) => inner.buildEvents(pendingId),
+      endPendingBuild: (pendingId, end) => inner.endPendingBuild(pendingId, end),
+      listPendingBuilds: () => inner.listPendingBuilds(),
+      listLatestEndedPendingBuilds: () => inner.listLatestEndedPendingBuilds(),
+      findPendingBuildByName: (name) => inner.findPendingBuildByName(name),
+      appendBuildActivity: (pendingId, entry) => inner.appendBuildActivity(pendingId, entry),
+      buildActivity: (pendingId) => inner.buildActivity(pendingId),
       append(id, nodeId, event) {
         inner.append(id, nodeId, event);
         track(id, [{ nodeId, event }]);
@@ -97,5 +108,43 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
     },
     output: (nodeId, stream, text) =>
       apply((current) => foldOutput(current, { nodeId, at: now(), stream, text })),
+  };
+}
+
+export type BuildActivityOptions = {
+  pendingId: string;
+  now: () => number;
+  activity: Pick<Store, "appendBuildActivity" | "buildActivity">;
+  publish: (push: EnginePush) => void;
+};
+
+export function createBuildActivity({
+  pendingId,
+  now,
+  activity,
+  publish,
+}: BuildActivityOptions): (call: AgentCall) => void {
+  let { nextId } = feedOf(activity.buildActivity(pendingId));
+  const running = new Map<string, number>();
+  return (call) => {
+    const { piece } = call;
+    if (piece === undefined) return;
+    const key = call.toolUseId ?? piece;
+    const started = call.status === undefined;
+    const id = (started ? undefined : running.get(key)) ?? nextId++;
+    if (started) running.set(key, id);
+    else running.delete(key);
+    const entry: ActivityEntry = {
+      id,
+      nodeId: piece,
+      at: now(),
+      summary: piece,
+      kind: "subagent",
+      agentType: call.agentType ?? "general-purpose",
+      state: started ? "running" : "finished",
+      ...(call.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
+    };
+    activity.appendBuildActivity(pendingId, entry);
+    publish({ push: "build-activity", pendingId, entry });
   };
 }

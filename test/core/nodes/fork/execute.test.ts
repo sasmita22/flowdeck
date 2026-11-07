@@ -179,17 +179,27 @@ describe("parallelSections", () => {
 });
 
 describe("forkTurnText", () => {
-  const text = forkTurnText("h1", ["a1", "a2"]);
+  const branch = (id: string, piece = id, given: string[] = []) => ({
+    id,
+    piece,
+    given,
+    writes: [],
+  });
+  const text = forkTurnText("h1", [branch("a1"), branch("a2")]);
+  const prompts = (turn: string) =>
+    [...turn.matchAll(/the prompt ("(?:[^"\\]|\\.)*")/g)].map(
+      (match) => JSON.parse(match[1] ?? '""') as string,
+    );
 
   it("names every branch's agent type in quotes", () => {
     expect(text).toContain(`"${agentType("h1", "a1")}"`);
     expect(text).toContain(`"${agentType("h1", "a2")}"`);
   });
 
-  it("asks for all the Agent calls in one message with the prompt Go", () => {
+  it("asks for all the Agent calls in one message, each prompt led by its node marker", () => {
     expect(text).toContain("Agent");
     expect(text).toMatch(/one message/i);
-    expect(text).toContain('"Go"');
+    expect(prompts(text)).toEqual(["NODE a1\nGo", "NODE a2\nGo"]);
   });
 
   it("says not to wait for one agent before starting the next", () => {
@@ -197,19 +207,33 @@ describe("forkTurnText", () => {
   });
 
   it("names only the branches it is given", () => {
-    expect(forkTurnText("h1", ["a1"])).not.toContain(agentType("h1", "a2"));
+    expect(forkTurnText("h1", [branch("a1")])).not.toContain(agentType("h1", "a2"));
+  });
+
+  it("asks for two calls when two branches share one piece, each with its own details", () => {
+    const shared = forkTurnText("h1", [
+      branch("b1", "review", ["a.md"]),
+      branch("b2", "review", ["b.md"]),
+    ]);
+
+    expect(shared.split(`"${agentType("h1", "review")}"`)).toHaveLength(3);
+    expect(prompts(shared)).toEqual([
+      "NODE b1\nYou are given: a.md\nGo",
+      "NODE b2\nYou are given: b.md\nGo",
+    ]);
   });
 });
 
 describe("unlaunched", () => {
-  it("returns the branch types with no launch, in branch order", () => {
-    expect(unlaunched(["h:a1", "h:a2", "h:a3"], ["h:a2", "general-purpose"])).toEqual([
-      "h:a1",
-      "h:a3",
-    ]);
+  it("returns the branch nodes with no launch, in branch order", () => {
+    expect(unlaunched(["a1", "a2", "a3"], ["a2", "x9"])).toEqual(["a1", "a3"]);
   });
 
   it("is empty when every branch launched", () => {
-    expect(unlaunched(["h:a1", "h:a2"], ["h:a2", "h:a1"])).toEqual([]);
+    expect(unlaunched(["a1", "a2"], ["a2", "a1"])).toEqual([]);
+  });
+
+  it("keeps a branch unlaunched when only another node on its piece launched", () => {
+    expect(unlaunched(["b1", "b2"], ["b1"])).toEqual(["b2"]);
   });
 });

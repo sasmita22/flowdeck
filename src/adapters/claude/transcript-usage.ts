@@ -72,12 +72,17 @@ function entryOf(line: Line | undefined): UsageEntry | undefined {
 const entriesIn = (jsonl: string): UsageEntry[] =>
   jsonl.split("\n").flatMap((line) => entryOf(parse(line)) ?? []);
 
-type Transcript = { jsonl: string; agentType?: string };
+type Transcript = { jsonl: string; tags: Pick<UsageEntry, "agentType" | "toolUseId"> };
 
-function agentTypeIn(meta: string | undefined): string | undefined {
+function tagsIn(meta: string | undefined): Transcript["tags"] {
   const parsed =
-    meta === undefined ? undefined : (parse(meta) as { agentType?: unknown } | undefined);
-  return typeof parsed?.agentType === "string" ? parsed.agentType : undefined;
+    meta === undefined
+      ? undefined
+      : (parse(meta) as { agentType?: unknown; toolUseId?: unknown } | undefined);
+  return {
+    ...(typeof parsed?.agentType === "string" ? { agentType: parsed.agentType } : {}),
+    ...(typeof parsed?.toolUseId === "string" ? { toolUseId: parsed.toolUseId } : {}),
+  };
 }
 
 export class TranscriptUsage implements UsageSource {
@@ -91,8 +96,8 @@ export class TranscriptUsage implements UsageSource {
     if (sessionId === "") return [];
     const transcript = await this.findTranscript(sessionId);
     if (transcript === undefined) return [];
-    return (await this.transcripts(transcript, sessionId)).flatMap(({ jsonl, agentType }) =>
-      entriesIn(jsonl).map((entry) => (agentType === undefined ? entry : { ...entry, agentType })),
+    return (await this.transcripts(transcript, sessionId)).flatMap(({ jsonl, tags }) =>
+      entriesIn(jsonl).map((entry) => ({ ...entry, ...tags })),
     );
   }
 
@@ -120,10 +125,9 @@ export class TranscriptUsage implements UsageSource {
         const jsonl = await read(join(subagents, name));
         if (jsonl === undefined) return undefined;
         const meta = await read(join(subagents, name.replace(/\.jsonl$/, ".meta.json")));
-        const agentType = agentTypeIn(meta);
-        return agentType === undefined ? { jsonl } : { jsonl, agentType };
+        return { jsonl, tags: tagsIn(meta) };
       }),
     );
-    return [{ jsonl: main }, ...others.flatMap((other) => other ?? [])];
+    return [{ jsonl: main, tags: {} }, ...others.flatMap((other) => other ?? [])];
   }
 }

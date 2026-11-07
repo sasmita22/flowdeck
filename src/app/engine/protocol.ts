@@ -1,4 +1,5 @@
 import type { ActivityEntry } from "../../core/run/activity.js";
+import type { BuildProgress } from "../../core/run/build-progress.js";
 import type { RunSnapshot } from "../../core/run/snapshot.js";
 import type { PendingWait } from "../../core/run/wait.js";
 
@@ -15,6 +16,9 @@ export type EngineRequest = {
     | "load-run"
     | "doctor"
     | "build-version"
+    | "build-progress-list"
+    | "build-stop"
+    | "build-activity"
     | "list-builds"
     | "build-files"
     | "run-build"
@@ -39,8 +43,18 @@ export type EnginePush =
   | { push: "run-state"; value: RunSnapshot }
   | { push: "session"; runId: string; value: string | null }
   | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
-  | { push: "wait"; runId: string; value: PendingWait | null };
+  | { push: "build-activity"; pendingId: string; entry: ActivityEntry }
+  | { push: "wait"; runId: string; value: PendingWait | null }
+  | {
+      push: "build-progress";
+      pendingId: string;
+      flowId: string;
+      progress: BuildProgress;
+      buildId?: string;
+    };
 
 export type EngineMessage = EngineResponse | EnginePush;
+
+export type BuildVersionStarted = { kind: "started"; pendingId: string };
 
 export type StoreOpenResult = { kind: "ready" } | { kind: "error"; message: string };

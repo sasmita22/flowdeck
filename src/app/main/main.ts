@@ -12,6 +12,7 @@ import {
   type StoreStatus,
 } from "../preload/bridge.js";
 import { createActivityRelay } from "./activity.js";
+import { createBuildProgressRelay } from "./build-progress.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
@@ -251,6 +252,19 @@ void app.whenReady().then(async () => {
     },
   });
   client.onPush(activity.onPush);
+  const buildProgress = createBuildProgressRelay({
+    send: (update) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.buildProgress, update);
+    },
+  });
+  client.onPush(buildProgress.onPush);
+  client.onPush((push) => {
+    if (push.push !== "build-activity" || window.isDestroyed()) return;
+    window.webContents.send(bridgeChannels.buildActivity, {
+      pendingId: push.pendingId,
+      entry: push.entry,
+    });
+  });
   const wait = createWaitRelay({
     send: (value) => {
       if (!window.isDestroyed()) window.webContents.send(bridgeChannels.wait, value);

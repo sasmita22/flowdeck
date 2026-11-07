@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { createActions } from "./actions.js";
 import { App } from "./app.js";
 import { createBranchStore } from "./branch-store.js";
+import { createBuildProgressStore } from "./build-progress-store.js";
 import { createAppStore } from "./app-store.js";
 import { createCanvasStore } from "./canvas/store.js";
 import { createInspectorStore } from "./inspector/store.js";
@@ -53,6 +54,8 @@ function renderApp(root: HTMLElement) {
   const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save });
   const nav = createNavStore();
   const library = createLibraryStore({ bridge: window.flowdeck });
+  const buildProgress = createBuildProgressStore(window.flowdeck);
+  void buildProgress.getState().connect();
   void library.getState().refresh();
   run.subscribe((next, previous) => {
     const moved = Object.values(next.snapshots).some(
@@ -87,6 +90,7 @@ function renderApp(root: HTMLElement) {
       nav={nav}
       library={library}
       branches={branches}
+      buildProgress={buildProgress}
       actions={actions}
     />,
   );

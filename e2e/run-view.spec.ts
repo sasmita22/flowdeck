@@ -14,6 +14,7 @@ import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { buildVersion } from "../src/core/compiler/build-version.js";
 import { FakeConnectorSource } from "../test/fakes/fake-connector-source.js";
+import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
 import {
   agent,
   branch,
@@ -29,7 +30,8 @@ import {
 } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 
 const laidOut = (nodes: unknown[], wires: unknown[]) =>
@@ -75,8 +77,12 @@ process.stdin.on("data", (chunk) => {
 draw();
 `;
 
-const launch = async (env: Record<string, string> = {}) => {
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), env });
+const launch = async (ownBin?: string) => {
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    ...(ownBin === undefined ? {} : { ownBin }),
+  });
   await expect(launched.window.getByTestId(controlTestIds.build)).toBeVisible();
   return launched.window;
 };
@@ -89,7 +95,7 @@ const withFakeClaude = async () => {
     `#!/bin/sh\nexec "${process.execPath}" "${join(bin, "fake-claude.cjs")}"\n`,
   );
   await chmod(join(bin, "claude"), 0o755);
-  return launch({ PATH: `${bin}:${process.env["PATH"] ?? ""}` });
+  return launch(bin);
 };
 
 const closeApp = async () => {
@@ -401,18 +407,21 @@ test("The Cost tab shows each node's tokens, cost and time, and a session line t
   try {
     let clock = Date.parse("2026-11-02T10:00:00Z");
     const runs = new SqliteStore({ db, now: () => new Date(clock) });
+    const fs = new NodeFileSystem();
     const built = await buildVersion(
       source,
       { name: "plan-and-build", values: {} },
       {
         flows: new SqliteFlowStore({ db }),
         store: runs,
-        fs: new NodeFileSystem(),
+        fs,
         home,
         connectors: new FakeConnectorSource(),
         gitState: new GitFolderState(),
         worktree: new GitWorktree(),
         newId: () => "0f3a9c2e-0000-4000-8000-000000000000",
+        now: () => clock,
+        ...fakeBuildDeps(fs, home),
       },
     );
     if (!built.ok) throw new Error("the seeded flow did not build");

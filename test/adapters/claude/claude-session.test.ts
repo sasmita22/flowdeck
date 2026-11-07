@@ -1,10 +1,14 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeCli } from "../../../src/adapters/claude/claude-cli.js";
 import {
   openClaudeSession,
   SessionGoneError,
 } from "../../../src/adapters/claude/claude-session.js";
+import { layDown, workspaceDir } from "../../../src/core/compiler/build.js";
+import { buildWorktree } from "../../../src/core/run/workspace.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
+import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const rule = "─".repeat(40);
 const readyPane = [rule, "❯ ", rule].join("\n");
@@ -224,6 +228,76 @@ describe("openClaudeSession", () => {
       expect(command).toContain(" --add-dir '..'");
       expect(command).toContain(" --plugin-dir '../plugin'");
       await session.stop();
+    });
+  });
+
+  describe("for two builds made from one blueprint", () => {
+    const home = "/fd";
+    const repo = "/src/carousell-web";
+    const blueprint = flow([prompt("p"), agent("a")], [thenWire("p", "a")]);
+    const builds = [
+      { id: "b-alpha-0001-2222", name: "alpha" },
+      { id: "b-beta-0003-4444", name: "beta" },
+    ];
+
+    const launch = async (build: { id: string; name: string }) => {
+      const laidDown = await layDown(blueprint, {
+        home,
+        workspace: {
+          ...build,
+          repo,
+          base: "main",
+          values: {},
+          blueprint: { name: "shared", version: 1 },
+        },
+      });
+      if (!laidDown.ok) throw new Error(JSON.stringify(laidDown.errors));
+      const dir = workspaceDir(home, build.id);
+      const cwd = buildWorktree({ ...build, repo, dir }).path;
+      const sessions = new SlowStartHost();
+      const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+      const opened = await openClaudeSession(
+        { ...workspace, sessionName: `fd-run-${build.name}`, buildDir: dir, cwd },
+        { sessions, claude, sessionId: "s1" },
+      );
+      sessions.finishStart();
+      await opened.session.ensureStarted();
+      const command = sessions.get(`fd-run-${build.name}`)?.command ?? "";
+      await opened.stop();
+      const files = new Map(laidDown.files.map((file) => [`${dir}/${file.path}`, file.content]));
+      return { dir, cwd, command, files };
+    };
+
+    const pluginDirs = (command: string) =>
+      [...command.matchAll(/ --plugin-dir '([^']*)'/g)].map((match) => match[1] ?? "");
+
+    it("gives each run exactly one plugin folder, its own build's ../plugin", async () => {
+      for (const build of builds) {
+        const { dir, cwd, command } = await launch(build);
+
+        expect(pluginDirs(command)).toEqual(["../plugin"]);
+        expect(resolve(cwd, "../plugin")).toBe(`${dir}/plugin`);
+      }
+    });
+
+    it("loads a plugin named after its own build", async () => {
+      for (const build of builds) {
+        const { cwd, command, files } = await launch(build);
+        const [pluginDir] = pluginDirs(command);
+        const manifest = files.get(resolve(cwd, pluginDir ?? "", ".claude-plugin/plugin.json"));
+
+        expect(manifest).toBeDefined();
+        expect(JSON.parse(manifest ?? "{}")).toEqual({ name: build.name });
+      }
+    });
+
+    it("never names the other build's workspace", async () => {
+      const [alpha, beta] = await Promise.all(builds.map(launch));
+
+      expect(alpha?.command).not.toContain(beta?.dir);
+      expect(alpha?.command).not.toContain(builds[1]?.id);
+      expect(beta?.command).not.toContain(alpha?.dir);
+      expect(beta?.command).not.toContain(builds[0]?.id);
     });
   });
 

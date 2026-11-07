@@ -41,6 +41,7 @@ const allMigrations = [
   { name: "006_build_lineage.sql" },
   { name: "007_activity.sql" },
   { name: "008_named_builds.sql" },
+  { name: "009_build_progress.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -92,7 +93,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies every migration, 001 to 008, to a new database file", () => {
+  it("applies every migration, 001 to 009, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
@@ -128,6 +129,89 @@ describe("openDatabase", () => {
     opened.push(store);
 
     expect(migrations(raw())).toEqual(allMigrations);
+  });
+
+  describe("the build progress tables", () => {
+    const startPending = (
+      db: Database.Database,
+      id: string,
+      { flowId = "flow-1", name = "fix-login" }: { flowId?: string; name?: string } = {},
+    ) =>
+      db
+        .prepare(
+          `INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at)
+             VALUES (?, ?, 1, ?, '{}', 1)`,
+        )
+        .run(id, flowId, name);
+
+    const end = (db: Database.Database, id: string) =>
+      db.prepare("UPDATE pending_builds SET ended_at = 2, outcome = 'failed' WHERE id = ?").run(id);
+
+    it.each(["build_events", "build_activity"])("keeps %s append-only", (table) => {
+      const db = open();
+      startPending(db, "pb-1");
+      db.prepare(
+        `INSERT INTO ${table} (pending_id, seq, at, body_json) VALUES ('pb-1', 1, 1, '{}')`,
+      ).run();
+
+      expect(() => db.prepare(`UPDATE ${table} SET body_json = '{"x":1}'`).run()).toThrow(
+        /append-only/,
+      );
+      expect(() => db.prepare(`DELETE FROM ${table}`).run()).toThrow(/append-only/);
+      expect(db.prepare(`SELECT body_json FROM ${table}`).all()).toEqual([{ body_json: "{}" }]);
+    });
+
+    it("refuses a second open build of the same blueprint", () => {
+      const db = open();
+      startPending(db, "pb-1", { flowId: "flow-1", name: "first" });
+
+      expect(() => startPending(db, "pb-2", { flowId: "flow-1", name: "second" })).toThrow(
+        /UNIQUE/,
+      );
+    });
+
+    it("refuses a second open build with the same name", () => {
+      const db = open();
+      startPending(db, "pb-1", { flowId: "flow-1", name: "fix-login" });
+
+      expect(() => startPending(db, "pb-2", { flowId: "flow-2", name: "fix-login" })).toThrow(
+        /UNIQUE/,
+      );
+    });
+
+    it("lets a new build of the same blueprint and name start once the open one has ended", () => {
+      const db = open();
+      startPending(db, "pb-1");
+      end(db, "pb-1");
+
+      startPending(db, "pb-2");
+
+      expect(db.prepare("SELECT id FROM pending_builds WHERE ended_at IS NULL").all()).toEqual([
+        { id: "pb-2" },
+      ]);
+    });
+
+    it.each([
+      ["ended_at", 2, 3],
+      ["outcome", "built", "failed"],
+      ["build_id", "b1", "b2"],
+      ["report_json", "{}", '{"x":1}'],
+    ])("sets %s once and never changes it", (column, first, second) => {
+      const db = open();
+      startPending(db, "pb-1");
+      const set = (value: string | number) =>
+        db.prepare(`UPDATE pending_builds SET ${column} = ? WHERE id = 'pb-1'`).run(value);
+
+      set(first);
+
+      expect(() => set(second)).toThrow();
+      expect(() =>
+        db.prepare(`UPDATE pending_builds SET ${column} = NULL WHERE id = 'pb-1'`).run(),
+      ).toThrow();
+      expect(db.prepare(`SELECT ${column} AS value FROM pending_builds`).get()).toEqual({
+        value: first,
+      });
+    });
   });
 
   describe("a migration marked to run outside a transaction", () => {

@@ -26,6 +26,8 @@ export const controlTestIds = {
   zoomOut: "canvas-zoom-out",
   fit: "canvas-fit",
   search: "palette-search",
+  buildStop: "build-progress-stop",
+  buildModel: "build-model",
 } as const;
 
 export const readoutTestIds = {
@@ -59,6 +61,15 @@ export const pageTestIds = {
   buildFileContent: "build-file-content",
   buildBack: "build-back",
   buildDetailRun: "build-detail-run",
+  buildChip: (flowId: string) => `build-chip-${flowId}`,
+  canvasBuildBar: "canvas-build-bar",
+  buildProgress: (pendingId: string) => `build-progress-${pendingId}`,
+  buildStep: (pendingId: string, step: number) => `build-step-${pendingId}-${step}`,
+  buildComponent: (pendingId: string, path: string) => `build-component-${pendingId}-${path}`,
+  buildQuestion: (pendingId: string, index: number) => `build-question-${pendingId}-${index}`,
+  buildActivity: (pendingId: string) => `build-activity-${pendingId}`,
+  buildTerminal: (pendingId: string) => `build-terminal-${pendingId}`,
+  buildCost: (pendingId: string) => `build-cost-${pendingId}`,
   runCard: (runId: string) => `run-card-${runId}`,
   runOpen: (runId: string) => `run-open-${runId}`,
   runResult: (runId: string) => `run-result-${runId}`,

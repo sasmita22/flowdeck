@@ -18,17 +18,23 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
   prompt: {
     instructions: [
       "M-prompt-instructions",
-      inFile("plugin/commands/p.md", "M-prompt-instructions"),
+      inFile("plugin/skills/label-prompt/SKILL.md", "M-prompt-instructions"),
     ],
-    expectedOutput: ["M-prompt-output", inFile("plugin/commands/p.md", "M-prompt-output")],
+    expectedOutput: [
+      "M-prompt-output",
+      inFile("plugin/skills/label-prompt/SKILL.md", "M-prompt-output"),
+    ],
   },
   agent: {
-    role: ["M-agent-role", inFile("plugin/agents/a.md", "M-agent-role")],
-    instructions: ["M-agent-instructions", inFile("plugin/agents/a.md", "M-agent-instructions")],
-    model: ["M-agent-model", inFile("plugin/agents/a.md", "M-agent-model")],
-    tools: [["M-agent-tool"], inFile("plugin/agents/a.md", "M-agent-tool")],
-    given: [["M-agent-given.md"], inFile("plugin/agents/a.md", "M-agent-given.md")],
-    writes: [["M-agent-writes.md"], inFile("plugin/agents/a.md", "M-agent-writes.md")],
+    role: ["M-agent-role", inFile("plugin/agents/label-agent.md", "M-agent-role")],
+    instructions: [
+      "M-agent-instructions",
+      inFile("plugin/agents/label-agent.md", "M-agent-instructions"),
+    ],
+    model: ["M-agent-model", inFile("plugin/agents/label-agent.md", "M-agent-model")],
+    tools: [["M-agent-tool"], inFile("plugin/agents/label-agent.md", "M-agent-tool")],
+    given: [["M-agent-given.md"], inFile("plugin/agents/label-agent.md", "M-agent-given.md")],
+    writes: [["M-agent-writes.md"], inFile("plugin/agents/label-agent.md", "M-agent-writes.md")],
   },
   script: {
     command: ["M-script-command", atRunTime("M-script-command")],
@@ -130,10 +136,16 @@ const everyNode = () =>
   });
 
 const builtFiles = () => {
-  const files = emit(lower(everyNode(), { name: "M-build", values: { "M-variable": true } }), {
-    repo: "/M-build-repo",
-    base: "M-build-base",
-  });
+  const target = { repo: "/M-build-repo", base: "M-build-base", workspace: "/M-build-workspace" };
+  const files = emit(
+    lower(everyNode(), {
+      name: "M-build",
+      values: { "M-variable": true },
+      repo: target.repo,
+      workspace: target.workspace,
+    }),
+    target,
+  );
   const byPath = new Map(files.map((file) => [file.path, file.content]));
   const manifest = JSON.parse(byPath.get("manifest.json") ?? "{}") as Manifest;
   return { byPath, manifest };
@@ -148,7 +160,7 @@ const landed = (
   field: string,
 ) => {
   if ("file" in landing) {
-    expect(byPath.get(landing.file), `${type}.${field} in ${landing.file}`).toContain(
+    expect(byPath.get(landing.file) ?? "", `${type}.${field} in ${landing.file}`).toContain(
       landing.shows,
     );
     return;

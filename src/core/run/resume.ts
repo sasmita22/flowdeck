@@ -1,5 +1,7 @@
 import type { ManifestNode } from "../compiler/lower.js";
+import { pieceOf } from "../compiler/pieces.js";
 import { agentType } from "../nodes/agent/execute.js";
+import { nodeMarker } from "./agent-calls.js";
 import { nodeStatus } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import type { StoredEvent } from "./store.js";
@@ -35,20 +37,30 @@ type ResumeInput = {
 const humanTypes = new Set<ManifestNode["type"]>(["gate", "ask", "hardstop", "loop"]);
 
 function turnMarker(node: ManifestNode, prefix: string): string {
+  const piece = pieceOf(node);
   return node.type === "agent"
-    ? `subagent_type "${agentType(prefix, node.id)}"`
-    : `<command-name>/${prefix}:${node.id}</command-name>`;
+    ? `subagent_type "${agentType(prefix, piece)}"`
+    : `<command-name>/${prefix}:${piece}</command-name>`;
 }
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const holdsNodeMarker = (userText: string, nodeId: string) =>
+  new RegExp(`${escaped(nodeMarker(nodeId))}(?=$|[\\s\\\\"<])`).test(userText);
 
 function settleTurn(
   node: ManifestNode,
   prefix: string,
+  shared: boolean,
   events: readonly StoredEvent[],
   turns: readonly TranscriptTurn[],
 ): ResumeAction {
   const sends = events.filter((event) => event.kind === "sent").length;
   const marker = turnMarker(node, prefix);
-  const matching = turns.filter((turn) => turn.userText.includes(marker));
+  const matching = turns.filter(
+    (turn) =>
+      turn.userText.includes(marker) && (!shared || holdsNodeMarker(turn.userText, node.id)),
+  );
   if (matching.length === sends - 1) return { kind: "send" };
   const last = matching.at(-1);
   if (matching.length !== sends || last === undefined) {
@@ -97,6 +109,14 @@ export function decideResume({
   sessionRestarted = false,
 }: ResumeInput): ResumeActions {
   const actions: ResumeActions = {};
+  const pieceUses = new Map<string, number>();
+  for (const node of manifest.nodes) {
+    if (node.type !== "agent" && node.type !== "prompt") continue;
+    const key = turnMarker(node, manifest.prefix);
+    pieceUses.set(key, (pieceUses.get(key) ?? 0) + 1);
+  }
+  const shared = (node: ManifestNode) =>
+    (pieceUses.get(turnMarker(node, manifest.prefix)) ?? 0) > 1;
   const statusOf = (id: string) => nodeStatus(events.filter((event) => event.nodeId === id));
   const interrupted = manifest.nodes.some(
     (node) => node.type === "fork" && inTurn(node, statusOf(node.id)),
@@ -112,7 +132,7 @@ export function decideResume({
       continue;
     }
     if (inTurn(node, status)) {
-      const settled = settleTurn(node, manifest.prefix, own, turns);
+      const settled = settleTurn(node, manifest.prefix, shared(node), own, turns);
       actions[node.id] = sessionRestarted && settled.kind === "wait" ? cutOff(node.id) : settled;
     }
     if (status === "running" && node.type === "script") {

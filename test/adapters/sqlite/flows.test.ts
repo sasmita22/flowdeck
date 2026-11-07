@@ -682,6 +682,7 @@ describe("SqliteFlowStore", () => {
       { name: "006_build_lineage.sql" },
       { name: "007_activity.sql" },
       { name: "008_named_builds.sql" },
+      { name: "009_build_progress.sql" },
     ]);
   });
 });

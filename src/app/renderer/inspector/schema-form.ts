@@ -59,6 +59,7 @@ const sessionForm: Form = {
   prefix: "session",
   labels: sessionLabels,
   optionLabels: {},
+  hidden: new Set(["buildConfig.buildModel"]),
   choices: { model: modelChoices, permissionMode: permissionModes },
 };
 

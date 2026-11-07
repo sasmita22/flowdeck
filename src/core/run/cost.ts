@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { pieceOf } from "../compiler/pieces.js";
 import { agentType } from "../nodes/agent/execute.js";
 import { costOf, type UsageEntry } from "./budget.js";
-import { nodeStatus, type RunEvent } from "./run-events.js";
+import { donePayload, nodeStatus, type RunEvent } from "./run-events.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 
 export type CostLine = { nodeId: string; tokens: number; cost: number; ms: number | null };
@@ -50,22 +51,43 @@ function ownerOf(starts: readonly TurnStart[], at: number | undefined): string |
   return (starts.findLast((start) => start.at <= at) ?? starts[0])?.nodeId;
 }
 
-export const agentNodes = (manifest: {
-  hash: string;
-  prefix: string;
-  nodes: readonly { id: string; type: string }[];
-}): Map<string, string> =>
-  new Map(
-    manifest.nodes
-      .filter((node) => node.type === "agent")
-      .map((node) => [agentType(manifest.prefix, node.id), node.id]),
+export type UsageOwners = {
+  calls: ReadonlyMap<string, string>;
+  types: ReadonlyMap<string, string>;
+};
+
+type OwnedEvent = { nodeId: string; kind: string; payload?: unknown };
+
+export function usageOwners(
+  manifest: { prefix: string; nodes: readonly { id: string; type: string; piece?: string }[] },
+  events: readonly OwnedEvent[],
+): UsageOwners {
+  const calls = new Map<string, string>();
+  for (const event of events) {
+    if (event.kind !== "done") continue;
+    const parsed = donePayload.safeParse(event.payload ?? {});
+    for (const id of parsed.success ? (parsed.data.toolUseIds ?? []) : []) {
+      calls.set(id, event.nodeId);
+    }
+  }
+  const byType = new Map<string, string[]>();
+  for (const node of manifest.nodes.filter((candidate) => candidate.type === "agent")) {
+    const type = agentType(manifest.prefix, pieceOf(node));
+    byType.set(type, [...(byType.get(type) ?? []), node.id]);
+  }
+  const types = new Map(
+    [...byType].flatMap(([type, [only, ...others]]) =>
+      only !== undefined && others.length === 0 ? [[type, only] as const] : [],
+    ),
   );
+  return { calls, types };
+}
 
 export function chargeUsage(input: {
   events: readonly TimedEvent[];
   entries: readonly UsageEntry[];
   turnNodes: ReadonlySet<string>;
-  agentNodes?: ReadonlyMap<string, string>;
+  owners?: UsageOwners;
 }): EventEntry[] {
   const counted = countedMessages(input.events);
   const starts = turnStarts(input.events, input.turnNodes);
@@ -73,9 +95,11 @@ export function chargeUsage(input: {
   const byNode = new Map<string, UsageEntry[]>();
   for (const entry of latest.values()) {
     if (counted.has(entry.messageId)) continue;
-    const branch =
-      entry.agentType === undefined ? undefined : input.agentNodes?.get(entry.agentType);
-    const nodeId = branch ?? ownerOf(starts, entry.at);
+    const byCall =
+      entry.toolUseId === undefined ? undefined : input.owners?.calls.get(entry.toolUseId);
+    const byType =
+      entry.agentType === undefined ? undefined : input.owners?.types.get(entry.agentType);
+    const nodeId = byCall ?? byType ?? ownerOf(starts, entry.at);
     if (nodeId === undefined) continue;
     byNode.set(nodeId, [...(byNode.get(nodeId) ?? []), entry]);
   }

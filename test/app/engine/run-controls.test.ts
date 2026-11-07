@@ -32,6 +32,7 @@ import {
   wire,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
+import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
@@ -78,7 +79,9 @@ describe("run controls", () => {
         kind: "ok",
         nodePath: process.execPath,
         hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
+        guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
       }),
+      ...fakeEngineBuildOptions(new NodeFileSystem()),
       isFolder,
       fs: new NodeFileSystem(),
       connectors: new FakeConnectorSource(),
@@ -106,13 +109,18 @@ describe("run controls", () => {
 
   const builtId = async (input: Flow, values: Record<string, unknown> = {}) => {
     const { flowId, version } = flows.save(atRepo(input));
-    const built = (await call("build-version", {
-      flowId,
-      version,
-      name: `build-${++names}`,
-      values,
-    })) as { kind: string; id: string; message?: string };
-    if (built.kind !== "built") throw new Error(`did not build: ${built.message}`);
+    const name = `build-${++names}`;
+    const answered = (await call("build-version", { flowId, version, name, values })) as {
+      kind: string;
+      pendingId: string;
+      message?: string;
+    };
+    if (answered.kind !== "started") throw new Error(`did not build: ${answered.message}`);
+    await vi.waitFor(() => {
+      expect(runs.listPendingBuilds().map((open) => open.id)).not.toContain(answered.pendingId);
+    });
+    const built = runs.findBuildByName(name);
+    if (built === undefined) throw new Error(`did not build ${name}`);
     return built.id;
   };
 

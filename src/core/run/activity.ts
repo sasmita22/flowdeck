@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentNodeId } from "../nodes/agent/execute.js";
+import { agentCallOf } from "./agent-calls.js";
 import { attribute, type NodeWindow } from "./attribution.js";
 import { plainReason } from "./failure.js";
 import type { RunEvent } from "./run-events.js";
@@ -13,6 +13,8 @@ export const activityEntrySchema = z.discriminatedUnion("kind", [
     kind: z.literal("subagent"),
     agentType: z.string(),
     state: z.enum(["running", "finished"]),
+    toolUseId: z.string().optional(),
+    agentId: z.string().optional(),
   }),
   z.object({ ...base, kind: z.literal("turn") }),
   z.object({
@@ -101,9 +103,8 @@ function addEntry(
   const tool = String(payload["tool_name"]);
   const input = recordOf(payload["tool_input"]);
   const subagentType = input["subagent_type"];
-  const owner =
-    tool === "Agent" && typeof subagentType === "string" ? agentNodeId(subagentType) : undefined;
-  const nodeId = attribute(windows, at, owner);
+  const call = agentCallOf({ kind: "PreToolUse", payload });
+  const nodeId = attribute(windows, at, call?.nodeId);
   if (nodeId === undefined) return unchanged;
   const common = { id: feed.nextId, nodeId, at };
   const changed: ActivityEntry =
@@ -114,6 +115,7 @@ function addEntry(
           agentType: typeof subagentType === "string" ? subagentType : defaultAgentType,
           summary: cut(firstString(input, ["description"])),
           state: "running",
+          ...(call?.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
         }
       : {
           ...common,
@@ -154,18 +156,41 @@ function addPullRequest(
   return added(feed, { id: feed.nextId, nodeId, at, kind: "pr", url, summary: url });
 }
 
-function finishSubagent(feed: ActivityFeed, payload: Record<string, unknown>): FoldResult {
-  const agentType = payload["agent_type"];
-  const running = feed.entries.find(
+const replaced = (feed: ActivityFeed, old: ActivityEntry, changed: ActivityEntry): FoldResult => ({
+  feed: { ...feed, entries: feed.entries.map((entry) => (entry === old ? changed : entry)) },
+  changed,
+});
+
+const runningWhere = (feed: ActivityFeed, matches: (entry: SubagentEntry) => boolean) =>
+  feed.entries.find(
     (entry): entry is SubagentEntry =>
-      entry.kind === "subagent" && entry.state === "running" && entry.agentType === agentType,
+      entry.kind === "subagent" && entry.state === "running" && matches(entry),
   );
-  if (running === undefined) return { feed, changed: undefined };
-  const changed: SubagentEntry = { ...running, state: "finished" };
-  return {
-    feed: { ...feed, entries: feed.entries.map((entry) => (entry === running ? changed : entry)) },
-    changed,
-  };
+
+function finishCall(feed: ActivityFeed, payload: Record<string, unknown>): FoldResult {
+  const call = agentCallOf({ kind: "PostToolUse", payload });
+  const toolUseId = call?.toolUseId;
+  const running =
+    toolUseId === undefined
+      ? undefined
+      : runningWhere(feed, (entry) => entry.toolUseId === toolUseId);
+  if (call === undefined || running === undefined) return { feed, changed: undefined };
+  return replaced(feed, running, {
+    ...running,
+    state: "finished",
+    ...(call.nodeId === undefined ? {} : { nodeId: call.nodeId }),
+    ...(call.agentId === undefined ? {} : { agentId: call.agentId }),
+  });
+}
+
+function finishSubagent(feed: ActivityFeed, payload: Record<string, unknown>): FoldResult {
+  const call = agentCallOf({ kind: "SubagentStop", payload });
+  const agentId = payload["agent_id"];
+  if (call?.background === true || typeof agentId !== "string") return { feed, changed: undefined };
+  const running = runningWhere(feed, (entry) => entry.agentId === agentId);
+  return running === undefined
+    ? { feed, changed: undefined }
+    : replaced(feed, running, { ...running, state: "finished" });
 }
 
 export function foldHookEvent(
@@ -178,7 +203,9 @@ export function foldHookEvent(
     case "PreToolUse":
       return addEntry(feed, windows, event.payload, place);
     case "PostToolUse":
-      return addPullRequest(feed, windows, event.payload);
+      return event.payload["tool_name"] === "Agent" && event.payload["agent_id"] === undefined
+        ? finishCall(feed, event.payload)
+        : addPullRequest(feed, windows, event.payload);
     case "SubagentStop":
       return finishSubagent(feed, event.payload);
   }

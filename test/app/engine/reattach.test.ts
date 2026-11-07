@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
@@ -25,6 +25,9 @@ import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import { flow, gate, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
+import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
+import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
+import type { BuildAgents, BuildTurnResult } from "../../../src/ports/build-agents.js";
 
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
@@ -90,7 +93,9 @@ describe("an app restart", () => {
         kind: "ok",
         nodePath: process.execPath,
         hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
+        guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
       }),
+      ...fakeEngineBuildOptions(new NodeFileSystem()),
       isFolder,
       fs: new NodeFileSystem(),
       connectors: new FakeConnectorSource(),
@@ -132,12 +137,19 @@ describe("an app restart", () => {
       ...input,
       session: { ...input.session, buildConfig: { repo: repo.path, variables: [] } },
     });
-    const built = (await call(handler, "build-version", {
+    const name = `build-${++names}`;
+    const answered = (await call(handler, "build-version", {
       flowId,
       version,
-      name: `build-${++names}`,
+      name,
       values: {},
-    })) as { id: string };
+    })) as { kind: string; pendingId: string; message?: string };
+    if (answered.kind !== "started") throw new Error(`did not build: ${answered.message}`);
+    await vi.waitFor(() => {
+      expect(runs.listPendingBuilds().map((open) => open.id)).not.toContain(answered.pendingId);
+    });
+    const built = runs.findBuildByName(name);
+    if (built === undefined) throw new Error(`did not build ${name}`);
     const result = (await call(handler, "run-build", { buildId: built.id })) as {
       kind: string;
       runId: string;
@@ -155,8 +167,10 @@ describe("an app restart", () => {
       .filter((event) => event.nodeId === nodeId)
       .map((event) => event.kind);
   const lastWait = (runId: string) =>
-    pushes.findLast((push) => push.push === "wait" && push.runId === runId)?.value as
-      PendingWait | null | undefined;
+    pushes.findLast(
+      (push): push is Extract<EnginePush, { push: "wait" }> =>
+        push.push === "wait" && push.runId === runId,
+    )?.value as PendingWait | null | undefined;
   const cwdOf = (runId: string) => {
     const cwd = runs.findRun(runId)?.session.cwd;
     if (cwd === undefined || cwd === "") throw new Error(`run ${runId} has no folder`);
@@ -488,6 +502,241 @@ describe("an app restart", () => {
 
       expect(pushes).toEqual([]);
       expect(opened).toEqual([]);
+    });
+  });
+
+  describe("a build left going", () => {
+    type ProgressPush = Extract<EnginePush, { push: "build-progress" }>;
+
+    class InFlightAgents implements BuildAgents {
+      readonly fake = new FakeBuildAgents({ fs: new NodeFileSystem() });
+
+      readonly open: BuildAgents["open"] = (spec) => this.fake.open(spec);
+
+      readonly turn: BuildAgents["turn"] = async (sessionName, text, onCall) => {
+        await this.fake.turn(sessionName, text, onCall);
+        return new Promise<BuildTurnResult>(() => undefined);
+      };
+
+      readonly alive: BuildAgents["alive"] = (sessionName) => this.fake.alive(sessionName);
+
+      readonly close: BuildAgents["close"] = (sessionName) => this.fake.close(sessionName);
+    }
+
+    const leftMidTurn = async () => {
+      const inFlight = new InFlightAgents();
+      const first = newHandler({ buildAgents: inFlight });
+      const blueprint = flow([prompt("p1")], []);
+      const { flowId, version } = flows.save({
+        ...blueprint,
+        session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },
+      });
+      const name = "left-going";
+      const answered = (await call(first, "build-version", {
+        flowId,
+        version,
+        name,
+        values: {},
+      })) as { kind: string; pendingId: string; message?: string };
+      if (answered.kind !== "started") throw new Error(`did not build: ${answered.message}`);
+      await vi.waitFor(() => expect(inFlight.fake.turns).toHaveLength(1));
+      const [spec] = inFlight.fake.opened;
+      if (spec === undefined) throw new Error("the build session never opened");
+      await first.detach();
+      return { pendingId: answered.pendingId, name, spec };
+    };
+
+    const stepEvents = (pendingId: string) =>
+      runs.buildEvents(pendingId).flatMap((event) => (event.type === "step" ? [event] : []));
+
+    const endPush = (pendingId: string) =>
+      pushes.findLast(
+        (push): push is ProgressPush =>
+          push.push === "build-progress" &&
+          push.pendingId === pendingId &&
+          push.progress.outcomeLabel !== undefined,
+      );
+
+    it("reattaches a build whose session is alive: announces it, waits for the turn's Stop, then carries on to the end", async () => {
+      const { pendingId, name, spec } = await leftMidTurn();
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+
+      expect(pushes).toContainEqual({ push: "session", runId: pendingId, value: spec.sessionName });
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      expect(after.opened[0]).toMatchObject({
+        attach: true,
+        sessionName: spec.sessionName,
+        claudeSessionId: spec.claudeSessionId,
+        workspaceDir: spec.workspaceDir,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(after.turns).toEqual([]);
+      expect(runs.listPendingBuilds().map((open) => open.id)).toContain(pendingId);
+
+      events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+
+      await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
+      expect(runs.listPendingBuilds()).toEqual([]);
+      expect(after.turns.length).toBeGreaterThan(0);
+      expect(after.turns.every((turn) => turn.sessionName === spec.sessionName)).toBe(true);
+      const steps = stepEvents(pendingId);
+      for (const step of [1, 2] as const) {
+        expect(
+          steps.filter((event) => event.step === step && event.status === "running"),
+        ).toHaveLength(1);
+      }
+      expect(
+        steps.filter((event) => event.step === 3 && event.status === "done" && event.round === 1),
+      ).toHaveLength(1);
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
+    });
+
+    it.each([
+      { ended: true, waits: false },
+      { ended: false, waits: true },
+    ])(
+      "with the in-flight turn in the transcript and ended $ended, waits for a Stop: $waits",
+      async ({ ended, waits }) => {
+        const { pendingId, name, spec } = await leftMidTurn();
+        alive.add(spec.sessionName);
+        const after = new FakeBuildAgents({
+          fs: new NodeFileSystem(),
+          script: { aliveAfterRestart: true },
+        });
+        pushes = [];
+
+        const second = newHandler({
+          buildAgents: after,
+          transcriptTurns: async (claudeSessionId) =>
+            claudeSessionId === spec.claudeSessionId ? [{ userText: "build turn", ended }] : [],
+        });
+        await second.reattach();
+
+        if (waits) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          expect(after.turns).toEqual([]);
+          events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+        }
+        await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
+        expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
+      },
+    );
+
+    it("ends a reattached build failed when its in-flight turn ends in a StopFailure, tearing down", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      events.publish({
+        kind: "StopFailure",
+        sessionId: spec.claudeSessionId,
+        payload: { error: "API Error: overloaded" },
+      });
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(stepEvents(pendingId).at(-1)).toMatchObject({
+        status: "failed",
+        message: "API Error: overloaded",
+      });
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+      expect(after.turns).toEqual([]);
+      expect(after.closed).toEqual([spec.sessionName]);
+      expect(runs.listBuilds()).toEqual([]);
+    });
+
+    it("ends a reattached build failed when its session ends while the in-flight turn is awaited", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      let sessionUp = true;
+      const dying: BuildAgents = {
+        open: (opened) => after.open(opened),
+        turn: (sessionName, text, onCall) => after.turn(sessionName, text, onCall),
+        alive: async (sessionName) => sessionUp && (await after.alive(sessionName)),
+        close: (sessionName) => after.close(sessionName),
+      };
+      pushes = [];
+
+      const second = newHandler({ buildAgents: dying, buildSessionPollMs: 5 });
+      await second.reattach();
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(runs.listPendingBuilds().map((open) => open.id)).toContain(pendingId);
+
+      sessionUp = false;
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(stepEvents(pendingId).at(-1)).toMatchObject({
+        status: "failed",
+        message: "the build session ended",
+      });
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+      expect(after.turns).toEqual([]);
+      expect(runs.listBuilds()).toEqual([]);
+    });
+
+    it("ends a build left past its step-3 turn failed, closing its live session and tearing down", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      runs.appendBuildEvent(pendingId, { type: "step", step: 3, status: "done", round: 1 });
+      runs.appendBuildEvent(pendingId, { type: "step", step: 4, status: "running" });
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(after.closed).toEqual([spec.sessionName]);
+      expect(after.opened).toEqual([]);
+      expect(after.turns).toEqual([]);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+      expect(runs.listBuilds()).toEqual([]);
+    });
+
+    it("ends a build whose session has ended failed, tears its workspace down, and starts no session", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(true);
+      expect(await new NodeFileSystem().exists(spec.settingsPath)).toBe(true);
+      const after = new FakeBuildAgents({ fs: new NodeFileSystem() });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+      expect(await new NodeFileSystem().exists(dirname(spec.settingsPath))).toBe(false);
+      expect(after.opened.filter((opened) => !("attach" in opened))).toEqual([]);
+      expect(after.turns).toEqual([]);
+      expect(runs.listBuilds()).toEqual([]);
     });
   });
 });

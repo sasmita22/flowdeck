@@ -423,7 +423,7 @@
       ]
     },
     "model": "sonnet",
-    "allowedTools": [],
+    "allowedTools": ["Read", "Edit"],
     "permissionMode": "default",
     "connectors": []
   }

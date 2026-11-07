@@ -1,4 +1,5 @@
 import type { Flow } from "../flow/schema.js";
+import { rule as agentTools } from "./rules/agent-tools.js";
 import { rule as bodyNodes } from "./rules/body-nodes.js";
 import { rule as branchVariable } from "./rules/branch-variable.js";
 import { rule as fileWires } from "./rules/file-wires.js";
@@ -47,6 +48,7 @@ export const rules = [
   undeclaredVariable,
   variableNames,
   repoRequired,
+  agentTools,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

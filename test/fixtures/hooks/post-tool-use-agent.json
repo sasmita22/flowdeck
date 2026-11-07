@@ -1,0 +1,22 @@
+{
+  "session_id": "d9a5609b-712e-4925-ae35-7dcc327f3fa3",
+  "transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/d9a5609b-712e-4925-ae35-7dcc327f3fa3.jsonl",
+  "cwd": "/tmp/fd-fixture",
+  "permission_mode": "acceptEdits",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Review node n1",
+    "prompt": "NODE n1\nGo",
+    "subagent_type": "fix-login:review"
+  },
+  "tool_response": {
+    "status": "completed",
+    "prompt": "NODE n1\nGo",
+    "agentId": "aa309e9c40045c6c8",
+    "agentType": "fix-login:review",
+    "content": [{ "type": "text", "text": "DONE" }]
+  },
+  "tool_use_id": "toolu_01A8CCuRgXEwumBwrGYfVc1e",
+  "duration_ms": 5120
+}

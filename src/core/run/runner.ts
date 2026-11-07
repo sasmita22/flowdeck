@@ -1,11 +1,15 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
 import type { VerifyFileSystem, VerifyLayout } from "../compiler/verify.js";
-import { agentOutcome, agentTurnText, agentType } from "../nodes/agent/execute.js";
+import { pieceOf } from "../compiler/pieces.js";
+import { hasTemplate, templatePath } from "../compiler/handoff-templates.js";
+import { handoffOf, withWired, type Handoff } from "../flow/handoff.js";
+import { agentOutcome, agentTurnText, type AgentTurnNode } from "../nodes/agent/execute.js";
 import { branchDecision, branchSkips } from "../nodes/branch/execute.js";
 import {
   forkTurnText,
   parallelSections,
   unlaunched,
+  type ForkBranch,
   type ParallelSection,
 } from "../nodes/fork/execute.js";
 import { bodyProblems } from "../flow/structure.js";
@@ -42,6 +46,7 @@ import {
   type LoopStep,
 } from "../nodes/loop/execute.js";
 import { scriptOutcome, type ExitCodes } from "../nodes/script/execute.js";
+import { agentCallOf, nodeMarker, type AgentCall } from "./agent-calls.js";
 import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
 import { contextFull, contextUse, type CompactionReader } from "./context.js";
 import {
@@ -84,7 +89,9 @@ export type RunnerDeps = {
     rejoin?(job: string): Promise<ScriptResult | undefined>;
   };
   waiter: HumanWaiter;
-  files: Pick<VerifyFileSystem, "readFile">;
+  files: Pick<VerifyFileSystem, "readFile"> & {
+    writeFile(path: string, content: string): Promise<void>;
+  };
   auto?: boolean;
   flags?: Record<string, boolean>;
   onChange?: (line: string) => void;
@@ -175,6 +182,9 @@ export class StructureError extends Error {
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+const readOrMissing = (files: RunnerDeps["files"], path: string): Promise<string | undefined> =>
+  files.readFile(path).catch(() => undefined);
+
 const outputLines = (text: string) =>
   text === ""
     ? []
@@ -234,29 +244,49 @@ function exitReason(code: number | null): string {
     : `exit code ${code} (usually means it was stopped by signal ${signal})`;
 }
 
-type SubagentStops = { seen: string[]; unsubscribe: () => void };
+type AgentCalls = { calls: AgentCall[]; unsubscribe: () => void };
 
-function recordSubagentStopsUntilStop(
+function recordAgentCallsUntilStop(
   events: TurnEvents,
   sessionId: string,
   armedAt: number | undefined,
-): SubagentStops {
-  const seen: string[] = [];
-  const stopRecording = events.subscribe("SubagentStop", sessionId, (event) => {
-    const type = event.payload["agent_type"];
-    if (typeof type === "string") seen.push(type);
+): AgentCalls {
+  const calls: AgentCall[] = [];
+  const stopRecording = events.subscribe("PostToolUse", sessionId, (event) => {
+    if (event.payload["agent_id"] !== undefined) return;
+    const call = agentCallOf({ kind: "PostToolUse", payload: event.payload });
+    if (call !== undefined) calls.push(call);
   });
   const stopWatching = events.subscribe("Stop", sessionId, (event) => {
     if (!stampedBefore(event, armedAt)) stopRecording();
   });
   return {
-    seen,
+    calls,
     unsubscribe: () => {
       stopRecording();
       stopWatching();
     },
   };
 }
+
+const declaredFiles = (node: ManifestNode): Handoff => {
+  const { given = [], writes = [] } = node.settings as Partial<Handoff>;
+  return { given, writes };
+};
+
+function turnNode(node: ManifestNode, manifest: RunnableManifest): AgentTurnNode {
+  return {
+    id: node.id,
+    ...withWired(declaredFiles(node), handoffOf(node.id, manifest.wires ?? [])),
+  };
+}
+
+const finishedIds = (calls: readonly AgentCall[], nodeId: string): string[] =>
+  calls.flatMap((call) =>
+    call.nodeId === nodeId && call.status !== undefined && call.toolUseId !== undefined
+      ? [call.toolUseId]
+      : [],
+  );
 
 export class Runner {
   private readonly deps: RunnerDeps;
@@ -456,6 +486,7 @@ export class Runner {
     if (settled !== undefined) return settled;
     const held = await this.holdForFiles(node.id, context);
     if (held !== undefined) return held;
+    await this.copyTemplates(node.id, context);
     const { prefix, ensureStarted } = context;
     let failure: string | undefined;
     let reply: string | undefined;
@@ -489,7 +520,7 @@ export class Runner {
         turn =
           node.type === "prompt"
             ? await this.runPrompt(node, prefix, ensureStarted, condition, item)
-            : await this.runAgent(node, prefix, ensureStarted, condition, item);
+            : await this.runAgent(node, context, condition, item);
       } finally {
         this.inTurn = undefined;
       }
@@ -735,9 +766,8 @@ export class Runner {
     if (this.status(nodeId) !== "waiting") return undefined;
     for (const wire of context.manifest.wires ?? []) {
       if (wire.kind !== "file" || wire.to.node !== nodeId) continue;
-      try {
-        await this.deps.files.readFile(listPath(this.deps.cwd, wire.file));
-      } catch {
+      const content = await readOrMissing(this.deps.files, listPath(this.deps.cwd, wire.file));
+      if (content === undefined || content === (await this.templateOf(wire.file))) {
         const producer = context.manifest.nodes.find((node) => node.id === wire.from.node);
         const reason = `${wire.file} wasn't written by ${producer?.label ?? wire.from.node}`;
         this.recordAll([
@@ -751,6 +781,23 @@ export class Runner {
       }
     }
     return undefined;
+  }
+
+  private async templateOf(file: string): Promise<string | undefined> {
+    if (!hasTemplate(file)) return undefined;
+    const { cwd, files } = this.deps;
+    return readOrMissing(files, `${cwd.slice(0, cwd.lastIndexOf("/"))}/${templatePath(file)}`);
+  }
+
+  private async copyTemplates(nodeId: string, context: RunContext): Promise<void> {
+    const { cwd, files } = this.deps;
+    for (const wire of context.manifest.wires ?? []) {
+      if (wire.kind !== "file" || wire.from.node !== nodeId) continue;
+      const target = listPath(cwd, wire.file);
+      if ((await readOrMissing(files, target)) !== undefined) continue;
+      const template = await this.templateOf(wire.file);
+      if (template !== undefined) await files.writeFile(target, template);
+    }
   }
 
   private roundItem(node: ManifestNode, nodes: readonly ManifestNode[]): string | undefined {
@@ -780,6 +827,7 @@ export class Runner {
     for (const branch of section.branches) {
       const held = await this.holdForFiles(branch, context);
       if (held !== undefined) return held;
+      await this.copyTemplates(branch, context);
     }
     const join = context.nodes.find((node) => node.id === section.join);
     const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
@@ -801,8 +849,6 @@ export class Runner {
     context: RunContext,
   ): Promise<StepResult> {
     const { fork, join, branches } = section;
-    const branchOf = new Map(branches.map((id) => [agentType(context.prefix, id), id]));
-    const branchTypes = [...branchOf.keys()];
     const stopped = new Set<string>();
     const timeoutMs = this.deps.turnTimeoutMs ?? defaultTurnTimeoutMs;
     const quietMs = this.deps.settleQuietMs ?? defaultSettleQuietMs;
@@ -812,17 +858,16 @@ export class Runner {
       events: this.deps.events,
       sessionId: this.deps.sessionId,
       armedAt,
-      branchTypes,
-      onStopped: (type, message) => {
-        const id = branchOf.get(type);
-        if (id === undefined) return;
+      branchNodes: branches,
+      onStopped: (id, message, toolUseId) => {
         stopped.add(id);
-        this.record(
-          id,
-          typeof message === "string"
-            ? { kind: "done", payload: { stopMessage: message } }
-            : { kind: "done" },
-        );
+        this.record(id, {
+          kind: "done",
+          payload: {
+            ...(typeof message === "string" ? { stopMessage: message } : {}),
+            ...(toolUseId === undefined ? {} : { toolUseIds: [toolUseId] }),
+          },
+        });
         this.emit(`${id} done`);
       },
     });
@@ -833,16 +878,15 @@ export class Runner {
         { nodeId: join, event: { kind: "running" } },
       ]);
       this.emit(`${fork} started`);
-      const missing = () =>
-        unlaunched(branchTypes, [...watch.launched]).map((type) => branchOf.get(type) ?? type);
-      const untilJoined = (joining: readonly string[] = branchTypes) =>
-        watch.untilStopped((types) => joinComplete(wait, joining, types), timeoutMs, held);
+      const missing = () => unlaunched(branches, [...watch.launched]);
+      const untilJoined = (joining: readonly string[] = branches) =>
+        watch.untilStopped((ids) => joinComplete(wait, joining, ids), timeoutMs, held);
       const goesOnWithout = (notStarted: readonly string[]) =>
         notStarted.length === 0 || this.goesOnWithout(join, notStarted, onBranchFail);
       let stopMessage: string | undefined;
       try {
         await context.ensureStarted();
-        const text = forkTurnText(context.prefix, branches);
+        const text = forkTurnText(context.prefix, this.forkBranches(branches, context));
         if (wait === "first") {
           await this.deps.prompts.sendPrompt(text);
           await untilJoined();
@@ -863,9 +907,7 @@ export class Runner {
           }
           this.recordAll(notStarted.map((nodeId) => ({ nodeId, event: { kind: "skipped" } })));
           for (const id of notStarted) this.emit(`${id} skipped`);
-          await untilJoined(
-            branchTypes.filter((type) => !notStarted.includes(branchOf.get(type) ?? type)),
-          );
+          await untilJoined(branches.filter((id) => !notStarted.includes(id)));
           stopMessage = lastMessage(await watch.settled(quietMs, timeoutMs));
         }
       } catch (error) {
@@ -878,6 +920,14 @@ export class Runner {
     } finally {
       watch.close();
     }
+  }
+
+  private forkBranches(branches: readonly string[], context: RunContext): ForkBranch[] {
+    return branches.map((id) => {
+      const branch = context.nodes.find((node) => node.id === id);
+      if (branch === undefined) throw new Error(`${id} (agent) is not in the manifest`);
+      return { ...turnNode(branch, context.manifest), piece: pieceOf(branch) };
+    });
   }
 
   private async goesOnWithout(
@@ -1004,7 +1054,12 @@ export class Runner {
     return turnEnd;
   }
 
-  private finishTurn(nodeId: string, stopMessage: string | undefined, condition?: string) {
+  private finishTurn(
+    nodeId: string,
+    stopMessage: string | undefined,
+    condition?: string,
+    toolUseIds: readonly string[] = [],
+  ) {
     const before = this.usageBeforeTurn;
     this.usageBeforeTurn = undefined;
     const trimmed = stopMessage?.trim();
@@ -1013,9 +1068,13 @@ export class Runner {
       before === undefined && message === undefined
         ? undefined
         : { before: before ?? new Set(), message };
+    const payload = {
+      ...(stopMessage === undefined ? {} : { stopMessage }),
+      ...(toolUseIds.length === 0 ? {} : { toolUseIds: [...toolUseIds] }),
+    };
     this.record(
       nodeId,
-      stopMessage === undefined ? { kind: "done" } : { kind: "done", payload: { stopMessage } },
+      Object.keys(payload).length === 0 ? { kind: "done" } : { kind: "done", payload },
     );
     return { reply: condition === undefined ? undefined : stopMessage };
   }
@@ -1044,7 +1103,7 @@ export class Runner {
         this.emit(`${node.id} started`);
         await ensureStarted();
         const turnEnd = this.armTurnEnd(this.deps.now?.());
-        const turn = `/${prefix}:${node.id}`;
+        const turn = `/${prefix}:${pieceOf(node)} ${nodeMarker(node.id)}`;
         const command = withPromptContext(
           item === undefined ? turn : withItem(turn, item),
           answers,
@@ -1062,11 +1121,11 @@ export class Runner {
 
   private async runAgent(
     node: ManifestNode,
-    prefix: string,
-    ensureStarted: () => Promise<void>,
+    context: RunContext,
     condition?: string,
     item?: string,
   ): Promise<TurnResult> {
+    const { prefix, ensureStarted } = context;
     const action = this.takeAction(node.id);
     if (action?.kind === "complete") return this.finishTurn(node.id, action.stopMessage, condition);
     if (action?.kind === "wait") {
@@ -1078,28 +1137,34 @@ export class Runner {
     }
     const answers = this.answersFor(node.id, action);
     this.emit(`${node.id} started`);
-    let subagents: SubagentStops | undefined;
+    let recorded: AgentCalls | undefined;
     let end: TurnEndEvent;
     try {
       await ensureStarted();
       const armedAt = this.deps.now?.();
-      subagents = recordSubagentStopsUntilStop(this.deps.events, this.deps.sessionId, armedAt);
+      recorded = recordAgentCallsUntilStop(this.deps.events, this.deps.sessionId, armedAt);
       const turnEnd = this.armTurnEnd(armedAt);
+      const target = turnNode(node, context.manifest);
       const turnText =
         condition === undefined
-          ? agentTurnText(prefix, node.id, item)
-          : agentVerdictTurnText(prefix, node.id, condition);
+          ? agentTurnText(prefix, pieceOf(node), target, item)
+          : agentVerdictTurnText(prefix, pieceOf(node), target, condition);
       await this.deps.prompts.sendPrompt(withAgentContext(turnText, answers));
       end = await turnEnd;
     } catch (error) {
       return { failure: messageOf(error) };
     } finally {
-      subagents?.unsubscribe();
+      recorded?.unsubscribe();
     }
-    if (agentOutcome(subagents.seen, prefix, node.id) === "failed") {
-      return { failure: `no SubagentStop for ${agentType(prefix, node.id)}` };
+    if (agentOutcome(recorded.calls, node.id) === "failed") {
+      return { failure: `no finished Agent call for ${node.id}` };
     }
-    return this.finishTurn(node.id, lastMessage(end), condition);
+    return this.finishTurn(
+      node.id,
+      lastMessage(end),
+      condition,
+      finishedIds(recorded.calls, node.id),
+    );
   }
 
   private takeAnswers(): string[] {

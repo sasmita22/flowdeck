@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../../package.json" with { type: "json" };
+import { ClaudeBuildAgents } from "../../adapters/claude/claude-build-agents.js";
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
@@ -11,6 +12,7 @@ import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
 import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
 import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.js";
+import { prepareKit } from "../../adapters/node-fs/kit-copy.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
 import { HomeLock } from "../../adapters/process/home-lock.js";
 import { NodeProcessRunner } from "../../adapters/process/process-runner.js";
@@ -79,6 +81,23 @@ const run: EngineHandlerOptions["run"] = {
   },
 };
 
+const kit = prepareKit({ sourceDir: join(__dirname, "kit"), home });
+kit.catch((error: unknown) => {
+  console.log(`engine: kit error ${error instanceof Error ? error.message : String(error)}`);
+});
+
+const buildAgents = new ClaudeBuildAgents({
+  home,
+  sessions: (socketName) => new TmuxSessionHost({ socketName }),
+  cli: (sessions) => new ClaudeCli({ sessions }),
+  events: async (socketPath) => {
+    await mkdir(dirname(socketPath), { recursive: true });
+    const server = new HookSocketServer({ socketPath });
+    await server.start();
+    return { events: server, stop: () => server.stop() };
+  },
+});
+
 const homeLock = new HomeLock(join(home, "engine.lock"));
 process.on("exit", () => homeLock.release());
 
@@ -92,8 +111,11 @@ const handler = createEngineHandler({
     prepareHooks({
       home,
       sourcePath: join(__dirname, "flowdeck-hook.cjs"),
+      guardSourcePath: join(__dirname, "flowdeck-build-guard.cjs"),
       pathEnv: process.env["PATH"],
     }),
+  buildAgents,
+  kit: () => kit,
   isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
   fs,
   connectors: new ClaudeUserConnectors(

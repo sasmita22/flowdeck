@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { realDeps } from "../../src/cli/main.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
+import { nodeMarker } from "../../src/core/run/agent-calls.js";
 import { flow, prompt, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
@@ -75,7 +77,8 @@ async function entriesOf(path: string): Promise<Entry[]> {
   });
 }
 
-const commandOf = (prefix: string, id: string) => `<command-name>/${prefix}:${id}</command-name>`;
+const commandOf = (prefix: string, piece: string) =>
+  `<command-name>/${prefix}:${piece}</command-name>`;
 
 const userIndexes = (entries: Entry[], marker: string) =>
   entries.flatMap((entry, i) =>
@@ -160,17 +163,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
     { timeout: watchdogMs + 30_000 },
     async () => {
       const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
-      await cliBuild(
-        flow(
-          (["p1", "p2", "p3"] as const).map((id) =>
-            prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
-          ),
-          [thenWire("p1", "p2"), thenWire("p2", "p3")],
+      const prompts = flow(
+        (["p1", "p2", "p3"] as const).map((id) =>
+          prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
         ),
-        { name: buildName, repo: repo.path },
-        workspace,
-        { ...realDeps(), env },
+        [thenWire("p1", "p2"), thenWire("p2", "p3")],
       );
+      const pieces = pieceNames(prompts);
+      const commandOfNode = (id: string) => commandOf(buildName, pieces.get(id) ?? "");
+      const typedTurn = (id: string) => `❯ /${buildName}:${pieces.get(id) ?? ""} ${nodeMarker(id)}`;
+      await cliBuild(prompts, { name: buildName, repo: repo.path }, workspace, {
+        ...realDeps(),
+        env,
+      });
       delete env.TMUX;
       delete env.TMUX_PANE;
       let transcriptPath = "";
@@ -195,7 +200,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
         until(async () => {
           const sent = store.events(runId).some((e) => e.nodeId === "p2" && e.kind === "sent");
           const delivered =
-            userIndexes(await entriesOf(transcriptPath), commandOf(buildName, "p2")).length > 0;
+            userIndexes(await entriesOf(transcriptPath), commandOfNode("p2")).length > 0;
           return sent && delivered ? true : undefined;
         }),
         120_000,
@@ -224,8 +229,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
         await sleep(100);
       }
       const entries = await entriesOf(transcriptPath);
-      const p2Turns = userIndexes(entries, commandOf(buildName, "p2"));
-      const p3Turns = userIndexes(entries, commandOf(buildName, "p3"));
+      const p2Turns = userIndexes(entries, commandOfNode("p2"));
+      const p3Turns = userIndexes(entries, commandOfNode("p3"));
       const p3Ended = entries
         .slice((p3Turns[0] ?? entries.length) + 1)
         .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
@@ -241,10 +246,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real cl
       const paneLines = lastPane.split("\n").map((line) => line.trim());
       expect(code, report).toBe(0);
       expect(
-        paneLines.filter((line) => line === `❯ /${buildName}:p2`),
+        paneLines.filter((line) => line === typedTurn("p2")),
         report,
       ).toHaveLength(1);
-      expect(paneLines, report).toContain(`❯ /${buildName}:p3`);
+      expect(paneLines, report).toContain(typedTurn("p3"));
       expect(p2Turns, report).toHaveLength(1);
       expect(p3Turns, report).toHaveLength(1);
       expect(p3Ended, report).toBe(true);

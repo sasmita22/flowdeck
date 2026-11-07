@@ -33,8 +33,8 @@ export async function openClaudeSession(
   }
   const buildFiles =
     layout === "workspace"
-      ? { settingsPath: "../settings.json", pluginDir: "../plugin", addDir: ".." }
-      : { settingsPath: join(buildDir, "settings.json"), pluginDir: buildDir };
+      ? { settingsPath: "../settings.json", pluginDirs: ["../plugin"], addDir: ".." }
+      : { settingsPath: join(buildDir, "settings.json"), pluginDirs: [buildDir] };
   let closed = false;
   let started = attach === true;
   let starting: Promise<void> | undefined;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BuildRunningError } from "../../src/core/run/store.js";
-import type { NewBuild, NewRun } from "../../src/ports/store.js";
+import type { ActivityEntry } from "../../src/core/run/activity.js";
+import type { BuildEvent } from "../../src/core/run/build-progress.js";
+import type { NewBuild, NewPendingBuild, NewRun } from "../../src/ports/store.js";
 import { FakeStore } from "./fake-store.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
@@ -25,6 +27,20 @@ const build = (id: string, name = `build-${id}`, hash = "h1"): NewBuild => ({
   ],
   nodes: [{ nodeId: "p1", type: "prompt", config: {}, file: "commands/p1.md" }],
 });
+
+const pending = (flowId = "flow-1", name = "nightly"): NewPendingBuild => ({
+  flowId,
+  version: 3,
+  name,
+  origin: { kind: "canvas" },
+  startedAt: 1_000,
+});
+
+const startedId = (store: FakeStore, build: NewPendingBuild): string => {
+  const start = store.startPendingBuild(build);
+  if (start.kind !== "started") throw new Error(`expected a start, got ${start.reason}`);
+  return start.pendingId;
+};
 
 describe("FakeStore", () => {
   it("creates a running run with a fresh id and finds it by id", () => {
@@ -344,5 +360,124 @@ describe("FakeStore", () => {
         source: { flowId: "flow-1", version: 2 },
       }),
     ]);
+  });
+
+  describe("pending builds", () => {
+    it("is busy for a second build of the same blueprint while one is open", () => {
+      const store = new FakeStore();
+      store.startPendingBuild(pending("flow-1", "nightly"));
+
+      expect(store.startPendingBuild(pending("flow-1", "weekly"))).toEqual({
+        kind: "busy",
+        reason: "blueprint",
+      });
+    });
+
+    it("finds the open build of a name, and none once it has ended", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending("flow-1", "nightly"));
+      store.startPendingBuild(pending("flow-2", "weekly"));
+
+      expect(store.findPendingBuildByName("nightly")).toMatchObject({ id, name: "nightly" });
+      expect(store.findPendingBuildByName("monthly")).toBeUndefined();
+
+      store.endPendingBuild(id, { outcome: "failed", endedAt: 2_000 });
+
+      expect(store.findPendingBuildByName("nightly")).toBeUndefined();
+    });
+
+    it("is busy for a second build under the same name while one is open", () => {
+      const store = new FakeStore();
+      store.startPendingBuild(pending("flow-1", "nightly"));
+
+      expect(store.startPendingBuild(pending("flow-2", "nightly"))).toEqual({
+        kind: "busy",
+        reason: "name",
+      });
+    });
+
+    it("frees the blueprint and the name once the build ends", () => {
+      const store = new FakeStore();
+      const first = startedId(store, pending());
+      expect(store.startPendingBuild(pending()).kind).toBe("busy");
+
+      store.endPendingBuild(first, { outcome: "failed", endedAt: 2_000 });
+
+      const again = store.startPendingBuild(pending());
+      expect(again.kind).toBe("started");
+      expect(again).not.toEqual({ kind: "started", pendingId: first });
+    });
+
+    it("returns build events in the order they were appended", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+      const events: BuildEvent[] = [
+        { type: "step", step: 1, status: "running" },
+        {
+          type: "session",
+          name: "fd-build-1",
+          claudeSessionId: "c1",
+          buildId: "b1",
+          repo: "/repo",
+          base: "main",
+          values: {},
+        },
+        { type: "step", step: 1, status: "done" },
+      ];
+
+      for (const event of events) store.appendBuildEvent(id, event);
+
+      const stored = store.buildEvents(id);
+      expect(stored).toEqual(events.map((event) => expect.objectContaining(event)));
+      const seqs = stored.map((event) => event.seq);
+      expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+      expect(new Set(seqs).size).toBe(3);
+    });
+
+    it("returns build activity in the order it was appended", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+      const entries: ActivityEntry[] = [
+        { id: 2, nodeId: "p1", at: 10, summary: "Read a.ts", kind: "tool", tool: "Read" },
+        { id: 1, nodeId: "p1", at: 11, summary: "turn", kind: "turn" },
+      ];
+
+      for (const entry of entries) store.appendBuildActivity(id, entry);
+
+      expect(store.buildActivity(id)).toEqual(entries);
+    });
+
+    it("lists each blueprint's latest ended build with its outcome, build id and report, never an open one", () => {
+      const store = new FakeStore();
+      const report = { version: 1, questions: [{ nodeId: "a1", text: "Which repo?" }] };
+      const older = startedId(store, pending("flow-1", "first"));
+      store.endPendingBuild(older, { outcome: "built", endedAt: 2_000, buildId: "b1" });
+      const latest = startedId(store, pending("flow-1", "second"));
+      store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000, report });
+      const other = startedId(store, pending("flow-2", "third"));
+      store.endPendingBuild(other, { outcome: "built", endedAt: 2_500, buildId: "b3" });
+      startedId(store, pending("flow-1", "fourth"));
+      startedId(store, pending("flow-3", "fifth"));
+
+      expect(store.listLatestEndedPendingBuilds()).toEqual([
+        expect.objectContaining({ id: other, flowId: "flow-2", outcome: "built", buildId: "b3" }),
+        expect.objectContaining({
+          id: latest,
+          flowId: "flow-1",
+          name: "second",
+          outcome: "needs-you",
+          endedAt: 3_000,
+          report,
+        }),
+      ]);
+    });
+
+    it("throws when a build is ended twice", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+      store.endPendingBuild(id, { outcome: "built", endedAt: 2_000, buildId: "b1" });
+
+      expect(() => store.endPendingBuild(id, { outcome: "failed", endedAt: 3_000 })).toThrow();
+    });
   });
 });

@@ -10,17 +10,29 @@ import {
 
 export type BuildValues = Record<string, string | boolean>;
 
-export const buildIdNamed = (home: string, name: string): string => {
+const firstRow = <T>(home: string, sql: string, name: string): T | undefined => {
   const db = new Database(join(home, "flowdeck.db"), { readonly: true });
   try {
-    const row = db
-      .prepare("SELECT id FROM builds WHERE name = ? AND deleted_at IS NULL")
-      .get(name) as { id: string } | undefined;
-    if (row === undefined) throw new Error(`no build named ${name} was recorded`);
-    return row.id;
+    return db.prepare(sql).get(name) as T | undefined;
   } finally {
     db.close();
   }
+};
+
+export const buildIdNamed = (home: string, name: string): string => {
+  const row = firstRow<{ id: string }>(
+    home,
+    "SELECT id FROM builds WHERE name = ? AND deleted_at IS NULL",
+    name,
+  );
+  if (row === undefined) throw new Error(`no build named ${name} was recorded`);
+  return row.id;
+};
+
+const flowIdOfPendingBuild = async (home: string, name: string): Promise<string> => {
+  const sql = "SELECT flow_id FROM pending_builds WHERE name = ? ORDER BY started_at DESC";
+  await expect.poll(() => firstRow<{ flow_id: string }>(home, sql, name)?.flow_id).toBeDefined();
+  return firstRow<{ flow_id: string }>(home, sql, name)?.flow_id ?? "";
 };
 
 export async function buildOnCanvas(
@@ -39,8 +51,24 @@ export async function buildOnCanvas(
   }
   await window.getByTestId(buildDialogTestIds.confirm).click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+  return waitForBuilt(window, home, name);
+}
+
+export async function waitForBuilt(window: Page, home: string, name: string): Promise<string> {
+  const flowId = await flowIdOfPendingBuild(home, name);
+  const builtSql = "SELECT id FROM builds WHERE name = ? AND deleted_at IS NULL";
+  await expect
+    .poll(() => firstRow<{ id: string }>(home, builtSql, name)?.id, { timeout: 20_000 })
+    .toBeDefined();
+  await window.getByTestId("menu-blueprints").click();
+  await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText(/^Built · v\d+$/, {
+    timeout: 20_000,
+  });
+  const buildId = buildIdNamed(home, name);
+  await window.getByTestId("menu-builds").click();
+  await window.getByTestId(pageTestIds.buildOpen(buildId)).click();
   await expect(window.getByTestId(pageTestIds.buildDetailRun)).toBeVisible();
-  return buildIdNamed(home, name);
+  return buildId;
 }
 
 export async function runFromDetail(window: Page): Promise<void> {

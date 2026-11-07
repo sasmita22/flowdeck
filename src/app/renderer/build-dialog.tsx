@@ -5,7 +5,7 @@ import type { Variable } from "../../core/flow/schema.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
 import { selectCanBuild, type BuildDialog as Dialog, type RunState } from "./run-store.js";
-import { buildDialogTestIds } from "./test-ids.js";
+import { buildDialogTestIds, controlTestIds } from "./test-ids.js";
 
 const fieldStyle: CSSProperties = {
   display: "flex",
@@ -101,6 +101,15 @@ function BuildForm({
           data-testid={buildDialogTestIds.base}
           value={dialog.base}
           onChange={(event) => edit({ base: event.target.value })}
+        />
+      </label>
+      <label style={fieldStyle}>
+        Build model
+        <input
+          data-testid={controlTestIds.buildModel}
+          placeholder="The session's default"
+          value={dialog.buildModel}
+          onChange={(event) => edit({ buildModel: event.target.value })}
         />
       </label>
       {dialog.variables.map((variable) => (

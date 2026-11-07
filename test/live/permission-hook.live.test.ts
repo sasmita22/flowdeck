@@ -71,7 +71,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("plugin-dir PermissionRequest
       name,
       repo.path,
       { sessionId, model: "haiku" },
-      { settingsPath, pluginDir, env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" } },
+      { settingsPath, pluginDirs: [pluginDir], env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" } },
     );
     await cli.waitUntilReady(name);
     await cli.sendPrompt(

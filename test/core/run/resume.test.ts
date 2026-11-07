@@ -181,7 +181,7 @@ describe("decideResume", () => {
     const agentManifest = { hash, prefix, nodes: [node("a1", "agent")] };
     const events = stored([["a1", sent]]);
     const turn = (ended: boolean): TranscriptTurn => ({
-      userText: `The user answered: blue. ${agentTurnText(prefix, "a1")}`,
+      userText: `The user answered: blue. ${agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] })}`,
       ended,
       ...(ended ? { lastAssistantText: "DONE" } : {}),
     });
@@ -209,13 +209,24 @@ describe("decideResume", () => {
     });
     const markerTurns: TranscriptTurn[] = [
       {
-        userText: `${agentTurnText(prefix, "a1")} ${agentTurnText(prefix, "a2")}`,
+        userText: `${agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] })} ${agentTurnText(prefix, "a2", { id: "a2", given: [], writes: [] })}`,
         ended: true,
         lastAssistantText: "DONE",
       },
     ];
     const transcripts: [string, TranscriptTurn[]][] = [
-      ["the fork turn", [{ userText: forkTurnText(prefix, ["a1", "a2"]), ended: true }]],
+      [
+        "the fork turn",
+        [
+          {
+            userText: forkTurnText(prefix, [
+              { id: "a1", piece: "a1", given: [], writes: [] },
+              { id: "a2", piece: "a2", given: [], writes: [] },
+            ]),
+            ended: true,
+          },
+        ],
+      ],
       ["a turn holding both branch markers", markerTurns],
     ];
 
@@ -267,6 +278,172 @@ describe("decideResume", () => {
       ]);
 
       expect(decideResume({ manifest: sectionManifest, events, turns: markerTurns })).toEqual({});
+    });
+  });
+
+  describe("nodes that share a piece", () => {
+    const onPiece = (id: string, type: ManifestNode["type"], piece: string) => ({
+      ...node(id, type),
+      piece,
+    });
+    const reviewTurn = (
+      id: string,
+      ended: boolean,
+      lastAssistantText?: string,
+    ): TranscriptTurn => ({
+      userText: agentTurnText(prefix, "review", { id, given: [], writes: [] }),
+      ended,
+      ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
+    });
+    const planTurn = (args: string | undefined, ended: boolean, lastAssistantText?: string) => ({
+      userText: `<command-message>${prefix}:plan</command-message> <command-name>/${prefix}:plan</command-name>${args === undefined ? "" : ` <command-args>${args}</command-args>`}`,
+      ended,
+      ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
+    });
+
+    it("AT-20: resumes at a2 when the session died after a1 settled and before a2 was sent", () => {
+      const shared = {
+        hash,
+        prefix,
+        nodes: [onPiece("a1", "agent", "review"), onPiece("a2", "agent", "review")],
+      };
+      const events = stored([
+        ["a1", sent],
+        ["a1", done],
+        ["a2", sent],
+      ]);
+
+      expect(
+        decideResume({ manifest: shared, events, turns: [reviewTurn("a1", true, "A")] }),
+      ).toEqual({ a2: { kind: "send" } });
+      expect(
+        decideResume({
+          manifest: shared,
+          events,
+          turns: [reviewTurn("a1", true, "A"), reviewTurn("a2", true, "B")],
+        }),
+      ).toEqual({ a2: { kind: "complete", stopMessage: "B" } });
+    });
+
+    it("does not count a10's turn for a1, whose id begins a10's", () => {
+      const shared = {
+        hash,
+        prefix,
+        nodes: [onPiece("a10", "agent", "review"), onPiece("a1", "agent", "review")],
+      };
+      const events = stored([
+        ["a10", sent],
+        ["a10", done],
+        ["a1", sent],
+      ]);
+
+      expect(
+        decideResume({ manifest: shared, events, turns: [reviewTurn("a10", true, "A")] }),
+      ).toEqual({ a1: { kind: "send" } });
+    });
+
+    it("counts a prompt's turn by the node marker in its command arguments", () => {
+      const shared = {
+        hash,
+        prefix,
+        nodes: [onPiece("p1", "prompt", "plan"), onPiece("p2", "prompt", "plan")],
+      };
+      const events = stored([
+        ["p1", sent],
+        ["p1", done],
+        ["p2", sent],
+      ]);
+
+      expect(
+        decideResume({ manifest: shared, events, turns: [planTurn("NODE p1", true, "A")] }),
+      ).toEqual({ p2: { kind: "send" } });
+      expect(
+        decideResume({
+          manifest: shared,
+          events,
+          turns: [planTurn("NODE p1", true, "A"), planTurn("NODE p2", false)],
+        }),
+      ).toEqual({ p2: { kind: "wait" } });
+    });
+
+    it("AT-11: resumes after a settled section whose branches share a piece with a later node", () => {
+      const shared = {
+        hash,
+        prefix,
+        nodes: [
+          node("f", "fork"),
+          onPiece("b1", "agent", "review"),
+          onPiece("b2", "agent", "review"),
+          node("j", "join"),
+          onPiece("a3", "agent", "review"),
+        ],
+      };
+      const events = stored([
+        ["f", sent],
+        ["b1", sent],
+        ["b2", sent],
+        ["j", { kind: "running" }],
+        ["b2", done],
+        ["b1", done],
+        ["j", done],
+        ["f", done],
+        ["a3", sent],
+      ]);
+      const forkTurn: TranscriptTurn = {
+        userText: forkTurnText(prefix, [
+          { id: "b1", piece: "review", given: [], writes: [] },
+          { id: "b2", piece: "review", given: [], writes: [] },
+        ]),
+        ended: true,
+        lastAssistantText: "Both done.",
+      };
+
+      expect(
+        decideResume({
+          manifest: shared,
+          events,
+          turns: [forkTurn, reviewTurn("a3", true, "C")],
+        }),
+      ).toEqual({ a3: { kind: "complete", stopMessage: "C" } });
+    });
+
+    it("AT-11: still fails an in-flight section whose branches share a piece", () => {
+      const shared = {
+        hash,
+        prefix,
+        nodes: [
+          node("f", "fork"),
+          onPiece("b1", "agent", "review"),
+          onPiece("b2", "agent", "review"),
+          node("j", "join"),
+        ],
+      };
+      const events = stored([
+        ["f", sent],
+        ["b1", sent],
+        ["b2", sent],
+        ["j", { kind: "running" }],
+      ]);
+      const interrupted = (id: string) => ({
+        kind: "fail",
+        message: `${id} failed: parallel section was interrupted; start a new run`,
+      });
+
+      expect(decideResume({ manifest: shared, events, turns: [reviewTurn("b1", true)] })).toEqual({
+        f: interrupted("f"),
+        b1: interrupted("b1"),
+        b2: interrupted("b2"),
+        j: interrupted("j"),
+      });
+    });
+
+    it("AT-19: counts a turn with no node marker for a piece only one node uses", () => {
+      const single = { hash, prefix, nodes: [onPiece("p1", "prompt", "plan")] };
+      const events = stored([["p1", sent]]);
+
+      expect(
+        decideResume({ manifest: single, events, turns: [planTurn(undefined, true, "X")] }),
+      ).toEqual({ p1: { kind: "complete", stopMessage: "X" } });
     });
   });
 

@@ -28,6 +28,10 @@ const bridge = (
   deleteBuild: vi.fn(),
   doctorWorktrees: vi.fn(),
   defaultBranch: vi.fn(),
+  listBuildProgress: vi.fn(async () => []),
+  stopBuild: vi.fn(),
+  getBuildActivity: vi.fn(),
+  onBuildActivity: vi.fn(),
   setDirty: vi.fn(),
   onCloseRequest: vi.fn(() => () => {}),
   answerClose: vi.fn(),
@@ -47,6 +51,7 @@ const bridge = (
   onWait: vi.fn(() => () => {}),
   answerWait: vi.fn(async () => false),
   workspaceInfo: vi.fn(async () => null),
+  onBuildProgress: vi.fn(() => () => {}),
 });
 
 describe("createAppStore", () => {

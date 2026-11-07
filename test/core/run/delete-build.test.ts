@@ -9,7 +9,11 @@ import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
-import { deleteBuild, deleteBuildResultSchema } from "../../../src/core/run/delete-build.js";
+import {
+  deleteBuild,
+  deleteBuildResultSchema,
+  teardownWorkspace,
+} from "../../../src/core/run/delete-build.js";
 import type { NewBuild, NewRun } from "../../../src/ports/store.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeStore } from "../../fakes/fake-store.js";
@@ -240,6 +244,64 @@ describe("deleteBuild", () => {
       expect(await readFile(join(dir, "manifest.json"), "utf8")).toBe("{}\n");
       expect(store.findBuild("oldhash2")?.deletedAt).not.toBeNull();
     });
+  });
+});
+
+describe("teardownWorkspace", () => {
+  let repo: TmpRepo;
+  let home: string;
+  let db: Database.Database;
+  let store: SqliteStore;
+  const fs = new NodeFileSystem();
+
+  beforeEach(async () => {
+    repo = await createTmpRepo({ commit: true });
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-teardown-home-")));
+    db = openDatabase({ path: join(home, "flowdeck.db") });
+    store = new SqliteStore({ db });
+  });
+
+  afterEach(async () => {
+    db.close();
+    await repo.cleanup();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const layDownWorkspace = async () => {
+    const dir = join(home, "workspaces", buildId);
+    await fs.writeFile(join(dir, "CLAUDE.md"), "# fix-login\n");
+    await fs.writeFile(join(dir, "plugin", "commands", "p1.md"), "Fix FD-1\n");
+    return dir;
+  };
+
+  it("removes a workspace with no worktree, touching no worktree or branch", async () => {
+    const dir = await layDownWorkspace();
+    const worktree = new FakeWorktree();
+    const deps = { worktree, fs, home };
+
+    await teardownWorkspace(deps, { dir });
+
+    expect(await exists(dir)).toBe(false);
+    expect(worktree.removed).toEqual([]);
+    expect(worktree.deletedBranches).toEqual([]);
+  });
+
+  it("removes the workspace, its worktree and its branch, with no build recorded", async () => {
+    const dir = await layDownWorkspace();
+    const worktreePath = join(dir, basename(repo.path));
+    const worktree = new GitWorktree();
+    await worktree.add({ repo: repo.path, base: "main", branch, path: worktreePath });
+    const deps = { worktree, fs, home };
+
+    await teardownWorkspace(deps, {
+      dir,
+      worktree: { repo: repo.path, base: "main", branch, path: worktreePath },
+    });
+
+    expect(store.findBuild(buildId)).toBeUndefined();
+    expect(await exists(dir)).toBe(false);
+    expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
+    expect(await branches(repo.path)).not.toContain(branch);
   });
 });
 
