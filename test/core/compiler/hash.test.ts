@@ -5,7 +5,7 @@ import { hashBuild } from "../../../src/core/compiler/hash.js";
 
 const files = () => [
   { path: "settings.json", content: '{\n  "a": 1\n}\n' },
-  { path: "commands/p.md", content: "Do it.\n" },
+  { path: "skills/p/SKILL.md", content: "Do it.\n" },
   { path: "agents/a.md", content: "Review it.\n" },
 ];
 

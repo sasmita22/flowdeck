@@ -1,25 +1,32 @@
+import { handoffText, type Handoff } from "../../flow/handoff.js";
+import { nodeMarker, type AgentCall } from "../../run/agent-calls.js";
 import { withItem } from "../foreach/execute.js";
 
 export type AgentOutcome = "done" | "failed";
 
-export function agentType(prefix: string, nodeId: string): string {
-  return `${prefix}:${nodeId}`;
+export type AgentTurnNode = { id: string } & Handoff;
+
+export function agentType(prefix: string, piece: string): string {
+  return `${prefix}:${piece}`;
 }
 
-export function agentNodeId(type: string): string | undefined {
-  const separator = type.indexOf(":");
-  return separator === -1 ? undefined : type.slice(separator + 1);
+export function agentPrompt(node: AgentTurnNode, item?: string): string {
+  const details = handoffText(node).trim();
+  const go = item === undefined ? "Go" : withItem("Go.", item);
+  return [nodeMarker(node.id), ...(details === "" ? [] : [details]), go].join("\n");
 }
 
-export function agentTurnText(prefix: string, nodeId: string, item?: string): string {
-  const prompt = item === undefined ? "Go" : withItem("Go.", item);
-  return `Use the Agent tool with subagent_type "${agentType(prefix, nodeId)}" and the prompt ${JSON.stringify(prompt)}. Then reply DONE.`;
-}
-
-export function agentOutcome(
-  seenAgentTypes: readonly string[],
+export function agentTurnText(
   prefix: string,
-  nodeId: string,
-): AgentOutcome {
-  return seenAgentTypes.includes(agentType(prefix, nodeId)) ? "done" : "failed";
+  piece: string,
+  node: AgentTurnNode,
+  item?: string,
+): string {
+  return `Use the Agent tool with subagent_type "${agentType(prefix, piece)}" and the prompt ${JSON.stringify(agentPrompt(node, item))}. Then reply DONE.`;
+}
+
+export function agentOutcome(calls: readonly AgentCall[], nodeId: string): AgentOutcome {
+  return calls.some((call) => call.nodeId === nodeId && call.status !== undefined)
+    ? "done"
+    : "failed";
 }

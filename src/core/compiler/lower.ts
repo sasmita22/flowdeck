@@ -5,6 +5,8 @@ import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
 import { compilePrompt } from "../nodes/prompt/compile.js";
+import { repoFolder } from "../run/workspace.js";
+import { pieceNames } from "./pieces.js";
 
 export type BuildFile = { path: string; content: string };
 
@@ -15,6 +17,7 @@ export type ManifestNode = {
   parent?: string;
   settings: Node["settings"];
   file?: string;
+  piece?: string;
 };
 
 export type ManifestOutput = { node: string; name: string; type: string };
@@ -22,6 +25,7 @@ export type ManifestOutput = { node: string; name: string; type: string };
 export type Manifest = {
   version: 1;
   prefix?: string;
+  kitVersion?: string;
   layout?: "workspace";
   values?: VariableValues;
   source?: BuildSource;
@@ -33,21 +37,39 @@ export type Manifest = {
   files: Record<string, string>;
 };
 
-export type LowerInputs = { name: string; values: VariableValues };
+export type LowerInputs = {
+  name: string;
+  values: VariableValues;
+  repo?: string;
+  workspace?: string;
+  kitVersion?: string;
+};
 
 export type LoweredManifest = Omit<Manifest, "files"> &
   Required<Pick<Manifest, "prefix" | "layout" | "values">>;
 
 const compile = (
   node: Node,
+  piece: string | undefined,
   wires: readonly Wire[],
-  values: VariableValues,
+  inputs: LowerInputs,
 ): BuildFile | undefined => {
+  if (piece === undefined) return undefined;
+  const compileInputs = {
+    piece,
+    scope: {
+      build: inputs.name,
+      repo: repoFolder(inputs.repo ?? ""),
+      workspace: inputs.workspace ?? "",
+    },
+    wired: handoffOf(node.id, wires),
+    values: inputs.values,
+  };
   switch (node.type) {
     case "prompt":
-      return compilePrompt(node, handoffOf(node.id, wires), values);
+      return compilePrompt(node, compileInputs);
     case "agent":
-      return compileAgent(node, handoffOf(node.id, wires), values);
+      return compileAgent(node, compileInputs);
     default:
       return undefined;
   }
@@ -67,7 +89,11 @@ export function lower(
 ): { manifest: LoweredManifest; nodeFiles: BuildFile[] } {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
-  const compiled = nodes.map((node) => ({ node, file: compile(node, flow.wires, inputs.values) }));
+  const pieces = pieceNames(flow);
+  const compiled = nodes.map((node) => {
+    const piece = pieces.get(node.id);
+    return { node, piece, file: compile(node, piece, flow.wires, inputs) };
+  });
   const session = { ...flow.session };
   delete session.frame;
   const outputs = declaredOutputs(nodes);
@@ -75,18 +101,20 @@ export function lower(
     manifest: {
       version: 1,
       prefix: inputs.name,
+      ...(inputs.kitVersion === undefined ? {} : { kitVersion: inputs.kitVersion }),
       layout: "workspace",
       values: inputs.values,
       ...(source === undefined ? {} : { source }),
       ...(outputs.length === 0 ? {} : { outputs }),
       session,
-      nodes: compiled.map(({ node, file }) => ({
+      nodes: compiled.map(({ node, piece, file }) => ({
         id: node.id,
         type: node.type,
         label: node.label,
         ...(node.parent === undefined ? {} : { parent: node.parent }),
         settings: node.settings,
         ...(file === undefined ? {} : { file: file.path }),
+        ...(piece === undefined ? {} : { piece }),
       })),
       wires: flow.wires,
     },

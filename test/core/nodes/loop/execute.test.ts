@@ -30,14 +30,26 @@ describe("verdictRequest", () => {
 });
 
 describe("agentVerdictTurnText", () => {
+  const node = { id: "a1", given: ["plan.md"], writes: [] };
+
   it("replaces the agent turn's reply DONE with the verdict request", () => {
-    const text = agentVerdictTurnText("h1", "a1", "no issues left");
+    const text = agentVerdictTurnText("h1", "review", node, "no issues left");
 
     expect(text).not.toContain("Then reply DONE.");
     expect(text.endsWith(verdictRequest("no issues left"))).toBe(true);
     expect(text).toBe(
-      agentTurnText("h1", "a1").replace("Then reply DONE.", verdictRequest("no issues left")),
+      agentTurnText("h1", "review", node).replace(
+        "Then reply DONE.",
+        verdictRequest("no issues left"),
+      ),
     );
+  });
+
+  it("names <prefix>:<piece> and opens its prompt with the node marker and details", () => {
+    const text = agentVerdictTurnText("h1", "review", node, "no issues left");
+
+    expect(text).toContain('subagent_type "h1:review"');
+    expect(text).toContain(`the prompt ${JSON.stringify("NODE a1\nYou are given: plan.md\nGo")}`);
   });
 });
 

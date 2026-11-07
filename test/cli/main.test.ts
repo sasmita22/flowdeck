@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
@@ -25,6 +26,7 @@ import type { FlowStore } from "../../src/ports/flow-store.js";
 import type { ProcessResult } from "../../src/ports/process-runner.js";
 import type { Store } from "../../src/ports/store.js";
 import type { WaitReply } from "../../src/ports/waiter.js";
+import { FakeBuildAgents } from "../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../fakes/fake-flow-store.js";
@@ -46,6 +48,7 @@ import {
   wire,
 } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { fakeBuildDeps, fakeCliBuild } from "../fixtures/fake-build-deps.js";
 
 const git = promisify(execFile);
 
@@ -127,7 +130,7 @@ function stubDeps(
   options: {
     env?: Record<string, string>;
     results?: ProcessResult[];
-    subagents?: string[];
+    finishedAgents?: string[];
     waiter?: FakeWaiter;
     turns?: TranscriptTurn[];
     sessionGone?: boolean;
@@ -161,6 +164,7 @@ function stubDeps(
     fs,
     scripts,
     hooks,
+    build: fakeCliBuild(fs),
     connectors: options.connectors ?? new FakeConnectorSource({ jira }),
     gitState,
     worktree,
@@ -197,11 +201,16 @@ function stubDeps(
           sendPrompt: async (text) => {
             recorded.sends.push(text);
             setTimeout(() => {
-              for (const agentType of options.subagents ?? []) {
+              for (const nodeId of options.finishedAgents ?? []) {
                 source.publish({
-                  kind: "SubagentStop",
+                  kind: "PostToolUse",
                   sessionId,
-                  payload: { agent_type: agentType },
+                  payload: {
+                    tool_name: "Agent",
+                    tool_input: { prompt: `NODE ${nodeId}\nGo` },
+                    tool_use_id: `toolu-${nodeId}`,
+                    tool_response: { status: "completed" },
+                  },
                 });
               }
               source.publish({ kind: "Stop", sessionId, payload: {} });
@@ -231,6 +240,8 @@ function stubDeps(
         gitState,
         worktree,
         newId,
+        now: Date.now,
+        ...fakeBuildDeps(fs, home),
       },
     );
     if (!result.ok) throw new Error(`seed build failed: ${JSON.stringify(result.errors)}`);
@@ -331,14 +342,15 @@ describe("runCli run", () => {
   it("refuses a tampered build before starting anything, printing each problem", async () => {
     const { deps, recorded, scripts, store, seed } = stubDeps();
     const { dir } = await seed(promptThenScript());
-    await writeFile(join(dir, "plugin", "commands", "p1.md"), "tampered\n");
-    await writeFile(join(dir, "plugin", "commands", "extra.md"), "extra\n");
+    await mkdir(join(dir, "plugin", "skills", "p1"), { recursive: true });
+    await writeFile(join(dir, "plugin", "skills", "p1", "SKILL.md"), "tampered\n");
+    await writeFile(join(dir, "plugin", "skills", "p1", "extra.md"), "extra\n");
 
     expect(await runCli(["run", "x"], deps)).toBe(2);
     expect(recorded.stderr).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("plugin/commands/p1.md: changed"),
-        expect.stringContaining("plugin/commands/extra.md: extra"),
+        expect.stringContaining("plugin/skills/p1/SKILL.md: changed"),
+        expect.stringContaining("plugin/skills/p1/extra.md: extra"),
       ]),
     );
     expect(recorded.stdout).toEqual([]);
@@ -432,7 +444,7 @@ describe("runCli run", () => {
   });
 
   it("starts Claude and runs an agent-only build", async () => {
-    const { deps, recorded, seed } = stubDeps({ subagents: ["x:a1"] });
+    const { deps, recorded, seed } = stubDeps({ finishedAgents: ["a1"] });
     await seed(
       flow([trigger("t"), agent("a1"), output("o")], [thenWire("t", "a1"), thenWire("a1", "o")]),
     );
@@ -459,7 +471,7 @@ describe("runCli run", () => {
         hooks,
       },
     ]);
-    expect(recorded.sends).toEqual(["/x:p1"]);
+    expect(recorded.sends).toEqual(["/x:p1 NODE p1"]);
     expect(scripts.calls).toEqual([{ command: "npm", args: ["test"], cwd: worktree }]);
     expect(recorded.stdout).toEqual(["p1 started", "p1 done", "s1 started", "s1 done"]);
   });
@@ -1206,6 +1218,421 @@ describe("runCli build", () => {
       db.close();
     }
   });
+
+  describe("build agents", () => {
+    const withAgents = (deps: CliDeps) => {
+      const agents = new FakeBuildAgents({ fs: deps.fs });
+      return { deps: { ...deps, build: { ...deps.build, agents } }, agents };
+    };
+
+    const progressLines = (stdout: string[]) =>
+      stdout.filter((line) => line.startsWith("Building · ") || line.startsWith("Built · "));
+
+    const fileHashes = async (dir: string): Promise<Record<string, string>> => {
+      const hashes: Record<string, string> = {};
+      for (const entry of await readdir(dir, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const path = join(entry.parentPath, entry.name);
+        hashes[path] = createHash("sha256")
+          .update(await readFile(path))
+          .digest("hex");
+      }
+      return hashes;
+    };
+
+    it("prints one line per step and ends with Built · v1", async () => {
+      const flowPath = await writeFlow(promptThenScript());
+      const { deps, recorded } = stubDeps();
+
+      expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(0);
+
+      expect(progressLines(recorded.stdout)).toEqual([
+        "Building · step 1 of 5",
+        "Building · step 2 of 5",
+        "Building · step 3 of 5",
+        "Building · step 4 of 5",
+        "Building · step 5 of 5",
+        "Built · v1",
+      ]);
+    });
+
+    it("opens the build session with the --build-model given", async () => {
+      const flowPath = await writeFlow(promptThenScript());
+      const { deps, agents } = withAgents(stubDeps().deps);
+
+      expect(
+        await runCli(
+          ["build", flowPath, "--name", "x", "--repo", repo.path, "--build-model", "haiku"],
+          deps,
+        ),
+      ).toBe(0);
+
+      expect(agents.opened.map((spec) => spec.model)).toEqual(["haiku"]);
+    });
+
+    describe("interrupted", () => {
+      const interruptible = (deps: CliDeps) => {
+        let interrupt: (code: number) => void = () => undefined;
+        return {
+          deps: {
+            ...deps,
+            onInterrupt: (handler: (code: number) => void) => {
+              interrupt = handler;
+              return () => (interrupt = () => undefined);
+            },
+          },
+          interrupt: (code: number) => interrupt(code),
+        };
+      };
+
+      const exitCode = (flowPath: string, deps: CliDeps) =>
+        Promise.race([
+          runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps),
+          new Promise((resolve) => setTimeout(() => resolve("still building"), 1000)),
+        ]);
+
+      const expectStopped = async (store: FakeStore, agents: FakeBuildAgents) => {
+        expect(agents.closed).toEqual(["fd-build-TestKit1"]);
+        expect(await workspaces()).toEqual([]);
+        expect(await exists(join(home, "build-sessions", "fd-build-TestKit1"))).toBe(false);
+        expect(store.listPendingBuilds()).toEqual([]);
+        expect(store.listLatestEndedPendingBuilds()).toEqual([
+          expect.objectContaining({ name: "x", outcome: "stopped" }),
+        ]);
+        expect(store.builds()).toEqual([]);
+      };
+
+      it("on Ctrl-C mid-turn closes the build session, removes its workspace, ends the build stopped and exits", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        const agents = {
+          open: fake.open,
+          turn: async () => {
+            t.interrupt(130);
+            return new Promise<never>(() => undefined);
+          },
+          alive: fake.alive,
+          close: fake.close,
+        };
+        const deps = { ...t.deps, build: { ...t.deps.build, agents } };
+
+        expect(await exitCode(flowPath, deps)).toBe(130);
+
+        await expectStopped(stub.store, fake);
+      });
+
+      it("on Ctrl-C mid-turn exits with the interrupt's code and says why when closing the session fails", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        const agents = {
+          open: fake.open,
+          turn: async () => {
+            t.interrupt(130);
+            return new Promise<never>(() => undefined);
+          },
+          alive: fake.alive,
+          close: () => Promise.reject(new Error("close failed")),
+        };
+        const deps = { ...t.deps, build: { ...t.deps.build, agents } };
+
+        expect(await exitCode(flowPath, deps)).toBe(130);
+
+        expect(stub.recorded.stderr.join("\n")).toContain("close failed");
+        expect(stub.store.listPendingBuilds()).toEqual([]);
+      });
+
+      it("on Ctrl-C while the repo is still being read leaves no open build and no workspace", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        let release: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const reads: string[] = [];
+        const real = t.deps.gitState;
+        const deps: CliDeps = {
+          ...t.deps,
+          build: { ...t.deps.build, agents: fake },
+          gitState: {
+            read: async (folder) => {
+              reads.push(folder);
+              t.interrupt(130);
+              await held;
+              return real.read(folder);
+            },
+            branches: (folder) => real.branches(folder),
+            defaultBranch: (folder) => real.defaultBranch(folder),
+          },
+        };
+
+        expect(await exitCode(flowPath, deps)).toBe(130);
+        release();
+
+        const deadline = Date.now() + 1000;
+        while (Date.now() < deadline) {
+          expect(stub.store.listPendingBuilds()).toEqual([]);
+          expect(await workspaces()).toEqual([]);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(reads).toHaveLength(1);
+        expect(fake.opened).toEqual([]);
+        expect(await exists(join(home, "build-sessions", "fd-build-TestKit1"))).toBe(false);
+        expect(stub.store.builds()).toEqual([]);
+      });
+
+      it("on Ctrl-C once the worktree is cut removes the worktree and its branch too", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        const worktrees = new GitWorktree();
+        const cut: { path: string; branch: string }[] = [];
+        const deps: CliDeps = {
+          ...t.deps,
+          build: { ...t.deps.build, agents: fake },
+          worktree: {
+            add: async (options) => {
+              await worktrees.add(options);
+              cut.push(options);
+              t.interrupt(130);
+            },
+            remove: (options) => worktrees.remove(options),
+            isDirty: (path) => worktrees.isDirty(path),
+            hasUnpushed: (repoPath, branch, base) => worktrees.hasUnpushed(repoPath, branch, base),
+            deleteBranch: (repoPath, branch) => worktrees.deleteBranch(repoPath, branch),
+          },
+        };
+
+        expect(await exitCode(flowPath, deps)).toBe(130);
+
+        expect(cut).toHaveLength(1);
+        expect(await exists(cut[0]?.path ?? "")).toBe(false);
+        const { stdout: branches } = await git("git", [
+          "-C",
+          repo.path,
+          "branch",
+          "--list",
+          "--format=%(refname:short)",
+        ]);
+        expect(branches.split("\n")).not.toContain(cut[0]?.branch);
+        await expectStopped(stub.store, fake);
+      });
+
+      it("on Ctrl-C during the worktree cut closes the build session once", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        const worktrees = new GitWorktree();
+        let releaseAdd: () => void = () => undefined;
+        const addGate = new Promise<void>((resolve) => {
+          releaseAdd = resolve;
+        });
+        let releaseClose: () => void = () => undefined;
+        const closeGate = new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        });
+        const closing: string[] = [];
+        const deps: CliDeps = {
+          ...t.deps,
+          build: {
+            ...t.deps.build,
+            agents: {
+              open: fake.open,
+              turn: fake.turn,
+              alive: fake.alive,
+              close: async (sessionName) => {
+                closing.push(sessionName);
+                if (closing.length === 1) await closeGate;
+                return fake.close(sessionName);
+              },
+            },
+          },
+          worktree: {
+            add: async (options) => {
+              t.interrupt(130);
+              await addGate;
+              await worktrees.add(options);
+            },
+            remove: (options) => worktrees.remove(options),
+            isDirty: (path) => worktrees.isDirty(path),
+            hasUnpushed: (repoPath, branch, base) => worktrees.hasUnpushed(repoPath, branch, base),
+            deleteBranch: (repoPath, branch) => worktrees.deleteBranch(repoPath, branch),
+          },
+        };
+
+        const exited = exitCode(flowPath, deps);
+        releaseAdd();
+        await vi.waitFor(() => {
+          expect(closing).toHaveLength(1);
+        });
+        releaseClose();
+
+        expect(await exited).toBe(130);
+        expect(closing).toEqual(["fd-build-TestKit1"]);
+        expect(await workspaces()).toEqual([]);
+        expect(stub.store.listPendingBuilds()).toEqual([]);
+        expect(stub.store.listLatestEndedPendingBuilds()).toEqual([
+          expect.objectContaining({ name: "x", outcome: "stopped" }),
+        ]);
+        expect(stub.store.builds()).toEqual([]);
+      });
+
+      it("on Ctrl-C while the build session opens sends no turn and closes the session before exiting", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        let releaseOpen: () => void = () => undefined;
+        const openGate = new Promise<void>((resolve) => {
+          releaseOpen = resolve;
+        });
+        const deps: CliDeps = {
+          ...t.deps,
+          build: {
+            ...t.deps.build,
+            agents: {
+              open: async (spec) => {
+                t.interrupt(130);
+                await openGate;
+                return fake.open(spec);
+              },
+              turn: fake.turn,
+              alive: fake.alive,
+              close: fake.close,
+            },
+          },
+        };
+
+        const exited = exitCode(flowPath, deps);
+        setTimeout(releaseOpen, 100);
+
+        expect(await exited).toBe(130);
+        expect(fake.opened).toHaveLength(1);
+        expect(fake.turns).toEqual([]);
+        expect(fake.closed).toEqual(["fd-build-TestKit1"]);
+        expect(await fake.alive("fd-build-TestKit1")).toBe(false);
+        await expectStopped(stub.store, fake);
+      });
+
+      it("on Ctrl-C while the worktree is being cut exits only once it is removed with its branch", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        const worktrees = new GitWorktree();
+        let releaseAdd: () => void = () => undefined;
+        const addGate = new Promise<void>((resolve) => {
+          releaseAdd = resolve;
+        });
+        const cut: { path: string; branch: string }[] = [];
+        const deps: CliDeps = {
+          ...t.deps,
+          build: { ...t.deps.build, agents: fake },
+          worktree: {
+            add: async (options) => {
+              t.interrupt(130);
+              await addGate;
+              await worktrees.add(options);
+              cut.push(options);
+            },
+            remove: (options) => worktrees.remove(options),
+            isDirty: (path) => worktrees.isDirty(path),
+            hasUnpushed: (repoPath, branch, base) => worktrees.hasUnpushed(repoPath, branch, base),
+            deleteBranch: (repoPath, branch) => worktrees.deleteBranch(repoPath, branch),
+          },
+        };
+
+        const exited = exitCode(flowPath, deps);
+        setTimeout(releaseAdd, 100);
+
+        expect(await exited).toBe(130);
+        expect(cut).toHaveLength(1);
+        expect(await exists(cut[0]?.path ?? "")).toBe(false);
+        const { stdout: branches } = await git("git", [
+          "-C",
+          repo.path,
+          "branch",
+          "--list",
+          "--format=%(refname:short)",
+        ]);
+        expect(branches.split("\n")).not.toContain(cut[0]?.branch);
+        await expectStopped(stub.store, fake);
+      });
+
+      it("on Ctrl-C once the build is recorded keeps it with its workspace, ends it built and exits 0", async () => {
+        const flowPath = await writeFlow(promptThenScript());
+        const stub = stubDeps();
+        const fake = new FakeBuildAgents({ fs: stub.deps.fs });
+        const t = interruptible(stub.deps);
+        let releaseClose: () => void = () => undefined;
+        const closeGate = new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        });
+        const closing: string[] = [];
+        const deps: CliDeps = {
+          ...t.deps,
+          build: {
+            ...t.deps.build,
+            agents: {
+              open: fake.open,
+              turn: fake.turn,
+              alive: fake.alive,
+              close: async (sessionName) => {
+                closing.push(sessionName);
+                if (closing.length === 1) {
+                  t.interrupt(130);
+                  await closeGate;
+                }
+                return fake.close(sessionName);
+              },
+            },
+          },
+        };
+
+        const exited = exitCode(flowPath, deps);
+        await vi.waitFor(() => {
+          expect(closing).not.toEqual([]);
+        });
+        const [recorded] = stub.store.builds();
+        if (recorded === undefined) throw new Error("the build was not recorded before Ctrl-C");
+        releaseClose();
+
+        expect(await exited).toBe(0);
+        expect(stub.store.builds().map((build) => build.id)).toEqual([recorded.id]);
+        expect(await workspaces()).toHaveLength(1);
+        expect(stub.store.listPendingBuilds()).toEqual([]);
+        expect(stub.store.listLatestEndedPendingBuilds()).toEqual([
+          expect.objectContaining({ name: "x", outcome: "built" }),
+        ]);
+      });
+    });
+
+    it("never starts the build agents again when the build runs twice, and leaves its files unchanged", async () => {
+      const flowPath = await writeFlow(promptThenScript());
+      const stub = stubDeps({ results: [ok, ok] });
+      const { deps, agents } = withAgents(stub.deps);
+
+      expect(await runCli(["build", flowPath, "--name", "x", "--repo", repo.path], deps)).toBe(0);
+      const { dir } = printed(stub.recorded.stdout);
+      const built = await fileHashes(dir);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
+      const afterRun1 = await fileHashes(dir);
+      expect(await runCli(["run", "x"], deps)).toBe(0);
+      const afterRun2 = await fileHashes(dir);
+
+      expect(agents.opened).toHaveLength(1);
+      expect(Object.keys(built).length).toBeGreaterThan(0);
+      expect(afterRun1).toEqual(built);
+      expect(afterRun2).toEqual(built);
+    });
+  });
 });
 
 describe("runCli run state", () => {
@@ -1366,7 +1793,7 @@ describe("runCli resume", () => {
         attach: true,
       },
     ]);
-    expect(recorded.sends).toEqual(["/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p3 NODE p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1392,7 +1819,7 @@ describe("runCli resume", () => {
     expect(await runCli(["resume", id], deps)).toBe(0);
 
     expect(read).toBe(2);
-    expect(recorded.sends).toEqual(["/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p3 NODE p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1419,7 +1846,7 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual(["/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p3 NODE p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p3")).not.toContainEqual(
       expect.objectContaining({ kind: "done", payload: { stopMessage: "X" } }),
     );
@@ -1440,7 +1867,7 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual(["/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p3 NODE p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1467,7 +1894,7 @@ describe("runCli resume", () => {
 
     expect(await runCli(["resume", id], deps)).toBe(0);
 
-    expect(recorded.sends).toEqual(["/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p3 NODE p3"]);
     expect(store.events(id).filter((event) => event.nodeId === "p2")).toMatchObject([
       { kind: "sent" },
       { kind: "done", payload: { stopMessage: "X" } },
@@ -1481,7 +1908,7 @@ describe("runCli resume", () => {
     expect(await runCli(["resume", id], deps)).toBe(0);
 
     expect(recorded.openSession[0]?.attach).toBeUndefined();
-    expect(recorded.sends).toEqual(["/x:p1", "/x:p2", "/x:p3"]);
+    expect(recorded.sends).toEqual(["/x:p1 NODE p1", "/x:p2 NODE p2", "/x:p3 NODE p3"]);
     expect(store.findRun(id)?.status).toBe("done");
   });
 

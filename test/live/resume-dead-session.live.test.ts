@@ -27,6 +27,7 @@ import type { PendingWait } from "../../src/core/run/wait.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { flow, gate, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -153,7 +154,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
           openStores: () => stores,
           home,
           publish: (push) => pushes.push(push),
-          prepareHooks: () => ({ kind: "ok", nodePath: process.execPath, hookScriptPath }),
+          prepareHooks: () => ({
+            kind: "ok",
+            nodePath: process.execPath,
+            hookScriptPath,
+            guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+          }),
+          ...fakeEngineBuildOptions(fs),
           connectors: new FakeConnectorSource(),
           isFolder: (folder) => statSync(folder, { throwIfNoEntry: false })?.isDirectory() === true,
           fs,
@@ -207,11 +214,23 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
 
       const first = engine();
       const ref = stores.flows.save(saved);
-      const { id: buildId, dir } = (await ask(first.handler, "build-version", {
+      const started = (await ask(first.handler, "build-version", {
         ...ref,
         name: buildName,
         values: {},
-      })) as { id: string; dir: string };
+      })) as { kind: string; pendingId: string };
+      expect(started.kind).toBe("started");
+      await vi.waitFor(
+        () => {
+          expect(stores.runs.listPendingBuilds().map((open) => open.id)).not.toContain(
+            started.pendingId,
+          );
+        },
+        { timeout: 30_000 },
+      );
+      const record = stores.runs.findBuildByName(buildName);
+      if (record === undefined) throw new Error("the build did not finish built");
+      const { id: buildId, dir } = record;
       projectFolder = join(
         homedir(),
         ".claude",

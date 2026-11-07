@@ -3,7 +3,7 @@ import type { HookPaths } from "../compiler/hook-settings.js";
 import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
-import { agentNodes, chargeUsage } from "./cost.js";
+import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import {
@@ -40,7 +40,7 @@ export type OpenedSession = {
 };
 
 export type ExecuteDeps = {
-  fs: VerifyFileSystem;
+  fs: VerifyFileSystem & Pick<RunnerDeps["files"], "writeFile">;
   scripts: {
     run(
       command: string,
@@ -216,11 +216,12 @@ async function recordSpend(
   if (usage === undefined || sessionId === undefined || sessionId === "") return;
   try {
     const entries = await usage.entries(sessionId);
+    const events = store.events(runId);
     const charges = chargeUsage({
-      events: store.events(runId),
+      events,
       entries,
       turnNodes: turnNodeIds(manifest),
-      agentNodes: agentNodes(manifest),
+      owners: usageOwners(manifest, events),
     });
     if (charges.length > 0) store.appendAll(runId, charges);
     store.recordCost(runId, costOf(entries));
@@ -247,6 +248,15 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     deleteBuild: (id) => store.deleteBuild(id),
     listBuilds: () => store.listBuilds(),
     buildFiles: (id) => store.buildFiles(id),
+    startPendingBuild: (build) => store.startPendingBuild(build),
+    appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),
+    buildEvents: (pendingId) => store.buildEvents(pendingId),
+    endPendingBuild: (pendingId, end) => store.endPendingBuild(pendingId, end),
+    listPendingBuilds: () => store.listPendingBuilds(),
+    listLatestEndedPendingBuilds: () => store.listLatestEndedPendingBuilds(),
+    findPendingBuildByName: (name) => store.findPendingBuildByName(name),
+    appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
+    buildActivity: (pendingId) => store.buildActivity(pendingId),
     append(id, nodeId, event) {
       if (!stopped()) store.append(id, nodeId, event);
     },

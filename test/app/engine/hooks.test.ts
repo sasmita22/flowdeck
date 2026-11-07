@@ -8,6 +8,7 @@ describe("prepareHooks", () => {
   let folder: string;
   let home: string;
   let sourcePath: string;
+  let guardSourcePath: string;
 
   const binFolder = async (name: string, node: { executable: boolean } | "none") => {
     const dir = join(folder, name);
@@ -26,6 +27,8 @@ describe("prepareHooks", () => {
     sourcePath = join(folder, "dist", "flowdeck-hook.cjs");
     await mkdir(join(folder, "dist"));
     await writeFile(sourcePath, "console.log('hook v2');\n");
+    guardSourcePath = join(folder, "dist", "flowdeck-build-guard.cjs");
+    await writeFile(guardSourcePath, "console.log('guard v2');\n");
   });
 
   afterEach(async () => {
@@ -35,11 +38,28 @@ describe("prepareHooks", () => {
   it("copies the hook script under the home's hooks folder, creating it, and returns that path", async () => {
     const bin = await binFolder("bin", { executable: true });
 
-    const result = prepareHooks({ home, sourcePath, pathEnv: bin });
+    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
 
     const copy = join(home, "hooks", "flowdeck-hook.cjs");
-    expect(result).toEqual({ kind: "ok", nodePath: join(bin, "node"), hookScriptPath: copy });
+    expect(result).toMatchObject({ kind: "ok", nodePath: join(bin, "node"), hookScriptPath: copy });
     expect(await readFile(copy, "utf8")).toBe("console.log('hook v2');\n");
+  });
+
+  it("copies the build guard script beside the hook script and returns its path", async () => {
+    const bin = await binFolder("bin", { executable: true });
+
+    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
+
+    const hooksDir = join(home, "hooks");
+    expect(result).toEqual({
+      kind: "ok",
+      nodePath: join(bin, "node"),
+      hookScriptPath: join(hooksDir, "flowdeck-hook.cjs"),
+      guardScriptPath: join(hooksDir, "flowdeck-build-guard.cjs"),
+    });
+    expect(await readFile(join(hooksDir, "flowdeck-build-guard.cjs"), "utf8")).toBe(
+      "console.log('guard v2');\n",
+    );
   });
 
   it("overwrites a stale copy with the current source", async () => {
@@ -47,7 +67,7 @@ describe("prepareHooks", () => {
     await mkdir(join(home, "hooks"));
     await writeFile(join(home, "hooks", "flowdeck-hook.cjs"), "console.log('hook v1');\n");
 
-    prepareHooks({ home, sourcePath, pathEnv: bin });
+    prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
 
     expect(await readFile(join(home, "hooks", "flowdeck-hook.cjs"), "utf8")).toBe(
       "console.log('hook v2');\n",
@@ -63,6 +83,7 @@ describe("prepareHooks", () => {
     const result = prepareHooks({
       home,
       sourcePath,
+      guardSourcePath,
       pathEnv: [empty, notExecutable, first, second].join(":"),
     });
 
@@ -73,7 +94,12 @@ describe("prepareHooks", () => {
     const empty = await binFolder("empty", "none");
     const notExecutable = await binFolder("plain", { executable: false });
 
-    const result = prepareHooks({ home, sourcePath, pathEnv: `${empty}:${notExecutable}` });
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath,
+      pathEnv: `${empty}:${notExecutable}`,
+    });
 
     expect(result).toEqual({
       kind: "error",
@@ -82,7 +108,7 @@ describe("prepareHooks", () => {
   });
 
   it("returns an error naming node and PATH when PATH is not set", () => {
-    const result = prepareHooks({ home, sourcePath, pathEnv: undefined });
+    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: undefined });
 
     expect(result).toEqual({
       kind: "error",
@@ -96,6 +122,20 @@ describe("prepareHooks", () => {
     const result = prepareHooks({
       home,
       sourcePath: join(folder, "dist", "missing.cjs"),
+      guardSourcePath,
+      pathEnv: bin,
+    });
+
+    expect(result).toEqual({ kind: "error", message: expect.stringMatching(/\S/) });
+  });
+
+  it("returns an error, without throwing, when the build guard source is missing", async () => {
+    const bin = await binFolder("bin", { executable: true });
+
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath: join(folder, "dist", "missing-guard.cjs"),
       pathEnv: bin,
     });
 

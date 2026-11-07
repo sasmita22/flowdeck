@@ -12,10 +12,9 @@ import {
   type ActivityFeed,
   type ActivityHookEvent,
 } from "../../../src/core/run/activity.js";
-import { agentType } from "../../../src/core/nodes/agent/execute.js";
 import { trackWindow, type NodeWindow } from "../../../src/core/run/attribution.js";
 
-type HookInput = { kind: "PreToolUse" | "SubagentStop"; payload: Record<string, unknown> };
+type HookInput = ActivityHookEvent;
 
 const fixture = (name: string) =>
   JSON.parse(
@@ -46,9 +45,30 @@ const pre = (fields: Record<string, unknown> = {}): HookInput => ({
 const agentCall = (toolInput: Record<string, unknown>): HookInput =>
   pre({ tool_name: "Agent", tool_input: toolInput });
 
-const stopOf = (agentType: string): HookInput => ({
+const stopOf = (agentType: string, agentId = "agent-fixture-1"): HookInput => ({
   kind: "SubagentStop",
-  payload: { ...subagentStop, flowdeck_hook_at: insideP2, agent_type: agentType },
+  payload: {
+    ...subagentStop,
+    flowdeck_hook_at: insideP2,
+    agent_type: agentType,
+    agent_id: agentId,
+  },
+});
+
+const agentDone = (
+  toolUseId: string,
+  agentId: string,
+  prompt = "Go",
+  at: number = insideP2,
+): HookInput => ({
+  kind: "PostToolUse",
+  payload: {
+    flowdeck_hook_at: at,
+    tool_name: "Agent",
+    tool_input: { subagent_type: "h:review", prompt },
+    tool_use_id: toolUseId,
+    tool_response: { status: "completed", agentId, agentType: "h:review", content: [] },
+  },
 });
 
 const fold = (inputs: readonly HookInput[], start: ActivityFeed = emptyFeed) =>
@@ -114,6 +134,7 @@ describe("foldHookEvent", () => {
       agentType: "h:a1",
       summary: "Run a1",
       state: "running",
+      toolUseId: "toolu_01FixturePreToolUse",
     });
   });
 
@@ -127,22 +148,45 @@ describe("foldHookEvent", () => {
     expect(changed).toMatchObject({ kind: "subagent", agentType: "general-purpose" });
   });
 
-  it("finishes the oldest running subagent of the stopped type, one per SubagentStop", () => {
+  it("finishes each running subagent at its own finished Agent call, by call id", () => {
+    const call = (description: string, toolUseId: string) =>
+      pre({
+        tool_name: "Agent",
+        tool_input: { description, prompt: "Go" },
+        tool_use_id: toolUseId,
+      });
     const { changes, feed } = fold([
-      agentCall({ description: "First", prompt: "Go" }),
-      agentCall({ description: "Second", prompt: "Go" }),
-      stopOf("general-purpose"),
-      stopOf("general-purpose"),
-      stopOf("general-purpose"),
-      stopOf("h:unknown"),
+      call("First", "toolu_1"),
+      call("Second", "toolu_2"),
+      agentDone("toolu_2", "agent-2"),
+      agentDone("toolu_1", "agent-1"),
+      agentDone("toolu_1", "agent-1"),
     ]);
 
-    expect(changes[2]).toMatchObject({ id: 1, state: "finished", summary: "First" });
-    expect(changes[3]).toMatchObject({ id: 2, state: "finished", summary: "Second" });
+    expect(changes[2]).toMatchObject({
+      id: 2,
+      state: "finished",
+      summary: "Second",
+      agentId: "agent-2",
+    });
+    expect(changes[3]).toMatchObject({
+      id: 1,
+      state: "finished",
+      summary: "First",
+      agentId: "agent-1",
+    });
     expect(changes[4]).toBeUndefined();
-    expect(changes[5]).toBeUndefined();
     expect(feed.entries).toHaveLength(2);
     expect(feed.nextId).toBe(3);
+  });
+
+  it("finishes on a SubagentStop only the entry with its agent id, never the first of its type", () => {
+    const { changes } = fold([
+      agentCall({ description: "First", prompt: "Go" }),
+      stopOf("general-purpose", "agent-elsewhere"),
+    ]);
+
+    expect(changes[1]).toBeUndefined();
   });
 
   it("counts five tool calls and one subagent as six entries", () => {
@@ -156,7 +200,7 @@ describe("foldHookEvent", () => {
       agentCall({ description: "Reply OK", prompt: "Reply OK" }),
       pre({ agent_id: "agent-1", tool_name: "Read", tool_input: { file_path: "/x" } }),
       pre({ agent_id: "agent-1", tool_name: "Grep", tool_input: { pattern: "y" } }),
-      stopOf("general-purpose"),
+      agentDone("toolu_01FixturePreToolUse", "agent-1"),
     ]);
 
     expect(feed.entries).toHaveLength(6);
@@ -178,13 +222,13 @@ describe("foldHookEvent in a parallel section", () => {
       payload: { ...preToolUse, flowdeck_hook_at: 1500, ...fields },
     }).changed;
 
-  it("credits an Agent call to the branch its subagent_type names", () => {
+  it("credits an Agent call to the branch its node marker names", () => {
     expect(
       inSection({
         tool_name: "Agent",
-        tool_input: { subagent_type: agentType("h", "a2"), description: "Run a2", prompt: "Go" },
+        tool_input: { subagent_type: "h:review", description: "Run a2", prompt: "NODE a2\nGo" },
       }),
-    ).toMatchObject({ kind: "subagent", nodeId: "a2", agentType: "h:a2" });
+    ).toMatchObject({ kind: "subagent", nodeId: "a2", agentType: "h:review" });
   });
 
   it("credits any other main-session tool to the fork", () => {
@@ -197,6 +241,111 @@ describe("foldHookEvent in a parallel section", () => {
 
   it("still drops a tool call made inside a subagent", () => {
     expect(inSection({ agent_id: "agent-1", tool_name: "Bash" })).toBeUndefined();
+  });
+});
+
+describe("Activity by node", () => {
+  const call = (nodeId: string | undefined, toolUseId: string, at: number): HookInput => ({
+    kind: "PreToolUse",
+    payload: {
+      ...preToolUse,
+      flowdeck_hook_at: at,
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "h:review",
+        description: `Review ${nodeId ?? "it"}`,
+        prompt: nodeId === undefined ? "Go" : `NODE ${nodeId}\nGo`,
+      },
+      tool_use_id: toolUseId,
+    },
+  });
+  const foldOn = (on: readonly NodeWindow[], inputs: readonly HookInput[]) =>
+    inputs.reduce<{ feed: ActivityFeed; changes: (ActivityEntry | undefined)[] }>(
+      ({ feed, changes }, input) => {
+        const result = foldHookEvent(feed, on, input);
+        return { feed: result.feed, changes: [...changes, result.changed] };
+      },
+      { feed: emptyFeed, changes: [] },
+    );
+
+  it("owns each in-flight call's activity by its node when two nodes in a row share a piece", () => {
+    const sequence = (
+      [
+        ["a1", "sent", 100],
+        ["a1", "done", 200],
+        ["a2", "sent", 300],
+        ["a2", "done", 400],
+      ] as const
+    ).reduce<NodeWindow[]>((all, [nodeId, kind, at]) => trackWindow(all, nodeId, kind, at), []);
+    const bash = (at: number): HookInput => ({
+      kind: "PreToolUse",
+      payload: { ...preToolUse, flowdeck_hook_at: at },
+    });
+
+    const { changes } = foldOn(sequence, [
+      call("a1", "toolu_1", 150),
+      bash(160),
+      agentDone("toolu_1", "agent-1", "NODE a1\nGo", 190),
+      call("a2", "toolu_2", 350),
+      bash(360),
+      agentDone("toolu_2", "agent-2", "NODE a2\nGo", 390),
+    ]);
+
+    expect(changes.map((change) => change?.nodeId)).toEqual(["a1", "a1", "a1", "a2", "a2", "a2"]);
+  });
+
+  describe("two parallel calls of one piece", () => {
+    const section = (["f", "b1", "b2"] as const).reduce<NodeWindow[]>(
+      (all, nodeId) => trackWindow(all, nodeId, "sent", 1000),
+      [],
+    );
+
+    it("starts each call on its marker's node and finishes it by its own call id and agent id", () => {
+      const { changes, feed } = foldOn(section, [
+        call("b1", "toolu_b1", 1100),
+        call("b2", "toolu_b2", 1101),
+        agentDone("toolu_b2", "agent-b2", "NODE b2\nGo", 1200),
+      ]);
+
+      expect(changes[0]).toMatchObject({ nodeId: "b1", state: "running" });
+      expect(changes[1]).toMatchObject({ nodeId: "b2", state: "running" });
+      expect(changes[2]).toMatchObject({
+        id: 2,
+        nodeId: "b2",
+        state: "finished",
+        agentId: "agent-b2",
+      });
+      expect(feed.entries.find((entry) => entry.id === 1)).toMatchObject({ state: "running" });
+    });
+
+    it("moves an entry to the node its finished call's marker names", () => {
+      const { changes } = foldOn(section, [
+        call(undefined, "toolu_x", 1100),
+        agentDone("toolu_x", "agent-x", "NODE b2\nGo", 1200),
+      ]);
+
+      expect(changes[0]).toMatchObject({ nodeId: "f" });
+      expect(changes[1]).toMatchObject({ id: 1, nodeId: "b2", agentId: "agent-x" });
+    });
+  });
+
+  it("ignores a SubagentStop with no agent type", () => {
+    const { changes } = fold([
+      agentCall({ description: "Look", prompt: "Go" }),
+      {
+        kind: "SubagentStop",
+        payload: { flowdeck_hook_at: insideP2, agent_id: "a2acfd3c49ca63d33", agent_type: "" },
+      },
+    ]);
+
+    expect(changes[1]).toBeUndefined();
+  });
+
+  it("ignores a tool event carrying an agent id while no Agent call is in flight", () => {
+    expect(foldHookEvent(emptyFeed, windows, pre({ agent_id: "a2acfd3c49ca63d33" }))).toEqual({
+      feed: emptyFeed,
+      changed: undefined,
+    });
   });
 });
 

@@ -256,6 +256,7 @@ describe("the Build dialog", () => {
       base: "dev",
       variables: declared.variables,
       values: { deep: true },
+      buildModel: "",
       error: null,
     });
   });
@@ -357,6 +358,31 @@ describe("the Build dialog", () => {
     });
   });
 
+  it("builds with the build model given in the dialog", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login", buildModel: "haiku" });
+    run.getState().setValue("ticket", "FD-1");
+
+    await run.getState().confirmBuild();
+
+    expect(bridge.buildVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "fix-login", buildModel: "haiku" }),
+    );
+  });
+
+  it("starts the build model field from the blueprint's build configuration", async () => {
+    const { run } = await setup();
+
+    await run.getState().openBuild({
+      flowId: "flow-b",
+      version: 4,
+      buildConfig: { ...declared, buildModel: "sonnet" },
+    });
+
+    expect(run.getState().buildDialog?.buildModel).toBe("sonnet");
+  });
+
   it("does not build while it cannot", async () => {
     const { bridge, run } = await setup();
     await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
@@ -397,6 +423,40 @@ describe("the Build dialog", () => {
     run.getState().editBuild({ name: "fix-login-2" });
 
     expect(run.getState().buildDialog?.error).toBeNull();
+  });
+
+  it("closes with no error on a started build and answers its pending id", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+    run.getState().setValue("ticket", "FD-1");
+    bridge.buildVersion.mockResolvedValueOnce({ kind: "started", pendingId: "pb-7" });
+
+    await expect(run.getState().confirmBuild()).resolves.toBe("pb-7");
+
+    expect(run.getState()).toMatchObject({
+      buildDialog: null,
+      error: null,
+      problems: null,
+      starting: false,
+    });
+  });
+
+  it("stays open and shows the problems of a refused build", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+    run.getState().setValue("ticket", "FD-1");
+    const problems = [{ node: "prompt-1", field: "text", text: "Write the prompt." }];
+    bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "Not built", problems });
+
+    await expect(run.getState().confirmBuild()).resolves.toBeNull();
+
+    expect(run.getState()).toMatchObject({
+      buildDialog: { name: "fix-login", error: "Not built" },
+      problems,
+      starting: false,
+    });
   });
 
   it("cancel closes it without building", async () => {

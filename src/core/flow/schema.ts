@@ -56,6 +56,7 @@ export const BuildConfig = z.object({
   repo: z.string().optional(),
   base: z.string().optional(),
   variables: z.array(Variable).default([]),
+  buildModel: z.string().optional(),
 });
 
 export const Session = z.object({

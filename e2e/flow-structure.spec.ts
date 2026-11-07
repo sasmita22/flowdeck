@@ -15,7 +15,8 @@ import type { Flow } from "../src/core/flow/schema.js";
 import { fileWire, flow, loop, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 
 const exec = promisify(execFile);
@@ -65,10 +66,10 @@ draw();
 `;
 
 const launch = async () => {
-  launched = await launchApp({
+  launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
-    env: { PATH: `${bin}:${process.env["PATH"] ?? ""}` },
+    ownBin: bin,
   });
   await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
   return launched.window;

@@ -1,5 +1,6 @@
 import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
+import type { BuildEvent, BuildOutcome, PendingBuild, StoredBuildEvent } from "./build-progress.js";
 import type { RunEvent } from "./run-events.js";
 
 export type RunStatus = "running" | "done" | "failed" | "stopped";
@@ -65,6 +66,21 @@ export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string
 
 export type EventEntry = { nodeId: string; event: RunEvent };
 
+export type NewPendingBuild = Pick<
+  PendingBuild,
+  "flowId" | "version" | "name" | "origin" | "startedAt"
+>;
+
+export type PendingBuildStart =
+  { kind: "started"; pendingId: string } | { kind: "busy"; reason: "blueprint" | "name" };
+
+export type PendingBuildEnd = {
+  outcome: BuildOutcome;
+  endedAt: number;
+  buildId?: string;
+  report?: unknown;
+};
+
 export class BuildRunningError extends Error {
   constructor(buildId: string) {
     super(`build ${buildId} is running`);
@@ -92,4 +108,13 @@ export interface Store {
   deleteBuild(id: string): void;
   listBuilds(): BuildRecord[];
   buildFiles(id: string): BuildFileRecord[];
+  startPendingBuild(build: NewPendingBuild): PendingBuildStart;
+  appendBuildEvent(pendingId: string, event: BuildEvent): void;
+  buildEvents(pendingId: string): StoredBuildEvent[];
+  endPendingBuild(pendingId: string, end: PendingBuildEnd): void;
+  listPendingBuilds(): PendingBuild[];
+  listLatestEndedPendingBuilds(): PendingBuild[];
+  findPendingBuildByName(name: string): PendingBuild | undefined;
+  appendBuildActivity(pendingId: string, entry: ActivityEntry): void;
+  buildActivity(pendingId: string): ActivityEntry[];
 }

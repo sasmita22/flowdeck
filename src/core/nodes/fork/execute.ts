@@ -1,5 +1,5 @@
 import type { Node, Wire } from "../../flow/schema.js";
-import { agentType } from "../agent/execute.js";
+import { agentPrompt, agentType, type AgentTurnNode } from "../agent/execute.js";
 
 export type ParallelSection = { fork: string; join: string; branches: string[] };
 
@@ -122,14 +122,21 @@ export function parallelSections(
   };
 }
 
-export function forkTurnText(prefix: string, branches: readonly string[]): string {
-  const types = branches.map((branch) => `"${agentType(prefix, branch)}"`).join(", ");
-  return `Use the Agent tool once for each of these subagent_types, each with the prompt "Go": ${types}. Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next.`;
+export type ForkBranch = AgentTurnNode & { piece: string };
+
+export function forkTurnText(prefix: string, branches: readonly ForkBranch[]): string {
+  const calls = branches
+    .map(
+      (branch) =>
+        `subagent_type "${agentType(prefix, branch.piece)}" with the prompt ${JSON.stringify(agentPrompt(branch))}`,
+    )
+    .join("; ");
+  return `Use the Agent tool once for each of these calls: ${calls}. Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next.`;
 }
 
 export function unlaunched(
-  branchTypes: readonly string[],
-  launchedTypes: readonly string[],
+  branchNodes: readonly string[],
+  launchedNodes: readonly string[],
 ): string[] {
-  return branchTypes.filter((type) => !launchedTypes.includes(type));
+  return branchNodes.filter((nodeId) => !launchedNodes.includes(nodeId));
 }

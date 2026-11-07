@@ -74,6 +74,20 @@ const bridge: FlowdeckBridge = {
   },
   answerWait: (answer) => ipcRenderer.invoke(bridgeChannels.answerWait, answer) as Promise<boolean>,
   workspaceInfo: (buildConfig) => ipcRenderer.invoke(bridgeChannels.workspaceInfo, buildConfig),
+  onBuildProgress: (listener) => {
+    const handler = (_event: unknown, update: unknown) => listener(update);
+    ipcRenderer.on(bridgeChannels.buildProgress, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.buildProgress, handler);
+    };
+  },
+  onBuildActivity: (listener) => {
+    const handler = (_event: unknown, update: unknown) => listener(update);
+    ipcRenderer.on(bridgeChannels.buildActivity, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.buildActivity, handler);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

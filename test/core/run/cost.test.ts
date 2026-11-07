@@ -2,12 +2,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { TranscriptUsage } from "../../../src/adapters/claude/transcript-usage.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
-import { agentNodes, chargeUsage, costReport } from "../../../src/core/run/cost.js";
+import { chargeUsage, costReport, usageOwners } from "../../../src/core/run/cost.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
 const fork = (id: string) => ({ id, type: "fork" });
-const agent = (id: string) => ({ id, type: "agent" });
+const agent = (id: string, piece?: string) => ({
+  id,
+  type: "agent",
+  ...(piece === undefined ? {} : { piece }),
+});
 const join_ = (id: string) => ({ id, type: "join" });
 
 const transcript = fileURLToPath(
@@ -155,11 +159,10 @@ describe("chargeUsage in a parallel section", () => {
       events: parallel,
       entries,
       turnNodes: new Set(["f"]),
-      agentNodes: agentNodes({
-        hash: "abc123",
-        prefix: "h",
-        nodes: [fork("f"), agent("a1"), agent("a2"), join_("j")],
-      }),
+      owners: usageOwners(
+        { prefix: "h", nodes: [fork("f"), agent("a1"), agent("a2"), join_("j")] },
+        parallel,
+      ),
     });
 
     expect(usageOf(charges, "f")[0]?.payload.messages).toEqual(["main_1", "sub_other", "main_2"]);
@@ -199,17 +202,81 @@ describe("chargeUsage in a parallel section", () => {
   });
 });
 
-describe("agentNodes", () => {
-  it("names each agent node by the build's prefix, not its hash", () => {
-    expect(
-      agentNodes({ hash: "abc123", prefix: "fix-login", nodes: [fork("f"), agent("a1")] }),
-    ).toEqual(new Map([["fix-login:a1", "a1"]]));
+describe("usageOwners", () => {
+  it("names each agent node by the build's prefix and its node id when the build named no pieces", () => {
+    expect(usageOwners({ prefix: "fix-login", nodes: [fork("f"), agent("a1")] }, []).types).toEqual(
+      new Map([["fix-login:a1", "a1"]]),
+    );
   });
 
   it("names a hash-named build's agents by its hash, its prefix", () => {
-    expect(agentNodes({ hash: "abc123", prefix: "abc123", nodes: [agent("a1")] })).toEqual(
+    expect(usageOwners({ prefix: "abc123", nodes: [agent("a1")] }, []).types).toEqual(
       new Map([["abc123:a1", "a1"]]),
     );
+  });
+
+  it("names an agent by its piece, and leaves out a piece two nodes share", () => {
+    const owners = usageOwners(
+      { prefix: "h", nodes: [agent("a1", "review"), agent("a2", "review"), agent("a3", "plan")] },
+      [],
+    );
+
+    expect(owners.types).toEqual(new Map([["h:plan", "a3"]]));
+  });
+
+  it("maps each call id on a node's done event to that node", () => {
+    const events = stored([
+      [1, "a1", { kind: "sent" }],
+      [5, "a1", { kind: "done", payload: { toolUseIds: ["toolu_1"] } }],
+      [6, "a2", { kind: "sent" }],
+      [9, "a2", { kind: "done", payload: { stopMessage: "ok", toolUseIds: ["toolu_2"] } }],
+    ]);
+
+    expect(
+      usageOwners({ prefix: "h", nodes: [agent("a1", "review"), agent("a2", "review")] }, events)
+        .calls,
+    ).toEqual(
+      new Map([
+        ["toolu_1", "a1"],
+        ["toolu_2", "a2"],
+      ]),
+    );
+  });
+});
+
+describe("chargeUsage for nodes that share a piece", () => {
+  const subEntry = (messageId: string, second: number, toolUseId?: string): UsageEntry => ({
+    messageId,
+    model: "claude-haiku-5-5",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheWrite5mTokens: 0,
+    cacheWrite1hTokens: 0,
+    cacheReadTokens: 0,
+    at: at(second).getTime(),
+    agentType: "h:review",
+    ...(toolUseId === undefined ? {} : { toolUseId }),
+  });
+  const shared = { prefix: "h", nodes: [agent("a1", "review"), agent("a2", "review")] };
+
+  it("charges each node only the usage of the calls its done event lists", () => {
+    const parallel = stored([
+      [0, "a1", { kind: "sent" }],
+      [0, "a2", { kind: "sent" }],
+      [9, "a2", { kind: "done", payload: { toolUseIds: ["toolu_2"] } }],
+      [9, "a1", { kind: "done", payload: { toolUseIds: ["toolu_1"] } }],
+    ]);
+    const entries = [subEntry("sub_1", 2, "toolu_1"), subEntry("sub_2", 3, "toolu_2")];
+
+    const charges = chargeUsage({
+      events: parallel,
+      entries,
+      turnNodes: new Set(["a1", "a2"]),
+      owners: usageOwners(shared, parallel),
+    });
+
+    expect(usageOf(charges, "a1")[0]?.payload.messages).toEqual(["sub_1"]);
+    expect(usageOf(charges, "a2")[0]?.payload.messages).toEqual(["sub_2"]);
   });
 });
 

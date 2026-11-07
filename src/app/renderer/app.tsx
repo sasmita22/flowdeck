@@ -6,6 +6,7 @@ import { AppMenu } from "./app-menu.js";
 import { BuildDialog } from "./build-dialog.js";
 import type { AppState } from "./app-store.js";
 import type { BranchState } from "./branch-store.js";
+import type { BuildProgressState } from "./build-progress-store.js";
 import type { CanvasState } from "./canvas/store.js";
 import { ClosePrompt } from "./close-prompt.js";
 import type { InspectorState } from "./inspector/store.js";
@@ -43,6 +44,7 @@ export type AppStores = {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   branches: StoreApi<BranchState>;
+  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 };
 
@@ -176,10 +178,18 @@ function StatusBar({ store, run, workspace, nav, wait }: AppStores) {
 }
 
 function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
-  const { nav, library, run, save, canvas, actions } = stores;
+  const { nav, library, run, save, canvas, buildProgress, terminal, actions } = stores;
   switch (page.name) {
     case "blueprints":
-      return <BlueprintsPage nav={nav} library={library} run={run} actions={actions} />;
+      return (
+        <BlueprintsPage
+          nav={nav}
+          library={library}
+          run={run}
+          buildProgress={buildProgress}
+          actions={actions}
+        />
+      );
     case "builds":
       return (
         <BuildsPage
@@ -187,6 +197,8 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
           nav={nav}
           library={library}
           run={run}
+          buildProgress={buildProgress}
+          terminal={terminal}
           actions={actions}
         />
       );
@@ -228,6 +240,7 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         shell={stores.shell}
         nav={stores.nav}
         branches={stores.branches}
+        buildProgress={stores.buildProgress}
       />
     );
   }

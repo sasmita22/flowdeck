@@ -3,13 +3,22 @@ import { randomUUID } from "node:crypto";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
 import type { VariableValues } from "../../core/flow/variables.js";
 import type { RunEvent } from "../../core/run/run-events.js";
+import type {
+  BuildEvent,
+  BuildOutcome,
+  PendingBuild,
+  StoredBuildEvent,
+} from "../../core/run/build-progress.js";
 import { BuildRunningError } from "../../core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
   EventEntry,
   NewBuild,
+  NewPendingBuild,
   NewRun,
+  PendingBuildEnd,
+  PendingBuildStart,
   RunRecord,
   RunStatus,
   RunSummary,
@@ -99,6 +108,37 @@ type EventRow = {
   cost: number | null;
   time: string;
 };
+
+type PendingBuildRow = {
+  id: string;
+  flow_id: string;
+  version: number;
+  name: string;
+  origin_json: string;
+  started_at: number;
+  ended_at: number | null;
+  outcome: BuildOutcome | null;
+  build_id: string | null;
+  report_json: string | null;
+};
+
+const pendingColumns =
+  "id, flow_id, version, name, origin_json, started_at, ended_at, outcome, build_id, report_json";
+
+const toPendingBuild = (row: PendingBuildRow): PendingBuild => ({
+  id: row.id,
+  flowId: row.flow_id,
+  version: row.version,
+  name: row.name,
+  origin: JSON.parse(row.origin_json) as unknown,
+  startedAt: row.started_at,
+  ...(row.ended_at === null ? {} : { endedAt: row.ended_at }),
+  ...(row.outcome === null ? {} : { outcome: row.outcome }),
+  ...(row.build_id === null ? {} : { buildId: row.build_id }),
+  ...(row.report_json === null ? {} : { report: JSON.parse(row.report_json) as unknown }),
+});
+
+type BuildBodyRow = { seq: number; at: number; body_json: string };
 
 const buildRunningMessage = "build is running";
 
@@ -358,6 +398,103 @@ export class SqliteStore implements Store {
     return rows.map(toBuild);
   }
 
+  startPendingBuild(build: NewPendingBuild): PendingBuildStart {
+    const pendingId = randomUUID();
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          pendingId,
+          build.flowId,
+          build.version,
+          build.name,
+          JSON.stringify(build.origin),
+          build.startedAt,
+        );
+    } catch (error) {
+      if (!(error instanceof Database.SqliteError) || error.code !== "SQLITE_CONSTRAINT_UNIQUE") {
+        throw error;
+      }
+      const blueprintTaken = this.db
+        .prepare("SELECT 1 FROM pending_builds WHERE flow_id = ? AND ended_at IS NULL")
+        .get(build.flowId);
+      return { kind: "busy", reason: blueprintTaken === undefined ? "name" : "blueprint" };
+    }
+    return { kind: "started", pendingId };
+  }
+
+  appendBuildEvent(pendingId: string, event: BuildEvent): void {
+    this.appendBuildRow("build_events", pendingId, event);
+  }
+
+  buildEvents(pendingId: string): StoredBuildEvent[] {
+    return this.buildRows("build_events", pendingId).map((row) => ({
+      ...(JSON.parse(row.body_json) as BuildEvent),
+      seq: row.seq,
+      at: row.at,
+    }));
+  }
+
+  endPendingBuild(pendingId: string, end: PendingBuildEnd): void {
+    const ended = this.db
+      .prepare(
+        "UPDATE pending_builds SET ended_at = ?, outcome = ?, build_id = ?, report_json = ? WHERE id = ? AND ended_at IS NULL",
+      )
+      .run(
+        end.endedAt,
+        end.outcome,
+        end.buildId ?? null,
+        end.report === undefined ? null : JSON.stringify(end.report),
+        pendingId,
+      );
+    if (ended.changes === 0) throw new Error(`no open pending build ${pendingId}`);
+  }
+
+  listPendingBuilds(): PendingBuild[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${pendingColumns} FROM pending_builds WHERE ended_at IS NULL ORDER BY started_at, rowid`,
+      )
+      .all() as PendingBuildRow[];
+    return rows.map(toPendingBuild);
+  }
+
+  listLatestEndedPendingBuilds(): PendingBuild[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${pendingColumns} FROM pending_builds AS ended
+         WHERE ended_at IS NOT NULL AND NOT EXISTS (
+           SELECT 1 FROM pending_builds AS later
+           WHERE later.flow_id = ended.flow_id AND later.ended_at IS NOT NULL
+             AND (later.ended_at > ended.ended_at
+               OR (later.ended_at = ended.ended_at AND later.rowid > ended.rowid))
+         )
+         ORDER BY ended_at, rowid`,
+      )
+      .all() as PendingBuildRow[];
+    return rows.map(toPendingBuild);
+  }
+
+  findPendingBuildByName(name: string): PendingBuild | undefined {
+    const row = this.db
+      .prepare(`SELECT ${pendingColumns} FROM pending_builds WHERE name = ? AND ended_at IS NULL`)
+      .get(name) as PendingBuildRow | undefined;
+    return row === undefined ? undefined : toPendingBuild(row);
+  }
+
+  appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
+    this.appendBuildRow("build_activity", pendingId, entry);
+  }
+
+  buildActivity(pendingId: string): ActivityEntry[] {
+    return this.buildRows("build_activity", pendingId).flatMap((row) => {
+      const parsed = activityEntrySchema.safeParse(JSON.parse(row.body_json));
+      return parsed.success ? [parsed.data] : [];
+    });
+  }
+
   buildFiles(id: string): BuildFileRecord[] {
     return this.db
       .prepare("SELECT path, sha256 FROM build_files WHERE build_id = ? ORDER BY path")
@@ -374,6 +511,25 @@ export class SqliteStore implements Store {
     } catch (error) {
       throw asBuildRunning(error, buildId);
     }
+  }
+
+  private appendBuildRow(
+    table: "build_events" | "build_activity",
+    pendingId: string,
+    body: unknown,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO ${table} (pending_id, seq, at, body_json)
+         SELECT @pendingId, coalesce(MAX(seq), 0) + 1, @at, @body FROM ${table} WHERE pending_id = @pendingId`,
+      )
+      .run({ pendingId, at: this.now().getTime(), body: JSON.stringify(body) });
+  }
+
+  private buildRows(table: "build_events" | "build_activity", pendingId: string): BuildBodyRow[] {
+    return this.db
+      .prepare(`SELECT seq, at, body_json FROM ${table} WHERE pending_id = ? ORDER BY seq`)
+      .all(pendingId) as BuildBodyRow[];
   }
 
   private time(): string {

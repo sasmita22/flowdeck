@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decisionsOf,
+  donePayload,
   loopRound,
   nodeStatus,
   roundItems,
@@ -97,4 +98,28 @@ describe("decisionsOf", () => {
       { nodeId: "g1", decision: "rejected", reason: "no" },
     ]);
   });
+});
+
+describe("donePayload", () => {
+  const stored = (payload: unknown) => donePayload.parse(JSON.parse(JSON.stringify(payload)));
+
+  it("round-trips the call ids of a finishing event", () => {
+    const done: RunEvent = {
+      kind: "done",
+      payload: { stopMessage: "DONE", toolUseIds: ["toolu_1", "toolu_2"] },
+    };
+
+    expect(stored(done.payload)).toEqual({
+      stopMessage: "DONE",
+      toolUseIds: ["toolu_1", "toolu_2"],
+    });
+    expect(nodeStatus([sent, done])).toBe("done");
+  });
+
+  it.each([{}, { stopMessage: "DONE" }])(
+    "still parses a finishing event without them: %j",
+    (payload) => {
+      expect(stored(payload)).toEqual(payload);
+    },
+  );
 });

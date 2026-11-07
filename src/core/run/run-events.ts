@@ -1,9 +1,15 @@
+import { z } from "zod";
 import { move, type NodeState } from "./state.js";
 import type { HumanDecision } from "./wait.js";
 
+export const donePayload = z.object({
+  stopMessage: z.string().optional(),
+  toolUseIds: z.array(z.string()).optional(),
+});
+
 export type RunEvent =
   | { kind: "sent" | "running" | "retry" | "needs-you" | "skipped" | "reset" }
-  | { kind: "done"; payload?: { stopMessage?: string } }
+  | { kind: "done"; payload?: z.infer<typeof donePayload> }
   | { kind: "failed"; payload: { message: string } }
   | { kind: "decided" | "answered"; payload: HumanDecision }
   | { kind: "round"; payload: { round: number; items?: string[] } }

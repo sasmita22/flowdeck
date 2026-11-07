@@ -68,7 +68,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
   let workspace: PlannedWorkspace;
   let hash: string;
   let pluginDir: string;
-  let withoutCommands: string;
+  let withoutSkills: string;
 
   beforeAll(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-plugin-")));
@@ -81,9 +81,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
       { ...realDeps(), env: { ...process.env, FLOWDECK_HOME: home } },
     ));
     pluginDir = join(workspace.dir, "plugin");
-    withoutCommands = join(home, "copy", "plugin");
-    await cp(pluginDir, withoutCommands, { recursive: true });
-    await rename(join(withoutCommands, "commands"), join(withoutCommands, "commands-renamed"));
+    withoutSkills = join(home, "copy", "plugin");
+    await cp(pluginDir, withoutSkills, { recursive: true });
+    await rename(join(withoutSkills, "skills"), join(withoutSkills, "skills-renamed"));
     const installed = join(workspace.workFolder, ".claude", "skills", "plan-checker");
     await mkdir(installed, { recursive: true });
     await writeFile(
@@ -98,15 +98,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
     await rm(home, { recursive: true, force: true });
   });
 
-  it("lists the build's prompt as a skill and its agent as an agent", async () => {
+  it("lists the build's prompt and its run skill as skills and its agent as an agent", async () => {
     const output = await details(pluginDir, workspace.workFolder);
 
-    expect(inventory(output, "Skills")).toMatch(/^Skills \(1\)\s+plan-step$/);
+    expect(inventory(output, "Skills")).toMatch(/^Skills \(2\)\s+plan-step, run$/);
     expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);
   });
 
-  it("lists no skills once the build's commands folder is gone", async () => {
-    const output = await details(withoutCommands, workspace.workFolder);
+  it("lists no skills once the build's skills folder is gone", async () => {
+    const output = await details(withoutSkills, workspace.workFolder);
 
     expect(inventory(output, "Skills")).toMatch(/^Skills \(0\)/);
     expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);

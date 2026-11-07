@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { nodeStatus, type RunEvent } from "../src/core/run/run-events.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
 
 let home: string;
@@ -36,7 +37,7 @@ test.afterEach(async () => {
 
 test("Build saves the edit first, the build runs, and the run shows each node's status", async () => {
   seedFlow(home, twoScripts(), repo.path);
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
 
@@ -91,7 +92,7 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
 
 test("A script-only run has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
   seedFlow(home, twoScripts(), repo.path);
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
   await window.getByTestId("menu-more").click();

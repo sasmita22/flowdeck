@@ -24,7 +24,8 @@ import {
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
@@ -53,7 +54,7 @@ const twoScripts = (firstCommand?: { command: string; args: string[] }) => {
 };
 
 const launch = async () => {
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
   return launched;
 };

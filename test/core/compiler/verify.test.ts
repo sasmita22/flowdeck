@@ -119,8 +119,35 @@ describe("verify", () => {
       expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
     });
 
+    describe("with build-report.json at its root", () => {
+      it("accepts the report the build laid down", async () => {
+        const { fs, dir, hash } = await built();
+
+        expect(await fs.readFile(`${dir}/build-report.json`)).not.toBe("");
+        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+      });
+
+      it("accepts the report after the agents rewrote it", async () => {
+        const { fs, dir, hash } = await built();
+        await fs.writeFile(`${dir}/build-report.json`, '{"questions":["written after the lock"]}');
+
+        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+      });
+
+      it("still names CLAUDE.md when it was edited after the lock", async () => {
+        const { fs, dir, hash } = await built();
+        await fs.writeFile(`${dir}/build-report.json`, '{"questions":["written after the lock"]}');
+        await fs.writeFile(`${dir}/CLAUDE.md`, "tampered");
+
+        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+          ok: false,
+          problems: [{ path: "CLAUDE.md", problem: "changed" }],
+        });
+      });
+    });
+
     it.each([
-      "plugin/commands/p.md",
+      "plugin/skills/p/SKILL.md",
       "plugin/.claude-plugin/plugin.json",
       "settings.json",
       "CLAUDE.md",
@@ -172,13 +199,13 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       const copy = await copyWithout(fs, dir, "plugin/agents/a.md");
       await copy.writeFile(`${dir}/settings.json`, "tampered");
-      await copy.writeFile(`${dir}/plugin/commands/extra.md`, "stray");
+      await copy.writeFile(`${dir}/plugin/skills/extra/SKILL.md`, "stray");
 
       expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
         ok: false,
         problems: [
           { path: "plugin/agents/a.md", problem: "missing" },
-          { path: "plugin/commands/extra.md", problem: "extra" },
+          { path: "plugin/skills/extra/SKILL.md", problem: "extra" },
           { path: "settings.json", problem: "changed" },
         ],
       });

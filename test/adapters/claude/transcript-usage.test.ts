@@ -131,6 +131,31 @@ describe("TranscriptUsage", () => {
     });
   });
 
+  it("tags a subagent's usage with the call id its meta file names, and reads a meta without one", async () => {
+    const tokens = { output_tokens: 1 };
+    await writeMain(jsonl(assistant("msg_main", "claude-haiku-5-5", tokens)));
+    await writeSubagent("agent-a1.jsonl", jsonl(assistant("msg_a1", "claude-haiku-5-5", tokens)));
+    await writeSubagent(
+      "agent-a1.meta.json",
+      JSON.stringify({ agentType: "hash:review", toolUseId: "toolu_1" }),
+    );
+    await writeSubagent("agent-a2.jsonl", jsonl(assistant("msg_a2", "claude-haiku-5-5", tokens)));
+    await writeSubagent("agent-a2.meta.json", JSON.stringify({ agentType: "hash:review" }));
+
+    const found = Object.fromEntries(
+      (await usage.entries(sessionId)).map((entry) => [
+        entry.messageId,
+        [entry.agentType, entry.toolUseId],
+      ]),
+    );
+
+    expect(found).toEqual({
+      msg_main: [undefined, undefined],
+      msg_a1: ["hash:review", "toolu_1"],
+      msg_a2: ["hash:review", undefined],
+    });
+  });
+
   it("carries the time an assistant line was written, and none when it has no valid timestamp", async () => {
     const stamped = (id: string, timestamp: unknown) =>
       JSON.stringify({

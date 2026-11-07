@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
@@ -229,12 +230,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
         },
       };
 
-      const built = await cliBuild(
-        liveFlow(),
-        { name: buildName, repo: repo.path },
-        workspace,
-        deps,
-      );
+      const flow = liveFlow();
+      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
       await mkdir(join(workspace.workFolder, "src"));
       for (const [path, content] of Object.entries(files)) {
         await writeFile(join(workspace.workFolder, path), content);
@@ -247,7 +244,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
       expect(fixText).not.toMatch(namesTheError);
       expect(condition).not.toMatch(namesTheError);
       expect(
-        await readFile(join(workspace.dir, "plugin", "commands", "fix.md"), "utf8"),
+        await readFile(
+          join(workspace.dir, "plugin", "skills", pieceNames(flow).get("fix") ?? "", "SKILL.md"),
+          "utf8",
+        ),
       ).not.toMatch(namesTheError);
 
       const code = await withWatchdog(

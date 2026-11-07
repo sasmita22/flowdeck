@@ -1,0 +1,4 @@
+{
+  "name": "flowdeck-build",
+  "description": "Flowdeck's build kit: the auditor agents and skills that write and check the content of a build's pieces after code lays down their structure."
+}

@@ -48,6 +48,7 @@ export type BuildFileContent = z.infer<typeof buildFileContentSchema>;
 
 export const buildVersionResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("built"), id: z.string(), hash: z.string(), dir: z.string() }),
+  z.object({ kind: z.literal("started"), pendingId: z.string() }),
   z.object({
     kind: z.literal("error"),
     message: z.string(),

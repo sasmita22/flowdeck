@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realDeps } from "../../src/cli/main.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -58,9 +59,13 @@ function turnSequence(entries: Entry[], prefix: string): string[] {
   return tokens.filter((token) => token === "end_turn" || token.startsWith(`command ${prefix}:`));
 }
 
-function expectOneTurnPerPromptInOrder(entries: Entry[], prefix: string): void {
+function expectOneTurnPerPromptInOrder(
+  entries: Entry[],
+  prefix: string,
+  pieces: ReadonlyMap<string, string>,
+): void {
   expect(turnSequence(entries, prefix)).toEqual(
-    promptIds.flatMap((id) => [`command ${prefix}:${id}`, "end_turn"]),
+    promptIds.flatMap((id) => [`command ${prefix}:${pieces.get(id) ?? ""}`, "end_turn"]),
   );
 }
 
@@ -250,7 +255,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
         );
         expectOnlyOkWritten(porcelain);
         expect(transcripts).toHaveLength(1);
-        expectOneTurnPerPromptInOrder(entries, buildName);
+        expectOneTurnPerPromptInOrder(entries, buildName, pieceNames(flow));
       } catch (error) {
         console.error(await diagnostics(exit, porcelain, projectFolder));
         throw error;

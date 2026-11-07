@@ -9,6 +9,7 @@ export type UsageEntry = {
   text?: string;
   at?: number;
   agentType?: string;
+  toolUseId?: string;
 };
 
 export type UsageReader = { entries(sessionId: string): Promise<UsageEntry[]> };

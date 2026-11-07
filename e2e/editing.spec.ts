@@ -25,7 +25,8 @@ import {
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
 
 const git = async (repo: string, ...args: string[]) =>
@@ -50,7 +51,7 @@ test.afterEach(async () => {
 });
 
 const launch = async (colorScheme?: "dark") => {
-  launched = await launchApp({
+  launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
     ...(colorScheme === undefined ? {} : { colorScheme }),

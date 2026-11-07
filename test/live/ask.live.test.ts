@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
@@ -170,17 +171,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
         },
       };
 
-      const built = await cliBuild(
-        liveFlow(),
-        { name: buildName, repo: repo.path },
-        workspace,
-        deps,
-      );
+      const flow = liveFlow();
+      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
       const colourPath = join(workspace.workFolder, "colour.md");
       expect(await readOrMissing(colourPath)).toBeUndefined();
       expect(promptText).not.toMatch(colourWord);
       expect(
-        await readFile(join(workspace.dir, "plugin", "commands", "p1.md"), "utf8"),
+        await readFile(
+          join(workspace.dir, "plugin", "skills", pieceNames(flow).get("p1") ?? "", "SKILL.md"),
+          "utf8",
+        ),
       ).not.toMatch(colourWord);
 
       const code = await runCli(

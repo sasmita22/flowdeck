@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createActivityTracker } from "../../../src/app/engine/activity-tracker.js";
+import {
+  createActivityTracker,
+  createBuildActivity,
+} from "../../../src/app/engine/activity-tracker.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Store } from "../../../src/ports/store.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -35,7 +38,19 @@ describe("createActivityTracker", () => {
     hook("PreToolUse", at, { tool_name: "Bash", tool_input: { command: "ls" } }, sessionId);
 
   const agent = (at: number) =>
-    hook("PreToolUse", at, { tool_name: "Agent", tool_input: { description: "Look" } });
+    hook("PreToolUse", at, {
+      tool_name: "Agent",
+      tool_input: { description: "Look" },
+      tool_use_id: "toolu_1",
+    });
+
+  const agentDone = (at: number) =>
+    hook("PostToolUse", at, {
+      tool_name: "Agent",
+      tool_input: { description: "Look" },
+      tool_use_id: "toolu_1",
+      tool_response: { status: "completed", agentId: "agent-1", agentType: "general-purpose" },
+    });
 
   const activity = () => pushes.filter((push) => push.push === "activity");
 
@@ -151,7 +166,7 @@ describe("createActivityTracker", () => {
 
   it("publishes a running subagent, then only that entry again when it finishes", () => {
     agent(350);
-    hook("SubagentStop", 360, { agent_id: "agent-1", agent_type: "general-purpose" });
+    agentDone(360);
 
     expect(pushes).toEqual([
       {
@@ -166,6 +181,7 @@ describe("createActivityTracker", () => {
             agentType: "general-purpose",
             summary: "Look",
             state: "running",
+            toolUseId: "toolu_1",
           },
         },
       },
@@ -181,6 +197,8 @@ describe("createActivityTracker", () => {
             agentType: "general-purpose",
             summary: "Look",
             state: "finished",
+            toolUseId: "toolu_1",
+            agentId: "agent-1",
           },
         },
       },
@@ -213,7 +231,7 @@ describe("createActivityTracker", () => {
 
   it("stores each entry it publishes, and stores it again when it changes", () => {
     agent(350);
-    hook("SubagentStop", 360, { agent_id: "agent-1", agent_type: "general-purpose" });
+    agentDone(360);
 
     expect(inner.activity(runId)).toEqual([
       expect.objectContaining({ id: 1, kind: "subagent", state: "finished" }),
@@ -288,5 +306,24 @@ describe("createActivityTracker", () => {
     tracker.output("p1", "stdout", "new");
 
     expect(stored.activity(id).map((entry) => entry.id)).toEqual([7, 8]);
+  });
+});
+
+describe("createBuildActivity", () => {
+  it("records and pushes nothing for an Agent call that names no piece", () => {
+    const store = new FakeStore();
+    const pushes: EnginePush[] = [];
+    const record = createBuildActivity({
+      pendingId: "pending-1",
+      now: () => 10,
+      activity: store,
+      publish: (push) => pushes.push(push),
+    });
+
+    record({ toolUseId: "toolu-1", agentType: "general-purpose" });
+    record({ background: true, agentId: "a2acfd3c49ca63d33" });
+
+    expect(store.buildActivity("pending-1")).toEqual([]);
+    expect(pushes).toEqual([]);
   });
 });

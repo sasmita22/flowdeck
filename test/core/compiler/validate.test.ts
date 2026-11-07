@@ -82,6 +82,14 @@ describe("validate", () => {
     ]);
   });
 
+  it("refuses an Agent that asks for a tool the session does not allow", () => {
+    const input = flow([agent("review", { settings: { tools: ["Bash"] } })], []);
+
+    expect(validate(input).map(({ rule, node }) => ({ rule, node }))).toEqual([
+      { rule: "agent-tools", node: "review" },
+    ]);
+  });
+
   it("rejects a hard stop edited off outside the app", () => {
     const parsed = parseFlow(readJson(brokenDir, "hardstop-locked.json"));
     expect(validate(parsed).map(({ rule, node, field }) => ({ rule, node, field }))).toEqual([

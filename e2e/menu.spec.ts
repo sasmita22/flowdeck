@@ -14,8 +14,9 @@ import {
 import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
-import { buildAndRun, buildIdNamed } from "./build-run.js";
+import { type LaunchedApp } from "../scripts/drive.js";
+import { launchWithFakeClaude } from "./fake-claude.js";
+import { buildAndRun, buildIdNamed, waitForBuilt } from "./build-run.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 
@@ -37,7 +38,7 @@ const withConnectors = (connectors: string[]) => {
 };
 
 const launch = async () => {
-  launched = await launchApp({
+  launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
     env: { FLOWDECK_CLAUDE_CONFIG: claudeConfig },
@@ -200,6 +201,7 @@ const confirmBuild = async (window: Page, name: string) => {
   await window.getByTestId(buildDialogTestIds.name).fill(name);
   await window.getByTestId(buildDialogTestIds.confirm).click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+  await waitForBuilt(window, home, name);
 };
 
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
@@ -216,12 +218,11 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText('"slack"');
-  await window.getByTestId(pageTestIds.buildFile("plugin/commands/p1.md")).click();
+  await window.getByTestId(pageTestIds.buildFile("plugin/skills/p1/SKILL.md")).click();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText("Do the work.");
-  await expect(window.getByTestId(pageTestIds.buildFile("plugin/commands/p1.md"))).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await expect(
+    window.getByTestId(pageTestIds.buildFile("plugin/skills/p1/SKILL.md")),
+  ).toHaveAttribute("aria-current", "true");
   await expect(window.locator('[data-testid^="build-file-"][aria-current]')).toHaveCount(1);
   await shot(target, testInfo, "build-files");
   for (const row of await window.locator('[data-testid^="build-file-"]').all()) {

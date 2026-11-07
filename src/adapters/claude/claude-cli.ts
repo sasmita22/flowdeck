@@ -22,11 +22,11 @@ const cursorOnYes = /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m;
 const rule = "────";
 const busy = "esc to interrupt";
 
-export type ClaudeSession = { sessionId: string; model: string; resume?: boolean };
+export type ClaudeSession = { sessionId: string; model?: string; resume?: boolean };
 
 export type ClaudeStartOptions = {
   settingsPath?: string;
-  pluginDir?: string;
+  pluginDirs?: readonly string[];
   mcpConfigPath?: string;
   addDir?: string;
   env?: Record<string, string>;
@@ -35,20 +35,21 @@ export type ClaudeStartOptions = {
 export function claudeCommand(
   { sessionId, model, resume }: ClaudeSession,
   settingsPath?: string,
-  pluginDir?: string,
+  pluginDirs: readonly string[] = [],
   mcpConfigPath?: string,
   addDir?: string,
 ): string {
   const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
   const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
-  const plugin = pluginDir === undefined ? "" : ` --plugin-dir ${shellQuote(pluginDir)}`;
+  const plugin = pluginDirs.map((dir) => ` --plugin-dir ${shellQuote(dir)}`).join("");
+  const modelFlag = model === undefined ? "" : ` --model ${shellQuote(model)}`;
   const mcp =
     mcpConfigPath === undefined
       ? ""
       : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
   const added = addDir === undefined ? "" : ` --add-dir ${shellQuote(addDir)}`;
   const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
-  return `env ${unset} claude ${session} --model ${shellQuote(model)}${settings}${plugin}${added}${mcp}`;
+  return `env ${unset} claude ${session}${modelFlag}${settings}${plugin}${added}${mcp}`;
 }
 
 function showsInputBox(pane: string): boolean {
@@ -111,13 +112,13 @@ export class ClaudeCli {
     name: string,
     cwd: string,
     session: ClaudeSession,
-    { settingsPath, pluginDir, mcpConfigPath, addDir, env }: ClaudeStartOptions = {},
+    { settingsPath, pluginDirs, mcpConfigPath, addDir, env }: ClaudeStartOptions = {},
   ): Promise<void> {
     this.ready.delete(name);
     await this.sessions.start(
       name,
       cwd,
-      claudeCommand(session, settingsPath, pluginDir, mcpConfigPath, addDir),
+      claudeCommand(session, settingsPath, pluginDirs, mcpConfigPath, addDir),
       env,
     );
   }

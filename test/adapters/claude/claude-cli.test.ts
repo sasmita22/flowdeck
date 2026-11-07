@@ -45,7 +45,7 @@ describe("claudeCommand", () => {
     const command = claudeCommand(
       { sessionId, model: "haiku", resume: true },
       settingsPath,
-      "/b",
+      ["/b"],
       "/m.json",
     );
 
@@ -60,7 +60,7 @@ describe("claudeCommand", () => {
 
   it("loads the plugin folder, quoted like the settings path", () => {
     expect(
-      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/tmp/fd home/builds/abc"),
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, ["/tmp/fd home/builds/abc"]),
     ).toMatch(
       / --settings '\/tmp\/fd home\/sessions\/s1\/settings\.json' --plugin-dir '\/tmp\/fd home\/builds\/abc'$/,
     );
@@ -71,7 +71,7 @@ describe("claudeCommand", () => {
       claudeCommand(
         { sessionId, model: "haiku" },
         settingsPath,
-        "/tmp/fd home/builds/abc",
+        ["/tmp/fd home/builds/abc"],
         "/tmp/fd home/runs/r1/mcp.json",
       ),
     ).toMatch(
@@ -80,7 +80,7 @@ describe("claudeCommand", () => {
   });
 
   it("loads no MCP config without one, and keeps the user's own servers", () => {
-    const command = claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/b");
+    const command = claudeCommand({ sessionId, model: "haiku" }, settingsPath, ["/b"]);
 
     expect(command).not.toContain("--mcp-config");
     expect(command).not.toContain("--strict-mcp-config");
@@ -96,7 +96,7 @@ describe("claudeCommand", () => {
     const command = claudeCommand(
       { sessionId, model: "haiku" },
       "../settings.json",
-      "../plugin",
+      ["../plugin"],
       undefined,
       "../fd home",
     );
@@ -108,8 +108,25 @@ describe("claudeCommand", () => {
 
   it("adds no folder without one", () => {
     expect(
-      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/b", "/m.json"),
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, ["/b"], "/m.json"),
     ).not.toContain("--add-dir");
+  });
+
+  it("loads every plugin folder, each as its own quoted flag, in order", () => {
+    expect(
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, ["/tmp/fd home/kit", "../plugin"]),
+    ).toMatch(/ --plugin-dir '\/tmp\/fd home\/kit' --plugin-dir '\.\.\/plugin'$/);
+  });
+
+  it("passes the model it is given", () => {
+    expect(claudeCommand({ sessionId, model: "haiku" })).toContain(" --model 'haiku'");
+  });
+
+  it("leaves the model to Claude Code when none is set", () => {
+    const command = claudeCommand({ sessionId }, settingsPath);
+
+    expect(command).not.toContain("--model");
+    expect(command).toContain(` claude --session-id ${sessionId} --settings `);
   });
 
   it("keeps the user's telemetry setting", () => {
@@ -169,11 +186,11 @@ describe("ClaudeCli", () => {
       "fd-b",
       "/repo",
       { sessionId, model: "haiku" },
-      { settingsPath, pluginDir: "/fd/builds/abc" },
+      { settingsPath, pluginDirs: ["/fd/builds/abc"] },
     );
 
     expect(sessions.get("fd-b")?.command).toBe(
-      claudeCommand({ sessionId, model: "haiku" }, settingsPath, "/fd/builds/abc"),
+      claudeCommand({ sessionId, model: "haiku" }, settingsPath, ["/fd/builds/abc"]),
     );
     expect(sessions.get("fd-b")?.command).toContain("--plugin-dir '/fd/builds/abc'");
   });

@@ -1,11 +1,12 @@
+import { agentCallOf } from "./agent-calls.js";
 import { stampedBefore, turnFailure, type TurnEndEvent, type TurnEvents } from "./turns.js";
 
 export type SectionWatchDeps = {
   events: TurnEvents;
   sessionId: string;
   armedAt: number;
-  branchTypes: readonly string[];
-  onStopped: (type: string, message: unknown) => void;
+  branchNodes: readonly string[];
+  onStopped: (nodeId: string, message: unknown, toolUseId: string | undefined) => void;
 };
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -13,6 +14,16 @@ type Timer = ReturnType<typeof setTimeout>;
 const stampOf = (event: TurnEndEvent) => {
   const at = event.payload["flowdeck_hook_at"];
   return typeof at === "number" ? at : Number.POSITIVE_INFINITY;
+};
+
+const replyOf = (event: TurnEndEvent): string | undefined => {
+  const response = event.payload["tool_response"] as { content?: unknown } | undefined;
+  const content = Array.isArray(response?.content) ? (response.content as unknown[]) : [];
+  const texts = content.flatMap((part) => {
+    const text = (part as { text?: unknown } | null)?.text;
+    return typeof text === "string" ? [text] : [];
+  });
+  return texts.length === 0 ? undefined : texts.join("\n");
 };
 
 export class SectionWatch {
@@ -29,7 +40,7 @@ export class SectionWatch {
     const { events, sessionId } = deps;
     this.unsubscribes = [
       events.subscribe("PreToolUse", sessionId, (event) => this.onToolUse(event)),
-      events.subscribe("SubagentStop", sessionId, (event) => this.onSubagentStop(event)),
+      events.subscribe("PostToolUse", sessionId, (event) => this.onAgentDone(event)),
       events.subscribe("Stop", sessionId, (event) => this.onStop(event)),
       events.subscribe("StopFailure", sessionId, (event) => this.onStopFailure(event)),
     ];
@@ -60,7 +71,9 @@ export class SectionWatch {
           if (held()) return arm();
           finish();
           reject(
-            new Error(`no SubagentStop for session ${this.deps.sessionId} within ${timeoutMs} ms`),
+            new Error(
+              `no finished Agent call for session ${this.deps.sessionId} within ${timeoutMs} ms`,
+            ),
           );
         }, timeoutMs);
       };
@@ -118,23 +131,27 @@ export class SectionWatch {
     this.listeners.clear();
   }
 
-  private onToolUse(event: TurnEndEvent) {
-    const { payload } = event;
-    if (stampedBefore(event, this.deps.armedAt)) return;
-    if (payload["tool_name"] !== "Agent" || payload["agent_id"] !== undefined) return;
-    const input = payload["tool_input"] as Record<string, unknown> | undefined;
-    const type = input?.["subagent_type"];
-    if (typeof type === "string" && this.deps.branchTypes.includes(type)) this.launched.add(type);
+  private branchOf(kind: "PreToolUse" | "PostToolUse", event: TurnEndEvent) {
+    if (stampedBefore(event, this.deps.armedAt)) return undefined;
+    if (event.payload["agent_id"] !== undefined) return undefined;
+    const call = agentCallOf({ kind, payload: event.payload });
+    const nodeId = call?.nodeId;
+    return nodeId !== undefined && this.deps.branchNodes.includes(nodeId)
+      ? { nodeId, toolUseId: call?.toolUseId }
+      : undefined;
   }
 
-  private onSubagentStop(event: TurnEndEvent) {
-    const type = event.payload["agent_type"];
-    if (stampedBefore(event, this.deps.armedAt)) return;
-    if (typeof type !== "string" || !this.deps.branchTypes.includes(type)) return;
-    if (this.stopped.has(type)) return;
-    this.stopped.add(type);
+  private onToolUse(event: TurnEndEvent) {
+    const branch = this.branchOf("PreToolUse", event);
+    if (branch !== undefined) this.launched.add(branch.nodeId);
+  }
+
+  private onAgentDone(event: TurnEndEvent) {
+    const branch = this.branchOf("PostToolUse", event);
+    if (branch === undefined || this.stopped.has(branch.nodeId)) return;
+    this.stopped.add(branch.nodeId);
     this.lastStoppedAt = Math.max(this.lastStoppedAt, stampOf(event));
-    this.deps.onStopped(type, event.payload["last_assistant_message"]);
+    this.deps.onStopped(branch.nodeId, replyOf(event), branch.toolUseId);
     this.notify();
   }
 

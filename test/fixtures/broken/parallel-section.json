@@ -120,7 +120,7 @@
       ]
     },
     "model": "sonnet",
-    "allowedTools": [],
+    "allowedTools": ["Read"],
     "permissionMode": "default",
     "connectors": []
   }

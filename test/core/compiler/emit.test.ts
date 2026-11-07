@@ -1,16 +1,20 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { emptyReport } from "../../../src/core/compiler/build-report.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit } from "../../../src/core/compiler/emit.js";
+import { guardHookFiles } from "../../../src/core/compiler/guard-hooks.js";
+import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
 import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-settings.js";
 import { lower } from "../../../src/core/compiler/lower.js";
+import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
-import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const sample = () => {
   const base = flow(
     [prompt("p"), agent("a", { settings: { tools: ["Grep"] } })],
-    [thenWire("p", "a")],
+    [thenWire("p", "a"), fileWire("p", "a", "plan.md")],
   );
   return {
     ...base,
@@ -24,6 +28,7 @@ const fixLogin = {
   blueprint: { name: "Bugfix", version: 3 },
   repo: "/Users/dev/code/carousell-web",
   base: "release/2026-11",
+  workspace: "/fd-home/workspaces/b-login",
 };
 
 const fixSignup = {
@@ -32,13 +37,23 @@ const fixSignup = {
   blueprint: { name: "Review", version: 1 },
   repo: "/work/flowdeck",
   base: "main",
+  workspace: "/fd-home/workspaces/b-signup",
 };
 
+const lowered = (build = fixLogin) =>
+  lower(sample(), {
+    name: build.name,
+    values: build.values,
+    repo: build.repo,
+    workspace: build.workspace,
+  });
+
 const emitted = (build = fixLogin) =>
-  emit(lower(sample(), { name: build.name, values: build.values }), {
+  emit(lowered(build), {
     blueprint: build.blueprint,
     repo: build.repo,
     base: build.base,
+    workspace: build.workspace,
   });
 
 const fileAt = (files: { path: string; content: string }[], path: string) => {
@@ -53,16 +68,67 @@ const summaryOf = (claudeMd: string) => {
 };
 
 describe("emit", () => {
-  it("emits the plugin under plugin/ and the settings, CLAUDE.md and manifest at the root, sorted by path", () => {
+  it("lays down the whole plugin under plugin/ and the settings, CLAUDE.md, report and manifest at the root, sorted by path", () => {
     expect(emitted().map((file) => file.path)).toEqual([
       "CLAUDE.md",
+      "build-report.json",
       "manifest.json",
       "plugin/.claude-plugin/plugin.json",
       "plugin/agents/a.md",
-      "plugin/commands/p.md",
       "plugin/hooks/hooks.json",
+      "plugin/hooks/no-force-push.sh",
+      "plugin/hooks/rules-after-compact.sh",
+      "plugin/skills/p/SKILL.md",
+      "plugin/skills/run/SKILL.md",
+      "plugin/templates/plan.md",
       "settings.json",
     ]);
+  });
+
+  it("writes nothing under plugin/commands/ or plugin/scripts/", () => {
+    expect(emitted().filter((file) => /^plugin\/(commands|scripts)\//.test(file.path))).toEqual([]);
+  });
+
+  it("writes the agent and step skill files that lowering compiled", () => {
+    const files = emitted();
+
+    for (const file of lowered().nodeFiles) {
+      expect(fileAt(files, file.path)).toBe(file.content);
+    }
+    expect(lowered().nodeFiles.map((file) => file.path)).toEqual([
+      "plugin/skills/p/SKILL.md",
+      "plugin/agents/a.md",
+    ]);
+  });
+
+  it("writes one hand-off template per File-wire file", () => {
+    const files = emitted();
+
+    for (const template of handoffTemplates(sample(), "carousell-web")) {
+      expect(fileAt(files, template.path)).toBe(template.content);
+    }
+  });
+
+  it("writes the orchestrator from the lowered manifest, scoped to this build, repo folder and workspace", () => {
+    const expected = orchestratorSkill(lowered().manifest, {
+      build: "fix-login",
+      repo: "carousell-web",
+      workspace: "/fd-home/workspaces/b-login",
+    });
+
+    expect(fileAt(emitted(), expected.path)).toBe(expected.content);
+  });
+
+  it("writes both guard hook scripts", () => {
+    const files = emitted();
+
+    for (const script of guardHookFiles()) {
+      expect(fileAt(files, script.path)).toBe(script.content);
+    }
+  });
+
+  it("writes build-report.json as the empty report", () => {
+    expect(JSON.parse(fileAt(emitted(), "build-report.json"))).toStrictEqual(emptyReport());
   });
 
   it("names the plugin after the build", () => {
@@ -77,7 +143,17 @@ describe("emit", () => {
   it("allows only the session's tools and sets its permission mode", () => {
     const settings = JSON.parse(fileAt(emitted(), "settings.json"));
 
+    expect(settings.permissions).toStrictEqual({
+      allow: ["Read", "Edit"],
+      defaultMode: "acceptEdits",
+    });
+  });
+
+  it("turns background tasks off for every session started on the workspace settings, as run sessions do", () => {
+    const settings = JSON.parse(fileAt(emitted(), "settings.json"));
+
     expect(settings).toStrictEqual({
+      env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
       permissions: { allow: ["Read", "Edit"], defaultMode: "acceptEdits" },
     });
   });
@@ -86,27 +162,24 @@ describe("emit", () => {
     const hooks = fileAt(emitted(), "plugin/hooks/hooks.json");
 
     expect(hooks).toBe(canonicalJson(hookSettings(buildHookCommand)));
-    expect(hooks).not.toContain("/");
+    expect(hooks.replaceAll("${CLAUDE_PLUGIN_ROOT}/hooks/", "")).not.toContain("/");
   });
 
-  it("writes the lowered manifest with a sha256 per emitted file as canonical JSON, without a hash", () => {
-    const lowered = lower(sample(), { name: fixLogin.name, values: fixLogin.values });
-    const files = emit(lowered, {
-      blueprint: fixLogin.blueprint,
-      repo: fixLogin.repo,
-      base: fixLogin.base,
-    });
+  it("writes the lowered manifest with a sha256 per emitted file but the report, as canonical JSON, without a hash", () => {
+    const manifestBefore = lowered().manifest;
+    const files = emitted();
     const manifest = fileAt(files, "manifest.json");
     const expectedFiles = Object.fromEntries(
       files
-        .filter((file) => file.path !== "manifest.json")
+        .filter((file) => file.path !== "manifest.json" && file.path !== "build-report.json")
         .map((file) => [file.path, createHash("sha256").update(file.content).digest("hex")]),
     );
 
-    expect(manifest).toBe(canonicalJson({ ...lowered.manifest, files: expectedFiles }));
+    expect(manifest).toBe(canonicalJson({ ...manifestBefore, files: expectedFiles }));
     expect(Object.keys(JSON.parse(manifest).files)).toEqual(
       expect.arrayContaining(["CLAUDE.md", "plugin/.claude-plugin/plugin.json"]),
     );
+    expect(JSON.parse(manifest).files).not.toHaveProperty(["build-report.json"]);
     expect(JSON.parse(manifest)).not.toHaveProperty("hash");
   });
 
@@ -119,6 +192,22 @@ describe("emit", () => {
       expect(summary).toContain("carousell-web");
       expect(summary).toContain("release/2026-11");
       expect(summary).toMatch(/ticket.*FD-99/);
+    });
+
+    it("names the target repo's absolute path as read only while building", () => {
+      const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
+
+      expect(summary).toMatch(
+        /^- Target repo \(read only while building\): \/Users\/dev\/code\/carousell-web$/m,
+      );
+    });
+
+    it("says hand-off files live in the repo folder inside the workspace, never the workspace itself", () => {
+      const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
+
+      expect(summary).toContain(
+        "- Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace, never in the workspace folder itself.",
+      );
     });
 
     it("ends with the standard rules, after a blank line", () => {

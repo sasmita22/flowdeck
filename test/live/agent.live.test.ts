@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { EventLog } from "../../src/adapters/jsonl/event-log.js";
 import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
@@ -83,7 +84,7 @@ function liveFlow(secret: string) {
       name: "main",
       buildConfig: { base: "main", variables: [] },
       model: "haiku",
-      allowedTools: [],
+      allowedTools: ["Write"],
       permissionMode: "acceptEdits",
       connectors: [],
     },
@@ -235,20 +236,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
         },
       };
 
-      const built = await cliBuild(
-        liveFlow(secret),
-        { name: buildName, repo: repo.path },
-        workspace,
-        deps,
-      );
+      const flow = liveFlow(secret);
+      const piece = pieceNames(flow).get("a1") ?? "";
+      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
       const notesPath = join(workspace.workFolder, "notes.md");
       const controlPath = join(workspace.workFolder, "control.md");
       await rm(notesPath, { force: true });
       expect(await readOrMissing(notesPath)).toBeUndefined();
       expect(
-        await readFile(join(workspace.dir, "plugin", "agents", "a1.md"), "utf8"),
+        await readFile(join(workspace.dir, "plugin", "agents", `${piece}.md`), "utf8"),
       ).not.toContain(secret);
-      expect(agentTurnText(buildName, "a1")).not.toContain(secret);
+      expect(agentTurnText(buildName, piece, { id: "a1", given: [], writes: [] })).not.toContain(
+        secret,
+      );
 
       const code = await runCli(
         ["run", buildName, "--session", sessionName, "--model", "haiku"],
@@ -283,7 +283,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
           log.filter((line) => line.kind === "SubagentStop").map((line) => line.agent_type),
           "a SubagentStop for the build's agent",
         )
-        .toContain(`${buildName}:a1`);
+        .toContain(`${buildName}:${piece}`);
       expect.soft(notes ?? "", "the subagent does not know the secret").not.toContain(secret);
       expect.soft(control ?? "", "positive control: the main session knows it").toContain(secret);
     },

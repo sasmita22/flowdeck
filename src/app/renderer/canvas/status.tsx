@@ -1,6 +1,7 @@
 import { createContext, useContext, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import type { BuildProgressState } from "../build-progress-store.js";
 import { selectNodeDisplay, type RunView } from "../run-store.js";
 import { issueSummary, statusBadge } from "./status-look.js";
 import { newCanvasFlow, selectNodeIssues, type CanvasState } from "./store.js";
@@ -8,6 +9,11 @@ import { newCanvasFlow, selectNodeIssues, type CanvasState } from "./store.js";
 export const RunStoreContext = createContext<StoreApi<RunView> | null>(null);
 
 export const CanvasStoreContext = createContext<StoreApi<CanvasState> | null>(null);
+
+export const BuildAuditContext = createContext<{
+  flowId: string;
+  buildProgress: StoreApi<BuildProgressState>;
+} | null>(null);
 
 const emptyFlow = newCanvasFlow();
 
@@ -25,14 +31,32 @@ const idleStore: StoreApi<RunView> = {
   subscribe: () => () => undefined,
 };
 
+const noBuild: StoreApi<Pick<BuildProgressState, "isBuilding" | "nodeAuditStatus">> = {
+  getState: () => ({ isBuilding: () => false, nodeAuditStatus: () => undefined }),
+  getInitialState: () => ({ isBuilding: () => false, nodeAuditStatus: () => undefined }),
+  setState: () => undefined,
+  subscribe: () => () => undefined,
+};
+
 export function useNodeDisplay(nodeId: string) {
   const store = useContext(RunStoreContext);
   const status = useStore(store ?? idleStore, (state) => selectNodeDisplay(state, nodeId));
   return store === null ? null : status;
 }
 
+function useNodeAudit(nodeId: string) {
+  const audit = useContext(BuildAuditContext);
+  return useStore(audit?.buildProgress ?? noBuild, (state) =>
+    audit !== null && state.isBuilding(audit.flowId)
+      ? (state.nodeAuditStatus(audit.flowId, nodeId) ?? null)
+      : null,
+  );
+}
+
 export function NodeStatusBadge({ nodeId }: { nodeId: string }) {
-  const status = useNodeDisplay(nodeId);
+  const display = useNodeDisplay(nodeId);
+  const audit = useNodeAudit(nodeId);
+  const status = display ?? audit;
   if (status === null) return null;
   const { label, color } = statusBadge(status);
   return (

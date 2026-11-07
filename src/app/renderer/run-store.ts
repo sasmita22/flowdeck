@@ -46,6 +46,7 @@ export type BuildDialog = {
   base: string;
   variables: Variable[];
   values: Record<string, string | boolean>;
+  buildModel: string;
   error: string | null;
 };
 
@@ -74,7 +75,7 @@ export type RunState = {
   connect(): Promise<void>;
   view(runId: string): Promise<void>;
   openBuild(source?: BuildSource): Promise<void>;
-  editBuild(patch: Partial<Pick<BuildDialog, "name" | "repo" | "base">>): void;
+  editBuild(patch: Partial<Pick<BuildDialog, "name" | "repo" | "base" | "buildModel">>): void;
   setValue(name: string, value: string | boolean): void;
   confirmBuild(): Promise<string | null>;
   cancelBuild(): void;
@@ -323,6 +324,7 @@ export const createRunStore = ({
             base,
             variables: buildConfig.variables,
             values: defaults(buildConfig.variables),
+            buildModel: buildConfig.buildModel ?? "",
             error: null,
           },
         });
@@ -337,6 +339,7 @@ export const createRunStore = ({
         const dialog = get().buildDialog;
         if (dialog === null || !selectCanBuild(get()) || get().starting) return null;
         const { flowId, version, name, repo, base, values } = dialog;
+        const buildModel = dialog.buildModel.trim();
         set({ starting: true });
         const refuse = (error: string, problems: Problem[] | null = null) => {
           set({ starting: false, problems, buildDialog: { ...dialog, error } });
@@ -344,7 +347,15 @@ export const createRunStore = ({
         };
         let answer: unknown;
         try {
-          answer = await bridge.buildVersion({ flowId, version, name, repo, base, values });
+          answer = await bridge.buildVersion({
+            flowId,
+            version,
+            name,
+            repo,
+            base,
+            values,
+            ...(buildModel === "" ? {} : { buildModel }),
+          });
         } catch (thrown) {
           return refuse(messageOf(thrown));
         }
@@ -352,6 +363,10 @@ export const createRunStore = ({
         if (!result.success) return refuse("unexpected build result");
         if (result.data.kind === "error") {
           return refuse(result.data.message, result.data.problems ?? null);
+        }
+        if (result.data.kind === "started") {
+          set({ starting: false, error: null, problems: null, buildDialog: null });
+          return result.data.pendingId;
         }
         const { id } = result.data;
         set({

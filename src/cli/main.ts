@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { ClaudeBuildAgents } from "../adapters/claude/claude-build-agents.js";
 import { ClaudeCli } from "../adapters/claude/claude-cli.js";
 import {
   ClaudeUserConnectors,
@@ -16,6 +17,7 @@ import { HookSocketServer } from "../adapters/hook-socket/hook-socket-server.js"
 import { openClaudeSession } from "../adapters/claude/claude-session.js";
 import { GitFolderState } from "../adapters/git/git-state.js";
 import { GitWorktree } from "../adapters/git/worktree.js";
+import { prepareKit, type PreparedKit } from "../adapters/node-fs/kit-copy.js";
 import { NodeFileSystem } from "../adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../adapters/sqlite/flows.js";
@@ -23,9 +25,10 @@ import { openDatabase } from "../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../adapters/sqlite/sqlite-store.js";
 import { assertSessionName, TmuxSessionHost } from "../adapters/tmux/tmux-session-host.js";
 import type { BuildResult } from "../core/compiler/build.js";
+import { newBuildSessionName } from "../core/compiler/build-session.js";
 import { buildFlow, buildVersion } from "../core/compiler/build-version.js";
 import { resolveConnectors, type McpServer } from "../core/compiler/connectors.js";
-import type { HookPaths } from "../core/compiler/hook-settings.js";
+import { hookCommand, shellQuote, type HookPaths } from "../core/compiler/hook-settings.js";
 import { FlowParseError, parseFlow, type BuildConfig, type Flow } from "../core/flow/schema.js";
 import type { VariableValues } from "../core/flow/variables.js";
 import {
@@ -40,9 +43,16 @@ import {
   type OpenSessionOptions,
 } from "../core/run/execute.js";
 import { storedAuto, storedFlags } from "../core/run/options.js";
-import { BuildRunningError } from "../core/run/store.js";
+import { progressOf, type BuildEvent, type PendingBuild } from "../core/run/build-progress.js";
+import {
+  BuildRunningError,
+  type NewBuild,
+  type NewPendingBuild,
+  type PendingBuildEnd,
+} from "../core/run/store.js";
 import { decideResume, type TranscriptTurn } from "../core/run/resume.js";
 import type { TurnEvents } from "../core/run/turns.js";
+import type { BuildAgents, BuildAgentsOpenSpec } from "../ports/build-agents.js";
 import type { ConnectorSource } from "../ports/connector-source.js";
 import type { FileSystem } from "../ports/file-system.js";
 import type { FlowStore } from "../ports/flow-store.js";
@@ -67,6 +77,12 @@ export type CliDeps = {
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   usage?: UsageSource;
   hooks: HookPaths;
+  build: {
+    agents: BuildAgents;
+    kit(home: string): Promise<PreparedKit>;
+    guardScriptPath: string;
+    sessionName(): string;
+  };
   connectors: ConnectorSource;
   openStore(path: string): { runs: Store; flows: FlowStore };
   transcriptTurns(claudeSessionId: string): Promise<TranscriptTurn[]>;
@@ -78,7 +94,7 @@ export type CliDeps = {
 };
 
 const buildOptions =
-  "--name <build-name> [--repo <repo>] [--base <branch>] [--var <name=value>]...";
+  "--name <build-name> [--repo <repo>] [--base <branch>] [--var <name=value>]... [--build-model <model>]";
 
 const usage = [
   "Usage:",
@@ -88,6 +104,10 @@ const usage = [
   "  flowdeck resume <id> [--auto | --no-auto]",
 ];
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
+const guardScriptPath = fileURLToPath(
+  new URL("../../bin/flowdeck-build-guard.ts", import.meta.url),
+);
+const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 
 class UsageError extends Error {}
 
@@ -157,6 +177,7 @@ async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
       repo: { type: "string" },
       base: { type: "string" },
       var: { type: "string", multiple: true },
+      "build-model": { type: "string" },
     },
   });
   const byVersion = values.flow !== undefined || values.version !== undefined;
@@ -168,11 +189,57 @@ async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
   if (misused || values.name === undefined) throw new UsageError();
   const vars = splitVars(values.var ?? []);
   const { runs, flows } = deps.openStore(storePath(deps.env));
+  const home = flowdeckHome(deps.env);
+  const sessionName = deps.build.sessionName();
+  const buildModel = values["build-model"];
+  const { agents } = deps.build;
+  const now = deps.now ?? Date.now;
+  const stopping = new AbortController();
+  let recorded = false;
+  let lastChip: string | undefined;
+  let pending: PendingBuild | undefined;
+  const printChip = (build: PendingBuild) => {
+    const { chip } = progressOf(build, runs.buildEvents(build.id));
+    if (chip !== lastChip) deps.stdout(chip);
+    lastChip = chip;
+  };
   const buildDeps = {
     ...deps,
-    home: flowdeckHome(deps.env),
-    store: runs,
+    home,
+    store: {
+      recordBuild: (build: NewBuild) => {
+        recorded = true;
+        runs.recordBuild(build);
+      },
+      findBuildByName: (name: string) => runs.findBuildByName(name),
+      startPendingBuild: (build: NewPendingBuild) => runs.startPendingBuild(build),
+      appendBuildEvent: (pendingId: string, event: BuildEvent) =>
+        runs.appendBuildEvent(pendingId, event),
+      endPendingBuild: (pendingId: string, end: PendingBuildEnd) =>
+        runs.endPendingBuild(pendingId, end),
+      findPendingBuildByName: (name: string) => runs.findPendingBuildByName(name),
+    },
     flows,
+    now,
+    newId: deps.newId,
+    agents: {
+      open: (spec: BuildAgentsOpenSpec) =>
+        agents.open(buildModel === undefined ? spec : { ...spec, model: buildModel }),
+      turn: (...args: Parameters<BuildAgents["turn"]>) => agents.turn(...args),
+      alive: (name: string) => agents.alive(name),
+      close: (name: string) => agents.close(name),
+    },
+    signal: stopping.signal,
+    onEvent: (id: string) => {
+      pending ??= runs.listPendingBuilds().find((open) => open.id === id);
+      if (pending !== undefined) printChip(pending);
+    },
+    kit: await deps.build.kit(home),
+    sessionName: () => sessionName,
+    newSessionId: deps.newId,
+    settingsPath: join(home, "build-sessions", sessionName, "settings.json"),
+    guardCommand: [deps.hooks.nodePath, deps.build.guardScriptPath].map(shellQuote).join(" "),
+    hookCommand: hookCommand(deps.hooks),
   };
   let flow: Flow | undefined;
   if (!byVersion) {
@@ -197,11 +264,27 @@ async function buildCommand(args: string[], deps: CliDeps): Promise<number> {
     ...(values.repo === undefined ? {} : { repo: values.repo }),
     ...(values.base === undefined ? {} : { base: values.base }),
   };
-  const result =
-    flow === undefined
-      ? await buildVersion(ref, request, buildDeps)
-      : await buildFlow(flow, request, buildDeps);
-  return report(result, deps);
+  let interruptCode: number | undefined;
+  const stopListening = deps.onInterrupt?.((code) => {
+    if (recorded || stopping.signal.aborted) return;
+    interruptCode = code;
+    stopping.abort();
+  });
+  try {
+    const result =
+      flow === undefined
+        ? await buildVersion(ref, request, buildDeps)
+        : await buildFlow(flow, request, buildDeps);
+    if (interruptCode !== undefined) return interruptCode;
+    if (result.ok && pending !== undefined) printChip({ ...pending, outcome: "built" });
+    return report(result, deps);
+  } catch (error) {
+    if (interruptCode === undefined) throw error;
+    deps.stderr(messageOf(error));
+    return interruptCode;
+  } finally {
+    stopListening?.();
+  }
 }
 
 const executeDeps = (deps: CliDeps, store: Store) => ({ ...deps, store, onChange: deps.stdout });
@@ -447,6 +530,22 @@ export function realDeps(): CliDeps {
       });
     },
     hooks: { nodePath: process.execPath, hookScriptPath },
+    build: {
+      agents: new ClaudeBuildAgents({
+        home: flowdeckHome(process.env),
+        sessions: (socketName) => new TmuxSessionHost({ socketName }),
+        cli: (sessions) => new ClaudeCli({ sessions }),
+        events: async (socketPath) => {
+          await mkdir(dirname(socketPath), { recursive: true });
+          const server = new HookSocketServer({ socketPath });
+          await server.start();
+          return { events: server, stop: () => server.stop() };
+        },
+      }),
+      kit: (home) => prepareKit({ sourceDir: kitSourceDir, home }),
+      guardScriptPath,
+      sessionName: () => newBuildSessionName(randomUUID),
+    },
     connectors: new ClaudeUserConnectors(),
     openStore: (path) => {
       const db = openDatabase({ path });

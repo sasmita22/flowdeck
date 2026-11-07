@@ -50,6 +50,8 @@ describe("test ids", () => {
       "canvas-zoom-out",
       "canvas-fit",
       "palette-search",
+      "build-progress-stop",
+      "build-model",
     ]);
   });
 
@@ -96,6 +98,62 @@ describe("test ids", () => {
       `build-old-${id}`,
       `build-kept-${id}`,
     ]);
+  });
+
+  it("names a build in progress by its blueprint and its pending build", () => {
+    expect(Object.keys(pageTestIds)).toEqual(
+      expect.arrayContaining([
+        "buildChip",
+        "canvasBuildBar",
+        "buildProgress",
+        "buildStep",
+        "buildComponent",
+        "buildQuestion",
+        "buildActivity",
+        "buildTerminal",
+        "buildCost",
+      ]),
+    );
+    expect([
+      pageTestIds.buildChip("f1"),
+      pageTestIds.canvasBuildBar,
+      pageTestIds.buildProgress("pb-1"),
+      pageTestIds.buildStep("pb-1", 2),
+      pageTestIds.buildComponent("pb-1", "steps/02.md"),
+      pageTestIds.buildQuestion("pb-1", 0),
+      pageTestIds.buildActivity("pb-1"),
+      pageTestIds.buildTerminal("pb-1"),
+      pageTestIds.buildCost("pb-1"),
+    ]).toEqual([
+      "build-chip-f1",
+      "canvas-build-bar",
+      "build-progress-pb-1",
+      "build-step-pb-1-2",
+      "build-component-pb-1-steps/02.md",
+      "build-question-pb-1-0",
+      "build-activity-pb-1",
+      "build-terminal-pb-1",
+      "build-cost-pb-1",
+    ]);
+  });
+
+  it("gives each step, component and question of a pending build its own id", () => {
+    expect(Object.keys(pageTestIds)).toEqual(
+      expect.arrayContaining(["buildStep", "buildComponent", "buildQuestion"]),
+    );
+    const ids = [
+      pageTestIds.buildStep("pb-1", 1),
+      pageTestIds.buildStep("pb-1", 2),
+      pageTestIds.buildStep("pb-2", 1),
+      pageTestIds.buildComponent("pb-1", "a.md"),
+      pageTestIds.buildComponent("pb-1", "b.md"),
+      pageTestIds.buildComponent("pb-2", "a.md"),
+      pageTestIds.buildQuestion("pb-1", 0),
+      pageTestIds.buildQuestion("pb-1", 1),
+      pageTestIds.buildQuestion("pb-2", 0),
+    ];
+
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("names the Build configuration fields as the session form draws them", () => {
