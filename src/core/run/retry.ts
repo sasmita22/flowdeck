@@ -1,6 +1,7 @@
 import type { Manifest } from "../compiler/lower.js";
-import { parallelSections } from "../nodes/fork/execute.js";
+import { parallelSections, type ParallelSection } from "../nodes/fork/execute.js";
 import { nodeStatus } from "./run-events.js";
+import type { NodeState } from "./state.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 
 type RetryManifest = Pick<Manifest, "nodes" | "wires">;
@@ -24,6 +25,22 @@ function withFamily(manifest: RetryManifest, nodeId: string): Set<string> {
   return family;
 }
 
+const inTurn: readonly NodeState[] = ["sent", "running", "needs-you"];
+
+export const rerunsOnRetry = (status: NodeState) => status !== "done" && status !== "skipped";
+
+function sectionRetryEntries(section: ParallelSection, events: readonly StoredEvent[]) {
+  const rerun = section.branches.filter((branch) => rerunsOnRetry(statusIn(events, branch)));
+  return [section.fork, section.join, ...rerun].flatMap((id): EventEntry[] => {
+    const status = statusIn(events, id);
+    if (status === "waiting") return [];
+    const retry: EventEntry = { nodeId: id, event: { kind: "retry" } };
+    if (!inTurn.includes(status)) return [retry];
+    const message = `${id} failed: parallel section was interrupted`;
+    return [{ nodeId: id, event: { kind: "failed", payload: { message } } }, retry];
+  });
+}
+
 export function retryEntries(
   manifest: RetryManifest,
   events: readonly StoredEvent[],
@@ -31,11 +48,10 @@ export function retryEntries(
 ): EventEntry[] {
   if (statusIn(events, nodeId) !== "failed") throw new Error(`${nodeId} has not failed`);
   const { sections } = parallelSections(manifest.nodes, manifest.wires);
-  if (
-    sections.some((section) => [section.fork, section.join, ...section.branches].includes(nodeId))
-  ) {
-    throw new Error("Retry inside a parallel section isn't supported yet — run it again instead");
-  }
+  const section = sections.find((candidate) =>
+    [candidate.fork, candidate.join, ...candidate.branches].includes(nodeId),
+  );
+  if (section) return sectionRetryEntries(section, events);
   const family = withFamily(manifest, nodeId);
   return manifest.nodes.flatMap((node): EventEntry[] =>
     family.has(node.id) && statusIn(events, node.id) === "failed"

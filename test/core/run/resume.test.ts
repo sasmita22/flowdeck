@@ -205,7 +205,7 @@ describe("decideResume", () => {
     };
     const interrupted = (id: string) => ({
       kind: "fail",
-      message: `${id} failed: parallel section was interrupted; start a new run`,
+      message: `${id} failed: parallel section was interrupted; Retry sends it again`,
     });
     const markerTurns: TranscriptTurn[] = [
       {
@@ -426,7 +426,7 @@ describe("decideResume", () => {
       ]);
       const interrupted = (id: string) => ({
         kind: "fail",
-        message: `${id} failed: parallel section was interrupted; start a new run`,
+        message: `${id} failed: parallel section was interrupted; Retry sends it again`,
       });
 
       expect(decideResume({ manifest: shared, events, turns: [reviewTurn("b1", true)] })).toEqual({

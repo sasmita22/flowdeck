@@ -98,6 +98,58 @@ describe("openDatabase", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
+  it("switches the file to WAL, and a read-only connection still opens and reads it", () => {
+    const db = open();
+
+    expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
+
+    const readOnly = new Database(path, { readonly: true });
+    opened.push(readOnly);
+    expect(migrations(readOnly)).toEqual(allMigrations);
+  });
+
+  it("waits up to 30 seconds for a lock held by another connection", () => {
+    expect(open().pragma("busy_timeout", { simple: true })).toBe(30_000);
+  });
+
+  it("switches a new file to WAL once another connection lets go of the write lock it held", () => {
+    const holder = raw();
+    holder.exec("BEGIN IMMEDIATE");
+    const release = () => {
+      if (holder.inTransaction) holder.exec("COMMIT");
+    };
+
+    const db = openDatabase({ path, pause: release });
+    opened.push(db);
+
+    expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
+    expect(migrations(db)).toEqual(allMigrations);
+  });
+
+  it("gives up on the WAL switch with the lock error after 30 seconds of a write lock held throughout", () => {
+    const holder = raw();
+    holder.exec("BEGIN IMMEDIATE");
+    const paused: number[] = [];
+
+    expect(() => openDatabase({ path, pause: (ms) => paused.push(ms) })).toThrow(
+      expect.objectContaining({ code: "SQLITE_BUSY" }),
+    );
+    expect(paused.reduce((sum, ms) => sum + ms, 0)).toBe(30_000);
+  });
+
+  it("gives up on the WAL switch after 30 seconds of a read lock held throughout, waiting only between tries", () => {
+    const holder = raw();
+    holder.exec("CREATE TABLE held (id INTEGER)");
+    holder.exec("BEGIN");
+    holder.prepare("SELECT * FROM held").all();
+    const paused: number[] = [];
+
+    expect(() => openDatabase({ path, pause: (ms) => paused.push(ms) })).toThrow(
+      expect.objectContaining({ code: "SQLITE_BUSY" }),
+    );
+    expect(paused.reduce((sum, ms) => sum + ms, 0)).toBe(30_000);
+  });
+
   it("applies nothing new when the same file is opened again, and keeps its rows", () => {
     const first = open();
     first.prepare("INSERT INTO flows (id, name, created_at) VALUES ('f1', 'Untitled', 't')").run();

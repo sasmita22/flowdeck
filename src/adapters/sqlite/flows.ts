@@ -108,7 +108,7 @@ export class SqliteFlowStore implements FlowStore {
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {
-    return this.db.transaction(() => {
+    const saveVersion = this.db.transaction(() => {
       const time = this.now().toISOString();
       const flowId = this.flowIdFor(target, time);
       const { version } = this.db
@@ -176,7 +176,8 @@ export class SqliteFlowStore implements FlowStore {
         .run(flowId, version, JSON.stringify(flow.session), JSON.stringify(flow.notes ?? []), time);
 
       return { flowId, version };
-    })();
+    });
+    return saveVersion.immediate();
   }
 
   loadLatest(flowId: string | undefined = this.currentFlowId()): LoadedFlow | null {

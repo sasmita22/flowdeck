@@ -3,11 +3,21 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type OpenDatabaseOptions = { path: string; migrationsDir?: string; now?: () => Date };
+export type OpenDatabaseOptions = {
+  path: string;
+  migrationsDir?: string;
+  now?: () => Date;
+  pause?: (ms: number) => void;
+};
+
+const busyTimeoutMs = 30_000;
+const walRetryMs = 10;
 
 export function openDatabase(options: OpenDatabaseOptions): Database.Database {
   mkdirSync(dirname(options.path), { recursive: true });
-  const db = new Database(options.path);
+  const db = new Database(options.path, { timeout: 0 });
+  switchToWal(db, options.pause ?? sleep);
+  db.pragma(`busy_timeout = ${busyTimeoutMs}`);
   db.pragma("foreign_keys = ON");
   migrate(
     db,
@@ -17,6 +27,24 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
   return db;
 }
 
+function switchToWal(db: Database.Database, pause: (ms: number) => void): void {
+  for (let waited = 0; ; waited += walRetryMs) {
+    try {
+      db.pragma("journal_mode = WAL");
+      return;
+    } catch (error) {
+      if (!isBusy(error) || waited >= busyTimeoutMs) throw error;
+      pause(walRetryMs);
+    }
+  }
+}
+
+// SQLite skips the busy handler when the WAL switch upgrades its read lock, so it is retried here.
+const isBusy = (error: unknown) =>
+  error instanceof Database.SqliteError && error.code === "SQLITE_BUSY";
+
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
 function migrate(db: Database.Database, migrationsDir: string, now: () => Date): void {
   db.exec(
     "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
@@ -24,12 +52,14 @@ function migrate(db: Database.Database, migrationsDir: string, now: () => Date):
   const applied = new Set(
     (db.prepare("SELECT name FROM migrations").all() as { name: string }[]).map((row) => row.name),
   );
+  const isApplied = db.prepare("SELECT 1 FROM migrations WHERE name = ?");
   const pending = readdirSync(migrationsDir)
     .filter((name) => name.endsWith(".sql") && !applied.has(name))
     .sort();
   for (const name of pending) {
     const sql = readFileSync(join(migrationsDir, name), "utf8");
     const apply = () => {
+      if (isApplied.get(name) !== undefined) return;
       db.exec(sql);
       db.prepare("INSERT INTO migrations (name, applied_at) VALUES (?, ?)").run(
         name,
@@ -37,7 +67,7 @@ function migrate(db: Database.Database, migrationsDir: string, now: () => Date):
       );
     };
     if (sql.startsWith(noTransactionMarker)) applyWithForeignKeysOff(db, name, apply);
-    else db.transaction(apply)();
+    else db.transaction(apply).immediate();
   }
 }
 
@@ -51,7 +81,7 @@ function applyWithForeignKeysOff(db: Database.Database, name: string, apply: () 
       if ((db.pragma("foreign_key_check") as unknown[]).length > 0) {
         throw new Error(`migration ${name} leaves a broken foreign key`);
       }
-    })();
+    }).immediate();
   } finally {
     db.pragma("foreign_keys = ON");
   }
