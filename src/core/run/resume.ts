@@ -127,7 +127,7 @@ export function decideResume({
     if (sectionInterrupted(node, status, interrupted)) {
       actions[node.id] = {
         kind: "fail",
-        message: `${node.id} failed: parallel section was interrupted; start a new run`,
+        message: `${node.id} failed: parallel section was interrupted; Retry sends it again`,
       };
       continue;
     }

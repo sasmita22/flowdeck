@@ -57,6 +57,7 @@ import {
   type PermissionDecision,
 } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
+import { rerunsOnRetry } from "./retry.js";
 import { decisionsOf, loopRound, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import { SectionWatch } from "./section-watch.js";
@@ -824,19 +825,24 @@ export class Runner {
       );
       return { failure: { nodeId: fork.id, reason: reasonIn(fork.id, action.message) } };
     }
-    for (const branch of section.branches) {
+    const kept = section.branches.filter((id) => this.status(id) === "done");
+    const rerun = section.branches.filter((id) => rerunsOnRetry(this.status(id)));
+    const join = context.nodes.find((node) => node.id === section.join);
+    const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
+    if (joinComplete(wait, [...kept, ...rerun], new Set(kept))) {
+      return this.completeFromKept({ ...section, branches: rerun });
+    }
+    for (const branch of rerun) {
       const held = await this.holdForFiles(branch, context);
       if (held !== undefined) return held;
       await this.copyTemplates(branch, context);
     }
-    const join = context.nodes.find((node) => node.id === section.join);
-    const { wait, onBranchFail = "stop" } = join?.settings as JoinSettings;
     const halted = await this.checkBudget(fork.id);
     if (halted !== undefined) return halted;
     await this.compactIfFull(fork.id, context.ensureStarted);
     this.inTurn = fork.id;
     try {
-      return await this.driveSection(section, wait, onBranchFail, context);
+      return await this.driveSection({ ...section, branches: rerun }, wait, onBranchFail, context);
     } finally {
       this.inTurn = undefined;
     }
@@ -922,6 +928,19 @@ export class Runner {
     }
   }
 
+  private completeFromKept({ fork, join, branches }: ParallelSection): StepResult {
+    this.recordAll([
+      { nodeId: fork, event: { kind: "sent" } },
+      { nodeId: join, event: { kind: "running" } },
+      ...branches.map((nodeId): EventEntry => ({ nodeId, event: { kind: "skipped" } })),
+      { nodeId: join, event: { kind: "done" } },
+      { nodeId: fork, event: { kind: "done" } },
+    ]);
+    for (const id of branches) this.emit(`${id} skipped`);
+    this.emit(`${join} done`);
+    return {};
+  }
+
   private forkBranches(branches: readonly string[], context: RunContext): ForkBranch[] {
     return branches.map((id) => {
       const branch = context.nodes.find((node) => node.id === id);
@@ -968,7 +987,10 @@ export class Runner {
               nodeId,
               event: { kind: "failed", payload: { message: `${nodeId} failed: not started` } },
             }
-          : { nodeId, event: { kind: "skipped" } },
+          : {
+              nodeId,
+              event: { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
+            },
       );
     this.recordAll([
       ...ends,
@@ -990,7 +1012,9 @@ export class Runner {
       event: { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
     });
     this.recordAll([
-      ...section.branches.filter((id) => !stopped.has(id)).map(failed),
+      ...section.branches
+        .filter((id) => !stopped.has(id) && this.status(id) !== "skipped")
+        .map(failed),
       failed(section.join),
     ]);
     return { failure: { nodeId: section.fork, reason } };

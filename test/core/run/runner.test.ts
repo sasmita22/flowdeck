@@ -18,6 +18,7 @@ import {
   type RunOptions,
 } from "../../../src/core/run/runner.js";
 import type { ResumeActions } from "../../../src/core/run/resume.js";
+import { retryEntries } from "../../../src/core/run/retry.js";
 import { decisionsOf, nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import type { ProcessResult } from "../../../src/ports/process-runner.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
@@ -3000,9 +3001,13 @@ describe("Runner parallel section", () => {
     expect(result.states).toMatchObject({
       f: "failed",
       a1: "done",
-      a2: "skipped",
+      a2: "failed",
       a3: "failed",
       j: "failed",
+    });
+    expect(eventsOf(h.deps.store, "a2").at(-1)).toMatchObject({
+      kind: "failed",
+      payload: { message: "a2 failed: not started: a3" },
     });
   });
 
@@ -3070,6 +3075,31 @@ describe("Runner parallel section", () => {
       expect(result.states).toMatchObject({ a3, j: outcome });
       expect(result.decisions).toEqual([{ nodeId: "j", decision: "answered", answer }]);
     });
+  });
+
+  it("fails the section and leaves a branch skipped for not starting as it is when another branch times out", async () => {
+    const h = sectionHarness({
+      onFork: (s) => {
+        s.launch("a1");
+        s.launch("a2");
+        s.subagentStop("a1", "a1 reply");
+        s.stop("Launched two.");
+      },
+      turnTimeoutMs: 100,
+    });
+
+    const result = await runOn(h.deps, sectionManifest({ onBranchFail: "skip" }));
+
+    expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+    expect(result.states).toEqual({
+      f: "failed",
+      a1: "done",
+      a2: "failed",
+      a3: "skipped",
+      j: "failed",
+      after: "waiting",
+    });
+    expect(kindsOf(h.deps.store, "a3")).toEqual(["sent", "skipped"]);
   });
 
   it("fails the section without another turn when a branch never launches", async () => {
@@ -3318,7 +3348,7 @@ describe("Runner parallel section", () => {
       h.deps.store.append(id, nodeId, { kind });
     }
     const interrupted = (nodeId: string) =>
-      `${nodeId} failed: parallel section was interrupted; start a new run`;
+      `${nodeId} failed: parallel section was interrupted; Retry sends it again`;
     const actions: ResumeActions = {
       f: { kind: "fail", message: interrupted("f") },
       a1: { kind: "fail", message: interrupted("a1") },
@@ -3341,6 +3371,341 @@ describe("Runner parallel section", () => {
       payload: { message: interrupted("a1") },
     });
     expect(h.lines.at(-1)).toBe(interrupted("f"));
+  });
+
+  describe("retry", () => {
+    type History = [string, RunEvent][];
+    const failedWith = (nodeId: string, reason = "no Stop"): [string, RunEvent] => [
+      nodeId,
+      { kind: "failed", payload: { message: `${nodeId} failed: ${reason}` } },
+    ];
+    const opened: History = [
+      ["f", { kind: "sent" }],
+      ["a1", { kind: "sent" }],
+      ["a2", { kind: "sent" }],
+      ["a3", { kind: "sent" }],
+      ["j", { kind: "running" }],
+    ];
+    const retried = (deps: TestDeps, m: RunnableManifest, history: History, target: string) => {
+      const { id } = deps.store.createRun(newRun(m));
+      for (const [nodeId, event] of history) deps.store.append(id, nodeId, event);
+      for (const { nodeId, event } of retryEntries(
+        { nodes: m.nodes, wires: m.wires ?? [] },
+        deps.store.events(id),
+        target,
+      )) {
+        deps.store.append(id, nodeId, event);
+      }
+      return new Runner({ ...deps, runId: id }).run(m);
+    };
+    const afterRetry = (store: FakeStore, nodeId: string) => {
+      const kinds = kindsOf(store, nodeId);
+      return kinds.slice(kinds.lastIndexOf("retry") + 1);
+    };
+    const finishing =
+      (ids: string[], extra: Turn = () => undefined): Turn =>
+      (s) => {
+        extra(s);
+        for (const id of ids) s.launch(id);
+        for (const id of ids) s.subagentStop(id, `${id} reply`);
+        s.stop("Done again.");
+      };
+    const a1DoneRestFailed: History = [
+      ...opened,
+      ["a1", { kind: "done" }],
+      failedWith("a2"),
+      failedWith("a3"),
+      failedWith("j"),
+      failedWith("f"),
+    ];
+
+    it("reruns only the failed branch, keeps the done branch's result and completes the join", async () => {
+      const h = sectionHarness({ onFork: finishing(["a2"]) });
+      const m = sectionManifest({ branches: ["a1", "a2"] });
+      const history: History = [
+        ["f", { kind: "sent" }],
+        ["a1", { kind: "sent" }],
+        ["a2", { kind: "sent" }],
+        ["j", { kind: "running" }],
+        ["a1", { kind: "done" }],
+        failedWith("a2"),
+        failedWith("j"),
+        failedWith("f"),
+      ];
+
+      const result = await retried(h.deps, m, history, "a2");
+
+      expect(result.outcome).toBe("done");
+      expect(sends(h.calls)).toEqual([forkSend(["a2"]), afterSend]);
+      expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+      expect(afterRetry(h.deps.store, "a2")).toEqual(["sent", "done"]);
+      expect(afterRetry(h.deps.store, "j")).toEqual(["running", "done"]);
+      expect(afterRetry(h.deps.store, "f")).toEqual(["sent", "done"]);
+      expect(result.states).toEqual({
+        f: "done",
+        a1: "done",
+        a2: "done",
+        j: "done",
+        after: "done",
+      });
+    });
+
+    it.each(["f", "j"])(
+      "retrying %s reruns every unfinished branch and not the done one",
+      async (target) => {
+        const h = sectionHarness({ onFork: finishing(["a2", "a3"]) });
+
+        const result = await retried(h.deps, sectionManifest(), a1DoneRestFailed, target);
+
+        expect(result.outcome).toBe("done");
+        expect(sends(h.calls)).toEqual([forkSend(["a2", "a3"]), afterSend]);
+        expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+        expect(result.states).toMatchObject({ f: "done", a2: "done", a3: "done", j: "done" });
+      },
+    );
+
+    it("reruns the unfinished branches of a section a resume failed, keeping the done one", async () => {
+      const h = sectionHarness({ onFork: finishing(["a2"]) });
+      const m = sectionManifest({ branches: ["a1", "a2"] });
+      const { id } = h.deps.store.createRun(newRun(m));
+      for (const [nodeId, event] of [
+        ["f", { kind: "sent" }],
+        ["a1", { kind: "sent" }],
+        ["a2", { kind: "sent" }],
+        ["j", { kind: "running" }],
+        ["a1", { kind: "done" }],
+      ] as History) {
+        h.deps.store.append(id, nodeId, event);
+      }
+      const interrupted = (nodeId: string) =>
+        `${nodeId} failed: parallel section was interrupted; Retry sends it again`;
+      const actions: ResumeActions = {
+        f: { kind: "fail", message: interrupted("f") },
+        a2: { kind: "fail", message: interrupted("a2") },
+        j: { kind: "fail", message: interrupted("j") },
+      };
+      expect((await new Runner({ ...h.deps, runId: id }).run(m, { actions })).outcome).toBe(
+        "failed",
+      );
+      for (const { nodeId, event } of retryEntries(
+        { nodes: m.nodes, wires: m.wires ?? [] },
+        h.deps.store.events(id),
+        "f",
+      )) {
+        h.deps.store.append(id, nodeId, event);
+      }
+
+      const result = await new Runner({ ...h.deps, runId: id }).run(m);
+
+      expect(result.outcome).toBe("done");
+      expect(sends(h.calls)).toEqual([forkSend(["a2"]), afterSend]);
+      expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+      expect(result.states).toMatchObject({ f: "done", a1: "done", a2: "done", j: "done" });
+    });
+
+    it.each([
+      ["skip", [] as History],
+      [
+        "wait",
+        [
+          ["j", { kind: "needs-you" }],
+          [
+            "j",
+            {
+              kind: "answered",
+              payload: { nodeId: "j", decision: "answered", answer: "continue" },
+            },
+          ],
+          ["j", { kind: "running" }],
+        ] as History,
+      ],
+    ] as const)(
+      "leaves a branch the %s rule skipped as skipped and does not send it",
+      async (onBranchFail, answered) => {
+        const h = sectionHarness({ onFork: finishing(["a2"]) });
+        const history: History = [
+          ...opened,
+          ...answered,
+          ["a3", { kind: "skipped" }],
+          ["a1", { kind: "done" }],
+          failedWith("a2"),
+          failedWith("j"),
+          failedWith("f"),
+        ];
+
+        const result = await retried(h.deps, sectionManifest({ onBranchFail }), history, "a2");
+
+        expect(result.outcome).toBe("done");
+        expect(sends(h.calls)).toEqual([forkSend(["a2"]), afterSend]);
+        expect(kindsOf(h.deps.store, "a3")).toEqual(["sent", "skipped"]);
+        expect(result.states).toMatchObject({ a1: "done", a2: "done", a3: "skipped", j: "done" });
+      },
+    );
+
+    it("sends no fork turn when nothing is left to rerun, and completes the join and the fork", async () => {
+      const h = sectionHarness();
+      const history: History = [
+        ...opened,
+        ["a3", { kind: "skipped" }],
+        ["a1", { kind: "done" }],
+        ["a2", { kind: "done" }],
+        failedWith("j", "settle timed out"),
+        failedWith("f", "settle timed out"),
+      ];
+
+      const result = await retried(h.deps, sectionManifest({ onBranchFail: "skip" }), history, "j");
+
+      expect(result.outcome).toBe("done");
+      expect(sends(h.calls)).toEqual([afterSend]);
+      expect(afterRetry(h.deps.store, "f")).toEqual(["sent", "done"]);
+      expect(afterRetry(h.deps.store, "j")).toEqual(["running", "done"]);
+      expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+      expect(kindsOf(h.deps.store, "a2")).toEqual(["sent", "done"]);
+      expect(kindsOf(h.deps.store, "a3")).toEqual(["sent", "skipped"]);
+    });
+
+    it("counts no turn and compacts nothing for a section completed from kept results", async () => {
+      const usage = new FakeUsageSource();
+      usage.setEntries(sessionId, [
+        {
+          messageId: "m1",
+          model: "claude-opus-5-5",
+          inputTokens: 0,
+          outputTokens: 10,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
+          cacheReadTokens: 850_000,
+        },
+      ]);
+      const waiter = new FakeWaiter([]);
+      const h = sectionHarness({ waiter, usage, budget: 100 });
+      h.deps.usageSettleMs = 50;
+      h.deps.compactions = usage;
+      const send = h.deps.prompts.sendPrompt;
+      h.deps.prompts = {
+        ...h.deps.prompts,
+        sendPrompt: async (text) => {
+          await send(text);
+          if (text === "/compact") usage.compacted(sessionId);
+        },
+      };
+      const history: History = [
+        ...opened,
+        ["a3", { kind: "skipped" }],
+        ["a1", { kind: "done" }],
+        ["a2", { kind: "done" }],
+        failedWith("j", "settle timed out"),
+        failedWith("f", "settle timed out"),
+      ];
+
+      const result = await retried(h.deps, sectionManifest({ onBranchFail: "skip" }), history, "j");
+
+      expect(waiter.calls).toEqual([]);
+      expect(result.outcome).toBe("done");
+      expect(afterRetry(h.deps.store, "f")).toEqual(["sent", "done"]);
+      expect(kindsOf(h.deps.store, "after")).toEqual(["compacted", "sent", "done"]);
+    });
+
+    it("waits for first: a kept done branch completes the join even when a rerun branch's input file is missing", async () => {
+      const h = sectionHarness();
+      const flow = builders.flow(
+        [
+          builders.script("plan"),
+          builders.fork("f"),
+          builders.agent("a1"),
+          builders.agent("a2"),
+          builders.join("j", { settings: { wait: "first", onBranchFail: "stop" } }),
+        ],
+        [
+          builders.thenWire("plan", "f"),
+          builders.thenWire("f", "a1"),
+          builders.thenWire("f", "a2"),
+          builders.thenWire("a1", "j"),
+          builders.thenWire("a2", "j"),
+          builders.fileWire("plan", "a2", "plan.md"),
+        ],
+      );
+      const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+      const history: History = [
+        ["plan", { kind: "running" }],
+        ["plan", { kind: "done" }],
+        ["f", { kind: "sent" }],
+        ["a1", { kind: "sent" }],
+        ["a2", { kind: "sent" }],
+        ["j", { kind: "running" }],
+        ["a1", { kind: "done" }],
+        failedWith("a2"),
+        failedWith("j"),
+        failedWith("f"),
+      ];
+
+      const result = await retried(h.deps, { hash, prefix, nodes, wires }, history, "f");
+
+      expect(h.lines).not.toContain("a2 failed: plan.md wasn't written by plan");
+      expect(result.outcome).toBe("done");
+      expect(sends(h.calls)).toEqual([]);
+      expect(result.states).toMatchObject({ a1: "done", a2: "skipped", j: "done", f: "done" });
+    });
+
+    it("waits for first: a kept done branch completes the join, sending nothing and skipping the unfinished branches", async () => {
+      const h = sectionHarness();
+
+      const result = await retried(
+        h.deps,
+        sectionManifest({ wait: "first" }),
+        a1DoneRestFailed,
+        "f",
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(sends(h.calls)).toEqual([afterSend]);
+      expect(h.calls).not.toContain("interrupt");
+      expect(afterRetry(h.deps.store, "a2")).toEqual(["skipped"]);
+      expect(afterRetry(h.deps.store, "a3")).toEqual(["skipped"]);
+      expect(result.states).toEqual({
+        f: "done",
+        a1: "done",
+        a2: "skipped",
+        a3: "skipped",
+        j: "done",
+        after: "done",
+      });
+    });
+
+    it("records nothing for a stray finished call from a kept done branch during the rerun", async () => {
+      const h = sectionHarness({
+        onFork: finishing(["a2", "a3"], (s) => s.subagentStop("a1", "a1 again")),
+      });
+
+      const result = await retried(h.deps, sectionManifest(), a1DoneRestFailed, "a2");
+
+      expect(result.outcome).toBe("done");
+      expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+      expect(eventsOf(h.deps.store, "a1").at(-1)).not.toMatchObject({
+        payload: { stopMessage: "a1 again" },
+      });
+    });
+
+    it("fails the section again when a rerun branch never stops, leaving the kept done branch alone", async () => {
+      const h = sectionHarness({
+        turnTimeoutMs: 100,
+        onFork: (s) => {
+          s.launch("a2");
+          s.launch("a3");
+          s.subagentStop("a3", "a3 reply");
+          s.stop("Launched.");
+        },
+      });
+
+      const result = await retried(h.deps, sectionManifest(), a1DoneRestFailed, "a2");
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
+      expect(sends(h.calls)).toEqual([forkSend(["a2", "a3"])]);
+      expect(kindsOf(h.deps.store, "a1")).toEqual(["sent", "done"]);
+      expect(afterRetry(h.deps.store, "a2")).toEqual(["sent", "failed"]);
+      expect(afterRetry(h.deps.store, "a3")).toEqual(["sent", "done"]);
+      expect(result.states).toMatchObject({ f: "failed", a1: "done", j: "failed" });
+    });
   });
 });
 
@@ -4509,7 +4874,7 @@ describe("Runner by node", () => {
       ],
     };
 
-    function sharedSection(order: readonly string[]) {
+    function sharedSection(order: readonly string[], launched: readonly string[] = ["b1", "b2"]) {
       const events = new FakeEventSource();
       const calls: string[] = [];
       let clock = 1000;
@@ -4521,7 +4886,7 @@ describe("Runner by node", () => {
           sendPrompt: async (text) => {
             calls.push(`send ${text}`);
             if (text.startsWith("Use the Agent tool once for each")) {
-              for (const id of ["b1", "b2"]) {
+              for (const id of launched) {
                 publish("PreToolUse", {
                   tool_name: "Agent",
                   tool_input: { subagent_type: review, prompt: `NODE ${id}\nGo` },
@@ -4582,5 +4947,42 @@ describe("Runner by node", () => {
         expect(Math.max(...branchDones)).toBeLessThan(joinDone);
       },
     );
+
+    it("retrying the failed branch reruns only that one, though both share the piece", async () => {
+      const { deps, calls } = sharedSection(["b2"], ["b2"]);
+      const { id } = deps.store.createRun(newRun(sectionManifest));
+      for (const [nodeId, event] of [
+        ["f", { kind: "sent" }],
+        ["b1", { kind: "sent" }],
+        ["b2", { kind: "sent" }],
+        ["j", { kind: "running" }],
+        ["b1", { kind: "done", payload: { stopMessage: "b1", toolUseIds: ["toolu-b1"] } }],
+        ["b2", { kind: "failed", payload: { message: "b2 failed: no Stop" } }],
+        ["j", { kind: "failed", payload: { message: "j failed: no Stop" } }],
+        ["f", { kind: "failed", payload: { message: "f failed: no Stop" } }],
+      ] as [string, RunEvent][]) {
+        deps.store.append(id, nodeId, event);
+      }
+      for (const { nodeId, event } of retryEntries(
+        { nodes: sectionManifest.nodes, wires: sectionManifest.wires ?? [] },
+        deps.store.events(id),
+        "b2",
+      )) {
+        deps.store.append(id, nodeId, event);
+      }
+
+      const result = await new Runner({ ...deps, runId: id }).run(sectionManifest);
+
+      expect(result.outcome).toBe("done");
+      expect(calls[0]).toBe(
+        `send ${forkTurnText(prefix, [{ id: "b2", piece: "review", given: ["b.md"], writes: [] }])}`,
+      );
+      expect(
+        runEvents(deps.store)
+          .filter((event) => event.nodeId === "b1")
+          .map((event) => event.kind),
+      ).toEqual(["sent", "done"]);
+      expect(result.states).toMatchObject({ b1: "done", b2: "done", j: "done", after: "done" });
+    });
   });
 });

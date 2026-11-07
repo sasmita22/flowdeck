@@ -23,9 +23,12 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
+  agent,
   branch,
   flow,
+  fork,
   gate,
+  join as joinNode,
   prompt,
   script,
   thenWire,
@@ -357,6 +360,101 @@ describe("run controls", () => {
         kind: "error",
       });
     });
+
+    it("reruns only the failed branch of a parallel section, and the join completes", async () => {
+      const events = new FakeEventSource();
+      const sent: string[] = [];
+      let forkTurns = 0;
+      const publish = (
+        kind: "Stop" | "StopFailure" | "PreToolUse" | "PostToolUse",
+        sessionId: string,
+        payload: object,
+      ) =>
+        events.publish({ kind, sessionId, payload: { ...payload, flowdeck_hook_at: Date.now() } });
+      const fakeSession = (options: OpenSessionOptions): OpenedSession => ({
+        sessionId: options.claudeSessionId,
+        session: { ensureStarted: async () => undefined },
+        prompts: {
+          sendPrompt: async (text) => {
+            sent.push(text);
+            const calls = [
+              ...text.matchAll(/subagent_type "([^"]+)" with the prompt "NODE (\w+)/g),
+            ];
+            const first = ++forkTurns === 1;
+            setTimeout(() => {
+              const id = options.claudeSessionId;
+              for (const [, type, node] of calls) {
+                publish("PreToolUse", id, {
+                  tool_name: "Agent",
+                  tool_input: { subagent_type: type, prompt: `NODE ${node}\nGo` },
+                  tool_use_id: `toolu-${node}-${forkTurns}`,
+                });
+              }
+              for (const [, type, node] of calls) {
+                if (first && node === "b") continue;
+                publish("PostToolUse", id, {
+                  tool_name: "Agent",
+                  tool_input: { subagent_type: type, prompt: `NODE ${node}\nGo` },
+                  tool_use_id: `toolu-${node}-${forkTurns}`,
+                  tool_response: {
+                    status: "completed",
+                    agentId: `agent-${node}`,
+                    agentType: type,
+                    content: [{ type: "text", text: `${node} reply` }],
+                  },
+                });
+              }
+              if (first) {
+                publish("StopFailure", id, {
+                  error: "server_error",
+                  last_assistant_message: "API Error",
+                });
+              } else publish("Stop", id, { last_assistant_message: "Done." });
+            }, 0);
+          },
+          interrupt: async () => undefined,
+        },
+        stop: async () => undefined,
+      });
+      handler = handlerWith({
+        run: runEnvironment({
+          startEvents: async () => ({ events, stop: async () => undefined }),
+          openSession: async (options) => fakeSession(options),
+        }),
+      });
+      const runId = await start(
+        flow(
+          [fork("f"), agent("a"), agent("b"), joinNode("j")],
+          [thenWire("f", "a"), thenWire("f", "b"), thenWire("a", "j"), thenWire("b", "j")],
+        ),
+      );
+      expect(await finished(runId)).toBe("failed");
+      expect([statusOf(runId, "a"), statusOf(runId, "b")]).toEqual(["done", "failed"]);
+
+      expect(started(await call("retry-node", { runId, nodeId: "b" }))).toBe(runId);
+
+      await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"), {
+        timeout: 15_000,
+      });
+      const kindsOf = (nodeId: string) =>
+        runs
+          .events(runId)
+          .filter((event) => event.nodeId === nodeId)
+          .map((event) => event.kind);
+      expect(
+        runs
+          .events(runId)
+          .filter((event) => event.kind === "retry")
+          .map((event) => event.nodeId)
+          .sort(),
+      ).toEqual(["b", "f", "j"]);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toContain("NODE b");
+      expect(sent[1]).not.toContain("NODE a");
+      expect(kindsOf("a")).toEqual(["sent", "done"]);
+      expect(kindsOf("b").slice(-3)).toEqual(["retry", "sent", "done"]);
+      expect(statusOf(runId, "j")).toBe("done");
+    }, 20_000);
   });
 
   describe("resume", () => {

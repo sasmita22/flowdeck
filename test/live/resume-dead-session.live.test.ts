@@ -254,6 +254,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         ((await ask(second.handler, "load-run", { runId })) as { run: { status: string } }).run
           .status,
       ).toBe("interrupted");
+      pushes.length = 0;
       expect(await ask(second.handler, "resume-run", { runId })).toEqual({
         kind: "started",
         runId,
@@ -261,7 +262,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
       const gateWait = () =>
         pushes.findLast((push) => push.push === "wait")?.value as PendingWait | null | undefined;
       await vi.waitFor(() => expect(gateWait()?.request.nodeId).toBe("g1"));
-      second.waiter.answer({ waitId: gateWait()?.waitId ?? "", reply: { decision: "approve" } });
+      expect(
+        second.waiter.answer({ waitId: gateWait()?.waitId ?? "", reply: { decision: "approve" } }),
+      ).toBe(true);
       await vi.waitFor(
         async () =>
           expect(
