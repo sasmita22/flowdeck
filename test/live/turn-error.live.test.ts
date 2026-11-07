@@ -1,70 +1,53 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
-import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
-import { realDeps } from "../../src/cli/main.js";
 import { nodeStatus } from "../../src/core/run/run-events.js";
 import * as builders from "../fixtures/flow-builders.js";
-import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const tsx = join(root, "node_modules", ".bin", "tsx");
 const buildName = "live-turn-error";
 const runDeadlineMs = 60_000;
 const notLoggedIn = "Not logged in · Please run /login";
+const loggedInVars = [
+  "USER",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "TMUX",
+  "TMUX_PANE",
+] as const;
 
-type Exit = { code: number | null; stdout: string; stderr: string };
-
-function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Exit> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(tsx, ["src/cli/main.ts", ...args], { cwd: root, env });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    const deadline = setTimeout(() => child.kill("SIGTERM"), runDeadlineMs);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      clearTimeout(deadline);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-function loggedOutEnv(home: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
-  delete env.USER;
-  delete env.ANTHROPIC_API_KEY;
-  delete env.ANTHROPIC_AUTH_TOKEN;
-  delete env.CLAUDE_CODE_OAUTH_TOKEN;
-  delete env.TMUX;
-  delete env.TMUX_PANE;
-  return env;
+function logOut(): () => void {
+  const saved = loggedInVars.map((name) => [name, process.env[name]] as const);
+  for (const name of loggedInVars) Reflect.deleteProperty(process.env, name);
+  return () => {
+    for (const [name, value] of saved) {
+      if (value !== undefined) process.env[name] = value;
+    }
+  };
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with real claude", () => {
   const sessionName = `fd-live-turn-error-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let sessionIds: string[];
+  let engine: LiveEngine | undefined;
+  let logIn: (() => void) | undefined;
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    sessionIds = [];
+    engine = undefined;
+    logIn = undefined;
   });
 
   afterEach(async () => {
+    logIn?.();
     try {
       const { stdout } = await run("tmux", [
         "-L",
@@ -78,8 +61,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
     } catch (error) {
       console.error(`no pane of ${sessionName} to capture: ${String(error)}`);
     }
-    await killTmuxServer(sessionName);
-    await removeClaudeSessions(workspace.workFolder, sessionIds);
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -88,45 +70,37 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
     "fails a logged-out session's Prompt node with its message, and the run ends failed",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
-      const flow = builders.flow(
+      const parsed = builders.flow(
         [builders.trigger("t"), builders.prompt("p1", { settings: { instructions: "Say hi." } })],
         [builders.thenWire("t", "p1")],
       );
-      await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, {
-        ...realDeps(),
-        env: { ...process.env, FLOWDECK_HOME: home },
+      const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };
+      const live = liveEngine({ home, repo: repo.path, sessionName });
+      engine = live;
+      const { buildId } = await live.saveAndBuild(flow, { name: buildName });
+
+      logIn = logOut();
+      const runId = await live.runBuild(buildId);
+      const status = await live.waitForRunEnd(runId, runDeadlineMs);
+      logIn();
+      logIn = undefined;
+
+      const p1Events = live.stores.runs.events(runId).filter((event) => event.nodeId === "p1");
+      const progress = p1Events
+        .filter(
+          (event) => event.kind === "sent" || event.kind === "failed" || event.kind === "done",
+        )
+        .map((event) => event.kind);
+      const report = `status ${status}\np1 events:\n${p1Events.map((event) => JSON.stringify(event)).join("\n")}`;
+
+      expect(status, report).toBe("failed");
+      expect(progress, report).toEqual(["sent", "failed"]);
+      expect(live.stores.runs.listRuns().map((record) => record.status)).toEqual(["failed"]);
+      expect(nodeStatus(p1Events)).toBe("failed");
+      expect(p1Events.at(-1)).toMatchObject({
+        kind: "failed",
+        payload: { message: `p1 failed: ${notLoggedIn}` },
       });
-
-      const exit = await runCliProcess(
-        ["run", buildName, "--session", sessionName, "--model", "haiku"],
-        loggedOutEnv(home),
-      );
-
-      const db = openDatabase({ path: join(home, "flowdeck.db") });
-      try {
-        const store = new SqliteStore({ db });
-        const runIds = (db.prepare("SELECT id FROM runs").all() as { id: string }[]).map(
-          (row) => row.id,
-        );
-        const runs = runIds.map((id) => store.findRun(id));
-        sessionIds = runs.flatMap((record) => record?.session.claudeSessionId ?? []);
-        const report = `exit ${exit.code}\nstdout:\n${exit.stdout}\nstderr:\n${exit.stderr}`;
-
-        expect(exit.code, report).toBe(1);
-        expect(
-          exit.stdout.split("\n").filter((line) => line !== ""),
-          report,
-        ).toEqual(["p1 started", `p1 failed: ${notLoggedIn}`]);
-        expect(runs.map((record) => record?.status)).toEqual(["failed"]);
-        const p1Events = store.events(runIds[0] ?? "").filter((event) => event.nodeId === "p1");
-        expect(nodeStatus(p1Events)).toBe("failed");
-        expect(p1Events.at(-1)).toMatchObject({
-          kind: "failed",
-          payload: { message: `p1 failed: ${notLoggedIn}` },
-        });
-      } finally {
-        db.close();
-      }
     },
   );
 });

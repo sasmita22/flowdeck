@@ -1,16 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
-import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
-import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
-import type { StoredEvent } from "../../src/core/run/store.js";
+import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
+import type { RunStatus, StoredEvent } from "../../src/core/run/store.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
-import { cliBuild, plannedWorkspace } from "../fixtures/cli-build.js";
-import { killTmuxServer, removeClaudeSessions } from "../fixtures/live-claude.js";
 import {
   agent,
   flow,
@@ -21,6 +17,7 @@ import {
   thenWire,
   trigger,
 } from "../fixtures/flow-builders.js";
+import { liveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
 
 const buildName = "live-parallel";
@@ -82,7 +79,7 @@ const describeEvent = ({ kind, payload }: HookEvent) =>
     .join(" ");
 
 type LiveRun = {
-  code: number;
+  status: RunStatus | undefined;
   recorded: HookEvent[];
   events: StoredEvent[];
   cleanup: () => Promise<void>;
@@ -93,61 +90,58 @@ async function runLive(
   sessionName: string,
 ): Promise<LiveRun> {
   const recorded: HookEvent[] = [];
-  const sessionIds: string[] = [];
   const home = await mkdtemp(join(tmpdir(), "fd-home-"));
   const repo = await createTmpRepo({ commit: true });
-  const workspace = plannedWorkspace(home, repo.path);
-  const cleanup = async () => {
-    await killTmuxServer(sessionName);
-    await removeClaudeSessions(workspace.workFolder, sessionIds);
-    await repo.cleanup();
-    await rm(home, { recursive: true, force: true });
-  };
   let server: HookSocketServer | undefined;
-  const real = realDeps();
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const deps: CliDeps = {
-    ...real,
-    env: { ...process.env, FLOWDECK_HOME: home },
-    stdout: (line) => stdout.push(line),
-    stderr: (line) => stderr.push(line),
-    startEvents: async (socketPath) => {
-      await mkdir(dirname(socketPath), { recursive: true });
-      server = new HookSocketServer({ socketPath });
-      await server.start();
-      const started = server;
-      return { events: started, stop: () => started.stop() };
+  const engine = liveEngine({
+    home,
+    repo: repo.path,
+    sessionName,
+    startEvents: (start) => async (socketPath) => {
+      const started = await start(socketPath);
+      server = started.events as HookSocketServer;
+      return started;
     },
-    openSession: async (options) => {
-      const opened = await real.openSession(options);
-      sessionIds.push(opened.sessionId);
+    openSession: (open) => async (options) => {
+      const opened = await open(options);
       if (server === undefined) throw new Error("hook socket not started");
       for (const kind of hookKinds) {
         server.subscribe(kind, opened.sessionId, (event) => recorded.push(event));
       }
       return opened;
     },
+  });
+  const cleanup = async () => {
+    await engine.cleanup();
+    await repo.cleanup();
+    await rm(home, { recursive: true, force: true });
   };
 
-  const built = await cliBuild(parsed, { name: buildName, repo: repo.path }, workspace, deps);
-  const code = await runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps);
-
-  const runId = stderr.map((line) => /^run (\S+)/.exec(line)?.[1]).find(Boolean);
-  const store = new SqliteStore({ path: join(home, "flowdeck.db") });
-  const events = runId === undefined ? [] : store.events(runId);
-  store.close();
-  console.log(
-    [
-      `hash: ${built.hash}`,
-      `exit: ${code}`,
-      `stdout:\n${stdout.join("\n")}`,
-      `stderr:\n${stderr.join("\n")}`,
-      `run events:\n${events.map((event) => `${event.time} ${event.nodeId} ${event.kind}`).join("\n")}`,
-      `hook events in order:\n${recorded.map(describeEvent).join("\n")}`,
-    ].join("\n"),
-  );
-  return { code, recorded, events, cleanup };
+  try {
+    const built = await engine.saveAndBuild(parsed, { name: buildName });
+    const runId = await engine.runBuild(built.buildId);
+    let status: RunStatus | undefined;
+    try {
+      status = await engine.waitForRunEnd(runId, runTimeoutMs - 60_000);
+    } finally {
+      console.log(
+        [
+          `hash: ${built.hash}`,
+          `status: ${status ?? "still running"}`,
+          `run events:\n${engine.stores.runs
+            .events(runId)
+            .map((event) => `${event.time} ${event.nodeId} ${event.kind}`)
+            .join("\n")}`,
+          `hook events in order:\n${recorded.map(describeEvent).join("\n")}`,
+        ].join("\n"),
+      );
+    }
+    const events = engine.stores.runs.events(runId);
+    return { status, recorded, events, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 async function processesMatching(pattern: string): Promise<string> {
@@ -236,7 +230,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
       const elapsed = timeOf(events, "after", "sent") - timeOf(events, "f", "sent");
       console.log(`fork sent to after sent: ${elapsed} ms`);
 
-      expect(live?.code).toBe(0);
+      expect(live?.status).toBe("done");
       expect(elapsed).toBeLessThan(60_000);
     });
 

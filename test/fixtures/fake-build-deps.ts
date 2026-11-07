@@ -17,10 +17,3 @@ export const fakeEngineBuildOptions = (fs: FileSystem) => ({
   buildAgents: new FakeBuildAgents({ fs }),
   kit: async () => kit,
 });
-
-export const fakeCliBuild = (fs: FileSystem) => ({
-  agents: new FakeBuildAgents({ fs }),
-  kit: async () => kit,
-  guardScriptPath: "/flowdeck-build-guard.ts",
-  sessionName: () => "fd-build-TestKit1",
-});

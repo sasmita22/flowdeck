@@ -4,10 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { realDeps } from "../../src/cli/main.js";
 import { agent, flow, prompt, thenWire } from "../fixtures/flow-builders.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
-import { removeClaudeSessions } from "../fixtures/live-claude.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -65,7 +63,8 @@ const sessionInit = async (pluginDir: string, cwd: string): Promise<Init> => {
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude", () => {
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
+  let engine: LiveEngine | undefined;
+  let workFolder: string;
   let hash: string;
   let pluginDir: string;
   let withoutSkills: string;
@@ -73,18 +72,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
   beforeAll(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-plugin-")));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    ({ hash } = await cliBuild(
+    engine = liveEngine({ home, repo: repo.path });
+    const built = await engine.saveAndBuild(
       flow([prompt("plan-step"), agent("plan-checker")], [thenWire("plan-step", "plan-checker")]),
-      { name: buildName, repo: repo.path },
-      workspace,
-      { ...realDeps(), env: { ...process.env, FLOWDECK_HOME: home } },
-    ));
-    pluginDir = join(workspace.dir, "plugin");
+      { name: buildName },
+    );
+    ({ hash, workFolder } = built);
+    pluginDir = join(built.dir, "plugin");
     withoutSkills = join(home, "copy", "plugin");
     await cp(pluginDir, withoutSkills, { recursive: true });
     await rename(join(withoutSkills, "skills"), join(withoutSkills, "skills-renamed"));
-    const installed = join(workspace.workFolder, ".claude", "skills", "plan-checker");
+    const installed = join(workFolder, ".claude", "skills", "plan-checker");
     await mkdir(installed, { recursive: true });
     await writeFile(
       join(installed, "SKILL.md"),
@@ -93,20 +91,20 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
   });
 
   afterAll(async () => {
-    await removeClaudeSessions(workspace.workFolder, []);
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   });
 
   it("lists the build's prompt and its run skill as skills and its agent as an agent", async () => {
-    const output = await details(pluginDir, workspace.workFolder);
+    const output = await details(pluginDir, workFolder);
 
     expect(inventory(output, "Skills")).toMatch(/^Skills \(2\)\s+plan-step, run$/);
     expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);
   });
 
   it("lists no skills once the build's skills folder is gone", async () => {
-    const output = await details(withoutSkills, workspace.workFolder);
+    const output = await details(withoutSkills, workFolder);
 
     expect(inventory(output, "Skills")).toMatch(/^Skills \(0\)/);
     expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);
@@ -116,7 +114,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
     "offers the agent under the build name next to an installed skill of the same name",
     { timeout: 150_000 },
     async () => {
-      const init = await sessionInit(pluginDir, workspace.workFolder);
+      const init = await sessionInit(pluginDir, workFolder);
       const report = JSON.stringify(init);
       const named = [
         ...(init.agents ?? []),

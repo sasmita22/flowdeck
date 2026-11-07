@@ -5,20 +5,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
-import { CliWaiter } from "../../src/cli/cli-waiter.js";
-import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
+import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { transcriptTail } from "../fixtures/live-evidence.js";
 import {
-  killTmuxServer,
   readLines,
-  removeClaudeSessions,
   sleep,
   tokenResults,
   type ContentBlock,
   type TranscriptEntry,
 } from "../fixtures/live-claude.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const buildName = "live-permission";
@@ -78,19 +75,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
   const claude = new ClaudeCli({ sessions: new TmuxSessionHost() });
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let sessionIds: string[];
+  let engine: LiveEngine | undefined;
 
   beforeEach(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    sessionIds = [];
+    engine = undefined;
   });
 
   afterEach(async () => {
-    await killTmuxServer(sessionName);
-    await removeClaudeSessions(workspace.workFolder, sessionIds);
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -102,83 +96,67 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
       const token = `fd-perm-${randomUUID().slice(0, 8)}`;
 
       const transcript = async () => {
-        const sessionId = sessionIds[0];
+        const sessionId = engine?.sessionIds[0];
         return sessionId === undefined ? undefined : claude.findTranscript(sessionId);
       };
       const results = async () => tokenResults(await transcriptEntries(await transcript()), token);
 
-      const questions: string[] = [];
+      const questions: WaitRequest[] = [];
       let atQuestion: ContentBlock[] | undefined;
       let afterHold: ContentBlock[] | undefined;
       let asked: () => void = () => {};
       const question = new Promise<void>((resolve) => (asked = resolve));
-      const waiter = new CliWaiter({
-        write: (text) => {
-          questions.push(text);
+      const waiter: HumanWaiter = {
+        wait: async (request) => {
+          questions.push(request);
           asked();
-        },
-        readLine: async () => {
           atQuestion = await results();
           await sleep(unattendedHoldMs);
           afterHold = await results();
-          return "approve";
-        },
-      });
-
-      const real = realDeps();
-      const stdout: string[] = [];
-      const stderr: string[] = [];
-      const deps: CliDeps = {
-        ...real,
-        env: { ...process.env, FLOWDECK_HOME: home },
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-        waiter,
-        openSession: async (options) => {
-          const opened = await real.openSession(options);
-          sessionIds.push(opened.sessionId);
-          return opened;
+          return { decision: "approve" };
         },
       };
 
-      await cliBuild(
+      engine = liveEngine({ home, repo: repo.path, sessionName, waiter });
+      const built = await engine.saveAndBuild(
         liveFlow(
           `Run the Bash command \`node -e "console.log('${token}')"\` and reply with its output.`,
         ),
-        { name: buildName, repo: repo.path },
-        workspace,
-        deps,
+        { name: buildName },
       );
 
-      const exit = runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps);
+      const runId = await engine.runBuild(built.buildId);
+      const ended = engine.waitForRunEnd(runId, 360_000);
       const noQuestion = sleep(questionWithinMs).then(() => "none" as const);
       const first = await Promise.race([question.then(() => "asked" as const), noQuestion]);
       if (first === "none") {
         const path = await transcript();
         const tail = path === undefined ? [] : await transcriptTail(path);
-        console.log(`no question; stdout:\n${stdout.join("\n")}\ntranscript:\n${tail.join("\n")}`);
+        console.log(`no question; transcript:\n${tail.join("\n")}`);
       }
       expect(first, `a permission question within ${questionWithinMs} ms`).toBe("asked");
 
-      const code = await exit;
+      const status = await ended;
+      const events = engine.stores.runs.events(runId);
       const entries = await transcriptEntries(await transcript());
       console.log(
         [
-          `exit: ${code}`,
+          `status: ${status}`,
           `questions: ${JSON.stringify(questions)}`,
-          `stdout:\n${stdout.join("\n")}`,
-          `stderr:\n${stderr.join("\n")}`,
+          `run events:\n${events.map((event) => `${event.nodeId} ${event.kind}`).join("\n")}`,
           `hook decisions: ${JSON.stringify(hookDecisions(entries))}`,
         ].join("\n"),
       );
 
       expect(questions).toHaveLength(1);
-      expect(questions[0]).toContain(`p1 permission: Allow Bash: node -e`);
-      expect(questions[0]).toContain(token);
+      expect(questions[0]).toMatchObject({ nodeId: "p1", kind: "permission", tool: "Bash" });
+      const input = questions[0]?.kind === "permission" ? questions[0].input : "";
+      expect(input).toMatch(/^node -e/);
+      expect(input).toContain(token);
       expect(atQuestion, "Bash ran before the question was answered").toEqual([]);
       expect(afterHold, "Bash ran unattended").toEqual([]);
-      expect(code).toBe(0);
-      expect(stdout).toContain("p1 done");
+      expect(status).toBe("done");
+      expect(events).toContainEqual(expect.objectContaining({ nodeId: "p1", kind: "done" }));
       expect(tokenResults(entries, token).length).toBeGreaterThan(0);
       expect(hookDecisions(entries)).toEqual(["allow"]);
     },

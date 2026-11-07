@@ -44,8 +44,8 @@ describe("no real Claude builds in tests", () => {
     expect(buildingSpecs().length).toBeGreaterThan(0);
   });
 
-  it("gives the CLI build fixture fake build agents", () => {
-    expect(read("test/fixtures/cli-build.ts")).toMatch(/\bnew FakeBuildAgents\s*\(/);
+  it("gives the engine build fixture fake build agents", () => {
+    expect(read("test/fixtures/fake-build-deps.ts")).toMatch(/\bnew FakeBuildAgents\s*\(/);
   });
 
   it("launches every building spec through launchWithFakeClaude", () => {

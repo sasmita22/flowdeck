@@ -1,22 +1,15 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
-import { realDeps } from "../../src/cli/main.js";
+import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { nodeMarker } from "../../src/core/run/agent-calls.js";
 import { flow, prompt, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
-const run = promisify(execFile);
-const root = fileURLToPath(new URL("../../", import.meta.url));
-const mainPath = fileURLToPath(new URL("../../src/cli/main.ts", import.meta.url));
 const buildName = "live-resume";
 const watchdogMs = 180_000;
 const words = { p1: "ALPHA", p2: "BRAVO", p3: "CHARLIE" };
@@ -26,25 +19,7 @@ const hasCode = (error: unknown, ...codes: (string | number)[]) =>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Cli = {
-  child: ChildProcess;
-  stdout: () => string;
-  stderr: () => string;
-  exit: Promise<number | null>;
-};
-
-function startCli(args: string[], env: NodeJS.ProcessEnv): Cli {
-  const child = spawn(process.execPath, ["--import", "tsx", mainPath, ...args], { cwd: root, env });
-  let stdout = "";
-  let stderr = "";
-  child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-  child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-  const exit = new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolve(code));
-  });
-  return { child, stdout: () => stdout, stderr: () => stderr, exit };
-}
+const sessionAlive = (name: string) => new TmuxSessionHost({ socketName: name }).has(name);
 
 async function until<T>(read: () => Promise<T | undefined> | T | undefined): Promise<T> {
   for (;;) {
@@ -89,174 +64,139 @@ const userIndexes = (entries: Entry[], marker: string) =>
       : [],
   );
 
-async function claudeRunning(sessionId: string): Promise<boolean> {
-  try {
-    await run("pgrep", ["-f", `session-id ${sessionId}`]);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 1)) return false;
-    throw error;
-  }
-}
+describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
+  "a run resumed by the engine with real claude",
+  () => {
+    const sessionName = `fd-live-resume-${process.pid}`;
+    let home: string;
+    let repo: TmpRepo;
+    let engines: LiveEngine[];
+    let claudeTmp: string | undefined;
 
-async function removeIfEmpty(folder: string): Promise<void> {
-  try {
-    await rmdir(folder);
-  } catch (error) {
-    if (!hasCode(error, "ENOTEMPTY", "ENOENT")) throw error;
-  }
-}
-
-describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck resume with real claude", () => {
-  const sessionName = `fd-live-resume-${process.pid}`;
-  let home: string;
-  let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let projectFolder: string;
-  let slug: string;
-  const children: ChildProcess[] = [];
-  const stores: SqliteStore[] = [];
-
-  beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    slug = workspace.workFolder.replace(home, await realpath(home)).replace(/[^a-zA-Z0-9]/g, "-");
-    projectFolder = join(homedir(), ".claude", "projects", slug);
-  });
-
-  afterEach(async () => {
-    for (const child of children.splice(0)) child.kill("SIGKILL");
-    for (const store of stores.splice(0)) store.close();
-    await run("tmux", ["-L", sessionName, "kill-server"]).catch(() => undefined);
-    const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
-    await rm(join(socketFolder, sessionName), { force: true });
-    let transcripts: string[] = [];
-    try {
-      transcripts = (await readdir(projectFolder)).filter((name) => name.endsWith(".jsonl"));
-    } catch (error) {
-      if (!hasCode(error, "ENOENT")) throw error;
-    }
-    for (const transcript of transcripts) {
-      const sessionId = transcript.replace(/\.jsonl$/, "");
-      for (let waited = 0; waited < 10_000 && (await claudeRunning(sessionId)); waited += 100) {
-        await sleep(100);
-      }
-      await rm(join(projectFolder, transcript));
-      await rm(join(projectFolder, sessionId), { recursive: true, force: true });
-      for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
-      }
-    }
-    await removeIfEmpty(join(projectFolder, "memory"));
-    await removeIfEmpty(projectFolder);
-    await rm(join("/private/tmp", `claude-${userInfo().uid}`, slug), {
-      recursive: true,
-      force: true,
+    beforeEach(async () => {
+      home = await mkdtemp(join(tmpdir(), "fd-home-"));
+      repo = await createTmpRepo({ commit: true });
+      engines = [];
+      claudeTmp = undefined;
     });
-    await repo.cleanup();
-    await rm(home, { recursive: true, force: true });
-  }, 60_000);
 
-  it(
-    "resumes a run killed during node 2 without resending it, and runs node 3",
-    { timeout: watchdogMs + 30_000 },
-    async () => {
-      const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
-      const prompts = flow(
-        (["p1", "p2", "p3"] as const).map((id) =>
-          prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
-        ),
-        [thenWire("p1", "p2"), thenWire("p2", "p3")],
-      );
-      const pieces = pieceNames(prompts);
-      const commandOfNode = (id: string) => commandOf(buildName, pieces.get(id) ?? "");
-      const typedTurn = (id: string) => `❯ /${buildName}:${pieces.get(id) ?? ""} ${nodeMarker(id)}`;
-      await cliBuild(prompts, { name: buildName, repo: repo.path }, workspace, {
-        ...realDeps(),
-        env,
-      });
-      delete env.TMUX;
-      delete env.TMUX_PANE;
-      let transcriptPath = "";
-      let lastPane = "";
-      const evidence = async () => {
-        console.error(`pane:\n${await paneText(sessionName, sessionName)}`);
-        console.error(`transcript tail:\n${(await transcriptTail(transcriptPath)).join("\n")}`);
-      };
+    afterEach(async () => {
+      for (const engine of engines.reverse()) await engine.cleanup();
+      if (claudeTmp !== undefined) await rm(claudeTmp, { recursive: true, force: true });
+      await repo.cleanup();
+      await rm(home, { recursive: true, force: true });
+    }, 60_000);
 
-      const first = startCli(["run", buildName, "--session", sessionName, "--model", "haiku"], env);
-      children.push(first.child);
-      const runId = await withWatchdog(
-        until(() => /^run (\S+)$/m.exec(first.stderr())?.[1]),
-        30_000,
-        evidence,
-      );
-      const store = new SqliteStore({ path: join(home, "flowdeck.db") });
-      stores.push(store);
-      const claudeSessionId = store.findRun(runId)?.session.claudeSessionId ?? "";
-      transcriptPath = join(projectFolder, `${claudeSessionId}.jsonl`);
-      await withWatchdog(
-        until(async () => {
-          const sent = store.events(runId).some((e) => e.nodeId === "p2" && e.kind === "sent");
-          const delivered =
-            userIndexes(await entriesOf(transcriptPath), commandOfNode("p2")).length > 0;
-          return sent && delivered ? true : undefined;
-        }),
-        120_000,
-        evidence,
-      );
-      first.child.kill("SIGKILL");
-      await first.exit;
+    it(
+      "resumes a run interrupted during node 2 without resending it, and runs node 3",
+      { timeout: watchdogMs + 30_000 },
+      async () => {
+        const parsed = flow(
+          (["p1", "p2", "p3"] as const).map((id) =>
+            prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
+          ),
+          [thenWire("p1", "p2"), thenWire("p2", "p3")],
+        );
+        const prompts = { ...parsed, session: { ...parsed.session, model: "haiku" } };
+        const pieces = pieceNames(prompts);
+        const commandOfNode = (id: string) => commandOf(buildName, pieces.get(id) ?? "");
+        const typedTurn = (id: string) =>
+          `❯ /${buildName}:${pieces.get(id) ?? ""} ${nodeMarker(id)}`;
+        const first = liveEngine({ home, repo: repo.path, sessionName, sessionAlive });
+        engines.push(first);
+        const built = await first.saveAndBuild(prompts, { name: buildName });
+        const slug = (await realpath(built.workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
+        claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
+        const projectFolder = join(homedir(), ".claude", "projects", slug);
+        let transcriptPath = "";
+        let lastPane = "";
+        const evidence = async () => {
+          console.error(`pane:\n${await paneText(sessionName, sessionName)}`);
+          console.error(`transcript tail:\n${(await transcriptTail(transcriptPath)).join("\n")}`);
+        };
 
-      const second = startCli(["resume", runId], env);
-      children.push(second.child);
-      const polling = (async () => {
-        while (second.child.exitCode === null) {
-          const pane = await paneText(sessionName, sessionName);
-          if (!pane.startsWith("no pane")) lastPane = pane;
-          await sleep(100);
-        }
-      })();
-      const code = await withWatchdog(second.exit, 150_000, evidence);
-      await polling;
+        const runId = await first.runBuild(built.buildId);
+        const { runs } = first.stores;
+        const claudeSessionId = await withWatchdog(
+          until(() => runs.findRun(runId)?.session.claudeSessionId || undefined),
+          30_000,
+          evidence,
+        );
+        transcriptPath = join(projectFolder, `${claudeSessionId}.jsonl`);
+        await withWatchdog(
+          until(async () => {
+            const sent = runs.events(runId).some((e) => e.nodeId === "p2" && e.kind === "sent");
+            const delivered =
+              userIndexes(await entriesOf(transcriptPath), commandOfNode("p2")).length > 0;
+            return sent && delivered ? true : undefined;
+          }),
+          120_000,
+          evidence,
+        );
+        await first.detach();
+        const statusAtDetach = runs.findRun(runId)?.status;
 
-      for (
-        let waited = 0;
-        waited < 10_000 && (await claudeRunning(claudeSessionId));
-        waited += 100
-      ) {
-        await sleep(100);
-      }
-      const entries = await entriesOf(transcriptPath);
-      const p2Turns = userIndexes(entries, commandOfNode("p2"));
-      const p3Turns = userIndexes(entries, commandOfNode("p3"));
-      const p3Ended = entries
-        .slice((p3Turns[0] ?? entries.length) + 1)
-        .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
-      const p3Done = store.events(runId).find((e) => e.nodeId === "p3" && e.kind === "done");
-      const report = [
-        `resume exited ${code}`,
-        `stdout:\n${second.stdout()}`,
-        `stderr:\n${second.stderr()}`,
-        `last pane:\n${lastPane}`,
-        `transcript tail:\n${(await transcriptTail(transcriptPath)).join("\n")}`,
-      ].join("\n");
+        const second = liveEngine({
+          home,
+          repo: repo.path,
+          sessionName,
+          sessionAlive,
+          stores: first.stores,
+        });
+        engines.push(second);
+        await second.handler.reattach();
+        let ended = false;
+        const polling = (async () => {
+          while (!ended) {
+            const pane = await paneText(sessionName, sessionName);
+            if (!pane.startsWith("no pane")) lastPane = pane;
+            await sleep(100);
+          }
+        })();
+        const status = await withWatchdog(
+          second.waitForRunEnd(runId, 150_000).finally(() => (ended = true)),
+          150_000,
+          evidence,
+        ).finally(() => (ended = true));
+        await polling;
 
-      const paneLines = lastPane.split("\n").map((line) => line.trim());
-      expect(code, report).toBe(0);
-      expect(
-        paneLines.filter((line) => line === typedTurn("p2")),
-        report,
-      ).toHaveLength(1);
-      expect(paneLines, report).toContain(typedTurn("p3"));
-      expect(p2Turns, report).toHaveLength(1);
-      expect(p3Turns, report).toHaveLength(1);
-      expect(p3Ended, report).toBe(true);
-      expect(store.findRun(runId)?.status, report).toBe("done");
-      expect(p3Done, report).toMatchObject({
-        payload: { stopMessage: expect.stringContaining(words.p3) },
-      });
-    },
-  );
-});
+        const entries = await entriesOf(transcriptPath);
+        const p2Turns = userIndexes(entries, commandOfNode("p2"));
+        const p3Turns = userIndexes(entries, commandOfNode("p3"));
+        const p3Ended = entries
+          .slice((p3Turns[0] ?? entries.length) + 1)
+          .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
+        const p3Done = runs.events(runId).find((e) => e.nodeId === "p3" && e.kind === "done");
+        const report = [
+          `status at detach: ${statusAtDetach}`,
+          `status: ${status}`,
+          `run events:\n${runs
+            .events(runId)
+            .map((event) => `${event.time} ${event.nodeId} ${event.kind}`)
+            .join("\n")}`,
+          `last pane:\n${lastPane}`,
+          `transcript tail:\n${(await transcriptTail(transcriptPath)).join("\n")}`,
+        ].join("\n");
+
+        const paneLines = lastPane.split("\n").map((line) => line.trim());
+        expect(statusAtDetach, report).toBe("running");
+        expect(status, report).toBe("done");
+        expect(
+          paneLines.filter((line) => line === typedTurn("p2")),
+          report,
+        ).toHaveLength(1);
+        expect(paneLines, report).toContain(typedTurn("p3"));
+        expect(p2Turns, report).toHaveLength(1);
+        expect(p3Turns, report).toHaveLength(1);
+        expect(p3Ended, report).toBe(true);
+        expect(
+          runs.events(runId).filter((e) => e.nodeId === "p2" && e.kind === "sent"),
+          report,
+        ).toHaveLength(1);
+        expect(p3Done, report).toMatchObject({
+          payload: { stopMessage: expect.stringContaining(words.p3) },
+        });
+      },
+    );
+  },
+);
