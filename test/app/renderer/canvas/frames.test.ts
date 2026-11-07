@@ -47,6 +47,13 @@ describe("nodeWidth", () => {
       containerLabelWidth(type, containerText(type, long, sub)),
     );
   });
+
+  it("estimates a Loop title at 7 px a character when nothing can measure it", () => {
+    const text = containerText("loop", long, "max 3");
+    expect(nodeWidth({ type: "loop", label: long, sub: "max 3" })).toBe(
+      text.length * 7 + 2 * nodeOutline("loop").padL,
+    );
+  });
 });
 
 describe("frame geometry of a wide node", () => {

@@ -3,7 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
 import type { BranchState } from "../branch-store.js";
-import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
+import { labelFor, selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import {
   selectNodeDisplay,
@@ -129,7 +129,7 @@ function RunView({
       <h2 style={headingStyle}>Nodes</h2>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
         {nodes.map((node) => (
-          <NodeRow key={node.id} run={run} nodeId={node.id} label={node.label} page={page} />
+          <NodeRow key={node.id} run={run} nodeId={node.id} label={labelFor(node)} page={page} />
         ))}
       </ul>
       <h2 style={headingStyle}>Activity</h2>

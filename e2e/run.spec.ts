@@ -121,3 +121,18 @@ test("A script-only run has no terminal: the menu's Open terminal stays disabled
     "Output: one",
   );
 });
+
+test("A run of a blueprint with an empty-labelled Script shows the node type in the Nodes list", async () => {
+  const blueprint = twoScripts() as { nodes: { id: string; label: string }[] };
+  for (const node of blueprint.nodes) if (node.id === "s1") node.label = "";
+  seedFlow(home, blueprint, repo.path);
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
+
+  await buildAndRun(window, home, "blank");
+
+  const row = window.getByTestId("inspector-node-s1");
+  await expect(row).toHaveAttribute("data-status", "done", { timeout: 20_000 });
+  await expect(row).toContainText("Script");
+});

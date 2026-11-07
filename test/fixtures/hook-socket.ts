@@ -34,12 +34,22 @@ export function runHook(options: {
   delete env["FLOWDECK_SOCK"];
   if (options.socketPath !== undefined) env["FLOWDECK_SOCK"] = options.socketPath;
   Object.assign(env, options.env);
+  return runTimed([hookPath, ...(options.args ?? [])], env, options.stdin, options.keepStdinOpen);
+}
+
+export function runBareNode(stdin: string | Buffer): Promise<HookRun> {
+  return runTimed(["-e", "process.stdin.resume()"], process.env, stdin);
+}
+
+function runTimed(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  stdin: string | Buffer,
+  keepStdinOpen = false,
+): Promise<HookRun> {
   return new Promise((resolve, reject) => {
     const started = performance.now();
-    const child = spawn(process.execPath, [hookPath, ...(options.args ?? [])], {
-      env,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    const child = spawn(process.execPath, args, { env, stdio: ["pipe", "pipe", "inherit"] });
     let stdout = "";
     let ms = 0;
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -52,8 +62,8 @@ export function runHook(options: {
       child.stdin.destroy();
     });
     child.on("close", (code) => resolve({ code, stdout, ms }));
-    if (options.keepStdinOpen) child.stdin.write(options.stdin);
-    else child.stdin.end(options.stdin);
+    if (keepStdinOpen) child.stdin.write(stdin);
+    else child.stdin.end(stdin);
   });
 }
 

@@ -10,6 +10,7 @@ import {
   withPositions,
   type Bounds,
 } from "./frames.js";
+import { labelFor } from "./store.js";
 
 export { FRAME_PADDING } from "./frames.js";
 
@@ -174,7 +175,7 @@ export const toViewNodes = (
         ...placed(framing, node, node.position),
         selected: selection.includes(node.id),
         data: {
-          label: node.label,
+          label: labelFor(node),
           highlighted: node.id === highlighted,
           ...(sub !== undefined && { sub }),
         },
