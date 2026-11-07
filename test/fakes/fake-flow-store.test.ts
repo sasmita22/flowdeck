@@ -151,4 +151,27 @@ describe("FakeFlowStore", () => {
     ]);
     expect(() => store.save(flowOf("p1"), "nope")).toThrow("No blueprint nope");
   });
+
+  it("lists a new blueprint as not pinned, pins and unpins it, keeping its save time and the order", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+    store.create("A");
+    store.create("B");
+    store.save(flowOf("p1"), "flow-a");
+    const unpinned = store.list();
+    expect(unpinned.map(({ flowId, pinned }) => ({ flowId, pinned }))).toEqual([
+      { flowId: "flow-a", pinned: false },
+      { flowId: "flow-b", pinned: false },
+    ]);
+
+    store.pin("flow-b", true);
+
+    expect(store.list()).toEqual([
+      { ...unpinned[0], pinned: false },
+      { ...unpinned[1], pinned: true },
+    ]);
+
+    store.pin("flow-b", false);
+
+    expect(store.list()).toEqual(unpinned);
+  });
 });

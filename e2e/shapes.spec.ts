@@ -21,7 +21,7 @@ import {
   wire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
-import { launchApp, type ColorScheme, type LaunchedApp } from "../scripts/drive.js";
+import { launchOnCanvas, type ColorScheme, type LaunchedApp } from "../scripts/drive.js";
 import { nodeTitle } from "../src/app/renderer/canvas/palette-items.js";
 
 let home: string;
@@ -129,7 +129,11 @@ test.afterEach(async () => {
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Every node type draws its own shape in the ${colorScheme} theme`, async () => {
     seedFlow(home, everyShape());
-    launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), colorScheme });
+    launched = await launchOnCanvas({
+      home,
+      logPath: test.info().outputPath("app.log"),
+      colorScheme,
+    });
     const { window } = launched;
     for (const id of nodeShots) {
       await expect(window.getByTestId(`node-${id}`)).toBeVisible();
@@ -150,7 +154,11 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Parallel start and end draw as tall bars in the ${colorScheme} theme`, async () => {
     seedFlow(home, parallelShapes());
-    launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), colorScheme });
+    launched = await launchOnCanvas({
+      home,
+      logPath: test.info().outputPath("app.log"),
+      colorScheme,
+    });
     const { window } = launched;
     const bars = ["fork", "join"];
     for (const id of bars) {
@@ -173,7 +181,11 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`For each draws as a dashed EACH frame in the ${colorScheme} theme`, async () => {
     seedFlow(home, forEachShapes());
-    launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), colorScheme });
+    launched = await launchOnCanvas({
+      home,
+      logPath: test.info().outputPath("app.log"),
+      colorScheme,
+    });
     const { window } = launched;
     await expect(window.getByTestId("foreach-frame-each")).toBeVisible();
     await expect(window.getByText("EACH · each plan unit")).toBeVisible();
@@ -193,7 +205,11 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Branch draws as an IF hexagon in the ${colorScheme} theme`, async () => {
     seedFlow(home, branchShapes());
-    launched = await launchApp({ home, logPath: test.info().outputPath("app.log"), colorScheme });
+    launched = await launchOnCanvas({
+      home,
+      logPath: test.info().outputPath("app.log"),
+      colorScheme,
+    });
     const { window } = launched;
     const node = window.getByTestId("node-branch");
     await expect(node).toBeVisible();
@@ -259,7 +275,7 @@ test("A parallel start and end show their full tag inside the bar and their labe
       ],
     ),
   );
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("node-output")).toBeVisible();
   const nodes = await Promise.all(
@@ -287,7 +303,7 @@ test("A parallel start and end show their full tag inside the bar and their labe
 
 test("Hovering a node says what it is and what it does", async () => {
   seedFlow(home, parallelShapes());
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
 
   for (const [id, type] of [

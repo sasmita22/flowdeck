@@ -503,6 +503,43 @@ describe("toViewNodes for Loop and For each labels", () => {
   });
 });
 
+describe("toViewNodes with a wide node", () => {
+  const long = "Review every changed file against the plan and list each gap";
+
+  it("widens a Loop frame around a body Agent with a 60-character label", () => {
+    const frameWidth = (label: string) =>
+      viewOf(
+        toViewNodes(
+          flow(
+            [
+              { ...loop("L"), position: { x: 0, y: 0 } },
+              { ...agent("A", { parent: "L" }), label, position: { x: 0, y: 90 } },
+            ],
+            [],
+          ),
+          [],
+          {},
+          null,
+        ),
+        "loop-frame-L",
+      )?.width ?? 0;
+
+    expect(frameWidth(long)).toBeGreaterThan(frameWidth("Review"));
+  });
+
+  it("keeps the Fork and Join bars 28 wide beside a wide branch", () => {
+    const source = parallelSection();
+    const wide = {
+      ...source,
+      nodes: source.nodes.map((node) => (node.id === "b1" ? { ...node, label: long } : node)),
+    };
+    const view = toViewNodes(wide, [], {}, null);
+
+    expect(viewOf(view, "F")?.width).toBe(28);
+    expect(viewOf(view, "J")?.width).toBe(28);
+  });
+});
+
 describe("toViewNodes while a container is dragged", () => {
   const dragged = () =>
     flow(

@@ -55,6 +55,7 @@ describe("preload run-state wiring", () => {
     ["openFlow", "flowdeck:open-flow", { flowId: "flow-a" }],
     ["listFlows", "flowdeck:list-flows", undefined],
     ["renameFlow", "flowdeck:rename-flow", { flowId: "flow-a", name: "Weekly" }],
+    ["pinFlow", "flowdeck:pin-flow", { flowId: "flow-a", pinned: true }],
     [
       "buildVersion",
       "flowdeck:build-version",
@@ -93,6 +94,7 @@ describe("preload run-state wiring", () => {
   );
 
   it.each([
+    ["pin-flow", "pinFlow"],
     ["delete-build", "deleteBuild"],
     ["doctor-worktrees", "doctorWorktrees"],
     ["default-branch", "defaultBranch"],

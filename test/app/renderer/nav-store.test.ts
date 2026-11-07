@@ -8,8 +8,8 @@ import {
 } from "../../../src/app/renderer/nav-store.js";
 
 describe("createNavStore", () => {
-  it("starts in the editor", () => {
-    expect(createNavStore().getState().page).toEqual({ name: "editor" });
+  it("starts on the Blueprints page", () => {
+    expect(createNavStore().getState().page).toEqual({ name: "blueprints" });
   });
 
   it("goes to a page and clears the search and sort of the last one", () => {
@@ -41,6 +41,7 @@ describe("createNavStore", () => {
 
   it("opens search on the Blueprints page from the editor or a run, and stays on a list page", () => {
     const nav = createNavStore();
+    nav.getState().go({ name: "editor" });
 
     nav.getState().focusSearch();
     expect(nav.getState().page).toEqual({ name: "blueprints" });

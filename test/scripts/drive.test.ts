@@ -13,6 +13,7 @@ import {
   drive,
   forceExit,
   launchApp,
+  openCanvas,
   parseSteps,
   playwrightPage,
   reportFailure,
@@ -55,6 +56,14 @@ class FakeDrivePage implements DrivePage {
 
   press(key: string): Promise<void> {
     return this.act(`press ${key}`);
+  }
+
+  rightClick(testid: string): Promise<void> {
+    return this.act(`right-click ${testid}`);
+  }
+
+  waitFor(testid: string, timeoutMs: number): Promise<void> {
+    return this.act(`wait-for ${testid} ${timeoutMs}`);
   }
 
   async screenshot(path: string): Promise<void> {
@@ -133,6 +142,17 @@ describe("parseSteps", () => {
     ];
 
     expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+  });
+
+  it("accepts a right-click step and names one that has no testid", () => {
+    const steps = [{ type: "right-click", testid: "loop-1" }];
+
+    const parseWithoutTestid = () => parseSteps('[{"type":"screenshot"},{"type":"right-click"}]');
+
+    expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+    expect(parseWithoutTestid).toThrow("step 2 (right-click)");
+    expect(parseWithoutTestid).toThrow("testid");
+    expect(parseWithoutTestid).not.toThrow("unknown step type");
   });
 
   it("rejects malformed JSON", () => {
@@ -268,6 +288,21 @@ describe("runSteps", () => {
       "wait Flowdeck 10000",
       "wait ready 250",
     ]);
+  });
+
+  it("sends a right-click step to the page by testid, in step order", async () => {
+    await runSteps(
+      parseSteps(
+        JSON.stringify([
+          { type: "right-click", testid: "loop-1" },
+          { type: "click", testid: "node-menu-frame-only" },
+        ]),
+      ),
+      page,
+      { outDir },
+    );
+
+    expect(page.calls).toEqual(["right-click loop-1", "click node-menu-frame-only"]);
   });
 
   it("dispatches drag and press to the page in step order", async () => {
@@ -554,6 +589,28 @@ class FakePlaywrightPage {
     return this as unknown as Page;
   }
 }
+
+describe("openCanvas", () => {
+  const clicks = (page: FakeDrivePage) => page.calls.filter((call) => call.startsWith("click "));
+
+  it("opens the seeded blueprint by its id, then waits for the canvas", async () => {
+    const page = new FakeDrivePage();
+
+    await openCanvas(page, { flowId: "f-seeded" });
+
+    expect(clicks(page)).toEqual(["click blueprint-open-f-seeded"]);
+    expect(page.calls.indexOf("click blueprint-open-f-seeded")).toBeLessThan(page.calls.length - 1);
+  });
+
+  it("makes a new blueprint when no flow id is given, then waits for the canvas", async () => {
+    const page = new FakeDrivePage();
+
+    await openCanvas(page, {});
+
+    expect(clicks(page)).toEqual(["click blueprint-new"]);
+    expect(page.calls.indexOf("click blueprint-new")).toBeLessThan(page.calls.length - 1);
+  });
+});
 
 describe("playwrightPage", () => {
   const layout = () => ({

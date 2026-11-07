@@ -12,6 +12,7 @@ const bridge = (
   openFlow: vi.fn(),
   listFlows: vi.fn(),
   renameFlow: vi.fn(),
+  pinFlow: vi.fn(),
   buildVersion: vi.fn(),
   listBuilds: vi.fn(),
   buildFiles: vi.fn(),

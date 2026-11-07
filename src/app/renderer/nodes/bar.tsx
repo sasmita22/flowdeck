@@ -1,4 +1,5 @@
 import type { NodeProps } from "@xyflow/react";
+import { labelFonts, labelTextWidth } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
 import { barLook } from "./outlines.js";
@@ -17,6 +18,7 @@ export function ParallelBar({
 }) {
   const { box, group, outline, tag } = nodeLook(type);
   const [w, h] = [width ?? box.width, height ?? box.height];
+  const labelWidth = labelTextWidth(data.label ?? "", "body");
   const ring = (stroke: string, strokeWidth: number) => (
     <rect
       width={w}
@@ -71,12 +73,12 @@ export function ParallelBar({
           left: "50%",
           transform: "translateX(-50%)",
           marginBottom: 6,
-          maxWidth: 170,
+          maxWidth: Math.max(170, labelWidth),
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           color: "var(--fg)",
-          font: "600 13px var(--f-body)",
+          font: labelFonts.body,
         }}
       >
         {data.label}
@@ -94,10 +96,11 @@ export function ParallelBar({
         <NodeStatusBadge nodeId={id} />
         <NodeFailureReason
           nodeId={id}
-          style={{ left: "50%", transform: "translateX(-50%)", width: 160, textAlign: "center" }}
+          width={Math.max(160, labelWidth)}
+          style={{ left: "50%", transform: "translateX(-50%)", textAlign: "center" }}
         />
       </div>
-      <NodeIssueMarker nodeId={id} />
+      <NodeIssueMarker nodeId={id} width={170} />
       {ports(id, type)}
     </div>
   );

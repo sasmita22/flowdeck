@@ -46,64 +46,74 @@ const work = nodeLook("agent").group;
 const ctrl = nodeLook("branch").group;
 
 const branch = nodeLook("branch").box;
-const hexagon = `12,0 ${branch.width - 12},0 ${branch.width},${branch.height / 2} ${branch.width - 12},${branch.height} 12,${branch.height} 0,${branch.height / 2}`;
-const stop = octagon(w, h, 13);
+const hexagon = (width: number) =>
+  `12,0 ${width - 12},0 ${width},${branch.height / 2} ${width - 12},${branch.height} 12,${branch.height} 0,${branch.height / 2}`;
 
-const outlines: Record<OutlinedType, NodeOutline> = {
-  trigger: outline(
-    `M${r},0 H${w - 6} Q${w},0 ${w},6 V${h - 6} Q${w},${h} ${w - 6},${h} H${r} A${r},${r} 0 0 1 ${r},0 Z`,
-    16,
-  ),
-  output: outline(
-    `M6,0 H${w - r} A${r},${r} 0 0 1 ${w - r},${h} H6 Q0,${h} 0,${h - 6} V6 Q0,0 6,0 Z`,
-    8,
-  ),
-  prompt: outline(roundedRect(w, h, 4), 8),
-  agent: outline(roundedRect(w, h, 12), 10, {
-    strokeWidth: 1.6,
-    extras: [
-      {
-        element: "path",
-        attributes: {
-          d: roundedRect(w, h, 9, 3.5),
-          fill: "none",
-          stroke: work,
-          strokeOpacity: 0.4,
+const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
+  trigger: (w) =>
+    outline(
+      `M${r},0 H${w - 6} Q${w},0 ${w},6 V${h - 6} Q${w},${h} ${w - 6},${h} H${r} A${r},${r} 0 0 1 ${r},0 Z`,
+      16,
+    ),
+  output: (w) =>
+    outline(`M6,0 H${w - r} A${r},${r} 0 0 1 ${w - r},${h} H6 Q0,${h} 0,${h - 6} V6 Q0,0 6,0 Z`, 8),
+  prompt: (w) => outline(roundedRect(w, h, 4), 8),
+  agent: (w) =>
+    outline(roundedRect(w, h, 12), 10, {
+      strokeWidth: 1.6,
+      extras: [
+        {
+          element: "path",
+          attributes: {
+            d: roundedRect(w, h, 9, 3.5),
+            fill: "none",
+            stroke: work,
+            strokeOpacity: 0.4,
+          },
         },
-      },
-    ],
-  }),
-  script: outline(roundedRect(w, h, 6), 8, {
-    fill: "var(--term-bg)",
-    strokeWidth: 1,
-    ink: "var(--term-fg)",
-  }),
-  gate: outline(roundedRect(w, h, 3), 12, {
-    strokeWidth: 1,
-    extras: [
-      { element: "rect", attributes: { x: 0, y: 0, width: 5, height: h, rx: 2, fill: human } },
-      { element: "rect", attributes: { x: w - 5, y: 0, width: 5, height: h, rx: 2, fill: human } },
-    ],
-  }),
-  hardstop: outline(stop, 12, {
-    strokeWidth: 2,
-    extras: [{ element: "path", attributes: { d: stop, fill: human, fillOpacity: 0.14 } }],
-  }),
-  ask: outline(
-    `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
-    8,
-  ),
-  loop: container(w),
-  foreach: container(w),
-  branch: outline(`M${hexagon.replaceAll(" ", " L")} Z`, 14, {
-    extras: [
-      { element: "polygon", attributes: { points: hexagon, fill: ctrl, fillOpacity: 0.08 } },
-    ],
-  }),
+      ],
+    }),
+  script: (w) =>
+    outline(roundedRect(w, h, 6), 8, {
+      fill: "var(--term-bg)",
+      strokeWidth: 1,
+      ink: "var(--term-fg)",
+    }),
+  gate: (w) =>
+    outline(roundedRect(w, h, 3), 12, {
+      strokeWidth: 1,
+      extras: [
+        { element: "rect", attributes: { x: 0, y: 0, width: 5, height: h, rx: 2, fill: human } },
+        {
+          element: "rect",
+          attributes: { x: w - 5, y: 0, width: 5, height: h, rx: 2, fill: human },
+        },
+      ],
+    }),
+  hardstop: (w) => {
+    const stop = octagon(w, h, 13);
+    return outline(stop, 12, {
+      strokeWidth: 2,
+      extras: [{ element: "path", attributes: { d: stop, fill: human, fillOpacity: 0.14 } }],
+    });
+  },
+  ask: (w) =>
+    outline(
+      `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
+      8,
+    ),
+  loop: container,
+  foreach: container,
+  branch: (w) =>
+    outline(`M${hexagon(w).replaceAll(" ", " L")} Z`, 14, {
+      extras: [
+        { element: "polygon", attributes: { points: hexagon(w), fill: ctrl, fillOpacity: 0.08 } },
+      ],
+    }),
 };
 
-export const nodeOutline = (type: OutlinedType, width = w): NodeOutline =>
-  (type === "loop" || type === "foreach") && width !== w ? container(width) : outlines[type];
+export const nodeOutline = (type: OutlinedType, width = nodeLook(type).box.width): NodeOutline =>
+  outlines[type](width);
 
 export const barLook = { rx: 8, fillOpacity: 0.16, strokeWidth: 1.4 } as const;
 

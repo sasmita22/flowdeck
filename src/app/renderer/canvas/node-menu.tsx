@@ -1,10 +1,16 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import { controlTestIds } from "../test-ids.js";
+import { isContainer } from "./frames.js";
 import type { CanvasState } from "./store.js";
 
 export function NodeMenu({ store }: { store: StoreApi<CanvasState> }) {
   const menu = useStore(store, (state) => state.menu);
+  const frame = useStore(store, (state) => {
+    const node = state.flow.nodes.find(({ id }) => id === state.menu?.nodeId);
+    return node !== undefined && isContainer(node);
+  });
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,6 +51,28 @@ export function NodeMenu({ store }: { store: StoreApi<CanvasState> }) {
         boxShadow: "0 4px 12px rgba(0, 0, 0, 0.2)",
       }}
     >
+      {frame && (
+        <>
+          <button
+            role="menuitem"
+            data-testid={controlTestIds.nodeMenuDuplicate}
+            onClick={() => {
+              const { select, duplicate } = store.getState();
+              select([menu.nodeId]);
+              duplicate();
+            }}
+          >
+            Duplicate
+          </button>
+          <button
+            role="menuitem"
+            data-testid={controlTestIds.nodeMenuFrameOnly}
+            onClick={() => store.getState().frameOnly(menu.nodeId)}
+          >
+            Frame only
+          </button>
+        </>
+      )}
       <button
         role="menuitem"
         data-testid="node-menu-delete"

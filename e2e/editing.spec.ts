@@ -16,8 +16,10 @@ import {
 import type { Flow } from "../src/core/flow/schema.js";
 import {
   branch,
+  fileWire,
   flow,
   fork,
+  loop,
   prompt,
   script,
   thenWire,
@@ -293,6 +295,50 @@ test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicat
   await expect.poll(async () => (await readout(window)).nodes.length).toBe(4);
 });
 
+const loopWithBody = () =>
+  flow(
+    [
+      at(loop("L", { settings: { cap: 5 } }), 80, 120, "Retry"),
+      at(prompt("p", { parent: "L" }), 100, 200, "Fix"),
+      at(script("s", { parent: "L" }), 320, 200, "Test"),
+    ],
+    [thenWire("p", "s")],
+  );
+
+const childrenIn = async (window: Page, id: string) =>
+  (await readout(window)).nodes.filter((node) => node.parent === id).map((node) => node.id);
+
+test("Frame only from the node menu adds an empty Loop with the same settings, and Duplicate keeps the body", async () => {
+  seedFlow(home, loopWithBody());
+  const window = await launch();
+
+  await window.getByTestId("node-L").click({ button: "right" });
+  await window.getByTestId("node-menu-frame-only").click();
+
+  await expect(window.getByTestId("node-loop-1")).toContainText("max 5");
+  const framed = await readout(window);
+  expect(framed.nodes.map((node) => node.id)).toEqual(["L", "p", "s", "loop-1"]);
+  expect(framed.nodes.find((node) => node.id === "loop-1")).toMatchObject({
+    label: "Retry",
+    settings: { cap: 5 },
+  });
+  expect(await childrenIn(window, "loop-1")).toEqual([]);
+  expect(framed.wires).toHaveLength(1);
+
+  await window.keyboard.press("Meta+z");
+  await expect(window.getByTestId("node-loop-1")).toHaveCount(0);
+  expect((await readout(window)).nodes.map((node) => node.id)).toEqual(["L", "p", "s"]);
+
+  await window.getByTestId("node-L").click({ button: "right" });
+  await window.getByTestId("node-menu-duplicate").click();
+  await expect.poll(() => childrenIn(window, "loop-1")).toEqual(["prompt-1", "script-1"]);
+
+  await window.getByTestId("node-L").click();
+  await window.keyboard.press("Meta+d");
+  await expect.poll(() => childrenIn(window, "loop-2")).toEqual(["prompt-2", "script-2"]);
+  expect((await readout(window)).wires).toHaveLength(3);
+});
+
 test("Cmd+C with no node selected is left to the page, so selected text still copies", async () => {
   seedFlow(home, copyable());
   const window = await launch();
@@ -341,6 +387,64 @@ test("A node is renamed in place by double-click or Enter, and Escape keeps the 
   await expect
     .poll(async () => (await readout(window)).nodes.map((node) => node.label))
     .toEqual(["Plan", "Test"]);
+});
+
+test("A File wire is renamed from its label, stays selected, and Undo brings the old name back", async () => {
+  seedFlow(
+    home,
+    flow(
+      [
+        at(script("plan", { settings: { command: "true" } }), 80, 160, "Planner"),
+        at(script("build", { settings: { command: "true" } }), 420, 160, "Builder"),
+      ],
+      [
+        thenWire("plan", "build"),
+        fileWire("plan", "build", "brief.md"),
+        fileWire("plan", "build", "notes.md"),
+      ],
+    ),
+  );
+  const window = await launch();
+  const notesId = "plan:file-out->build:file-in:notes.md";
+  const planId = "plan:file-out->build:file-in:plan.md";
+  const files = async () =>
+    (await readout(window)).wires.flatMap((wire) => (wire.kind === "file" ? [wire.file] : []));
+  const label = await boxOf(window.getByTestId("file-wire-plan-build-notes.md"));
+  const clickLabel = () =>
+    window.mouse.click(label.x + label.width / 2, label.y + label.height / 2);
+
+  await clickLabel();
+  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([notesId]));
+  await clickLabel();
+  const field = window.getByTestId(`file-wire-name-${notesId}`);
+  await expect(field).toBeFocused();
+  await field.fill("plan.md");
+  await field.press("Enter");
+
+  await expect(field).toHaveCount(0);
+  await expect(window.getByTestId("file-wire-plan-build-plan.md")).toHaveText("plan.md");
+  await expect(window.getByTestId(`rf__edge-${planId}`)).toHaveClass(/selected/);
+  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([planId]));
+  expect(await files()).toEqual(["brief.md", "plan.md"]);
+
+  await window.keyboard.press("Meta+z");
+  await expect(window.getByTestId("file-wire-plan-build-notes.md")).toHaveText("notes.md");
+  await expect(window.getByTestId(`rf__edge-${notesId}`)).toHaveClass(/selected/);
+  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([notesId]));
+  expect(await files()).toEqual(["brief.md", "notes.md"]);
+
+  await clickLabel();
+  await expect(field).toBeFocused();
+  await field.fill("brief.md");
+  await field.press("Enter");
+
+  await expect(window.getByTestId("canvas-message")).toHaveText(
+    "Can't connect Planner to Builder: they are already joined.",
+  );
+  expect(await files()).toEqual(["brief.md", "notes.md"]);
+  await window.keyboard.press("Escape");
+  await expect(window.getByTestId("file-wire-plan-build-notes.md")).toHaveText("notes.md");
+  await expect(window.getByTestId("file-wire-plan-build-brief.md")).toHaveText("brief.md");
 });
 
 const zoomOf = async (window: Page) =>

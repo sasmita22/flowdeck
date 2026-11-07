@@ -24,6 +24,7 @@ export const flowSummarySchema = z.object({
   versions: z.number().int(),
   lastSavedAt: z.string().nullable(),
   buildConfig: BuildConfig.nullable(),
+  pinned: z.boolean(),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;
@@ -38,6 +39,7 @@ export interface FlowStore {
   list(): FlowSummary[];
   /** Throws when the blueprint does not exist or the name is blank. */
   rename(flowId: string, name: string): void;
+  pin(flowId: string, pinned: boolean): void;
   /**
    * Appends the next version to the blueprint `target` names, or creates a blueprint named
    * `target.name` with this as its version 1, all or nothing. Without a target, appends to the

@@ -11,6 +11,7 @@ export type EngineRequest = {
     | "save-flow"
     | "list-flows"
     | "rename-flow"
+    | "pin-flow"
     | "open-flow"
     | "list-runs"
     | "load-run"

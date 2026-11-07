@@ -5,8 +5,8 @@ import {
   bodyFrameBounds,
   boundsOf,
   containerMoves,
-  containerSub,
   followed,
+  nodeSub,
   withPositions,
   type Bounds,
 } from "./frames.js";
@@ -167,7 +167,7 @@ export const toViewNodes = (
       toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
     ),
     ...live.nodes.map((node) => {
-      const sub = node.type === "branch" ? node.settings.variable : containerSub(node);
+      const sub = nodeSub(node);
       return {
         id: node.id,
         type: node.type,

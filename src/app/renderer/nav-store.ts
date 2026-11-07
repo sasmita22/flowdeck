@@ -64,7 +64,7 @@ export function arrange<T>(
 
 export const createNavStore = (): StoreApi<NavState> =>
   createStore<NavState>()((set, get) => ({
-    page: { name: "editor" },
+    page: { name: "blueprints" },
     query: "",
     sort: "recent",
     searchFocus: 0,

@@ -1,5 +1,6 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { ports } from "../../../core/nodes/branch/ports.js";
+import { nodeWidth } from "../canvas/frames.js";
 import { useNodeDisplay } from "../canvas/status.js";
 import { nodeOutline } from "./outlines.js";
 import { Label, NodeShape, TagPill, type ShapeNode } from "./shape.js";
@@ -20,6 +21,7 @@ export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
       type="branch"
       selected={selected}
       highlighted={data.highlighted}
+      width={nodeWidth({ type: "branch", label: data.label ?? "", sub: data.sub })}
       handles={ports.map(({ name, direction }) => (
         <Handle
           key={name}

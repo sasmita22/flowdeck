@@ -1,6 +1,6 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { launchOnCanvas, type LaunchedApp, type LaunchOptions } from "../scripts/drive.js";
 
 const fakeClaude = `
 const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
@@ -120,7 +120,7 @@ if (buildSession) {
 
 export const fakeClaudeRan = (home: string) => join(home, "fake-claude-bin", "ran");
 
-export type FakeClaudeLaunchOptions = Parameters<typeof launchApp>[0] & {
+export type FakeClaudeLaunchOptions = LaunchOptions & {
   ownBin?: string;
   basePath?: string;
   pieceMs?: number;
@@ -156,5 +156,5 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     .filter((dir) => dir !== undefined && dir !== "")
     .join(":");
   const home = usage === undefined ? {} : { HOME: usage.userHome };
-  return launchApp({ ...launchOptions, env: { ...options.env, ...home, PATH: path } });
+  return launchOnCanvas({ ...launchOptions, env: { ...options.env, ...home, PATH: path } });
 }

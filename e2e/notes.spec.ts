@@ -6,13 +6,13 @@ import { noteTitle } from "../src/app/renderer/canvas/palette-items.js";
 import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
 import { agent, flow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
-import { launchApp, type LaunchedApp } from "../scripts/drive.js";
+import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
 
 const launch = async () => {
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
   await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
   return launched;
 };

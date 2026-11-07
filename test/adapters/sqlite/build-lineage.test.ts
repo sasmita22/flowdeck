@@ -654,6 +654,7 @@ describe("build lineage", () => {
             const { build_hash, ...rest } = row;
             return { ...rest, build_id: build_hash };
           }
+          if (table === "flows") return { ...row, pinned: 0 };
           return row;
         });
         expect(after, table).toEqual(expected);

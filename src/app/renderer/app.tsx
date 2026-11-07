@@ -7,7 +7,7 @@ import { BuildDialog } from "./build-dialog.js";
 import type { AppState } from "./app-store.js";
 import type { BranchState } from "./branch-store.js";
 import type { BuildProgressState } from "./build-progress-store.js";
-import type { CanvasState } from "./canvas/store.js";
+import { nodeLabel, type CanvasState } from "./canvas/store.js";
 import { ClosePrompt } from "./close-prompt.js";
 import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
@@ -57,7 +57,6 @@ function Problems({
   const problems = useStore(run, (state) => state.problems);
   const nodes = useStore(canvas, (state) => state.flow.nodes);
   if (problems === null) return null;
-  const labelOf = (id: string) => nodes.find((node) => node.id === id)?.label ?? id;
   const open = (node: string | undefined) => {
     nav.getState().go({ name: "editor" });
     if (node === undefined) shell.getState().openSessionSettings();
@@ -90,7 +89,7 @@ function Problems({
               onClick={() => open(node)}
             >
               <span className="fd-problem-where">
-                {node === undefined ? "Session" : labelOf(node)}
+                {node === undefined ? "Session" : nodeLabel(nodes, node)}
               </span>
               <span>{text}</span>
             </button>

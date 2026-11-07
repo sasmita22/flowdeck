@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import {
   createLibraryStore,
+  pinnedFirst,
   selectBuildCards,
   selectRunCards,
   type LibraryBridge,
@@ -15,6 +16,7 @@ const flows = [
     versions: 2,
     lastSavedAt: "2026-01-02T00:00:00.000Z",
     buildConfig: { repo: "/code/shop", variables: [] },
+    pinned: false,
   },
 ];
 
@@ -67,6 +69,7 @@ const fakeBridge = () =>
     listBuilds: vi.fn(async () => builds),
     listRuns: vi.fn(async () => runs),
     renameFlow: vi.fn(async () => null),
+    pinFlow: vi.fn(async () => null),
     buildFiles: vi.fn(async () => [
       { path: "commands/p1.md", sha256: "c", content: "do the thing" },
       { path: "manifest.json", sha256: "m", content: "{}" },
@@ -131,6 +134,19 @@ describe("createLibraryStore", () => {
     bridge.renameFlow.mockRejectedValueOnce(new Error("A blueprint needs a name"));
     await expect(library.getState().rename("flow-a", "")).resolves.toBe(false);
     expect(library.getState().error).toBe("A blueprint needs a name");
+  });
+
+  it("pins a blueprint and reloads the lists", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().pin("flow-a", true);
+
+    expect(bridge.pinFlow).toHaveBeenCalledWith({ flowId: "flow-a", pinned: true });
+    expect(bridge.listFlows).toHaveBeenCalledTimes(1);
+    expect(bridge.pinFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      bridge.listFlows.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("opens a build's files by its id with the manifest first and shows it", async () => {
@@ -251,6 +267,37 @@ describe("cards", () => {
     expect(selectRunCards(library.getState())).toEqual([
       expect.objectContaining({ id: "run-2", name: "Report", version: 2, buildId: "b-fix" }),
       expect.objectContaining({ id: "run-1", name: "Report", version: 2, buildId: "b-fix" }),
+    ]);
+  });
+});
+
+describe("pinnedFirst", () => {
+  const card = (flowId: string, pinned: boolean) => ({
+    flowId,
+    name: flowId,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    versions: 1,
+    lastSavedAt: "2026-01-02T00:00:00.000Z",
+    buildConfig: null,
+    pinned,
+  });
+
+  it("puts pinned blueprints first and keeps the given order within each group", () => {
+    expect(
+      pinnedFirst([
+        card("a", false),
+        card("b", true),
+        card("c", false),
+        card("d", true),
+        card("e", false),
+      ]).map((flow) => flow.flowId),
+    ).toEqual(["b", "d", "a", "c", "e"]);
+  });
+
+  it("leaves a list with nothing pinned as it was", () => {
+    expect(pinnedFirst([card("a", false), card("b", false)]).map((flow) => flow.flowId)).toEqual([
+      "a",
+      "b",
     ]);
   });
 });

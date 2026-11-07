@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { CanvasState } from "../canvas/store.js";
+import { nodeLabel, type CanvasState } from "../canvas/store.js";
 import { formatCost, formatDuration, formatTokens } from "../format.js";
 import { selectRunSnapshot, type RunState } from "../run-store.js";
 
@@ -34,7 +34,6 @@ export function CostTab({
   }, [run, runId, changed]);
 
   if (report === null) return <p data-testid="cost-loading">Reading the cost…</p>;
-  const labelOf = (nodeId: string) => nodes.find((node) => node.id === nodeId)?.label ?? nodeId;
   const shown = report.nodes.filter((line) => line.ms !== null || line.tokens > 0);
   return (
     <table data-testid="cost-tab" style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -49,8 +48,8 @@ export function CostTab({
       <tbody>
         {shown.map((line) => (
           <tr key={line.nodeId} data-testid={`cost-node-${line.nodeId}`}>
-            <td style={nameCell} title={labelOf(line.nodeId)}>
-              {labelOf(line.nodeId)}
+            <td style={nameCell} title={nodeLabel(nodes, line.nodeId)}>
+              {nodeLabel(nodes, line.nodeId)}
             </td>
             <td style={cell}>{formatTokens(line.tokens).replace(" tokens", "")}</td>
             <td style={cell}>{formatCost(line.cost)}</td>

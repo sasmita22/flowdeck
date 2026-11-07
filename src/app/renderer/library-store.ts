@@ -22,6 +22,7 @@ export type LibraryBridge = Pick<
   | "listBuilds"
   | "listRuns"
   | "renameFlow"
+  | "pinFlow"
   | "buildFiles"
   | "openFlow"
   | "doctor"
@@ -47,6 +48,7 @@ export type LibraryState = {
   refresh(): Promise<void>;
   openRun(runId: string): Promise<void>;
   rename(flowId: string, name: string): Promise<boolean>;
+  pin(flowId: string, pinned: boolean): Promise<void>;
   openFiles(buildId: string): Promise<void>;
   selectFile(path: string): void;
   diagnose(flowId: string | null, openConnectors: readonly string[]): Promise<void>;
@@ -99,6 +101,11 @@ export const selectRunCards = (state: Pick<LibraryState, "flows" | "runs">): Run
     name: nameIn(state.flows, run.source?.flowId),
     version: run.source?.version ?? null,
   }));
+
+export const pinnedFirst = <T extends Pick<FlowSummary, "pinned">>(flows: readonly T[]): T[] => [
+  ...flows.filter((flow) => flow.pinned),
+  ...flows.filter((flow) => !flow.pinned),
+];
 
 const manifestFirst = (a: BuildFileContent, b: BuildFileContent) =>
   Number(b.path === "manifest.json") - Number(a.path === "manifest.json") ||
@@ -154,6 +161,16 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
       }
       await get().refresh();
       return true;
+    },
+
+    pin: async (flowId, pinned) => {
+      try {
+        await bridge.pinFlow({ flowId, pinned });
+      } catch (error) {
+        set({ error: messageOf(error) });
+        return;
+      }
+      await get().refresh();
     },
 
     openFiles: async (buildId) => {

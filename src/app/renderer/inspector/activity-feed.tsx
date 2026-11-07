@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
-import type { CanvasState } from "../canvas/store.js";
+import { nodeLabel, type CanvasState } from "../canvas/store.js";
 import type { RunView } from "../run-store.js";
 import { entryText, selectActivity, type InspectorState } from "./store.js";
 
@@ -51,7 +51,6 @@ export function ActivityFeed({
   const nodes = useStore(canvas, (state) => state.flow.nodes);
   const entries = selectActivity({ feed }, runId, stored ?? []);
   if (entries.length === 0) return <p data-testid="activity-empty">No activity yet</p>;
-  const labelOf = (nodeId: string) => nodes.find((node) => node.id === nodeId)?.label ?? nodeId;
   return (
     <ol style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
       {entries.map((entry) => (
@@ -64,7 +63,7 @@ export function ActivityFeed({
             style={entryStyle}
             onClick={() => canvas.getState().highlight(entry.nodeId)}
           >
-            <strong>{labelOf(entry.nodeId)}</strong> {entryText(entry)}
+            <strong>{nodeLabel(nodes, entry.nodeId)}</strong> {entryText(entry)}
           </button>
           {entry.kind === "output" && entry.text.includes("\n") && (
             <pre data-testid={`activity-output-${entry.id}`} style={outputStyle}>

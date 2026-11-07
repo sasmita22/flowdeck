@@ -3,6 +3,7 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { nodeLook } from "../nodes/look.js";
+import { widthOf } from "./frames.js";
 import type { CanvasState, Naming } from "./store.js";
 
 const below = 28;
@@ -11,8 +12,10 @@ const anchorOf = (state: CanvasState, naming: Naming) => {
   const corner = (id: string, side: "left" | "right") => {
     const node = state.flow.nodes.find((candidate) => candidate.id === id);
     if (node === undefined) return { x: 0, y: 0 };
-    const { width, height } = nodeLook(node.type).box;
-    return { x: node.position.x + (side === "left" ? 0 : width), y: node.position.y + height };
+    return {
+      x: node.position.x + (side === "left" ? 0 : widthOf(node)),
+      y: node.position.y + nodeLook(node.type).box.height,
+    };
   };
   const from = corner(naming.from.node, "right");
   const to = corner(naming.to.node, "left");
