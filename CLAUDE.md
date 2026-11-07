@@ -25,7 +25,6 @@ and `/plugin install workflows@agent-workflow`. How tickets run through it is in
 | All unit and integration tests                  | `npm test`                                     |
 | A single test file                              | `npx vitest run <file>`                        |
 | Live tests (start real Claude Code, cost money) | `FLOWDECK_LIVE=1 npx vitest run <file>`        |
-| Run the CLI                                     | `npx tsx src/cli/main.ts <args>`               |
 | Drive the app                                   | `npm run drive -- <steps.json>`                |
 
 `npm test` never runs live tests. CI runs `npm run check` on every PR.
@@ -43,13 +42,12 @@ flow.
 
 ### Layers
 
-| Folder          | Holds                                                                                                             | May import                                                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                    | `core` only                                                                                                                     |
-| `src/ports/`    | Interfaces only: SessionHost, EventSource, Waiter, Store, ProcessRunner, Clock, FileSystem                        | `core`                                                                                                                          |
-| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                | `core`, `ports`                                                                                                                 |
-| `src/cli/`      | The `flowdeck` command and its composition root                                                                   | all of the above                                                                                                                |
-| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React) | all of the above; the renderer only `core`, and `preload` for types, never `ports`, `adapters`, `cli`, `main`, `engine` or Node |
+| Folder          | Holds                                                                                                             | May import                                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                    | `core` only                                                                                                              |
+| `src/ports/`    | Interfaces only: SessionHost, EventSource, Waiter, Store, ProcessRunner, Clock, FileSystem                        | `core`                                                                                                                   |
+| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                | `core`, `ports`                                                                                                          |
+| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React) | all of the above; the renderer only `core`, and `preload` for types, never `ports`, `adapters`, `main`, `engine` or Node |
 
 `test/` may import any layer. The layer rule is enforced by ESLint (`eslint-plugin-boundaries`,
 with `eslint-import-resolver-typescript` so `.js` import paths resolve to `.ts` files; without the
@@ -62,7 +60,7 @@ code to the right layer instead.
 - **Every port has a fake** in `test/fakes/`. Core logic is tested against fakes, not real tools.
 - **Constructor injection, no DI framework.** Classes take their ports in the constructor, for
   example `new Runner({ sessions, events, store, waiter })`. Real adapters are created only in the
-  composition roots, `src/cli/main.ts` and `src/app/main`.
+  composition roots, `src/app/main` and `src/app/engine/engine.ts`.
 - **One folder per node type** in `src/core/nodes/<type>/`: settings schema, ports, compile,
   execute. A new node type is a new folder; `src/core/nodes/registry.ts` lists them.
 - **The zod schema is the single source of truth** for a type, its validation and its settings

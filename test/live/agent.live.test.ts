@@ -1,18 +1,17 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
+import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { EventLog } from "../../src/adapters/jsonl/event-log.js";
-import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -130,72 +129,23 @@ const describeEvent = ({ kind, payload }: HookEvent) =>
     .filter((part) => part !== undefined)
     .join(" ");
 
-async function claudeRunning(sessionId: string): Promise<boolean> {
-  try {
-    await run("pgrep", ["-f", `session-id ${sessionId}`]);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 1)) return false;
-    throw error;
-  }
-}
-
-async function waitForClaudeToExit(sessionId: string): Promise<void> {
-  for (let elapsed = 0; elapsed < 10_000; elapsed += 100) {
-    if (!(await claudeRunning(sessionId))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`claude for session ${sessionId} did not exit`);
-}
-
-async function removeIfEmpty(folder: string): Promise<void> {
-  try {
-    await rmdir(folder);
-  } catch (error) {
-    if (!hasCode(error, "ENOTEMPTY", "ENOENT")) throw error;
-  }
-}
-
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude", () => {
   const sessionName = `fd-live-agent-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let slug: string;
-  let claudeTmp: string;
-  let projectFolder: string;
-  let sessionIds: string[];
+  let engine: LiveEngine | undefined;
+  let claudeTmp: string | undefined;
 
   beforeEach(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
-    claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
-    projectFolder = join(homedir(), ".claude", "projects", slug);
-    sessionIds = [];
+    engine = undefined;
+    claudeTmp = undefined;
   });
 
   afterEach(async () => {
-    try {
-      await run("tmux", ["-L", sessionName, "kill-server"]);
-      console.error(`killed a tmux server left on ${sessionName}`);
-    } catch (error) {
-      if (!hasCode(error, 1)) throw error;
-    }
-    const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
-    await rm(join(socketFolder, sessionName), { force: true });
-    for (const sessionId of sessionIds) {
-      await waitForClaudeToExit(sessionId);
-      await rm(join(projectFolder, `${sessionId}.jsonl`), { force: true });
-      await rm(join(projectFolder, sessionId), { recursive: true, force: true });
-      for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
-      }
-    }
-    await removeIfEmpty(join(projectFolder, "memory"));
-    await removeIfEmpty(projectFolder);
-    await rm(claudeTmp, { recursive: true, force: true });
+    await engine?.cleanup();
+    if (claudeTmp !== undefined) await rm(claudeTmp, { recursive: true, force: true });
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -209,24 +159,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
       const logPath = join(home, "runs", "agent", "events.jsonl");
       const recorded: HookEvent[] = [];
       let server: HookSocketServer | undefined;
-      const real = realDeps();
-      const stdout: string[] = [];
-      const stderr: string[] = [];
-      const deps: CliDeps = {
-        ...real,
-        env: { ...process.env, FLOWDECK_HOME: home },
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-        startEvents: async (socketPath) => {
-          await mkdir(dirname(socketPath), { recursive: true });
-          server = new HookSocketServer({ socketPath });
-          await server.start();
-          const started = server;
-          return { events: started, stop: () => started.stop() };
+      engine = liveEngine({
+        home,
+        repo: repo.path,
+        sessionName,
+        startEvents: (start) => async (socketPath) => {
+          const started = await start(socketPath);
+          server = started.events as HookSocketServer;
+          return started;
         },
-        openSession: async (options) => {
-          const opened = await real.openSession(options);
-          sessionIds.push(opened.sessionId);
+        openSession: (open) => async (options) => {
+          const opened = await open(options);
           if (server === undefined) throw new Error("hook socket not started");
           new EventLog({ events: server, path: logPath, runId: "agent" }).watch(opened.sessionId);
           for (const kind of hookKinds) {
@@ -234,27 +177,35 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
           }
           return opened;
         },
-      };
+      });
 
       const flow = liveFlow(secret);
       const piece = pieceNames(flow).get("a1") ?? "";
-      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
-      const notesPath = join(workspace.workFolder, "notes.md");
-      const controlPath = join(workspace.workFolder, "control.md");
+      const built = await engine.saveAndBuild(flow, { name: buildName });
+      claudeTmp = join(
+        "/private/tmp",
+        `claude-${userInfo().uid}`,
+        built.workFolder.replace(/[^a-zA-Z0-9]/g, "-"),
+      );
+      const notesPath = join(built.workFolder, "notes.md");
+      const controlPath = join(built.workFolder, "control.md");
       await rm(notesPath, { force: true });
       expect(await readOrMissing(notesPath)).toBeUndefined();
       expect(
-        await readFile(join(workspace.dir, "plugin", "agents", `${piece}.md`), "utf8"),
+        await readFile(join(built.dir, "plugin", "agents", `${piece}.md`), "utf8"),
       ).not.toContain(secret);
       expect(agentTurnText(buildName, piece, { id: "a1", given: [], writes: [] })).not.toContain(
         secret,
       );
 
-      const code = await runCli(
-        ["run", buildName, "--session", sessionName, "--model", "haiku"],
-        deps,
-      );
+      const runId = await engine.runBuild(built.buildId);
+      const status = await engine.waitForRunEnd(runId, runTimeoutMs - 60_000);
 
+      const progress = engine.stores.runs
+        .events(runId)
+        .filter((event) => ["p1", "a1", "p2"].includes(event.nodeId))
+        .filter((event) => event.kind === "sent" || event.kind === "done")
+        .map((event) => `${event.nodeId} ${event.kind === "sent" ? "started" : "done"}`);
       const notes = await readOrMissing(notesPath);
       const control = await readOrMissing(controlPath);
       const log = await readEventLog(logPath);
@@ -262,20 +213,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
         [
           `secret: ${secret}`,
           `hash: ${built.hash}`,
-          `exit: ${code}`,
-          `stdout:\n${stdout.join("\n")}`,
-          `stderr:\n${stderr.join("\n")}`,
+          `status: ${status}`,
+          `progress:\n${progress.join("\n")}`,
           `notes.md: ${JSON.stringify(notes)}`,
           `control.md: ${JSON.stringify(control)}`,
-          `git status --porcelain:\n${(await run("git", ["status", "--porcelain"], { cwd: workspace.workFolder })).stdout}`,
+          `git status --porcelain:\n${(await run("git", ["status", "--porcelain"], { cwd: built.workFolder })).stdout}`,
           `files under ${claudeTmp}: ${JSON.stringify(await listRecursive(claudeTmp))}`,
           `hook events in order:\n${recorded.map(describeEvent).join("\n")}`,
         ].join("\n"),
       );
 
-      expect.soft(code).toBe(0);
+      expect.soft(status).toBe("done");
       expect
-        .soft(stdout)
+        .soft(progress)
         .toEqual(["p1 started", "p1 done", "a1 started", "a1 done", "p2 started", "p2 done"]);
       expect.soft(notes, "notes.md exists").toBeDefined();
       expect

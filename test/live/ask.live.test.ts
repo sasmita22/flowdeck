@@ -1,17 +1,13 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
-const run = promisify(execFile);
 const buildName = "live-ask";
 const runTimeoutMs = 300_000;
 const colourWord = /\b(red|blue|green)\b/i;
@@ -81,72 +77,20 @@ async function readOrMissing(path: string): Promise<string | undefined> {
   }
 }
 
-async function claudeRunning(sessionId: string): Promise<boolean> {
-  try {
-    await run("pgrep", ["-f", `session-id ${sessionId}`]);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 1)) return false;
-    throw error;
-  }
-}
-
-async function waitForClaudeToExit(sessionId: string): Promise<void> {
-  for (let elapsed = 0; elapsed < 10_000; elapsed += 100) {
-    if (!(await claudeRunning(sessionId))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`claude for session ${sessionId} did not exit`);
-}
-
-async function removeIfEmpty(folder: string): Promise<void> {
-  try {
-    await rmdir(folder);
-  } catch (error) {
-    if (!hasCode(error, "ENOTEMPTY", "ENOENT")) throw error;
-  }
-}
-
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude", () => {
   const sessionName = `fd-live-ask-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let slug: string;
-  let claudeTmp: string;
-  let projectFolder: string;
-  let sessionIds: string[];
+  let engine: LiveEngine | undefined;
 
   beforeEach(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
-    claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
-    projectFolder = join(homedir(), ".claude", "projects", slug);
-    sessionIds = [];
+    engine = undefined;
   });
 
   afterEach(async () => {
-    try {
-      await run("tmux", ["-L", sessionName, "kill-server"]);
-      console.error(`killed a tmux server left on ${sessionName}`);
-    } catch (error) {
-      if (!hasCode(error, 1)) throw error;
-    }
-    const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
-    await rm(join(socketFolder, sessionName), { force: true });
-    for (const sessionId of sessionIds) {
-      await waitForClaudeToExit(sessionId);
-      await rm(join(projectFolder, `${sessionId}.jsonl`), { force: true });
-      await rm(join(projectFolder, sessionId), { recursive: true, force: true });
-      for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
-      }
-    }
-    await removeIfEmpty(join(projectFolder, "memory"));
-    await removeIfEmpty(projectFolder);
-    await rm(claudeTmp, { recursive: true, force: true });
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -155,52 +99,51 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
     "attaches the Ask's answer to the next Prompt, which writes it to colour.md",
     { timeout: runTimeoutMs },
     async () => {
-      const real = realDeps();
-      const stdout: string[] = [];
-      const stderr: string[] = [];
-      const deps: CliDeps = {
-        ...real,
-        env: { ...process.env, FLOWDECK_HOME: home },
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
+      engine = liveEngine({
+        home,
+        repo: repo.path,
+        sessionName,
         waiter: new FakeWaiter([{ decision: "answer", answer: "blue" }]),
-        openSession: async (options) => {
-          const opened = await real.openSession(options);
-          sessionIds.push(opened.sessionId);
-          return opened;
-        },
-      };
+      });
 
       const flow = liveFlow();
-      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
-      const colourPath = join(workspace.workFolder, "colour.md");
+      const built = await engine.saveAndBuild(flow, { name: buildName });
+      const colourPath = join(built.workFolder, "colour.md");
       expect(await readOrMissing(colourPath)).toBeUndefined();
       expect(promptText).not.toMatch(colourWord);
       expect(
         await readFile(
-          join(workspace.dir, "plugin", "skills", pieceNames(flow).get("p1") ?? "", "SKILL.md"),
+          join(built.dir, "plugin", "skills", pieceNames(flow).get("p1") ?? "", "SKILL.md"),
           "utf8",
         ),
       ).not.toMatch(colourWord);
 
-      const code = await runCli(
-        ["run", buildName, "--session", sessionName, "--model", "haiku"],
-        deps,
-      );
+      const runId = await engine.runBuild(built.buildId);
+      const status = await engine.waitForRunEnd(runId, runTimeoutMs - 60_000);
 
+      const events = engine.stores.runs.events(runId);
+      const progress = events.flatMap((event) => {
+        if (event.nodeId === "q1" && event.kind === "answered") {
+          return [
+            `q1 answered: ${event.payload.decision === "answered" ? event.payload.answer : event.payload.decision}`,
+          ];
+        }
+        if (event.nodeId === "p1" && event.kind === "sent") return ["p1 started"];
+        if (event.nodeId === "p1" && event.kind === "done") return ["p1 done"];
+        return [];
+      });
       const colour = await readOrMissing(colourPath);
       console.log(
         [
           `hash: ${built.hash}`,
-          `exit: ${code}`,
-          `stdout:\n${stdout.join("\n")}`,
-          `stderr:\n${stderr.join("\n")}`,
+          `status: ${status}`,
+          `progress:\n${progress.join("\n")}`,
           `colour.md: ${JSON.stringify(colour)}`,
         ].join("\n"),
       );
 
-      expect.soft(code).toBe(0);
-      expect.soft(stdout).toEqual(["q1 answered: blue", "p1 started", "p1 done"]);
+      expect.soft(status).toBe("done");
+      expect.soft(progress).toEqual(["q1 answered: blue", "p1 started", "p1 done"]);
       expect.soft(colour, "colour.md exists").toBeDefined();
       const content = (colour ?? "").trim().toLowerCase();
       expect.soft(content, "colour.md names the answer").toContain("blue");

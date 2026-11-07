@@ -1,16 +1,15 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { realDeps, runCli, type CliDeps } from "../../src/cli/main.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
+import type { StoredEvent } from "../../src/core/run/store.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
-import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -32,41 +31,12 @@ const files = {
   "src/math.js": "function add(a, b) {\n  return a + b;\n\nmodule.exports = { add };\n",
 };
 
-const hasCode = (error: unknown, ...codes: (string | number)[]) =>
-  error instanceof Error && "code" in error && codes.includes(error.code as string | number);
-
 const at = (x: number) => ({ x, y: 0 });
 const then = (from: string, to: string) => ({
   kind: "then",
   from: { node: from, port: "out" },
   to: { node: to, port: "in" },
 });
-
-async function claudeRunning(sessionId: string): Promise<boolean> {
-  try {
-    await run("pgrep", ["-f", `session-id ${sessionId}`]);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 1)) return false;
-    throw error;
-  }
-}
-
-async function waitForClaudeToExit(sessionId: string): Promise<void> {
-  for (let elapsed = 0; elapsed < 10_000; elapsed += 100) {
-    if (!(await claudeRunning(sessionId))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`claude for session ${sessionId} did not exit`);
-}
-
-async function removeIfEmpty(folder: string): Promise<void> {
-  try {
-    await rmdir(folder);
-  } catch (error) {
-    if (!hasCode(error, "ENOTEMPTY", "ENOENT")) throw error;
-  }
-}
 
 function liveFlow() {
   return parseFlow({
@@ -134,11 +104,11 @@ async function nodeIn(cwd: string, ...args: string[]): Promise<{ code: number; s
   }
 }
 
-const roundsOf = (lines: string[]) => {
+const roundsOf = (events: StoredEvent[]) => {
   const rounds: string[][] = [];
-  for (const line of lines) {
-    if (/^l1 round \d+$/.test(line)) rounds.push([]);
-    else rounds.at(-1)?.push(line);
+  for (const event of events) {
+    if (event.nodeId === "l1" && event.kind === "round") rounds.push([]);
+    else if (event.kind === "done") rounds.at(-1)?.push(`${event.nodeId} done`);
   }
   return rounds;
 };
@@ -147,42 +117,19 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
   const sessionName = `fd-live-loop-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let slug: string;
-  let claudeTmp: string;
-  let projectFolder: string;
-  let sessionIds: string[];
+  let engine: LiveEngine | undefined;
+  let claudeTmp: string | undefined;
 
   beforeEach(async () => {
-    home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
-    claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
-    projectFolder = join(homedir(), ".claude", "projects", slug);
-    sessionIds = [];
+    engine = undefined;
+    claudeTmp = undefined;
   });
 
   afterEach(async () => {
-    try {
-      await run("tmux", ["-L", sessionName, "kill-server"]);
-      console.error(`killed a tmux server left on ${sessionName}`);
-    } catch (error) {
-      if (!hasCode(error, 1)) throw error;
-    }
-    const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
-    await rm(join(socketFolder, sessionName), { force: true });
-    for (const sessionId of sessionIds) {
-      await waitForClaudeToExit(sessionId);
-      await rm(join(projectFolder, `${sessionId}.jsonl`), { force: true });
-      await rm(join(projectFolder, sessionId), { recursive: true, force: true });
-      for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
-      }
-    }
-    await removeIfEmpty(join(projectFolder, "memory"));
-    await removeIfEmpty(projectFolder);
-    await rm(claudeTmp, { recursive: true, force: true });
+    await engine?.cleanup();
+    if (claudeTmp !== undefined) await rm(claudeTmp, { recursive: true, force: true });
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
@@ -191,71 +138,58 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
     "loops a reviewer and a fixer until the planted syntax error is fixed",
     { timeout: runTimeoutMs },
     async () => {
-      const real = realDeps();
-      const stdout: string[] = [];
-      const stderr: string[] = [];
       const replies: string[] = [];
       let events: TurnEvents | undefined;
-      let stopRun: ((exitCode: number) => void) | undefined;
-      const deps: CliDeps = {
-        ...real,
-        env: { ...process.env, FLOWDECK_HOME: home },
-        stdout: (line) => {
-          stdout.push(line);
-          console.log(`cli: ${line}`);
-        },
-        stderr: (line) => {
-          stderr.push(line);
-          console.error(`cli: ${line}`);
-        },
-        onInterrupt: (handler) => {
-          stopRun = handler;
-          return () => {
-            stopRun = undefined;
-          };
-        },
-        waiter: new FakeWaiter([]),
-        startEvents: async (socketPath) => {
-          const started = await real.startEvents(socketPath);
+      const live = liveEngine({
+        home,
+        repo: repo.path,
+        sessionName,
+        startEvents: (start) => async (socketPath) => {
+          const started = await start(socketPath);
           events = started.events;
           return started;
         },
-        openSession: async (options) => {
-          const opened = await real.openSession(options);
-          sessionIds.push(opened.sessionId);
+        openSession: (open) => async (options) => {
+          const opened = await open(options);
           events?.subscribe("Stop", opened.sessionId, (event) => {
             replies.push(String(event.payload["last_assistant_message"]));
           });
           return opened;
         },
-      };
+      });
+      engine = live;
 
       const flow = liveFlow();
-      const built = await cliBuild(flow, { name: buildName, repo: repo.path }, workspace, deps);
-      await mkdir(join(workspace.workFolder, "src"));
+      const built = await live.saveAndBuild(flow, { name: buildName });
+      const { workFolder } = built;
+      const slug = (await realpath(workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
+      claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
+      const projectFolder = join(homedir(), ".claude", "projects", slug);
+      await mkdir(join(workFolder, "src"));
       for (const [path, content] of Object.entries(files)) {
-        await writeFile(join(workspace.workFolder, path), content);
+        await writeFile(join(workFolder, path), content);
       }
-      const before = await nodeIn(workspace.workFolder, "--check", "src/math.js");
+      const before = await nodeIn(workFolder, "--check", "src/math.js");
       console.log(`node --check src/math.js before: exit ${before.code}\n${before.stderr}`);
       expect(before.code).not.toBe(0);
-      expect((await nodeIn(workspace.workFolder, "--check", "src/greet.js")).code).toBe(0);
-      expect((await nodeIn(workspace.workFolder, "--check", "src/total.js")).code).toBe(0);
+      expect((await nodeIn(workFolder, "--check", "src/greet.js")).code).toBe(0);
+      expect((await nodeIn(workFolder, "--check", "src/total.js")).code).toBe(0);
       expect(fixText).not.toMatch(namesTheError);
       expect(condition).not.toMatch(namesTheError);
       expect(
         await readFile(
-          join(workspace.dir, "plugin", "skills", pieceNames(flow).get("fix") ?? "", "SKILL.md"),
+          join(built.dir, "plugin", "skills", pieceNames(flow).get("fix") ?? "", "SKILL.md"),
           "utf8",
         ),
       ).not.toMatch(namesTheError);
 
-      const code = await withWatchdog(
-        runCli(["run", buildName, "--session", sessionName, "--model", "haiku"], deps),
+      const runId = await live.runBuild(built.buildId);
+      const status = await withWatchdog(
+        live.waitForRunEnd(runId, watchdogMs + 30_000),
         watchdogMs,
         async () => {
           const transcripts = await Promise.all(
-            sessionIds.map((id) => transcriptTail(join(projectFolder, `${id}.jsonl`))),
+            live.sessionIds.map((id) => transcriptTail(join(projectFolder, `${id}.jsonl`))),
           );
           console.error(
             [
@@ -264,24 +198,29 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
               ...transcripts.map((lines) => `transcript tail:\n${lines.join("\n")}`),
             ].join("\n"),
           );
-          stopRun?.(1);
+          await live.stopRun(runId);
         },
       );
 
-      const rounds = roundsOf(stdout);
-      const after = await nodeIn(workspace.workFolder, "--check", "src/math.js");
+      const runEvents = live.stores.runs.events(runId);
+      const rounds = roundsOf(runEvents);
+      const loopProgress = runEvents
+        .filter(
+          (event) => event.nodeId === "l1" && (event.kind === "round" || event.kind === "done"),
+        )
+        .map((event) => (event.kind === "round" ? `l1 round ${event.payload.round}` : "l1 done"));
+      const after = await nodeIn(workFolder, "--check", "src/math.js");
       const adds = await nodeIn(
-        workspace.workFolder,
+        workFolder,
         "-e",
         "process.exit(require('./src/math.js').add(2, 3) === 5 ? 0 : 1)",
       );
-      const math = await readFile(join(workspace.workFolder, "src/math.js"), "utf8");
+      const math = await readFile(join(workFolder, "src/math.js"), "utf8");
       console.log(
         [
           `hash: ${built.hash}`,
-          `exit: ${code}`,
-          `stdout:\n${stdout.join("\n")}`,
-          `stderr:\n${stderr.join("\n")}`,
+          `status: ${status}`,
+          `run events:\n${runEvents.map((event) => `${event.time} ${event.nodeId} ${event.kind}`).join("\n")}`,
           `rounds: ${rounds.length}`,
           ...replies.map((reply, i) => `reply ${i + 1}:\n${reply}`),
           `node --check src/math.js after: exit ${after.code}\n${after.stderr}`,
@@ -290,15 +229,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
         ].join("\n"),
       );
 
-      expect.soft(code).toBe(0);
-      expect.soft(stdout).toContain("l1 round 1");
+      expect.soft(status).toBe("done");
+      expect.soft(loopProgress).toContain("l1 round 1");
       expect.soft(rounds.length).toBeGreaterThanOrEqual(1);
       expect.soft(rounds.length).toBeLessThanOrEqual(3);
       for (const round of rounds) {
         expect.soft(round).toContain("review done");
         expect.soft(round).toContain("fix done");
       }
-      expect.soft(stdout.filter((line) => line.startsWith("l1 ")).at(-1)).toBe("l1 done");
+      expect.soft(loopProgress.at(-1)).toBe("l1 done");
       expect.soft(after.code, "node --check src/math.js passes").toBe(0);
       expect.soft(adds.code, "add(2, 3) is 5").toBe(0);
     },

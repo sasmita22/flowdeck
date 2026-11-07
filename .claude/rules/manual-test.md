@@ -6,11 +6,11 @@ host and run each check twice. Use these rules instead.
 
 ## How to drive each part
 
-| What changed      | How to drive it                                                                                                                                          | Evidence to save and read back                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Engine and CLI    | Run the `flowdeck` command against a throwaway repo created by `test/fixtures/tmp-repo.ts`                                                               | The command's output, `tmux capture-pane -p -t <session>`, and the files or database rows the check names |
-| App screens       | `npm run drive -- <steps.json>`: launches the app with Playwright for Electron and runs click, type, wait-for-text and screenshot steps by `data-testid` | A screenshot and an accessibility snapshot per step, plus the app log                                     |
-| The terminal pane | Open it through the drive script                                                                                                                         | The screenshot, checked against `tmux capture-pane` of the same session                                   |
+| What changed      | How to drive it                                                                                                                                          | Evidence to save and read back                                                                                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine            | Build a blueprint and run it in the app with `npm run drive -- <steps.json>`                                                                             | A screenshot and an accessibility snapshot per step, the app log, `tmux capture-pane -p -t <session>` of the run's session, and the database rows the check names (for example `run_nodes`) |
+| App screens       | `npm run drive -- <steps.json>`: launches the app with Playwright for Electron and runs click, type, wait-for-text and screenshot steps by `data-testid` | A screenshot and an accessibility snapshot per step, plus the app log                                                                                                                       |
+| The terminal pane | Open it through the drive script                                                                                                                         | The screenshot, checked against `tmux capture-pane` of the same session                                                                                                                     |
 
 ## Rules
 

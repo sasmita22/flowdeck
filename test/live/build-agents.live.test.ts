@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { ClaudeBuildAgents } from "../../src/adapters/claude/claude-build-agents.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { prepareKit } from "../../src/adapters/node-fs/kit-copy.js";
-import { realDeps } from "../../src/cli/main.js";
 import { buildReportSchema } from "../../src/core/compiler/build-report.js";
 import {
   buildSessionSettings,
@@ -22,15 +21,18 @@ import { scopeLine, scopeOf } from "../../src/core/compiler/scope-line.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import type { Handoff } from "../../src/core/flow/handoff.js";
 import { agentPrompt } from "../../src/core/nodes/agent/execute.js";
-import { cliBuild, plannedWorkspace } from "../fixtures/cli-build.js";
 import { flow as builderFlow, prompt } from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import {
   draftsOnly,
-  LiveBuilds,
+  guardScriptPath,
+  hookScriptPath,
+  liveBuildAgents,
+  liveEngine,
   realBuildAgents,
-  type LiveBuildResult,
-} from "../fixtures/live-build.js";
+  type EndedBuild,
+  type LiveEngine,
+} from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -200,7 +202,7 @@ function liveFlow(
 const agentFile = (flow: Flow, nodeId: string) =>
   `plugin/agents/${pieceNames(flow).get(nodeId)}.md`;
 
-const contentOf = (built: LiveBuildResult, path: string): string => {
+const contentOf = (built: EndedBuild, path: string): string => {
   const content = built.files.get(path);
   if (content === undefined)
     throw new Error(`${path} was not in the workspace when the session closed`);
@@ -224,7 +226,7 @@ function afterScope(description: string): string {
 
 const fold = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
-const manifestOf = (built: LiveBuildResult): Manifest =>
+const manifestOf = (built: EndedBuild): Manifest =>
   JSON.parse(contentOf(built, "manifest.json")) as Manifest;
 
 const nodeOf = (manifest: Manifest, id: string): ManifestNode => {
@@ -238,18 +240,25 @@ const detailsOf = (node: ManifestNode): string => {
   return agentPrompt({ id: node.id, given, writes });
 };
 
-const endReport = (built: LiveBuildResult) => buildReportSchema.parse(built.ends.at(-1)?.report);
+const endReport = (built: EndedBuild) => buildReportSchema.parse(built.outcome.report);
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claude", () => {
   let home: string;
   let repo: TmpRepo;
-  let builds: LiveBuilds;
+  let builds: LiveEngine;
 
   beforeEach(async () => {
-    home = await realpath(await mkdtemp(join(tmpdir(), "fd-build-agents-")));
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
     await seedSampleRepo(repo.path);
-    builds = new LiveBuilds(home);
+    const kit = prepareKit({ sourceDir: kitSourceDir, home });
+    builds = liveEngine({
+      home,
+      repo: repo.path,
+      buildAgents: liveBuildAgents(home),
+      kit: () => kit,
+      buildTimeoutMs: buildTimeoutMs - 60_000,
+    });
   });
 
   afterEach(async () => {
@@ -277,11 +286,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
           ["Bash"],
         );
 
-        const built = await builds.build(flow, { name: "live-at4", repo: repo.path });
+        const built = await builds.saveAndEndBuild(flow, { name: "live-at4" });
 
         const after = afterScope(descriptionOf(contentOf(built, agentFile(flow, "a1"))));
         console.log(`description after the scope line: ${JSON.stringify(after)}`);
-        expect.soft(built.ends.at(-1)?.outcome).toBe("built");
+        expect.soft(built.outcome.outcome).toBe("built");
         expect(fold(after)).not.toBe(fold("sync with base branch"));
         expect(after.length).toBeGreaterThanOrEqual(descriptionFloor);
         expect(after).toMatch(/\b(base|main)\b/i);
@@ -319,9 +328,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         );
         expect(JSON.stringify(flow)).not.toContain(gate);
 
-        const built = await builds.build(flow, { name: "live-at5", repo: repo.path });
+        const built = await builds.saveAndEndBuild(flow, { name: "live-at5" });
 
-        expect.soft(built.ends.at(-1)?.outcome).toBe("built");
+        expect.soft(built.outcome.outcome).toBe("built");
         expect(contentOf(built, agentFile(flow, "a1"))).toContain(gate);
       },
     );
@@ -351,9 +360,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
           ["Read", "Write"],
         );
 
-        const built = await builds.build(flow, { name: "live-at6", repo: repo.path });
+        const built = await builds.saveAndEndBuild(flow, { name: "live-at6" });
 
-        expect(built.ends.at(-1)?.outcome).toBe("needs-you");
+        expect(built.outcome.outcome).toBe("needs-you");
         expect(endReport(built).questions).toContainEqual(
           expect.objectContaining({ nodeId: "a1", otherNodeId: "p1" }),
         );
@@ -388,9 +397,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
           ["Read", "Grep", "Write"],
         );
 
-        const built = await builds.build(flow, { name: "live-at7", repo: repo.path });
+        const built = await builds.saveAndEndBuild(flow, { name: "live-at7" });
 
-        expect.soft(built.ends.at(-1)?.outcome).toBe("built");
+        expect.soft(built.outcome.outcome).toBe("built");
         const manifest = manifestOf(built);
         const first = nodeOf(manifest, "a1");
         const second = nodeOf(manifest, "a2");
@@ -430,9 +439,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
           ["Read", "Grep", "Glob"],
         );
 
-        const built = await builds.build(flow, { name: "live-at8", repo: repo.path });
+        const built = await builds.saveAndEndBuild(flow, { name: "live-at8" });
 
-        expect.soft(built.ends.at(-1)?.outcome).toBe("built");
+        expect.soft(built.outcome.outcome).toBe("built");
         const manifest = manifestOf(built);
         expect(nodeOf(manifest, "a2").piece).not.toBe(nodeOf(manifest, "a1").piece);
         const keptApart = endReport(built).keptApart.find(
@@ -450,20 +459,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
   let home: string;
   let repo: TmpRepo;
   let workspaceDir: string;
+  let engine: LiveEngine | undefined;
   let agents: ClaudeBuildAgents | undefined;
 
   beforeAll(async () => {
-    home = await realpath(await mkdtemp(join(tmpdir(), "fd-build-kit-")));
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
-    const workspace = plannedWorkspace(home, repo.path);
-    workspaceDir = workspace.dir;
-    const real = realDeps();
-    await cliBuild(
-      builderFlow([prompt("p1")], []),
-      { name: "live-kit", repo: repo.path },
-      workspace,
-      { ...real, env: { ...process.env, FLOWDECK_HOME: home } },
-    );
+    engine = liveEngine({ home, repo: repo.path });
+    ({ dir: workspaceDir } = await engine.saveAndBuild(builderFlow([prompt("p1")], []), {
+      name: "live-kit",
+    }));
     const kit = await prepareKit({ sourceDir: kitSourceDir, home });
     const settingsPath = join(home, "build-sessions", sessionName, "settings.json");
     await mkdir(dirname(settingsPath), { recursive: true });
@@ -471,10 +476,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
       settingsPath,
       JSON.stringify(
         buildSessionSettings({
-          guardCommand: [real.hooks.nodePath, real.build.guardScriptPath, workspaceDir]
-            .map(shellQuote)
-            .join(" "),
-          hookCommand: hookCommand(real.hooks),
+          guardCommand: [process.execPath, guardScriptPath, workspaceDir].map(shellQuote).join(" "),
+          hookCommand: hookCommand({ nodePath: process.execPath, hookScriptPath }),
         }),
       ),
     );
@@ -493,6 +496,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
   afterAll(async () => {
     await agents?.close(sessionName);
     await killTmuxServer(sessionName);
+    await engine?.cleanup();
     await removeClaudeSessions(workspaceDir, [claudeSessionId]);
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });

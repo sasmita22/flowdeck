@@ -42,7 +42,6 @@ src/
   core/       pure logic: flow schema, node types, validator, compiler, run state machine
   ports/      interfaces: SessionHost, EventSource, Waiter, Store, ...
   adapters/   real implementations: tmux, Claude Code, hook socket, SQLite, git
-  cli/        the flowdeck command
   app/        the Electron app: main, engine, preload, renderer
 test/fakes/   a fake for every port
 ```

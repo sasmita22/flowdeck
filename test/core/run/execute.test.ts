@@ -198,7 +198,7 @@ describe("the core run path", () => {
       expect((await loadBuild(buildId, { fs, store })).kind).toBe("loaded");
     });
 
-    it("refuses a build with a changed file, with the message the CLI prints", async () => {
+    it("refuses a build with a changed file, naming the file", async () => {
       const files = (await fs.list(join(dir, "plugin"))).map((path) => `plugin/${path}`);
       const changed = files[0];
       if (changed === undefined) throw new Error("the build has no plugin file");
@@ -614,7 +614,7 @@ describe("the core run path", () => {
       });
     });
 
-    it("refuses a path longer than 104 characters with the CLI's message", () => {
+    it("refuses a path longer than 104 characters, naming the path", () => {
       const longHome = `/${"h".repeat(120)}`;
 
       expect(runSocketPath(longHome, "fd-run-abcd1234")).toEqual({
@@ -710,6 +710,76 @@ describe("execute wiring", () => {
     );
     return { code, sends, store, runId: id, lines };
   }
+
+  it("stops a session whose start finishes after the run was stopped, and sends nothing", async () => {
+    const store = new FakeStore();
+    const manifest = promptBuild();
+    const log: string[] = [];
+    let interrupt: (code: number) => void = () => undefined;
+    let finishStart: () => void = () => undefined;
+    const starting = new Promise<void>((resolve) => (finishStart = resolve));
+    const { id } = store.createRun({
+      buildDir: "/fd/builds/abc",
+      inputs: {},
+      nodeIds: manifest.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
+      buildId: manifest.hash,
+    });
+
+    const code = await execute(
+      {
+        fs,
+        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
+        waiter: new FakeWaiter([]),
+        startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
+        openSession: async () => {
+          throw new Error("execute opens the session through the execution");
+        },
+        store,
+        onChange: () => undefined,
+        onInterrupt: (handler) => {
+          interrupt = handler;
+          return () => undefined;
+        },
+      },
+      {
+        store,
+        runId: id,
+        manifest,
+        cwd: "/repo",
+        auto: false,
+        socketPath: "/fd/sockets/fd-run-abcd1234.sock",
+        open: async () => ({
+          sessionId: claudeSessionId,
+          session: {
+            ensureStarted: async () => {
+              log.push("start requested");
+              interrupt(130);
+              await starting;
+              log.push("started");
+            },
+          },
+          prompts: {
+            interrupt: async () => undefined,
+            sendPrompt: async (text) => {
+              log.push(`send ${text}`);
+            },
+          },
+          stop: async () => {
+            log.push("session stopped");
+          },
+        }),
+      },
+    );
+    finishStart();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(code).toBe(130);
+    expect(log).toContain("started");
+    expect(log.slice(log.indexOf("started"))).toContain("session stopped");
+    expect(log.filter((entry) => entry.startsWith("send"))).toEqual([]);
+    expect(store.findRun(id)?.status).toBe("stopped");
+  });
 
   it("pauses at the manifest's budget before sending the first prompt", async () => {
     const usage = new FakeUsageSource();

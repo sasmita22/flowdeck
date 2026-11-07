@@ -9,6 +9,7 @@ import {
   buildVersion,
   runBuild,
   startBuild,
+  stoppedRule,
   type BuildOrigin,
   type StartedBuild,
 } from "../../../src/core/compiler/build-version.js";
@@ -1464,6 +1465,39 @@ describe("buildVersion", () => {
         ok: false,
         errors: [{ rule: "version", message: "flow-1 has no saved version 9" }],
       });
+      expectNothingDone(store, fs, worktree);
+    });
+
+    it("a build stopped while the repo is still being read, leaving no open build", async () => {
+      const { store, fs, worktree, gitState, agents, deps } = setup();
+      const stopping = new AbortController();
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const read = gitState.read.bind(gitState);
+      gitState.read = async (folder) => {
+        stopping.abort();
+        await held;
+        return read(folder);
+      };
+
+      const building = buildVersion(
+        v1,
+        { name: "fix-login", repo, values: { ticket: "FD-1" } },
+        { ...deps, signal: stopping.signal },
+      );
+
+      await expect(building).resolves.toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: stoppedRule })],
+      });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(gitState.reads).toEqual([repo]);
+      expect(store.listPendingBuilds()).toEqual([]);
+      expect(await fs.folders(`${home}/workspaces`)).toEqual([]);
+      expect(agents.opened).toEqual([]);
       expectNothingDone(store, fs, worktree);
     });
   });

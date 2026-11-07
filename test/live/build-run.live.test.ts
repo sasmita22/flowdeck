@@ -3,21 +3,30 @@ import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
-import { runCli, type CliDeps } from "../../src/cli/main.js";
+import { prepareKit } from "../../src/adapters/node-fs/kit-copy.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import type { RunEvent } from "../../src/core/run/run-events.js";
+import type { HumanWaiter } from "../../src/core/run/wait.js";
 import { killTmuxServer, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import { paneText } from "../fixtures/live-evidence.js";
-import { LiveBuilds, sessionIdsIn, workFolderOf } from "../fixtures/live-build.js";
+import {
+  liveBuildAgents,
+  liveEngine,
+  sessionIdsIn,
+  type LiveEngine,
+} from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
+const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
+const buildTimeoutMs = 900_000;
 const testTimeoutMs = 1_500_000;
 const runDeadlineMs = 300_000;
 const statusKinds = new Set<RunEvent["kind"]>([
@@ -113,14 +122,28 @@ function nodeRows(home: string, runId: string) {
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real claude", () => {
   let home: string;
   let repo: TmpRepo;
-  let builds: LiveBuilds;
+  let engine: LiveEngine | undefined;
   let socketName: string;
   let workFolder: string | undefined;
 
+  const builds = (waiter?: HumanWaiter) => {
+    const kit = prepareKit({ sourceDir: kitSourceDir, home });
+    engine = liveEngine({
+      home,
+      repo: repo.path,
+      sessionName: socketName,
+      buildAgents: liveBuildAgents(home),
+      kit: () => kit,
+      buildTimeoutMs,
+      ...(waiter === undefined ? {} : { waiter }),
+    });
+    return engine;
+  };
+
   beforeEach(async () => {
-    home = await realpath(await mkdtemp(join(tmpdir(), "fd-build-run-")));
+    home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
-    builds = new LiveBuilds(home);
+    engine = undefined;
     socketName = `fd-lt-${randomBytes(4).toString("hex")}`;
     workFolder = undefined;
   });
@@ -131,16 +154,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
     );
     await killTmuxServer(socketName);
     if (workFolder !== undefined) {
-      await removeClaudeSessions(workFolder, await sessionIdsIn(workFolder));
+      await removeClaudeSessions(workFolder, await sessionIdsIn(await realpath(workFolder)));
     }
-    await builds.cleanup();
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 120_000);
 
   describe("AT-24", () => {
     it(
-      "runs a three-Agent flow built by the real agents to done through flowdeck run, with no manual step",
+      "runs a three-Agent flow built by the real agents to done through the engine, with no manual step",
       { timeout: testTimeoutMs },
       async () => {
         const flow = liveFlow(
@@ -171,38 +194,30 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
           [fileWire("a1", "a2", "greeting.txt"), fileWire("a2", "a3", "shout.txt")],
         );
         const waits: unknown[] = [];
-        const deps: CliDeps = {
-          ...builds.deps(),
-          waiter: {
-            wait: async (request) => {
-              waits.push(request);
-              return { decision: "stop", reason: "AT-24 allows no manual step" };
-            },
+        const live = builds({
+          wait: async (request) => {
+            waits.push(request);
+            return { decision: "stop", reason: "AT-24 allows no manual step" };
           },
-        };
-        const built = await builds.build(flow, { name: "live-three", repo: repo.path }, deps);
-        expect(built.ends.at(-1)?.outcome).toBe("built");
-        if (built.workspaceDir === undefined) throw new Error("the build opened no session");
-        workFolder = workFolderOf(built.workspaceDir, repo.path);
-        const stdout: string[] = [];
-        const stderr: string[] = [];
+        });
+        const built = await live.saveAndBuild(flow, { name: "live-three" });
+        expect(built.outcome.outcome).toBe("built");
+        workFolder = built.workFolder;
 
-        const code = await runCli(
-          ["run", "live-three", "--session", socketName, "--model", "haiku"],
-          { ...deps, stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line) },
-        );
+        const runId = await live.runBuild(built.buildId);
+        const status = await live
+          .waitForRunEnd(runId, runDeadlineMs)
+          .catch((error: unknown) => `not ended: ${String(error)}`);
 
-        const runId = stderr.find((line) => line.startsWith("run "))?.slice("run ".length) ?? "";
         const { rows, askedYou } = nodeRows(home, runId);
         console.log(
           [
-            `exit: ${code}`,
-            `stdout:\n${stdout.join("\n")}`,
-            `stderr:\n${stderr.join("\n")}`,
+            `status: ${status}`,
             `run_nodes: ${JSON.stringify(rows)}`,
             `count.txt: ${JSON.stringify(await contentOrEmpty(join(workFolder, "count.txt")))}`,
           ].join("\n"),
         );
+        expect(status).toBe("done");
         expect(rows.filter((row) => ["a1", "a2", "a3"].includes(row.node))).toEqual(
           ["a1", "a2", "a3"].map((node) => ({ node, finished: true, status: "done" })),
         );
@@ -247,10 +262,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
           ],
           [fileWire("p1", "a1", "plan.md"), fileWire("a1", "a2", "steps.md")],
         );
-        const built = await builds.build(flow, { name, repo: repo.path });
-        expect(built.ends.at(-1)?.outcome).toBe("built");
-        if (built.workspaceDir === undefined) throw new Error("the build opened no session");
-        const folder = workFolderOf(built.workspaceDir, repo.path);
+        const built = await builds().saveAndBuild(flow, { name });
+        expect(built.outcome.outcome).toBe("built");
+        const folder = built.workFolder;
         console.log(
           [...built.files]
             .filter(
@@ -302,11 +316,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
           ),
         );
         const { stdout: found } = await run("find", [
-          built.workspaceDir,
+          built.dir,
           "-name",
           "*.md",
           "-newer",
-          join(built.workspaceDir, "manifest.json"),
+          join(built.dir, "manifest.json"),
         ]);
         console.log(
           `outputs: ${JSON.stringify(contents)}\nmd files written after the build:\n${found}\nscrollback:\n${scrollback}`,

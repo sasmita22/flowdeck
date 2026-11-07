@@ -114,7 +114,7 @@ describe("two processes writing one database", () => {
     }
   }, 120_000);
 
-  it("the app and the CLI saving the same blueprint at once both succeed with distinct versions", async () => {
+  it("two processes saving the same blueprint at once both succeed with distinct versions", async () => {
     const path = join(folder, "flowdeck.db");
     const saver = startSaver(path);
     savers.push(saver);

@@ -34,7 +34,6 @@ export default tseslint.config(
         { type: "core", pattern: "src/core" },
         { type: "ports", pattern: "src/ports" },
         { type: "adapters", pattern: "src/adapters" },
-        { type: "cli", pattern: "src/cli" },
         { type: "app-main", pattern: "src/app/main" },
         { type: "app-engine", pattern: "src/app/engine" },
         { type: "app-preload", pattern: "src/app/preload" },
@@ -55,7 +54,6 @@ export default tseslint.config(
             layer("core", ["core"]),
             layer("ports", ["core", "ports"]),
             layer("adapters", ["core", "ports", "adapters"]),
-            layer("cli", ["core", "ports", "adapters", "cli"]),
             layer("app-main", [
               "core",
               "ports",
@@ -78,7 +76,6 @@ export default tseslint.config(
               "core",
               "ports",
               "adapters",
-              "cli",
               "app-main",
               "app-engine",
               "app-preload",

@@ -1,20 +1,17 @@
-import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { realDeps } from "../../src/cli/main.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
-import { cliBuild, plannedWorkspace, type PlannedWorkspace } from "../fixtures/cli-build.js";
+import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
-const root = fileURLToPath(new URL("../../", import.meta.url));
 const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", import.meta.url));
-const tsx = join(root, "node_modules", ".bin", "tsx");
 const runDeadlineMs = 240_000;
 const transcriptSettleMs = 10_000;
 const promptIds = ["p1", "p2", "p3"];
@@ -28,23 +25,7 @@ type Entry = {
   message?: { content?: unknown; stop_reason?: string | null };
 };
 
-type Exit = { code: number | null; stdout: string; stderr: string };
-
-function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Exit> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(tsx, ["src/cli/main.ts", ...args], { cwd: root, env });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    const deadline = setTimeout(() => child.kill("SIGTERM"), runDeadlineMs);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      clearTimeout(deadline);
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
+type Outcome = { status: string; progress: string[] };
 
 function turnSequence(entries: Entry[], prefix: string): string[] {
   const tokens: string[] = [];
@@ -103,11 +84,14 @@ function describeEntry(entry: Entry): string {
   return `${entry.type} stop=${entry.message?.stop_reason ?? "-"} tools=[${tools.join(",")}] ${snippet(text)}`;
 }
 
-async function diagnostics(exit: Exit, porcelain: string, projectFolder: string): Promise<string> {
+async function diagnostics(
+  outcome: Outcome,
+  porcelain: string,
+  projectFolder: string,
+): Promise<string> {
   const lines = [
-    `flowdeck run exited ${exit.code}`,
-    `stdout:\n${exit.stdout}`,
-    `stderr:\n${exit.stderr}`,
+    `run ended ${outcome.status}`,
+    `progress:\n${outcome.progress.join("\n")}`,
     `git status --porcelain:\n${porcelain}`,
   ];
   for (const transcript of await transcriptsIn(projectFolder)) {
@@ -115,32 +99,6 @@ async function diagnostics(exit: Exit, porcelain: string, projectFolder: string)
     lines.push(`last entries of ${transcript}:`, ...entries.slice(-20).map(describeEntry));
   }
   return lines.join("\n");
-}
-
-async function claudeRunning(sessionId: string): Promise<boolean> {
-  try {
-    await run("pgrep", ["-f", `session-id ${sessionId}`]);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 1)) return false;
-    throw error;
-  }
-}
-
-async function waitForClaudeToExit(sessionId: string): Promise<void> {
-  for (let elapsed = 0; elapsed < 10_000; elapsed += 100) {
-    if (!(await claudeRunning(sessionId))) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`claude for session ${sessionId} did not exit`);
-}
-
-async function removeIfEmpty(folder: string): Promise<void> {
-  try {
-    await rmdir(folder);
-  } catch (error) {
-    if (!hasCode(error, "ENOTEMPTY", "ENOENT")) throw error;
-  }
 }
 
 async function transcriptsIn(folder: string): Promise<string[]> {
@@ -152,20 +110,16 @@ async function transcriptsIn(folder: string): Promise<string[]> {
   }
 }
 
-describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claude", () => {
+describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run with real claude", () => {
   const sessionName = `fd-live-run-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
-  let workspace: PlannedWorkspace;
-  let slug: string;
-  let projectFolder: string;
+  let engine: LiveEngine | undefined;
 
   beforeEach(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
     repo = await createTmpRepo({ commit: true });
-    workspace = plannedWorkspace(home, repo.path);
-    slug = workspace.workFolder.replace(/[^a-zA-Z0-9]/g, "-");
-    projectFolder = join(homedir(), ".claude", "projects", slug);
+    engine = undefined;
   });
 
   afterEach(async () => {
@@ -179,34 +133,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
         `=${sessionName}:`,
       ]);
       console.error(`pane of ${sessionName} before cleanup:\n${stdout}`);
-      await run("tmux", ["-L", sessionName, "kill-server"]);
     } catch (error) {
       if (!hasCode(error, 1)) throw error;
     }
-    const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
-    await rm(join(socketFolder, sessionName), { force: true });
-    for (const transcript of await transcriptsIn(projectFolder)) {
-      const sessionId = transcript.replace(/\.jsonl$/, "");
-      await waitForClaudeToExit(sessionId);
-      await rm(join(projectFolder, transcript));
-      await rm(join(projectFolder, sessionId), { recursive: true, force: true });
-      for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
-      }
-    }
-    await removeIfEmpty(join(projectFolder, "memory"));
-    await removeIfEmpty(projectFolder);
-    await rm(join("/private/tmp", `claude-${userInfo().uid}`, slug), {
-      recursive: true,
-      force: true,
-    });
+    await engine?.cleanup();
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
   }, 60_000);
 
   it(
     "runs three prompts one turn each, in order, writing only ok.txt",
-    { timeout: runDeadlineMs + 30_000 },
+    { timeout: runDeadlineMs + 60_000 },
     async () => {
       const fixture = parseFlow(JSON.parse(await readFile(fixturePath, "utf8")));
       const flow = {
@@ -216,48 +153,46 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("flowdeck run with real claud
             ? {
                 ...node,
                 settings: {
-                  instructions: node.settings.instructions.replaceAll(
-                    "{{repo}}",
-                    workspace.workFolder,
-                  ),
+                  instructions: node.settings.instructions.replaceAll("{{repo}}", "."),
                 },
               }
             : node,
         ),
       };
-      const env: NodeJS.ProcessEnv = { ...process.env, FLOWDECK_HOME: home };
-      await cliBuild(flow, { name: buildName, repo: repo.path, vars: ["ticket=FD-1"] }, workspace, {
-        ...realDeps(),
-        env,
+      engine = liveEngine({ home, repo: repo.path, sessionName });
+      const { buildId, workFolder } = await engine.saveAndBuild(flow, {
+        name: buildName,
+        values: { ticket: "FD-1" },
       });
-      delete env.TMUX;
-      delete env.TMUX_PANE;
-
-      const exit = await runCliProcess(
-        ["run", buildName, "--session", sessionName, "--model", "haiku"],
-        env,
+      const projectFolder = join(
+        homedir(),
+        ".claude",
+        "projects",
+        workFolder.replace(/[^a-zA-Z0-9]/g, "-"),
       );
 
-      const porcelain = (await run("git", ["status", "--porcelain"], { cwd: workspace.workFolder }))
-        .stdout;
+      const runId = await engine.runBuild(buildId);
+      const status = await engine.waitForRunEnd(runId, runDeadlineMs);
+      const progress = engine.stores.runs
+        .events(runId)
+        .filter((event) => promptIds.includes(event.nodeId))
+        .filter((event) => event.kind === "sent" || event.kind === "done")
+        .map((event) => `${event.nodeId} ${event.kind === "sent" ? "started" : "done"}`);
+
+      const porcelain = (await run("git", ["status", "--porcelain"], { cwd: workFolder })).stdout;
       const transcripts = await transcriptsIn(projectFolder);
-      for (const transcript of transcripts) {
-        await waitForClaudeToExit(transcript.replace(/\.jsonl$/, ""));
-      }
       const entries =
         transcripts.length === 1
           ? await settledTranscript(join(projectFolder, transcripts[0] ?? ""), buildName)
           : [];
       try {
-        expect(exit.code).toBe(0);
-        expect(exit.stdout.split("\n").filter((line) => line !== "")).toEqual(
-          promptIds.flatMap((id) => [`${id} started`, `${id} done`]),
-        );
+        expect(status).toBe("done");
+        expect(progress).toEqual(promptIds.flatMap((id) => [`${id} started`, `${id} done`]));
         expectOnlyOkWritten(porcelain);
         expect(transcripts).toHaveLength(1);
         expectOneTurnPerPromptInOrder(entries, buildName, pieceNames(flow));
       } catch (error) {
-        console.error(await diagnostics(exit, porcelain, projectFolder));
+        console.error(await diagnostics({ status, progress }, porcelain, projectFolder));
         throw error;
       }
     },

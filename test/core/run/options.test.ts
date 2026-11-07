@@ -65,7 +65,7 @@ describe("optionsClash on an old build", () => {
   const triggerWith = (inputs: string[], flags: Record<string, boolean>) =>
     oldManifest([oldTrigger(inputs, flags), oldScript("s")], inputs);
 
-  it("refuses a Trigger flag named auto, the way the CLI does", () => {
+  it("refuses a Trigger flag named auto, which a run reads as the auto option", () => {
     expect(optionsClash(triggerWith([], { auto: true }))).toBe(
       'Trigger flag "auto" clashes with the built-in option --auto',
     );
