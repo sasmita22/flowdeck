@@ -3,6 +3,7 @@ import { defaultLabel as foreachLabel } from "../../../core/nodes/foreach/defaul
 import { defaultLabel as loopLabel } from "../../../core/nodes/loop/defaults.js";
 import { nodeLook, tagWidth } from "../nodes/look.js";
 import { nodeOutline, type OutlinedType } from "../nodes/outlines.js";
+import { renderedWidth } from "./text-measure.js";
 
 type Position = { x: number; y: number };
 
@@ -12,9 +13,14 @@ export const FRAME_PADDING = 24;
 
 const labelCharWidth = 7;
 
-const charWidths = { body: 7, mono: 7.2 } as const;
+export const labelFonts = {
+  body: "600 13px var(--f-body)",
+  mono: "600 12px var(--f-mono)",
+} as const;
 
-export type LabelFont = keyof typeof charWidths;
+export type LabelFont = keyof typeof labelFonts;
+
+const charWidths: Record<LabelFont, number> = { body: 7, mono: 7.2 };
 
 export const isContainer = (node: Pick<Node, "type">): boolean =>
   node.type === "loop" || node.type === "foreach";
@@ -42,7 +48,7 @@ export const containerLabelWidth = (type: "loop" | "foreach", text: string): num
   Math.max(nodeLook(type).box.width, text.length * labelCharWidth + 2 * nodeOutline(type).padL);
 
 export const labelTextWidth = (text: string, font: LabelFont): number =>
-  text.length * charWidths[font];
+  renderedWidth(text, labelFonts[font]) ?? text.length * charWidths[font];
 
 export const labelX = (type: OutlinedType): number =>
   nodeOutline(type).padL + tagWidth(nodeLook(type).tag) + 6;

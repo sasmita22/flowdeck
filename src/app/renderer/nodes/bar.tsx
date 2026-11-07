@@ -1,5 +1,5 @@
 import type { NodeProps } from "@xyflow/react";
-import { labelTextWidth } from "../canvas/frames.js";
+import { labelFonts, labelTextWidth } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
 import { barLook } from "./outlines.js";
@@ -78,7 +78,7 @@ export function ParallelBar({
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           color: "var(--fg)",
-          font: "600 13px var(--f-body)",
+          font: labelFonts.body,
         }}
       >
         {data.label}

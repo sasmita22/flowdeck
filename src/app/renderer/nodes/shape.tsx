@@ -1,7 +1,7 @@
 import { Handle, Position, type Node } from "@xyflow/react";
 import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
-import { labelX } from "../canvas/frames.js";
+import { labelFonts, labelX } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { nodeLook, tagWidth } from "./look.js";
@@ -144,7 +144,7 @@ export function Label({ type, text }: { type: OutlinedType; text: string | undef
       x={labelX(type)}
       y={20}
       fill={ink ?? "var(--fg)"}
-      style={{ font: ink === undefined ? "600 13px var(--f-body)" : "600 12px var(--f-mono)" }}
+      style={{ font: labelFonts[ink === undefined ? "body" : "mono"] }}
     >
       {text}
     </text>
