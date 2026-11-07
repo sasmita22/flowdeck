@@ -1377,4 +1377,24 @@ describe("a node's shown label", () => {
 
     expect(store.getState().message).toMatch(/^Can't connect Agent to Agent: /);
   });
+
+  it("names an empty-labelled Loop in a paste refusal", () => {
+    const store = createCanvasStore();
+    store.getState().load(
+      flow(
+        [
+          { ...loop("L"), label: "" },
+          { ...trigger("T"), position: { x: 400, y: 0 } },
+        ],
+        [],
+      ),
+    );
+    store.getState().select(["T"]);
+    store.getState().copy();
+    store.getState().select(["L"]);
+
+    store.getState().paste();
+
+    expect(store.getState().message).toMatch(/^Can't paste into Loop: /);
+  });
 });

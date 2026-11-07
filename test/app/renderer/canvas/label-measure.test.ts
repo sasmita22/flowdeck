@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { labelX, nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
+import { containerText, labelX, nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeOutline } from "../../../../src/app/renderer/nodes/outlines.js";
 
 const long = "Review every changed file against the plan and list each gap";
@@ -74,5 +74,14 @@ describe("label width measured with the drawn font", () => {
     expect(nodeWidth({ type: "agent", label })).toBe(
       labelX("agent") + label.length * 10 + 1 + nodeOutline("agent").padL,
     );
+  });
+  it("sizes a Loop by its title's rendered width in the mono title font plus its letter spacing", () => {
+    const text = containerText("loop", long, "max 3");
+    const titleWidth = text.length * 10 + 1;
+    expect(nodeWidth({ type: "loop", label: long, sub: "max 3" })).toBeCloseTo(
+      titleWidth + text.length * 0.44 + 2 * nodeOutline("loop").padL,
+      6,
+    );
+    expect(measured).toContain(`600 11px Menlo, monospace|${text}`);
   });
 });

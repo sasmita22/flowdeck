@@ -3,7 +3,7 @@ import { useRef, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { widthOf } from "./frames.js";
-import type { CanvasState } from "./store.js";
+import { labelFor, type CanvasState } from "./store.js";
 
 export function RenameField({ store }: { store: StoreApi<CanvasState> }) {
   const node = useStore(store, (state) =>
@@ -40,7 +40,7 @@ export function RenameField({ store }: { store: StoreApi<CanvasState> }) {
         }}
         className="fd-rename nodrag nopan"
         data-testid="node-rename"
-        aria-label={`Rename ${node.label}`}
+        aria-label={`Rename ${labelFor(node)}`}
         defaultValue={node.label}
         style={{
           transform: `translate(${x}px, ${y - 2}px)`,

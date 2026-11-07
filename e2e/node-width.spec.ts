@@ -125,3 +125,27 @@ test("25-character Agent and Script labels sit inside their nodes", async () => 
     expect.soft(inside(await boxOf(labelOf(window, id, mid)), outline), id).toEqual(everywhere);
   }
 });
+
+test("A Loop with a 40-character title keeps it inside the node", async () => {
+  const title = long.slice(0, 40);
+  seedFlow(home, flow([{ ...loop("L"), label: title, position: { x: 60, y: 60 } }], []));
+  const window = await launch();
+
+  const node = window.getByTestId("node-L");
+  const text = node.locator("svg text", { hasText: title });
+  await expect(text).toHaveCount(1);
+  const titleBox = await text.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const { left, right } = range.getBoundingClientRect();
+    return { left, right };
+  });
+  const outline = await boxOf(node.locator(".fd-node-outline"));
+
+  const leftGap = titleBox.left - outline.x;
+  const rightGap = outline.x + outline.width - titleBox.right;
+  expect(leftGap).toBeGreaterThanOrEqual(0);
+  expect(rightGap, `left gap ${leftGap}, right gap ${rightGap}`).toBeGreaterThanOrEqual(
+    leftGap - 1,
+  );
+});

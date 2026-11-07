@@ -18,6 +18,10 @@ export const labelFonts = {
   mono: "600 12px var(--f-mono)",
 } as const;
 
+const containerTitleFont = "600 11px var(--f-mono)";
+
+const containerTitleTracking = 0.04 * 11;
+
 export type LabelFont = keyof typeof labelFonts;
 
 const charWidths: Record<LabelFont, number> = { body: 7, mono: 7.2 };
@@ -40,12 +44,19 @@ export const containerText = (
 ): string =>
   [
     nodeLook(type).tag,
-    ...(label === defaultLabels[type] ? [] : [label]),
+    ...(label.trim() === "" || label === defaultLabels[type] ? [] : [label]),
     ...(sub === undefined ? [] : [sub]),
   ].join(" · ");
 
+const containerTitleWidth = (text: string): number => {
+  const measured = renderedWidth(text, containerTitleFont);
+  return measured === undefined
+    ? text.length * labelCharWidth
+    : measured + text.length * containerTitleTracking;
+};
+
 export const containerLabelWidth = (type: "loop" | "foreach", text: string): number =>
-  Math.max(nodeLook(type).box.width, text.length * labelCharWidth + 2 * nodeOutline(type).padL);
+  Math.max(nodeLook(type).box.width, containerTitleWidth(text) + 2 * nodeOutline(type).padL);
 
 export const labelTextWidth = (text: string, font: LabelFont): number =>
   renderedWidth(text, labelFonts[font]) ?? text.length * charWidths[font];

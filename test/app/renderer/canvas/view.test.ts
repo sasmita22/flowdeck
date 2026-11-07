@@ -477,6 +477,25 @@ describe("alignedEnds", () => {
   });
 });
 
+describe("toViewNodes for a blank label", () => {
+  const labelOf = (node: ReturnType<typeof script>) =>
+    toViewNodes(flow([node], []), [], {}, null).find((view) => view.id === node.id)?.data.label;
+
+  it.each([
+    ["script", "", "Script"],
+    ["script", "   ", "Script"],
+    ["loop", "", "Loop"],
+  ] as const)("names a %s labelled %j by its type, %j", (type, label, shown) => {
+    const node = type === "loop" ? loop("N") : script("N");
+
+    expect(labelOf({ ...node, label })).toBe(shown);
+  });
+
+  it("keeps a label that has text", () => {
+    expect(labelOf({ ...script("N"), label: "Run tests" })).toBe("Run tests");
+  });
+});
+
 describe("toViewNodes for Loop and For each labels", () => {
   it("gives a Loop its cap and a For each its list file as a sub-line", () => {
     const source = flow(
@@ -624,5 +643,9 @@ describe("containerText", () => {
     ["foreach", "each plan unit", "plan.md", "EACH · each plan unit · plan.md"],
   ] as const)("names a %s labelled %s only when renamed", (type, label, sub, text) => {
     expect(containerText(type, label, sub)).toBe(text);
+  });
+
+  it.each(["", "   "])("leaves out a blank label %j", (label) => {
+    expect(containerText("loop", label, "max 3")).toBe("LOOP · max 3");
   });
 });

@@ -559,7 +559,8 @@ export function createCanvasStore(
           pastedIds.has(problem.node) && (problem.outOfPlace === true || problem.nested === true),
       );
       if (misplaced !== undefined) {
-        const into = target !== null && isContainer(target) ? ` into ${target.label}` : "";
+        const into =
+          target !== null && isContainer(target) ? ` into ${labelOf(after, target.id)}` : "";
         const reason = reasonNaming(
           misplaced.node,
           `${misplaced.message}.`,

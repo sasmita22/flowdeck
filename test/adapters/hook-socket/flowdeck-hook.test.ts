@@ -5,6 +5,7 @@ import {
   type HookRun,
   makeSocketPath,
   makeStaleSocket,
+  runBareNode,
   runHook,
   waitUntil,
 } from "../../fixtures/hook-socket.js";
@@ -323,20 +324,24 @@ describe("flowdeck-hook", () => {
     expect(listening.connections).toHaveLength(1);
   });
 
-  it("exits 0 in under 200 ms when there is no socket file", async () => {
-    const run = await runHook({ socketPath, stdin: await readFixture("stop") });
+  const hookOverBareNodeMs = 100;
+
+  async function expectAsQuickAsBareNode(): Promise<void> {
+    const stdin = await readFixture("stop");
+    const [run, bare] = await Promise.all([runHook({ socketPath, stdin }), runBareNode(stdin)]);
 
     expectQuiet(run);
-    expect(run.ms).toBeLessThan(200);
+    expect(run.ms).toBeLessThan(bare.ms + hookOverBareNodeMs);
+  }
+
+  it("exits 0 within 100 ms of a bare node start when there is no socket file", async () => {
+    await expectAsQuickAsBareNode();
   });
 
-  it("exits 0 in under 200 ms when the socket file is stale", async () => {
+  it("exits 0 within 100 ms of a bare node start when the socket file is stale", async () => {
     await makeStaleSocket(socketPath);
 
-    const run = await runHook({ socketPath, stdin: await readFixture("stop") });
-
-    expectQuiet(run);
-    expect(run.ms).toBeLessThan(200);
+    await expectAsQuickAsBareNode();
   });
 
   it("exits 0 within 1500 ms when the server accepts but never reads", async () => {
