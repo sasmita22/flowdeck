@@ -33,6 +33,7 @@ type SummaryRow = {
   last_saved_at: string | null;
   version: number | null;
   session: string | null;
+  pinned: number;
 };
 
 type NodeRow = {
@@ -80,7 +81,7 @@ export class SqliteFlowStore implements FlowStore {
   list(): FlowSummary[] {
     const rows = this.db
       .prepare(
-        `SELECT flows.id, flows.name, flows.created_at,
+        `SELECT flows.id, flows.name, flows.created_at, flows.pinned,
                 (SELECT count(*) FROM flow_versions WHERE flow_id = flows.id) AS versions,
                 latest.saved_at AS last_saved_at, latest.version, latest.session
            FROM flows
@@ -96,6 +97,13 @@ export class SqliteFlowStore implements FlowStore {
     const changed = this.db
       .prepare("UPDATE flows SET name = ? WHERE id = ?")
       .run(cleanName(name), flowId).changes;
+    if (changed === 0) throw new Error(`No blueprint ${flowId}`);
+  }
+
+  pin(flowId: string, pinned: boolean): void {
+    const changed = this.db
+      .prepare("UPDATE flows SET pinned = ? WHERE id = ?")
+      .run(pinned ? 1 : 0, flowId).changes;
     if (changed === 0) throw new Error(`No blueprint ${flowId}`);
   }
 
@@ -246,6 +254,7 @@ export class SqliteFlowStore implements FlowStore {
         row.session === null || row.version === null
           ? null
           : this.upgradedSession(row.id, row.version, row.session).buildConfig,
+      pinned: row.pinned === 1,
     };
   }
 

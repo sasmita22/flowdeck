@@ -14,7 +14,13 @@ const cleanName = (name: string): string => {
   return name.trim();
 };
 
-type Blueprint = { flowId: string; name: string; createdAt: string; touched: number };
+type Blueprint = {
+  flowId: string;
+  name: string;
+  createdAt: string;
+  touched: number;
+  pinned: boolean;
+};
 
 export class FakeFlowStore implements FlowStore {
   private readonly newId: () => string;
@@ -46,6 +52,10 @@ export class FakeFlowStore implements FlowStore {
   rename(flowId: string, name: string): void {
     if (name.trim() === "") throw new Error("A blueprint needs a name");
     this.find(flowId).name = name.trim();
+  }
+
+  pin(flowId: string, pinned: boolean): void {
+    this.find(flowId).pinned = pinned;
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {
@@ -84,6 +94,7 @@ export class FakeFlowStore implements FlowStore {
       name,
       createdAt: new Date(0).toISOString(),
       touched: ++this.clock,
+      pinned: false,
     };
     this.blueprints.push(blueprint);
     return blueprint;
@@ -115,6 +126,7 @@ export class FakeFlowStore implements FlowStore {
       versions: saved.length,
       lastSavedAt: latest === undefined ? null : blueprint.createdAt,
       buildConfig: latest?.flow.session.buildConfig ?? null,
+      pinned: blueprint.pinned,
     };
   }
 }

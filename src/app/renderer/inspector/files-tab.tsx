@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
-import type { CanvasState } from "../canvas/store.js";
+import { nodeLabel, type CanvasState } from "../canvas/store.js";
 import type { RunView } from "../run-store.js";
 import { selectActivity, selectFiles, type InspectorState } from "./store.js";
 
@@ -33,7 +33,6 @@ export function FilesTab({
     selectActivity({ feed }, runId, stored),
     nodes.map((node) => node.id),
   );
-  const labelOf = (nodeId: string) => nodes.find((node) => node.id === nodeId)?.label ?? nodeId;
   if (files.nodes.length === 0 && files.pullRequests.length === 0) {
     return <p data-testid="files-empty">No node has written a file yet</p>;
   }
@@ -44,14 +43,14 @@ export function FilesTab({
           <h3 style={headingStyle}>Pull requests</h3>
           {files.pullRequests.map(({ nodeId, url }) => (
             <p key={url} data-testid="files-pr" style={pathStyle}>
-              <strong>{labelOf(nodeId)}</strong> {url}
+              <strong>{nodeLabel(nodes, nodeId)}</strong> {url}
             </p>
           ))}
         </>
       )}
       {files.nodes.map(({ nodeId, paths }) => (
         <section key={nodeId} data-testid={`files-node-${nodeId}`}>
-          <h3 style={headingStyle}>{labelOf(nodeId)}</h3>
+          <h3 style={headingStyle}>{nodeLabel(nodes, nodeId)}</h3>
           {paths.map((path) => (
             <p key={path} style={pathStyle}>
               {path}

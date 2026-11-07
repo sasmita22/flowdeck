@@ -29,6 +29,7 @@ describe("flowSummarySchema", () => {
     createdAt: "2026-01-01T00:00:00.000Z",
     versions: 2,
     lastSavedAt: "2026-01-02T00:00:00.000Z",
+    pinned: false,
   };
 
   it("keeps the repo, base and variables of the latest version's Build configuration", () => {
@@ -48,6 +49,12 @@ describe("flowSummarySchema", () => {
     const empty = { ...summary, versions: 0, lastSavedAt: null, buildConfig: null };
 
     expect(flowSummarySchema.parse(empty)).toEqual(empty);
+  });
+
+  it("keeps a pinned blueprint pinned", () => {
+    const pinned = { ...summary, pinned: true, buildConfig: null };
+
+    expect(flowSummarySchema.parse(pinned)).toEqual(pinned);
   });
 
   it("carries no working folder", () => {

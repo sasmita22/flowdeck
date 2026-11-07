@@ -52,7 +52,11 @@ describe("test ids", () => {
       "palette-search",
       "build-progress-stop",
       "build-model",
+      expect.any(Function),
+      "node-menu-duplicate",
+      "node-menu-frame-only",
     ]);
+    expect(controlTestIds.fileWireName("a->b:notes.md")).toBe("file-wire-name-a->b:notes.md");
   });
 
   it("lists the readouts", () => {

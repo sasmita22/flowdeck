@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchApp, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
+import { launchOnCanvas, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
 
 const remoteUrl = "https://example.com/";
 const settleMs = 2000;
@@ -69,7 +69,7 @@ const navigateToRemote = async (target: LaunchedApp) => {
 test.beforeEach(async () => {
   launched = undefined;
   home = await mkdtemp(join(tmpdir(), "fd-e2e-home-"));
-  launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
   app = launched;
   window = launched.window;
   await expect(window.getByTestId("canvas-save")).toBeVisible();

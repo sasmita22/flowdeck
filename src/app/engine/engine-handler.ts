@@ -175,6 +175,8 @@ const savePayload = z.object({
 
 const renameFlowPayload = z.object({ flowId: z.string(), name: z.string() });
 
+const pinFlowPayload = z.object({ flowId: z.string(), pinned: z.boolean() });
+
 const openFlowPayload = z.object({ flowId: z.string().optional() });
 
 const loadRunPayload = z.object({ runId: z.string() });
@@ -1355,6 +1357,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "rename-flow":
           return parsedAnswer(request, renameFlowPayload, ({ flowId, name }) => {
             storesOrThrow().flows.rename(flowId, name);
+          });
+        case "pin-flow":
+          return parsedAnswer(request, pinFlowPayload, ({ flowId, pinned }) => {
+            storesOrThrow().flows.pin(flowId, pinned);
           });
         case "open-flow":
           return parsedAnswer(request, openFlowPayload, ({ flowId }) =>

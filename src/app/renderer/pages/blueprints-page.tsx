@@ -6,8 +6,9 @@ import type { Actions } from "../actions.js";
 import type { BuildProgressState } from "../build-progress-store.js";
 import { folderText, formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
-import type { LibraryState } from "../library-store.js";
+import { pinnedFirst, type LibraryState } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
+import { PinButton } from "../pin-button.js";
 import type { RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { Empty, PageHead } from "./page-head.js";
@@ -36,11 +37,13 @@ function BuildChip({
 
 function BlueprintCard({
   flow,
+  library,
   run,
   buildProgress,
   actions,
 }: {
   flow: FlowSummary;
+  library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
   buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
@@ -102,6 +105,7 @@ function BlueprintCard({
         >
           <Icon name="pencil" />
         </button>
+        <PinButton flow={flow} library={library} testId={pageTestIds.blueprintPin(flow.flowId)} />
         <BuildChip flowId={flow.flowId} buildProgress={buildProgress} />
       </div>
       <div className="fd-card-meta">
@@ -144,7 +148,7 @@ export function BlueprintsPage({
   const loaded = useStore(library, (state) => state.loaded);
   const query = useStore(nav, (state) => state.query);
   const sort = useStore(nav, (state) => state.sort);
-  const shown = arrange(flows, { query, sort }, (flow) => flow.name);
+  const shown = pinnedFirst(arrange(flows, { query, sort }, (flow) => flow.name));
   return (
     <>
       <PageHead
@@ -170,6 +174,7 @@ export function BlueprintsPage({
           <BlueprintCard
             key={flow.flowId}
             flow={flow}
+            library={library}
             run={run}
             buildProgress={buildProgress}
             actions={actions}

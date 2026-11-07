@@ -2,13 +2,19 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchApp, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
+import {
+  latestFlowId,
+  launchOnCanvas,
+  openCanvas,
+  playwrightPage,
+  type LaunchedApp,
+} from "../scripts/drive.js";
 
 let home: string;
 let opened: LaunchedApp[];
 
 const open = async () => {
-  const launched = await launchApp({ home, logPath: test.info().outputPath("app.log") });
+  const launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
   opened.push(launched);
   await expect(launched.window.getByTestId("canvas-save")).toBeVisible();
   return launched;
@@ -134,7 +140,7 @@ test("After the renderer reloads mid-prompt, closing the window closes the app",
   await editThenClose(first);
 
   await first.window.reload();
-  await expect(first.window.getByTestId("canvas-save")).toBeVisible();
+  await openCanvas(playwrightPage(first.window), { flowId: latestFlowId(home) });
   await expect(first.window.getByTestId("flow-unsaved")).toHaveCount(0);
 
   await closeWindow(first);
@@ -146,7 +152,7 @@ test("After the renderer reloads mid-prompt, a new edit asks again on close", as
   await editThenClose(first);
 
   await first.window.reload();
-  await expect(first.window.getByTestId("canvas-save")).toBeVisible();
+  await openCanvas(playwrightPage(first.window), { flowId: latestFlowId(home) });
   await expect(first.window.getByTestId("flow-unsaved")).toHaveCount(0);
 
   await editThenClose(first);

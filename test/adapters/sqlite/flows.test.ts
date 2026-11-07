@@ -431,6 +431,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          pinned: false,
         },
         {
           flowId: "flow-a",
@@ -439,6 +440,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          pinned: false,
         },
       ]);
       expect(store.loadLatest("flow-a")).toBeNull();
@@ -504,6 +506,7 @@ describe("SqliteFlowStore", () => {
             base: "dev",
             variables: [{ name: "ticket", kind: "text" }],
           },
+          pinned: false,
         },
         {
           flowId: "flow-b",
@@ -512,6 +515,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          pinned: false,
         },
       ]);
     });
@@ -563,6 +567,61 @@ describe("SqliteFlowStore", () => {
       expect(open().list()).toEqual([
         expect.objectContaining({ flowId: "flow-1", name: "Untitled", versions: 2 }),
       ]);
+    });
+  });
+
+  describe("pinning", () => {
+    const ids = (...list: string[]) => {
+      const queue = [...list];
+      return () => queue.shift() ?? "spare";
+    };
+
+    it("lists a blueprint created before pinning existed as not pinned", async () => {
+      const before = join(folder, "migrations-before-pinned");
+      await mkdir(before);
+      for (const name of await readdir(migrationsDir)) {
+        if (name < "010") await copyFile(new URL(name, migrationsDir), join(before, name));
+      }
+      const old = openDatabase({ path, migrationsDir: before });
+      old.prepare("INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Old', 't')").run();
+      old.close();
+
+      expect(open().list()).toEqual([
+        expect.objectContaining({ flowId: "flow-1", name: "Old", pinned: false }),
+      ]);
+    });
+
+    it("pins and unpins a blueprint, keeping its save time and the last-saved order", () => {
+      const times = [
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-02T00:00:00.000Z",
+        "2026-01-03T00:00:00.000Z",
+      ];
+      let tick = 0;
+      const store = new SqliteFlowStore({
+        db: connect(),
+        newId: ids("flow-a", "flow-b"),
+        now: () => new Date(times[tick++] ?? "2026-12-31T00:00:00.000Z"),
+      });
+      store.create("A");
+      store.create("B");
+      store.save(relabelled("a1"), "flow-a");
+      const unpinned = store.list();
+      expect(unpinned.map(({ flowId, pinned }) => ({ flowId, pinned }))).toEqual([
+        { flowId: "flow-a", pinned: false },
+        { flowId: "flow-b", pinned: false },
+      ]);
+
+      store.pin("flow-b", true);
+
+      expect(open().list()).toEqual([
+        { ...unpinned[0], pinned: false },
+        { ...unpinned[1], pinned: true },
+      ]);
+
+      store.pin("flow-b", false);
+
+      expect(open().list()).toEqual(unpinned);
     });
   });
 
@@ -683,6 +742,7 @@ describe("SqliteFlowStore", () => {
       { name: "007_activity.sql" },
       { name: "008_named_builds.sql" },
       { name: "009_build_progress.sql" },
+      { name: "010_flow_pinned.sql" },
     ]);
   });
 });

@@ -1,8 +1,8 @@
-import type { Flow, Node } from "../../../core/flow/schema.js";
+import type { Flow, Node, NodeType } from "../../../core/flow/schema.js";
 import { defaultLabel as foreachLabel } from "../../../core/nodes/foreach/defaults.js";
 import { defaultLabel as loopLabel } from "../../../core/nodes/loop/defaults.js";
-import { nodeLook } from "../nodes/look.js";
-import { nodeOutline } from "../nodes/outlines.js";
+import { nodeLook, tagWidth } from "../nodes/look.js";
+import { nodeOutline, type OutlinedType } from "../nodes/outlines.js";
 
 type Position = { x: number; y: number };
 
@@ -11,6 +11,10 @@ export type Bounds = { left: number; top: number; right: number; bottom: number 
 export const FRAME_PADDING = 24;
 
 const labelCharWidth = 7;
+
+const charWidths = { body: 7, mono: 7.2 } as const;
+
+export type LabelFont = keyof typeof charWidths;
 
 export const isContainer = (node: Pick<Node, "type">): boolean =>
   node.type === "loop" || node.type === "foreach";
@@ -37,16 +41,41 @@ export const containerText = (
 export const containerLabelWidth = (type: "loop" | "foreach", text: string): number =>
   Math.max(nodeLook(type).box.width, text.length * labelCharWidth + 2 * nodeOutline(type).padL);
 
-const containerWidth = (node: Node): number => {
-  const type = node.type === "loop" ? "loop" : "foreach";
-  return containerLabelWidth(type, containerText(type, node.label, containerSub(node)));
+export const labelTextWidth = (text: string, font: LabelFont): number =>
+  text.length * charWidths[font];
+
+export const labelX = (type: OutlinedType): number =>
+  nodeOutline(type).padL + tagWidth(nodeLook(type).tag) + 6;
+
+export const textWidth = (type: OutlinedType, text: string): number => {
+  const { padL, ink } = nodeOutline(type);
+  return labelX(type) + labelTextWidth(text, ink === undefined ? "body" : "mono") + padL;
 };
+
+export const nodeWidth = ({
+  type,
+  label,
+  sub,
+}: {
+  type: NodeType;
+  label: string;
+  sub?: string | undefined;
+}): number => {
+  if (type === "loop" || type === "foreach")
+    return containerLabelWidth(type, containerText(type, label, sub));
+  if (type === "fork" || type === "join") return nodeLook(type).box.width;
+  return Math.max(nodeLook(type).box.width, textWidth(type, label), textWidth(type, sub ?? ""));
+};
+
+export const nodeSub = (node: Node): string | undefined =>
+  node.type === "branch" ? node.settings.variable : containerSub(node);
+
+export const widthOf = (node: Node): number =>
+  nodeWidth({ type: node.type, label: node.label, sub: nodeSub(node) });
 
 export const boundsOf = (node: Node): Bounds => {
   const { x, y } = node.position;
-  const { width, height } = nodeLook(node.type).box;
-  const right = x + (isContainer(node) ? containerWidth(node) : width);
-  return { left: x, top: y, right, bottom: y + height };
+  return { left: x, top: y, right: x + widthOf(node), bottom: y + nodeLook(node.type).box.height };
 };
 
 export const padded = (all: readonly Bounds[]): Bounds => ({
@@ -70,10 +99,10 @@ export const containerAt = (flow: Flow, point: Position): string | undefined =>
       contains(bodyFrameBounds(flow, node), point),
   )?.id;
 
-export const centerOf = (node: Node): Position => {
-  const { width, height } = nodeLook(node.type).box;
-  return { x: node.position.x + width / 2, y: node.position.y + height / 2 };
-};
+export const centerOf = (node: Node): Position => ({
+  x: node.position.x + widthOf(node) / 2,
+  y: node.position.y + nodeLook(node.type).box.height / 2,
+});
 
 export const bodyOf = (flow: Flow, containerId: string): Node[] =>
   flow.nodes.filter((node) => node.parent === containerId);

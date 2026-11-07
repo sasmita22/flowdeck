@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createCanvasStore,
   isNodeType,
+  labelFor,
   newCanvasFlow,
   nextNodeId,
   nodeDefaults,
+  nodeLabel,
   placeNode,
   selectCanvasEmpty,
   selectDirty,
@@ -12,6 +14,7 @@ import {
   selectNodeIssues,
   selectSelectedNode,
 } from "../../../../src/app/renderer/canvas/store.js";
+import { nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { NodeType, parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
@@ -1126,6 +1129,60 @@ describe("placeNode", () => {
   });
 });
 
+describe("placement beside a wide node", () => {
+  const long = "Review every changed file against the plan and list each gap";
+  const wide = () =>
+    flow(
+      [
+        { ...agent("A"), label: long, position: { x: 100, y: 100 } },
+        { ...prompt("P"), position: { x: 100, y: 300 } },
+      ],
+      [],
+    );
+  const wideRight = () => 100 + nodeWidth({ type: "agent", label: long });
+
+  it("adds a node right of a 60-character Agent's width", () => {
+    const store = createCanvasStore();
+    store.getState().load(wide());
+    store.getState().select(["A"]);
+
+    store.getState().addNext("script");
+
+    expect(store.getState().flow.nodes.at(-1)?.position).toEqual({
+      x: wideRight() + 48,
+      y: 100,
+    });
+  });
+
+  it("counts a drop on only the widened part of a wide node as overlapping", () => {
+    expect(placeNode(wide(), "prompt", { x: 100 + promptWidth + 10, y: 100 })).toEqual({
+      x: wideRight() + 48,
+      y: 100,
+    });
+  });
+
+  it("moves no other node when a placed Agent is renamed to 60 characters", () => {
+    const store = createCanvasStore();
+    store.getState().load(
+      flow(
+        [
+          { ...agent("A"), position: { x: 100, y: 100 } },
+          { ...prompt("B"), position: { x: 100 + promptWidth + 48, y: 100 } },
+          { ...prompt("C"), position: { x: 100, y: 200 } },
+        ],
+        [],
+      ),
+    );
+    const before = store.getState().flow.nodes.filter((node) => node.id !== "A");
+
+    store.getState().startRename("A");
+    store.getState().rename(long);
+
+    expect(store.getState().flow.nodes.find((node) => node.id === "A")?.label).toBe(long);
+    expect(store.getState().flow.nodes.filter((node) => node.id !== "A")).toEqual(before);
+  });
+});
+
 describe("addNext", () => {
   it("adds right of the one selected node at its y", () => {
     const store = createCanvasStore();
@@ -1277,5 +1334,47 @@ describe("selectFieldIssues", () => {
 
   it("is empty for a node with no field-level issue", () => {
     expect(selectFieldIssues(flow([fork("fork-1")], []), "fork-1")).toEqual({});
+  });
+});
+
+describe("a node's shown label", () => {
+  const unnamedAgent = { ...agent("A"), label: "" };
+
+  it.each([
+    ["agent", "", "Agent"],
+    ["agent", "   ", "Agent"],
+    ["hardstop", "", "Hard stop"],
+    ["foreach", "", "For each"],
+  ] as const)("labelFor names a %s labelled %j by its type, %j", (type, label, shown) => {
+    expect(labelFor({ type, label })).toBe(shown);
+  });
+
+  it("labelFor keeps a label that has text", () => {
+    expect(labelFor({ type: "agent", label: "Review" })).toBe("Review");
+  });
+
+  it("labelFor names no node at all Build", () => {
+    expect(labelFor(undefined)).toBe("Build");
+  });
+
+  it("nodeLabel names no node id Build", () => {
+    expect(nodeLabel(flow([unnamedAgent], []).nodes, undefined)).toBe("Build");
+  });
+
+  it("nodeLabel falls back to the raw id of a node that is not there", () => {
+    expect(nodeLabel(flow([unnamedAgent], []).nodes, "missing-id")).toBe("missing-id");
+  });
+
+  it("nodeLabel names an empty-labelled Agent by its type", () => {
+    expect(nodeLabel(flow([unnamedAgent], []).nodes, "A")).toBe("Agent");
+  });
+
+  it("names an empty-labelled Agent in a connection refusal", () => {
+    const store = createCanvasStore();
+    store.getState().load(flow([unnamedAgent], []));
+
+    expect(store.getState().connect(end("A", "out"), end("A", "in"))).toBe(false);
+
+    expect(store.getState().message).toMatch(/^Can't connect Agent to Agent: /);
   });
 });

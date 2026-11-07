@@ -12,6 +12,7 @@ import {
   agent,
   fileWire,
   flow,
+  forEach,
   fork,
   hardstop,
   loop,
@@ -326,6 +327,91 @@ describe("copy, paste and duplicate", () => {
 
     expect(ids(store.getState().flow)).toEqual(["A", "B", "C", "script-1", "prompt-1"]);
     expect(nodeOf(store.getState().flow, "prompt-1")?.label).toBe("Fix");
+  });
+});
+
+describe("frame only", () => {
+  const loopWithBody = () =>
+    flow(
+      [
+        {
+          ...at(loop("L", { settings: { cap: 5, condition: "tests pass" } }), 0, 0),
+          label: "Retry",
+        },
+        at(prompt("P", { parent: "L" }), 0, 80),
+        at(script("S", { parent: "L" }), 200, 80),
+      ],
+      [thenWire("P", "S")],
+    );
+
+  const childrenOf = (current: Flow, id: string) =>
+    current.nodes.filter((node) => node.parent === id).map((node) => node.id);
+
+  it("adds an empty Loop with the same settings and label, and no body or wires", () => {
+    const store = loaded(loopWithBody());
+    const before = store.getState().flow;
+
+    store.getState().frameOnly("L");
+
+    const after = store.getState().flow;
+    expect(ids(after)).toEqual(["L", "P", "S", "loop-1"]);
+    expect(nodeOf(after, "loop-1")).toMatchObject({
+      type: "loop",
+      label: "Retry",
+      settings: { cap: 5, condition: "tests pass", onCap: "fail" },
+    });
+    expect(nodeOf(after, "loop-1")?.parent).toBeUndefined();
+    expect(childrenOf(after, "loop-1")).toEqual([]);
+    expect(after.wires).toEqual(before.wires);
+  });
+
+  it("adds an empty For each, leaving out a frame nested in its body", () => {
+    const store = loaded(
+      flow(
+        [
+          at(forEach("F", { file: "units.md" }, "each unit"), 0, 0),
+          at(prompt("P", { parent: "F" }), 0, 80),
+          at(loop("inner", { parent: "F" }), 0, 160),
+          at(prompt("Q", { parent: "inner" }), 0, 240),
+        ],
+        [thenWire("P", "inner")],
+      ),
+    );
+
+    store.getState().frameOnly("F");
+
+    const after = store.getState().flow;
+    expect(ids(after)).toEqual(["F", "P", "inner", "Q", "foreach-1"]);
+    expect(nodeOf(after, "foreach-1")).toMatchObject({
+      type: "foreach",
+      label: "each unit",
+      settings: { file: "units.md" },
+    });
+    expect(childrenOf(after, "foreach-1")).toEqual([]);
+    expect(ends(after)).toEqual(["P>inner"]);
+  });
+
+  it("is one undo step that removes the new frame and leaves the original as it was", () => {
+    const store = loaded(loopWithBody());
+    const before = store.getState().flow;
+
+    store.getState().frameOnly("L");
+    expect(store.getState().undoStack).toHaveLength(1);
+    store.getState().undo();
+
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("leaves Duplicate copying the Loop with its body and wires", () => {
+    const store = loaded(loopWithBody());
+    store.getState().select(["L"]);
+
+    store.getState().duplicate();
+
+    const after = store.getState().flow;
+    expect(ids(after)).toEqual(["L", "P", "S", "loop-1", "prompt-1", "script-1"]);
+    expect(childrenOf(after, "loop-1")).toEqual(["prompt-1", "script-1"]);
+    expect(ends(after)).toEqual(["P>S", "prompt-1>script-1"]);
   });
 });
 

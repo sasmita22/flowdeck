@@ -3,6 +3,7 @@ import { paletteItems } from "../../../../src/app/renderer/canvas/palette-items.
 import { noteLook } from "../../../../src/app/renderer/nodes/note-look.js";
 import {
   barLook,
+  framePreview,
   frameLook,
   nodeOutline,
   previewOf,
@@ -11,6 +12,11 @@ import {
 import type { NodeType } from "../../../../src/core/flow/schema.js";
 
 const bars = ["fork", "join"] as const;
+const rightmostX = (path: string): number =>
+  Math.max(
+    ...[...path.matchAll(/(-?[\d.]+),-?[\d.]+/g)].map(([, x]) => Number(x)),
+    ...[...path.matchAll(/H(-?[\d.]+)/g)].map(([, x]) => Number(x)),
+  );
 const frames = ["loop", "foreach"] as const;
 const shaped = paletteItems
   .map(({ type }) => type)
@@ -73,6 +79,39 @@ describe("nodeOutline", () => {
     expect(nodeOutline(type).path).toContain("H166 Q170,0 170,4");
     expect(nodeOutline(type, 281).path).toContain("H277 Q281,0 281,4");
     expect(nodeOutline(type, 281).path).not.toContain("170");
+  });
+
+  it("builds the agent outline from the width it is given", () => {
+    expect(nodeOutline("agent", 300).path).toContain("H288 Q300,0 300,12");
+    expect(nodeOutline("agent").path).toContain("H158 Q170,0 170,12");
+  });
+
+  it.each(shaped.filter((type) => type !== "output"))(
+    "ends a %s outline 300 wide at x = 300",
+    (type) => {
+      expect(rightmostX(nodeOutline(type, 300).path)).toBe(300);
+    },
+  );
+
+  it("rounds a 300-wide output's right end at x = 300", () => {
+    expect(nodeOutline("output", 300).path).toContain("A24,24 0 0 1 276,48");
+  });
+
+  it("draws the agent's ring, the gate's right post and the branch fill at the width", () => {
+    const attributesOf = (type: "agent" | "gate" | "branch", index: number) =>
+      nodeOutline(type, 300).extras[index]?.attributes ?? {};
+    expect(rightmostX(String(attributesOf("agent", 0)["d"]))).toBe(296.5);
+    expect(attributesOf("gate", 1)["x"]).toBe(295);
+    expect(rightmostX(String(attributesOf("branch", 0)["points"]))).toBe(300);
+  });
+
+  it("draws the palette previews at the base width", () => {
+    expect(framePreview.width).toBe(170);
+    expect(previewOf("agent")).toEqual({
+      kind: "node",
+      type: "agent",
+      outline: nodeOutline("agent", 170),
+    });
   });
 
   it("draws the script as a terminal box with terminal ink", () => {

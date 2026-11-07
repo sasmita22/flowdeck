@@ -28,6 +28,9 @@ export const controlTestIds = {
   search: "palette-search",
   buildStop: "build-progress-stop",
   buildModel: "build-model",
+  fileWireName: (edgeId: string) => `file-wire-name-${edgeId}`,
+  nodeMenuDuplicate: "node-menu-duplicate",
+  nodeMenuFrameOnly: "node-menu-frame-only",
 } as const;
 
 export const readoutTestIds = {
@@ -40,6 +43,7 @@ export const pageTestIds = {
   newBlueprint: "menu-new",
   search: "menu-search",
   recent: (flowId: string) => `menu-recent-${flowId}`,
+  recentPin: (flowId: string) => `recent-pin-${flowId}`,
   title: "page-title",
   query: "page-search",
   sort: "page-sort",
@@ -47,6 +51,7 @@ export const pageTestIds = {
   blueprintCard: (flowId: string) => `blueprint-card-${flowId}`,
   blueprintOpen: (flowId: string) => `blueprint-open-${flowId}`,
   blueprintRename: (flowId: string) => `blueprint-rename-${flowId}`,
+  blueprintPin: (flowId: string) => `blueprint-pin-${flowId}`,
   blueprintNameInput: (flowId: string) => `blueprint-name-input-${flowId}`,
   blueprintBuild: (flowId: string) => `blueprint-build-${flowId}`,
   buildCard: (buildId: string) => `build-card-${buildId}`,

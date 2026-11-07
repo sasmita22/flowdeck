@@ -10,6 +10,8 @@ export const RunStoreContext = createContext<StoreApi<RunView> | null>(null);
 
 export const CanvasStoreContext = createContext<StoreApi<CanvasState> | null>(null);
 
+export const CanvasEditingContext = createContext(false);
+
 export const BuildAuditContext = createContext<{
   flowId: string;
   buildProgress: StoreApi<BuildProgressState>;
@@ -73,7 +75,15 @@ export function NodeStatusBadge({ nodeId }: { nodeId: string }) {
   );
 }
 
-export function NodeFailureReason({ nodeId, style }: { nodeId: string; style?: CSSProperties }) {
+export function NodeFailureReason({
+  nodeId,
+  width,
+  style,
+}: {
+  nodeId: string;
+  width: number;
+  style?: CSSProperties;
+}) {
   const store = useContext(RunStoreContext);
   const reason = useStore(store ?? idleStore, (state) =>
     state.snapshot?.nodes[nodeId] === "failed" ? state.snapshot.reasons?.[nodeId] : undefined,
@@ -87,7 +97,7 @@ export function NodeFailureReason({ nodeId, style }: { nodeId: string; style?: C
         position: "absolute",
         top: "100%",
         left: 0,
-        width: 200,
+        width,
         marginTop: 4,
         color: "#ef4444",
         font: "600 11px/1.35 var(--f-body)",
@@ -99,7 +109,7 @@ export function NodeFailureReason({ nodeId, style }: { nodeId: string; style?: C
   );
 }
 
-export function NodeIssueMarker({ nodeId }: { nodeId: string }) {
+export function NodeIssueMarker({ nodeId, width }: { nodeId: string; width: number }) {
   const store = useContext(CanvasStoreContext);
   const issues = useStore(
     store ?? emptyCanvasStore,
@@ -115,7 +125,7 @@ export function NodeIssueMarker({ nodeId }: { nodeId: string }) {
         position: "absolute",
         top: "100%",
         left: 0,
-        width: 170,
+        width,
         marginTop: 4,
         color: "var(--warn)",
         font: "11px/1.35 var(--f-body)",

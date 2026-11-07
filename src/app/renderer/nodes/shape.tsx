@@ -1,6 +1,7 @@
 import { Handle, Position, type Node } from "@xyflow/react";
 import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
+import { labelX } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { nodeLook, tagWidth } from "./look.js";
@@ -12,6 +13,8 @@ export type ShapeNode = Node<{ label?: string; highlighted?: boolean; sub?: stri
 export const BODY_HEIGHT = 48;
 
 const FILE_PORT_INSET = 24;
+
+const REASON_OVERHANG = 30;
 
 export const ports = (id: string, type: NodeType, width = nodeLook(type).box.width) => {
   return nodeLook(type).ports.map(({ name, direction, kind }) =>
@@ -105,8 +108,8 @@ export function NodeShape({
       <div style={{ position: "absolute", left: padL, top: 25, color: ink ?? "var(--fg)" }}>
         <NodeStatusBadge nodeId={id} />
       </div>
-      <NodeIssueMarker nodeId={id} />
-      <NodeFailureReason nodeId={id} />
+      <NodeIssueMarker nodeId={id} width={box.width} />
+      <NodeFailureReason nodeId={id} width={box.width + REASON_OVERHANG} />
       {handles}
     </div>
   );
@@ -135,10 +138,10 @@ export function TagPill({ type }: { type: OutlinedType }) {
 }
 
 export function Label({ type, text }: { type: OutlinedType; text: string | undefined }) {
-  const { padL, ink } = nodeOutline(type);
+  const { ink } = nodeOutline(type);
   return (
     <text
-      x={padL + tagWidth(nodeLook(type).tag) + 6}
+      x={labelX(type)}
       y={20}
       fill={ink ?? "var(--fg)"}
       style={{ font: ink === undefined ? "600 13px var(--f-body)" : "600 12px var(--f-mono)" }}

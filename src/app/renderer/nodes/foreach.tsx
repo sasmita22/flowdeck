@@ -1,5 +1,5 @@
 import type { NodeProps } from "@xyflow/react";
-import { containerLabelWidth, containerText } from "../canvas/frames.js";
+import { containerText, nodeWidth } from "../canvas/frames.js";
 import { nodeLook } from "./look.js";
 import { nodeOutline } from "./outlines.js";
 import { NodeShape, type ShapeNode } from "./shape.js";
@@ -13,7 +13,7 @@ export function ForEachNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="foreach"
       selected={selected}
       highlighted={data.highlighted}
-      width={containerLabelWidth("foreach", text)}
+      width={nodeWidth({ type: "foreach", label: data.label ?? "", sub: data.sub })}
       overlay={
         <text
           x={nodeOutline("foreach").padL}

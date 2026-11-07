@@ -37,6 +37,7 @@ import {
   containerMoves,
   followed,
   isContainer,
+  widthOf,
   withPositions,
 } from "./frames.js";
 import {
@@ -47,6 +48,7 @@ import {
   deleteNodes as deleteNodesCommand,
   deleteWires,
   moveNodes,
+  replaceWire,
   updateNode as updateNodeCommand,
   updateNote,
   updateSession,
@@ -110,6 +112,7 @@ export interface CanvasState {
   clipboard: Items | null;
   pastes: number;
   renaming: string | null;
+  renamingWire: string | null;
   focus: Focus | null;
   opened: number;
   drop(type: CanvasItemType, position: Position): void;
@@ -129,9 +132,13 @@ export interface CanvasState {
   copy(): void;
   paste(): void;
   duplicate(): void;
+  frameOnly(id: string): void;
   startRename(id?: string): void;
   rename(label: string): void;
   cancelRename(): void;
+  startWireRename(edgeId: string): void;
+  renameWire(file: string): void;
+  cancelWireRename(): void;
   focusNode(id: string): void;
   openNodeMenu(nodeId: string, at: Position): void;
   closeNodeMenu(): void;
@@ -207,7 +214,7 @@ const firstPosition: Position = { x: 80, y: 80 };
 
 const topLevel = (flow: Flow) => flow.nodes.filter((node) => node.parent === undefined);
 
-const rightEdge = (node: Node) => node.position.x + nodeLook(node.type).box.width;
+const rightEdge = (node: Node) => node.position.x + widthOf(node);
 
 const neighbours = (flow: Flow, parent: string | undefined) =>
   parent === undefined
@@ -217,11 +224,10 @@ const neighbours = (flow: Flow, parent: string | undefined) =>
 const overlapping = (flow: Flow, type: NodeType, { x, y }: Position, parent?: string) => {
   const { width, height } = nodeLook(type).box;
   return neighbours(flow, parent).find((node) => {
-    const box = nodeLook(node.type).box;
     return (
-      x < node.position.x + box.width &&
+      x < rightEdge(node) &&
       node.position.x < x + width &&
-      y < node.position.y + box.height &&
+      y < node.position.y + nodeLook(node.type).box.height &&
       node.position.y < y + height
     );
   });
@@ -267,7 +273,18 @@ const issuesByFlow = new WeakMap<Flow, Record<string, string[]>>();
 const reasonOf = (flow: Flow, error: ValidationError) =>
   reasonNaming(error.node, error.message, labelOf(flow, error.node ?? ""));
 
-const labelOf = (flow: Flow, id: string) => flow.nodes.find((node) => node.id === id)?.label ?? id;
+const labelOf = (flow: Flow, id: string) => nodeLabel(flow.nodes, id);
+
+export const labelFor = (node: Pick<Node, "type" | "label"> | undefined): string => {
+  if (node === undefined) return "Build";
+  return node.label.trim() === "" ? nodeDefaults[node.type].label : node.label;
+};
+
+export const nodeLabel = (nodes: readonly Node[], nodeId?: string): string => {
+  if (nodeId === undefined) return labelFor(undefined);
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  return node ? labelFor(node) : nodeId;
+};
 
 export const selectNodeIssues = (flow: Flow): Record<string, string[]> => {
   const cached = issuesByFlow.get(flow);
@@ -361,6 +378,9 @@ const keptWires = (selected: readonly string[], flow: Flow) => {
   return selected.filter((id) => present.has(id));
 };
 
+const swapped = (ids: readonly string[], from: string, to: string) =>
+  ids.map((id) => (id === from ? to : id));
+
 const both = (first: Command, second: Command): Command => ({
   do: (flow) => second.do(first.do(flow)),
   undo: (flow) => first.undo(second.undo(flow)),
@@ -390,15 +410,17 @@ export function createCanvasStore(
       run(updateSession({ ...session, buildConfig: edit(session.buildConfig) }));
     };
 
-    const run = (command: Command, selection = get().selection) => {
-      const { flow, undoStack, selectedWires } = get();
+    const wireRenames = new WeakMap<Command, { from: string; to: string }>();
+
+    const run = (command: Command, selection = get().selection, wires = get().selectedWires) => {
+      const { flow, undoStack } = get();
       const next = command.do(flow);
       set({
         flow: next,
         undoStack: [...undoStack, command],
         redoStack: [],
         selection: kept(selection, next),
-        selectedWires: keptWires(selectedWires, next),
+        selectedWires: keptWires(wires, next),
         message: null,
       });
     };
@@ -442,33 +464,44 @@ export function createCanvasStore(
       if (command !== undefined) run(command);
     };
 
-    const addChecked = (wire: Wire): boolean => {
+    const refusal = (others: readonly Wire[], wire: Wire, command: Command): string | null => {
       const { flow } = get();
-      if (flow.wires.some((existing) => sameWire(existing, wire))) {
-        set({ message: cannotConnect(flow, wire.from, wire.to, alreadyJoined) });
-        return false;
+      if (others.some((existing) => sameWire(existing, wire))) {
+        return cannotConnect(flow, wire.from, wire.to, alreadyJoined);
       }
-      const command = addWire(wire);
       const [error] = newErrors(flow, command.do(flow));
-      if (error !== undefined) {
-        set({ message: cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error)) });
+      return error === undefined
+        ? null
+        : cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error));
+    };
+
+    const addChecked = (wire: Wire): boolean => {
+      const command = addWire(wire);
+      const refused = refusal(get().flow.wires, wire, command);
+      if (refused !== null) {
+        set({ message: refused });
         return false;
       }
       run(command);
       return true;
     };
 
-    const copied = (flow: Flow, ids: readonly string[]): Items | null => {
+    const copied = (
+      flow: Flow,
+      ids: readonly string[],
+      { body }: { body: boolean } = { body: true },
+    ): Items | null => {
       const chosen = new Set(ids);
       const nodes = flow.nodes.filter(
-        (node) => chosen.has(node.id) || (node.parent !== undefined && chosen.has(node.parent)),
+        (node) =>
+          chosen.has(node.id) || (body && node.parent !== undefined && chosen.has(node.parent)),
       );
       const notes = (flow.notes ?? []).filter((note) => chosen.has(note.id));
       if (nodes.length === 0 && notes.length === 0) return null;
       const inside = new Set(nodes.map((node) => node.id));
-      const wires = flow.wires.filter(
-        (wire) => inside.has(wire.from.node) && inside.has(wire.to.node),
-      );
+      const wires = body
+        ? flow.wires.filter((wire) => inside.has(wire.from.node) && inside.has(wire.to.node))
+        : [];
       return structuredClone({ nodes, wires, notes });
     };
 
@@ -561,6 +594,7 @@ export function createCanvasStore(
       clipboard: null,
       pastes: 0,
       renaming: null,
+      renamingWire: null,
       focus: null,
       opened: 0,
 
@@ -687,6 +721,13 @@ export function createCanvasStore(
         if (items !== null) pasteItems(items, { x: pasteGap, y: pasteGap });
       },
 
+      frameOnly: (id) => {
+        if (!ready()) return;
+        set({ menu: null });
+        const items = copied(get().flow, [id], { body: false });
+        if (items !== null) pasteItems(items, { x: pasteGap, y: pasteGap });
+      },
+
       startRename: (id) => {
         if (!ready()) return;
         const { flow, selection } = get();
@@ -705,6 +746,33 @@ export function createCanvasStore(
       },
 
       cancelRename: () => set({ renaming: null }),
+
+      startWireRename: (id) => {
+        if (!ready()) return;
+        if (!get().flow.wires.some((wire) => wire.kind === "file" && edgeId(wire) === id)) return;
+        set({ renamingWire: id, menu: null });
+      },
+
+      renameWire: (file) => {
+        const { renamingWire, flow, selectedWires } = get();
+        set({ renamingWire: null });
+        const old = flow.wires.find((wire) => edgeId(wire) === renamingWire);
+        const name = file.trim();
+        if (!ready() || old?.kind !== "file" || name === old.file) return;
+        const next: Wire = { ...old, file: name };
+        const command = replaceWire(old, next);
+        const others = flow.wires.filter((wire) => wire !== old);
+        const refused = refusal(others, next, command);
+        if (refused !== null) {
+          set({ message: refused });
+          return;
+        }
+        const ids = { from: edgeId(old), to: edgeId(next) };
+        wireRenames.set(command, ids);
+        run(command, get().selection, swapped(selectedWires, ids.from, ids.to));
+      },
+
+      cancelWireRename: () => set({ renamingWire: null }),
 
       focusNode: (id) => {
         set({
@@ -817,12 +885,17 @@ export function createCanvasStore(
         const command = undoStack.at(-1);
         if (command === undefined) return;
         const next = command.undo(flow);
+        const renamed = wireRenames.get(command);
+        const wires = get().selectedWires;
         set({
           flow: next,
           undoStack: undoStack.slice(0, -1),
           redoStack: [...redoStack, command],
           selection: kept(selection, next),
-          selectedWires: keptWires(get().selectedWires, next),
+          selectedWires: keptWires(
+            renamed === undefined ? wires : swapped(wires, renamed.to, renamed.from),
+            next,
+          ),
         });
       },
 
@@ -832,12 +905,17 @@ export function createCanvasStore(
         const command = redoStack.at(-1);
         if (command === undefined) return;
         const next = command.do(flow);
+        const renamed = wireRenames.get(command);
+        const wires = get().selectedWires;
         set({
           flow: next,
           undoStack: [...undoStack, command],
           redoStack: redoStack.slice(0, -1),
           selection: kept(selection, next),
-          selectedWires: keptWires(get().selectedWires, next),
+          selectedWires: keptWires(
+            renamed === undefined ? wires : swapped(wires, renamed.from, renamed.to),
+            next,
+          ),
         });
       },
 
@@ -854,6 +932,7 @@ export function createCanvasStore(
           dragPositions: {},
           noteBoxes: {},
           renaming: null,
+          renamingWire: null,
           focus: null,
           opened: get().opened + 1,
         });

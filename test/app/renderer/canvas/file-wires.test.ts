@@ -175,3 +175,101 @@ describe("a refused Then wire", () => {
     );
   });
 });
+
+describe("renaming a File wire", () => {
+  const notesId = "plan:file-out->build:file-in:notes.md";
+  const planId = "plan:file-out->build:file-in:plan.md";
+
+  const filed = (...others: unknown[]) =>
+    loaded(
+      flow(
+        [{ ...prompt("plan"), label: "Planner" }, script("build"), script("check")],
+        [
+          thenWire("plan", "build"),
+          thenWire("build", "check"),
+          fileWire("plan", "build", "notes.md"),
+          ...others,
+        ],
+      ),
+    );
+
+  const renamed = (store: ReturnType<typeof loaded>, file: string) => {
+    store.getState().selectWires([notesId]);
+    store.getState().startWireRename(notesId);
+    store.getState().renameWire(file);
+  };
+
+  const filesOf = (store: ReturnType<typeof loaded>) =>
+    store.getState().flow.wires.flatMap((wire) => (wire.kind === "file" ? [wire.file] : []));
+
+  it("sets the new file name and keeps the wire selected under its new id", () => {
+    const store = filed();
+
+    renamed(store, " plan.md ");
+
+    expect(store.getState().flow.wires[2]).toEqual(fileWire("plan", "build", "plan.md"));
+    expect(store.getState().selectedWires).toEqual([planId]);
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+
+  it("undo and redo swap the name back and forth and keep the wire selected", () => {
+    const store = filed();
+    renamed(store, "plan.md");
+
+    store.getState().undo();
+    expect(store.getState().flow.wires[2]).toEqual(fileWire("plan", "build", "notes.md"));
+    expect(store.getState().selectedWires).toEqual([notesId]);
+
+    store.getState().redo();
+    expect(store.getState().flow.wires[2]).toEqual(fileWire("plan", "build", "plan.md"));
+    expect(store.getState().selectedWires).toEqual([planId]);
+  });
+
+  it("changes nothing and adds no undo step for the same name", () => {
+    const store = filed();
+    const before = store.getState().flow;
+
+    renamed(store, "notes.md");
+
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toEqual([]);
+    expect(store.getState().selectedWires).toEqual([notesId]);
+  });
+
+  it.each([
+    ["an empty name", ""],
+    ["a blank name", "   "],
+  ])("refuses %s and says why", (_name, file) => {
+    const store = filed();
+    const before = store.getState().flow;
+
+    renamed(store, file);
+
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toEqual([]);
+    expect(store.getState().message).toMatch(/^Can't connect Planner to build: \S/);
+  });
+
+  it("refuses a name another wire between the same nodes already uses", () => {
+    const store = filed(fileWire("plan", "build", "brief.md"));
+    const before = store.getState().flow;
+
+    renamed(store, "brief.md");
+
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toEqual([]);
+    expect(store.getState().message).toBe(
+      "Can't connect Planner to build: they are already joined.",
+    );
+  });
+
+  it("takes a name a wire between other nodes already uses", () => {
+    const store = filed(fileWire("plan", "check", "plan.md"));
+
+    renamed(store, "plan.md");
+
+    expect(filesOf(store)).toEqual(["plan.md", "plan.md"]);
+    expect(store.getState().flow.wires[2]).toEqual(fileWire("plan", "build", "plan.md"));
+    expect(store.getState().selectedWires).toEqual([planId]);
+  });
+});

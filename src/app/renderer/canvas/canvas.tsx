@@ -33,7 +33,7 @@ import { nodeMimeType, Palette } from "./palette.js";
 import { RenameField } from "./rename-field.js";
 import { SessionChip } from "./session-chip.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
-import { CanvasStoreContext } from "./status.js";
+import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
 import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
 
@@ -370,31 +370,33 @@ function Board({
   return (
     <div className="fd-canvas" data-testid="canvas" ref={board}>
       <CanvasStoreContext.Provider value={store}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          colorMode="system"
-          defaultMarkerColor={null}
-          defaultViewport={startViewport}
-          proOptions={proOptions}
-          onNodeClick={(_, node) => {
-            const container = containerOfFrame(node);
-            if (container !== undefined) {
-              if (readOnly) return;
-              store.getState().select([container]);
-            }
-            if (node.type !== "note") shell.getState().showInspector();
-          }}
-          {...(readOnly ? viewing : editing)}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
-          <ZoomControls />
-          {!readOnly && <FileNamePrompt store={store} />}
-          {!readOnly && <RenameField store={store} />}
-          {!readOnly && <EditorEffects store={store} onSave={onSave} />}
-        </ReactFlow>
+        <CanvasEditingContext.Provider value={!readOnly}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            colorMode="system"
+            defaultMarkerColor={null}
+            defaultViewport={startViewport}
+            proOptions={proOptions}
+            onNodeClick={(_, node) => {
+              const container = containerOfFrame(node);
+              if (container !== undefined) {
+                if (readOnly) return;
+                store.getState().select([container]);
+              }
+              if (node.type !== "note") shell.getState().showInspector();
+            }}
+            {...(readOnly ? viewing : editing)}
+          >
+            <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
+            <ZoomControls />
+            {!readOnly && <FileNamePrompt store={store} />}
+            {!readOnly && <RenameField store={store} />}
+            {!readOnly && <EditorEffects store={store} onSave={onSave} />}
+          </ReactFlow>
+        </CanvasEditingContext.Provider>
       </CanvasStoreContext.Provider>
       <PanelShowButtons
         shell={shell}

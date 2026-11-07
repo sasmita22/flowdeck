@@ -2,7 +2,7 @@ import { ViewportPortal } from "@xyflow/react";
 import { useRef, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { nodeLook } from "../nodes/look.js";
+import { widthOf } from "./frames.js";
 import type { CanvasState } from "./store.js";
 
 export function RenameField({ store }: { store: StoreApi<CanvasState> }) {
@@ -44,7 +44,7 @@ export function RenameField({ store }: { store: StoreApi<CanvasState> }) {
         defaultValue={node.label}
         style={{
           transform: `translate(${x}px, ${y - 2}px)`,
-          width: Math.max(nodeLook(node.type).box.width, 140),
+          width: Math.max(widthOf(node), 140),
         }}
         onKeyDown={onKeyDown}
         onBlur={(event) => finish(event.currentTarget.value)}

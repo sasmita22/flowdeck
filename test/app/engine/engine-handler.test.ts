@@ -382,6 +382,28 @@ describe("createEngineHandler", async () => {
       });
     });
 
+    it("pins a blueprint, so the list shows it pinned", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      flows.create("A");
+      flows.create("B");
+
+      expect(
+        await handler.handle({
+          id: 1,
+          type: "pin-flow",
+          payload: { flowId: "flow-a", pinned: true },
+        }),
+      ).toEqual({ id: 1, ok: true, value: null });
+      expect(await handler.handle({ id: 2, type: "list-flows" })).toMatchObject({
+        ok: true,
+        value: [
+          { flowId: "flow-b", pinned: false },
+          { flowId: "flow-a", pinned: true },
+        ],
+      });
+    });
+
     it("refuses a rename to a blank name, a save to an unknown blueprint and an unknown open", async () => {
       const flows = new FakeFlowStore({ newId: ids("flow-a") });
       const handler = createEngineHandler(options({ openStores: () => stores(flows) }));

@@ -256,6 +256,16 @@ body,
   color: var(--fg);
 }
 
+.fd-menu-recent-row {
+  display: flex;
+  align-items: center;
+}
+
+.fd-menu-recent-row .fd-menu-recent {
+  flex: 1;
+  min-width: 0;
+}
+
 .fd-menu-gap {
   height: var(--space-3);
 }
@@ -923,6 +933,18 @@ body,
   font: var(--fs-2xs) var(--f-mono);
   white-space: nowrap;
   pointer-events: none;
+}
+
+.fd-file-wire-label.fd-file-wire-renamable {
+  cursor: text;
+  pointer-events: all;
+}
+
+.fd-file-wire-label.fd-file-wire-input {
+  border-style: solid;
+  border-color: var(--select);
+  outline: none;
+  pointer-events: all;
 }
 
 .fd-file-name {

@@ -1,4 +1,5 @@
 import { _electron, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
 import type * as Electron from "electron";
 import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,10 +10,13 @@ import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
+import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { testDisplayFlags, withWindowMode } from "./window-mode.js";
 
 const stepSchemas = {
   click: z.object({ type: z.literal("click"), testid: z.string().min(1) }),
+  "right-click": z.object({ type: z.literal("right-click"), testid: z.string().min(1) }),
   type: z.object({ type: z.literal("type"), testid: z.string().min(1), text: z.string() }),
   "wait-for-text": z.object({
     type: z.literal("wait-for-text"),
@@ -43,6 +47,8 @@ export type Step = z.infer<(typeof stepSchemas)[keyof typeof stepSchemas]>;
 
 export interface DrivePage {
   click(testid: string): Promise<void>;
+  rightClick(testid: string): Promise<void>;
+  waitFor(testid: string, timeoutMs: number): Promise<void>;
   type(testid: string, text: string): Promise<void>;
   waitForText(text: string, timeoutMs: number): Promise<void>;
   drag(from: string, to: string, toPosition?: Point): Promise<void>;
@@ -92,6 +98,8 @@ async function runPageStep(step: PageStep, index: number, page: DrivePage, outDi
   switch (step.type) {
     case "click":
       return page.click(step.testid);
+    case "right-click":
+      return page.rightClick(step.testid);
     case "type":
       return page.type(step.testid, step.text);
     case "wait-for-text":
@@ -152,6 +160,8 @@ async function boxOf(page: Page, testid: string) {
 export function playwrightPage(page: Page): DrivePage {
   return {
     click: (testid) => page.getByTestId(testid).click(),
+    rightClick: (testid) => page.getByTestId(testid).click({ button: "right" }),
+    waitFor: (testid, timeoutMs) => page.getByTestId(testid).waitFor({ timeout: timeoutMs }),
     type: (testid, text) => page.getByTestId(testid).fill(text),
     waitForText: (text, timeoutMs) => page.getByText(text).first().waitFor({ timeout: timeoutMs }),
     drag: async (from, to, toPosition) => {
@@ -175,6 +185,34 @@ export function playwrightPage(page: Page): DrivePage {
     ariaSnapshot: async () =>
       `# title: ${await page.title()}\n${await page.locator("body").ariaSnapshot()}\n`,
   };
+}
+
+const openCanvasWaitMs = 30_000;
+
+export async function openCanvas(
+  page: DrivePage,
+  { flowId }: { flowId?: string | undefined },
+): Promise<void> {
+  const opener = flowId === undefined ? pageTestIds.create : pageTestIds.blueprintOpen(flowId);
+  if (flowId === undefined) await page.waitForText("No blueprints yet", openCanvasWaitMs);
+  else await page.waitFor(opener, openCanvasWaitMs);
+  await page.click(opener);
+  await page.waitFor(controlTestIds.save, openCanvasWaitMs);
+}
+
+export function latestFlowId(home: string): string | undefined {
+  let db: Database.Database;
+  try {
+    db = new Database(join(home, "flowdeck.db"), { readonly: true, fileMustExist: true });
+  } catch {
+    return undefined;
+  }
+  try {
+    const flows = new SqliteFlowStore({ db });
+    return flows.loadLatest()?.flowId ?? flows.list()[0]?.flowId;
+  } finally {
+    db.close();
+  }
 }
 
 export interface DriveProcess {
@@ -301,13 +339,15 @@ const launchElectron: Launch = (home, colorScheme, env = {}) =>
     ...(colorScheme && { colorScheme }),
   });
 
-export async function launchApp(options: {
+export type LaunchOptions = {
   home: string;
   logPath: string;
   launch?: Launch;
   colorScheme?: ColorScheme;
   env?: Readonly<Record<string, string>>;
-}): Promise<LaunchedApp> {
+};
+
+export async function launchApp(options: LaunchOptions): Promise<LaunchedApp> {
   const launched = await (options.launch ?? launchElectron)(
     options.home,
     options.colorScheme,
@@ -339,6 +379,18 @@ export async function launchApp(options: {
   }
 }
 
+export async function launchOnCanvas(options: LaunchOptions): Promise<LaunchedApp> {
+  const flowId = latestFlowId(options.home);
+  const launched = await launchApp(options);
+  try {
+    await openCanvas(playwrightPage(launched.window), { flowId });
+  } catch (error) {
+    await launched.close().catch(() => undefined);
+    throw error;
+  }
+  return launched;
+}
+
 export async function resolveHome(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<{ home: string; keep: boolean }> {
@@ -355,6 +407,7 @@ export async function drive(
     launch?: Launch;
     keepHome?: boolean;
     exitGraceMs?: number;
+    onCanvas?: boolean;
   },
 ): Promise<void> {
   let launched: LaunchedApp | undefined;
@@ -369,7 +422,7 @@ export async function drive(
   };
   const launch = async () => {
     closeRequested = false;
-    launched = await launchApp({
+    launched = await (options.onCanvas === true ? launchOnCanvas : launchApp)({
       home: options.home,
       logPath: join(options.outDir, "app.log"),
       ...(options.launch && { launch: options.launch }),
@@ -441,7 +494,7 @@ async function main(): Promise<void> {
   await mkdir(outDir, { recursive: true });
   const { home, keep } = await resolveHome(process.env);
   process.stdout.write(`evidence: ${outDir}\nhome: ${home}\n`);
-  await drive(steps, { outDir, home, keepHome: keep });
+  await drive(steps, { outDir, home, keepHome: keep, onCanvas: true });
 }
 
 export function reportFailure(
