@@ -7,6 +7,8 @@ description: How to write a build's subagent that another step can hand work to 
 
 A build agent is dispatched by its full name, `<build-name>:<piece>`. Its file is all it knows. The prompt it gets starts with `NODE <nodeId>`, may list `You are given: <files>` and `Write: <files>` for that node, and ends with `Go` (or `Go.` and one item inside a For each). A merged agent serves several nodes, each passing its own files this way.
 
+A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
+
 ## Description
 
 1. It starts with the scope line code wrote, with this build's names filled in:
@@ -26,11 +28,11 @@ Keep the five sections code laid down, in this order:
 - `## Inputs`: every file it reads and who writes it. Files that differ per node come from the prompt's `You are given:` line; say so instead of hard-coding them in a merged agent.
 - `## Steps`: imperative and numbered, built from the node's instructions. Each step reads or produces something named.
 - `## Output`: the files it writes (the prompt's `Write:` line) and their pinned shape: headings or fields, in order, that the next node reads as is. Start from the file's template in `plugin/templates/` when one exists; where the node's own instructions narrow the file's form, the node's own instructions win. In a merged piece where the nodes' output layouts differ, add one line per node, `NODE <id>: <layout>`, so each node keeps its own layout.
-- `## When to stop`: the done condition, what to do when stuck (stop and report the blocker, never guess), and a cap of 3 tries on any retry loop.
+- `## When to stop`: the node's done condition; a stuck path or a retry cap only where the node's own text states one.
 
 ## Frontmatter
 
-- `tools`: keep what the node set. If the node set none and the steps need fewer than every tool, list the fewest that do the job, each one in `settings.json` `permissions.allow`. A tool the steps need that the allow list lacks is a question.
+- `tools`: keep what the node set. If the node set none and the steps need fewer than every tool, list the fewest that do the job, each one in `settings.json` `permissions.allow`. A tool the steps need that the allow list lacks is never a question: write the piece with the allowed tools.
 - `model`: keep what the node set; never add one.
 - Never change `name`.
 

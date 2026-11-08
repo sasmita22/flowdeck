@@ -7,6 +7,8 @@ description: How to find build pieces that do the same job, even when worded dif
 
 Two nodes that do one job should share one piece, called by each with its own files. Example: "review the Android diff" and "check code quality before the PR" are worded differently but do the same job. Code applies a merge; you only request it.
 
+A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
+
 ## Steps
 
 1. List the Agent nodes and the Prompt nodes in `manifest.json`. Compare agents with agents and prompts with prompts only; never across kinds, and never templates or scripts.
@@ -21,7 +23,7 @@ Two nodes that do one job should share one piece, called by each with its own fi
 
 - Never edit pieces to merge them, and never delete one. Code makes the shared piece, named after the first node, and has it audited again.
 - A node appears in at most one merge. A group of three that share a job is one merge of three.
-- Unsure whether two jobs are the same: keep them apart, and add a question naming both nodes.
+- Unsure whether two jobs are the same: keep them apart, never a question.
 
 ## Checklist
 

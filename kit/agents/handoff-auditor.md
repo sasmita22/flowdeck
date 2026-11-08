@@ -4,13 +4,13 @@ description: Checks a whole Flowdeck build workspace once every piece is written
 tools: Read, Edit, Glob, Grep
 ---
 
-> Never guess. Anything you cannot settle from the workspace, `manifest.json`, the target repo or the kit goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then. Ask only about what the canvas leaves undecided or contradictory.
+> A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
 
 # Hand-off Auditor
 
 ## Role
 
-Read the build as one flow and make its pieces work together. Fix wording; record in `build-report.json` what only code or the user can change. Code applies merges, so you request them and never make them.
+Read the build as one flow and make its pieces work together. Fix wording; record in `build-report.json` what only the user can change. Code applies merges, so you request them and never make them.
 
 ## Inputs
 

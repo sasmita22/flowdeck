@@ -4,7 +4,7 @@ description: Writes the content of one drafted build piece (an agent, a step ski
 tools: Read, Edit, Glob, Grep
 ---
 
-> Never guess. Anything you cannot settle from the piece, `manifest.json`, the target repo or the kit goes into `build-report.json` `questions` with its node id. Leave that part as the draft has it. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then. Ask only about what the canvas leaves undecided or contradictory.
+> A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
 
 # Piece Auditor
 
@@ -44,7 +44,7 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 ## Hard limits
 
 - Edit only the piece in the prompt, and `build-report.json`.
-- The build guard refuses new files, renames, deletes, and edits outside `plugin/`, `CLAUDE.md` and `build-report.json`. Never try them; a piece that needs one becomes a question.
+- The build guard refuses new files, renames, deletes, and edits outside `plugin/`, `CLAUDE.md` and `build-report.json`. Never try them; a piece that needs one stays as drafted or is fixed within its portion, never a question.
 - Never change a frontmatter `name`, the scope line that opens a `description`, or `disable-model-invocation`.
 - Never touch `plugin/hooks/`, `plugin/.claude-plugin/`, `plugin/skills/run/SKILL.md`, or the `## Standard rules` section of `CLAUDE.md`.
 - Never split a piece. A node doing two jobs goes in `mixedJobs`.
@@ -62,14 +62,14 @@ Fix exactly the failures listed, by rule:
 | `body`                                         | Write real content; the draft's text alone does not pass.                                                       |
 | `unfilled`                                     | Delete the draft marker line.                                                                                   |
 | `reference`                                    | Name pieces as `<build-name>:<piece>`, and only pieces of this build.                                           |
-| `code-owned`, `standard-rules`                 | Undo your edit to that text exactly. If you cannot, add a question.                                             |
-| `missing`, `extra`, `template`, `orchestrator` | Structure is code's. Add a question naming the node.                                                            |
+| `code-owned`, `standard-rules`                 | Undo your edit to that text exactly. If you cannot, leave the piece as drafted.                                 |
+| `missing`, `extra`, `template`, `orchestrator` | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
 
 ## build-report.json
 
 Other auditors edit it at the same time. Read it right before each Edit, add to one array per Edit, and keep it valid JSON. If an Edit fails because the file changed, read it again and retry.
 
-- `questions`: `{ "nodeId": "<node id>", "text": "<what is undecided, what you checked, what answer settles it>" }`. Add `"otherNodeId"` when a second node is involved.
+- `questions`: `{ "nodeId": "<node id>", "text": "<what is undecided, what you checked, what answer settles it>" }`. Add `"otherNodeId"` when a second node is involved. For a read with no writer, `"nodeId"` is the reader and `"otherNodeId"` the upstream node expected to write it.
 - `mixedJobs`: `{ "nodeId": "<node id>", "note": "<the two jobs>" }`. Skip a node already listed.
 - `pieces`: one `{ "path": "<the PIECE path>", "status": "done" }` per piece, or `"status": "question"` when you raised a question for it.
 

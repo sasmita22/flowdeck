@@ -504,6 +504,23 @@ describe("buildVersion", () => {
       expectNothingDone(store, fs, worktree);
     });
 
+    it("refuses an Agent with blank instructions, naming the node, and reserves nothing", async () => {
+      const { store, fs, worktree, deps } = setup();
+      const blankAgent = withConfig(
+        flow([agent("a1", { settings: { instructions: "  " } })], []),
+        ticketConfig,
+      );
+
+      const result = await startBuild(blankAgent, request, deps);
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: "required-settings", node: "a1" })],
+      });
+      expect(store.listPendingBuilds()).toEqual([]);
+      expectNothingDone(store, fs, worktree);
+    });
+
     const answers: BuildAnswer[] = [
       { nodeId: "p1", text: "Which ticket tracker?", answer: "Jira, project FD." },
     ];
