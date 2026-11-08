@@ -5,8 +5,9 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "CLAUDE.md": "# Build fix-login
 
 - Blueprint: Bugfix, version 3
-- Repository folder: carousell-web
-- Hand-off files are read and written in \`carousell-web/\`, the run's working folder inside this build's workspace, never in the workspace folder itself.
+- Repository folder: carousell-web, relative to the workspace; run sessions start inside it
+- Plugin folder: plugin/ in the workspace; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
+- Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 - Target repo (read only while building): /work/carousell-web
 - Base branch: main
 
@@ -34,17 +35,17 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 ",
   "manifest.json": "{
   "files": {
-    "CLAUDE.md": "7cb81665bb10252f295eb222549a59d891d9c8b5c58f70ddba356dbfb7f1afa6",
+    "CLAUDE.md": "049c6336c110d220d76b4fdd24bf5952a34704033da558dd93e4198c5c9727f3",
     "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
-    "plugin/agents/a.md": "c04f168801154c094e18c6cd564fb41f37e6778ed39d8544e497af9a6cf2ad4f",
+    "plugin/agents/a.md": "4934aa74780a4ea28f467a14b00836d6526f2595ffc1b90d013802c54abc633b",
     "plugin/hooks/hooks.json": "59e2e7b56c83a29cdd5a0dc97d28f1b7ce85bacc0409cf6fff7ccf6d0101e4a4",
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "e10556c06879bd3ead874e20436808e33a134466ddac3b60559b0f3709322d39",
-    "plugin/skills/p/SKILL.md": "a42974b42db86131d498039482b3360ee9ae4b6602a9dfad82a606d0f1ad650a",
-    "plugin/skills/run/SKILL.md": "955d4a3a3c18853f46e05c9e5ef1895b5b77172bf1b901ea38acbda2e332ca91",
+    "plugin/skills/p/SKILL.md": "d64e21bce63c81b2a331d1c2158bf5aaf22dd92b056b7009500f5b6143b9f599",
+    "plugin/skills/run/SKILL.md": "8583e6604f07b5b556e342582b68da818db44d728ddec1d716235dcf0c5de9dc",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "a28f0b84b1ddd2aa3f1ac583d8d55fe883a0f4e911c1233dfb109f7c1dbf8692",
+  "hash": "3e6db606bb873a2c4530f8529b66c2338395b1742ef1febef7b0d1013e6d230f",
   "layout": "workspace",
   "nodes": [
     {
@@ -125,7 +126,7 @@ implementer
 
 ## Inputs
 
-Hand-off files are read and written in \`carousell-web/\`, the run's working folder inside this build's workspace, never in the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 
 None.
 
@@ -263,7 +264,7 @@ Do the work.
 
 ## Builds on
 
-Hand-off files are read and written in \`carousell-web/\`, the run's working folder inside this build's workspace, never in the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 
 None.
 
@@ -279,9 +280,9 @@ description: "Part of build fix-login (repo carousell-web, workspace /fd-home/wo
 
 Run these steps in order. Only order and hand off: each step goes to its skill or agent; never do a step's work yourself. Wait for each step's result before the next.
 
-Hand-off files are read and written in \`carousell-web/\`, the run's working folder inside this build's workspace, never in the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 
-1. NODE p (p): read \`plugin/skills/p/SKILL.md\` by path and follow it. Then go on to NODE a.
+1. NODE p (p): read \`\${CLAUDE_PLUGIN_ROOT}/skills/p/SKILL.md\` by path and follow it. Then go on to NODE a.
 2. NODE a (a): dispatch \`fix-login:a\` with the prompt "NODE a\\nGo", and wait for it to return.
 ",
   "settings.json": "{

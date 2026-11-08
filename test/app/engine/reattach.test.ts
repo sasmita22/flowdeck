@@ -1,8 +1,11 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import { createAppWaiter, type AppWaiter } from "../../../src/app/engine/app-waiter.js";
@@ -28,6 +31,19 @@ import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
 import type { BuildAgents, BuildTurnResult } from "../../../src/ports/build-agents.js";
+
+const git = async (repo: string, ...args: string[]): Promise<string> =>
+  (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
+
+const worktreeCount = async (repo: string): Promise<number> =>
+  (await git(repo, "worktree", "list", "--porcelain"))
+    .split("\n")
+    .filter((line) => line.startsWith("worktree ")).length;
+
+const flowdeckBranches = async (repo: string): Promise<string[]> =>
+  (await git(repo, "branch", "--list", "--format=%(refname:short)"))
+    .split("\n")
+    .filter((branch) => branch.startsWith("flowdeck/"));
 
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
@@ -523,13 +539,16 @@ describe("an app restart", () => {
       readonly close: BuildAgents["close"] = (sessionName) => this.fake.close(sessionName);
     }
 
-    const leftMidTurn = async () => {
+    const leftMidTurn = async (
+      overrides: Partial<EngineHandlerOptions> = {},
+      repoPath = repo.path,
+    ) => {
       const inFlight = new InFlightAgents();
-      const first = newHandler({ buildAgents: inFlight });
+      const first = newHandler({ buildAgents: inFlight, ...overrides });
       const blueprint = flow([prompt("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
-        session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },
+        session: { ...blueprint.session, buildConfig: { repo: repoPath, variables: [] } },
       });
       const name = "left-going";
       const answered = (await call(first, "build-version", {
@@ -564,9 +583,10 @@ describe("an app restart", () => {
         fs: new NodeFileSystem(),
         script: { aliveAfterRestart: true },
       });
+      const worktree = new FakeWorktree();
       pushes = [];
 
-      const second = newHandler({ buildAgents: after });
+      const second = newHandler({ buildAgents: after, worktree });
       await second.reattach();
 
       expect(pushes).toContainEqual({ push: "session", runId: pendingId, value: spec.sessionName });
@@ -597,6 +617,64 @@ describe("an app restart", () => {
         steps.filter((event) => event.step === 3 && event.status === "done" && event.round === 1),
       ).toHaveLength(1);
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
+      expect(worktree.calls).toEqual([]);
+    });
+
+    it("gives a reattached rebuild's step-4 audit the answers its origin keeps", async () => {
+      const question = { nodeId: "p1", text: "Which file does p1 write its plan to?" };
+      const answer = { ...question, answer: "p1 writes plan.md and nothing else." };
+      const asking = newHandler({
+        buildAgents: new FakeBuildAgents({
+          fs: new NodeFileSystem(),
+          script: { questions: [question] },
+        }),
+      });
+      const blueprint = flow([prompt("p1")], []);
+      const { flowId, version } = flows.save({
+        ...blueprint,
+        session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },
+      });
+      const asked = (await call(asking, "build-version", {
+        flowId,
+        version,
+        name: "asked",
+        values: {},
+      })) as { pendingId: string };
+      await vi.waitFor(() =>
+        expect(
+          runs.listLatestEndedPendingBuilds().find((ended) => ended.id === asked.pendingId)
+            ?.outcome,
+        ).toBe("needs-you"),
+      );
+      const inFlight = new InFlightAgents();
+      const first = newHandler({ buildAgents: inFlight });
+      const rebuilt = (await call(first, "build-rebuild", {
+        pendingId: asked.pendingId,
+        answers: [answer],
+      })) as { kind: string; pendingId: string };
+      expect(rebuilt.kind).toBe("started");
+      await vi.waitFor(() => expect(inFlight.fake.turns).toHaveLength(1));
+      expect(inFlight.fake.turns[0]?.text).toContain(answer.answer);
+      const [spec] = inFlight.fake.opened;
+      if (spec === undefined) throw new Error("the rebuild's session never opened");
+      await first.detach();
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+
+      await vi.waitFor(() => expect(runs.findBuildByName("asked")).toBeDefined(), {
+        timeout: 3000,
+      });
+      const audit = after.turns.find((turn) => turn.text.includes("handoff-auditor"));
+      expect(audit?.text).toContain(answer.text);
+      expect(audit?.text).toContain(answer.answer);
     });
 
     it.each([
@@ -737,6 +815,31 @@ describe("an app restart", () => {
       expect(after.opened.filter((opened) => !("attach" in opened))).toEqual([]);
       expect(after.turns).toEqual([]);
       expect(runs.listBuilds()).toEqual([]);
+    });
+
+    it("ends a build left in step 3 failed, removing its worktree registration, branch and workspace", async () => {
+      const source = await createTmpRepo({ commit: true });
+      onTestFinished(() => source.cleanup());
+      const onGit = {
+        worktree: new GitWorktree(),
+        gitState: new FakeGitState({ [source.path]: { kind: "branch", name: "main" } }),
+      };
+      const { pendingId, spec } = await leftMidTurn(onGit, source.path);
+      expect(await worktreeCount(source.path)).toBe(2);
+      expect(await flowdeckBranches(source.path)).toHaveLength(1);
+      pushes = [];
+
+      const second = newHandler({
+        buildAgents: new FakeBuildAgents({ fs: new NodeFileSystem() }),
+        ...onGit,
+      });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(await worktreeCount(source.path)).toBe(1);
+      expect(await flowdeckBranches(source.path)).toEqual([]);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
     });
   });
 });

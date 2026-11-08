@@ -4,7 +4,9 @@ import { z } from "zod";
 import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.js";
 import { workspaceDir, type BuildResult } from "../../core/compiler/build.js";
 import { newBuildSessionName } from "../../core/compiler/build-session.js";
+import { buildAnswerSchema, type BuildAnswer } from "../../core/compiler/build-report.js";
 import {
+  buildInputsSchema,
   buildResumeOf,
   questionRule,
   resumeRequest,
@@ -151,15 +153,18 @@ const messageOf = (error: unknown): string =>
 
 const workspaceInfoPayload = z.object({ buildConfig: BuildConfig });
 
-const buildVersionPayload = z.object({
+const buildVersionPayload = buildInputsSchema.omit({ answers: true }).extend({
   flowId: z.string(),
   version: z.number().int(),
   name: z.string(),
-  repo: z.string().optional(),
-  base: z.string().optional(),
-  values: z.record(z.string(), z.union([z.string(), z.boolean()])),
-  buildModel: z.string().optional(),
 });
+
+const rebuildPayload = z.object({
+  pendingId: z.string(),
+  answers: z.array(buildAnswerSchema).min(1),
+});
+
+const keptInputs = z.object({ request: buildInputsSchema });
 
 const buildIdPayload = z.object({ buildId: z.string() });
 
@@ -220,6 +225,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     listPendingBuilds: () => store.listPendingBuilds(),
     listLatestEndedPendingBuilds: () => store.listLatestEndedPendingBuilds(),
     findPendingBuildByName: (name) => store.findPendingBuildByName(name),
+    pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
     recordBuild: (build) => store.recordBuild(build),
@@ -273,6 +279,11 @@ const problemsOf = (result: { errors: readonly ValidationError[] }) =>
 const refusedBuild = (result: Extract<BuildResult, { ok: false }>): BuiltVersion => {
   const problems = plainProblems(result.errors);
   return { kind: "error", message: problems.map(problemText).join("\n"), problems };
+};
+
+const keptAnswersOf = (pending: PendingBuild): { answers?: BuildAnswer[] } => {
+  const answers = keptInputs.safeParse(pending.origin).data?.request.answers;
+  return answers === undefined ? {} : { answers };
 };
 
 const progressEntry = (
@@ -597,6 +608,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const buildFlowVersion = async (
     stores: EngineStores,
     { flowId, version, buildModel, ...request }: z.infer<typeof buildVersionPayload>,
+    answers?: readonly BuildAnswer[],
   ): Promise<BuiltVersion> => {
     const saved = stores.flows.load({ flowId, version });
     if (saved === null) {
@@ -610,10 +622,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       values: request.values as VariableValues,
       ...(request.repo === undefined ? {} : { repo: request.repo }),
       ...(request.base === undefined ? {} : { base: request.base }),
+      ...(answers === undefined ? {} : { answers }),
     };
     const origin = {
       source: { flowId, version },
       blueprint: { name: saved.name, version: saved.version },
+      request: {
+        values: request.values,
+        ...(request.repo === undefined ? {} : { repo: request.repo }),
+        ...(request.base === undefined ? {} : { base: request.base }),
+        ...(buildModel === undefined ? {} : { buildModel }),
+        ...(answers === undefined ? {} : { answers: [...answers] }),
+      },
     };
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") {
@@ -634,6 +654,28 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       ...(buildModel === undefined ? {} : { buildModel }),
     });
     return started;
+  };
+
+  const rebuildBuild = async (
+    stores: EngineStores,
+    pendingId: string,
+    answers: readonly BuildAnswer[],
+  ): Promise<BuiltVersion> => {
+    const asked = stores.runs.pendingBuild(pendingId);
+    if (asked === null) throw new Error(`No build ${pendingId}`);
+    if (asked.endedAt === undefined) throw new Error(`Build ${asked.name} is still going`);
+    if (asked.outcome !== "needs-you")
+      throw new Error(`Build ${asked.name} did not end needing answers`);
+    const kept = keptInputs.safeParse(asked.origin);
+    if (!kept.success) {
+      throw new Error(`Build ${asked.name} did not keep its inputs; build the blueprint again`);
+    }
+    const { answers: answeredBefore = [], ...inputs } = kept.data.request;
+    return buildFlowVersion(
+      stores,
+      { flowId: asked.flowId, version: asked.version, name: asked.name, ...inputs },
+      [...answeredBefore, ...answers],
+    );
   };
 
   const failLeftBuild = async (runs: Store, pending: PendingBuild, why: string) => {
@@ -678,7 +720,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       stores,
       pending,
       flow: saved.flow,
-      request: resumeRequest(pending.name, session),
+      request: {
+        ...resumeRequest(pending.name, session),
+        ...keptAnswersOf(pending),
+      },
       origin: {
         source: { flowId: pending.flowId, version: pending.version },
         blueprint: { name: saved.name, version: saved.version },
@@ -1380,6 +1425,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           const value = await withStores((stores) => buildFlowVersion(stores, parsed.data));
           return { id: request.id, ok: true, value };
         }
+        case "build-rebuild":
+          return parsedAnswer(request, rebuildPayload, ({ pendingId, answers }) =>
+            rebuildBuild(storesOrThrow(), pendingId, answers),
+          );
         case "build-stop":
           return parsedAnswer(request, pendingIdPayload, ({ pendingId }) => stopBuild(pendingId));
         case "build-activity":

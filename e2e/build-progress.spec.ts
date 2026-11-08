@@ -43,6 +43,26 @@ const buildSessions = (pendingId?: string): BuildSession[] =>
     .map((row) => JSON.parse(row.body_json) as { type: string } & BuildSession)
     .filter((event) => event.type === "session");
 
+const worktreePaths = async (): Promise<string[]> =>
+  (await run("git", ["-C", repo.path, "worktree", "list", "--porcelain"])).stdout
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length));
+
+const buildBranches = async (): Promise<string[]> =>
+  (
+    await run("git", [
+      "-C",
+      repo.path,
+      "branch",
+      "--list",
+      "flowdeck/*",
+      "--format=%(refname:short)",
+    ])
+  ).stdout
+    .split("\n")
+    .filter((line) => line !== "");
+
 const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
 
 const killBuildSessions = async () => {
@@ -192,8 +212,11 @@ test("the build terminal shows the fd-build session, and Stop ends the build and
   const [session] = buildSessions(pendingId);
   expect(session?.name).toMatch(/^fd-build-/);
   const name = session?.name ?? "";
-  const workspace = join(home, "workspaces", session?.buildId ?? "");
+  const buildId = session?.buildId ?? "";
+  const workspace = join(home, "workspaces", buildId);
   expect(existsSync(workspace)).toBe(true);
+  expect((await worktreePaths()).filter((path) => path.includes(buildId))).toHaveLength(1);
+  expect(await buildBranches()).toHaveLength(1);
 
   const terminal = window.getByTestId(pageTestIds.buildTerminal(pendingId));
   await expect(terminal).toBeVisible();
@@ -207,12 +230,14 @@ test("the build terminal shows the fd-build session, and Stop ends the build and
   await window.getByTestId(controlTestIds.buildStop).click();
   await expect(progress).toContainText("Stopped", { timeout: watchMs });
   await expect.poll(() => existsSync(workspace), { timeout: watchMs }).toBe(false);
+  expect((await worktreePaths()).filter((path) => path.includes(buildId))).toEqual([]);
+  expect(await buildBranches()).toEqual([]);
   await expect(progress).toBeVisible();
   await window.getByTestId("menu-blueprints").click();
   await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText("Failed");
 });
 
-test("a build that ends with a question shows it on the Builds page under its nodes, and the chip says Needs you", async () => {
+test("a build that ends with a question shows it under its nodes with an answer field, the chip says Needs you, and Rebuild with answers starts a new build of the blueprint", async () => {
   test.setTimeout(90_000);
   const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
   launched = await launchWithFakeClaude({
@@ -230,6 +255,31 @@ test("a build that ends with a question shows it on the Builds page under its no
   const question = window.getByTestId(pageTestIds.buildQuestion(pendingId, 0));
   await expect(question).toContainText("s1 · s0");
   await expect(question).toContainText("Which command runs the tests?");
+
+  const answer = window.getByTestId(pageTestIds.buildAnswer(pendingId, 0));
+  const rebuild = window.getByTestId(pageTestIds.buildRebuild(pendingId));
+  await expect(answer).toBeVisible();
+  await expect(rebuild).toBeDisabled();
+  await answer.fill("npm test");
+  await expect(rebuild).toBeEnabled();
+  await rebuild.click();
+
+  const rebuilt = () =>
+    rows<{ version: number; name: string; outcome: string | null; origin_json: string }>(
+      "SELECT version, name, outcome, origin_json FROM pending_builds WHERE flow_id = ? AND id != ?",
+      flowId,
+      pendingId,
+    );
+  await expect.poll(() => rebuilt().length).toBe(1);
+  const [next] = rebuilt();
+  expect(next).toMatchObject({ version: 1, name: "fix-a" });
+  expect(next?.origin_json).toContain("npm test");
+  await expect.poll(() => rebuilt()[0]?.outcome, { timeout: watchMs }).not.toBeNull();
+  expect(
+    rows<{ outcome: string }>("SELECT outcome FROM pending_builds WHERE id = ?", pendingId),
+  ).toEqual([{ outcome: "needs-you" }]);
+  await expect(progress).toContainText("Needs you");
+
   await window.getByTestId("menu-blueprints").click();
   await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText("Needs you");
 });

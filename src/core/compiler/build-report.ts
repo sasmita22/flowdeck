@@ -5,15 +5,21 @@ const nodeGroup = z.strictObject({
   reason: z.string(),
 });
 
+const buildQuestionSchema = z.strictObject({
+  nodeId: z.string(),
+  text: z.string(),
+  otherNodeId: z.string().optional(),
+});
+
+export const buildAnswerSchema = buildQuestionSchema.extend({
+  answer: z.string().trim().min(1),
+});
+
+export type BuildAnswer = z.infer<typeof buildAnswerSchema>;
+
 export const buildReportSchema = z.strictObject({
   version: z.literal(1),
-  questions: z.array(
-    z.strictObject({
-      nodeId: z.string(),
-      text: z.string(),
-      otherNodeId: z.string().optional(),
-    }),
-  ),
+  questions: z.array(buildQuestionSchema),
   merges: z.array(nodeGroup),
   keptApart: z.array(nodeGroup),
   mixedJobs: z.array(z.strictObject({ nodeId: z.string(), note: z.string() })),

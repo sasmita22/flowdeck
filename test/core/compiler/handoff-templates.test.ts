@@ -56,13 +56,19 @@ describe("handoffTemplates", () => {
     }
   });
 
-  it("names where the real file goes: the file's path in the repo folder inside the workspace", () => {
+  it("names where the real file goes: the bare file in the run's working folder, which sits at the repo folder in the workspace", () => {
     const [plan = "", review = ""] = handoffTemplates(sample(), "carousell-web").map(
       (file) => file.content,
     );
 
-    expect(plan.split("\n")[0]).toContain("`carousell-web/notes/plan.md`");
-    expect(review.split("\n")[0]).toContain("`carousell-web/review.md`");
+    expect(plan.split("\n")[0]).toContain(
+      "`notes/plan.md` in the run's working folder (`carousell-web/` in the workspace)",
+    );
+    expect(review.split("\n")[0]).toContain(
+      "`review.md` in the run's working folder (`carousell-web/` in the workspace)",
+    );
+    expect(plan).not.toContain("carousell-web/notes/plan.md");
+    expect(review).not.toContain("carousell-web/review.md");
   });
 
   it("names the nodes that write and read the file", () => {

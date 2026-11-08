@@ -10,6 +10,7 @@ import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import { agent, fileWire, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
 const sample = () => {
   const base = flow(
@@ -109,6 +110,16 @@ describe("emit", () => {
     }
   });
 
+  it("names no hand-off file of the flow under the repo folder in any emitted file", () => {
+    const nested = emitted().flatMap((file) =>
+      nestedHandoffPaths(file.content, "carousell-web", ["plan.md"]).map(
+        (path) => `${file.path}: ${path}`,
+      ),
+    );
+
+    expect(nested).toEqual([]);
+  });
+
   it("writes the orchestrator from the lowered manifest, scoped to this build, repo folder and workspace", () => {
     const expected = orchestratorSkill(lowered().manifest, {
       build: "fix-login",
@@ -202,12 +213,28 @@ describe("emit", () => {
       );
     });
 
-    it("says hand-off files live in the repo folder inside the workspace, never the workspace itself", () => {
+    it("keeps the Repository folder label and value, saying it is relative to the workspace and that run sessions start inside it", () => {
+      const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
+      const line = summary.split("\n").find((text) => text.startsWith("- Repository folder: "));
+
+      expect(line).toMatch(/^- Repository folder: carousell-web\b/);
+      expect(line).toMatch(/relative to the workspace/i);
+      expect(line).toMatch(/run sessions start inside it/i);
+    });
+
+    it("says the plugin folder is plugin/ in the workspace and run sessions reach it as ${CLAUDE_PLUGIN_ROOT}", () => {
+      const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
+      const line = summary.split("\n").find((text) => text.startsWith("- Plugin folder: ")) ?? "";
+
+      expect(line).toMatch(/^- Plugin folder: `?plugin\/`? in the workspace\b/);
+      expect(line).toContain("${CLAUDE_PLUGIN_ROOT}");
+      expect(line).toMatch(/run sessions reach it as/i);
+    });
+
+    it("says hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace, never the workspace itself", () => {
       const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
 
-      expect(summary).toContain(
-        "- Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace, never in the workspace folder itself.",
-      );
+      expectBareHandoffRule(summary, "carousell-web");
     });
 
     it("ends with the standard rules, after a blank line", () => {

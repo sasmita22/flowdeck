@@ -6,7 +6,11 @@ import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.j
 import { build, type BuildDeps, type BuildResult } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
-import { verify, type VerifyFileSystem } from "../../../src/core/compiler/verify.js";
+import {
+  verify,
+  workspaceListing,
+  type VerifyFileSystem,
+} from "../../../src/core/compiler/verify.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
@@ -82,6 +86,28 @@ const failingList = (error: Error): VerifyFileSystem => ({
     throw error;
   },
   readFile: async () => "",
+});
+
+describe("workspaceListing", () => {
+  it("lists the plugin and the named root files that exist, never the repository folder", async () => {
+    const { fs, dir } = await built();
+    await fs.writeFile(`${dir}/carousell-web/README.md`, "a repo file");
+    await fs.writeFile(`${dir}/carousell-web/plugin/agents/a.md`, "a repo file named like ours");
+    await fs.writeFile(`${dir}/carousell-web/manifest.json`, "{}");
+    const plugin = (await fs.list(`${dir}/plugin`)).map((path) => `plugin/${path}`);
+
+    const listing = await workspaceListing(fs, dir, [
+      "manifest.json",
+      "CLAUDE.md",
+      "build-report.json",
+      "absent.json",
+    ]);
+
+    expect(plugin.length).toBeGreaterThan(0);
+    expect([...(listing?.paths ?? [])].sort()).toStrictEqual(
+      ["manifest.json", "CLAUDE.md", "build-report.json", ...plugin].sort(),
+    );
+  });
 });
 
 describe("verify", () => {

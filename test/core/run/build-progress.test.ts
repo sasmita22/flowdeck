@@ -236,6 +236,21 @@ describe("progressOf questions", () => {
     expect(progress.questions).toEqual(questions);
   });
 
+  it.each<[BuildOutcome | undefined, boolean]>([
+    ["needs-you", true],
+    ["failed", false],
+    ["stopped", false],
+    [undefined, false],
+  ])("lets a build that ended %s with questions be answered: %s", (outcome, answerable) => {
+    const asked = report([{ nodeId: "n1", text: "Which repo?" }]);
+    const build = pending({
+      report: asked,
+      ...(outcome === undefined ? {} : { endedAt: 9_000, outcome }),
+    });
+
+    expect(progressOf(build, []).answerable === true).toBe(answerable);
+  });
+
   it("has no questions without a report, or with a report that asks none", () => {
     expect(progressOf(pending(), [])).not.toHaveProperty("questions");
     expect(progressOf(pending({ outcome: "built", report: report([]) }), [])).not.toHaveProperty(

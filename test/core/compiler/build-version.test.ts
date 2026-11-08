@@ -3,18 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { layDown, type BuildResult } from "../../../src/core/compiler/build.js";
-import { emptyReport, type BuildReport } from "../../../src/core/compiler/build-report.js";
+import {
+  emptyReport,
+  type BuildAnswer,
+  type BuildReport,
+} from "../../../src/core/compiler/build-report.js";
 import {
   buildResumeOf,
   buildVersion,
+  resumeRequest,
   runBuild,
   startBuild,
   stoppedRule,
   type BuildOrigin,
+  type BuildRequest,
   type StartedBuild,
 } from "../../../src/core/compiler/build-version.js";
 import { sha256Hex } from "../../../src/core/compiler/hash.js";
 import type { Manifest } from "../../../src/core/compiler/lower.js";
+import { verify } from "../../../src/core/compiler/verify.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
 import type { PendingBuildEnd } from "../../../src/core/run/store.js";
@@ -121,6 +128,18 @@ const endsOf = (store: FakeStore) => {
     end(pendingId, value);
   };
   return ends;
+};
+
+const expectFailedBeforeStep3 = (store: FakeStore, pendingId: string, message: string) => {
+  const steps = stepsOf(store, pendingId);
+  expect(steps.slice(0, 3)).toEqual([step(1, "running"), step(1, "done"), step(2, "running")]);
+  expect(steps.filter((event) => event.step >= 3)).toEqual([]);
+  expect(steps.at(-1)).toEqual({
+    type: "step",
+    step: expect.any(Number),
+    status: "failed",
+    message,
+  });
 };
 
 const errorMessages = (
@@ -230,13 +249,15 @@ describe("buildVersion", () => {
       ]);
     });
 
-    it("writes the workspace before the worktree, and records the build only after both", async () => {
-      const seen: { manifest: boolean; recorded: number }[] = [];
+    it("writes the workspace, then cuts the worktree before the build session opens, and records the build last", async () => {
+      const seen: { manifest: boolean; opened: number; turns: number; recorded: number }[] = [];
       const base = setup();
       const worktree = new (class extends FakeWorktree {
         override async add(options: WorktreeAddOptions): Promise<void> {
           seen.push({
             manifest: await base.fs.exists(`${home}/workspaces/${firstId}/manifest.json`),
+            opened: base.agents.opened.length,
+            turns: base.agents.turns.length,
             recorded: base.store.builds().length,
           });
           await super.add(options);
@@ -250,12 +271,12 @@ describe("buildVersion", () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(seen).toEqual([{ manifest: true, recorded: 0 }]);
+      expect(seen).toEqual([{ manifest: true, opened: 0, turns: 0, recorded: 0 }]);
       expect(base.store.builds()).toHaveLength(1);
     });
 
-    it("leaves no workspace folder and no row when the worktree cannot be made", async () => {
-      const { store, fs, worktree, deps } = setup({
+    it("leaves no workspace folder, no session and no open row when the worktree cannot be made", async () => {
+      const { store, fs, worktree, agents, deps } = setup({
         worktree: new FakeWorktree({ failWith: "git said no" }),
       });
 
@@ -267,7 +288,10 @@ describe("buildVersion", () => {
         ),
       ).rejects.toThrow("git said no");
 
+      expect(agents.opened).toEqual([]);
+      expect(agents.turns).toEqual([]);
       expect(store.builds()).toEqual([]);
+      expect(store.listPendingBuilds()).toEqual([]);
       expect(await fs.exists(`${home}/workspaces/${firstId}/manifest.json`)).toBe(false);
       expect(worktree.removed).toEqual([]);
     });
@@ -479,6 +503,53 @@ describe("buildVersion", () => {
       expect(store.listPendingBuilds()).toEqual([]);
       expectNothingDone(store, fs, worktree);
     });
+
+    const answers: BuildAnswer[] = [
+      { nodeId: "p1", text: "Which ticket tracker?", answer: "Jira, project FD." },
+    ];
+
+    const withRequest = (origin: BuildOrigin): BuildOrigin => ({
+      ...origin,
+      request: {
+        values: request.values,
+        repo: request.repo,
+        base: request.base,
+        buildModel: "claude-haiku-4-5",
+        answers,
+      },
+    });
+
+    it("keeps the build's inputs in the pending row's origin", async () => {
+      const { flows, store, deps } = setup();
+      const { flow: saved, origin } = savedV1(flows);
+      const kept = withRequest(origin);
+
+      await startBuild(saved, { ...request, answers }, deps, kept);
+
+      expect(store.listPendingBuilds()).toEqual([expect.objectContaining({ origin: kept })]);
+    });
+
+    it("lays down the same manifest and hash whether or not the origin keeps the inputs", async () => {
+      const built = async (withInputs: boolean) => {
+        const t = setup();
+        const { flow: saved, origin } = savedV1(t.flows);
+        const given = withInputs ? withRequest(origin) : origin;
+        const pending = await startBuild(saved, request, t.deps, given);
+        if (!("kind" in pending)) throw new Error(errorMessages(pending).join("; "));
+        const result = await runBuild(pending, saved, request, t.deps, given);
+        if (!result.ok) throw new Error("build failed");
+        return {
+          hash: result.hash,
+          manifest: await t.fs.readFile(`${result.dir}/manifest.json`),
+        };
+      };
+
+      const plain = await built(false);
+      const kept = await built(true);
+
+      expect(kept).toEqual(plain);
+      expect(JSON.parse(kept.manifest)).not.toHaveProperty("request");
+    });
   });
 
   describe("runBuild", () => {
@@ -524,18 +595,27 @@ describe("buildVersion", () => {
       expect(base.store.listPendingBuilds()).toEqual([]);
     });
 
-    it("ends the build only once its worktree is cut and the build recorded", async () => {
+    it("cuts the worktree once step 2 is laid down, before step 3, and ends the build only once it is recorded", async () => {
       const base = setup();
+      const pending = await started(base);
+      const stepsAtAdd: Omit<StepEvent, "round">[][] = [];
+      const add = base.worktree.add.bind(base.worktree);
+      base.worktree.add = async (options) => {
+        stepsAtAdd.push(stepsOf(base.store, pending.pendingId));
+        await add(options);
+      };
       const seen: { worktrees: number; recorded: number }[] = [];
       const end = base.store.endPendingBuild.bind(base.store);
       base.store.endPendingBuild = (pendingId, value) => {
         seen.push({ worktrees: base.worktree.calls.length, recorded: base.store.builds().length });
         end(pendingId, value);
       };
-      const pending = await started(base);
 
       await runBuild(pending, ticketFlow(), request, base.deps);
 
+      expect(stepsAtAdd).toHaveLength(1);
+      expect(stepsAtAdd[0]?.some((event) => event.step >= 3)).toBe(false);
+      expect(stepsAtAdd[0]).toContainEqual(step(2, "running"));
       expect(seen).toEqual([{ worktrees: 1, recorded: 1 }]);
     });
 
@@ -574,7 +654,7 @@ describe("buildVersion", () => {
       expect(base.store.builds()).toEqual([]);
     });
 
-    it("fails step 5 when the worktree cannot be cut, removing the workspace and keeping the report", async () => {
+    it("fails before step 3 when the worktree cannot be cut, opening no session, removing the workspace and keeping the report", async () => {
       const base = setup({ worktree: new FakeWorktree({ failWith: "git said no" }) });
       const ends = endsOf(base.store);
       const pending = await started(base);
@@ -583,7 +663,9 @@ describe("buildVersion", () => {
         "git said no",
       );
 
-      expect(stepsOf(base.store, pending.pendingId)).toEqual(failedAtStep5("git said no"));
+      expectFailedBeforeStep3(base.store, pending.pendingId, "git said no");
+      expect(base.agents.opened).toEqual([]);
+      expect(base.store.listPendingBuilds()).toEqual([]);
       expect(ends).toEqual([
         {
           pendingId: pending.pendingId,
@@ -627,7 +709,7 @@ describe("buildVersion", () => {
 
       expect(eventsOf(base.store, pending.pendingId).at(-1)).toEqual({
         type: "step",
-        step: 5,
+        step: expect.any(Number),
         status: "failed",
         message: "git said no",
       });
@@ -664,7 +746,7 @@ describe("buildVersion", () => {
       const again = await startBuild(ticketFlow(), request, base.deps);
 
       expect(again).toEqual({ kind: "started", pendingId: expect.any(String) });
-      expect(stepsOf(base.store, pending.pendingId)).toEqual(failedAtStep5("git said no"));
+      expectFailedBeforeStep3(base.store, pending.pendingId, "git said no");
     });
   });
 
@@ -780,7 +862,7 @@ describe("buildVersion", () => {
         onEvent,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       };
-      const run = async (source: Flow = agentsFlow()) => {
+      const run = async (source: Flow = agentsFlow(), given: BuildRequest = request) => {
         const pending = base.store.startPendingBuild({
           flowId: "file:fix-login",
           version: 1,
@@ -789,7 +871,7 @@ describe("buildVersion", () => {
           startedAt,
         });
         if (pending.kind !== "started") throw new Error("pending build not started");
-        const result = await runBuild(pending, source, request, deps).catch(
+        const result = await runBuild(pending, source, given, deps).catch(
           (error: unknown) => error,
         );
         return { pending, result };
@@ -821,15 +903,23 @@ describe("buildVersion", () => {
       expect(await t.fs.exists(settingsFolder)).toBe(false);
     };
 
+    const cut = () => ({
+      repo,
+      base: "main",
+      branch: "flowdeck/fix-login-0f3a9c2e",
+      path: `${dir()}/carousell-web`,
+    });
+
     const expectTornDown = async (t: ReturnType<typeof traced>) => {
       expect(t.fake.closed).toEqual([sessionName]);
       expect(await t.fs.exists(`${dir()}/manifest.json`)).toBe(false);
-      expect(t.worktree.calls).toEqual([]);
+      expect(t.worktree.calls).toEqual([cut()]);
+      expect(t.worktree.removed).toEqual([cut()]);
       expect(t.store.builds()).toEqual([]);
       await expectSettingsGone(t);
     };
 
-    it("lays down, opens the session, writes, audits, checks, locks, cuts, records, closes, then ends built", async () => {
+    it("lays down, cuts the worktree, opens the session, writes, audits, checks, locks, records, closes, then ends built", async () => {
       const t = traced();
       const pieceA = await pieceOf("a");
 
@@ -841,8 +931,8 @@ describe("buildVersion", () => {
         "step 1 done",
         "step 2 running",
         "write manifest.json",
-        "step 2 done",
-        `session ${sessionName}`,
+        "worktree.add",
+        "open",
         "step 3 running",
         "write turn",
         `component ${pieceA} running`,
@@ -853,14 +943,159 @@ describe("buildVersion", () => {
         "step 4 done",
         "step 5 running",
         "write manifest.json",
-        "worktree.add",
         "recordBuild",
         "close",
         "end built",
       ]);
-      expect(t.timeline.indexOf("open")).toBeLessThan(t.timeline.indexOf("write turn"));
-      expect(t.timeline.indexOf("open")).toBeGreaterThan(t.timeline.indexOf("step 2 done"));
+      expect(t.timeline.filter((entry) => entry === "worktree.add")).toHaveLength(1);
+      expect(t.timeline.indexOf("step 2 done")).toBeLessThan(t.timeline.indexOf("open"));
+      expect(t.timeline.indexOf(`session ${sessionName}`)).toBeLessThan(t.timeline.indexOf("open"));
       await expectSettingsGone(t);
+    });
+
+    it("leaves a seeded repository's files in the worktree untouched and out of the build", async () => {
+      const t = traced();
+      const worktreeDir = `${dir()}/carousell-web`;
+      const seeded = {
+        [`${worktreeDir}/README.md`]: "@unfilled: the repo's own placeholder\n\nRepo notes.\n",
+        [`${worktreeDir}/assets/logo.png`]: String.fromCharCode(0x89, 0x50, 0xff, 0xfe, 0x00, 0xc3),
+      };
+      const add = t.worktree.add.bind(t.worktree);
+      t.worktree.add = async (options) => {
+        await add(options);
+        for (const [path, content] of Object.entries(seeded)) await t.fs.writeFile(path, content);
+      };
+      const seenAtOpen: boolean[] = [];
+      const open = t.deps.agents.open;
+      t.deps.agents.open = async (spec) => {
+        seenAtOpen.push(await t.fs.exists(`${worktreeDir}/README.md`));
+        await open(spec);
+      };
+      const seededWrites = () =>
+        t.fs.calls.filter(
+          (call) =>
+            (call.method === "writeFile" || call.method === "remove") &&
+            Object.hasOwn(seeded, call.path),
+        );
+
+      const { pending, result } = await t.run();
+
+      expect(seenAtOpen).toEqual([true]);
+      if (!isBuilt(result)) throw new Error(`build failed: ${JSON.stringify(result)}`);
+      expect(t.ends).toEqual([
+        { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "built" }) },
+      ]);
+      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest & {
+        files: Record<string, string>;
+      };
+      expect(
+        Object.keys(manifest.files).filter((path) => path.startsWith("carousell-web/")),
+      ).toEqual([]);
+      for (const [path, content] of Object.entries(seeded)) {
+        expect(await t.fs.readFile(path)).toBe(content);
+      }
+      expect(seededWrites()).toHaveLength(Object.keys(seeded).length);
+      expect(await verify(result.dir, result.hash, "workspace", { fs: t.fs })).toEqual({
+        ok: true,
+      });
+    });
+
+    const laidDownBeforeRestart = async (t: ReturnType<typeof traced>, worktreeLeft: boolean) => {
+      const laid = await layDown(agentsFlow(), {
+        home,
+        kitVersion: kit.version,
+        workspace: { id: firstId, name: request.name, repo, base: "main", values: request.values },
+      });
+      if (!laid.ok) throw new Error("the flow does not lay down");
+      for (const file of laid.files) await t.fs.writeFile(`${dir()}/${file.path}`, file.content);
+      if (worktreeLeft) await t.fs.writeFile(`${cut().path}/README.md`, "Repo notes.\n");
+      const pending = t.store.startPendingBuild({
+        flowId: "file:fix-login",
+        version: 1,
+        name: request.name,
+        origin: {},
+        startedAt,
+      });
+      if (pending.kind !== "started") throw new Error("pending build not started");
+      const left: BuildEvent[] = [
+        { type: "step", step: 1, status: "running" },
+        { type: "step", step: 1, status: "done" },
+        { type: "step", step: 2, status: "running" },
+        { type: "step", step: 2, status: "done" },
+        {
+          type: "session",
+          name: sessionName,
+          claudeSessionId: "claude-session-1",
+          buildId: firstId,
+          repo,
+          base: "main",
+          values: request.values,
+        },
+        { type: "step", step: 3, status: "running", round: 1 },
+      ];
+      for (const event of left) t.store.appendBuildEvent(pending.pendingId, event);
+      const resume = buildResumeOf(t.store.buildEvents(pending.pendingId));
+      if (resume === undefined) throw new Error("the build is not resumable");
+      const resumeRun = () =>
+        runBuild(
+          pending,
+          agentsFlow(),
+          resumeRequest(request.name, resume.session),
+          t.deps,
+          undefined,
+          resume,
+        ).catch((error: unknown) => error);
+      return { pending, resumeRun };
+    };
+
+    it("resumes a build left in step 3 on the worktree already cut, never cutting it again", async () => {
+      const t = traced();
+      const { resumeRun } = await laidDownBeforeRestart(t, true);
+
+      const result = await resumeRun();
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(t.worktree.calls).toEqual([]);
+    });
+
+    it("ends a resumed build failed, recording no build, when its worktree is gone", async () => {
+      const t = traced();
+      const { pending, resumeRun } = await laidDownBeforeRestart(t, false);
+
+      const result = await resumeRun();
+
+      expect(result).toBeInstanceOf(Error);
+      expect(t.ends).toEqual([
+        { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "failed" }) },
+      ]);
+      expect(t.store.builds()).toEqual([]);
+      expect(t.worktree.calls).toEqual([]);
+      expect(t.fake.turns).toEqual([]);
+      expect(t.fake.closed).toEqual([sessionName]);
+    });
+
+    it("removes the worktree when a resumed build is stopped", async () => {
+      const stopping = new AbortController();
+      const t = traced({ signal: stopping.signal });
+      const { pending, resumeRun } = await laidDownBeforeRestart(t, true);
+      const turn = t.deps.agents.turn;
+      t.deps.agents.turn = async (name, text, onCall) => {
+        stopping.abort();
+        return turn(name, text, onCall);
+      };
+
+      const result = await resumeRun();
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: stoppedRule })],
+      });
+      expect(t.ends).toEqual([
+        { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "stopped" }) },
+      ]);
+      expect(t.worktree.calls).toEqual([]);
+      expect(t.worktree.removed).toEqual([cut()]);
+      expect(await t.fs.exists(`${dir()}/manifest.json`)).toBe(false);
     });
 
     it("opens the build session in the workspace with the kit, the settings and the session name", async () => {
@@ -1018,7 +1253,7 @@ describe("buildVersion", () => {
       expect(manifest.nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
     });
 
-    it("stopped during the merge writes, ends stopped with no workspace, no worktree and no turn after", async () => {
+    it("stopped during the merge writes, ends stopped with no workspace, its worktree removed and no turn after", async () => {
       const stopping = new AbortController();
       const t = traced({
         script: { merges: [{ nodeIds: ["a", "b"], reason: "Both review the same fix." }] },
@@ -1050,7 +1285,8 @@ describe("buildVersion", () => {
         "audit",
       ]);
       expect(await t.fs.list(dir()).catch(() => [])).toEqual([]);
-      expect(t.worktree.calls).toEqual([]);
+      expect(t.worktree.calls).toEqual([cut()]);
+      expect(t.worktree.removed).toEqual([cut()]);
       expect(t.fake.closed).toEqual([sessionName]);
       expect(t.store.builds()).toEqual([]);
     });
@@ -1147,6 +1383,58 @@ describe("buildVersion", () => {
         });
       },
     );
+
+    const answered: BuildAnswer[] = [
+      {
+        nodeId: "a",
+        otherNodeId: "p1",
+        text: "Does Review the fix read the draft Draft the fix writes?",
+        answer: "Yes, it reads draft.md first.",
+      },
+    ];
+
+    it("hands the answers to the build agents in the step-3 turn", async () => {
+      const t = traced();
+
+      await t.run(agentsFlow(), { ...request, answers: answered });
+
+      const [first] = writeTurns(t.fake);
+      for (const given of answered) {
+        expect(first?.text).toContain(given.text);
+        expect(first?.text).toContain(given.answer);
+      }
+    });
+
+    it("hands the answers to the turn that rewrites a merged piece", async () => {
+      const t = traced({
+        script: { merges: [{ nodeIds: ["a", "b"], reason: "Both review the same fix." }] },
+      });
+
+      await t.run(agentsFlow(), { ...request, answers: answered });
+
+      const rewrite = writeTurns(t.fake)[1];
+      for (const given of answered) {
+        expect(rewrite?.text).toContain(given.text);
+        expect(rewrite?.text).toContain(given.answer);
+      }
+    });
+
+    it("still ends needs-you when the build agents ask again after being given answers", async () => {
+      const asked = [{ nodeId: "a", otherNodeId: "p1", text: "Which of p1's files does a read?" }];
+      const t = traced({ script: { questions: asked } });
+
+      const { pending } = await t.run(agentsFlow(), { ...request, answers: answered });
+
+      expect(t.ends).toEqual([
+        {
+          pendingId: pending.pendingId,
+          end: expect.objectContaining({
+            outcome: "needs-you",
+            report: expect.objectContaining({ questions: asked }),
+          }),
+        },
+      ]);
+    });
 
     it("ends the build needs-you when the audit asks for a merge it cannot apply, asking about it", async () => {
       const t = traced({

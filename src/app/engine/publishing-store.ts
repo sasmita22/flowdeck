@@ -41,6 +41,7 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     listPendingBuilds: () => store.listPendingBuilds(),
     listLatestEndedPendingBuilds: () => store.listLatestEndedPendingBuilds(),
     findPendingBuildByName: (name) => store.findPendingBuildByName(name),
+    pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
     recordActivity: (id, entry) => store.recordActivity(id, entry),

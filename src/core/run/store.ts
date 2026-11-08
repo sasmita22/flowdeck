@@ -115,6 +115,7 @@ export interface Store {
   listPendingBuilds(): PendingBuild[];
   listLatestEndedPendingBuilds(): PendingBuild[];
   findPendingBuildByName(name: string): PendingBuild | undefined;
+  pendingBuild(id: string): PendingBuild | null;
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void;
   buildActivity(pendingId: string): ActivityEntry[];
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { scopeLine } from "../../../../src/core/compiler/scope-line.js";
 import { compileAgent } from "../../../../src/core/nodes/agent/compile.js";
 import { bodyOf, frontmatter, sectionOf } from "../../../fixtures/frontmatter.js";
+import { expectBareHandoffRule, nestedHandoffPaths } from "../../../fixtures/handoff.js";
 
 const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
 const piece = "review-the-diff";
@@ -129,10 +130,15 @@ describe("compileAgent", () => {
     expect(body).toContain("Write: review.md, notes.md\n");
   });
 
-  it("says under Inputs that hand-off files live in the repo folder inside the workspace", () => {
-    expect(sectionOf(compiled().content, /inputs/i)).toContain(
-      "Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace",
-    );
+  it("says under Inputs that hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace", () => {
+    const content = compiled(
+      agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] }),
+    ).content;
+
+    expectBareHandoffRule(sectionOf(content, /inputs/i), "carousell-web");
+    expect(
+      nestedHandoffPaths(content, "carousell-web", ["plan.md", "notes.md", "review.md"]),
+    ).toEqual([]);
   });
 
   it("names no hand-off side that has no files", () => {

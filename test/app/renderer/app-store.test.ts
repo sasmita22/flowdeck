@@ -32,6 +32,7 @@ const bridge = (
   listBuildProgress: vi.fn(async () => []),
   stopBuild: vi.fn(),
   getBuildActivity: vi.fn(),
+  buildRebuild: vi.fn(),
   onBuildActivity: vi.fn(),
   setDirty: vi.fn(),
   onCloseRequest: vi.fn(() => () => {}),

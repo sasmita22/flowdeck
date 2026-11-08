@@ -4,6 +4,7 @@ import {
   type EngineCalls,
   type FlowdeckBridge,
 } from "../../../src/app/preload/bridge.js";
+import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => void;
 
@@ -82,6 +83,21 @@ describe("preload run-state wiring", () => {
     ["listBuildProgress", "flowdeck:build-progress-list", undefined],
     ["stopBuild", "flowdeck:build-stop", { pendingId: "pending-1" }],
     ["getBuildActivity", "flowdeck:build-activity", { pendingId: "pending-1" }],
+    [
+      "buildRebuild",
+      "flowdeck:build-rebuild",
+      {
+        pendingId: "pending-1",
+        answers: [
+          {
+            nodeId: "s1",
+            otherNodeId: "s0",
+            text: "Which command runs the tests?",
+            answer: "npm test",
+          },
+        ],
+      },
+    ],
   ] as const)(
     "%s invokes %s with its payload and returns its answer",
     async (method, channel, payload) => {
@@ -101,6 +117,7 @@ describe("preload run-state wiring", () => {
     ["build-progress-list", "listBuildProgress"],
     ["build-stop", "stopBuild"],
     ["build-activity", "getBuildActivity"],
+    ["build-rebuild", "buildRebuild"],
   ] as const)(
     "relays %s as an engine call, so main guards it like every engine call",
     (request, method) => {
@@ -129,6 +146,10 @@ describe("preload run-state wiring", () => {
     expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
     expectTypeOf<Parameters<EngineCalls["listBuildProgress"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["stopBuild"]>[0]>().toEqualTypeOf<{ pendingId: string }>();
+    expectTypeOf<Parameters<EngineCalls["buildRebuild"]>[0]>().toEqualTypeOf<{
+      pendingId: string;
+      answers: BuildAnswer[];
+    }>();
   });
 
   it.each([

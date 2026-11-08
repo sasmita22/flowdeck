@@ -2,6 +2,13 @@ export type StoreStatus = { kind: "ready" } | { kind: "error"; message: string }
 
 export type CloseAnswer = "close" | "cancel";
 
+export type BuildAnswerPayload = {
+  nodeId: string;
+  text: string;
+  otherNodeId?: string | undefined;
+  answer: string;
+};
+
 export const engineCalls = {
   openFlow: { channel: "flowdeck:open-flow", request: "open-flow" },
   listFlows: { channel: "flowdeck:list-flows", request: "list-flows" },
@@ -26,6 +33,7 @@ export const engineCalls = {
   listBuildProgress: { channel: "flowdeck:build-progress-list", request: "build-progress-list" },
   stopBuild: { channel: "flowdeck:build-stop", request: "build-stop" },
   getBuildActivity: { channel: "flowdeck:build-activity", request: "build-activity" },
+  buildRebuild: { channel: "flowdeck:build-rebuild", request: "build-rebuild" },
 } as const;
 
 export type EngineCalls = {
@@ -60,6 +68,7 @@ export type EngineCalls = {
   listBuildProgress(): Promise<unknown>;
   stopBuild(payload: { pendingId: string }): Promise<unknown>;
   getBuildActivity(payload: { pendingId: string }): Promise<unknown>;
+  buildRebuild(payload: { pendingId: string; answers: BuildAnswerPayload[] }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {

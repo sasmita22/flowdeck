@@ -17,6 +17,7 @@ export type EngineRequest = {
     | "load-run"
     | "doctor"
     | "build-version"
+    | "build-rebuild"
     | "build-progress-list"
     | "build-stop"
     | "build-activity"
