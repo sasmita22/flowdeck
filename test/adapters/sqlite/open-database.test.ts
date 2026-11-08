@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import type { NewBuild, NewRun } from "../../../src/ports/store.js";
@@ -90,6 +90,7 @@ describe("openDatabase", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const db of opened.splice(0)) db.close();
     await rm(folder, { recursive: true, force: true });
   });
@@ -125,6 +126,30 @@ describe("openDatabase", () => {
     expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
     expect(migrations(db)).toEqual(allMigrations);
   });
+
+  it.each(["SQLITE_BUSY_RECOVERY", "SQLITE_BUSY_SNAPSHOT"])(
+    "retries the WAL switch after a %s lock error",
+    (code) => {
+      const pragma = Database.prototype.pragma;
+      let failures = 1;
+      vi.spyOn(Database.prototype, "pragma").mockImplementation(function (
+        this: Database.Database,
+        ...args: Parameters<Database.Database["pragma"]>
+      ) {
+        if (args[0] === "journal_mode = WAL" && failures-- > 0) {
+          throw new Database.SqliteError("database is locked", code);
+        }
+        return pragma.apply(this, args);
+      });
+      const paused: number[] = [];
+
+      const db = openDatabase({ path, pause: (ms) => paused.push(ms) });
+      opened.push(db);
+
+      expect(paused).toEqual([10]);
+      expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
+    },
+  );
 
   it("gives up on the WAL switch with the lock error after 30 seconds of a write lock held throughout", () => {
     const holder = raw();

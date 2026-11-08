@@ -41,7 +41,7 @@ function switchToWal(db: Database.Database, pause: (ms: number) => void): void {
 
 // SQLite skips the busy handler when the WAL switch upgrades its read lock, so it is retried here.
 const isBusy = (error: unknown) =>
-  error instanceof Database.SqliteError && error.code === "SQLITE_BUSY";
+  error instanceof Database.SqliteError && error.code.startsWith("SQLITE_BUSY");
 
 const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
