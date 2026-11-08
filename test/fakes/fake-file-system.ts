@@ -11,6 +11,7 @@ export type FileSystemCall = {
     | "remove"
     | "removeTree";
   path: string;
+  skip?: string;
 };
 
 export class FakeFileSystem implements FileSystem {
@@ -68,15 +69,18 @@ export class FakeFileSystem implements FileSystem {
     }
   }
 
-  async list(dir: string): Promise<string[]> {
-    this.calls.push({ method: "list", path: dir });
+  async list(dir: string, { skip }: { skip?: string } = {}): Promise<string[]> {
+    this.calls.push(
+      skip === undefined ? { method: "list", path: dir } : { method: "list", path: dir, skip },
+    );
     const files = this.under(dir);
     if (files.length === 0) {
       throw Object.assign(new Error(`ENOENT: no such directory, scandir '${dir}'`), {
         code: "ENOENT",
       });
     }
-    return files.sort();
+    const skipped = skip === undefined ? "" : `${skip.slice(dir.length + 1)}/`;
+    return files.filter((file) => skipped === "" || !file.startsWith(skipped)).sort();
   }
 
   async folders(dir: string): Promise<string[]> {

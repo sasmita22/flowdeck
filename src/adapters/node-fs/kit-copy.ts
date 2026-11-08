@@ -4,6 +4,8 @@ import { kitVersion } from "../../core/compiler/kit-version.js";
 
 export type PreparedKit = { dir: string; version: string };
 
+const manifestPath = join(".claude-plugin", "plugin.json");
+
 const readKitFiles = async (sourceDir: string) => {
   const entries = await readdir(sourceDir, { recursive: true, withFileTypes: true });
   return Promise.all(
@@ -25,10 +27,13 @@ const exists = (path: string) =>
 export async function prepareKit(options: {
   sourceDir: string;
   home: string;
+  root?: string;
 }): Promise<PreparedKit> {
   const files = await readKitFiles(options.sourceDir);
+  if (!files.some((file) => file.path === manifestPath))
+    throw new Error(`No ${manifestPath} in kit source ${options.sourceDir}`);
   const version = kitVersion(files);
-  const kitRoot = join(options.home, "kit");
+  const kitRoot = join(options.home, options.root ?? "kit");
   const dir = join(kitRoot, version);
   if (await exists(dir)) return { dir, version };
   await mkdir(kitRoot, { recursive: true });

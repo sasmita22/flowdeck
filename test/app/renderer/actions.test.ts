@@ -4,7 +4,12 @@ import { createActions, type ActionStores } from "../../../src/app/renderer/acti
 import { createNavStore } from "../../../src/app/renderer/nav-store.js";
 
 const setup = (
-  options: { flowId?: string | null; runId?: string | null; deleted?: boolean } = {},
+  options: {
+    flowId?: string | null;
+    runId?: string | null;
+    deleted?: boolean;
+    leaveAnswer?: "proceed" | "cancel";
+  } = {},
 ) => {
   const nav = createNavStore();
   nav.getState().go({ name: "blueprints" });
@@ -12,7 +17,11 @@ const setup = (
     flowId: options.flowId ?? null,
     open: vi.fn(async () => undefined),
     startNew: vi.fn(),
-    leave: vi.fn(async (next: () => Promise<void>) => next()),
+    leave: vi.fn(async (next: () => Promise<void>) => {
+      if (options.leaveAnswer === "cancel") return false;
+      await next();
+      return true;
+    }),
     rename: vi.fn(async () => undefined),
   }));
   const run = createStore(() => ({
@@ -27,7 +36,8 @@ const setup = (
     refresh: vi.fn(async () => undefined),
     rename: vi.fn(async () => true),
   }));
-  const stores = { nav, save, run, library } satisfies ActionStores;
+  const assistant = createStore(() => ({ end: vi.fn(async () => undefined) }));
+  const stores = { nav, save, run, library, assistant } satisfies ActionStores;
   return { ...stores, actions: createActions(stores) };
 };
 
@@ -59,6 +69,80 @@ describe("createActions", () => {
 
     expect(save.getState().startNew).toHaveBeenCalledTimes(1);
     expect(nav.getState().page).toEqual({ name: "editor" });
+  });
+
+  it("ends the blueprint session when the user proceeds to open another blueprint", async () => {
+    const { actions, assistant } = setup({ flowId: "flow-a" });
+
+    await actions.openBlueprint("flow-b");
+
+    expect(assistant.getState().end).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the blueprint session when the user cancels opening another blueprint", async () => {
+    const { actions, assistant, save } = setup({ flowId: "flow-a", leaveAnswer: "cancel" });
+
+    await actions.openBlueprint("flow-b");
+
+    expect(save.getState().open).not.toHaveBeenCalled();
+    expect(assistant.getState().end).not.toHaveBeenCalled();
+  });
+
+  it("keeps the blueprint session when the open blueprint is opened again", async () => {
+    const { actions, assistant } = setup({ flowId: "flow-a" });
+
+    await actions.openBlueprint("flow-a");
+
+    expect(assistant.getState().end).not.toHaveBeenCalled();
+  });
+
+  it("ends the blueprint session when the user starts a new blueprint", async () => {
+    const { actions, assistant } = setup({ flowId: "flow-a" });
+
+    await actions.newBlueprint();
+
+    expect(assistant.getState().end).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a blueprint for the agent in the editor, through the leave prompt", async () => {
+    const { actions, nav, save } = setup({ flowId: "flow-a" });
+    const pageAtLeave: unknown[] = [];
+    save.getState().leave.mockImplementationOnce(async (next) => {
+      pageAtLeave.push(nav.getState().page);
+      await next();
+      return true;
+    });
+    let loaded = false;
+    save.getState().open.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      loaded = true;
+    });
+
+    const opened = await actions.openForAgent("flow-b");
+
+    expect(opened).toBe(true);
+    expect(loaded).toBe(true);
+    expect(pageAtLeave).toEqual([{ name: "editor" }]);
+    expect(save.getState().open).toHaveBeenCalledExactlyOnceWith("flow-b");
+    expect(nav.getState().page).toEqual({ name: "editor" });
+  });
+
+  it("resolves false and opens nothing when the user cancels the agent's open", async () => {
+    const { actions, save } = setup({ flowId: "flow-a", leaveAnswer: "cancel" });
+
+    const opened = await actions.openForAgent("flow-b");
+
+    expect(opened).toBe(false);
+    expect(save.getState().leave).toHaveBeenCalledTimes(1);
+    expect(save.getState().open).not.toHaveBeenCalled();
+  });
+
+  it("never ends the blueprint session when it opens a blueprint for the agent", async () => {
+    const { actions, assistant } = setup({ flowId: "flow-a" });
+
+    await actions.openForAgent("flow-b");
+
+    expect(assistant.getState().end).not.toHaveBeenCalled();
   });
 
   it("runs a build by its id, opens the run page of the run that started, and refreshes the lists", async () => {

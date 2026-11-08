@@ -96,6 +96,40 @@ describe("EngineClient", () => {
     await settled;
   });
 
+  it("waits for a per-call timeout longer than the default before rejecting, naming it", async () => {
+    const listed = client.request("version", undefined, { timeoutMs: 300 });
+    let rejected: unknown;
+    listed.catch((error: unknown) => (rejected = error));
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(rejected).toBeUndefined();
+    port.reply({ id: port.postedId(0), ok: true, value: "0.0.0" });
+
+    await expect(listed).resolves.toBe("0.0.0");
+  });
+
+  it("rejects at the per-call timeout, not the default", async () => {
+    const listed = client.request("version", undefined, { timeoutMs: 300 });
+    const settled = expect(listed).rejects.toThrow(/version.*300 ?ms/);
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    await settled;
+  });
+
+  it("keeps the default timeout for a request made without the option beside one made with it", async () => {
+    const longer = client.request("store-status", undefined, { timeoutMs: 300 });
+    const plain = client.request("version");
+    let longerRejected: unknown;
+    longer.catch((error: unknown) => (longerRejected = error));
+    const plainSettled = expect(plain).rejects.toThrow(/version.*100 ?ms/);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await plainSettled;
+    expect(longerRejected).toBeUndefined();
+  });
+
   it("rejects every pending request when the engine exits", async () => {
     const version = client.request("version");
     const status = client.request("store-status");

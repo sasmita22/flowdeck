@@ -1,6 +1,6 @@
 import { listPackage } from "@electron/asar";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -9,9 +9,15 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import Database from "better-sqlite3";
-import { flow, script, thenWire, trigger } from "../test/fixtures/flow-builders.js";
-import { seedFlow } from "../test/fixtures/seed-flow.js";
+import {
+  blueprintTerminalTestId,
+  controlTestIds,
+  pageTestIds,
+} from "../src/app/renderer/test-ids.js";
+import { flow, prompt, script, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
 import { buildAndRun, buildOnCanvas } from "./build-run.js";
@@ -314,4 +320,62 @@ test("a copy copies the kit out under its home and its build session loads that 
     argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [argv[at + 1]] : [])),
   );
   expect(pluginDirs).toContain(join(kitRoot, version ?? ""));
+});
+
+test("the MCP server and blueprint kit ship inside app.asar", () => {
+  const listed = listPackage(appAsar(appPath), { isPack: false });
+  expect(listed).toEqual(
+    expect.arrayContaining([
+      "/.vite/build/flowdeck-mcp.cjs",
+      "/.vite/build/kit-blueprint/skills/blueprint/SKILL.md",
+    ]),
+  );
+});
+
+test("the packaged app copies the MCP server out on start and the blueprint session uses it", async () => {
+  test.setTimeout(120_000);
+  const home = await mkdtemp(join(tmpdir(), "fd-packaged-home-"));
+  tempDirs.push(home);
+  const { flowId } = seedBlueprint(home, "mcp-check", flow([prompt("p1")], []));
+  const bpSession = `fd-bp-${flowId}`;
+  const copiedScript = join(home, "mcp", "flowdeck-mcp.cjs");
+
+  try {
+    const { window } = await launchCopy(home);
+    await expect.poll(() => existsSync(copiedScript), { timeout: 20_000 }).toBe(true);
+
+    const back = window
+      .getByTestId(controlTestIds.back)
+      .or(window.getByTestId(pageTestIds.runBack));
+    if (await back.isVisible()) await back.click();
+    await window.getByTestId("menu-blueprints").click();
+    await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+    await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
+    await window.getByTestId(controlTestIds.blueprintTerminalToggle).click();
+    await expect(window.getByTestId(blueprintTerminalTestId)).toContainText(
+      `Fake Claude in ${bpSession}`,
+      { timeout: 20_000 },
+    );
+
+    const argvs = readFileSync(fakeClaudeRan(home), "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as string[]);
+    const mcpConfigs = argvs.flatMap((argv) =>
+      argv.flatMap((arg, at) => (arg === "--mcp-config" ? [argv[at + 1]] : [])),
+    );
+    const pluginDirs = argvs.flatMap((argv) =>
+      argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [argv[at + 1] ?? ""] : [])),
+    );
+    expect(pluginDirs).toHaveLength(1);
+    expect(existsSync(join(pluginDirs[0] ?? "", "skills", "blueprint", "SKILL.md"))).toBe(true);
+    const mcpConfig = join(home, "bp-sessions", flowId, "mcp.json");
+    expect(mcpConfigs).toEqual([mcpConfig]);
+    const config = JSON.parse(readFileSync(mcpConfig, "utf8")) as {
+      mcpServers: Record<string, { args?: string[] }>;
+    };
+    expect(config.mcpServers["flowdeck"]?.args).toEqual([copiedScript]);
+  } finally {
+    await promisify(execFile)("tmux", ["-L", bpSession, "kill-server"]).catch(() => undefined);
+  }
 });

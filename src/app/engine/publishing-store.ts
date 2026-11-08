@@ -32,6 +32,7 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     findBuildByName: (name) => store.findBuildByName(name),
     deleteBuild: (id) => store.deleteBuild(id),
     listBuilds: () => store.listBuilds(),
+    listBuildsWithDeleted: () => store.listBuildsWithDeleted(),
     listRuns: () => store.listRuns(),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),

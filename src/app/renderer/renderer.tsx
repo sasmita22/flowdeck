@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { createActions } from "./actions.js";
 import { App } from "./app.js";
+import { createAssistantStore } from "./assistant/assistant-store.js";
+import { createToolHandler } from "./assistant/tool-handler.js";
 import { createBranchStore } from "./branch-store.js";
 import { createBuildProgressStore } from "./build-progress-store.js";
 import { createAppStore } from "./app-store.js";
@@ -43,6 +45,8 @@ function renderApp(root: HTMLElement) {
   void run.getState().connect();
   const terminal = createTerminalStore({ bridge: window.flowdeck });
   void terminal.getState().connect();
+  const blueprintTerminal = createTerminalStore({ bridge: window.flowdeck });
+  void blueprintTerminal.getState().connect();
   const inspector = createInspectorStore({ bridge: window.flowdeck });
   void inspector.getState().connect();
   const wait = createWaitStore({ bridge: window.flowdeck });
@@ -74,7 +78,9 @@ function renderApp(root: HTMLElement) {
     }
   });
   const branches = createBranchStore({ bridge: window.flowdeck });
-  const actions = createActions({ nav, save, run, library });
+  const assistant = createAssistantStore({ bridge: window.flowdeck, save });
+  const actions = createActions({ nav, save, run, library, assistant });
+  createToolHandler({ bridge: window.flowdeck, canvas, save, actions });
 
   createRoot(root).render(
     <App
@@ -91,6 +97,8 @@ function renderApp(root: HTMLElement) {
       library={library}
       branches={branches}
       buildProgress={buildProgress}
+      assistant={assistant}
+      blueprintTerminal={blueprintTerminal}
       actions={actions}
     />,
   );

@@ -78,8 +78,8 @@ body,
 
 .fd-shell {
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto auto;
-  grid-template-areas: "title" "errors" "bar" "main" "terminal" "status";
+  grid-template-rows: auto auto auto 1fr auto auto auto;
+  grid-template-areas: "title" "errors" "bar" "main" "agent" "terminal" "status";
   height: 100%;
   margin: 0;
 }
@@ -1132,6 +1132,14 @@ body,
 
 .fd-terminal {
   grid-area: terminal;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.fd-blueprint-terminal {
+  grid-area: agent;
   display: flex;
   flex-direction: column;
   background: var(--panel);

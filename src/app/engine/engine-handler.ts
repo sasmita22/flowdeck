@@ -4,6 +4,12 @@ import { z } from "zod";
 import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.js";
 import { workspaceDir, type BuildResult } from "../../core/compiler/build.js";
 import { newBuildSessionName } from "../../core/compiler/build-session.js";
+import {
+  blueprintSessionFolder,
+  blueprintSessionName,
+  blueprintSessionSettings,
+  blueprintSocketPath,
+} from "../../core/compiler/blueprint-session.js";
 import { buildAnswerSchema, type BuildAnswer } from "../../core/compiler/build-report.js";
 import {
   buildInputsSchema,
@@ -76,9 +82,10 @@ import type {
   ListedRun,
   LoadedRun,
 } from "../../core/run/listing.js";
-import { buildWorktree } from "../../core/run/workspace.js";
+import { buildWorktree, repoFolder } from "../../core/run/workspace.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema, type HumanWaiter } from "../../core/run/wait.js";
+import type { BlueprintSessions } from "../../ports/blueprint-sessions.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
@@ -94,6 +101,10 @@ import { createActivityTracker, createBuildActivity } from "./activity-tracker.j
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult, PreparedHooks } from "./hooks.js";
 import type {
+  AssistantBuildState,
+  AssistantListedBuild,
+  AssistantReadBuild,
+  BlueprintSessionStarted,
   BuildVersionStarted,
   EnginePush,
   EngineRequest,
@@ -126,6 +137,13 @@ export type EngineHandlerOptions = {
   buildSessionPollMs?: number;
   endSession?: (sessionName: string) => Promise<void>;
   homeLock?: { acquire(): Promise<boolean> };
+  blueprint?:
+    | {
+        sessions: BlueprintSessions;
+        kitDir: string;
+        mcpScript: { nodePath: string; scriptPath: string };
+      }
+    | undefined;
 };
 
 export type EngineHandler = {
@@ -133,6 +151,8 @@ export type EngineHandler = {
   stop(): Promise<void>;
   detach(): Promise<void>;
   reattach(): Promise<void>;
+  sweepBlueprintSessions(): Promise<void>;
+  startUp(): Promise<void>;
 };
 
 type ActiveRun = {
@@ -168,6 +188,8 @@ const keptInputs = z.object({ request: buildInputsSchema });
 
 const buildIdPayload = z.object({ buildId: z.string() });
 
+const assistantReadBuildPayload = z.object({ id: z.string() });
+
 const pendingIdPayload = z.object({ pendingId: z.string() });
 
 const repoPayload = z.object({ repo: z.string() });
@@ -194,6 +216,8 @@ const runIdPayload = z.object({ runId: z.string() });
 
 const retryPayload = z.object({ runId: z.string(), nodeId: z.string() });
 
+const flowIdPayload = z.object({ flowId: z.string() });
+
 const sessionGone =
   "This run's Claude session ended just now. Resume again to start Claude on the same conversation.";
 
@@ -217,6 +241,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     findBuild: (id) => store.findBuild(id),
     findBuildByName: (name) => store.findBuildByName(name),
     listBuilds: () => store.listBuilds(),
+    listBuildsWithDeleted: () => store.listBuildsWithDeleted(),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),
@@ -298,6 +323,19 @@ const progressEntry = (
 });
 
 const isOld = (build: BuildRecord) => build.name === null;
+
+const assistantBuildState = (build: BuildRecord): AssistantBuildState => {
+  if (build.deletedAt !== null) return "deleted";
+  return isOld(build) ? "old" : "live";
+};
+
+const assistantListedBuild = (build: BuildRecord): AssistantListedBuild => ({
+  id: build.id,
+  name: build.name,
+  blueprint: build.source?.flowId ?? null,
+  version: build.source?.version ?? null,
+  state: assistantBuildState(build),
+});
 
 const isRepo = (state: { kind: string }) => state.kind === "branch" || state.kind === "detached";
 
@@ -1125,8 +1163,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     });
   };
 
+  const holdsHome = async () => options.homeLock === undefined || options.homeLock.acquire();
+
   const reattach = async (): Promise<void> => {
-    if (options.homeLock !== undefined && !(await options.homeLock.acquire())) {
+    if (!(await holdsHome())) {
       console.log(`engine: another Flowdeck holds ${options.home}; not reattaching`);
       return;
     }
@@ -1292,6 +1332,47 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const listBuilds = (runs: Store): ListedBuild[] =>
     runs.listBuilds().map((build) => ({ ...build, old: isOld(build) }));
 
+  const readWorktree = async (build: BuildRecord): Promise<AssistantReadBuild["worktree"]> => {
+    if (build.name === null || build.repo === null || build.base === null) return null;
+    const { path, branch } = buildWorktree({
+      id: build.id,
+      name: build.name,
+      repo: build.repo,
+      dir: build.dir,
+    });
+    if (!(await options.fs.exists(path)))
+      return { path, exists: false, dirty: null, unpushed: null };
+    return {
+      path,
+      exists: true,
+      dirty: await options.worktree.isDirty(path),
+      unpushed: await options.worktree.hasUnpushed(build.repo, branch, build.base),
+    };
+  };
+
+  const readBuild = async (runs: Store, id: string): Promise<AssistantReadBuild> => {
+    const build = runs.findBuild(id);
+    if (build === undefined) throw new Error(`No build ${id}`);
+    const exists = await options.fs.exists(build.dir);
+    const worktree = await readWorktree(build);
+    return {
+      repo: build.repo,
+      base: build.base,
+      values: build.values,
+      workspace: {
+        path: build.dir,
+        exists,
+        tree: exists
+          ? await options.fs.list(
+              build.dir,
+              build.repo === null ? {} : { skip: join(build.dir, repoFolder(build.repo)) },
+            )
+          : [],
+      },
+      worktree,
+    };
+  };
+
   const removeBuild = async (
     { runs }: EngineStores,
     buildId: string,
@@ -1361,6 +1442,61 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     };
   };
 
+  const blueprintOrThrow = () => {
+    if (options.blueprint === undefined) throw new Error("Blueprint sessions are not available");
+    return options.blueprint;
+  };
+
+  const startBlueprintSession = async (flowId: string): Promise<BlueprintSessionStarted> => {
+    const { sessions, kitDir, mcpScript } = blueprintOrThrow();
+    const session = blueprintSessionName(flowId);
+    if (!(await sessions.alive(session))) {
+      const hooks = options.prepareHooks();
+      if (hooks.kind === "error") throw new Error(hooks.message);
+      const folder = blueprintSessionFolder(options.home, flowId);
+      const socketPath = blueprintSocketPath(options.home);
+      const settingsPath = join(folder, "settings.json");
+      const mcpConfigPath = join(folder, "mcp.json");
+      const settings = blueprintSessionSettings({
+        home: options.home,
+        hookCommand: hookCommand(hooks),
+      });
+      await options.fs.writeFile(settingsPath, JSON.stringify(settings));
+      await writeSessionMcpConfig(options.fs, mcpConfigPath, {
+        flowdeck: {
+          command: mcpScript.nodePath,
+          args: [mcpScript.scriptPath],
+          env: { FLOWDECK_BP_SOCK: socketPath, FLOWDECK_BP_SESSION: session },
+        },
+      });
+      await sessions.start({
+        session,
+        cwd: folder,
+        settingsPath,
+        mcpConfigPath,
+        kitDir,
+        socketPath,
+      });
+    }
+    options.publish({ push: "session", runId: session, value: session });
+    return { session };
+  };
+
+  const stopBlueprintSession = async (sessions: BlueprintSessions, flowId: string) => {
+    await sessions.stop(blueprintSessionName(flowId));
+    await options.fs.removeTree(blueprintSessionFolder(options.home, flowId));
+  };
+
+  const stopAllBlueprintSessions = async (sessions: BlueprintSessions) => {
+    if (!(await holdsHome())) return;
+    const flowIds = await options.fs.folders(join(options.home, "bp-sessions"));
+    await Promise.all(flowIds.map((flowId) => stopBlueprintSession(sessions, flowId)));
+  };
+
+  const sweepBlueprintSessions = async () => {
+    if (options.blueprint !== undefined) await stopAllBlueprintSessions(options.blueprint.sessions);
+  };
+
   const doctor = async (needed: readonly string[]): Promise<DoctorReport> =>
     diagnoseConnectors(await options.connectors.list(), needed);
 
@@ -1385,6 +1521,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   return {
     detach,
     reattach,
+    sweepBlueprintSessions,
+    async startUp() {
+      await sweepBlueprintSessions().catch((error: unknown) => {
+        console.log(`engine: blueprint sweep error ${messageOf(error)}`);
+      });
+      await reattach();
+    },
     async stop() {
       await startsSettled();
       await Promise.all([...active.values()].map(stopActive));
@@ -1439,6 +1582,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return answer(request.id, () => buildProgressList(storesOrThrow().runs));
         case "list-builds":
           return answer(request.id, () => listBuilds(storesOrThrow().runs));
+        case "assistant-list-builds":
+          return answer(request.id, () =>
+            storesOrThrow().runs.listBuildsWithDeleted().map(assistantListedBuild),
+          );
+        case "assistant-read-build":
+          return parsedAnswer(request, assistantReadBuildPayload, ({ id }) =>
+            readBuild(storesOrThrow().runs, id),
+          );
         case "build-files":
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             buildFiles(storesOrThrow(), buildId),
@@ -1484,6 +1635,16 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return parsedAnswer(request, repoPayload, ({ repo }) =>
             options.gitState.defaultBranch(repo),
           );
+        case "blueprint-session-start":
+          return parsedAnswer(request, flowIdPayload, ({ flowId }) =>
+            startBlueprintSession(flowId),
+          );
+        case "blueprint-session-stop":
+          return parsedAnswer(request, flowIdPayload, ({ flowId }) =>
+            stopBlueprintSession(blueprintOrThrow().sessions, flowId),
+          );
+        case "blueprint-session-stop-all":
+          return answer(request.id, () => stopAllBlueprintSessions(blueprintOrThrow().sessions));
         case "answer-wait": {
           const parsed = waitAnswerSchema.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

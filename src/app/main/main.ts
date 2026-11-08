@@ -1,9 +1,12 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, screen, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node-pty";
+import { ToolSocketServer } from "../../adapters/tool-socket/tool-socket-server.js";
+import { blueprintSocketPath } from "../../core/compiler/blueprint-session.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import {
   bridgeChannels,
@@ -19,6 +22,7 @@ import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { loginPath } from "./login-path.js";
 import { createTerminal } from "./pty.js";
 import { createRunRelay, stopEngine } from "./run.js";
+import { createToolRelay } from "./tool-relay.js";
 import { answerWait, createWaitRelay } from "./wait.js";
 import { createWindowGuard, type WindowGuard } from "./window-guard.js";
 import { workspaceInfoHandler } from "./workspace.js";
@@ -195,6 +199,31 @@ function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard) {
   return { setSession, dispose: () => terminal.dispose() };
 }
 
+async function wireToolRelay(
+  home: string,
+  window: BrowserWindow,
+  windowGuard: WindowGuard,
+  client: EngineClient,
+) {
+  const relay = createToolRelay({
+    socket: new ToolSocketServer(),
+    send: (channel, payload) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels[channel], payload);
+    },
+    requestEngine: (type, payload, options) => client.request(type, payload, options),
+  });
+  ipcMain.on(
+    bridgeChannels.answerToolCall,
+    windowGuard.listen((requestId: string, result: unknown) => relay.answer(requestId, result)),
+  );
+  window.webContents.on("did-navigate", () => relay.failAll("the window reloaded"));
+  window.webContents.on("render-process-gone", () => relay.failAll("the window crashed"));
+  const path = blueprintSocketPath(home);
+  await mkdir(dirname(path), { recursive: true });
+  await relay.start(path);
+  return relay;
+}
+
 function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
   const guard = createCloseGuard({
     requestClose: () => window.webContents.send(bridgeChannels.closeRequest),
@@ -215,7 +244,8 @@ function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
 
 void app.whenReady().then(async () => {
   if (app.isPackaged) await useLoginPath();
-  const { engine, client, exited } = startEngine(resolveFlowdeckHome(process.env, homedir()));
+  const home = resolveFlowdeckHome(process.env, homedir());
+  const { engine, client, exited } = startEngine(home);
   const windowGuard = createWindowGuard({
     appUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL ?? pathToFileURL(rendererIndexPath).href,
   });
@@ -292,16 +322,29 @@ void app.whenReady().then(async () => {
     windowGuard.handle((payload: unknown) => answerWait(client, payload)),
   );
   ipcMain.handle(bridgeChannels.workspaceInfo, workspaceInfoHandler(windowGuard, client));
+  const tools = wireToolRelay(home, window, windowGuard, client);
+  void tools.catch((error: unknown) =>
+    console.log(`main: blueprint tool socket not started (${error})`),
+  );
   let quitting = false;
   app.on("will-quit", (event) => {
     if (quitting) return;
     quitting = true;
     event.preventDefault();
     terminal.dispose();
-    void stopEngine({ kill: () => engine.kill(), exited, timeoutMs: 10_000 }).then((result) => {
-      console.log(`main: engine stopped (${result})`);
-      app.exit(0);
-    });
+    void tools
+      .then(async (relay) => {
+        relay.failAll("Flowdeck is quitting");
+        await relay.close();
+      })
+      .catch(() => undefined)
+      .then(() => client.request("blueprint-session-stop-all"))
+      .catch((error: unknown) => console.log(`main: blueprint sessions not stopped (${error})`))
+      .then(() => stopEngine({ kill: () => engine.kill(), exited, timeoutMs: 10_000 }))
+      .then((result) => {
+        console.log(`main: engine stopped (${result})`);
+        app.exit(0);
+      });
   });
   guardClose(window, windowGuard);
 });

@@ -36,12 +36,12 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.runState, handler);
     };
   },
-  openTerminal: (runId, size) => ipcRenderer.invoke(bridgeChannels.openTerminal, runId, size),
-  getTerminalStatus: (runId) => ipcRenderer.invoke(bridgeChannels.getTerminalStatus, runId),
-  writeTerminal: (runId, data) => ipcRenderer.send(bridgeChannels.terminalInput, runId, data),
-  resizeTerminal: (runId, size) => ipcRenderer.send(bridgeChannels.terminalResize, runId, size),
-  closeTerminal: (runId) => ipcRenderer.send(bridgeChannels.closeTerminal, runId),
-  popOutTerminal: (runId) => ipcRenderer.invoke(bridgeChannels.popOutTerminal, runId),
+  openTerminal: (session, size) => ipcRenderer.invoke(bridgeChannels.openTerminal, session, size),
+  getTerminalStatus: (session) => ipcRenderer.invoke(bridgeChannels.getTerminalStatus, session),
+  writeTerminal: (session, data) => ipcRenderer.send(bridgeChannels.terminalInput, session, data),
+  resizeTerminal: (session, size) => ipcRenderer.send(bridgeChannels.terminalResize, session, size),
+  closeTerminal: (session) => ipcRenderer.send(bridgeChannels.closeTerminal, session),
+  popOutTerminal: (session) => ipcRenderer.invoke(bridgeChannels.popOutTerminal, session),
   onTerminalStatus: (listener) => {
     const handler = (_event: unknown, status: unknown) => listener(status);
     ipcRenderer.on(bridgeChannels.terminalStatus, handler);
@@ -88,6 +88,22 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.buildActivity, handler);
     };
   },
+  onToolCall: (listener) => {
+    const handler = (_event: unknown, call: unknown) => listener(call);
+    ipcRenderer.on(bridgeChannels.toolCall, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.toolCall, handler);
+    };
+  },
+  onToolTurnEnd: (listener) => {
+    const handler = (_event: unknown, turnEnd: unknown) => listener(turnEnd);
+    ipcRenderer.on(bridgeChannels.toolTurnEnd, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.toolTurnEnd, handler);
+    };
+  },
+  answerToolCall: (requestId, result) =>
+    ipcRenderer.send(bridgeChannels.answerToolCall, requestId, result),
 };
 
 contextBridge.exposeInMainWorld("flowdeck", bridge);

@@ -142,6 +142,10 @@ export class FakeStore implements Store {
     return this.allBuilds().filter((build) => build.deletedAt === null);
   }
 
+  listBuildsWithDeleted(): BuildRecord[] {
+    return this.allBuilds();
+  }
+
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {
     const open = this.listPendingBuilds();
     if (open.some((known) => known.flowId === build.flowId)) {

@@ -48,12 +48,17 @@ export class NodeFileSystem implements FileSystem {
     }
   }
 
-  async list(dir: string): Promise<string[]> {
-    const entries = await readdir(dir, { recursive: true, withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isFile())
-      .map((entry) => relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/"))
-      .sort();
+  async list(dir: string, { skip }: { skip?: string } = {}): Promise<string[]> {
+    const files: string[] = [];
+    const walk = async (folder: string): Promise<void> => {
+      for (const entry of await readdir(folder, { withFileTypes: true })) {
+        const path = join(folder, entry.name);
+        if (entry.isDirectory() && path !== skip) await walk(path);
+        else if (entry.isFile()) files.push(relative(dir, path).split(sep).join("/"));
+      }
+    };
+    await walk(dir);
+    return files.sort();
   }
 
   async folders(dir: string): Promise<string[]> {

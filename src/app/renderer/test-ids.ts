@@ -31,7 +31,10 @@ export const controlTestIds = {
   fileWireName: (edgeId: string) => `file-wire-name-${edgeId}`,
   nodeMenuDuplicate: "node-menu-duplicate",
   nodeMenuFrameOnly: "node-menu-frame-only",
+  blueprintTerminalToggle: "blueprint-terminal-toggle",
 } as const;
+
+export const blueprintTerminalTestId = "blueprint-terminal";
 
 export const readoutTestIds = {
   flow: "canvas-flow",

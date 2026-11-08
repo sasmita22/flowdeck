@@ -17,7 +17,14 @@ import {
 import { nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { NodeType, parseFlow, type Flow, type Session } from "../../../../src/core/flow/schema.js";
+import { addNode } from "../../../../src/app/renderer/canvas/commands.js";
+import {
+  NodeType,
+  parseFlow,
+  type Flow,
+  type Node,
+  type Session,
+} from "../../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
@@ -1396,5 +1403,185 @@ describe("a node's shown label", () => {
     store.getState().paste();
 
     expect(store.getState().message).toMatch(/^Can't paste into Loop: /);
+  });
+});
+
+describe("agent edits", () => {
+  const agentNode = (id: string): Node => {
+    const [node] = flow([prompt(id)], []).nodes;
+    if (node === undefined) throw new Error("expected a node");
+    return node;
+  };
+  const agentAdds = (store: Store, id: string) =>
+    act(store, (s) => s.applyAgent(addNode(agentNode(id))));
+  const ids = (store: Store) => store.getState().flow.nodes.map(({ id }) => id);
+
+  it("amends one undo entry per ask, and one undo reverts every edit in it", () => {
+    const store = createCanvasStore();
+    const before = store.getState().flow;
+
+    expect(agentAdds(store, "a")).toBe(true);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(agentAdds(store, "b")).toBe(true);
+    expect(agentAdds(store, "c")).toBe(true);
+
+    expect(ids(store)).toEqual(["a", "b", "c"]);
+    expect(store.getState().undoStack).toHaveLength(1);
+    act(store, (s) => s.undo());
+    expect(store.getState().flow).toEqual(before);
+    expect(store.getState().undoStack).toEqual([]);
+  });
+
+  it("starts a new entry for the next agent edit after the group ends", () => {
+    const store = createCanvasStore();
+    agentAdds(store, "a");
+    agentAdds(store, "b");
+
+    store.getState().endAgentGroup();
+    agentAdds(store, "c");
+
+    expect(store.getState().undoStack).toHaveLength(2);
+    act(store, (s) => s.undo());
+    expect(ids(store)).toEqual(["a", "b"]);
+  });
+
+  it("keeps a user edit between agent edits as its own entry, and closes the group", () => {
+    const store = createCanvasStore();
+    agentAdds(store, "a");
+
+    act(store, (s) => s.updateNode({ ...agentNode("a"), label: "Renamed" }));
+    agentAdds(store, "b");
+
+    expect(store.getState().undoStack).toHaveLength(3);
+    act(store, (s) => s.undo());
+    expect(ids(store)).toEqual(["a"]);
+    expect(store.getState().flow.nodes[0]?.label).toBe("Renamed");
+    act(store, (s) => s.undo());
+    expect(store.getState().flow.nodes[0]?.label).toBe("a");
+  });
+
+  it("closes the group on undo", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    agentAdds(store, "a");
+
+    act(store, (s) => s.undo());
+    agentAdds(store, "b");
+
+    expect(store.getState().undoStack).toHaveLength(2);
+    act(store, (s) => s.undo());
+    expect(ids(store)).toEqual(["script-1"]);
+  });
+
+  it("closes the group on redo", () => {
+    const store = createCanvasStore();
+    agentAdds(store, "a");
+    store.setState({ redoStack: [addNode(agentNode("redone"))] });
+
+    act(store, (s) => s.redo());
+    agentAdds(store, "b");
+
+    expect(store.getState().undoStack).toHaveLength(3);
+    act(store, (s) => s.undo());
+    expect(ids(store)).toEqual(["a", "redone"]);
+  });
+
+  it("closes the group on markSaved", () => {
+    const store = createCanvasStore();
+    agentAdds(store, "a");
+
+    store.getState().markSaved(store.getState().flow);
+    agentAdds(store, "b");
+
+    expect(store.getState().undoStack).toHaveLength(2);
+    act(store, (s) => s.undo());
+    expect(ids(store)).toEqual(["a"]);
+  });
+
+  it("closes the group on load", () => {
+    const store = createCanvasStore();
+    const loaded = flow([prompt("p")], []);
+    agentAdds(store, "a");
+
+    store.getState().load(loaded);
+    agentAdds(store, "b");
+    agentAdds(store, "c");
+
+    expect(store.getState().undoStack).toHaveLength(1);
+    act(store, (s) => s.undo());
+    expect(store.getState().flow).toEqual(loaded);
+  });
+
+  it("clears the redo stack", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    act(store, (s) => s.undo());
+    expect(store.getState().redoStack).toHaveLength(1);
+
+    agentAdds(store, "a");
+
+    expect(store.getState().redoStack).toEqual([]);
+  });
+
+  it("returns false and leaves the flow unchanged while the canvas is not ready", () => {
+    const store = createCanvasStore({ ready: false });
+    const before = store.getState();
+
+    expect(store.getState().applyAgent(addNode(agentNode("a")))).toBe(false);
+
+    expect(store.getState().flow).toBe(before.flow);
+    expect(store.getState().undoStack).toEqual([]);
+  });
+
+  describe("variableCommand", () => {
+    const variablesOf = (store: Store) => store.getState().flow.session.buildConfig.variables;
+    const withTwoVariables = () => {
+      const store = createCanvasStore();
+      store.getState().load(
+        parseFlow({
+          ...newCanvasFlow(),
+          session: {
+            ...newCanvasFlow().session,
+            buildConfig: {
+              variables: [
+                { name: "deep", kind: "text" },
+                { name: "ticket", kind: "text" },
+              ],
+            },
+          },
+        }),
+      );
+      return store;
+    };
+
+    it("adds a variable that does not exist yet", () => {
+      const store = withTwoVariables();
+
+      act(store, (s) => s.applyAgent(s.variableCommand({ name: "new", kind: "yesno" })));
+
+      expect(variablesOf(store)).toEqual([
+        { name: "deep", kind: "text" },
+        { name: "ticket", kind: "text" },
+        { name: "new", kind: "yesno" },
+      ]);
+    });
+
+    it("updates a variable with the same name in place, and undo restores it", () => {
+      const store = withTwoVariables();
+
+      act(store, (s) =>
+        s.applyAgent(s.variableCommand({ name: "deep", kind: "yesno", default: true })),
+      );
+
+      expect(variablesOf(store)).toEqual([
+        { name: "deep", kind: "yesno", default: true },
+        { name: "ticket", kind: "text" },
+      ]);
+      act(store, (s) => s.undo());
+      expect(variablesOf(store)).toEqual([
+        { name: "deep", kind: "text" },
+        { name: "ticket", kind: "text" },
+      ]);
+    });
   });
 });
