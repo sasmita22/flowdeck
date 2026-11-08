@@ -8,7 +8,7 @@ const line = (lead: string, files: readonly string[]) =>
   files.length === 0 ? [] : [`${lead}: ${files.join(", ")}`];
 
 export const handoffFolderLine = (folder: string): string =>
-  `Hand-off files are read and written in \`${folder}/\`, the run's working folder inside this build's workspace, never in the workspace folder itself.`;
+  `Hand-off files are read and written by bare name (\`<file>\`, not \`${folder}/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`${folder}/\`. Never use the workspace folder itself.`;
 
 export function handoffText({ given, writes }: Handoff): string {
   const lines = [...line("You are given", given), ...line("Write", writes)];

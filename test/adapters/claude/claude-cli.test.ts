@@ -426,6 +426,32 @@ describe("ClaudeCli", () => {
       expect(sessions.inputs("fd-a")).toEqual([{ typed: prompt }, { key: "Enter" }]);
     });
 
+    const pastedPrompt = Array.from({ length: 16 }, (_, i) =>
+      `QUESTION ${i}: which folder holds the hand-off files? ANSWER ${i}: `.padEnd(187, "x"),
+    ).join("\n");
+
+    it("sees a long prompt folded into paste chips, its end wrapped onto the next line, as held", async () => {
+      const ready = await readyCli({ submitRetryMs: 1000 });
+      claudeBox({
+        box: ["❯ [Pasted text #1 +7 lines][Pasted text #2 +7 lines][Pasted text #3 +2", "  lines]"],
+        emptyAfterEnters: 1,
+      });
+
+      await ready.sendPrompt("fd-a", pastedPrompt);
+
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: pastedPrompt }, { key: "Enter" }]);
+    });
+
+    it("never presses Enter for a long prompt while the box holds unrelated text", async () => {
+      const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
+      claudeBox({ box: ["❯ fix the lint errors in the login form"], emptyAfterEnters: 1 });
+
+      await expect(ready.sendPrompt("fd-a", pastedPrompt)).rejects.toThrow(
+        'Claude in session "fd-a" did not show the prompt in its input box within 100 ms',
+      );
+      expect(sessions.inputs("fd-a")).toEqual([{ typed: pastedPrompt }]);
+    });
+
     it("never presses Enter when the prompt never shows in the box", async () => {
       const ready = await readyCli({ submitRetryMs: 10, readyTimeoutMs: 100 });
       sessions.setPane("fd-a", placeholderPane);

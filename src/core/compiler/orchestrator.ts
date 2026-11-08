@@ -53,7 +53,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       case "trigger":
         return "the run starts here.";
       case "prompt":
-        return `read \`plugin/skills/${pieceOf(node)}/SKILL.md\` by path and follow it.`;
+        return `read \`\${CLAUDE_PLUGIN_ROOT}/skills/${pieceOf(node)}/SKILL.md\` by path and follow it.`;
       case "agent": {
         const fork = forkOf(node.id);
         return fork === undefined

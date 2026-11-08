@@ -55,13 +55,23 @@ const subagent = (id: number, nodeId: string, state: "running" | "finished") => 
   state,
 });
 
-const setup = async (listed: unknown, activity: unknown = []) => {
+const setup = async (
+  listed: unknown,
+  activity: unknown = [],
+  rebuildAnswer: () => Promise<unknown> = () =>
+    Promise.resolve({ kind: "started", pendingId: "pb-new" }),
+) => {
   let push: (update: unknown) => void = () => undefined;
   let pushActivity: (update: unknown) => void = () => undefined;
   const asked: unknown[] = [];
   const calls: string[] = [];
   const stopped: unknown[] = [];
+  const rebuilt: unknown[] = [];
   const bridge: BuildProgressBridge = {
+    buildRebuild: (payload) => {
+      rebuilt.push(payload);
+      return rebuildAnswer();
+    },
     listBuildProgress: () => {
       calls.push("list");
       return Promise.resolve(listed);
@@ -90,6 +100,7 @@ const setup = async (listed: unknown, activity: unknown = []) => {
     store,
     calls,
     stopped,
+    rebuilt,
     asked,
     push: (update: unknown) => push(update),
     pushActivity: (update: unknown) => pushActivity(update),
@@ -227,6 +238,146 @@ describe("build progress store", () => {
     await store.getState().stop("pb-1");
 
     expect(stopped).toEqual([{ pendingId: "pb-1" }]);
+  });
+
+  describe("answering a build's questions", () => {
+    const questions = [
+      { nodeId: "n1", text: "Who writes notes.md?", otherNodeId: "n0" },
+      { nodeId: "n2", text: "Which command runs the tests?" },
+    ];
+
+    const asking = (pendingId = "pb-1") => {
+      const ended = entry(pending(pendingId, "flow-a", 1, "needs-you"), atStep(3));
+      return { ...ended, progress: { ...ended.progress, questions } };
+    };
+
+    const deferred = () => {
+      let resolve!: (value: unknown) => void;
+      const promise = new Promise<unknown>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+
+    it("keeps one draft per question of each build", async () => {
+      const { store } = await setup([asking("pb-1"), asking("pb-2")]);
+
+      store.getState().setAnswer("pb-1", 0, "n");
+      store.getState().setAnswer("pb-1", 0, "n1 writes it");
+      store.getState().setAnswer("pb-1", 1, "npm test");
+
+      expect(store.getState().answerFor("pb-1", 0)).toBe("n1 writes it");
+      expect(store.getState().answerFor("pb-1", 1)).toBe("npm test");
+      expect(store.getState().answerFor("pb-2", 0)).toBe("");
+    });
+
+    it("rebuilds with each question and its answer once every question is answered", async () => {
+      const { store, rebuilt } = await setup([asking()]);
+
+      store.getState().setAnswer("pb-1", 0, "n1 writes it");
+      store.getState().setAnswer("pb-1", 1, "npm test");
+      expect(store.getState().canRebuild("pb-1")).toBe(true);
+      await store.getState().rebuild("pb-1");
+
+      expect(rebuilt).toEqual([
+        {
+          pendingId: "pb-1",
+          answers: [
+            {
+              nodeId: "n1",
+              text: "Who writes notes.md?",
+              otherNodeId: "n0",
+              answer: "n1 writes it",
+            },
+            { nodeId: "n2", text: "Which command runs the tests?", answer: "npm test" },
+          ],
+        },
+      ]);
+    });
+
+    it.each([
+      ["no answers", [] as [number, string][]],
+      ["one question unanswered", [[0, "n1 writes it"]] as [number, string][]],
+      [
+        "a blank answer",
+        [
+          [0, "n1 writes it"],
+          [1, "   "],
+        ] as [number, string][],
+      ],
+    ])("sends nothing with %s", async (_, drafts) => {
+      const { store, rebuilt } = await setup([asking()]);
+
+      drafts.forEach(([index, text]) => store.getState().setAnswer("pb-1", index, text));
+      expect(store.getState().canRebuild("pb-1")).toBe(false);
+      await store.getState().rebuild("pb-1");
+
+      expect(rebuilt).toEqual([]);
+    });
+
+    it("sends nothing for a build with no questions", async () => {
+      const { store, rebuilt } = await setup([
+        entry(pending("pb-1", "flow-a", 1, "failed"), atStep(3)),
+      ]);
+
+      expect(store.getState().canRebuild("pb-1")).toBe(false);
+      await store.getState().rebuild("pb-1");
+
+      expect(rebuilt).toEqual([]);
+    });
+
+    it("sends one rebuild while one is in flight", async () => {
+      const answer = deferred();
+      const { store, rebuilt } = await setup([asking()], [], () => answer.promise);
+      store.getState().setAnswer("pb-1", 0, "n1 writes it");
+      store.getState().setAnswer("pb-1", 1, "npm test");
+
+      const first = store.getState().rebuild("pb-1");
+      expect(store.getState().isRebuilding("pb-1")).toBe(true);
+      expect(store.getState().canRebuild("pb-1")).toBe(false);
+      await store.getState().rebuild("pb-1");
+      answer.resolve({ kind: "started", pendingId: "pb-new" });
+      await first;
+
+      expect(rebuilt).toHaveLength(1);
+      expect(store.getState().isRebuilding("pb-1")).toBe(false);
+    });
+
+    it("clears the drafts once the rebuild started", async () => {
+      const { store } = await setup([asking()]);
+      store.getState().setAnswer("pb-1", 0, "n1 writes it");
+      store.getState().setAnswer("pb-1", 1, "npm test");
+
+      await store.getState().rebuild("pb-1");
+
+      expect(store.getState().answerFor("pb-1", 0)).toBe("");
+      expect(store.getState().answerFor("pb-1", 1)).toBe("");
+      expect(store.getState().rebuildErrorFor("pb-1")).toBeUndefined();
+    });
+
+    it.each([
+      [
+        "the engine refuses it",
+        () => Promise.reject(new Error("Build fix-a did not keep its inputs")),
+        "Build fix-a did not keep its inputs",
+      ],
+      [
+        "the build cannot start",
+        () => Promise.resolve({ kind: "error", message: "fix-a is already building" }),
+        "fix-a is already building",
+      ],
+    ])("keeps the drafts and shows the reason when %s", async (_, answer, message) => {
+      const { store } = await setup([asking()], [], answer);
+      store.getState().setAnswer("pb-1", 0, "n1 writes it");
+      store.getState().setAnswer("pb-1", 1, "npm test");
+
+      await store.getState().rebuild("pb-1");
+
+      expect(store.getState().rebuildErrorFor("pb-1")).toBe(message);
+      expect(store.getState().answerFor("pb-1", 0)).toBe("n1 writes it");
+      expect(store.getState().answerFor("pb-1", 1)).toBe("npm test");
+      expect(store.getState().isRebuilding("pb-1")).toBe(false);
+    });
   });
 
   it("gives every node of a merged component that component's status", async () => {

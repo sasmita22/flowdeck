@@ -1493,7 +1493,7 @@ describe("createEngineHandler", async () => {
         worktree.hold();
         const open = await startedPendingId(other, "third");
         await vi.waitFor(() => {
-          expect(progressPushes(open).at(-1)?.progress.chip).toBe("Building · step 5 of 5");
+          expect(progressPushes(open).at(-1)?.progress.chip).toBe("Building · step 2 of 5");
         });
 
         const listed = await handler.handle({ id: nextId++, type: "build-progress-list" });
@@ -1512,7 +1512,7 @@ describe("createEngineHandler", async () => {
             expect.objectContaining({
               pendingId: open,
               flowId: other,
-              progress: expect.objectContaining({ chip: "Building · step 5 of 5" }),
+              progress: expect.objectContaining({ chip: "Building · step 2 of 5" }),
             }),
           ]),
         );
@@ -1948,7 +1948,7 @@ describe("createEngineHandler", async () => {
         expect(await new NodeFileSystem().exists(cut.path)).toBe(false);
       });
 
-      it("closes the build session once when Stop lands during the worktree cut", async () => {
+      it("opens no build session when Stop lands during the worktree cut, and removes the workspace and worktree", async () => {
         const source = await createTmpRepo({ commit: true });
         onTestFinished(() => source.cleanup());
         const git = new GitWorktree();
@@ -1956,23 +1956,9 @@ describe("createEngineHandler", async () => {
         const addGate = new Promise<void>((resolve) => {
           releaseAdd = resolve;
         });
-        let releaseClose: () => void = () => undefined;
-        const closeGate = new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        });
         const asked: WorktreeAddOptions[] = [];
-        const closing: string[] = [];
         handler = handlerWith({
-          buildAgents: {
-            open: agents.open,
-            turn: agents.turn,
-            alive: agents.alive,
-            close: async (sessionName) => {
-              closing.push(sessionName);
-              if (closing.length === 1) await closeGate;
-              return agents.close(sessionName);
-            },
-          },
+          buildAgents: agents,
           gitState: gitAt(source.path),
           run: { ...runEnvironment(new NodeFileSystem()), usage },
           worktree: {
@@ -2001,8 +1987,8 @@ describe("createEngineHandler", async () => {
         await vi.waitFor(() => {
           expect(asked).toHaveLength(1);
         });
-        const session = runs.buildEvents(pendingId).find((entry) => entry.type === "session");
-        if (session === undefined) throw new Error("the build never reached its session");
+        const [cut] = asked;
+        if (cut === undefined) throw new Error("no worktree was asked for");
 
         const stopping = handler.handle({
           id: nextId++,
@@ -2010,10 +1996,6 @@ describe("createEngineHandler", async () => {
           payload: { pendingId },
         });
         releaseAdd();
-        await vi.waitFor(() => {
-          expect(closing).toHaveLength(1);
-        });
-        releaseClose();
 
         expect(await stopping).toMatchObject({ ok: true });
         const ended = await endPush(pendingId);
@@ -2021,9 +2003,12 @@ describe("createEngineHandler", async () => {
         expect(
           runs.listLatestEndedPendingBuilds().find((pending) => pending.id === pendingId)?.outcome,
         ).toBe("stopped");
+        expect(agents.fake.opened).toEqual([]);
+        expect(sessionEventName(pendingId)).toBeUndefined();
         expect(runs.listBuilds()).toEqual([]);
-        expect(closing).toHaveLength(1);
-        expect(await new NodeFileSystem().exists(workspaceDir(home, session.buildId))).toBe(false);
+        expect(await worktreePaths(cut.repo)).toHaveLength(1);
+        expect((await branches(cut.repo)).split("\n")).not.toContain(cut.branch);
+        expect(await new NodeFileSystem().exists(dirname(cut.path))).toBe(false);
       });
 
       it("keeps a build recorded before a stop: its workspace stays and it ends built", async () => {
@@ -2232,6 +2217,257 @@ describe("createEngineHandler", async () => {
         await settle();
 
         expect(runs.buildEvents(pendingId)).toEqual(eventsAtStop);
+      });
+
+      describe("build-rebuild", () => {
+        const question = { nodeId: "write", text: "Who writes notes.md?", otherNodeId: "check" };
+        const questions = [question];
+        const firstAnswer = { ...question, answer: "write writes notes.md; check reads it." };
+        const secondAnswer = {
+          nodeId: "check",
+          text: "Should check fail on an empty notes.md?",
+          answer: "Yes, an empty notes.md fails the check.",
+        };
+
+        const asking = () => {
+          agents = new WatchedBuildAgents(() => undefined, { questions });
+          handler = handlerWith({
+            buildAgents: agents,
+            run: { ...runEnvironment(new NodeFileSystem()), usage },
+          });
+        };
+
+        const rebuild = (payload: unknown) =>
+          handler.handle({ id: nextId++, type: "build-rebuild" as never, payload });
+
+        const rebuiltPendingId = async (pendingId: string, answers: unknown[]) => {
+          const answered = await rebuild({ pendingId, answers });
+          expect(answered).toMatchObject({
+            ok: true,
+            value: { kind: "started", pendingId: expect.any(String) },
+          });
+          return (answered as { value: { pendingId: string } }).value.pendingId;
+        };
+
+        const stepThreeTurnOf = (sessionIndex: number) => {
+          const sessionName = agents.fake.opened[sessionIndex]?.sessionName;
+          return agents.fake.turns.find((turn) => turn.sessionName === sessionName)?.text ?? "";
+        };
+
+        const firstRequest = () => ({ repo: repo.path, base: "main", buildModel: "haiku" });
+
+        const askedBuild = async () => {
+          const answered = await handler.handle({
+            id: nextId++,
+            type: "build-version",
+            payload: {
+              flowId: "flow-1",
+              version: 1,
+              name: "fix-login",
+              values: {},
+              ...firstRequest(),
+            },
+          });
+          expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+          const { pendingId } = (answered as { value: { pendingId: string } }).value;
+          expect((await endPush(pendingId)).progress.chip).toBe("Needs you");
+          return pendingId;
+        };
+
+        const refusal = (response: unknown) => {
+          const answered = response as
+            { ok: true; value?: { kind?: string } } | { ok: false; error?: unknown } | undefined;
+          if (answered === undefined) return false;
+          return answered.ok
+            ? answered.value?.kind === "error"
+            : typeof answered.error === "string";
+        };
+
+        it("starts a new build of the same blueprint, version and name, with the old inputs and the answers so far, and leaves the old build as it was", async () => {
+          asking();
+          const asked = await askedBuild();
+          const askedRow = runs.listLatestEndedPendingBuilds().find((row) => row.id === asked);
+
+          const first = await rebuiltPendingId(asked, [firstAnswer]);
+          await endPush(first);
+
+          expect(first).not.toBe(asked);
+          expect(runs.pendingBuild(asked)).toEqual(askedRow);
+          expect(runs.pendingBuild(first)).toMatchObject({
+            flowId: "flow-1",
+            version: 1,
+            name: "fix-login",
+            outcome: "needs-you",
+            origin: { request: { values: {}, ...firstRequest(), answers: [firstAnswer] } },
+          });
+          expect(agents.fake.opened.map((spec) => spec.model)).toEqual(["haiku", "haiku"]);
+          expect(stepThreeTurnOf(0)).not.toContain(firstAnswer.answer);
+          expect(stepThreeTurnOf(1)).toContain(firstAnswer.text);
+          expect(stepThreeTurnOf(1)).toContain(firstAnswer.answer);
+
+          const second = await rebuiltPendingId(first, [secondAnswer]);
+          await endPush(second);
+
+          expect(runs.pendingBuild(second)).toMatchObject({
+            name: "fix-login",
+            origin: {
+              request: { values: {}, ...firstRequest(), answers: [firstAnswer, secondAnswer] },
+            },
+          });
+          expect(stepThreeTurnOf(2)).toContain(firstAnswer.answer);
+          expect(stepThreeTurnOf(2)).toContain(secondAnswer.answer);
+        });
+
+        it("refuses an unknown build, an empty answer, and no answers, starting nothing", async () => {
+          asking();
+          const asked = await askedBuild();
+          const opened = agents.fake.opened.length;
+
+          for (const payload of [
+            { pendingId: "missing", answers: [firstAnswer] },
+            { pendingId: asked, answers: [{ ...firstAnswer, answer: "   " }] },
+            { pendingId: asked, answers: [] },
+          ]) {
+            expect(refusal(await rebuild(payload)), JSON.stringify(payload)).toBe(true);
+          }
+          await settle();
+
+          expect(runs.listPendingBuilds()).toEqual([]);
+          expect(runs.listLatestEndedPendingBuilds().map((ended) => ended.id)).toEqual([asked]);
+          expect(agents.fake.opened).toHaveLength(opened);
+        });
+
+        it("refuses a build that ended built, starting nothing", async () => {
+          const built = await startedPendingId("built-already");
+          expect((await endPush(built)).progress.chip).toBe("Built · v1");
+          const opened = agents.fake.opened.length;
+
+          expect(refusal(await rebuild({ pendingId: built, answers: [firstAnswer] }))).toBe(true);
+          await settle();
+
+          expect(runs.listPendingBuilds()).toEqual([]);
+          expect(runs.listLatestEndedPendingBuilds().map((ended) => ended.id)).toEqual([built]);
+          expect(agents.fake.opened).toHaveLength(opened);
+        });
+
+        it("refuses a build still going, starting nothing", async () => {
+          agents.holdTurns();
+          const going = await startedPendingId("still-going");
+          try {
+            await vi.waitFor(() => {
+              expect(agents.turnsStarted).toBe(1);
+            });
+
+            expect(refusal(await rebuild({ pendingId: going, answers: [firstAnswer] }))).toBe(true);
+            await settle();
+
+            expect(runs.listPendingBuilds().map((open) => open.id)).toEqual([going]);
+            expect(agents.fake.opened).toHaveLength(1);
+          } finally {
+            await handler.handle({
+              id: nextId++,
+              type: "build-stop",
+              payload: { pendingId: going },
+            });
+          }
+        });
+
+        it("refuses a build that asked before builds kept their inputs, starting nothing", async () => {
+          const start = runs.startPendingBuild({
+            flowId: "flow-1",
+            version: 1,
+            name: "asked-before",
+            origin: {
+              source: { flowId: "flow-1", version: 1 },
+              blueprint: { name: "Untitled", version: 1 },
+            },
+            startedAt: 1_000,
+          });
+          if (start.kind !== "started") throw new Error("the old build did not start");
+          runs.endPendingBuild(start.pendingId, {
+            outcome: "needs-you",
+            endedAt: 2_000,
+            report: { version: 1, questions },
+          });
+
+          expect(
+            refusal(await rebuild({ pendingId: start.pendingId, answers: [firstAnswer] })),
+          ).toBe(true);
+          await settle();
+
+          expect(runs.listPendingBuilds()).toEqual([]);
+          expect(runs.listLatestEndedPendingBuilds().map((ended) => ended.id)).toEqual([
+            start.pendingId,
+          ]);
+          expect(agents.fake.opened).toEqual([]);
+        });
+
+        it.each(["failed", "stopped"] as const)(
+          "refuses a build that ended %s although it kept its inputs and its questions, starting nothing",
+          async (outcome) => {
+            const start = runs.startPendingBuild({
+              flowId: "flow-1",
+              version: 1,
+              name: `ended-${outcome}`,
+              origin: {
+                source: { flowId: "flow-1", version: 1 },
+                blueprint: { name: "Untitled", version: 1 },
+                request: { values: {}, ...firstRequest() },
+              },
+              startedAt: 1_000,
+            });
+            if (start.kind !== "started") throw new Error("the ended build did not start");
+            runs.endPendingBuild(start.pendingId, {
+              outcome,
+              endedAt: 2_000,
+              report: {
+                version: 1,
+                questions: [{ nodeId: firstAnswer.nodeId, text: firstAnswer.text }],
+                merges: [],
+                keptApart: [],
+                mixedJobs: [],
+                pieces: [],
+              },
+            });
+
+            const refused = await rebuild({ pendingId: start.pendingId, answers: [firstAnswer] });
+
+            expect(refusal(refused)).toBe(true);
+            expect(refused).toMatchObject({
+              error: expect.stringContaining("did not end needing answers"),
+            });
+            await settle();
+
+            expect(runs.listPendingBuilds()).toEqual([]);
+            expect(runs.listLatestEndedPendingBuilds().map((ended) => ended.id)).toEqual([
+              start.pendingId,
+            ]);
+            expect(agents.fake.opened).toEqual([]);
+          },
+        );
+
+        it("keeps a build-version request's inputs in its origin, and takes no answers from it", async () => {
+          const answered = await handler.handle({
+            id: nextId++,
+            type: "build-version",
+            payload: {
+              flowId: "flow-1",
+              version: 1,
+              name: "no-answers",
+              values: {},
+              ...firstRequest(),
+              answers: [firstAnswer],
+            },
+          });
+          expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+          const { pendingId } = (answered as { value: { pendingId: string } }).value;
+          await endPush(pendingId);
+
+          const ended = runs.listLatestEndedPendingBuilds().find((row) => row.id === pendingId);
+          const request = (ended?.origin as { request?: unknown } | undefined)?.request;
+          expect(request).toEqual({ values: {}, ...firstRequest() });
+          expect(stepThreeTurnOf(0)).not.toContain(firstAnswer.answer);
+        });
       });
     });
 

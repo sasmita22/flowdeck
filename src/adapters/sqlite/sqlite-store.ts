@@ -484,6 +484,13 @@ export class SqliteStore implements Store {
     return row === undefined ? undefined : toPendingBuild(row);
   }
 
+  pendingBuild(id: string): PendingBuild | null {
+    const row = this.db
+      .prepare(`SELECT ${pendingColumns} FROM pending_builds WHERE id = ?`)
+      .get(id) as PendingBuildRow | undefined;
+    return row === undefined ? null : toPendingBuild(row);
+  }
+
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
     this.appendBuildRow("build_activity", pendingId, entry);
   }

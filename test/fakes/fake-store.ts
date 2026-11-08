@@ -195,6 +195,11 @@ export class FakeStore implements Store {
     return this.listPendingBuilds().find((known) => known.name === name);
   }
 
+  pendingBuild(id: string): PendingBuild | null {
+    const known = this.pendingBuilds.find((record) => record.id === id);
+    return known === undefined ? null : copy(known);
+  }
+
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
     this.buildActivityLog.push({ pendingId, entry: copy(entry) });
   }

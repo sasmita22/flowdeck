@@ -472,6 +472,39 @@ describe("FakeStore", () => {
       ]);
     });
 
+    it("reads one build by id: an ended one with its outcome, report and origin, an open one, and none for an unknown id", () => {
+      const store = new FakeStore();
+      const report = { version: 1, questions: [{ nodeId: "a1", text: "Which repo?" }] };
+      const origin = {
+        source: { flowId: "flow-1", version: 3 },
+        request: { values: { ticket: "FD-1" }, repo: "/repo", base: "main" },
+      };
+      const ended = startedId(store, { ...pending("flow-1", "asked"), origin });
+      store.endPendingBuild(ended, { outcome: "needs-you", endedAt: 2_000, report });
+      const going = startedId(store, pending("flow-2", "going"));
+
+      expect(store.pendingBuild(ended)).toEqual({
+        id: ended,
+        flowId: "flow-1",
+        version: 3,
+        name: "asked",
+        origin,
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: "needs-you",
+        report,
+      });
+      expect(store.pendingBuild(going)).toEqual({
+        id: going,
+        flowId: "flow-2",
+        version: 3,
+        name: "going",
+        origin: { kind: "canvas" },
+        startedAt: 1_000,
+      });
+      expect(store.pendingBuild("missing")).toBeNull();
+    });
+
     it("throws when a build is ended twice", () => {
       const store = new FakeStore();
       const id = startedId(store, pending());

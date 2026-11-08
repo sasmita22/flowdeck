@@ -99,6 +99,7 @@ export const buildProgressSchema = z.object({
   questions: buildReportSchema.shape.questions.exactOptional(),
   chip: z.string(),
   outcomeLabel: z.string().exactOptional(),
+  answerable: z.literal(true).exactOptional(),
 });
 
 export const buildProgressEntrySchema = z.object({
@@ -196,6 +197,7 @@ export const progressOf = (
     ...(pending.outcome === undefined
       ? {}
       : { outcomeLabel: pending.outcome === "stopped" ? "Stopped" : chip }),
+    ...(pending.outcome === "needs-you" ? { answerable: true as const } : {}),
   };
 };
 

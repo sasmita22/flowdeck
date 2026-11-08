@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
 import type { BuildConfig, Flow } from "../flow/schema.js";
 import { unsetVariables, type VariableValues } from "../flow/variables.js";
@@ -13,9 +14,14 @@ import { teardownWorkspace, type TeardownDeps } from "../run/delete-build.js";
 import type { BuildSource, Store } from "../run/store.js";
 import { buildWorktree, type RunWorktree } from "../run/workspace.js";
 import { layDown, lockBuild, workspaceDir, type BuildDeps, type BuildResult } from "./build.js";
-import { parseBuildReport, type BuildReport } from "./build-report.js";
+import {
+  buildAnswerSchema,
+  parseBuildReport,
+  type BuildAnswer,
+  type BuildReport,
+} from "./build-report.js";
 import { buildSessionSettings } from "./build-session.js";
-import { auditTurn, pieceKind, writeTurn } from "./build-turns.js";
+import { auditTurn, nodeIdsOf, pieceKind, writeTurn } from "./build-turns.js";
 import { canonicalJson } from "./canonical-json.js";
 import { checkBuild, type BuildCheckFailure } from "./check-build.js";
 import { resolveConnectors } from "./connectors.js";
@@ -26,12 +32,14 @@ import type { BuildFile, Manifest } from "./lower.js";
 import { applyMerges } from "./merge.js";
 import { buildRecord } from "./record.js";
 import { validate, type ValidationError } from "./validate.js";
+import { workspaceListing, workspaceRootFiles } from "./verify.js";
 
 export type BuildRequest = {
   name: string;
   repo?: string;
   base?: string;
   values: VariableValues;
+  answers?: readonly BuildAnswer[];
 };
 
 export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
@@ -166,9 +174,20 @@ async function requestProblems(
     : [{ rule: "build-values", message: `Give a value for ${unset.join(", ")}.` }];
 }
 
+export const buildInputsSchema = z.object({
+  values: z.record(z.string(), z.union([z.string(), z.boolean()])),
+  repo: z.string().optional(),
+  base: z.string().optional(),
+  buildModel: z.string().optional(),
+  answers: z.array(buildAnswerSchema).optional(),
+});
+
+export type BuildInputs = z.infer<typeof buildInputsSchema>;
+
 export type BuildOrigin = {
   source: BuildSource;
   blueprint: { name: string; version: number };
+  request?: BuildInputs;
 };
 
 const withRequestTarget = (flow: Flow, { repo, base }: BuildRequest): Flow => ({
@@ -242,11 +261,6 @@ const componentsOf = (manifest: Manifest, files: readonly BuildFile[]): string[]
   ),
   ...files.flatMap((file) => (file.path.startsWith("plugin/templates/") ? [file.path] : [])),
 ];
-
-const nodeIdsOf = (manifest: Manifest, path: string): string[] =>
-  path.startsWith("script:")
-    ? [path.slice("script:".length)]
-    : manifest.nodes.flatMap((node) => (node.file === path ? [node.id] : []));
 
 const componentStatus = (call: AgentCall): ComponentStatus => {
   if (call.status === undefined) return "running";
@@ -391,11 +405,17 @@ export async function runBuild(
       base,
     };
     const dir = workspaceDir(deps.home, id);
+    const worktree = { repo, base, ...buildWorktree({ id, name: request.name, repo, dir }) };
     if (resume === undefined) {
       current = 2;
       append({ type: "step", step: 2, status: "running" });
     } else {
+      opening = resume.session.name;
       workspace = { dir };
+      if (!(await deps.fs.exists(worktree.path))) {
+        throw new Error(`The build's worktree ${worktree.path} is gone.`);
+      }
+      workspace = { dir, worktree };
     }
     const laidDown = await waited(
       layDown(flow, {
@@ -435,6 +455,10 @@ export async function runBuild(
       files.find((file) => file.path === reportPath)?.content ?? "{}",
     );
     report = latest;
+    if (resume === undefined) {
+      await deps.worktree.add(worktree);
+      workspace = { dir, worktree };
+    }
 
     current = 3;
     const sessionName = resume?.session.name ?? deps.sessionName();
@@ -524,7 +548,7 @@ export async function runBuild(
       }
       const written = inFlight
         ? undefined
-        : await turn(writeTurn(manifest, pieces, round, failures));
+        : await turn(writeTurn(manifest, pieces, round, failures, request.answers));
       if (written !== undefined) return await turnFailed(3, written, round);
       append({ type: "step", step: 3, status: "done", round });
       if (asked()) return await stop("needs-you", questionErrors(latest));
@@ -532,7 +556,7 @@ export async function runBuild(
       if (round === 1) {
         current = 4;
         append({ type: "step", step: 4, status: "running" });
-        const audited = await turn(auditTurn(manifest));
+        const audited = await turn(auditTurn(manifest, request.answers));
         if (audited !== undefined) return await turnFailed(4, audited);
         if (asked()) {
           append({ type: "step", step: 4, status: "done" });
@@ -559,7 +583,9 @@ export async function runBuild(
             append({ type: "merge", nodeIds: nodeIdsOf(merged.manifest, piece), piece });
           files = merged.files;
           manifest = merged.manifest;
-          const rewritten = await turn(writeTurn(manifest, merged.mergedPieces, 1));
+          const rewritten = await turn(
+            writeTurn(manifest, merged.mergedPieces, 1, [], request.answers),
+          );
           if (rewritten !== undefined) return await turnFailed(4, rewritten);
           if (asked()) {
             append({ type: "step", step: 4, status: "done" });
@@ -571,22 +597,22 @@ export async function runBuild(
 
       current = 5;
       append({ type: "step", step: 5, status: "running", round });
-      const back = await waited(
-        Promise.all(
-          (await waited(deps.fs.list(dir))).map(async (path) => ({
-            path,
-            content: await deps.fs.readFile(`${dir}/${path}`),
-          })),
-        ),
+      const listing = await waited(
+        workspaceListing(deps.fs, dir, [...workspaceRootFiles, reportPath]),
       );
+      const back =
+        listing === undefined
+          ? []
+          : await waited(
+              Promise.all(
+                listing.paths.map(async (path) => ({ path, content: await listing.read(path) })),
+              ),
+            );
       failures = checkBuild({ laidDown: files, readBack: back, manifest, flow });
       if (failures.length === 0) {
         const { hash, manifest: locked } = await settled(
           lockBuild(deps.fs, dir, lockedFiles(back, manifest)),
         );
-        const worktree = { repo, base, ...buildWorktree({ id, name: request.name, repo, dir }) };
-        await deps.worktree.add(worktree);
-        workspace = { dir, worktree };
         const record = buildRecord(dir, locked, identity);
         checkpoint();
         deps.store.recordBuild(record);

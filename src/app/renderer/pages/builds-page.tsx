@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type {
   BuildCost,
+  BuildQuestion,
   BuildStepNumber,
   ComponentProgress,
   StepProgress,
@@ -201,6 +202,76 @@ function BuildActivity({
   );
 }
 
+const answerStyle: CSSProperties = { flexBasis: "100%", maxWidth: 480 };
+
+const rebuildErrorStyle: CSSProperties = {
+  margin: 0,
+  color: "var(--warn)",
+  fontSize: "var(--fs-sm)",
+};
+
+function BuildQuestions({
+  pendingId,
+  questions,
+  answerable,
+  buildProgress,
+}: {
+  pendingId: string;
+  questions: readonly BuildQuestion[];
+  answerable: boolean;
+  buildProgress: StoreApi<BuildProgressState>;
+}) {
+  const drafts = useStore(buildProgress, (state) => state.drafts[pendingId]);
+  const canRebuild = useStore(buildProgress, (state) => state.canRebuild(pendingId));
+  const error = useStore(buildProgress, (state) => state.rebuildErrorFor(pendingId));
+  return (
+    <>
+      <ol className="fd-build-steps" aria-label="Questions">
+        {questions.map((question, index) => (
+          <li key={index} data-testid={pageTestIds.buildQuestion(pendingId, index)}>
+            <span>
+              {question.nodeId}
+              {question.otherNodeId === undefined ? "" : ` · ${question.otherNodeId}`}
+            </span>
+            <span>{question.text}</span>
+            {answerable && (
+              <input
+                type="text"
+                aria-label={`Answer to: ${question.text}`}
+                placeholder="Your answer"
+                style={answerStyle}
+                data-testid={pageTestIds.buildAnswer(pendingId, index)}
+                value={drafts?.[index] ?? ""}
+                onChange={(event) =>
+                  buildProgress.getState().setAnswer(pendingId, index, event.target.value)
+                }
+              />
+            )}
+          </li>
+        ))}
+      </ol>
+      {answerable && (
+        <div className="fd-page-bar">
+          <button
+            className="fd-btn fd-btn-primary"
+            data-testid={pageTestIds.buildRebuild(pendingId)}
+            title="Build this blueprint again with these answers"
+            disabled={!canRebuild}
+            onClick={() => void buildProgress.getState().rebuild(pendingId)}
+          >
+            Rebuild with answers
+          </button>
+          {error !== undefined && (
+            <p role="alert" style={rebuildErrorStyle}>
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function BuildProgressView({
   pendingId,
   nav,
@@ -278,17 +349,12 @@ function BuildProgressView({
         </ul>
       )}
       {progress.questions !== undefined && (
-        <ol className="fd-build-steps" aria-label="Questions">
-          {progress.questions.map((question, index) => (
-            <li key={index} data-testid={pageTestIds.buildQuestion(pendingId, index)}>
-              <span>
-                {question.nodeId}
-                {question.otherNodeId === undefined ? "" : ` · ${question.otherNodeId}`}
-              </span>
-              <span>{question.text}</span>
-            </li>
-          ))}
-        </ol>
+        <BuildQuestions
+          pendingId={pendingId}
+          questions={progress.questions}
+          answerable={progress.answerable === true}
+          buildProgress={buildProgress}
+        />
       )}
       <BuildActivity pendingId={pendingId} buildProgress={buildProgress} />
       {open && <BuildTerminal pendingId={pendingId} terminal={terminal} />}

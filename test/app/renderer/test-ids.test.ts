@@ -160,6 +160,29 @@ describe("test ids", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("names a needs-you build's answer field per question and its Rebuild with answers control", () => {
+    expect([
+      pageTestIds.buildAnswer("pb-1", 0),
+      pageTestIds.buildAnswer("pb-1", 1),
+      pageTestIds.buildRebuild("pb-1"),
+    ]).toEqual(["build-answer-pb-1-0", "build-answer-pb-1-1", "build-rebuild-pb-1"]);
+  });
+
+  it("gives each answer field and Rebuild control its own id, apart from the question ids", () => {
+    const ids = [
+      pageTestIds.buildQuestion("pb-1", 0),
+      pageTestIds.buildQuestion("pb-1", 1),
+      pageTestIds.buildAnswer("pb-1", 0),
+      pageTestIds.buildAnswer("pb-1", 1),
+      pageTestIds.buildAnswer("pb-2", 0),
+      pageTestIds.buildRebuild("pb-1"),
+      pageTestIds.buildRebuild("pb-2"),
+      pageTestIds.buildProgress("pb-1"),
+    ];
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("names the Build configuration fields as the session form draws them", () => {
     expect(buildConfigTestIds).toMatchObject({
       repo: "session-build-config-repo",

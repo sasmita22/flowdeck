@@ -43,7 +43,7 @@ const byPath = (a: VerifyProblem, b: VerifyProblem) =>
 export type VerifyLayout = "workspace" | "legacy";
 
 const pluginFolder = "plugin";
-const workspaceRootFiles = [manifestPath, "CLAUDE.md", "settings.json"];
+export const workspaceRootFiles = [manifestPath, "CLAUDE.md", "settings.json"];
 
 type Listing = { paths: string[]; read(path: string): Promise<string> };
 
@@ -70,11 +70,15 @@ async function legacyListing(dir: string, fs: VerifyFileSystem): Promise<Listing
   return paths === undefined ? undefined : { paths, read: (path) => fs.readFile(`${dir}/${path}`) };
 }
 
-async function workspaceListing(dir: string, fs: VerifyFileSystem): Promise<Listing | undefined> {
+export async function workspaceListing(
+  fs: VerifyFileSystem,
+  dir: string,
+  rootFiles: readonly string[],
+): Promise<Listing | undefined> {
   const plugin = await listOrMissing(fs, `${dir}/${pluginFolder}`);
   if (plugin === undefined) return undefined;
   const root = new Map<string, string>();
-  for (const path of workspaceRootFiles) {
+  for (const path of rootFiles) {
     const content = await readOrMissing(fs, `${dir}/${path}`);
     if (content !== undefined) root.set(path, content);
   }
@@ -92,7 +96,7 @@ export async function verify(
 ): Promise<VerifyResult> {
   const listing =
     layout === "workspace"
-      ? await workspaceListing(buildDir, deps.fs)
+      ? await workspaceListing(deps.fs, buildDir, workspaceRootFiles)
       : await legacyListing(buildDir, deps.fs);
   if (listing === undefined) return manifestProblem("missing");
   const listed = listing.paths;

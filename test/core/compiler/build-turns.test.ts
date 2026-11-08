@@ -1,6 +1,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
 import { auditTurn, writeTurn } from "../../../src/core/compiler/build-turns.js";
 import type { BuildCheckFailure } from "../../../src/core/compiler/check-build.js";
 import type { Manifest, ManifestNode } from "../../../src/core/compiler/lower.js";
@@ -148,6 +149,64 @@ describe("writeTurn", () => {
 
   it("gives every kit name the flowdeck-build: prefix", () => {
     expectKitNamesPrefixed(writeTurn(manifest(), allPieces, 2, failures));
+  });
+
+  const answers: BuildAnswer[] = [
+    {
+      nodeId: "a1",
+      otherNodeId: "p1",
+      text: "Should review read the spec draft-spec writes?",
+      answer: "Yes, review reads spec.md before it starts.",
+    },
+    {
+      nodeId: "p2",
+      text: "Which branch does ship push to?",
+      answer: "Push to release/next, never main.",
+    },
+  ];
+
+  it("gives round 1 each answer with its node, the other node when there is one, the question and the answer", () => {
+    const text = writeTurn(manifest(), allPieces, 1, [], answers);
+
+    for (const given of answers) {
+      expect(text).toContain(given.nodeId);
+      if (given.otherNodeId !== undefined) expect(text).toContain(given.otherNodeId);
+      expect(text).toContain(given.text);
+      expect(text).toContain(given.answer);
+    }
+    expect(text).not.toContain("undefined");
+    expect(pieceLines(text)).toEqual(allPieces.map((path) => `PIECE ${path}`));
+  });
+
+  it("puts each answer inside the block of every piece serving its nodes, and every answer in the handoff-auditor's block", () => {
+    const [shared, shipOnly] = answers;
+    if (shared === undefined || shipOnly === undefined) throw new Error("two answers expected");
+    const pieces = [...allPieces, "plugin/skills/ship/SKILL.md"];
+    const text = writeTurn(manifest(), pieces, 1, [], answers);
+    const where = (given: BuildAnswer) =>
+      pieces.filter((path) => {
+        const block = blockOf(text, path);
+        return block.includes(given.text) && block.includes(given.answer);
+      });
+
+    expect(where(shared)).toEqual(["plugin/skills/draft-spec/SKILL.md", "plugin/agents/review.md"]);
+    expect(where(shipOnly)).toEqual(["plugin/skills/ship/SKILL.md"]);
+
+    const audit = blockOf(auditTurn(manifest(), answers), "workspace");
+    for (const given of answers) {
+      expect(audit).toContain(given.text);
+      expect(audit).toContain(given.answer);
+    }
+  });
+
+  it("leaves round 1 as it is when there are no answers", () => {
+    expect(writeTurn(manifest(), allPieces, 1, [], [])).toBe(writeTurn(manifest(), allPieces, 1));
+  });
+
+  it("carries no answers after round 1", () => {
+    expect(writeTurn(manifest(), allPieces, 2, failures, answers)).toBe(
+      writeTurn(manifest(), allPieces, 2, failures),
+    );
   });
 });
 

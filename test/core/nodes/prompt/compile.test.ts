@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { scopeLine } from "../../../../src/core/compiler/scope-line.js";
 import { compilePrompt } from "../../../../src/core/nodes/prompt/compile.js";
 import { bodyOf, frontmatter, sectionOf } from "../../../fixtures/frontmatter.js";
+import { expectBareHandoffRule, nestedHandoffPaths } from "../../../fixtures/handoff.js";
 
 const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
 const piece = "plan-it";
@@ -80,9 +81,13 @@ describe("compilePrompt", () => {
     expect(sectionOf(content, /leaves behind/i)).toMatch(/plan\.md[\s\S]*notes\.md/);
   });
 
-  it("says under Builds on that hand-off files live in the repo folder inside the workspace", () => {
-    expect(sectionOf(compiled().content, /builds on/i)).toContain(
-      "Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace",
+  it("says under Builds on that hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace", () => {
+    const wired = { given: ["plan.md", "ticket.md"], writes: ["notes.md"] };
+    const content = compiled(undefined, { wired }).content;
+
+    expectBareHandoffRule(sectionOf(content, /builds on/i), "carousell-web");
+    expect(nestedHandoffPaths(content, "carousell-web", [...wired.given, ...wired.writes])).toEqual(
+      [],
     );
   });
 

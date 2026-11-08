@@ -72,9 +72,13 @@ function inputBox(pane: string): string | undefined {
 
 const squash = (text: string) => text.replace(/\s+/g, "");
 
+const pasteChipAtEnd = /\[Pastedtext#\d+(\+\d+lines)?\]$/;
+
 function boxHolds(pane: string, prompt: string): boolean {
   const box = inputBox(pane);
-  return box !== undefined && squash(box).includes(squash(prompt).slice(-40));
+  if (box === undefined) return false;
+  const held = squash(box);
+  return held.includes(squash(prompt).slice(-40)) || pasteChipAtEnd.test(held);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -23,6 +23,7 @@ import {
   trigger,
   wire,
 } from "../../fixtures/flow-builders.js";
+import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
 const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
 
@@ -118,16 +119,22 @@ describe("orchestratorSkill", () => {
     expect(ids).toEqual(manifestOf(sample()).nodes.map((node) => node.id));
   });
 
-  it("says hand-off files live in the repo folder inside the workspace, never the workspace itself", () => {
-    expect(skill().content).toContain(
-      "Hand-off files are read and written in `carousell-web/`, the run's working folder inside this build's workspace, never in the workspace folder itself.",
-    );
+  it("says hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace, never the workspace itself", () => {
+    const { content } = skill();
+
+    expectBareHandoffRule(content, "carousell-web");
+    expect(
+      nestedHandoffPaths(content, "carousell-web", ["plan.md", "code.md", "units.md"]),
+    ).toEqual([]);
   });
 
-  it("reads a Prompt node's step skill by path and follows it", () => {
-    expect(lineOf(skill().content, "p")).toContain(
-      "read `plugin/skills/plan/SKILL.md` by path and follow it",
+  it("reads a Prompt node's step skill by path from the plugin root and follows it", () => {
+    const line = lineOf(skill().content, "p");
+
+    expect(line).toContain(
+      "read `${CLAUDE_PLUGIN_ROOT}/skills/plan/SKILL.md` by path and follow it",
     );
+    expect(line).not.toContain("`plugin/skills/");
   });
 
   it("dispatches an Agent node by its full name with its node marker and details, and waits", () => {

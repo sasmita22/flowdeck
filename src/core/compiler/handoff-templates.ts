@@ -18,7 +18,7 @@ const templateOf = (
   readers: readonly string[],
 ) =>
   [
-    `${templateMarker} ${file}: the writing node replaces this template with the real file, \`${folder}/${file}\` in the run's working folder.`,
+    `${templateMarker} ${file}: the writing node replaces this template with the real file, \`${file}\` in the run's working folder (\`${folder}/\` in the workspace).`,
     "",
     `Written by: ${nodeList(writers)}`,
     `Read by: ${nodeList(readers)}`,

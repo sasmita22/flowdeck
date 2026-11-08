@@ -31,7 +31,8 @@ export function workspaceClaudeMd(
     ...(target.blueprint === undefined
       ? []
       : [`- Blueprint: ${target.blueprint.name}, version ${target.blueprint.version}`]),
-    `- Repository folder: ${repoFolder(target.repo)}`,
+    `- Repository folder: ${repoFolder(target.repo)}, relative to the workspace; run sessions start inside it`,
+    "- Plugin folder: plugin/ in the workspace; run sessions reach it as ${CLAUDE_PLUGIN_ROOT}",
     `- ${handoffFolderLine(repoFolder(target.repo))}`,
     `- Target repo (read only while building): ${target.repo}`,
     `- Base branch: ${target.base}`,
