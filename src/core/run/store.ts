@@ -107,6 +107,7 @@ export interface Store {
   findBuildByName(name: string): BuildRecord | undefined;
   deleteBuild(id: string): void;
   listBuilds(): BuildRecord[];
+  listBuildsWithDeleted(): BuildRecord[];
   buildFiles(id: string): BuildFileRecord[];
   startPendingBuild(build: NewPendingBuild): PendingBuildStart;
   appendBuildEvent(pendingId: string, event: BuildEvent): void;

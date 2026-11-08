@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  bridgeChannels,
   engineCalls,
   type EngineCalls,
   type FlowdeckBridge,
@@ -98,6 +99,8 @@ describe("preload run-state wiring", () => {
         ],
       },
     ],
+    ["startBlueprintSession", "flowdeck:blueprint-session-start", { flowId: "flow-a" }],
+    ["stopBlueprintSession", "flowdeck:blueprint-session-stop", { flowId: "flow-a" }],
   ] as const)(
     "%s invokes %s with its payload and returns its answer",
     async (method, channel, payload) => {
@@ -118,12 +121,29 @@ describe("preload run-state wiring", () => {
     ["build-stop", "stopBuild"],
     ["build-activity", "getBuildActivity"],
     ["build-rebuild", "buildRebuild"],
+    ["blueprint-session-start", "startBlueprintSession"],
+    ["blueprint-session-stop", "stopBlueprintSession"],
   ] as const)(
     "relays %s as an engine call, so main guards it like every engine call",
     (request, method) => {
       expect(engineCalls[method]).toEqual({ channel: `flowdeck:${request}`, request });
     },
   );
+
+  it("keeps stopping every blueprint session to main, out of the renderer's engine calls", () => {
+    const requests = Object.values(engineCalls).map((call) => call.request);
+
+    expect(requests).not.toContain("blueprint-session-stop-all");
+  });
+
+  it("types each blueprint session call's payload as the engine reads it", () => {
+    expectTypeOf<Parameters<EngineCalls["startBlueprintSession"]>[0]>().toEqualTypeOf<{
+      flowId: string;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["stopBlueprintSession"]>[0]>().toEqualTypeOf<{
+      flowId: string;
+    }>();
+  });
 
   it("types each build call's payload as the engine reads it", () => {
     expectTypeOf<Parameters<EngineCalls["buildVersion"]>[0]>().toEqualTypeOf<{
@@ -325,4 +345,69 @@ describe("preload terminal wiring", () => {
       expect(listener).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+describe("preload blueprint tool wiring", () => {
+  let bridge: FlowdeckBridge;
+
+  beforeAll(async () => {
+    await import("../../../src/app/preload/preload.js");
+    bridge = electron.exposed["flowdeck"] as FlowdeckBridge;
+  });
+
+  it.each([
+    ["toolCall", "flowdeck:tool-call"],
+    ["answerToolCall", "flowdeck:answer-tool-call"],
+    ["toolTurnEnd", "flowdeck:tool-turn-end"],
+  ] as const)("names the %s channel %s", (key, channel) => {
+    expect((bridgeChannels as Record<string, string>)[key]).toBe(channel);
+  });
+
+  it.each([
+    [
+      "onToolCall",
+      "flowdeck:tool-call",
+      {
+        requestId: "1",
+        session: "fd-bp-flow-a",
+        name: "change_node",
+        input: { nodeId: "s1", settings: { prompt: "Run the tests" } },
+      },
+    ],
+    ["onToolTurnEnd", "flowdeck:tool-turn-end", { session: "fd-bp-flow-a" }],
+  ] as const)(
+    "%s hands each %s payload to the listener without the event, and stops after unsubscribe",
+    (method, channel, payload) => {
+      expect(bridge[method]).toEqual(expect.any(Function));
+      const listener = vi.fn();
+      electron.ipcRenderer.on.mockClear();
+      const unsubscribe = bridge[method](listener);
+      const registered = electron.ipcRenderer.on.mock.calls[0]?.[1];
+
+      electron.emit(channel, payload);
+
+      expect(electron.ipcRenderer.on).toHaveBeenCalledWith(channel, expect.any(Function));
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(payload);
+
+      unsubscribe();
+      electron.emit(channel, payload);
+
+      expect(electron.ipcRenderer.removeListener).toHaveBeenCalledWith(channel, registered);
+      expect(listener).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("sends flowdeck:answer-tool-call with the request id and the result for answerToolCall", () => {
+    expect(bridge.answerToolCall).toEqual(expect.any(Function));
+    const result = { ok: true, nodeId: "s2", problems: [] };
+
+    bridge.answerToolCall("7", result);
+
+    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith(
+      "flowdeck:answer-tool-call",
+      "7",
+      result,
+    );
+  });
 });

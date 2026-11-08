@@ -1,9 +1,9 @@
-import { lstat, unlink } from "node:fs/promises";
-import { connect, createServer, type Server, type Socket } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { EventBus } from "../../core/event-bus.js";
 import { denied } from "../../core/run/permission.js";
 import type { EventSource, HookEvent, HookEventKind } from "../../ports/event-source.js";
 import type { PermissionDecision, PermissionSource } from "../../ports/permission-source.js";
+import { hasCode, removeStaleSocket } from "../unix-socket/stale-socket.js";
 
 const maxLineLength = 10 * 1024 * 1024;
 
@@ -17,10 +17,6 @@ const hookEventKinds: Record<HookEventKind, true> = {
 
 function isHookEventKind(value: unknown): value is HookEventKind {
   return typeof value === "string" && Object.hasOwn(hookEventKinds, value);
-}
-
-function hasCode(error: unknown, ...codes: string[]): boolean {
-  return error instanceof Error && "code" in error && codes.includes(error.code as string);
 }
 
 function reportToStderr(reason: string, line: string): void {
@@ -51,7 +47,7 @@ export class HookSocketServer implements EventSource, PermissionSource {
   }
 
   async start(): Promise<void> {
-    await this.removeStaleSocket();
+    await removeStaleSocket(this.socketPath);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(this.socketPath, () => {
@@ -84,32 +80,6 @@ export class HookSocketServer implements EventSource, PermissionSource {
         this.permissionHandlers.delete(sessionId);
       }
     };
-  }
-
-  private async removeStaleSocket(): Promise<void> {
-    try {
-      if (!(await lstat(this.socketPath)).isSocket()) {
-        throw new Error(`"${this.socketPath}" exists and is not a socket`);
-      }
-    } catch (error) {
-      if (hasCode(error, "ENOENT")) return;
-      throw error;
-    }
-    if (await this.isLive()) throw new Error(`Another server is listening on "${this.socketPath}"`);
-    await unlink(this.socketPath);
-  }
-
-  private isLive(): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      const probe = connect(this.socketPath);
-      probe.on("connect", () => {
-        probe.destroy();
-        resolve(true);
-      });
-      probe.on("error", (error) =>
-        hasCode(error, "ECONNREFUSED") ? resolve(false) : reject(error),
-      );
-    });
   }
 
   private accept(socket: Socket): void {

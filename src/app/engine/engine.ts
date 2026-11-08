@@ -3,6 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import pkg from "../../../package.json" with { type: "json" };
+import { ClaudeBlueprintSessions } from "../../adapters/claude/claude-blueprint-sessions.js";
 import { ClaudeBuildAgents } from "../../adapters/claude/claude-build-agents.js";
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js";
@@ -27,6 +28,7 @@ import {
   type EngineStores,
 } from "./engine-handler.js";
 import { prepareHooks } from "./hooks.js";
+import { prepareMcpScript } from "./mcp-script.js";
 import type { EngineMessage, EngineRequest } from "./protocol.js";
 
 const home = process.env["FLOWDECK_HOME"];
@@ -98,57 +100,90 @@ const buildAgents = new ClaudeBuildAgents({
   },
 });
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const prepareBlueprint = async (): Promise<EngineHandlerOptions["blueprint"]> => {
+  try {
+    const blueprintKit = await prepareKit({
+      sourceDir: join(__dirname, "kit-blueprint"),
+      home,
+      root: "blueprint-kit",
+    });
+    return {
+      sessions: new ClaudeBlueprintSessions({
+        sessions: (socketName) => new TmuxSessionHost({ socketName }),
+        cli: (sessions) => new ClaudeCli({ sessions }),
+      }),
+      kitDir: blueprintKit.dir,
+      mcpScript: prepareMcpScript({ bundleDir: __dirname, home, path: process.env["PATH"] }),
+    };
+  } catch (error) {
+    console.log(`engine: blueprint error ${errorText(error)}`);
+    return undefined;
+  }
+};
+
 const homeLock = new HomeLock(join(home, "engine.lock"));
 process.on("exit", () => homeLock.release());
+let locked: Promise<boolean> | undefined;
+const lockHome = () => (locked ??= homeLock.acquire());
 
-const handler = createEngineHandler({
-  version: pkg.version,
-  openStores,
-  home,
-  userHome: homedir(),
-  publish: post,
-  prepareHooks: () =>
-    prepareHooks({
-      home,
-      sourcePath: join(__dirname, "flowdeck-hook.cjs"),
-      guardSourcePath: join(__dirname, "flowdeck-build-guard.cjs"),
-      pathEnv: process.env["PATH"],
-    }),
-  buildAgents,
-  kit: () => kit,
-  isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
-  fs,
-  connectors: new ClaudeUserConnectors(
-    claudeConfig === undefined ? {} : { configPath: claudeConfig },
-  ),
-  run,
-  waits,
-  worktree: new GitWorktree(),
-  gitState: new GitFolderState(),
-  sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
-  endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
-  homeLock,
-  transcriptTurns: async (claudeSessionId) => {
-    const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
-      claudeSessionId,
-    );
-    return transcript === undefined ? [] : parseTranscriptTurns(await readFile(transcript, "utf8"));
-  },
-});
+const createHandler = async () =>
+  createEngineHandler({
+    version: pkg.version,
+    openStores,
+    home,
+    userHome: homedir(),
+    publish: post,
+    prepareHooks: () =>
+      prepareHooks({
+        home,
+        sourcePath: join(__dirname, "flowdeck-hook.cjs"),
+        guardSourcePath: join(__dirname, "flowdeck-build-guard.cjs"),
+        pathEnv: process.env["PATH"],
+      }),
+    buildAgents,
+    kit: () => kit,
+    isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
+    fs,
+    connectors: new ClaudeUserConnectors(
+      claudeConfig === undefined ? {} : { configPath: claudeConfig },
+    ),
+    run,
+    waits,
+    worktree: new GitWorktree(),
+    gitState: new GitFolderState(),
+    sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
+    endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
+    homeLock: { acquire: lockHome },
+    blueprint: await prepareBlueprint(),
+    transcriptTurns: async (claudeSessionId) => {
+      const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
+        claudeSessionId,
+      );
+      return transcript === undefined
+        ? []
+        : parseTranscriptTurns(await readFile(transcript, "utf8"));
+    },
+  });
+
+const handler = createHandler();
 
 process.parentPort.on("message", (event: { data: EngineRequest }) => {
-  void handler.handle(event.data).then(post);
+  void handler.then((ready) => ready.handle(event.data)).then(post);
 });
 
-void handler.reattach().catch((error: unknown) => {
-  console.log(`engine: reattach error ${error instanceof Error ? error.message : String(error)}`);
-});
+void handler
+  .then((ready) => ready.startUp())
+  .catch((error: unknown) => {
+    console.log(`engine: reattach error ${errorText(error)}`);
+  });
 
 process.on("SIGTERM", () => {
   void handler
-    .detach()
+    .then((ready) => ready.detach())
     .catch((error: unknown) => {
-      console.log(`engine: detach error ${error instanceof Error ? error.message : String(error)}`);
+      console.log(`engine: detach error ${errorText(error)}`);
     })
     .finally(() => process.exit(0));
 });

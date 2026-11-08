@@ -1,3 +1,4 @@
+import type { VariableValues } from "../../core/flow/variables.js";
 import type { ActivityEntry } from "../../core/run/activity.js";
 import type { BuildProgress } from "../../core/run/build-progress.js";
 import type { RunSnapshot } from "../../core/run/snapshot.js";
@@ -34,7 +35,12 @@ export type EngineRequest = {
     | "list-branches"
     | "delete-build"
     | "doctor-worktrees"
-    | "default-branch";
+    | "default-branch"
+    | "blueprint-session-start"
+    | "blueprint-session-stop"
+    | "blueprint-session-stop-all"
+    | "assistant-list-builds"
+    | "assistant-read-build";
   payload?: unknown;
 };
 
@@ -56,6 +62,31 @@ export type EnginePush =
     };
 
 export type EngineMessage = EngineResponse | EnginePush;
+
+export type AssistantBuildState = "live" | "deleted" | "old";
+
+export type AssistantListedBuild = {
+  id: string;
+  name: string | null;
+  blueprint: string | null;
+  version: number | null;
+  state: AssistantBuildState;
+};
+
+export type AssistantReadBuild = {
+  repo: string | null;
+  base: string | null;
+  values: VariableValues | null;
+  workspace: { path: string; exists: boolean; tree: string[] };
+  worktree: {
+    path: string;
+    exists: boolean;
+    dirty: boolean | null;
+    unpushed: boolean | null;
+  } | null;
+};
+
+export type BlueprintSessionStarted = { session: string };
 
 export type BuildVersionStarted = { kind: "started"; pendingId: string };
 

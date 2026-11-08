@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
 import { validate, type ValidationError } from "../../../core/compiler/validate.js";
+import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import { bodyProblems } from "../../../core/flow/structure.js";
 import {
@@ -15,19 +16,7 @@ import {
   type Variable,
   type Wire,
 } from "../../../core/flow/schema.js";
-import * as promptDefaults from "../../../core/nodes/prompt/defaults.js";
-import * as scriptDefaults from "../../../core/nodes/script/defaults.js";
-import * as agentDefaults from "../../../core/nodes/agent/defaults.js";
-import * as gateDefaults from "../../../core/nodes/gate/defaults.js";
-import * as askDefaults from "../../../core/nodes/ask/defaults.js";
-import * as hardstopDefaults from "../../../core/nodes/hardstop/defaults.js";
-import * as loopDefaults from "../../../core/nodes/loop/defaults.js";
-import * as triggerDefaults from "../../../core/nodes/trigger/defaults.js";
-import * as outputDefaults from "../../../core/nodes/output/defaults.js";
-import * as forkDefaults from "../../../core/nodes/fork/defaults.js";
-import * as joinDefaults from "../../../core/nodes/join/defaults.js";
-import * as foreachDefaults from "../../../core/nodes/foreach/defaults.js";
-import * as branchDefaults from "../../../core/nodes/branch/defaults.js";
+import { nodeDefaults } from "../../../core/nodes/defaults.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
 import {
@@ -65,23 +54,7 @@ export type CanvasItemType = NodeType | "note";
 export const isCanvasItemType = (value: string): value is CanvasItemType =>
   value === "note" || isNodeType(value);
 
-type SettingsOf<T extends NodeType> = Extract<Node, { type: T }>["settings"];
-
-export const nodeDefaults: { [T in NodeType]: { label: string; settings: SettingsOf<T> } } = {
-  prompt: { label: promptDefaults.defaultLabel, settings: promptDefaults.defaultSettings },
-  script: { label: scriptDefaults.defaultLabel, settings: scriptDefaults.defaultSettings },
-  agent: { label: agentDefaults.defaultLabel, settings: agentDefaults.defaultSettings },
-  gate: { label: gateDefaults.defaultLabel, settings: gateDefaults.defaultSettings },
-  ask: { label: askDefaults.defaultLabel, settings: askDefaults.defaultSettings },
-  hardstop: { label: hardstopDefaults.defaultLabel, settings: hardstopDefaults.defaultSettings },
-  loop: { label: loopDefaults.defaultLabel, settings: loopDefaults.defaultSettings },
-  trigger: { label: triggerDefaults.defaultLabel, settings: triggerDefaults.defaultSettings },
-  output: { label: outputDefaults.defaultLabel, settings: outputDefaults.defaultSettings },
-  fork: { label: forkDefaults.defaultLabel, settings: forkDefaults.defaultSettings },
-  join: { label: joinDefaults.defaultLabel, settings: joinDefaults.defaultSettings },
-  foreach: { label: foreachDefaults.defaultLabel, settings: foreachDefaults.defaultSettings },
-  branch: { label: branchDefaults.defaultLabel, settings: branchDefaults.defaultSettings },
-};
+export { nodeDefaults };
 
 export type WireEnd = { node: string; port: string };
 
@@ -152,6 +125,9 @@ export interface CanvasState {
   updateVariable(index: number, variable: Variable): void;
   removeVariable(index: number): void;
   updateNode(next: Node): void;
+  applyAgent(command: Command): boolean;
+  endAgentGroup(): void;
+  variableCommand(variable: Variable): Command;
   undo(): void;
   redo(): void;
   load(input: unknown): void;
@@ -258,14 +234,6 @@ const nextTo = (flow: Flow, selection: readonly string[]): Position => {
   return anchor === undefined
     ? firstPosition
     : { x: rightEdge(anchor) + gap, y: anchor.position.y };
-};
-
-const sameError = (a: ValidationError, b: ValidationError) =>
-  a.rule === b.rule && a.node === b.node && a.wire === b.wire && a.field === b.field;
-
-const newErrors = (before: Flow, after: Flow) => {
-  const known = validate(before);
-  return validate(after).filter((error) => !known.some((old) => sameError(old, error)));
 };
 
 const issuesByFlow = new WeakMap<Flow, Record<string, string[]>>();
@@ -404,25 +372,40 @@ export function createCanvasStore(
   return createStore<CanvasState>()((set, get) => {
     const ready = () => get().ready;
 
-    const editBuildConfig = (edit: (config: BuildConfig) => BuildConfig) => {
-      if (!ready()) return;
+    const buildConfigCommand = (edit: (config: BuildConfig) => BuildConfig) => {
       const { session } = get().flow;
-      run(updateSession({ ...session, buildConfig: edit(session.buildConfig) }));
+      return updateSession({ ...session, buildConfig: edit(session.buildConfig) });
+    };
+
+    const editBuildConfig = (edit: (config: BuildConfig) => BuildConfig) => {
+      if (ready()) run(buildConfigCommand(edit));
     };
 
     const wireRenames = new WeakMap<Command, { from: string; to: string }>();
 
-    const run = (command: Command, selection = get().selection, wires = get().selectedWires) => {
-      const { flow, undoStack } = get();
-      const next = command.do(flow);
+    let agentGroup: Command | null = null;
+
+    const record = (
+      entry: Command,
+      next: Flow,
+      below: readonly Command[],
+      selection = get().selection,
+      wires = get().selectedWires,
+    ) => {
       set({
         flow: next,
-        undoStack: [...undoStack, command],
+        undoStack: [...below, entry],
         redoStack: [],
         selection: kept(selection, next),
         selectedWires: keptWires(wires, next),
         message: null,
       });
+    };
+
+    const run = (command: Command, selection = get().selection, wires = get().selectedWires) => {
+      agentGroup = null;
+      const { flow, undoStack } = get();
+      record(command, command.do(flow), undoStack, selection, wires);
     };
 
     const nodeDeletion = (flow: Flow, ids: readonly string[]): Command | undefined => {
@@ -469,7 +452,7 @@ export function createCanvasStore(
       if (others.some((existing) => sameWire(existing, wire))) {
         return cannotConnect(flow, wire.from, wire.to, alreadyJoined);
       }
-      const [error] = newErrors(flow, command.do(flow));
+      const [error] = newProblems(flow, command.do(flow));
       return error === undefined
         ? null
         : cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error));
@@ -611,7 +594,7 @@ export function createCanvasStore(
         const parent = isContainer({ type }) ? undefined : containerAt(flow, position);
         const at = placeNode(flow, type, position, parent);
         const command = addNode(newNode(type, id, at, parent));
-        const [misplaced] = newErrors(flow, command.do(flow)).filter(
+        const [misplaced] = newProblems(flow, command.do(flow)).filter(
           (error) => error.rule === "body-nodes",
         );
         if (misplaced !== undefined) {
@@ -825,7 +808,7 @@ export function createCanvasStore(
         const command = moveNodes(moves);
         const nested = moves.find((move) => move.parent !== undefined);
         if (nested?.parent !== undefined) {
-          const [error] = newErrors(flow, command.do(flow)).filter(
+          const [error] = newProblems(flow, command.do(flow)).filter(
             (candidate) => candidate.rule !== "loop-body",
           );
           if (error !== undefined) {
@@ -880,8 +863,32 @@ export function createCanvasStore(
         run(updateNodeCommand(next));
       },
 
+      applyAgent: (command) => {
+        if (!ready()) return false;
+        const { flow, undoStack } = get();
+        const group = agentGroup === null ? command : both(agentGroup, command);
+        record(group, command.do(flow), agentGroup === null ? undoStack : undoStack.slice(0, -1));
+        agentGroup = group;
+        return true;
+      },
+
+      endAgentGroup: () => {
+        agentGroup = null;
+      },
+
+      variableCommand: (variable) =>
+        buildConfigCommand((config) => ({
+          ...config,
+          variables: config.variables.some(({ name }) => name === variable.name)
+            ? config.variables.map((current) =>
+                current.name === variable.name ? variable : current,
+              )
+            : [...config.variables, variable],
+        })),
+
       undo: () => {
         if (!ready()) return;
+        agentGroup = null;
         const { flow, undoStack, redoStack, selection } = get();
         const command = undoStack.at(-1);
         if (command === undefined) return;
@@ -902,6 +909,7 @@ export function createCanvasStore(
 
       redo: () => {
         if (!ready()) return;
+        agentGroup = null;
         const { flow, undoStack, redoStack, selection } = get();
         const command = redoStack.at(-1);
         if (command === undefined) return;
@@ -922,6 +930,7 @@ export function createCanvasStore(
 
       load: (input) => {
         const flow = parseFlow(input);
+        agentGroup = null;
         set({
           flow,
           saved: flow,
@@ -939,7 +948,10 @@ export function createCanvasStore(
         });
       },
 
-      markSaved: (flow) => set({ saved: flow }),
+      markSaved: (flow) => {
+        agentGroup = null;
+        set({ saved: flow });
+      },
     };
   });
 }

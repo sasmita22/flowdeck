@@ -57,6 +57,16 @@ describe("prepareKit", () => {
     expect(await readTree(kit.dir)).toEqual(await readTree(sourceDir));
   });
 
+  it("copies into the named root under the home instead of kit", async () => {
+    const version = kitVersion(kitFiles);
+
+    const kit = await prepareKit({ sourceDir, home, root: "blueprint-kit" });
+
+    expect(kit).toEqual({ dir: join(home, "blueprint-kit", version), version });
+    expect(await readTree(kit.dir)).toEqual(await readTree(sourceDir));
+    expect(await readdir(home)).toEqual(["blueprint-kit"]);
+  });
+
   it("leaves a folder already there for that version untouched", async () => {
     const first = await prepareKit({ sourceDir, home });
     expect(first.dir).toBe(join(home, "kit", first.version));
@@ -68,6 +78,25 @@ describe("prepareKit", () => {
 
     expect(second).toEqual(first);
     expect(await readTree(second.dir)).toEqual(before);
+  });
+
+  it("refuses a source with no files", async () => {
+    const empty = join(tmp, "empty");
+    await mkdir(empty);
+
+    await expect(prepareKit({ sourceDir: empty, home })).rejects.toThrow(empty);
+    expect(await readdir(tmp)).not.toContain("home");
+  });
+
+  it("refuses a source with no plugin manifest", async () => {
+    const noManifest = join(tmp, "no-manifest");
+    await writeTree(
+      noManifest,
+      kitFiles.filter((file) => file.path !== ".claude-plugin/plugin.json"),
+    );
+
+    await expect(prepareKit({ sourceDir: noManifest, home })).rejects.toThrow(noManifest);
+    expect(await readdir(tmp)).not.toContain("home");
   });
 
   it("puts a changed kit in a new folder and keeps the old one", async () => {

@@ -17,7 +17,7 @@ const isExecutable = (path: string): boolean => {
   }
 };
 
-const findNode = (pathEnv: string | undefined): string | undefined =>
+export const findNode = (pathEnv: string | undefined): string | undefined =>
   (pathEnv ?? "")
     .split(":")
     .filter((dir) => dir !== "")

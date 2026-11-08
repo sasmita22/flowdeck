@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
+import type { AssistantState } from "../assistant/assistant-store.js";
+import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
 import type { BranchState } from "../branch-store.js";
 import type { BuildProgressState } from "../build-progress-store.js";
 import { Canvas } from "../canvas/canvas.js";
@@ -81,6 +83,24 @@ function CanvasBuildBar({
   );
 }
 
+function AgentToggle({ assistant }: { assistant: StoreApi<AssistantState> }) {
+  const visible = useStore(assistant, (state) => state.visible);
+  return (
+    <button
+      className="fd-btn"
+      data-testid={controlTestIds.blueprintTerminalToggle}
+      aria-pressed={visible}
+      title={visible ? "Hide the agent terminal" : "Show an agent terminal for this blueprint"}
+      onClick={() => {
+        if (visible) assistant.getState().hide();
+        else void assistant.getState().show();
+      }}
+    >
+      Agent
+    </button>
+  );
+}
+
 function EditorTitleRow({
   canvas,
   save,
@@ -89,6 +109,7 @@ function EditorTitleRow({
   shell,
   nav,
   buildProgress,
+  assistant,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
@@ -97,6 +118,7 @@ function EditorTitleRow({
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
   buildProgress: StoreApi<BuildProgressState>;
+  assistant: StoreApi<AssistantState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
@@ -158,6 +180,7 @@ function EditorTitleRow({
           </button>
         )}
         {ready && <SessionSettingsButton shell={shell} />}
+        {ready && <AgentToggle assistant={assistant} />}
         {ready && <MoreMenu shell={shell} terminal={terminal} />}
       </div>
     </header>
@@ -174,6 +197,8 @@ export function EditorPage({
   nav,
   branches,
   buildProgress,
+  assistant,
+  blueprintTerminal,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
@@ -184,8 +209,11 @@ export function EditorPage({
   nav: StoreApi<NavState>;
   branches?: StoreApi<BranchState>;
   buildProgress: StoreApi<BuildProgressState>;
+  assistant: StoreApi<AssistantState>;
+  blueprintTerminal: StoreApi<TerminalState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
+  const agentVisible = useStore(assistant, (state) => state.visible);
   const flowId = useStore(save, (state) => state.flowId);
   const onSave = useCallback(() => void save.getState().save(), [save]);
   return (
@@ -198,6 +226,7 @@ export function EditorPage({
         shell={shell}
         nav={nav}
         buildProgress={buildProgress}
+        assistant={assistant}
       />
       {flowId !== null && (
         <CanvasBuildBar flowId={flowId} buildProgress={buildProgress} nav={nav} />
@@ -218,6 +247,7 @@ export function EditorPage({
           />
         )}
       </div>
+      {agentVisible && <BlueprintTerminalPane assistant={assistant} terminal={blueprintTerminal} />}
     </>
   );
 }

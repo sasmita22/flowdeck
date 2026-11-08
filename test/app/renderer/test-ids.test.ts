@@ -55,6 +55,7 @@ describe("test ids", () => {
       expect.any(Function),
       "node-menu-duplicate",
       "node-menu-frame-only",
+      "blueprint-terminal-toggle",
     ]);
     expect(controlTestIds.fileWireName("a->b:notes.md")).toBe("file-wire-name-a->b:notes.md");
   });

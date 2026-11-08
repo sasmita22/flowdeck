@@ -34,6 +34,14 @@ export const engineCalls = {
   stopBuild: { channel: "flowdeck:build-stop", request: "build-stop" },
   getBuildActivity: { channel: "flowdeck:build-activity", request: "build-activity" },
   buildRebuild: { channel: "flowdeck:build-rebuild", request: "build-rebuild" },
+  startBlueprintSession: {
+    channel: "flowdeck:blueprint-session-start",
+    request: "blueprint-session-start",
+  },
+  stopBlueprintSession: {
+    channel: "flowdeck:blueprint-session-stop",
+    request: "blueprint-session-stop",
+  },
 } as const;
 
 export type EngineCalls = {
@@ -69,6 +77,8 @@ export type EngineCalls = {
   stopBuild(payload: { pendingId: string }): Promise<unknown>;
   getBuildActivity(payload: { pendingId: string }): Promise<unknown>;
   buildRebuild(payload: { pendingId: string; answers: BuildAnswerPayload[] }): Promise<unknown>;
+  startBlueprintSession(payload: { flowId: string }): Promise<unknown>;
+  stopBlueprintSession(payload: { flowId: string }): Promise<unknown>;
 };
 
 export type FlowdeckBridge = EngineCalls & {
@@ -80,12 +90,12 @@ export type FlowdeckBridge = EngineCalls & {
   answerClose(answer: CloseAnswer): void;
   getRunState(runId: string): Promise<unknown>;
   onRunState(listener: (snapshot: unknown) => void): () => void;
-  openTerminal(runId: string, size: { cols: number; rows: number }): Promise<unknown>;
-  getTerminalStatus(runId: string): Promise<unknown>;
-  writeTerminal(runId: string, data: string): void;
-  resizeTerminal(runId: string, size: { cols: number; rows: number }): void;
-  closeTerminal(runId: string): void;
-  popOutTerminal(runId: string): Promise<unknown>;
+  openTerminal(session: string, size: { cols: number; rows: number }): Promise<unknown>;
+  getTerminalStatus(session: string): Promise<unknown>;
+  writeTerminal(session: string, data: string): void;
+  resizeTerminal(session: string, size: { cols: number; rows: number }): void;
+  closeTerminal(session: string): void;
+  popOutTerminal(session: string): Promise<unknown>;
   onTerminalStatus(listener: (status: unknown) => void): () => void;
   onTerminalData(listener: (data: unknown) => void): () => void;
   getActivity(runId: string): Promise<unknown>;
@@ -96,6 +106,9 @@ export type FlowdeckBridge = EngineCalls & {
   workspaceInfo(buildConfig: unknown): Promise<unknown>;
   onBuildProgress(listener: (update: unknown) => void): () => void;
   onBuildActivity(listener: (update: unknown) => void): () => void;
+  onToolCall(listener: (call: unknown) => void): () => void;
+  onToolTurnEnd(listener: (turnEnd: unknown) => void): () => void;
+  answerToolCall(requestId: string, result: unknown): void;
 };
 
 export const bridgeChannels = {
@@ -123,4 +136,7 @@ export const bridgeChannels = {
   workspaceInfo: "flowdeck:workspace-info",
   buildProgress: "flowdeck:build-progress",
   buildActivity: "flowdeck:build-activity-push",
+  toolCall: "flowdeck:tool-call",
+  answerToolCall: "flowdeck:answer-tool-call",
+  toolTurnEnd: "flowdeck:tool-turn-end",
 } as const;

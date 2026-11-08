@@ -247,6 +247,7 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     findBuildByName: (name) => store.findBuildByName(name),
     deleteBuild: (id) => store.deleteBuild(id),
     listBuilds: () => store.listBuilds(),
+    listBuildsWithDeleted: () => store.listBuildsWithDeleted(),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),

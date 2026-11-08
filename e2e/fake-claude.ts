@@ -1,4 +1,4 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { launchOnCanvas, type LaunchedApp, type LaunchOptions } from "../scripts/drive.js";
 
@@ -87,9 +87,100 @@ const drawBuild = () =>
     "\\x1b[2J\\x1b[Hfake build session\\r\\n────────\\r\\n❯ " + typed.replace(/\\s+/g, " ").slice(-120) + "\\r\\n────────\\r\\n",
   );
 
+const blueprintTurns = () => {
+  const { spawn } = require("node:child_process");
+  const config = JSON.parse(readFileSync(flag("--mcp-config"), "utf8"));
+  const server = Object.values(config.mcpServers)[0];
+  const child = spawn(server.command, server.args ?? [], {
+    env: { ...process.env, ...(server.env ?? {}) },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const waiting = new Map();
+  let nextId = 1;
+  let output = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+    const lines = output.split("\\n");
+    output = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim() === "") continue;
+      const message = JSON.parse(line);
+      waiting.get(message.id)?.(message);
+      waiting.delete(message.id);
+    }
+  });
+  const request = (method, params) =>
+    new Promise((done) => {
+      const id = nextId++;
+      waiting.set(id, done);
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\\n");
+    });
+  const ready = request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "1" } })
+    .then(() => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\\n"))
+    .then(() => request("tools/list", {}));
+  const answerOf = (reply) => {
+    const text = reply.result?.content?.[0]?.text;
+    if (reply.result?.isError !== true && typeof text === "string") {
+      try {
+        return JSON.parse(text);
+      } catch {}
+    }
+    return reply.result ?? reply.error;
+  };
+  const runStopHook = () =>
+    new Promise((done) => {
+      const settings = JSON.parse(readFileSync(flag("--settings"), "utf8"));
+      const command = settings.hooks.Stop[0].hooks[0].command;
+      const hook = spawn("sh", ["-c", command], { stdio: ["pipe", "ignore", "ignore"] });
+      hook.on("exit", done);
+      hook.on("error", done);
+      hook.stdin.end(JSON.stringify({ session_id: sessionId, hook_event_name: "Stop", last_assistant_message: "ok" }));
+    });
+  const asksFile = resolve(__dirname, "bp-asks.json");
+  const resultsFile = resolve(__dirname, "bp-results.jsonl");
+  let asked = 0;
+  let queue = ready;
+  return (draw) => {
+    const ask = asked++;
+    queue = queue.then(async () => {
+      const batches = existsSync(asksFile) ? JSON.parse(readFileSync(asksFile, "utf8")) : [];
+      for (const call of batches[ask] ?? []) {
+        const reply = await request("tools/call", { name: call.name, arguments: call.input ?? {} });
+        appendFileSync(resultsFile, JSON.stringify({ ask, name: call.name, result: answerOf(reply) }) + "\\n");
+      }
+      await runStopHook();
+      draw(ask + 1);
+    });
+  };
+};
+
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
-if (buildSession) {
+if (process.env.FLOWDECK_BP_SOCK) {
+  const bpSession = "fd-bp-" + process.cwd().slice(process.cwd().lastIndexOf("/") + 1);
+  let answered = 0;
+  const drawBlueprint = () =>
+    process.stdout.write(
+      "\\x1b[2J\\x1b[HFake Claude in " + bpSession + "\\r\\nasks done: " + answered + "\\r\\n────────\\r\\n❯ " + typed + "\\r\\n────────\\r\\n",
+    );
+  const nextAsk = blueprintTurns();
+  process.stdout.on("resize", drawBlueprint);
+  process.stdin.on("data", (chunk) => {
+    for (const key of chunk) {
+      if (key === "\\r" || key === "\\n") {
+        nextAsk((done) => {
+          answered = done;
+          drawBlueprint();
+        });
+        typed = "";
+      } else if (key === "\\x7f") typed = typed.slice(0, -1);
+      else if (key !== "\\x1b") typed += key;
+    }
+    drawBlueprint();
+  });
+  drawBlueprint();
+} else if (buildSession) {
   process.stdout.on("resize", drawBuild);
   process.stdin.on("data", (chunk) => {
     for (const key of chunk) {
@@ -119,6 +210,26 @@ if (buildSession) {
 `;
 
 export const fakeClaudeRan = (home: string) => join(home, "fake-claude-bin", "ran");
+
+export type BlueprintCall = { name: string; input?: Record<string, unknown> };
+
+export type BlueprintResult = { ask: number; name: string; result: unknown };
+
+export async function writeBlueprintAsks(home: string, asks: BlueprintCall[][]): Promise<void> {
+  const bin = join(home, "fake-claude-bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "bp-asks.json"), JSON.stringify(asks));
+}
+
+export async function blueprintResults(home: string): Promise<BlueprintResult[]> {
+  const text = await readFile(join(home, "fake-claude-bin", "bp-results.jsonl"), "utf8").catch(
+    () => "",
+  );
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as BlueprintResult);
+}
 
 export type FakeClaudeLaunchOptions = LaunchOptions & {
   ownBin?: string;

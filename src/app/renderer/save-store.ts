@@ -25,7 +25,7 @@ export type SaveState = {
   startNew(): void;
   rename(name: string): Promise<void>;
   save(options?: { force?: boolean }): Promise<boolean>;
-  leave(next: () => Promise<void>): Promise<void>;
+  leave(next: () => Promise<void>): Promise<boolean>;
   answerLeave(answer: CloseChoice): Promise<void>;
   answerClose(answer: CloseChoice): Promise<void>;
 };
@@ -39,7 +39,8 @@ export const createSaveStore = ({
   bridge: SaveBridge;
   canvas: StoreApi<CanvasState>;
 }): StoreApi<SaveState> => {
-  let pendingLeave: (() => Promise<void>) | null = null;
+  let pendingLeave: { next: () => Promise<void>; settle: (proceeded: boolean) => void } | null =
+    null;
 
   const store = createStore<SaveState>()((set, get) => {
     const fail = (message: string) => {
@@ -123,22 +124,27 @@ export const createSaveStore = ({
       leave: async (next) => {
         if (!selectDirty(canvas.getState())) {
           await next();
-          return;
+          return true;
         }
-        pendingLeave = next;
+        pendingLeave?.settle(false);
+        const proceeded = new Promise<boolean>((settle) => {
+          pendingLeave = { next, settle };
+        });
         set({ leavePrompt: true });
+        return proceeded;
       },
 
       answerLeave: async (answer) => {
-        const next = pendingLeave;
+        const pending = pendingLeave;
         pendingLeave = null;
-        if (answer === "cancel" || next === null) {
+        if (pending === null) {
           set({ leavePrompt: false });
           return;
         }
-        const saved = answer === "discard" || (await save());
+        const saved = answer === "discard" || (answer === "save" && (await save()));
         set({ leavePrompt: false });
-        if (saved) await next();
+        if (saved) await pending.next();
+        pending.settle(saved);
       },
 
       answerClose: async (answer) => {

@@ -78,6 +78,7 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       findBuildByName: (name) => inner.findBuildByName(name),
       deleteBuild: (id) => inner.deleteBuild(id),
       listBuilds: () => inner.listBuilds(),
+      listBuildsWithDeleted: () => inner.listBuildsWithDeleted(),
       listRuns: () => inner.listRuns(),
       buildFiles: (id) => inner.buildFiles(id),
       startPendingBuild: (build) => inner.startPendingBuild(build),

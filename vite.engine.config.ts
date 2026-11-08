@@ -8,12 +8,11 @@ const migrationsSource = fileURLToPath(
   new URL("./src/adapters/sqlite/migrations/", import.meta.url),
 );
 
-const kitSource = fileURLToPath(new URL("./kit/", import.meta.url));
-
-const copyKit = (): Plugin => ({
-  name: "flowdeck-copy-kit",
+const copyKit = (folder: string): Plugin => ({
+  name: `flowdeck-copy-${folder}`,
   async writeBundle(options) {
-    await cp(kitSource, join(options.dir ?? ".vite/build", "kit"), { recursive: true });
+    const source = fileURLToPath(new URL(`./${folder}/`, import.meta.url));
+    await cp(source, join(options.dir ?? ".vite/build", folder), { recursive: true });
   },
 });
 
@@ -35,11 +34,12 @@ export default defineConfig({
         engine: "src/app/engine/engine.ts",
         "flowdeck-hook": "bin/flowdeck-hook.ts",
         "flowdeck-build-guard": "bin/flowdeck-build-guard.ts",
+        "flowdeck-mcp": "bin/flowdeck-mcp.ts",
       },
       fileName: () => "[name].cjs",
       formats: ["cjs"],
     },
     rollupOptions: { external: nativeModules },
   },
-  plugins: [copyMigrations(), copyKit()],
+  plugins: [copyMigrations(), copyKit("kit"), copyKit("kit-blueprint")],
 });

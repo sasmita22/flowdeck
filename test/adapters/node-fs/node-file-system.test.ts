@@ -88,6 +88,20 @@ describe("NodeFileSystem", () => {
     expect(await fs.list(tmp)).toEqual(["a/b.md", "z.md"]);
   });
 
+  it("lists without reading inside the skipped folder", async () => {
+    await fs.writeFile(join(tmp, "z.md"), "z");
+    await fs.writeFile(join(tmp, "a/b.md"), "b");
+    await fs.writeFile(join(tmp, "repo/src/work.ts"), "w");
+    await fs.writeFile(join(tmp, "repository/x.md"), "x");
+    const repo = join(tmp, "repo");
+    await chmod(repo, 0o000);
+    try {
+      expect(await fs.list(tmp, { skip: repo })).toEqual(["a/b.md", "repository/x.md", "z.md"]);
+    } finally {
+      await chmod(repo, 0o700);
+    }
+  });
+
   it("rejects listing a missing folder", async () => {
     await expect(fs.list(join(tmp, "missing"))).rejects.toThrow(/ENOENT/);
   });

@@ -1,0 +1,4 @@
+{
+  "name": "flowdeck-blueprint",
+  "description": "Flowdeck's blueprint kit: the skill the blueprint agent uses to read and edit blueprints on the canvas through Flowdeck's tools."
+}

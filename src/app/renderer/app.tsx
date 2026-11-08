@@ -5,6 +5,7 @@ import type { Actions } from "./actions.js";
 import { AppMenu } from "./app-menu.js";
 import { BuildDialog } from "./build-dialog.js";
 import type { AppState } from "./app-store.js";
+import type { AssistantState } from "./assistant/assistant-store.js";
 import type { BranchState } from "./branch-store.js";
 import type { BuildProgressState } from "./build-progress-store.js";
 import { nodeLabel, type CanvasState } from "./canvas/store.js";
@@ -45,6 +46,8 @@ export type AppStores = {
   library: StoreApi<LibraryState>;
   branches: StoreApi<BranchState>;
   buildProgress: StoreApi<BuildProgressState>;
+  assistant: StoreApi<AssistantState>;
+  blueprintTerminal: StoreApi<TerminalState>;
   actions: Actions;
 };
 
@@ -240,6 +243,8 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         nav={stores.nav}
         branches={stores.branches}
         buildProgress={stores.buildProgress}
+        assistant={stores.assistant}
+        blueprintTerminal={stores.blueprintTerminal}
       />
     );
   }

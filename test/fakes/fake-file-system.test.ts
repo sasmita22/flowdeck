@@ -82,6 +82,18 @@ describe("FakeFileSystem", () => {
     expect(await fs.list("root")).toEqual(["a/b.md", "z.md"]);
   });
 
+  it("lists every file under a folder except those in the skipped folder, and records the skip", async () => {
+    const fs = new FakeFileSystem();
+    await fs.writeFile("root/z.md", "z");
+    await fs.writeFile("root/repo/a.md", "a");
+    await fs.writeFile("root/repository/b.md", "b");
+
+    expect(await fs.list("root", { skip: "root/repo" })).toEqual(["repository/b.md", "z.md"]);
+    expect(fs.calls.filter((call) => call.method === "list")).toEqual([
+      { method: "list", path: "root", skip: "root/repo" },
+    ]);
+  });
+
   it("lists only the folders directly inside a folder, by name and sorted, and records the call", async () => {
     const fs = new FakeFileSystem();
     await fs.writeFile("root/z.md", "z");
