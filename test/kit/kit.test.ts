@@ -152,6 +152,113 @@ describe("the build kit", () => {
     expect(readKit(path)).toContain("`NODE <id>: <layout>`");
   });
 
+  it.each([
+    "agents/piece-auditor.md",
+    "agents/handoff-auditor.md",
+    "skills/audit-handoffs/SKILL.md",
+    "skills/fit-to-repo/SKILL.md",
+    "skills/write-script/SKILL.md",
+    "skills/write-agent/SKILL.md",
+    "skills/audit-orchestrator/SKILL.md",
+    "skills/audit-duplicates/SKILL.md",
+  ])("%s says a question is only for a blueprint input", (path) => {
+    const content = readKit(path);
+
+    expect(content).toContain("A question is only for a blueprint input");
+    expect(content).toContain("decided inside the node's portion, never a question");
+    expect(content).not.toContain("leaves undecided");
+  });
+
+  it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(
+    "%s has no never-guess banner",
+    (path) => {
+      expect(readKit(path)).not.toContain("Never guess");
+    },
+  );
+
+  it("agent piece-auditor fixes a piece within its portion instead of asking", () => {
+    const content = readKit("agents/piece-auditor.md");
+
+    expect(content).toContain("stays as drafted or is fixed within its portion");
+    expect(content).not.toContain("becomes a question");
+    expect(content).not.toContain("Add a question naming the node");
+    expect(content).not.toContain("If you cannot, add a question");
+  });
+
+  it("agent piece-auditor names the reader of a file no node writes as the question's node", () => {
+    expect(readKit("agents/piece-auditor.md")).toContain(
+      'For a read with no writer, `"nodeId"` is the reader and `"otherNodeId"` the upstream node expected to write it.',
+    );
+  });
+
+  it("agent handoff-auditor never asks about what only code or the user can change", () => {
+    expect(readKit("agents/handoff-auditor.md")).not.toContain("only code or the user can change");
+  });
+
+  it("skill write-agent writes with the allowed tools and invents no stop rule", () => {
+    const content = skill("write-agent");
+
+    expect(content).toContain("write the piece with the allowed tools");
+    expect(content).not.toContain("the allow list lacks is a question");
+    expect(content).toContain(
+      "a stuck path or a retry cap only where the node's own text states one",
+    );
+    expect(content).not.toContain("stop and report the blocker");
+  });
+
+  it("skill write-script keeps the node's command as written instead of asking", () => {
+    const content = skill("write-script");
+
+    expect(content).toContain("stays as the node wrote it");
+    expect(content).not.toContain("fixed mechanically");
+    expect(content).not.toContain("becomes a question");
+    expect(content).not.toContain("add a question");
+    expect(content).not.toContain("one question naming the node");
+  });
+
+  it("skill fit-to-repo quotes the repo's gate and adds no obligation", () => {
+    const content = skill("fit-to-repo");
+
+    expect(content).toContain("quote that gate's command exactly as the repo writes it");
+    expect(content).toContain(
+      "A node that reviews or checks work judges it against the repo's gates",
+    );
+    expect(content).toContain(
+      "- [ ] A review or check piece names each repo gate with its command quoted.",
+    );
+    expect(content).toContain(
+      "never add a step, gate or obligation the node's own steps do not call for",
+    );
+    expect(content).not.toContain("If the piece cannot work without that answer");
+  });
+
+  it("skill audit-orchestrator adds no rule the nodes do not state", () => {
+    const content = skill("audit-orchestrator");
+
+    expect(content).toContain(
+      "A rule the blueprint's nodes do not state is never added and never a question",
+    );
+    expect(content).toContain("A flow with none of these nodes gets no such rule");
+    expect(content).not.toContain("is a question naming its node");
+  });
+
+  it("skill audit-handoffs limits retries to the node's text and names the user's gap", () => {
+    const content = skill("audit-handoffs");
+
+    expect(content).toContain("only to a retry the node's own text states");
+    expect(content).toContain("gap the user must close");
+    expect(content).not.toContain("code or the user must close");
+    expect(content).not.toContain("Every loop and retry has a cap");
+    expect(content).not.toContain('a missing "at most 3 tries"');
+  });
+
+  it("skill audit-duplicates keeps unmergeable nodes apart without asking", () => {
+    const content = skill("audit-duplicates");
+
+    expect(content).toContain("keep them apart, never a question");
+    expect(content).not.toContain("add a question naming both nodes");
+  });
+
   it("leaves no file marked @unfilled", () => {
     const files = kitFiles();
 

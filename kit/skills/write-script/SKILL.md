@@ -5,7 +5,9 @@ description: How to check a Script node's command before it runs unattended - qu
 
 # Check a Script
 
-A Script node's command lives in `manifest.json`, not in a file, and no agent ever rewrites it. You check it; a wrong command becomes a question.
+A Script node's command lives in `manifest.json`, not in a file, and no agent ever rewrites it. You check it; a wrong command stays as the node wrote it, never a question.
+
+A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
 
 ## How it runs
 
@@ -24,11 +26,11 @@ The runner runs `command` through `sh -c`, with each of `args` passed as its own
    - Full paths: every program is one the repo provides (its scripts, its package manager's bin) or a standard tool; a repo-local program is called by its path.
    - Exit codes: the codes the command really gives for success and for a passing retry match `successCodes` and `retryCodes`.
    - Never waits for input: no prompt, pager, editor, watch mode, or confirmation without its non-interactive flag.
-3. For every problem, add a question with the node's id: what is wrong, the evidence (the repo file or the exit-code behaviour), and the change you would suggest.
+3. A problem found stays as the node wrote it: the command is the blueprint's.
 4. Edit nothing. The only file you write is `build-report.json`.
 
 ## Checklist
 
 - [ ] Every point in step 2 was checked against the worktree, not assumed.
-- [ ] Each problem is one question naming the node, with its evidence.
+- [ ] No problem became a question.
 - [ ] The command and args are unchanged.
