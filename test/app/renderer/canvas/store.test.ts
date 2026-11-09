@@ -913,6 +913,27 @@ describe("the Build configuration", () => {
     expect(configOf(store)).toEqual({ variables: [] });
   });
 
+  it("changes only the base branch, keeping the repository, variables and build model", () => {
+    const store = withConfig();
+
+    expect(undoable(store, (s) => s.setBase("main"))).toEqual({
+      repo: "/a",
+      base: "main",
+      variables: [{ name: "topic", kind: "text" }],
+      buildModel: "haiku",
+    });
+  });
+
+  it("clears the base branch, keeping the repository, variables and build model", () => {
+    const store = withConfig();
+
+    expect(undoable(store, (s) => s.setBase(""))).toEqual({
+      repo: "/a",
+      variables: [{ name: "topic", kind: "text" }],
+      buildModel: "haiku",
+    });
+  });
+
   it("adds a text variable with a name not yet taken, as one undoable edit", () => {
     const store = createCanvasStore();
 
