@@ -69,6 +69,10 @@ describe("checkEdit refuses", () => {
     expect(refused(name, input)).toContain("ghost");
   });
 
+  it("an edit that still names a blueprint", () => {
+    expect(refused("delete_node", { nodeId: "p1", blueprint: "flow-1" })).toContain("blueprint");
+  });
+
   it("a wire from a port the node type does not have", () => {
     const input = {
       kind: "then",
@@ -113,7 +117,6 @@ describe("checkEdit accepts", () => {
     ["wire", wire("a1", "out", "p1", "in")],
     ["wire", fileWire("a1", "p1", "plan.md")],
     ["set_variable", { name: "ticket", kind: "text", default: "FD-1" }],
-    ["delete_node", { nodeId: "p1", blueprint: "flow-1" }],
   ])("a well-formed %s", (name, input) => {
     expect(checkEdit(blueprint(), name, input)).toMatchObject({ ok: true });
   });

@@ -18,9 +18,8 @@ const setup = (
     open: vi.fn(async () => undefined),
     startNew: vi.fn(),
     leave: vi.fn(async (next: () => Promise<void>) => {
-      if (options.leaveAnswer === "cancel") return false;
+      if (options.leaveAnswer === "cancel") return;
       await next();
-      return true;
     }),
     rename: vi.fn(async () => undefined),
   }));
@@ -102,47 +101,6 @@ describe("createActions", () => {
     await actions.newBlueprint();
 
     expect(assistant.getState().end).toHaveBeenCalledTimes(1);
-  });
-
-  it("opens a blueprint for the agent in the editor, through the leave prompt", async () => {
-    const { actions, nav, save } = setup({ flowId: "flow-a" });
-    const pageAtLeave: unknown[] = [];
-    save.getState().leave.mockImplementationOnce(async (next) => {
-      pageAtLeave.push(nav.getState().page);
-      await next();
-      return true;
-    });
-    let loaded = false;
-    save.getState().open.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      loaded = true;
-    });
-
-    const opened = await actions.openForAgent("flow-b");
-
-    expect(opened).toBe(true);
-    expect(loaded).toBe(true);
-    expect(pageAtLeave).toEqual([{ name: "editor" }]);
-    expect(save.getState().open).toHaveBeenCalledExactlyOnceWith("flow-b");
-    expect(nav.getState().page).toEqual({ name: "editor" });
-  });
-
-  it("resolves false and opens nothing when the user cancels the agent's open", async () => {
-    const { actions, save } = setup({ flowId: "flow-a", leaveAnswer: "cancel" });
-
-    const opened = await actions.openForAgent("flow-b");
-
-    expect(opened).toBe(false);
-    expect(save.getState().leave).toHaveBeenCalledTimes(1);
-    expect(save.getState().open).not.toHaveBeenCalled();
-  });
-
-  it("never ends the blueprint session when it opens a blueprint for the agent", async () => {
-    const { actions, assistant } = setup({ flowId: "flow-a" });
-
-    await actions.openForAgent("flow-b");
-
-    expect(assistant.getState().end).not.toHaveBeenCalled();
   });
 
   it("runs a build by its id, opens the run page of the run that started, and refreshes the lists", async () => {
