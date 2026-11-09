@@ -868,6 +868,42 @@ describe("the Build configuration", () => {
     });
   });
 
+  const withConfig = () => {
+    const store = createCanvasStore();
+    const start = newCanvasFlow();
+    store.getState().load({
+      ...start,
+      session: {
+        ...start.session,
+        buildConfig: {
+          repo: "/a",
+          base: "dev",
+          variables: [{ name: "topic", kind: "text" }],
+          buildModel: "haiku",
+        },
+      },
+    });
+    return store;
+  };
+
+  it("drops the base when the repository changes, keeping the variables and build model", () => {
+    const store = withConfig();
+
+    expect(undoable(store, (s) => s.setRepo("/b"))).toEqual({
+      repo: "/b",
+      variables: [{ name: "topic", kind: "text" }],
+      buildModel: "haiku",
+    });
+  });
+
+  it("keeps the base when the same repository is set again", () => {
+    const store = withConfig();
+
+    act(store, (s) => s.setRepo("/a"));
+
+    expect(configOf(store)).toMatchObject({ repo: "/a", base: "dev" });
+  });
+
   it("sets the base branch as one undoable edit, and an empty base leaves it to the repository", () => {
     const store = createCanvasStore();
 

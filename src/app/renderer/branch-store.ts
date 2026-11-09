@@ -2,16 +2,19 @@ import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 
-export type BranchBridge = Pick<FlowdeckBridge, "listBranches">;
+export type BranchBridge = Pick<FlowdeckBridge, "listBranches" | "pickFolder">;
 
 export type BranchState = {
   repo: string | null;
   branches: string[] | null;
   error: string | null;
   load(repo: string): Promise<void>;
+  browse(commit: (repo: string) => void): Promise<void>;
 };
 
 const branchesSchema = z.array(z.string());
+
+const pickedSchema = z.string().nullable();
 
 const remotePrefix = /^Error invoking remote method '[^']*': (?:Error: )?/;
 
@@ -41,6 +44,12 @@ export const createBranchStore = ({ bridge }: { bridge: BranchBridge }): StoreAp
         } catch (error) {
           if (asked === latest) set({ error: messageOf(error) });
         }
+      },
+      browse: async (commit) => {
+        const picked = pickedSchema.parse(await bridge.pickFolder());
+        if (picked === null) return;
+        commit(picked);
+        await get().load(picked);
       },
     };
   });

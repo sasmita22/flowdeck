@@ -450,17 +450,27 @@ export function Canvas({
   run,
   onSave,
   readOnly = false,
+  below,
 }: {
   store: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
   run: StoreApi<RunView>;
   onSave?: () => void;
   readOnly?: boolean;
+  below?: ReactNode;
 }) {
+  const board = <Board store={store} shell={shell} run={run} readOnly={readOnly} onSave={onSave} />;
   return (
     <ReactFlowProvider>
       {!readOnly && <Palette canvas={store} shell={shell} run={run} />}
-      <Board store={store} shell={shell} run={run} readOnly={readOnly} onSave={onSave} />
+      {below === undefined ? (
+        board
+      ) : (
+        <div className="fd-canvas-column">
+          {board}
+          {below}
+        </div>
+      )}
     </ReactFlowProvider>
   );
 }

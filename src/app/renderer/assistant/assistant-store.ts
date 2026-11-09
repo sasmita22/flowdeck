@@ -12,8 +12,11 @@ export type AssistantState = {
   visible: boolean;
   flowId: string | null;
   session: string | null;
+  confirmingStop: boolean;
   show(): Promise<void>;
   hide(): void;
+  askStop(): void;
+  cancelStop(): void;
   end(): Promise<void>;
 };
 
@@ -30,6 +33,7 @@ export const createAssistantStore = ({
     visible: false,
     flowId: null,
     session: null,
+    confirmingStop: false,
 
     show: async () => {
       if (get().session !== null) {
@@ -45,10 +49,13 @@ export const createAssistantStore = ({
 
     hide: () => set({ visible: false }),
 
+    askStop: () => set({ confirmingStop: true }),
+
+    cancelStop: () => set({ confirmingStop: false }),
+
     end: async () => {
       const { flowId, session } = get();
-      if (session === null || flowId === null) return;
-      await bridge.stopBlueprintSession({ flowId });
-      set({ visible: false, session: null });
+      if (session !== null && flowId !== null) await bridge.stopBlueprintSession({ flowId });
+      set({ visible: false, session: null, confirmingStop: false });
     },
   }));

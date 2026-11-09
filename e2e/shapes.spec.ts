@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -314,4 +314,90 @@ test("Hovering a node says what it is and what it does", async () => {
     await node.hover();
     await expect(node).toHaveAttribute("title", nodeTitle(type));
   }
+});
+
+const directParallel = () =>
+  flow([at(fork("fork"), 100, 60), at(joinNode("join"), 400, 60)], [thenWire("fork", "join")]);
+
+const storedY = async (window: Page) => {
+  const saved = JSON.parse((await window.getByTestId("canvas-flow").textContent()) ?? "") as {
+    nodes: { id: string; position: { y: number } }[];
+  };
+  const y = (id: string) => saved.nodes.find((node) => node.id === id)?.position.y ?? NaN;
+  return { fork: y("fork"), join: y("join") };
+};
+
+test("A Parallel start wired straight to a Parallel end keeps each bar where it is dragged", async () => {
+  seedFlow(home, directParallel());
+  launched = await launchOnCanvas({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    colorScheme: "light",
+  });
+  const { window } = launched;
+  const bars = { fork: window.getByTestId("node-fork"), join: window.getByTestId("node-join") };
+  await expect(bars.fork).toBeVisible();
+  await expect(bars.join).toBeVisible();
+  await expect(window.getByTestId("rf__edge-fork:out->join:in")).toBeAttached();
+  await window.evaluate(() => document.fonts.ready);
+  const start = { fork: await boxOf(bars.fork), join: await boxOf(bars.join) };
+  const stored0 = await storedY(window);
+  const drawnDy = async () => ({
+    fork: Math.round((await boxOf(bars.fork)).y - start.fork.y),
+    join: Math.round((await boxOf(bars.join)).y - start.join.y),
+    heights: [(await boxOf(bars.fork)).height, (await boxOf(bars.join)).height],
+  });
+  const heights = [start.fork.height, start.join.height];
+
+  const drag = async (id: "fork" | "join", dy: number) => {
+    const other = id === "fork" ? "join" : "fork";
+    const before = await drawnDy();
+    const box = await boxOf(bars[id]);
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await window.mouse.move(x, y);
+    await window.mouse.down();
+    await window.mouse.move(x, y + Math.sign(dy) * 2);
+    await window.mouse.move(x, y + dy / 2, { steps: 6 });
+    await window.mouse.move(x, y + dy, { steps: 6 });
+    await expect
+      .poll(async () => {
+        const now = await drawnDy();
+        return {
+          followsPointer: Math.abs(now[id] - before[id] - dy) <= 4,
+          other: now[other],
+          heights: now.heights,
+        };
+      })
+      .toEqual({ followsPointer: true, other: before[other], heights });
+    await window.mouse.up();
+
+    const stored = await storedY(window);
+    expect(stored[other] - stored0[other]).toBe(before[other]);
+    await expect.poll(drawnDy).toEqual({
+      ...before,
+      [id]: Math.round(stored[id] - stored0[id]),
+      heights,
+    });
+  };
+
+  await drag("fork", -40);
+  await drag("fork", 160);
+  await drag("join", -40);
+  await drag("join", 260);
+
+  await window.mouse.move(1, 1);
+  const forkBox = await boxOf(bars.fork);
+  const joinBox = await boxOf(bars.join);
+  const top = Math.min(forkBox.y, joinBox.y) - 32;
+  const bottom = Math.max(forkBox.y + forkBox.height, joinBox.y + joinBox.height) + 32;
+  await expect(window).toHaveScreenshot("direct-parallel-wire.png", {
+    ...exact,
+    clip: {
+      x: forkBox.x - 24,
+      y: top,
+      width: joinBox.x + joinBox.width - forkBox.x + 200,
+      height: bottom - top,
+    },
+  });
 });

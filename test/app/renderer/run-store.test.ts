@@ -470,6 +470,92 @@ describe("the Build dialog", () => {
   });
 });
 
+describe("the Build dialog's repository", () => {
+  const settle = () => new Promise((done) => setTimeout(done, 0));
+
+  const opened = async () => {
+    const ready = await setup();
+    await ready.run.getState().openBuild({
+      flowId: "flow-b",
+      version: 4,
+      buildConfig: { repo: "/a", base: "dev", variables: [] },
+    });
+    ready.bridge.defaultBranch.mockClear();
+    return { ...ready, flowBefore: ready.canvas.getState().flow };
+  };
+
+  const dialogOf = (run: Awaited<ReturnType<typeof opened>>["run"]) => run.getState().buildDialog;
+
+  it("clears the base at once on a new repository, then starts from that repository's default branch", async () => {
+    const { run, bridge, canvas, flowBefore } = await opened();
+    const reply = deferred<unknown>();
+    bridge.defaultBranch.mockReturnValueOnce(reply.promise);
+
+    run.getState().editBuild({ repo: "/b" });
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/b", base: "" });
+    expect(bridge.defaultBranch).toHaveBeenCalledExactlyOnceWith({ repo: "/b" });
+    reply.resolve("main");
+    await settle();
+    expect(dialogOf(run)).toMatchObject({ repo: "/b", base: "main" });
+    expect(canvas.getState().flow).toBe(flowBefore);
+  });
+
+  it("keeps the base and asks nothing when the same repository is set again", async () => {
+    const { run, bridge, canvas, flowBefore } = await opened();
+
+    run.getState().editBuild({ repo: "/a" });
+    await settle();
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/a", base: "dev" });
+    expect(bridge.defaultBranch).not.toHaveBeenCalled();
+    expect(canvas.getState().flow).toBe(flowBefore);
+  });
+
+  it("ignores the default branch of a repository that was replaced before it answered", async () => {
+    const { run, bridge, canvas, flowBefore } = await opened();
+    const forB = deferred<unknown>();
+    const forC = deferred<unknown>();
+    bridge.defaultBranch.mockReturnValueOnce(forB.promise).mockReturnValueOnce(forC.promise);
+
+    run.getState().editBuild({ repo: "/b" });
+    run.getState().editBuild({ repo: "/c" });
+    forB.resolve("b-main");
+    await settle();
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/c", base: "" });
+    forC.resolve("c-main");
+    await settle();
+    expect(dialogOf(run)).toMatchObject({ repo: "/c", base: "c-main" });
+    expect(canvas.getState().flow).toBe(flowBefore);
+  });
+
+  it("leaves the base empty when the default branch cannot be read", async () => {
+    const { run, bridge, canvas, flowBefore } = await opened();
+    bridge.defaultBranch.mockRejectedValueOnce(new Error("/b is not a git repository"));
+
+    run.getState().editBuild({ repo: "/b" });
+    await settle();
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/b", base: "" });
+    expect(canvas.getState().flow).toBe(flowBefore);
+  });
+
+  it("keeps a branch picked before the default branch answered", async () => {
+    const { run, bridge, canvas, flowBefore } = await opened();
+    const reply = deferred<unknown>();
+    bridge.defaultBranch.mockReturnValueOnce(reply.promise);
+
+    run.getState().editBuild({ repo: "/b" });
+    run.getState().editBuild({ base: "dev" });
+    reply.resolve("main");
+    await settle();
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/b", base: "dev" });
+    expect(canvas.getState().flow).toBe(flowBefore);
+  });
+});
+
 describe("needsSessionSetup", () => {
   it("is true when a problem is about the session's Build configuration", () => {
     expect(needsSessionSetup([{ field: "buildConfig.repo", text: "Choose the repository." }])).toBe(

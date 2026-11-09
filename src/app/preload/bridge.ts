@@ -104,6 +104,7 @@ export type FlowdeckBridge = EngineCalls & {
   onWait(listener: (value: unknown) => void): () => void;
   answerWait(answer: unknown): Promise<boolean>;
   workspaceInfo(buildConfig: unknown): Promise<unknown>;
+  pickFolder(): Promise<string | null>;
   onBuildProgress(listener: (update: unknown) => void): () => void;
   onBuildActivity(listener: (update: unknown) => void): () => void;
   onToolCall(listener: (call: unknown) => void): () => void;
@@ -134,6 +135,7 @@ export const bridgeChannels = {
   wait: "flowdeck:wait",
   answerWait: "flowdeck:answer-wait",
   workspaceInfo: "flowdeck:workspace-info",
+  pickFolder: "flowdeck:pick-folder",
   buildProgress: "flowdeck:build-progress",
   buildActivity: "flowdeck:build-activity-push",
   toolCall: "flowdeck:tool-call",

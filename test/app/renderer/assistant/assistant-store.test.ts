@@ -122,3 +122,69 @@ describe("createAssistantStore", () => {
     expect(bridge.stopBlueprintSession).not.toHaveBeenCalled();
   });
 });
+
+describe("createAssistantStore stop confirm", () => {
+  const shown = async () => {
+    const ready = await setup();
+    await ready.assistant.getState().show();
+    ready.bridge.startBlueprintSession.mockClear();
+    return ready;
+  };
+
+  it("starts with no stop being confirmed", async () => {
+    const { assistant } = await setup();
+
+    expect(assistant.getState()).toMatchObject({ confirmingStop: false });
+  });
+
+  it("asks to stop and cancels without touching the pane, the session or the bridge", async () => {
+    const { assistant, bridge } = await shown();
+
+    assistant.getState().askStop();
+
+    expect(assistant.getState()).toMatchObject({
+      confirmingStop: true,
+      visible: true,
+      session: "fd-bp-flow-1",
+    });
+
+    assistant.getState().cancelStop();
+
+    expect(assistant.getState()).toMatchObject({
+      confirmingStop: false,
+      visible: true,
+      session: "fd-bp-flow-1",
+    });
+    expect(bridge.startBlueprintSession).not.toHaveBeenCalled();
+    expect(bridge.stopBlueprintSession).not.toHaveBeenCalled();
+  });
+
+  it("ends a confirmed stop: stops the session, hides the pane and closes the confirm", async () => {
+    const { assistant, bridge } = await shown();
+    assistant.getState().askStop();
+
+    await assistant.getState().end();
+
+    expect(bridge.stopBlueprintSession).toHaveBeenCalledExactlyOnceWith({ flowId: "flow-1" });
+    expect(assistant.getState()).toMatchObject({
+      visible: false,
+      session: null,
+      confirmingStop: false,
+    });
+  });
+
+  it("still hides the pane and closes the confirm when there is no session to stop", async () => {
+    const { assistant, bridge } = await setup();
+    assistant.setState({ visible: true });
+    assistant.getState().askStop();
+
+    await assistant.getState().end();
+
+    expect(bridge.stopBlueprintSession).not.toHaveBeenCalled();
+    expect(assistant.getState()).toMatchObject({
+      visible: false,
+      session: null,
+      confirmingStop: false,
+    });
+  });
+});

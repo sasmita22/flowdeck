@@ -62,6 +62,10 @@ export const edgeId = (wire: Wire): string => {
   return wire.kind === "file" ? `${ends}:${wire.file}` : ends;
 };
 
+const isBarType = (type: Node["type"] | undefined) => type === "fork" || type === "join";
+
+const isBar = (node: Node) => isBarType(node.type);
+
 const branchesOf = (flow: Flow, bar: Node): Node[] => {
   const ids = new Set(
     flow.wires.flatMap(({ kind, from, to }) => {
@@ -75,7 +79,9 @@ const branchesOf = (flow: Flow, bar: Node): Node[] => {
 };
 
 const barBounds = (flow: Flow, bar: Node, x = bar.position.x): Bounds | null => {
-  const branches = branchesOf(flow, bar).map(boundsOf);
+  const branches = branchesOf(flow, bar)
+    .filter((node) => !isBar(node))
+    .map(boundsOf);
   if (branches.length === 0) return null;
   const { width, height } = nodeLook(bar.type).box;
   const top = Math.min(...branches.map((branch) => branch.top));
@@ -121,8 +127,6 @@ const toForEachFrameViewNodes = (flow: Flow): ViewNode[] =>
         forEachId: each.id,
       }),
     );
-
-const isBar = (node: Node) => node.type === "fork" || node.type === "join";
 
 const placed = (flow: Flow, node: Node, position: Position) => {
   if (!isBar(node)) return { position };
@@ -185,6 +189,7 @@ export const toViewNodes = (
 };
 
 const alignOf = (types: ReadonlyMap<string, Node["type"]>, wire: Wire): Align | null => {
+  if (isBarType(types.get(wire.from.node)) && isBarType(types.get(wire.to.node))) return null;
   if (types.get(wire.from.node) === "fork") return "target";
   if (types.get(wire.to.node) === "join") return "source";
   return null;

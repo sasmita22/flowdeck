@@ -45,6 +45,7 @@ export type AppStores = {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   branches: StoreApi<BranchState>;
+  buildBranches: StoreApi<BranchState>;
   buildProgress: StoreApi<BuildProgressState>;
   assistant: StoreApi<AssistantState>;
   blueprintTerminal: StoreApi<TerminalState>;
@@ -279,7 +280,12 @@ export function App(stores: AppStores) {
         </section>
       )}
       <StatusBar {...stores} />
-      <BuildDialog run={stores.run} nav={stores.nav} library={stores.library} />
+      <BuildDialog
+        run={stores.run}
+        nav={stores.nav}
+        library={stores.library}
+        branches={stores.buildBranches}
+      />
       <RunDialog run={stores.run} actions={stores.actions} />
       <ClosePrompt store={stores.save} />
       <LeavePrompt store={stores.save} />

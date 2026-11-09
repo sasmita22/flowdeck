@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, utilityProcess } from "electron";
 import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -18,6 +18,7 @@ import { createActivityRelay } from "./activity.js";
 import { createBuildProgressRelay } from "./build-progress.js";
 import { createCloseGuard } from "./close-guard.js";
 import { EngineClient } from "./engine-client.js";
+import { folderPickerHandler } from "./folder-picker.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { loginPath } from "./login-path.js";
 import { createTerminal } from "./pty.js";
@@ -270,6 +271,7 @@ void app.whenReady().then(async () => {
     );
   }
   const window = openWindow(windowGuard);
+  ipcMain.handle(bridgeChannels.pickFolder, folderPickerHandler(windowGuard, { dialog, window }));
   const relay = createRunRelay({
     send: (snapshot) => {
       if (!window.isDestroyed()) window.webContents.send(bridgeChannels.runState, snapshot);

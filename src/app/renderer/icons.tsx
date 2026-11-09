@@ -9,7 +9,10 @@ export type IconName =
   | "back"
   | "pencil"
   | "folder"
-  | "pin";
+  | "pin"
+  | "info"
+  | "minimize"
+  | "close";
 
 const paths: Record<IconName, string> = {
   plus: "M8 3v10M3 8h10",
@@ -23,6 +26,9 @@ const paths: Record<IconName, string> = {
   pencil: "M10.5 2.5l3 3-8 8h-3v-3Z",
   folder: "M1.5 4V13h13V5.5H7.5L6 4Z",
   pin: "M5.5 1.5h5M6.5 1.5v4L4 9h8L9.5 5.5v-4M8 9v5.5",
+  info: "M8 14.5a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13ZM8 7v4.5M8 4.75v.5",
+  minimize: "M3.5 11.5h9",
+  close: "M4 4l8 8M12 4l-8 8",
 };
 
 export function Icon({ name }: { name: IconName }) {

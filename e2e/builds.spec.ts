@@ -6,6 +6,7 @@ import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
+  buildConfigTestIds,
   buildDialogTestIds,
   controlTestIds,
   dialogTestIds,
@@ -293,4 +294,88 @@ test("A running build refuses another run, while a second build runs beside it i
   expect(launches.map(({ cwd }) => cwd).sort()).toEqual(
     [first, second].map((id) => join(home, "workspaces", id, basename(repo.path))).sort(),
   );
+});
+
+const stubFolderPicker = async (picked: string) => {
+  await launched?.app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = (async () => ({
+      canceled: false,
+      filePaths: [path],
+    })) as unknown as typeof dialog.showOpenDialog;
+  }, picked);
+};
+
+test("The Build dialog picks repo, branch and build model with the settings' fields, and leaves the blueprint unchanged", async () => {
+  await run("git", ["-C", repo.path, "branch", "dev"]);
+  const other = await createTmpRepo({ commit: true });
+  try {
+    const { flowId } = seedBlueprint(home, "Fixer", blueprint());
+    const window = await launch();
+    await openBuildDialog(window, flowId);
+    const repoField = window.getByTestId(buildDialogTestIds.repo);
+    const basePick = window.getByTestId(buildDialogTestIds.base);
+    const modelPick = window.getByTestId(controlTestIds.buildModel);
+
+    await expect(repoField).toHaveValue("");
+    await expect(window.getByTestId(buildDialogTestIds.repoBrowse)).toHaveAccessibleName(
+      "Browse for a folder",
+    );
+    await expect(basePick).toBeDisabled();
+    await expect(basePick.locator("option")).toHaveText(["Choose a repository first"]);
+    expect(await modelPick.evaluate((element) => element.tagName)).toBe("SELECT");
+    await expect(modelPick.locator("option").first()).toHaveText("The session's default");
+    await expect(modelPick).toHaveValue("");
+
+    await stubFolderPicker(other.path);
+    await window.getByTestId(buildDialogTestIds.repoBrowse).click();
+    await expect(repoField).toHaveValue(other.path);
+    await expect(basePick).toBeEnabled();
+    await expect(basePick.locator("option")).toHaveText(["main"]);
+    await expect(basePick).toHaveValue("main");
+
+    await repoField.fill(repo.path);
+    await repoField.press("Enter");
+    await expect(basePick.locator("option")).toHaveText(["dev", "main"]);
+    await expect(basePick).toHaveValue("main");
+    await basePick.selectOption("dev");
+    await modelPick.selectOption("haiku");
+    await window.getByTestId(buildDialogTestIds.name).fill("fix-dialog");
+    await window.getByTestId(buildDialogTestIds.variable("ticket")).fill("FD-1");
+    await window.getByTestId(buildDialogTestIds.confirm).click();
+    await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+    await waitForBuilt(window, home, "fix-dialog");
+
+    expect(
+      rows<{ repo: string; base: string }>(
+        "SELECT repo, base FROM builds WHERE name = ?",
+        "fix-dialog",
+      ),
+    ).toEqual([{ repo: repo.path, base: "dev" }]);
+    const [pending] = rows<{ origin_json: string }>(
+      "SELECT origin_json FROM pending_builds WHERE name = ?",
+      "fix-dialog",
+    );
+    expect(JSON.parse(pending?.origin_json ?? "{}")).toMatchObject({
+      request: { repo: repo.path, base: "dev", buildModel: "haiku" },
+    });
+    const sessions = rows<{ session: string }>(
+      "SELECT session FROM flow_versions WHERE flow_id = ?",
+      flowId,
+    ).map(({ session }) => JSON.parse(session) as { buildConfig: object; budget?: number });
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const session of sessions) {
+      expect(session.buildConfig).not.toHaveProperty("repo");
+      expect(session.buildConfig).not.toHaveProperty("base");
+      expect(session).not.toHaveProperty("budget");
+    }
+
+    await toMenu(window);
+    await window.getByTestId("menu-blueprints").click();
+    await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+    await window.getByTestId(controlTestIds.sessionSettings).click();
+    await expect(window.getByTestId(buildConfigTestIds.repo)).toHaveValue("");
+    await expect(window.getByTestId(buildConfigTestIds.base)).toBeDisabled();
+  } finally {
+    await other.cleanup();
+  }
 });

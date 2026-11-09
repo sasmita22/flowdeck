@@ -827,7 +827,12 @@ export function createCanvasStore(
         if (ready()) run(updateSession(next));
       },
 
-      setRepo: (repo) => editBuildConfig((config) => ({ ...config, repo })),
+      setRepo: (repo) =>
+        editBuildConfig(({ base, ...rest }) => ({
+          ...rest,
+          repo,
+          ...(base !== undefined && rest.repo === repo && { base }),
+        })),
 
       setBase: (base) =>
         editBuildConfig(({ repo, variables }) => ({

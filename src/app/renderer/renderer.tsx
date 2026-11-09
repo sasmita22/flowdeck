@@ -78,6 +78,7 @@ function renderApp(root: HTMLElement) {
     }
   });
   const branches = createBranchStore({ bridge: window.flowdeck });
+  const buildBranches = createBranchStore({ bridge: window.flowdeck });
   const assistant = createAssistantStore({ bridge: window.flowdeck, save });
   const actions = createActions({ nav, save, run, library, assistant });
   createToolHandler({ bridge: window.flowdeck, canvas, save, actions });
@@ -96,6 +97,7 @@ function renderApp(root: HTMLElement) {
       nav={nav}
       library={library}
       branches={branches}
+      buildBranches={buildBranches}
       buildProgress={buildProgress}
       assistant={assistant}
       blueprintTerminal={blueprintTerminal}
