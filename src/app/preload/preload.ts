@@ -74,6 +74,7 @@ const bridge: FlowdeckBridge = {
   },
   answerWait: (answer) => ipcRenderer.invoke(bridgeChannels.answerWait, answer) as Promise<boolean>,
   workspaceInfo: (buildConfig) => ipcRenderer.invoke(bridgeChannels.workspaceInfo, buildConfig),
+  pickFolder: () => ipcRenderer.invoke(bridgeChannels.pickFolder) as Promise<string | null>,
   onBuildProgress: (listener) => {
     const handler = (_event: unknown, update: unknown) => listener(update);
     ipcRenderer.on(bridgeChannels.buildProgress, handler);

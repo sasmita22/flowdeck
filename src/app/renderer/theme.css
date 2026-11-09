@@ -78,8 +78,8 @@ body,
 
 .fd-shell {
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto auto auto;
-  grid-template-areas: "title" "errors" "bar" "main" "agent" "terminal" "status";
+  grid-template-rows: auto auto auto 1fr auto auto;
+  grid-template-areas: "title" "errors" "bar" "main" "terminal" "status";
   height: 100%;
   margin: 0;
 }
@@ -1138,12 +1138,60 @@ body,
   border-top: 1px solid var(--line);
 }
 
-.fd-blueprint-terminal {
-  grid-area: agent;
+.fd-canvas-column {
   display: flex;
+  flex: 1;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fd-blueprint-terminal {
+  display: flex;
+  flex: 0 0 40%;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   background: var(--panel);
   border-top: 1px solid var(--line);
+}
+
+.fd-blueprint-terminal-head {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.fd-blueprint-terminal-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fd-blueprint-terminal-name {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fd-blueprint-terminal-state {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.fd-blueprint-terminal-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-1);
+}
+
+.fd-field-info {
+  display: inline-flex;
+  color: var(--muted);
+  cursor: help;
 }
 
 .fd-terminal-head {

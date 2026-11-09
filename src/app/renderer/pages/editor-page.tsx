@@ -234,7 +234,21 @@ export function EditorPage({
       <div className="fd-main">
         {ready && (
           <BuildAuditContext.Provider value={flowId === null ? null : { flowId, buildProgress }}>
-            <Canvas store={canvas} shell={shell} run={idle} onSave={onSave} />
+            <Canvas
+              store={canvas}
+              shell={shell}
+              run={idle}
+              onSave={onSave}
+              below={
+                agentVisible ? (
+                  <BlueprintTerminalPane
+                    assistant={assistant}
+                    terminal={blueprintTerminal}
+                    save={save}
+                  />
+                ) : null
+              }
+            />
           </BuildAuditContext.Provider>
         )}
         {ready && (
@@ -247,7 +261,6 @@ export function EditorPage({
           />
         )}
       </div>
-      {agentVisible && <BlueprintTerminalPane assistant={assistant} terminal={blueprintTerminal} />}
     </>
   );
 }

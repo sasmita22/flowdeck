@@ -55,6 +55,7 @@ const bridge = (
   onWait: vi.fn(() => () => {}),
   answerWait: vi.fn(async () => false),
   workspaceInfo: vi.fn(async () => null),
+  pickFolder: vi.fn(async () => null),
   onBuildProgress: vi.fn(() => () => {}),
   onToolCall: vi.fn(() => () => {}),
   onToolTurnEnd: vi.fn(() => () => {}),

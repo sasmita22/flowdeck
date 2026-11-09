@@ -434,6 +434,63 @@ describe("toViewNodes with a parallel section", () => {
   });
 });
 
+const directWire = (joinY = 300) =>
+  flow(
+    [
+      { ...fork("F"), position: { x: 10, y: 10 } },
+      { ...join("J"), position: { x: 270, y: joinY } },
+    ],
+    [thenWire("F", "J")],
+  );
+
+const directWireAndBox = () =>
+  flow(
+    [
+      { ...fork("F"), position: { x: 10, y: 10 } },
+      { ...agent("b1"), position: { x: 70, y: 90 } },
+      { ...join("J"), position: { x: 270, y: 0 } },
+    ],
+    [thenWire("F", "J"), thenWire("F", "b1")],
+  );
+
+describe("toViewNodes with a fork wired straight to a join", () => {
+  it("draws each bar at its own stored position with its own look box", () => {
+    const view = toViewNodes(directWire(), [], {}, null);
+
+    expect(viewOf(view, "F")).toMatchObject({
+      position: { x: 10, y: 10 },
+      ...nodeLook("fork").box,
+    });
+    expect(viewOf(view, "J")).toMatchObject({
+      position: { x: 270, y: 300 },
+      ...nodeLook("join").box,
+    });
+  });
+
+  it("draws the dragged bar at its drag position and leaves the other bar where it is", () => {
+    const view = toViewNodes(directWire(), [], { F: { x: 40, y: 500 } }, null);
+
+    expect(viewOf(view, "F")).toMatchObject({ position: { x: 40, y: 500 } });
+    expect(viewOf(view, "J")).toMatchObject({ position: { x: 270, y: 300 } });
+  });
+
+  it("follows a dragged join the same way", () => {
+    const view = toViewNodes(directWire(), [], { J: { x: 270, y: -150 } }, null);
+
+    expect(viewOf(view, "J")).toMatchObject({ position: { x: 270, y: -150 } });
+    expect(viewOf(view, "F")).toMatchObject({ position: { x: 10, y: 10 } });
+  });
+
+  it("still stretches a fork over a box it is also wired to", () => {
+    const view = toViewNodes(directWireAndBox(), [], {}, null);
+
+    expect(viewOf(view, "F")).toMatchObject({
+      position: { x: 10, y: 90 },
+      height: Math.max(BAR_MIN_HEIGHT, nodeLook("agent").box.height),
+    });
+  });
+});
+
 describe("toViewEdges with a parallel section", () => {
   const edges = () => new Map(toViewEdges(parallelSection()).map((edge) => [edge.id, edge]));
 
@@ -453,6 +510,18 @@ describe("toViewEdges with a parallel section", () => {
         data: { align: "source" },
       });
     }
+  });
+
+  it("leaves a fork-to-join wire unaligned and keeps a fork-to-box wire aligned to its target", () => {
+    const direct = new Map(toViewEdges(directWireAndBox()).map((edge) => [edge.id, edge]));
+
+    expect(direct.get("F:out->J:in")).toBeDefined();
+    expect(direct.get("F:out->J:in")).not.toHaveProperty("type");
+    expect(direct.get("F:out->J:in")).not.toHaveProperty("data");
+    expect(direct.get("F:out->b1:in")).toMatchObject({
+      type: "aligned",
+      data: { align: "target" },
+    });
   });
 
   it("leaves wires into a fork and out of a join unchanged", () => {

@@ -56,6 +56,8 @@ describe("test ids", () => {
       "node-menu-duplicate",
       "node-menu-frame-only",
       "blueprint-terminal-toggle",
+      "blueprint-terminal-minimize",
+      "blueprint-terminal-close",
     ]);
     expect(controlTestIds.fileWireName("a->b:notes.md")).toBe("file-wire-name-a->b:notes.md");
   });
@@ -74,6 +76,9 @@ describe("test ids", () => {
       name: "build-dialog-name",
       repo: "build-dialog-repo",
       base: "build-dialog-base",
+      repoBrowse: "build-dialog-repo-browse",
+      baseInfo: "build-dialog-base-info",
+      branchesError: "build-dialog-branches-error",
       confirm: "build-dialog-confirm",
       cancel: "build-dialog-cancel",
       error: "build-dialog-error",
@@ -188,9 +193,20 @@ describe("test ids", () => {
     expect(buildConfigTestIds).toMatchObject({
       repo: "session-build-config-repo",
       base: "session-build-config-base",
+      repoBrowse: "session-build-config-repo-browse",
+      baseInfo: "session-build-config-base-info",
+      branchesError: "session-branches-error",
       addVariable: "build-config-add-variable",
     });
     expect(buildConfigTestIds.variable("deep")).toBe("build-config-variable-deep");
+  });
+
+  it("names the stop-agent confirm and its two answers", () => {
+    expect(pageTestIds).toMatchObject({
+      stopAgentDialog: "stop-agent-dialog",
+      stopAgentConfirm: "stop-agent-confirm",
+      stopAgentCancel: "stop-agent-cancel",
+    });
   });
 
   it("names the Branch variable picker and the Doctor's worktree list", () => {

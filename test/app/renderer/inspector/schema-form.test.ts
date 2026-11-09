@@ -68,19 +68,6 @@ describe("describeFields", () => {
     expect(permission.optionLabels["acceptEdits"]).toBe("Accept file edits without asking");
   });
 
-  it("picks the base branch from the repository's branches once they are known", () => {
-    const base = sessionFields(["dev", "main"]).find(
-      (field) => field.testId === "session-build-config-base",
-    );
-
-    expect(base).toMatchObject({
-      control: "select",
-      path: ["buildConfig", "base"],
-      options: ["dev", "main"],
-      optionLabels: { dev: "dev", main: "main" },
-    });
-  });
-
   it("labels every field in plain words", () => {
     expect(sessionFields().map((field) => [field.testId, field.label])).toEqual([
       ["session-name", "Session name"],
@@ -89,7 +76,7 @@ describe("describeFields", () => {
       ["session-model", "Model"],
       ["session-allowed-tools", "Allowed tools (one per line)"],
       ["session-permission-mode", "Permission mode"],
-      ["session-budget", "Budget ($)"],
+      ["session-budget", "Budget ($, optional)"],
     ]);
   });
 });

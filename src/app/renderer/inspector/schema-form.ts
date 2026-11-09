@@ -52,7 +52,7 @@ const sessionLabels: Record<string, string> = {
   model: "Model",
   allowedTools: "Allowed tools (one per line)",
   permissionMode: "Permission mode",
-  budget: "Budget ($)",
+  budget: "Budget ($, optional)",
 };
 
 const sessionForm: Form = {
@@ -218,12 +218,7 @@ const asChoices = (values: readonly string[]): Choice[] =>
 export const yesNoChoices = (buildConfig: Pick<BuildConfig, "variables">): Choice[] =>
   asChoices(buildConfig.variables.filter(({ kind }) => kind === "yesno").map(({ name }) => name));
 
-export const sessionFields = (branches?: readonly string[]): FieldDescription[] => {
-  const fields = describeFields(sessionSettingsSchema);
-  return branches === undefined
-    ? fields
-    : withChoices(fields, "buildConfig.base", asChoices(branches));
-};
+export const sessionFields = (): FieldDescription[] => describeFields(sessionSettingsSchema);
 
 const emptyVariant = (variant: AnyObject, discriminator: string, kind: string) =>
   Object.fromEntries(

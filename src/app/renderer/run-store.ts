@@ -330,7 +330,19 @@ export const createRunStore = ({
         });
       },
 
-      editBuild: (patch) => editDialog((dialog) => ({ ...dialog, ...patch })),
+      editBuild: (patch) => {
+        const { repo } = patch;
+        const moved = repo !== undefined && repo !== get().buildDialog?.repo;
+        editDialog((dialog) => ({ ...dialog, ...(moved && { base: "" }), ...patch }));
+        if (!moved || get().buildDialog?.base !== "") return;
+        void startingBase({ repo, variables: [] })
+          .catch(() => "")
+          .then((base) => {
+            const dialog = get().buildDialog;
+            if (dialog?.repo !== repo || dialog.base !== "") return;
+            set({ buildDialog: { ...dialog, base } });
+          });
+      },
 
       setValue: (name, value) =>
         editDialog((dialog) => ({ ...dialog, values: { ...dialog.values, [name]: value } })),

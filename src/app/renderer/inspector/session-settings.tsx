@@ -1,24 +1,38 @@
 import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import { modelChoices } from "../../../core/flow/choices.js";
 import type { Variable } from "../../../core/flow/schema.js";
 import type { BranchState } from "../branch-store.js";
 import { selectSessionIssues, type CanvasState } from "../canvas/store.js";
+import { BranchField } from "../fields/branch-field.js";
+import { ModelField } from "../fields/model-field.js";
+import { RepoField } from "../fields/repo-field.js";
 import { buildConfigTestIds } from "../test-ids.js";
 import { Field, type Commit } from "./field.js";
-import { applyField, sessionFields } from "./schema-form.js";
+import { applyField, sessionFields, type FieldDescription } from "./schema-form.js";
 
-const noBranches: StoreApi<Pick<BranchState, "branches" | "error" | "load">> = {
-  getState: () => ({ branches: null, error: null, load: async () => undefined }),
-  getInitialState: () => ({ branches: null, error: null, load: async () => undefined }),
+const noBranchState: BranchState = {
+  repo: null,
+  branches: null,
+  error: null,
+  load: async () => undefined,
+  browse: async () => undefined,
+};
+
+const noBranches: StoreApi<BranchState> = {
+  getState: () => noBranchState,
+  getInitialState: () => noBranchState,
   setState: () => undefined,
   subscribe: () => () => undefined,
 };
 
 const rowStyle: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: 6,
+  minWidth: 0,
   fontSize: "var(--fs-sm)",
 };
 
@@ -58,7 +72,7 @@ function VariableRow({
         data-testid={buildConfigTestIds.variableName(index)}
         aria-label="Variable name"
         defaultValue={variable.name}
-        style={{ flex: 1, minWidth: 0 }}
+        style={{ flex: "1 1 80px", minWidth: 0 }}
         onBlur={(event) => {
           const name = event.target.value.trim();
           if (name === "" || name === variable.name) event.target.value = variable.name;
@@ -85,7 +99,7 @@ function VariableRow({
           aria-label={`${variable.name} default`}
           placeholder="No default"
           defaultValue={variable.default ?? ""}
-          style={{ flex: 1, minWidth: 0 }}
+          style={{ flex: "1 1 80px", minWidth: 0 }}
           onBlur={(event) => {
             if (event.target.value !== (variable.default ?? "")) {
               update(withDefault(variable, event.target.value));
@@ -124,6 +138,7 @@ function VariablesField({ canvas }: { canvas: StoreApi<CanvasState> }) {
         display: "flex",
         flexDirection: "column",
         gap: 4,
+        minWidth: 0,
         margin: 0,
         padding: 0,
         border: "none",
@@ -152,41 +167,82 @@ export function SessionSettingsSection({
   branches = noBranches,
 }: {
   canvas: StoreApi<CanvasState>;
-  branches?: StoreApi<Pick<BranchState, "branches" | "error" | "load">> | undefined;
+  branches?: StoreApi<BranchState> | undefined;
 }) {
   const session = useStore(canvas, (state) => state.flow.session);
   const issues = useStore(canvas, (state) => selectSessionIssues(state.flow));
-  const known = useStore(branches, (state) => state.branches);
-  const branchError = useStore(branches, (state) => state.error);
   const repo = session.buildConfig.repo ?? "";
 
   useEffect(() => {
     void branches.getState().load(repo);
   }, [branches, repo]);
 
-  const fields = sessionFields(known ?? undefined);
   const commit: Commit = (path, value) => {
-    if (typeof value !== "string") return null;
-    const { flow, updateSession, setRepo, setBase } = canvas.getState();
-    const key = path.join(".");
-    if (key === "buildConfig.repo") setRepo(value);
-    else if (key === "buildConfig.base") setBase(value);
-    else updateSession(applyField(flow.session, path, value));
+    if (typeof value === "string") {
+      const { flow, updateSession } = canvas.getState();
+      updateSession(applyField(flow.session, path, value));
+    }
     return null;
+  };
+  const setRepo = (next: string) => canvas.getState().setRepo(next);
+  const fieldFor = (field: FieldDescription) => {
+    switch (field.path.join(".")) {
+      case "buildConfig.repo":
+        return (
+          <RepoField
+            key={field.testId}
+            label={field.label}
+            value={repo}
+            testId={buildConfigTestIds.repo}
+            browseTestId={buildConfigTestIds.repoBrowse}
+            issue={issues["buildConfig.repo"]}
+            onCommit={setRepo}
+            onBrowse={() => void branches.getState().browse(setRepo)}
+          />
+        );
+      case "buildConfig.base":
+        return (
+          <BranchField
+            key={field.testId}
+            label={field.label}
+            repo={repo}
+            value={session.buildConfig.base ?? ""}
+            branches={branches}
+            testId={buildConfigTestIds.base}
+            infoTestId={buildConfigTestIds.baseInfo}
+            errorTestId={buildConfigTestIds.branchesError}
+            onChange={(base) => canvas.getState().setBase(base)}
+          />
+        );
+      case "model":
+        return (
+          <ModelField
+            key={field.testId}
+            label={field.label}
+            value={session.model}
+            choices={modelChoices}
+            testId={field.testId}
+            onChange={(model) => commit(field.path, model)}
+          />
+        );
+      default:
+        return (
+          <Field
+            key={field.testId}
+            field={field}
+            values={session}
+            commit={commit}
+            issues={issues}
+          />
+        );
+    }
   };
   return (
     <div
       data-testid="session-settings"
       style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}
     >
-      {fields.map((field) => (
-        <Field key={field.testId} field={field} values={session} commit={commit} issues={issues} />
-      ))}
-      {branchError !== null && (
-        <span className="fd-hint" data-testid="session-branches-error" role="status">
-          {branchError}. Type the branch to start from instead.
-        </span>
-      )}
+      {sessionFields().map(fieldFor)}
       <VariablesField canvas={canvas} />
     </div>
   );

@@ -528,3 +528,142 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
     worktree: { path: worktreePath, exists: false, dirty: null, unpushed: null },
   });
 });
+
+const sessionCreated = async (name: string) =>
+  (
+    await run("tmux", ["-L", name, "display", "-p", "-t", `=${name}:`, "#{session_created}"])
+  ).stdout.trim();
+
+const boxOf = async (window: Page, selector: string) => {
+  const box = await window.locator(selector).first().boundingBox();
+  if (box === null) throw new Error(`${selector} has no box`);
+  return box;
+};
+
+test("the shown pane has a header naming the blueprint, and Minimize keeps its session", async () => {
+  const flowId = seeded("Release notes");
+  const window = await launch();
+  await openOn(window, flowId);
+  await showPane(window, flowId);
+  const pane = window.getByTestId(paneId);
+
+  await expect(pane.getByRole("heading", { name: "Agent" })).toBeVisible();
+  await expect(pane.locator(".fd-blueprint-terminal-name")).toHaveText("Release notes");
+  await expect(pane.locator(".fd-blueprint-terminal-state")).toHaveText("running");
+  const minimize = pane.getByTestId(controlTestIds.blueprintTerminalMinimize);
+  await expect(minimize).toHaveAccessibleName("Minimize");
+  await expect(pane.getByTestId(controlTestIds.blueprintTerminalClose)).toHaveAccessibleName(
+    "Stop the agent",
+  );
+  const created = await sessionCreated(bpName(flowId));
+
+  await minimize.click();
+
+  await expect(pane).toHaveCount(0);
+  await expect(window.getByTestId(toggleId)).toHaveAttribute("aria-pressed", "false");
+  await expect(window.getByTestId(pageTestIds.stopAgentDialog)).toHaveCount(0);
+  expect(await tmuxAlive(bpName(flowId))).toBe(true);
+  await showPane(window, flowId);
+  expect(await sessionCreated(bpName(flowId))).toBe(created);
+  expect(await bpLaunches()).toHaveLength(1);
+});
+
+test("Close asks first: Cancel keeps the agent, Stop agent ends it and its folder but keeps its edits", async () => {
+  const flowId = seeded("a");
+  const window = await launch();
+  await openOn(window, flowId);
+  await showPane(window, flowId);
+  const pane = window.getByTestId(paneId);
+  await writeBlueprintAsks(home, [
+    [{ name: "add_node", input: { type: "script", label: "Tests" } }],
+  ]);
+  await askInPane(window, "add a script");
+  await expect(pane).toContainText("asks done: 1", { timeout: 20_000 });
+  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
+  const folder = join(home, "bp-sessions", flowId);
+  expect(existsSync(folder)).toBe(true);
+  const dialog = window.getByTestId(pageTestIds.stopAgentDialog);
+
+  await pane.getByTestId(controlTestIds.blueprintTerminalClose).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("p")).toHaveText(
+    "Stop the agent? Its conversation ends; edits it made stay on the canvas.",
+  );
+  await expect(dialog.getByRole("button")).toHaveText(["Stop agent", "Cancel"]);
+  expect(await tmuxAlive(bpName(flowId))).toBe(true);
+
+  await dialog.getByTestId(pageTestIds.stopAgentCancel).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(pane).toBeVisible();
+  await expect(pane.locator(".fd-blueprint-terminal-state")).toHaveText("running");
+  expect(await tmuxAlive(bpName(flowId))).toBe(true);
+  expect(existsSync(folder)).toBe(true);
+
+  await pane.getByTestId(controlTestIds.blueprintTerminalClose).click();
+  await dialog.getByTestId(pageTestIds.stopAgentConfirm).click();
+
+  await expect(pane).toHaveCount(0);
+  await expect(window.getByTestId(toggleId)).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(() => tmuxAlive(bpName(flowId)), { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => existsSync(folder), { timeout: 10_000 }).toBe(false);
+  expect((await readout(window)).nodes.map(({ id }) => id)).toEqual(["p1", "script-1"]);
+  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
+
+  await showPane(window, flowId);
+  expect(await bpLaunches()).toHaveLength(2);
+  expect(await tmuxAlive(bpName(flowId))).toBe(true);
+});
+
+test("the pane spans the canvas column, the side panels reach the bottom, and it follows a side panel resize", async () => {
+  const flowId = seeded("a");
+  const window = await launch();
+  const size = { width: 1280, height: 800 };
+  await launched?.app.evaluate(({ BrowserWindow }, next) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(next.width, next.height);
+  }, size);
+  await window.waitForFunction(
+    (next) => globalThis.innerWidth === next.width && globalThis.innerHeight === next.height,
+    size,
+  );
+  await openOn(window, flowId);
+  await window.getByTestId(controlTestIds.inspectorShow).click();
+  await expect(window.getByTestId("inspector")).toBeVisible();
+  await showPane(window, flowId);
+
+  const layout = async () => {
+    const pane = await boxOf(window, `[data-testid="${paneId}"]`);
+    const canvas = await boxOf(window, ".fd-canvas");
+    const sidebar = await boxOf(window, "aside[aria-label='Nodes']");
+    const inspector = await boxOf(window, ".fd-inspector");
+    const status = await boxOf(window, ".fd-status-bar");
+    return {
+      paneLeft: pane.x - canvas.x,
+      paneRight: pane.x + pane.width - (canvas.x + canvas.width),
+      paneBelowCanvas: pane.y - (canvas.y + canvas.height),
+      paneBottom: pane.y + pane.height - status.y,
+      sidebarBottom: sidebar.y + sidebar.height - status.y,
+      inspectorBottom: inspector.y + inspector.height - status.y,
+      paneWidth: pane.width,
+    };
+  };
+  const flush = {
+    paneLeft: 0,
+    paneRight: 0,
+    paneBelowCanvas: 0,
+    paneBottom: 0,
+    sidebarBottom: 0,
+    inspectorBottom: 0,
+  };
+  const before = await layout();
+  expect(before).toEqual({ ...flush, paneWidth: before.paneWidth });
+
+  const handle = await boxOf(window, `[data-testid="${controlTestIds.inspectorResize}"]`);
+  await window.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await window.mouse.down();
+  await window.mouse.move(handle.x + handle.width / 2 - 100, handle.y + handle.height / 2, {
+    steps: 10,
+  });
+  await window.mouse.up();
+
+  await expect.poll(layout).toEqual({ ...flush, paneWidth: before.paneWidth - 100 });
+});

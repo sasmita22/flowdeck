@@ -32,6 +32,8 @@ export const controlTestIds = {
   nodeMenuDuplicate: "node-menu-duplicate",
   nodeMenuFrameOnly: "node-menu-frame-only",
   blueprintTerminalToggle: "blueprint-terminal-toggle",
+  blueprintTerminalMinimize: "blueprint-terminal-minimize",
+  blueprintTerminalClose: "blueprint-terminal-close",
 } as const;
 
 export const blueprintTerminalTestId = "blueprint-terminal";
@@ -99,6 +101,9 @@ export const pageTestIds = {
   leaveSave: "leave-save",
   leaveDiscard: "leave-discard",
   leaveCancel: "leave-cancel",
+  stopAgentDialog: "stop-agent-dialog",
+  stopAgentConfirm: "stop-agent-confirm",
+  stopAgentCancel: "stop-agent-cancel",
 } as const;
 
 export const dialogTestIds = {
@@ -113,6 +118,9 @@ export const buildDialogTestIds = {
   name: "build-dialog-name",
   repo: "build-dialog-repo",
   base: "build-dialog-base",
+  repoBrowse: "build-dialog-repo-browse",
+  baseInfo: "build-dialog-base-info",
+  branchesError: "build-dialog-branches-error",
   variable: (name: string) => `build-dialog-variable-${name}`,
   confirm: "build-dialog-confirm",
   cancel: "build-dialog-cancel",
@@ -122,6 +130,9 @@ export const buildDialogTestIds = {
 export const buildConfigTestIds = {
   repo: "session-build-config-repo",
   base: "session-build-config-base",
+  repoBrowse: "session-build-config-repo-browse",
+  baseInfo: "session-build-config-base-info",
+  branchesError: "session-branches-error",
   addVariable: "build-config-add-variable",
   variable: (name: string) => `build-config-variable-${name}`,
   variableName: (index: number) => `build-config-variable-name-${index}`,

@@ -1,7 +1,12 @@
-import type { CSSProperties } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { Variable } from "../../core/flow/schema.js";
+import type { BranchState } from "./branch-store.js";
+import { BranchField } from "./fields/branch-field.js";
+import { buildModelChoices } from "./fields/field-options.js";
+import { ModelField } from "./fields/model-field.js";
+import { RepoField } from "./fields/repo-field.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
 import { selectCanBuild, type BuildDialog as Dialog, type RunState } from "./run-store.js";
@@ -59,14 +64,17 @@ function BuildForm({
   dialog,
   canBuild,
   run,
+  branches,
   onBuild,
 }: {
   dialog: Dialog;
   canBuild: boolean;
   run: StoreApi<RunState>;
+  branches: StoreApi<BranchState>;
   onBuild(): void;
 }) {
   const edit = run.getState().editBuild;
+  const setRepo = (repo: string) => edit({ repo });
   return (
     <form
       style={{ display: "flex", flexDirection: "column", gap: 14, width: 380 }}
@@ -87,31 +95,29 @@ function BuildForm({
           onChange={(event) => edit({ name: event.target.value })}
         />
       </label>
-      <label style={fieldStyle}>
-        Repository
-        <input
-          data-testid={buildDialogTestIds.repo}
-          value={dialog.repo}
-          onChange={(event) => edit({ repo: event.target.value })}
-        />
-      </label>
-      <label style={fieldStyle}>
-        Start from branch
-        <input
-          data-testid={buildDialogTestIds.base}
-          value={dialog.base}
-          onChange={(event) => edit({ base: event.target.value })}
-        />
-      </label>
-      <label style={fieldStyle}>
-        Build model
-        <input
-          data-testid={controlTestIds.buildModel}
-          placeholder="The session's default"
-          value={dialog.buildModel}
-          onChange={(event) => edit({ buildModel: event.target.value })}
-        />
-      </label>
+      <RepoField
+        value={dialog.repo}
+        testId={buildDialogTestIds.repo}
+        browseTestId={buildDialogTestIds.repoBrowse}
+        onCommit={setRepo}
+        onBrowse={() => void branches.getState().browse(setRepo)}
+      />
+      <BranchField
+        repo={dialog.repo}
+        value={dialog.base}
+        branches={branches}
+        testId={buildDialogTestIds.base}
+        infoTestId={buildDialogTestIds.baseInfo}
+        errorTestId={buildDialogTestIds.branchesError}
+        onChange={(base) => edit({ base })}
+      />
+      <ModelField
+        label="Build model"
+        value={dialog.buildModel}
+        choices={buildModelChoices}
+        testId={controlTestIds.buildModel}
+        onChange={(buildModel) => edit({ buildModel })}
+      />
       {dialog.variables.map((variable) => (
         <VariableField
           key={variable.name}
@@ -151,13 +157,21 @@ export function BuildDialog({
   run,
   nav,
   library,
+  branches,
 }: {
   run: StoreApi<RunState>;
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
+  branches: StoreApi<BranchState>;
 }) {
   const dialog = useStore(run, (state) => state.buildDialog);
   const canBuild = useStore(run, (state) => selectCanBuild(state) && !state.starting);
+  const repo = dialog?.repo ?? "";
+
+  useEffect(() => {
+    void branches.getState().load(repo);
+  }, [branches, repo]);
+
   if (dialog === null) return null;
   const build = async () => {
     const buildId = await run.getState().confirmBuild();
@@ -174,7 +188,13 @@ export function BuildDialog({
         aria-labelledby="build-dialog-title"
         data-testid={buildDialogTestIds.dialog}
       >
-        <BuildForm dialog={dialog} canBuild={canBuild} run={run} onBuild={() => void build()} />
+        <BuildForm
+          dialog={dialog}
+          canBuild={canBuild}
+          run={run}
+          branches={branches}
+          onBuild={() => void build()}
+        />
       </div>
     </div>
   );

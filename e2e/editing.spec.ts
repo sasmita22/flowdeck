@@ -593,3 +593,106 @@ test("A run that wrote a file leaves it in its build's worktree, not the repo, a
   await expect(window.getByTestId("inspector-node-s1")).toHaveAttribute("data-status", "done");
   await expect(window.locator('[data-kind="kept"]')).toHaveCount(0);
 });
+
+const worktreeNote =
+  "Every build makes its own git worktree from this branch. Flowdeck never works in the repository's own checkout.";
+
+const withoutRepo = (drawn: Flow): Flow => ({
+  ...drawn,
+  session: { ...drawn.session, buildConfig: { variables: [] } },
+});
+
+const plainFolder = async () => {
+  const path = await realpath(await mkdtemp(join(tmpdir(), "fd-plain-")));
+  cleanups.push(() => rm(path, { recursive: true, force: true }));
+  return path;
+};
+
+const stubFolderPicker = async (picked: string | null) => {
+  await launched?.app.evaluate(({ dialog }, path) => {
+    const reply =
+      path === null ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: [path] };
+    const asked: unknown[] = [];
+    (globalThis as { folderPicks?: unknown[] }).folderPicks = asked;
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      asked.push(args.at(-1));
+      return reply;
+    }) as unknown as typeof dialog.showOpenDialog;
+  }, picked);
+};
+
+const folderPicks = async () =>
+  launched?.app.evaluate(() => (globalThis as { folderPicks?: unknown[] }).folderPicks ?? []);
+
+test("Start from branch lists the repository's branches once one is set, and says why when it can't", async () => {
+  const repo = await tempRepo();
+  await git(repo.path, "branch", "dev");
+  const plain = await plainFolder();
+  seedFlow(home, withoutRepo(flow([at(script("s1"), 80, 120)], [])));
+  const window = await launch();
+  await window.getByTestId(controlTestIds.sessionChip).click();
+  await expect(window.getByTestId("session-settings")).toBeVisible();
+  const repoField = window.getByTestId(buildConfigTestIds.repo);
+  const basePick = window.getByTestId(buildConfigTestIds.base);
+
+  await expect(basePick).toBeDisabled();
+  await expect(basePick.locator("option")).toHaveText(["Choose a repository first"]);
+  await expect(window.getByTestId(buildConfigTestIds.branchesError)).toHaveCount(0);
+
+  await repoField.fill(repo.path);
+  await repoField.press("Enter");
+  await expect(basePick).toBeEnabled();
+  await expect(basePick.locator("option")).toHaveText(["Choose…", "dev", "main"]);
+  await basePick.selectOption("dev");
+  await expect
+    .poll(async () => (await readout(window)).session.buildConfig)
+    .toEqual({ repo: repo.path, base: "dev", variables: [] });
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(window.getByTestId("session-settings")).toHaveCount(0);
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(basePick).toHaveValue("dev");
+
+  await repoField.fill(plain);
+  await repoField.press("Enter");
+  await expect(window.getByTestId(buildConfigTestIds.branchesError)).toHaveText(
+    `${plain} is not a git repository`,
+  );
+  await expect(basePick).toBeDisabled();
+  await expect(basePick.locator("option")).toHaveText(["No branches"]);
+  await expect
+    .poll(async () => (await readout(window)).session.buildConfig)
+    .toEqual({ repo: plain, variables: [] });
+  await expect(window.locator("input[data-testid*='base']")).toHaveCount(0);
+
+  const info = window.getByTestId(buildConfigTestIds.baseInfo);
+  await expect(info).toHaveAttribute("title", worktreeNote);
+  await expect(window.getByRole("img", { name: worktreeNote })).toBeVisible();
+});
+
+test("Browse fills Repository from the folder picker and loads its branches; cancelling changes nothing", async () => {
+  const repo = await tempRepo();
+  await git(repo.path, "branch", "dev");
+  seedFlow(home, withoutRepo(flow([at(script("s1"), 80, 120)], [])));
+  const window = await launch();
+  await window.getByTestId(controlTestIds.sessionChip).click();
+  const repoField = window.getByTestId(buildConfigTestIds.repo);
+  const basePick = window.getByTestId(buildConfigTestIds.base);
+  const browse = window.getByTestId(buildConfigTestIds.repoBrowse);
+  await expect(browse).toHaveAccessibleName("Browse for a folder");
+
+  await stubFolderPicker(null);
+  await browse.click();
+  await expect.poll(folderPicks).toEqual([{ properties: ["openDirectory"] }]);
+  await expect(repoField).toHaveValue("");
+  await expect(basePick).toBeDisabled();
+  expect((await readout(window)).session.buildConfig).toEqual({ variables: [] });
+
+  await stubFolderPicker(repo.path);
+  await browse.click();
+  await expect(repoField).toHaveValue(repo.path);
+  await expect(basePick).toBeEnabled();
+  await expect(basePick.locator("option")).toHaveText(["Choose…", "dev", "main"]);
+  await expect
+    .poll(async () => (await readout(window)).session.buildConfig)
+    .toEqual({ repo: repo.path, variables: [] });
+});
