@@ -67,28 +67,28 @@ describe("optionsClash on an old build", () => {
 
   it("refuses a Trigger flag named auto, which a run reads as the auto option", () => {
     expect(optionsClash(triggerWith([], { auto: true }))).toBe(
-      'Trigger flag "auto" clashes with the built-in option --auto',
+      'Blueprint variable "auto" clashes with the built-in option --auto',
     );
   });
 
   it("refuses a Trigger input named auto", () => {
     expect(optionsClash(triggerWith(["auto"], {}))).toBe(
-      'Trigger input "auto" clashes with the built-in option --auto',
+      'Blueprint variable "auto" clashes with the built-in option --auto',
     );
   });
 
   it("refuses a Trigger input or flag named model, which a resume reads as the model", () => {
     expect(optionsClash(triggerWith(["model"], {}))).toBe(
-      'Trigger input "model" clashes with the built-in option --model',
+      'Blueprint variable "model" clashes with the built-in option --model',
     );
     expect(optionsClash(triggerWith([], { model: true }))).toBe(
-      'Trigger flag "model" clashes with the built-in option --model',
+      'Blueprint variable "model" clashes with the built-in option --model',
     );
   });
 
   it("refuses a Trigger input and flag with the same name", () => {
     expect(optionsClash(triggerWith(["deep"], { deep: true }))).toBe(
-      'Trigger input "deep" clashes with the Trigger flag "deep"',
+      'Blueprint variable "deep" is declared twice, once as text and once as yes/no',
     );
   });
 

@@ -286,7 +286,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
   }
 
   it(
-    "publishes waiting, running, done for each prompt, in order, and ends done",
+    "publishes waiting, sent, done for each prompt, in order, and ends done",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
       const snapshots: RunSnapshot[] = [];
@@ -305,13 +305,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       for (const id of promptIds) {
         expect(withoutRepeats(shown(id)), `display statuses of ${id}`).toEqual([
           "waiting",
-          "running",
+          "sent",
           "done",
         ]);
       }
       const first = (id: string, status: DisplayStatus) => shown(id).indexOf(status);
-      expect(first("p2", "running")).toBeGreaterThan(first("p1", "done"));
-      expect(first("p3", "running")).toBeGreaterThan(first("p2", "done"));
+      expect(first("p2", "sent")).toBeGreaterThan(first("p1", "done"));
+      expect(first("p3", "sent")).toBeGreaterThan(first("p2", "done"));
       expect(snapshots.at(-1)?.status).toBe("done");
     },
   );

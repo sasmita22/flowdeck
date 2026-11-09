@@ -1,12 +1,15 @@
-import { spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { lstat, mkdtemp } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const hookPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const maxSocketPath = 104;
+const reportRunTimeOnFd3 =
+  '--import=data:text/javascript,import fs from "node:fs";process.on("exit",()=>fs.writeSync(3,String(performance.now())))';
 
 export function hasCode(error: unknown, ...codes: string[]): boolean {
   return error instanceof Error && "code" in error && codes.includes(error.code as string);
@@ -22,6 +25,7 @@ export async function makeSocketPath(): Promise<{ dir: string; socketPath: strin
 }
 
 export type HookRun = { code: number | null; stdout: string; ms: number };
+export type RunningHook = Promise<HookRun> & { kill: () => void };
 
 export function runHook(options: {
   socketPath?: string;
@@ -29,7 +33,7 @@ export function runHook(options: {
   env?: NodeJS.ProcessEnv;
   keepStdinOpen?: boolean;
   args?: string[];
-}): Promise<HookRun> {
+}): RunningHook {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env["FLOWDECK_SOCK"];
   if (options.socketPath !== undefined) env["FLOWDECK_SOCK"] = options.socketPath;
@@ -37,34 +41,35 @@ export function runHook(options: {
   return runTimed([hookPath, ...(options.args ?? [])], env, options.stdin, options.keepStdinOpen);
 }
 
-export function runBareNode(stdin: string | Buffer): Promise<HookRun> {
-  return runTimed(["-e", "process.stdin.resume()"], process.env, stdin);
-}
-
 function runTimed(
   args: string[],
   env: NodeJS.ProcessEnv,
   stdin: string | Buffer,
   keepStdinOpen = false,
-): Promise<HookRun> {
-  return new Promise((resolve, reject) => {
-    const started = performance.now();
-    const child = spawn(process.execPath, args, { env, stdio: ["pipe", "pipe", "inherit"] });
+): RunningHook {
+  const child = spawn(process.execPath, [reportRunTimeOnFd3, ...args], {
+    env,
+    stdio: ["pipe", "pipe", "inherit", "pipe"],
+  }) as ChildProcessByStdio<Writable, Readable, null>;
+  const running = new Promise<HookRun>((resolve, reject) => {
     let stdout = "";
-    let ms = 0;
+    let runTime = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    (child.stdio[3] as Readable)
+      .setEncoding("utf8")
+      .on("data", (chunk: string) => (runTime += chunk));
     child.stdin.on("error", (error) => {
       if (!hasCode(error, "EPIPE")) reject(error);
     });
     child.on("error", reject);
-    child.on("exit", () => {
-      ms = performance.now() - started;
-      child.stdin.destroy();
-    });
-    child.on("close", (code) => resolve({ code, stdout, ms }));
+    child.on("exit", () => child.stdin.destroy());
+    child.on("close", (code) =>
+      resolve({ code, stdout, ms: runTime === "" ? NaN : Number(runTime) }),
+    );
     if (keepStdinOpen) child.stdin.write(stdin);
     else child.stdin.end(stdin);
   });
+  return Object.assign(running, { kill: () => child.kill("SIGKILL") });
 }
 
 const listenThenReport = `

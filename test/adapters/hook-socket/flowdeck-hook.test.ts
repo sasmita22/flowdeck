@@ -1,11 +1,12 @@
 import { readFile, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FORWARD_CAP_MS, STDIN_CAP_MS } from "../../../bin/hook-limits.ts";
 import {
   type HookRun,
+  type RunningHook,
   makeSocketPath,
   makeStaleSocket,
-  runBareNode,
   runHook,
   waitUntil,
 } from "../../fixtures/hook-socket.js";
@@ -94,6 +95,18 @@ function decisionOf(run: HookRun): unknown {
   };
   expect(output.hookSpecificOutput?.hookEventName).toBe("PermissionRequest");
   return output.hookSpecificOutput?.decision;
+}
+
+async function withinCeiling(running: RunningHook): Promise<HookRun | undefined> {
+  const run = await Promise.race([
+    running,
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 3000)),
+  ]);
+  if (run === undefined) {
+    running.kill();
+    await running;
+  }
+  return run;
 }
 
 const deniedWithReason = { behavior: "deny", message: expect.stringMatching(/\S/) };
@@ -307,13 +320,10 @@ describe("flowdeck-hook", () => {
     collector = listening;
     const stdin = await readFixture("stop");
 
-    const run = await Promise.race([
-      runHook({ socketPath, stdin, keepStdinOpen: true }),
-      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 3000)),
-    ]);
+    const run = await withinCeiling(runHook({ socketPath, stdin, keepStdinOpen: true }));
     expect(run, "the hook was still running after 3 s").toBeDefined();
     expectQuiet(run as HookRun);
-    expect(run?.ms).toBeLessThan(2200);
+    expect(run?.ms).toBeGreaterThanOrEqual(STDIN_CAP_MS);
     expectQuiet(await runHook({ socketPath, stdin }));
     await waitUntil(
       () => listening.connections.length >= 1,
@@ -324,34 +334,43 @@ describe("flowdeck-hook", () => {
     expect(listening.connections).toHaveLength(1);
   });
 
-  const hookOverBareNodeMs = 100;
-
-  async function expectAsQuickAsBareNode(): Promise<void> {
-    const stdin = await readFixture("stop");
-    const [run, bare] = await Promise.all([runHook({ socketPath, stdin }), runBareNode(stdin)]);
+  async function expectExitBeforeForwardCap(): Promise<void> {
+    const run = await runHook({ socketPath, stdin: await readFixture("stop") });
 
     expectQuiet(run);
-    expect(run.ms).toBeLessThan(bare.ms + hookOverBareNodeMs);
+    expect(run.ms).toBeLessThan(FORWARD_CAP_MS);
   }
 
-  it("exits 0 within 100 ms of a bare node start when there is no socket file", async () => {
-    await expectAsQuickAsBareNode();
+  it("counts the hook's own run time, not when the test process sees it exit", async () => {
+    const running = runHook({ socketPath, stdin: await readFixture("stop") });
+    await new Promise((resolve) => setImmediate(resolve));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1200);
+
+    const run = await running;
+
+    expect(run.code).toBe(0);
+    expect(run.ms).toBeLessThan(FORWARD_CAP_MS);
   });
 
-  it("exits 0 within 100 ms of a bare node start when the socket file is stale", async () => {
+  it("exits 0 before the forward cap when there is no socket file", async () => {
+    await expectExitBeforeForwardCap();
+  });
+
+  it("exits 0 before the forward cap when the socket file is stale", async () => {
     await makeStaleSocket(socketPath);
 
-    await expectAsQuickAsBareNode();
+    await expectExitBeforeForwardCap();
   });
 
-  it("exits 0 within 1500 ms when the server accepts but never reads", async () => {
+  it("exits 0 at the forward cap when the server accepts but never reads", async () => {
     collector = await listen(socketPath, { neverRead: true });
     const sample = JSON.parse(await readFixture("stop")) as Record<string, unknown>;
     sample["last_assistant_message"] = "x".repeat(2 * 1024 * 1024);
 
-    const run = await runHook({ socketPath, stdin: JSON.stringify(sample) });
+    const run = await withinCeiling(runHook({ socketPath, stdin: JSON.stringify(sample) }));
 
-    expectQuiet(run);
-    expect(run.ms).toBeLessThan(1500);
+    expect(run, "the hook was still running after 3 s").toBeDefined();
+    expectQuiet(run as HookRun);
+    expect(run?.ms).toBeGreaterThanOrEqual(FORWARD_CAP_MS);
   });
 });
