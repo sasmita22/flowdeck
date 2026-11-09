@@ -13,6 +13,7 @@ export function LoopNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="loop"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "loop", label: data.label ?? "", sub: data.sub })}
       overlay={
         <text

@@ -51,14 +51,14 @@ describe("paletteItems", () => {
     expect(description).not.toMatch(/\n/);
   });
 
-  it("names the six node groups in the design's order, then Canvas", () => {
+  it("leads with a headingless group, then the node groups in the design's order, then Canvas", () => {
     expect(paletteGroups).toEqual([
+      "",
       "Composition",
       "Work",
       "Control",
       "People and safety",
       "Run events",
-      "In and out",
       "Canvas",
     ]);
   });
@@ -144,10 +144,46 @@ describe("the Branch entry", () => {
   });
 });
 
-describe("the Trigger entry", () => {
-  it("says it is where the flow starts, with no Run button or inputs", () => {
-    const { description } = itemOf("trigger");
+describe("the Start entry", () => {
+  it("says it is where the blueprint starts and what the main flow is", () => {
+    expect(itemOf("trigger").description).toBe(
+      "Where the blueprint starts. Everything wired from here is the main flow.",
+    );
+  });
+});
 
-    expect(description).toBe("Where the flow starts when its build runs.");
+describe("the Stop entry", () => {
+  it("says it is where the main flow ends and what it hands back", () => {
+    expect(itemOf("output").description).toBe("Where the main flow ends, and what it hands back.");
+  });
+});
+
+describe("Start and Stop on top", () => {
+  const typesOf = (query: string) => filterPalette(paletteItems, query).map((item) => item.type);
+
+  it("puts Start then Stop in a headingless group ahead of every named group", () => {
+    const [first, ...rest] = groupPalette(filterPalette(paletteItems, ""));
+
+    expect(first).toEqual({ group: "", items: [itemOf("trigger"), itemOf("output")] });
+    expect(rest.map(({ group }) => group as string)).not.toContain("");
+  });
+
+  it("no longer has an In and out group", () => {
+    expect(paletteItems.map((item) => item.group as string)).not.toContain("In and out");
+    expect(groupPalette(paletteItems).map(({ group }) => group as string)).not.toContain(
+      "In and out",
+    );
+  });
+
+  it("keeps Stop ahead of Hard stop when searching for stop", () => {
+    expect(typesOf("stop")).toEqual(["output", "hardstop"]);
+    expect(groupPalette(filterPalette(paletteItems, "stop"))[0]).toEqual({
+      group: "",
+      items: [itemOf("output")],
+    });
+  });
+
+  it("keeps Start and Stop first when searching for s", () => {
+    expect(typesOf("s").slice(0, 2)).toEqual(["trigger", "output"]);
   });
 });

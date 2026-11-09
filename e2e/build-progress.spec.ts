@@ -7,7 +7,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { flow, script } from "../test/fixtures/flow-builders.js";
+import { onMainFlow, script } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -86,7 +86,7 @@ const startBuild = async (window: Page, name: string): Promise<string> => {
 };
 
 const oneScript = () =>
-  flow([script("s1", { settings: { command: "sh", args: ["-c", "echo one"] } })], []);
+  onMainFlow([script("s1", { settings: { command: "sh", args: ["-c", "echo one"] } })], []);
 
 const openBlueprint = async (window: Page, flowId: string) => {
   await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();

@@ -125,6 +125,10 @@ export const buildDialogTestIds = {
   confirm: "build-dialog-confirm",
   cancel: "build-dialog-cancel",
   error: "build-dialog-error",
+  ignored: "build-dialog-ignored",
+  ignoredNode: (id: string) => `build-dialog-ignored-${id}`,
+  buildAnyway: "build-dialog-build-anyway",
+  ignoredCancel: "build-dialog-ignored-cancel",
 } as const;
 
 export const buildConfigTestIds = {

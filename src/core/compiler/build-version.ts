@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
+import { mainFlowOnly } from "../flow/main-flow.js";
 import type { BuildConfig, Flow } from "../flow/schema.js";
 import { unsetVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
@@ -212,7 +213,7 @@ export async function startBuild(
   deps: BuildFlowDeps,
   origin?: BuildOrigin,
 ): Promise<StartBuildResult> {
-  const flow = withRequestTarget(saved, request);
+  const flow = mainFlowOnly(withRequestTarget(saved, request));
   const { buildConfig } = flow.session;
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
@@ -318,7 +319,7 @@ export async function runBuild(
   origin?: BuildOrigin,
   resume?: BuildResume,
 ): Promise<BuildResult> {
-  const flow = withRequestTarget(saved, request);
+  const flow = mainFlowOnly(withRequestTarget(saved, request));
   const { buildConfig } = flow.session;
   const repo = buildConfig.repo ?? "";
   let current: BuildStepNumber = resume === undefined ? 1 : 3;

@@ -42,12 +42,18 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "e10556c06879bd3ead874e20436808e33a134466ddac3b60559b0f3709322d39",
     "plugin/skills/p/SKILL.md": "d64e21bce63c81b2a331d1c2158bf5aaf22dd92b056b7009500f5b6143b9f599",
-    "plugin/skills/run/SKILL.md": "8583e6604f07b5b556e342582b68da818db44d728ddec1d716235dcf0c5de9dc",
+    "plugin/skills/run/SKILL.md": "6c4857b7e09ce23e4d86fe8385c33138d94f3864912abd6978bb9bce352acefa",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "3e6db606bb873a2c4530f8529b66c2338395b1742ef1febef7b0d1013e6d230f",
+  "hash": "686cb27124583ead4b2d6405ac8531d11ad752eaf88915933abcd4ccd60b2ab0",
   "layout": "workspace",
   "nodes": [
+    {
+      "id": "start",
+      "label": "start",
+      "settings": {},
+      "type": "trigger"
+    },
     {
       "file": "plugin/skills/p/SKILL.md",
       "id": "p",
@@ -72,6 +78,22 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
         ]
       },
       "type": "agent"
+    },
+    {
+      "id": "stop",
+      "label": "stop",
+      "settings": {
+        "name": "result",
+        "type": "text"
+      },
+      "type": "output"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "result",
+      "node": "stop",
+      "type": "text"
     }
   ],
   "prefix": "fix-login",
@@ -96,12 +118,34 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "wires": [
     {
       "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "kind": "then",
+      "to": {
+        "node": "p",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
         "node": "p",
         "port": "out"
       },
       "kind": "then",
       "to": {
         "node": "a",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "a",
+        "port": "out"
+      },
+      "kind": "then",
+      "to": {
+        "node": "stop",
         "port": "in"
       }
     }
@@ -282,8 +326,10 @@ Run these steps in order. Only order and hand off: each step goes to its skill o
 
 Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 
-1. NODE p (p): read \`\${CLAUDE_PLUGIN_ROOT}/skills/p/SKILL.md\` by path and follow it. Then go on to NODE a.
-2. NODE a (a): dispatch \`fix-login:a\` with the prompt "NODE a\\nGo", and wait for it to return.
+1. NODE start (start): the run starts here. Then go on to NODE p.
+2. NODE p (p): read \`\${CLAUDE_PLUGIN_ROOT}/skills/p/SKILL.md\` by path and follow it. Then go on to NODE a.
+3. NODE a (a): dispatch \`fix-login:a\` with the prompt "NODE a\\nGo", and wait for it to return. Then go on to NODE stop.
+4. NODE stop (stop): the run's output \`result\` (text) is ready.
 ",
   "settings.json": "{
   "env": {

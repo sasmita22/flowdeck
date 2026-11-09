@@ -57,6 +57,23 @@ const drop = async (window: Page, type: Parameters<typeof paletteTestId>[0], x: 
   await expect(window.getByTestId(`node-${type}-1`)).toBeVisible();
 };
 
+const boxOf = async (locator: Locator) => {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("element has no box");
+  return box;
+};
+
+const connectPorts = async (window: Page, from: Locator, to: Locator) => {
+  const source = await boxOf(from);
+  const target = await boxOf(to);
+  await window.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await window.mouse.down();
+  await window.mouse.move(target.x + target.width / 2, target.y + target.height / 2, {
+    steps: 12,
+  });
+  await window.mouse.up();
+};
+
 type Readout = { nodes: { id: string; label: string; settings: Record<string, unknown> }[] };
 
 const nodeIn = async (window: Page, id: string) => {
@@ -281,6 +298,11 @@ test("A Branch's variable comes from the session's yes/no variables", async () =
   const { window } = await launch();
   await drop(window, "trigger", 120);
   await drop(window, "branch", 420);
+  await connectPorts(
+    window,
+    window.getByTestId("port-trigger-1-out"),
+    window.getByTestId("port-branch-1-in"),
+  );
   const branchIssue = window.getByTestId("node-issue-branch-1");
   await expect(branchIssue).toBeVisible();
   await window.getByTestId("node-branch-1").click();

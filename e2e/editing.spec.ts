@@ -20,6 +20,8 @@ import {
   flow,
   fork,
   loop,
+  onMainFlow,
+  output,
   prompt,
   script,
   thenWire,
@@ -158,10 +160,12 @@ test("A refused Build lists every problem in plain words, and a click selects it
     home,
     flow(
       [
+        at(trigger("start"), -200, 120, "Start"),
         at(prompt("p1", { settings: { instructions: "" } }), 80, 120, "Draft the plan"),
         at(script("s1", { settings: { command: "" } }), 900, 700, "Run the tests"),
+        at(output("stop"), 1200, 700, "Stop"),
       ],
-      [thenWire("p1", "s1")],
+      [thenWire("start", "p1"), thenWire("p1", "s1"), thenWire("s1", "stop")],
     ),
     repo.path,
   );
@@ -482,6 +486,22 @@ test("A new blueprint with one Script asks for its repository at Build, then run
   await window.getByTestId(paletteTestId("script")).dragTo(window.getByTestId("canvas"), {
     targetPosition: { x: 300, y: 200 },
   });
+  await window.getByTestId(paletteTestId("trigger")).dragTo(window.getByTestId("canvas"), {
+    targetPosition: { x: 60, y: 200 },
+  });
+  await window.getByTestId(paletteTestId("output")).dragTo(window.getByTestId("canvas"), {
+    targetPosition: { x: 560, y: 200 },
+  });
+  await connectPorts(
+    window,
+    window.getByTestId("port-trigger-1-out"),
+    window.getByTestId("port-script-1-in"),
+  );
+  await connectPorts(
+    window,
+    window.getByTestId("port-script-1-out"),
+    window.getByTestId("port-output-1-in"),
+  );
   await window.getByTestId("node-script-1").click();
   await window.getByTestId("node-setting-command").fill("pwd");
   await window.getByTestId("node-setting-command").press("Enter");
@@ -507,9 +527,13 @@ test("A new blueprint with one Script asks for its repository at Build, then run
   await app?.close();
   const db = new Database(join(home, "flowdeck.db"), { readonly: true });
   try {
-    expect(db.prepare("SELECT node_id, finished_at FROM run_nodes").all()).toEqual([
-      { node_id: "script-1", finished_at: expect.any(String) },
-    ]);
+    expect(db.prepare("SELECT node_id, finished_at FROM run_nodes ORDER BY node_id").all()).toEqual(
+      [
+        { node_id: "output-1", finished_at: expect.any(String) },
+        { node_id: "script-1", finished_at: expect.any(String) },
+        { node_id: "trigger-1", finished_at: expect.any(String) },
+      ],
+    );
     const [session] = db.prepare("SELECT cwd FROM run_sessions").all() as { cwd: string }[];
     expect(await realpath(session?.cwd ?? "")).toBe(
       await realpath(join(home, "workspaces", buildId, basename(repo.path))),
@@ -558,7 +582,10 @@ const runInBuild = async (command: string) => {
   const repo = await tempRepo();
   seedFlow(
     home,
-    flow([at(script("s1", { settings: { command: "sh", args: ["-c", command] } }), 80, 120)], []),
+    onMainFlow(
+      [at(script("s1", { settings: { command: "sh", args: ["-c", command] } }), 80, 120)],
+      [],
+    ),
     repo.path,
   );
   const window = await launch();

@@ -16,7 +16,15 @@ import {
   controlTestIds,
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
-import { flow, prompt, script, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import {
+  flow,
+  onMainFlow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
@@ -244,8 +252,8 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   seedFlow(
     home,
     flow(
-      [trigger("t"), script("s", { settings: { command: "echo", args: ["ok"] } })],
-      [thenWire("t", "s")],
+      [trigger("t"), script("s", { settings: { command: "echo", args: ["ok"] } }), output("stop")],
+      [thenWire("t", "s"), thenWire("s", "stop")],
     ),
     repo.path,
   );
@@ -296,7 +304,7 @@ test("a copy copies the kit out under its home and its build session loads that 
   tempDirs.push(repo.path);
   seedFlow(
     home,
-    flow([script("s", { settings: { command: "echo", args: ["ok"] } })], []),
+    onMainFlow([script("s", { settings: { command: "echo", args: ["ok"] } })], []),
     repo.path,
   );
   const argvLog = join(home, "argv.log");

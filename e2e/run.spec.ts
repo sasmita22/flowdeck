@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeStatus, type RunEvent } from "../src/core/run/run-events.js";
+import { thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -36,7 +37,9 @@ test.afterEach(async () => {
 });
 
 test("Build saves the edit first, the build runs, and the run shows each node's status", async () => {
-  seedFlow(home, twoScripts(), repo.path);
+  const blueprint = twoScripts() as { wires: unknown[] };
+  blueprint.wires.push(thenWire("s1", "stop"));
+  seedFlow(home, blueprint, repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
@@ -71,8 +74,14 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
     expect(run).toMatchObject({ build_id: buildId, build_dir: builds[0]?.dir });
 
     expect(
-      db.prepare("SELECT node_id, finished_at FROM run_nodes WHERE run_id = ?").all(run.id),
-    ).toEqual([{ node_id: "s1", finished_at: expect.any(String) }]);
+      db
+        .prepare("SELECT node_id, finished_at FROM run_nodes WHERE run_id = ? ORDER BY node_id")
+        .all(run.id),
+    ).toEqual([
+      { node_id: "s1", finished_at: expect.any(String) },
+      { node_id: "start", finished_at: expect.any(String) },
+      { node_id: "stop", finished_at: expect.any(String) },
+    ]);
 
     const events = (
       db

@@ -80,7 +80,8 @@ export const nodeWidth = ({
 }): number => {
   if (type === "loop" || type === "foreach")
     return containerLabelWidth(type, containerText(type, label, sub));
-  if (type === "fork" || type === "join") return nodeLook(type).box.width;
+  if (type === "fork" || type === "join" || type === "trigger" || type === "output")
+    return nodeLook(type).box.width;
   return Math.max(nodeLook(type).box.width, textWidth(type, label), textWidth(type, sub ?? ""));
 };
 

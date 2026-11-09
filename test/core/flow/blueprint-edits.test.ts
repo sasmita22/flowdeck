@@ -9,7 +9,9 @@ import {
   flow,
   fork,
   join,
+  output,
   prompt,
+  script,
   thenWire,
   trigger,
   wire,
@@ -172,29 +174,104 @@ describe("newProblems", () => {
     expect(newProblems(before, after)).toEqual([]);
   });
 
+  describe("reads only the main flow", () => {
+    const blankAgent = agent("blank", { settings: { instructions: "" } });
+    const before = flow(
+      [trigger("start"), prompt("a"), output("stop")],
+      [thenWire("start", "a"), thenWire("a", "stop")],
+    );
+
+    it("reports nothing for a blank Agent added off the main flow", () => {
+      const after = flow([...before.nodes, blankAgent], before.wires);
+
+      expect(newProblems(before, after)).toEqual([]);
+    });
+
+    it("reports the blank Agent's settings once it is added on the main flow", () => {
+      const after = flow(
+        [...before.nodes, blankAgent],
+        [thenWire("start", "a"), thenWire("a", "blank"), thenWire("blank", "stop")],
+      );
+
+      expect(newProblems(before, after)).toEqual([
+        expect.objectContaining({ rule: "required-settings", node: "blank" }),
+      ]);
+    });
+
+    it.each([
+      ["a Script with no command", script("loose", { settings: { command: "" } }), "out"],
+      ["a Branch with no variable picked", branch("loose", ""), "yes"],
+    ])(
+      "reports nothing when a wire brings %s already on the canvas onto it",
+      (_name, loose, out) => {
+        const nodes = [trigger("start"), output("stop"), loose];
+        const looseBefore = flow(nodes, [thenWire("start", "stop")]);
+        const wiredIn = flow(nodes, [thenWire("start", "loose"), wire("loose", out, "stop", "in")]);
+
+        expect(newProblems(looseBefore, wiredIn)).toEqual([]);
+      },
+    );
+
+    it("reports nothing when Start is wired to an unfilled Script while Stop is still loose", () => {
+      const nodes = [
+        trigger("start"),
+        script("loose", { settings: { command: "" } }),
+        output("stop"),
+      ];
+
+      expect(newProblems(flow(nodes, []), flow(nodes, [thenWire("start", "loose")]))).toEqual([]);
+    });
+
+    it("reports a cycle drawn off the main flow once a wire brings it onto it", () => {
+      const nodes = [trigger("start"), output("stop"), agent("a"), agent("b")];
+      const mainFlow = [thenWire("start", "stop"), thenWire("a", "b")];
+      const looseCycle = flow(nodes, [...mainFlow, thenWire("b", "a")]);
+      const wiredIn = flow(nodes, [...looseCycle.wires, thenWire("start", "a")]);
+
+      expect(newProblems(flow(nodes, mainFlow), looseCycle)).toEqual([]);
+      expect(newProblems(looseCycle, wiredIn)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ rule: "no-cycle" })]),
+      );
+    });
+  });
+
   describe("tells wires apart by their ends", () => {
-    const nodes = [trigger("start"), agent("a1"), agent("a2"), prompt("p1"), branch("b1", "go")];
+    const nodes = [
+      trigger("start"),
+      agent("a1"),
+      agent("a2"),
+      prompt("p1"),
+      branch("b1", "go"),
+      output("stop"),
+    ];
+    const mainFlowWires = [
+      thenWire("start", "a1"),
+      thenWire("start", "a2"),
+      thenWire("start", "b1"),
+      thenWire("p1", "stop"),
+    ];
+    const onFlow = (wires: unknown[]) => flow(nodes, [...wires, ...mainFlowWires]);
     const badPort = (from: string, port = "out") => wire(from, port, "p1", "bogus");
     const portProblem = (index: number) =>
       expect.objectContaining({ rule: "ports", node: "p1", wire: index });
 
     it("reports a problem on another wire between the same nodes, from a different port", () => {
-      const before = flow(nodes, [badPort("b1", "yes")]);
-      const after = flow(nodes, [badPort("b1", "yes"), badPort("b1", "no")]);
+      const before = onFlow([badPort("b1", "yes")]);
+      const after = onFlow([badPort("b1", "yes"), badPort("b1", "no")]);
 
       expect(newProblems(before, after)).toEqual([portProblem(1)]);
     });
 
     it("reports a problem on a new wire that repeats an existing wire's message", () => {
-      const before = flow(nodes, [badPort("a1")]);
-      const after = flow(nodes, [badPort("a1"), badPort("a2")]);
+      const before = onFlow([badPort("a1")]);
+      const after = onFlow([badPort("a1"), badPort("a2")]);
 
       expect(newProblems(before, after)).toEqual([portProblem(1)]);
     });
 
     it("reports only the new wire's problem after an earlier wire is deleted", () => {
-      const before = flow(nodes, [thenWire("start", "a1"), badPort("a1")]);
-      const after = flow(nodes, [badPort("a1"), badPort("a2")]);
+      const before = onFlow([thenWire("start", "a1"), badPort("a1")]);
+      const after = onFlow([badPort("a1"), badPort("a2")]);
 
       expect(newProblems(before, after)).toEqual([portProblem(1)]);
     });

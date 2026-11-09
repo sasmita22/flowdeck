@@ -8,7 +8,7 @@ import {
 import { layDown, workspaceDir } from "../../../src/core/compiler/build.js";
 import { buildWorktree } from "../../../src/core/run/workspace.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
-import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const rule = "─".repeat(40);
 const readyPane = [rule, "❯ ", rule].join("\n");
@@ -234,7 +234,7 @@ describe("openClaudeSession", () => {
   describe("for two builds made from one blueprint", () => {
     const home = "/fd";
     const repo = "/src/carousell-web";
-    const blueprint = flow([prompt("p"), agent("a")], [thenWire("p", "a")]);
+    const blueprint = onMainFlow([prompt("p"), agent("a")], [thenWire("p", "a")]);
     const builds = [
       { id: "b-alpha-0001-2222", name: "alpha" },
       { id: "b-beta-0003-4444", name: "beta" },

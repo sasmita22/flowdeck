@@ -1,12 +1,12 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { FrameRect } from "../nodes/shape.js";
+import { FrameRect, ignoredMarks } from "../nodes/shape.js";
 
-type ForEachFrameNode = Node<{ forEachId?: string }>;
+type ForEachFrameNode = Node<{ forEachId?: string; ignored?: boolean }>;
 
 export function ForEachFrame({ data, width, height }: NodeProps<ForEachFrameNode>) {
   return (
     <div
-      className="fd-node"
+      {...ignoredMarks(data.ignored)}
       data-testid={`foreach-frame-${data.forEachId ?? ""}`}
       style={{ position: "relative", width, height }}
     >

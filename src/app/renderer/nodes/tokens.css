@@ -13,3 +13,7 @@
   text-align: inherit;
   box-shadow: none;
 }
+
+.fd-node-ignored {
+  opacity: 0.4;
+}

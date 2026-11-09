@@ -44,6 +44,8 @@ import {
   flow,
   gate,
   loop,
+  onMainFlow,
+  output,
   prompt,
   script,
   thenWire,
@@ -73,7 +75,11 @@ const gitAt = (...repos: string[]) =>
 
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
-const savedFlow = () => flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]);
+const savedFlow = () =>
+  flow(
+    [trigger("start"), prompt("plan"), output("stop")],
+    [thenWire("start", "plan"), thenWire("plan", "stop")],
+  );
 
 const newBlueprint = () => ({ flowId: null, flow: savedFlow() });
 
@@ -284,7 +290,7 @@ describe("createEngineHandler", async () => {
     it("saves, lists, renames and opens blueprints, each keeping its own versions", async () => {
       const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
       const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
-      const second = flow([prompt("other")], []);
+      const second = onMainFlow([prompt("other")], []);
 
       const savedA = await handler.handle({
         id: 3,
@@ -434,7 +440,7 @@ describe("createEngineHandler", async () => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
       const runs = new FakeStore();
       flows.create("Report");
-      const { version } = flows.save(flow([script("s1"), script("s2")], []), "flow-a");
+      const { version } = flows.save(onMainFlow([script("s1"), script("s2")], []), "flow-a");
       runs.recordBuild({
         id: "b1",
         hash: "h1",
@@ -492,7 +498,7 @@ describe("createEngineHandler", async () => {
         value: {
           run: expect.objectContaining({ id: runId, status: "failed" }),
           name: "Report",
-          flow: flow([script("s1"), script("s2")], []),
+          flow: onMainFlow([script("s1"), script("s2")], []),
           snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
           activity: [],
         },
@@ -599,7 +605,7 @@ describe("createEngineHandler", async () => {
 
     const twoScripts = () =>
       atRepo(
-        flow(
+        onMainFlow(
           [
             script("write", {
               settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
@@ -611,7 +617,7 @@ describe("createEngineHandler", async () => {
       );
 
     const sleeper = () =>
-      atRepo(flow([script("nap", { settings: { command: "sleep", args: ["3"] } })], []));
+      atRepo(onMainFlow([script("nap", { settings: { command: "sleep", args: ["3"] } })], []));
 
     const collectInto = (sink: EnginePush[]) => (push: EnginePush) => {
       sink.push(push);
@@ -807,14 +813,25 @@ describe("createEngineHandler", async () => {
       const first = await startedRunId();
       await untilFinished(first);
       const v2 = twoScripts();
-      flows.save({ ...v2, nodes: v2.nodes.filter((node) => node.id === "write"), wires: [] });
+      flows.save(
+        atRepo(
+          onMainFlow(
+            v2.nodes.filter((node) => node.id === "write"),
+            [],
+          ),
+        ),
+      );
 
       const second = await startedRunId();
       await untilFinished(second);
 
       expect(runs.builds()).toHaveLength(2);
-      expect(runs.findRun(second)?.nodeIds).toEqual(["write"]);
-      expect(Object.keys(snapshotsOf(second).at(-1)?.nodes ?? {})).toEqual(["write"]);
+      expect(runs.findRun(second)?.nodeIds).toEqual(["start", "write", "stop"]);
+      expect(Object.keys(snapshotsOf(second).at(-1)?.nodes ?? {})).toEqual([
+        "start",
+        "write",
+        "stop",
+      ]);
     });
 
     it("publishes every node waiting first, and every node done when the run ends", async () => {
@@ -831,13 +848,17 @@ describe("createEngineHandler", async () => {
         ),
       ).toEqual({
         push: "run-state",
-        value: { runId, status: "running", nodes: { write: "waiting", check: "waiting" } },
+        value: {
+          runId,
+          status: "running",
+          nodes: { start: "waiting", write: "waiting", check: "waiting", stop: "waiting" },
+        },
       });
       await untilFinished(runId);
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "done",
-        nodes: { write: "done", check: "done" },
+        nodes: { start: "done", write: "done", check: "done", stop: "done" },
       });
       expect(runs.findRun(runId)?.status).toBe("done");
     });
@@ -960,15 +981,21 @@ describe("createEngineHandler", async () => {
       let source: TmpRepo;
 
       const promptAt = () =>
-        inFolder(flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]), {
-          repo: source.path,
-          base: "main",
-          variables: [],
-        });
+        inFolder(
+          flow(
+            [trigger("start"), prompt("plan"), output("stop")],
+            [thenWire("start", "plan"), thenWire("plan", "stop")],
+          ),
+          {
+            repo: source.path,
+            base: "main",
+            variables: [],
+          },
+        );
 
       const scriptsIn = (...steps: string[]) =>
         inFolder(
-          flow(
+          onMainFlow(
             steps.map((command, index) =>
               script(`s${index + 1}`, { settings: { command: "sh", args: ["-c", command] } }),
             ),
@@ -1107,7 +1134,7 @@ describe("createEngineHandler", async () => {
     });
 
     it("returns the validation problems of a flow that does not build, in plain words", async () => {
-      flows.save(atRepo(flow([loop("retry", { settings: { cap: 0, onCap: "fail" } })], [])));
+      flows.save(atRepo(onMainFlow([loop("retry", { settings: { cap: 0, onCap: "fail" } })], [])));
 
       await expectErrorAndNoRun(/^retry: Loop cap 0 is not a whole number of at least 1\./);
       expect(runs.builds()).toEqual([]);
@@ -1116,7 +1143,7 @@ describe("createEngineHandler", async () => {
     it("lists every build problem with its node and field, and no rule ids", async () => {
       flows.save(
         atRepo(
-          flow(
+          onMainFlow(
             [
               loop("retry", { settings: { cap: 0, onCap: "fail" } }),
               prompt("body", { parent: "retry", settings: { instructions: "" } }),
@@ -1186,6 +1213,12 @@ describe("createEngineHandler", async () => {
           expect.objectContaining({
             flow: "flow-sql",
             version: 2,
+            node_id: "start",
+            type: "trigger",
+          }),
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
             node_id: "write",
             type: "script",
           }),
@@ -1194,6 +1227,12 @@ describe("createEngineHandler", async () => {
             version: 2,
             node_id: "check",
             type: "script",
+          }),
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
+            node_id: "stop",
+            type: "output",
           }),
         ]);
         expect(rows[0]?.dir).toBe(join(home, "workspaces", rows[0]?.id ?? ""));
@@ -1291,7 +1330,7 @@ describe("createEngineHandler", async () => {
         await untilFinished(runId);
         expect(runs.findRun(runId)).toMatchObject({
           buildId: id,
-          nodeIds: ["write", "check"],
+          nodeIds: ["start", "write", "check", "stop"],
           status: "done",
         });
       });
@@ -1313,6 +1352,30 @@ describe("createEngineHandler", async () => {
           ]),
         );
         expect(runs.findBuild(first)?.dir).not.toBe(runs.findBuild(second)?.dir);
+      });
+
+      it("leaves a loose node out of the workspace manifest and out of the run", async () => {
+        const main = twoScripts();
+        const loose = flow(
+          [
+            script("loose", {
+              settings: { command: "sh", args: ["-c", "echo loose > loose.txt"] },
+            }),
+          ],
+          [],
+        );
+        flows.save({ ...main, nodes: [...main.nodes, ...loose.nodes] });
+        const mainIds = main.nodes.map((node) => node.id);
+
+        const buildId = await builtId();
+        const manifest = JSON.parse(
+          await new NodeFileSystem().readFile(`${buildDirOf(buildId)}/manifest.json`),
+        ) as { nodes: { id: string }[] };
+        const runId = await startedOn(buildId);
+        await untilFinished(runId);
+
+        expect(manifest.nodes.map((node) => node.id)).toEqual(mainIds);
+        expect(runs.findRun(runId)?.nodeIds).toEqual(mainIds);
       });
 
       it("answers an unsaved version, an unknown build and a bad payload with errors", async () => {
@@ -2740,7 +2803,12 @@ describe("createEngineHandler", async () => {
     });
 
     const promptFlow = () =>
-      atRepo(flow([trigger("start"), prompt("plan")], [thenWire("start", "plan")]));
+      atRepo(
+        flow(
+          [trigger("start"), prompt("plan"), output("stop")],
+          [thenWire("start", "plan"), thenWire("plan", "stop")],
+        ),
+      );
 
     const claudeSession = (ensureStarted: () => Promise<void>): OpenedSession => ({
       sessionId: "claude-session-1",
@@ -3096,7 +3164,7 @@ describe("createEngineHandler", async () => {
 
     const gated = () =>
       atRepo(
-        flow(
+        onMainFlow(
           [
             script("s1", { settings: { command: "echo", args: ["one"] } }),
             gate("g1"),
@@ -3129,7 +3197,7 @@ describe("createEngineHandler", async () => {
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "running",
-        nodes: { s1: "done", g1: "needs-you", s2: "waiting" },
+        nodes: { start: "done", s1: "done", g1: "needs-you", s2: "waiting", stop: "waiting" },
       });
     };
 
@@ -3149,7 +3217,7 @@ describe("createEngineHandler", async () => {
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "done",
-        nodes: { s1: "done", g1: "done", s2: "done" },
+        nodes: { start: "done", s1: "done", g1: "done", s2: "done", stop: "done" },
       });
       expect(runs.events(runId)).toContainEqual(
         expect.objectContaining({

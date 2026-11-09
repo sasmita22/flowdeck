@@ -17,6 +17,8 @@ const line = "var(--line)";
 
 const box = { width: 170, height: 48 };
 
+const circle = { width: 48, height: 48 };
+
 export const tagWidth = (tag: string) => tag.length * 7 + 10;
 
 export const BAR_MIN_HEIGHT = tagWidth("PARALLEL START") + 4;
@@ -37,8 +39,8 @@ const look = (
 });
 
 const looks: Record<NodeType, NodeLook> = {
-  trigger: look("trigger", "TRG", io, io),
-  output: look("output", "OUT", io, io),
+  trigger: look("trigger", "", io, io, circle.height, circle.width),
+  output: look("output", "", io, io, circle.height, circle.width),
   prompt: look("prompt", "STP", work, line),
   agent: look("agent", "AGT", work, work),
   script: look("script", "SH", work, "var(--term-bg)"),

@@ -22,8 +22,8 @@ const groups: Record<NodeType, string> = {
 };
 
 const tags: Record<NodeType, string> = {
-  trigger: "TRG",
-  output: "OUT",
+  trigger: "",
+  output: "",
   prompt: "STP",
   agent: "AGT",
   script: "SH",
@@ -74,12 +74,15 @@ describe("nodeLook", () => {
     expect(nodeLook(type).outline).toBe(outlines[type]);
   });
 
-  it.each(types.filter((type) => !["ask", "fork", "join", "branch"].includes(type)))(
-    "boxes %s at 170x48",
-    (type) => {
-      expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
-    },
-  );
+  it.each(["trigger", "output"] as const)("boxes %s at 48x48 for its circle", (type) => {
+    expect(nodeLook(type).box).toEqual({ width: 48, height: 48 });
+  });
+
+  it.each(
+    types.filter((type) => !["ask", "fork", "join", "branch", "trigger", "output"].includes(type)),
+  )("boxes %s at 170x48", (type) => {
+    expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
+  });
 
   it.each(["fork", "join"] as const)(
     "boxes a lone %s as a 28-wide bar of the minimum height",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { defaultLabel, defaultSettings } from "../../../../src/core/nodes/script/defaults.js";
 import { settings } from "../../../../src/core/nodes/script/settings.js";
-import { flow } from "../../../fixtures/flow-builders.js";
+import { onMainFlow } from "../../../fixtures/flow-builders.js";
 
 describe("script defaults", () => {
   it("starts with empty command and the label Script", () => {
@@ -23,7 +23,7 @@ describe("script defaults", () => {
       settings: defaultSettings,
     };
 
-    expect(validate(flow([node], [])).map(({ rule, field }) => ({ rule, field }))).toEqual([
+    expect(validate(onMainFlow([node], [])).map(({ rule, field }) => ({ rule, field }))).toEqual([
       { rule: "required-settings", field: "command" },
     ]);
   });

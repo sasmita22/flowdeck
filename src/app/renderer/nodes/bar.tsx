@@ -4,7 +4,7 @@ import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
 import { barLook } from "./outlines.js";
 import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
-import { ports, tagTextStyle, type ShapeNode } from "./shape.js";
+import { ignoredMarks, ports, tagTextStyle, type ShapeNode } from "./shape.js";
 
 export function ParallelBar({
   id,
@@ -31,7 +31,7 @@ export function ParallelBar({
   );
   return (
     <div
-      className="fd-node"
+      {...ignoredMarks(data.ignored)}
       data-testid={`node-${id}`}
       data-highlighted={data.highlighted === true ? "true" : undefined}
       title={nodeTitle(type)}

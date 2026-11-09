@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { gate, onMainFlow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -20,14 +20,16 @@ let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
-const laidOut = (nodes: unknown[], wires: unknown[]) =>
-  flow(
-    nodes.map((node, index) => ({
-      ...(node as object),
+const laidOut = (nodes: unknown[], wires: unknown[]): Flow => {
+  const built = onMainFlow(nodes, wires);
+  return {
+    ...built,
+    nodes: built.nodes.map((node, index) => ({
+      ...node,
       position: { x: index * 240, y: (index % 2) * 120 },
     })),
-    wires,
-  );
+  };
+};
 
 const sh = (id: string, command: string) =>
   script(id, { settings: { command: "sh", args: ["-c", command] } });

@@ -26,7 +26,7 @@ import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
-import { flow, gate, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { onMainFlow, gate, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
@@ -195,7 +195,7 @@ describe("an app restart", () => {
   const sessionName = (runId: string) => runs.findRun(runId)?.session.tmuxName ?? "";
 
   const askedAtGate = () =>
-    flow(
+    onMainFlow(
       [prompt("p1"), gate("g1", { settings: { shown: "Check the plan" } }), sh("s2", "true")],
       [thenWire("p1", "g1"), thenWire("g1", "s2")],
     );
@@ -241,7 +241,7 @@ describe("an app restart", () => {
       let release: () => void = () => undefined;
       sending.held = new Promise((resolve) => (release = resolve));
       const first = newHandler();
-      await start(first, flow([prompt("p1")], []));
+      await start(first, onMainFlow([prompt("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       let detached = false;
 
@@ -257,7 +257,7 @@ describe("an app restart", () => {
     it("stops waiting for a prompt that never finishes sending after 8 seconds", async () => {
       sending.held = new Promise(() => undefined);
       const first = newHandler();
-      await start(first, flow([prompt("p1")], []));
+      await start(first, onMainFlow([prompt("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -276,7 +276,10 @@ describe("an app restart", () => {
 
     it("leaves a running script running", async () => {
       const first = newHandler();
-      const runId = await start(first, flow([sh("s1", "echo $$ > s1.pid; exec sleep 30")], []));
+      const runId = await start(
+        first,
+        onMainFlow([sh("s1", "echo $$ > s1.pid; exec sleep 30")], []),
+      );
       const pidText = () => readFile(join(cwdOf(runId), "s1.pid"), "utf8").catch(() => "");
       await vi.waitFor(async () => expect(await pidText()).toMatch(/^\d+\n$/));
 
@@ -321,7 +324,7 @@ describe("an app restart", () => {
       const first = newHandler();
       const runId = await start(
         first,
-        flow(
+        onMainFlow(
           [
             sh(
               "s1",
@@ -371,7 +374,7 @@ describe("an app restart", () => {
       const first = newHandler();
       const runId = await start(
         first,
-        flow(
+        onMainFlow(
           [prompt("p1"), gate("g1"), prompt("p2")],
           [thenWire("p1", "g1"), thenWire("g1", "p2")],
         ),
@@ -545,7 +548,7 @@ describe("an app restart", () => {
     ) => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
-      const blueprint = flow([prompt("p1")], []);
+      const blueprint = onMainFlow([prompt("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
         session: { ...blueprint.session, buildConfig: { repo: repoPath, variables: [] } },
@@ -629,7 +632,7 @@ describe("an app restart", () => {
           script: { questions: [question] },
         }),
       });
-      const blueprint = flow([prompt("p1")], []);
+      const blueprint = onMainFlow([prompt("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
         session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },

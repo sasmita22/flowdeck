@@ -7,9 +7,12 @@ import {
   flow,
   forEach,
   loop,
+  onMainFlow,
+  output,
   prompt,
   thenWire,
   trigger,
+  wire,
 } from "../../fixtures/flow-builders.js";
 
 const brokenDir = new URL("../../fixtures/broken/", import.meta.url);
@@ -70,8 +73,15 @@ describe("validate", () => {
         prompt("each-p", { parent: "each" }),
         { ...forEach("inner"), parent: "retry" },
         prompt("inner-p", { parent: "inner" }),
+        output("stop"),
       ],
-      [thenWire("stray", "start")],
+      [
+        wire("start", "done", "stray", "in"),
+        thenWire("stray", "retry"),
+        thenWire("retry", "build"),
+        thenWire("build", "each"),
+        thenWire("each", "stop"),
+      ],
     );
     expect(validate(input).map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "loop-cap", node: "retry" },
@@ -83,7 +93,7 @@ describe("validate", () => {
   });
 
   it("refuses an Agent that asks for a tool the session does not allow", () => {
-    const input = flow([agent("review", { settings: { tools: ["Bash"] } })], []);
+    const input = onMainFlow([agent("review", { settings: { tools: ["Bash"] } })], []);
 
     expect(validate(input).map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "agent-tools", node: "review" },

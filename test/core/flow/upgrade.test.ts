@@ -140,6 +140,27 @@ describe("upgradeFlow on an old blueprint", () => {
   });
 });
 
+describe("upgradeFlow on the old Start and Stop names", () => {
+  const labelled = (id: string, type: string, label: string) => ({ ...node(id, type, {}), label });
+  const labelOf = (raw: ReturnType<typeof labelled>) =>
+    (
+      upgradeFlow({ nodes: [raw], wires: [], session: sessionBase }) as {
+        nodes: { label: string }[];
+      }
+    ).nodes[0]?.label;
+
+  it.each([
+    ["a trigger labelled Trigger", "trigger", "Trigger", "Start"],
+    ["an output labelled Output", "output", "Output", "Stop"],
+    ["a trigger labelled Kickoff", "trigger", "Kickoff", "Kickoff"],
+    ["a prompt labelled Trigger", "prompt", "Trigger", "Trigger"],
+    ["a prompt labelled Output", "prompt", "Output", "Output"],
+    ["an output labelled Done", "output", "Done", "Done"],
+  ])("keeps or renames the label of %s", (_, type, label, expected) => {
+    expect(labelOf(labelled("n", type, label))).toBe(expected);
+  });
+});
+
 describe("upgradeFlow on a blueprint already in the new shape", () => {
   const current = {
     nodes: [

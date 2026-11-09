@@ -19,6 +19,10 @@ const reported = (nodes: unknown[]) =>
   rule.check(flow(nodes, [])).map(({ rule, node, message }) => ({ rule, node, message }));
 
 describe("body-nodes", () => {
+  it("names Start and Stop in its rule message", () => {
+    expect(rule.message).toBe("A Start or Stop cannot sit inside a Loop or For each body.");
+  });
+
   it.each([
     [
       "a Trigger in a Loop",

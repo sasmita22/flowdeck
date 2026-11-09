@@ -7,12 +7,12 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { frontmatter } from "../../fixtures/frontmatter.js";
-import { agent, fileWire, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const sample = (): Flow => {
-  const base = flow(
+  const base = onMainFlow(
     [
       labelled(prompt("p"), "Draft the spec"),
       labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),

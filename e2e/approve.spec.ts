@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flow, gate, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { gate, onMainFlow, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -14,8 +14,8 @@ let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
-const scriptThenGateThenScript = () =>
-  flow(
+const scriptThenGateThenScript = () => {
+  const built = onMainFlow(
     [
       script("s1", { settings: { command: "echo", args: ["one"] } }),
       gate("g1"),
@@ -23,6 +23,11 @@ const scriptThenGateThenScript = () =>
     ],
     [thenWire("s1", "g1"), thenWire("g1", "s2")],
   );
+  return {
+    ...built,
+    nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+  };
+};
 
 test.beforeEach(async () => {
   launched = undefined;

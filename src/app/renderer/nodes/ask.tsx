@@ -9,6 +9,7 @@ export function AskNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="ask"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "ask", label: data.label ?? "" })}
     >
       <TagPill type="ask" />

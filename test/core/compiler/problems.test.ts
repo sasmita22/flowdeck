@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { plainProblems, plainReason, reasonNaming } from "../../../src/core/compiler/problems.js";
 import { validate } from "../../../src/core/compiler/validate.js";
-import { agent, flow, forEach, fork, prompt } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  forEach,
+  fork,
+  onMainFlow,
+  output,
+  prompt,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 
 describe("plainReason", () => {
   it("drops the node id it starts with and the type tags, and starts with a capital", () => {
@@ -28,8 +38,19 @@ describe("reasonNaming", () => {
 describe("plainProblems", () => {
   it("lists every problem with its node and field, and no rule ids", () => {
     const current = flow(
-      [fork("fork-1"), agent("agent-1", { settings: { instructions: "" } }), forEach("each")],
-      [],
+      [
+        trigger("start"),
+        fork("fork-1"),
+        agent("agent-1", { settings: { instructions: "" } }),
+        forEach("each"),
+        output("stop"),
+      ],
+      [
+        thenWire("start", "agent-1"),
+        thenWire("agent-1", "each"),
+        thenWire("each", "stop"),
+        thenWire("each", "fork-1"),
+      ],
     );
 
     const problems = plainProblems(validate(current));
@@ -45,7 +66,7 @@ describe("plainProblems", () => {
   });
 
   it("keeps a problem with no node, such as the missing repository", () => {
-    const base = flow([prompt("p")], []);
+    const base = onMainFlow([prompt("p")], []);
     const current = {
       ...base,
       session: { ...base.session, buildConfig: { ...base.session.buildConfig, repo: "" } },

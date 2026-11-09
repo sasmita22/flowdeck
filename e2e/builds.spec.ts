@@ -13,7 +13,7 @@ import {
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { gate, onMainFlow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -66,14 +66,18 @@ draw();
 const argvLog = () => join(bin, "argv.log");
 
 const blueprint = (): Flow => {
-  const laidOut = flow(
+  const built = onMainFlow(
     [
       prompt("p1", { settings: { instructions: "Work on {{ticket}}." } }),
       gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
       script("s2", { settings: { command: "sh", args: ["-c", "echo two"] } }),
-    ].map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+    ],
     [thenWire("p1", "g1"), thenWire("g1", "s2")],
   );
+  const laidOut = {
+    ...built,
+    nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+  };
   return {
     ...laidOut,
     session: {

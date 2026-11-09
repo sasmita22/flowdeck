@@ -9,6 +9,7 @@ export function PromptNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="prompt"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "prompt", label: data.label ?? "" })}
     >
       <TagPill type="prompt" />

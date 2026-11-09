@@ -9,6 +9,7 @@ export function AgentNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="agent"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "agent", label: data.label ?? "" })}
     >
       <TagPill type="agent" />

@@ -12,7 +12,15 @@ import {
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { fileWire, flow, loop, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import {
+  fileWire,
+  flow,
+  loop,
+  onMainFlow,
+  prompt,
+  script,
+  thenWire,
+} from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -99,7 +107,12 @@ const boxOf = async (locator: Locator) => {
   return box;
 };
 
-const dropOn = async (window: Page, type: "prompt" | "loop" | "foreach", x: number, y: number) => {
+const dropOn = async (
+  window: Page,
+  type: "prompt" | "loop" | "foreach" | "trigger" | "output",
+  x: number,
+  y: number,
+) => {
   const canvas = await boxOf(window.getByTestId("canvas"));
   await window.getByTestId(paletteTestId(type)).dragTo(window.getByTestId("canvas"), {
     targetPosition: { x: x - canvas.x, y: y - canvas.y },
@@ -361,7 +374,7 @@ test("A File wire named plan.md draws dashed with its name and survives a reload
 
 test("A script-only run holds the next node on its File wire until the file is written", async () => {
   seed(
-    flow(
+    onMainFlow(
       [
         at(sh("plan", "Planner", "if [ -f go ]; then echo '- one' > plan.md; fi"), 80, 160),
         at(sh("build", "Builder", "cat plan.md > built.txt"), 420, 160),
@@ -412,6 +425,20 @@ for (const container of ["loop", "foreach"] as const) {
     await window.getByTestId("node-setting-instructions").blur();
     await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
     await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
+    const canvas = await boxOf(window.getByTestId("canvas"));
+    const frame = await boxOf(window.getByTestId(`${container}-frame-${id}`));
+    await dropOn(window, "trigger", canvas.x + 20, frame.y);
+    await dropOn(window, "output", frame.x + frame.width + 60, frame.y);
+    await connectPorts(
+      window,
+      window.getByTestId("port-trigger-1-out"),
+      window.getByTestId(`port-${id}-in`),
+    );
+    await connectPorts(
+      window,
+      window.getByTestId(`port-${id}-out`),
+      window.getByTestId("port-output-1-in"),
+    );
 
     const buildId = await buildOnCanvas(window, home, container);
     await writeFile(join(workFolder(buildId), "items.txt"), "- alpha\n- bravo\n");

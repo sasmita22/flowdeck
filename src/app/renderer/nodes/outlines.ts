@@ -49,14 +49,25 @@ const branch = nodeLook("branch").box;
 const hexagon = (width: number) =>
   `12,0 ${width - 12},0 ${width},${branch.height / 2} ${width - 12},${branch.height} 12,${branch.height} 0,${branch.height / 2}`;
 
+const circle = (inset = 0): string => {
+  const radius = r - inset;
+  return `M${inset},${r} A${radius},${radius} 0 1 1 ${h - inset},${r} A${radius},${radius} 0 1 1 ${inset},${r} Z`;
+};
+
+const io = nodeLook("trigger").group;
+
 const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
-  trigger: (w) =>
-    outline(
-      `M${r},0 H${w - 6} Q${w},0 ${w},6 V${h - 6} Q${w},${h} ${w - 6},${h} H${r} A${r},${r} 0 0 1 ${r},0 Z`,
-      16,
-    ),
-  output: (w) =>
-    outline(`M6,0 H${w - r} A${r},${r} 0 0 1 ${w - r},${h} H6 Q0,${h} 0,${h - 6} V6 Q0,0 6,0 Z`, 8),
+  trigger: () => outline(circle(), 8),
+  output: () =>
+    outline(circle(), 8, {
+      strokeWidth: 3,
+      extras: [
+        {
+          element: "path",
+          attributes: { d: circle(5), fill: "none", stroke: io, strokeWidth: 1.4 },
+        },
+      ],
+    }),
   prompt: (w) => outline(roundedRect(w, h, 4), 8),
   agent: (w) =>
     outline(roundedRect(w, h, 12), 10, {

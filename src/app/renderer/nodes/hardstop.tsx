@@ -9,6 +9,7 @@ export function HardstopNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="hardstop"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "hardstop", label: data.label ?? "" })}
     >
       <TagPill type="hardstop" />

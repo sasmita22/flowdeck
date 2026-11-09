@@ -73,8 +73,8 @@ describe("dropping a new node onto a frame", () => {
   });
 
   it.each([
-    ["trigger", "Trigger"],
-    ["output", "Output"],
+    ["trigger", "Start"],
+    ["output", "Stop"],
   ] as const)("refuses a %s dropped on a frame, and says why", (type, label) => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
     const before = store.getState().flow;

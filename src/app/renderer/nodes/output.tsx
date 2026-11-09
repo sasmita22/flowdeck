@@ -1,6 +1,5 @@
 import type { NodeProps } from "@xyflow/react";
-import { nodeWidth } from "../canvas/frames.js";
-import { Label, NodeShape, TagPill, type ShapeNode } from "./shape.js";
+import { NodeShape, SideLabel, type ShapeNode } from "./shape.js";
 
 export function OutputNode({ id, data, selected }: NodeProps<ShapeNode>) {
   return (
@@ -9,10 +8,10 @@ export function OutputNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="output"
       selected={selected}
       highlighted={data.highlighted}
-      width={nodeWidth({ type: "output", label: data.label ?? "" })}
+      ignored={data.ignored}
+      overlay={<SideLabel type="output" text={data.label} />}
     >
-      <TagPill type="output" />
-      <Label type="output" text={data.label} />
+      {null}
     </NodeShape>
   );
 }

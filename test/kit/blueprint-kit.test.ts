@@ -93,6 +93,10 @@ describe("the blueprint kit", () => {
     for (const rule of rules) expect(content, rule.id).toContain(`\`${rule.id}\``);
   });
 
+  it.each(["one-start", "stop-required"])("names the %s rule", (id) => {
+    expect(skill()).toContain(`\`${id}\``);
+  });
+
   it("says to call read_blueprint before any edit", () => {
     expect(skill()).toMatch(/`read_blueprint`[^.\n]*before[^.\n]*edit/i);
   });
