@@ -26,14 +26,14 @@ export const optionsClash = (manifest: ManifestPart): string | undefined => {
   const inputs = manifest.inputs ?? [];
   for (const builtIn of ["auto", "model"]) {
     if (flags.includes(builtIn))
-      return `Trigger flag "${builtIn}" clashes with the built-in option --${builtIn}`;
+      return `Blueprint variable "${builtIn}" clashes with the built-in option --${builtIn}`;
     if (inputs.includes(builtIn))
-      return `Trigger input "${builtIn}" clashes with the built-in option --${builtIn}`;
+      return `Blueprint variable "${builtIn}" clashes with the built-in option --${builtIn}`;
   }
   const shared = inputs.find((name) => flags.includes(name));
   return shared === undefined
     ? undefined
-    : `Trigger input "${shared}" clashes with the Trigger flag "${shared}"`;
+    : `Blueprint variable "${shared}" is declared twice, once as text and once as yes/no`;
 };
 
 export const storedOptions = ({ inputs, flags, auto }: RunOptions): Record<string, unknown> => ({

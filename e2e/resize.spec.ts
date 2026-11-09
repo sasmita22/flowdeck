@@ -229,9 +229,6 @@ test("At the smallest window the widest panels leave the canvas its room, and co
 
   await sizeTo(target, smallest);
   await expect.poll(async () => (await widths(window)).canvas).toBeGreaterThanOrEqual(CANVAS_MIN);
-  await window.emulateMedia({ colorScheme: "dark" });
-  await window.mouse.move(1, 1);
-  await window.screenshot({ path: "/tmp/fd-52/min.png" });
 
   await dragHandle(window, controlTestIds.sidebarResize, 600);
   await dragHandle(window, controlTestIds.inspectorResize, -600);

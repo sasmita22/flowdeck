@@ -1,6 +1,7 @@
 import { connect } from "node:net";
+import { FORWARD_CAP_MS, STDIN_CAP_MS } from "./hook-limits.ts";
 
-const stdinCap = setTimeout(() => process.exit(0), 2000);
+const stdinCap = setTimeout(() => process.exit(0), STDIN_CAP_MS);
 
 type Decision = { behavior: "allow" } | { behavior: "deny"; message: string };
 
@@ -8,7 +9,7 @@ const deadlineFlag = "--permission-deadline-ms=";
 
 function forward(input: string): void {
   clearTimeout(stdinCap);
-  setTimeout(() => process.exit(0), 1000);
+  setTimeout(() => process.exit(0), FORWARD_CAP_MS);
   const socketPath = process.env["FLOWDECK_SOCK"];
   if (input.length === 0 || !socketPath) process.exit(0);
   const socket = connect(socketPath);

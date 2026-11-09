@@ -70,7 +70,9 @@ describe("branchTakes", () => {
   });
 
   it("throws naming a flag nobody declares", () => {
-    expect(() => branchTakes("e2e", { other: true }, {})).toThrow(/e2e/);
+    expect(() => branchTakes("e2e", { other: true }, {})).toThrow(
+      new Error('Branch variable "e2e" is not a yes/no variable on the blueprint.'),
+    );
   });
 });
 

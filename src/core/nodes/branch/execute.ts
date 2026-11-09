@@ -24,7 +24,7 @@ export function branchTakes(
 ): BranchPort {
   const value = overrides[flag] ?? defaults[flag];
   if (typeof value !== "boolean") {
-    throw new Error(`Branch flag "${flag}" is not a boolean flag on the Trigger.`);
+    throw new Error(`Branch variable "${flag}" is not a yes/no variable on the blueprint.`);
   }
   return value ? "yes" : "no";
 }
