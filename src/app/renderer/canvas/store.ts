@@ -835,11 +835,12 @@ export function createCanvasStore(
         })),
 
       setBase: (base) =>
-        editBuildConfig(({ repo, variables }) => ({
-          ...(repo === undefined ? {} : { repo }),
-          ...(base === "" ? {} : { base }),
-          variables,
-        })),
+        editBuildConfig((config) => {
+          if (base !== "") return { ...config, base };
+          const { ...rest } = config;
+          delete rest.base;
+          return rest;
+        }),
 
       addVariable: () =>
         editBuildConfig((config) => ({
