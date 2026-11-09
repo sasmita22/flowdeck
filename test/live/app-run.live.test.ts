@@ -37,6 +37,7 @@ import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
 import { flow as buildFlow, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
+import { expectPaneToShow } from "../fixtures/pane-text.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
@@ -425,7 +426,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       });
 
       live.write(runId, "fdterm");
-      await vi.waitFor(async () => expect(await pane()).toContain("fdterm"), { timeout: 10_000 });
+      await expectPaneToShow(pane, "fdterm");
 
       const clientSize = () =>
         tmux("list-clients", "-t", target, "-F", "#{client_width}x#{client_height}");
@@ -447,7 +448,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       expect(live.open(runId, { cols: 100, rows: 30 })).toBe(true);
       expect(spawns).toBe(2);
       await vi.waitFor(async () => expect(await clients()).toHaveLength(1));
-      expect(await pane()).toContain("fdterm");
+      await expectPaneToShow(pane, "fdterm");
 
       await handler?.stop();
       await vi.waitFor(() =>

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,16 @@ const isAlive = (pid: number) => {
     return false;
   }
 };
+
+function killGroupIfAny(pid: number): void {
+  if (pid <= 0) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
+  }
+}
 
 describe("NodeProcessRunner", () => {
   const runner = new NodeProcessRunner();
@@ -134,9 +144,27 @@ describe("NodeProcessRunner jobs", () => {
   });
 
   afterEach(async () => {
-    const pid = await pidOf();
-    if (pid > 0 && isAlive(pid)) process.kill(-pid, "SIGKILL");
+    killGroupIfAny(await pidOf());
     await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("cleanup does not throw for a group whose only member is an unreaped zombie", async () => {
+    const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    const pid = child.pid ?? 0;
+    expect(pid).toBeGreaterThan(0);
+    process.kill(-pid, "SIGKILL");
+    const deadline = Date.now() + 2000;
+    while (
+      !execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" })
+        .trim()
+        .startsWith("Z")
+    ) {
+      if (Date.now() > deadline) throw new Error(`process ${pid} never became a zombie`);
+    }
+
+    expect(() => killGroupIfAny(pid)).not.toThrow();
+    await exited;
   });
 
   it("gives the code and output like a plain run, and keeps them in the job's folder", async () => {
