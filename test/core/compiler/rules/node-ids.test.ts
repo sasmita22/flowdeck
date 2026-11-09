@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/node-ids.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { flow, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { flow, onMainFlow, prompt, thenWire } from "../../../fixtures/flow-builders.js";
 
 const errorsFor = (ids: string[]) =>
   rule
@@ -51,7 +51,7 @@ describe("node-ids", () => {
   });
 
   it("makes validate reject a flow whose ids would collide on a case-insensitive disk", () => {
-    const errors = validate(flow([prompt("p1"), prompt("P1")], [thenWire("p1", "P1")]));
+    const errors = validate(onMainFlow([prompt("p1"), prompt("P1")], [thenWire("p1", "P1")]));
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "node-ids", node: "P1" },

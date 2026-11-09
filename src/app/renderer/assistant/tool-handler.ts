@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { StoreApi } from "zustand/vanilla";
 import { blueprintSessionName } from "../../../core/compiler/blueprint-session.js";
-import { validate } from "../../../core/compiler/validate.js";
+import { flowProblems } from "../../../core/compiler/flow-problems.js";
 import { checkEdit, newProblems, type BlueprintEdit } from "../../../core/flow/blueprint-edits.js";
 import {
   searchBlueprints,
@@ -111,11 +111,16 @@ export function createToolHandler({
     const blueprint = targetOf(input);
     if (blueprint === undefined || isOpen(blueprint)) {
       const { flow } = canvas.getState();
-      return { ok: true, flow, unsaved: selectDirty(canvas.getState()), problems: validate(flow) };
+      return {
+        ok: true,
+        flow,
+        unsaved: selectDirty(canvas.getState()),
+        problems: flowProblems(flow),
+      };
     }
     const saved = await readSaved(blueprint);
     if (saved?.flow == null) return refuse(`No blueprint "${blueprint}".`);
-    return { ok: true, ...saved, problems: validate(saved.flow) };
+    return { ok: true, ...saved, problems: flowProblems(saved.flow) };
   };
 
   const searchSaved = async (input: unknown): Promise<Answer> => {

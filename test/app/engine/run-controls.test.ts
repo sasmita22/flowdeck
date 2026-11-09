@@ -25,10 +25,10 @@ import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
   branch,
-  flow,
   fork,
   gate,
   join as joinNode,
+  onMainFlow,
   prompt,
   script,
   thenWire,
@@ -186,7 +186,7 @@ describe("run controls", () => {
 
   describe("run options", () => {
     const skippableGate = () =>
-      flow(
+      onMainFlow(
         [
           sh("s1", "true"),
           gate("g1", { settings: { shown: "Check", skippable: true } }),
@@ -196,7 +196,7 @@ describe("run controls", () => {
       );
 
     const branchOn = (variable: string) => {
-      const base = flow(
+      const base = onMainFlow(
         [branch("b", variable), sh("yes", "true"), sh("no", "true")],
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
@@ -253,7 +253,10 @@ describe("run controls", () => {
   describe("stop", () => {
     it("kills the running script and marks the run stopped, writing nothing after", async () => {
       const runId = await start(
-        flow([sh("s1", "echo $$ > pid; exec sleep 30"), sh("s2", "true")], [thenWire("s1", "s2")]),
+        onMainFlow(
+          [sh("s1", "echo $$ > pid; exec sleep 30"), sh("s2", "true")],
+          [thenWire("s1", "s2")],
+        ),
       );
       await vi.waitFor(async () =>
         expect(await readFile(join(cwdOf(runId), "pid"), "utf8").catch(() => "")).not.toBe(""),
@@ -266,6 +269,8 @@ describe("run controls", () => {
       await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(/ESRCH/));
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(runs.events(runId).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
+        "start running",
+        "start done",
         "s1 running",
       ]);
     });
@@ -276,7 +281,7 @@ describe("run controls", () => {
 
     describe("on a run left interrupted", () => {
       const interrupted = async (tmuxName: string) => {
-        const buildId = await builtId(flow([sh("s1", "true")], []));
+        const buildId = await builtId(onMainFlow([sh("s1", "true")], []));
         const { id } = runs.createRun({
           buildDir: buildDirOf(buildId),
           inputs: {},
@@ -321,7 +326,10 @@ describe("run controls", () => {
 
   describe("retry", () => {
     const readsCode = () =>
-      flow([sh("s1", "exit $(cat code.txt)"), sh("s2", "echo after")], [thenWire("s1", "s2")]);
+      onMainFlow(
+        [sh("s1", "exit $(cat code.txt)"), sh("s2", "echo after")],
+        [thenWire("s1", "s2")],
+      );
 
     it("sends a failed script again once its file is fixed, and the run goes on to done", async () => {
       const buildId = await builtId(readsCode());
@@ -355,7 +363,7 @@ describe("run controls", () => {
         message: "s2 has not failed",
       });
 
-      const going = await start(flow([sh("nap", "sleep 30")], []));
+      const going = await start(onMainFlow([sh("nap", "sleep 30")], []));
       expect(await call("retry-node", { runId: going, nodeId: "nap" })).toMatchObject({
         kind: "error",
       });
@@ -423,7 +431,7 @@ describe("run controls", () => {
         }),
       });
       const runId = await start(
-        flow(
+        onMainFlow(
           [fork("f"), agent("a"), agent("b"), joinNode("j")],
           [thenWire("f", "a"), thenWire("f", "b"), thenWire("a", "j"), thenWire("b", "j")],
         ),
@@ -459,7 +467,7 @@ describe("run controls", () => {
 
   describe("resume", () => {
     const stoppable = () =>
-      flow(
+      onMainFlow(
         [sh("s1", "echo once >> s1.log"), sh("s2", "test -f go || sleep 30"), sh("s3", "true")],
         [thenWire("s1", "s2"), thenWire("s2", "s3")],
       );
@@ -478,7 +486,7 @@ describe("run controls", () => {
     });
 
     it("refuses a stopped run while another run of its build is going, leaving it stopped", async () => {
-      const buildId = await builtId(flow([sh("s1", "test -f go || sleep 30")], []));
+      const buildId = await builtId(onMainFlow([sh("s1", "test -f go || sleep 30")], []));
       const first = await startOn(buildId);
       await vi.waitFor(() => expect(statusOf(first, "s1")).toBe("running"));
       await call("stop-run", { runId: first });
@@ -491,7 +499,7 @@ describe("run controls", () => {
     });
 
     it("refuses a run that is done", async () => {
-      const runId = await start(flow([sh("s1", "true")], []));
+      const runId = await start(onMainFlow([sh("s1", "true")], []));
       await finished(runId);
 
       expect(await call("resume-run", { runId })).toEqual({
@@ -517,7 +525,7 @@ describe("run controls", () => {
     it("starts Claude again with --resume when the run's Claude session is gone", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => false });
-      const runId = await start(flow([prompt("p1")], []));
+      const runId = await start(onMainFlow([prompt("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
 
@@ -531,7 +539,7 @@ describe("run controls", () => {
     it("refuses, changing nothing, when the session ends between the check and the attach", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => true });
-      const runId = await start(flow([prompt("p1")], []));
+      const runId = await start(onMainFlow([prompt("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
       const before = runs.events(runId);
@@ -549,7 +557,7 @@ describe("run controls", () => {
 
   describe("activity and cost", () => {
     it("keeps a run's script output, and loads it again with the run", async () => {
-      const runId = await start(flow([sh("s1", "echo hello; echo oops >&2")], []));
+      const runId = await start(onMainFlow([sh("s1", "echo hello; echo oops >&2")], []));
       await finished(runId);
 
       const loaded = (await call("load-run", { runId })) as { activity: unknown[] };
@@ -561,7 +569,7 @@ describe("run controls", () => {
     });
 
     it("answers each node's tokens and cost, and a session total that is their sum", async () => {
-      const runId = await start(flow([sh("s1", "true")], []));
+      const runId = await start(onMainFlow([sh("s1", "true")], []));
       await finished(runId);
       runs.append(runId, "s1", {
         kind: "usage",
@@ -576,7 +584,9 @@ describe("run controls", () => {
       };
 
       expect(report.nodes).toEqual([
+        expect.objectContaining({ nodeId: "start", tokens: 0, cost: 0 }),
         expect.objectContaining({ nodeId: "s1", tokens: 7, cost: 0.25 }),
+        expect.objectContaining({ nodeId: "stop", tokens: 0, cost: 0 }),
       ]);
       expect(report.total).toMatchObject({ tokens: 7, cost: 0.25 });
     });

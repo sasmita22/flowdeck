@@ -9,6 +9,7 @@ export function ScriptNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="script"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "script", label: data.label ?? "" })}
     >
       <TagPill type="script" />

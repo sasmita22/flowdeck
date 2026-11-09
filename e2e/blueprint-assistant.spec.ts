@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { flow, gate, prompt, thenWire } from "../test/fixtures/flow-builders.js";
+import { flow, gate, onMainFlow, prompt, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, type LaunchedApp } from "../scripts/drive.js";
@@ -37,6 +37,17 @@ const laidOut = (nodes: unknown[], wires: unknown[]): Flow =>
     })),
     wires,
   );
+
+const runnable = (nodes: unknown[], wires: unknown[]): Flow => {
+  const built = onMainFlow(nodes, wires);
+  return {
+    ...built,
+    nodes: built.nodes.map((node, index) => ({
+      ...node,
+      position: { x: index * 240, y: (index % 2) * 120 },
+    })),
+  };
+};
 
 const bpName = (flowId: string) => `fd-bp-${flowId}`;
 
@@ -193,7 +204,7 @@ test("a run's terminal keeps working beside the blueprint terminal", async () =>
   repo = await createTmpRepo({ commit: true });
   const { flowId } = seedFlow(
     home,
-    laidOut(
+    runnable(
       [prompt("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } })],
       [thenWire("p1", "g1")],
     ),
@@ -465,7 +476,7 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
   test.setTimeout(120_000);
   repo = await createTmpRepo({ commit: true });
   const repoName = repo.path.split("/").at(-1) ?? "";
-  const { flowId } = seedBlueprint(home, "a", laidOut([prompt("p1")], []), repo.path);
+  const { flowId } = seedBlueprint(home, "a", runnable([prompt("p1")], []), repo.path);
   const seed = new Database(join(home, "flowdeck.db"));
   try {
     seed

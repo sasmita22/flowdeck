@@ -11,7 +11,14 @@ import {
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
-import { flow, gate, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import {
+  flow,
+  gate,
+  onMainFlow,
+  prompt,
+  script,
+  thenWire,
+} from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -33,7 +40,7 @@ const twoScripts = () =>
   ) as unknown;
 
 const withConnectors = (connectors: string[]) => {
-  const base = flow([prompt("p1")], []);
+  const base = onMainFlow([prompt("p1")], []);
   return { ...base, session: { ...base.session, connectors } };
 };
 
@@ -426,7 +433,7 @@ test("A run left running by an earlier session shows as interrupted, never live"
 test("The status bar takes you from the editor to the live run that needs you", async () => {
   seedFlow(
     home,
-    flow(
+    onMainFlow(
       [
         script("s1", { settings: { command: "echo", args: ["one"] } }),
         gate("g1"),

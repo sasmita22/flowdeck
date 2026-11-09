@@ -13,7 +13,15 @@ import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
 import type { Flow, Variable } from "../../../../src/core/flow/schema.js";
-import { flow, prompt, script, thenWire, trigger } from "../../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../../../fixtures/flow-builders.js";
 
 type HandlerBridge = Pick<
   FlowdeckBridge,
@@ -312,6 +320,51 @@ describe("tool handler reads", () => {
     expect(result).toMatchObject({ ok: true, flow: review?.flow });
     expect(canvas.getState().flow).toBe(before);
     expect(save.getState().flowId).toBe("flow-1");
+  });
+
+  it("read_blueprint raises no problem for a blank Agent added off the main flow", async () => {
+    const { call } = await setup();
+    const added = await call("add_node", {
+      type: "agent",
+      label: "Blank",
+      settings: { instructions: "" },
+    });
+
+    const result = await call("read_blueprint", {});
+
+    expect(result.problems).toEqual(
+      expect.not.arrayContaining([expect.objectContaining({ node: added.nodeId })]),
+    );
+  });
+
+  describe("read_blueprint of another flow id reads its main flow", () => {
+    const blankAgent = agent("blank", { settings: { instructions: "" } });
+    const readSaved = async (saved: Flow) => {
+      const { call, blueprints } = await setup();
+      blueprints.push({ flowId: "flow-5", name: "Loose", flow: saved });
+      return call("read_blueprint", { blueprint: "flow-5" });
+    };
+
+    it("raising no problem for a blank Agent off it", async () => {
+      const result = await readSaved(
+        flow(
+          [trigger("start"), prompt("a"), output("stop"), blankAgent],
+          [thenWire("start", "a"), thenWire("a", "stop")],
+        ),
+      );
+
+      expect(result.problems).toEqual([]);
+    });
+
+    it("raising one-start when it has no Start", async () => {
+      const result = await readSaved(
+        flow([prompt("a"), output("stop"), blankAgent], [thenWire("a", "stop")]),
+      );
+
+      expect(result.problems).toEqual(
+        expect.arrayContaining([expect.objectContaining({ rule: "one-start" })]),
+      );
+    });
   });
 
   it("list_blueprints returns every summary from listFlows", async () => {

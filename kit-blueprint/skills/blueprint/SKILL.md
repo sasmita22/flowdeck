@@ -23,23 +23,29 @@ A blueprint is one session: every node on the canvas runs inside one Claude Code
 
 Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent`, and settings for its type. Settings you leave out when adding a node take the type's defaults.
 
-| Type       | What it does                               | Settings (default)                                                                                                 | Ports                                                          |
-| ---------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `trigger`  | Where the run starts                       | none                                                                                                               | out `out` (then)                                               |
-| `prompt`   | One turn of the session                    | `instructions` (""), `expectedOutput` (optional)                                                                   | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
-| `agent`    | A subagent the session calls               | `role` (""), `instructions` (""), `model` ("sonnet"), `tools` ([]), `given` and `writes` (optional lists of files) | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
-| `script`   | Runs a command                             | `command` (""), `args`, `successCodes`, `retryCodes` (optional; exit codes are whole numbers)                      | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
-| `gate`     | Stops for the user to look before going on | `shown` (""), `skippable` (false)                                                                                  | in `in`, out `out` (then)                                      |
-| `ask`      | Asks the user a question                   | `question` (""), `options` ([])                                                                                    | in `in`, out `out` (then)                                      |
-| `hardstop` | A stop that cannot be skipped              | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                  | in `in`, out `out` (then)                                      |
-| `loop`     | Repeats its body until its condition holds | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                            | in `in`, out `out` (then)                                      |
-| `foreach`  | Runs its body once per item of a list file | `file` ("items.txt"; relative to the session folder, no `..`)                                                      | in `in`, out `out` (then); in `file-in` (file)                 |
-| `fork`     | Parallel start                             | none                                                                                                               | in `in`, out `out` (then)                                      |
-| `join`     | Parallel end                               | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                             | in `in`, out `out` (then)                                      |
-| `branch`   | Takes `yes` or `no` from a yes/no variable | `variable` ("")                                                                                                    | in `in`; out `yes`, out `no` (then)                            |
-| `output`   | Where the run ends, naming what it leaves  | `name` (""), `type` ("")                                                                                           | in `in` (then)                                                 |
+| Type       | What it does                                           | Settings (default)                                                                                                 | Ports                                                          |
+| ---------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `trigger`  | Start: where the blueprint starts                      | none                                                                                                               | out `out` (then)                                               |
+| `prompt`   | One turn of the session                                | `instructions` (""), `expectedOutput` (optional)                                                                   | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
+| `agent`    | A subagent the session calls                           | `role` (""), `instructions` (""), `model` ("sonnet"), `tools` ([]), `given` and `writes` (optional lists of files) | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
+| `script`   | Runs a command                                         | `command` (""), `args`, `successCodes`, `retryCodes` (optional; exit codes are whole numbers)                      | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
+| `gate`     | Stops for the user to look before going on             | `shown` (""), `skippable` (false)                                                                                  | in `in`, out `out` (then)                                      |
+| `ask`      | Asks the user a question                               | `question` (""), `options` ([])                                                                                    | in `in`, out `out` (then)                                      |
+| `hardstop` | A stop that cannot be skipped                          | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                  | in `in`, out `out` (then)                                      |
+| `loop`     | Repeats its body until its condition holds             | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                            | in `in`, out `out` (then)                                      |
+| `foreach`  | Runs its body once per item of a list file             | `file` ("items.txt"; relative to the session folder, no `..`)                                                      | in `in`, out `out` (then); in `file-in` (file)                 |
+| `fork`     | Parallel start                                         | none                                                                                                               | in `in`, out `out` (then)                                      |
+| `join`     | Parallel end                                           | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                             | in `in`, out `out` (then)                                      |
+| `branch`   | Takes `yes` or `no` from a yes/no variable             | `variable` ("")                                                                                                    | in `in`; out `yes`, out `no` (then)                            |
+| `output`   | Stop: where the main flow ends, and what it hands back | `name` (""), `type` ("")                                                                                           | in `in` (then)                                                 |
 
 A Loop or For each holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
+
+Start and Stop are drawn as circles, Stop with a heavy ring. A blueprint has exactly one Start, and at least one Stop on its main flow.
+
+## Main flow
+
+The main flow is every node reached from Start along `then` and `file` wires. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
 
 ## Wires
 
@@ -74,13 +80,15 @@ An edit that fits the schema is applied even if it breaks a rule below, so a blu
 - `node-ids`: node ids are unique and use letters, digits, dashes and underscores.
 - `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop or For each.
 - `loop-body`: a Loop or For each needs a Prompt or Agent in its body, cannot sit inside another, and only they hold a body.
-- `body-nodes`: a Trigger or Output cannot sit inside a Loop or For each body.
+- `body-nodes`: a Start or Stop cannot sit inside a Loop or For each body.
 - `branch-variable`: a Branch picks a `yesno` variable that is declared, and is not inside a body.
 - `file-wires`: a file wire names a file inside the working folder and comes from a node that runs before the one that needs it, not beside it in a parallel section.
 - `undeclared-variable`: every `{{name}}` in a Prompt or Agent is a declared variable.
 - `variable-names`: variable names are unique and safe.
 - `repo-required`: the blueprint names the repository it builds from.
 - `agent-tools`: an Agent asks only for tools in the session's allowed tools.
+- `one-start`: the blueprint has exactly one Start.
+- `stop-required`: the blueprint has a Stop on its main flow.
 
 ## Tools
 

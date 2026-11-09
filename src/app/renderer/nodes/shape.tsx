@@ -8,7 +8,17 @@ import { nodeLook, tagWidth } from "./look.js";
 import { frameLook, nodeOutline, type OutlinedType, type ShapeExtra } from "./outlines.js";
 import "./tokens.css";
 
-export type ShapeNode = Node<{ label?: string; highlighted?: boolean; sub?: string }>;
+export type ShapeNode = Node<{
+  label?: string;
+  highlighted?: boolean;
+  sub?: string;
+  ignored?: boolean;
+}>;
+
+export const ignoredMarks = (ignored: boolean | undefined) =>
+  ignored === true
+    ? { className: "fd-node fd-node-ignored", "data-ignored": "true" }
+    : { className: "fd-node" };
 
 export const BODY_HEIGHT = 48;
 
@@ -52,6 +62,7 @@ export function NodeShape({
   type,
   selected,
   highlighted,
+  ignored,
   width,
   handles = ports(id, type, width),
   overlay,
@@ -61,6 +72,7 @@ export function NodeShape({
   type: OutlinedType;
   selected: boolean;
   highlighted: boolean | undefined;
+  ignored?: boolean | undefined;
   width?: number;
   handles?: ReactNode;
   overlay?: ReactNode;
@@ -72,7 +84,7 @@ export function NodeShape({
   const { path: outline, padL, fill, strokeWidth, ink, extras } = nodeOutline(type, box.width);
   return (
     <div
-      className="fd-node"
+      {...ignoredMarks(ignored)}
       data-testid={`node-${id}`}
       data-highlighted={highlighted === true ? "true" : undefined}
       title={nodeTitle(type)}
@@ -145,6 +157,23 @@ export function Label({ type, text }: { type: OutlinedType; text: string | undef
       y={20}
       fill={ink ?? "var(--fg)"}
       style={{ font: labelFonts[ink === undefined ? "body" : "mono"] }}
+    >
+      {text}
+    </text>
+  );
+}
+
+const SIDE_LABEL_GAP = 8;
+
+export function SideLabel({ type, text }: { type: OutlinedType; text: string | undefined }) {
+  const { box } = nodeLook(type);
+  return (
+    <text
+      x={box.width + SIDE_LABEL_GAP}
+      y={box.height / 2}
+      fill="var(--fg)"
+      dominantBaseline="central"
+      style={{ font: labelFonts.body }}
     >
       {text}
     </text>

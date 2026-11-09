@@ -12,6 +12,7 @@ import {
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
+import { panelWidthLimits } from "../src/app/renderer/shell-store.js";
 import { NodeType, parseFlow } from "../src/core/flow/schema.js";
 import {
   agent,
@@ -47,8 +48,8 @@ const smallest = { width: 960, height: 640 };
 const twoScripts = (firstCommand?: { command: string; args: string[] }) => {
   const seeded = JSON.parse(
     readFileSync(new URL("../test/fixtures/app-run-two-scripts.json", import.meta.url), "utf8"),
-  ) as { nodes: { settings: object }[] };
-  const [first] = seeded.nodes;
+  ) as { nodes: { id: string; settings: object }[] };
+  const first = seeded.nodes.find((node) => node.id === "s1");
   if (first !== undefined && firstCommand !== undefined) first.settings = firstCommand;
   return seeded;
 };
@@ -307,6 +308,44 @@ test("Sidebar search and toggle", async () => {
   );
 });
 
+test("Start and Stop sit on top of the sidebar at any sidebar width", async () => {
+  const target = await launch();
+  const { window } = target;
+  await sizeTo(target, shot.size);
+  const sidebar = window.getByRole("complementary", { name: "Nodes" });
+  const firstEntries = () =>
+    sidebar.evaluate((aside) =>
+      [...aside.querySelectorAll('.fd-group-heading, [data-testid^="palette-"]')]
+        .map((element) => element.getAttribute("data-testid") ?? "heading")
+        .filter((id) => id !== "palette-search")
+        .slice(0, 3),
+    );
+  const startAndStopAboveHeadings = async () => {
+    expect(await firstEntries()).toEqual([
+      paletteTestId("trigger"),
+      paletteTestId("output"),
+      "heading",
+    ]);
+    const stop = await boxOf(window.getByTestId(paletteTestId("output")));
+    const heading = await boxOf(sidebar.locator(".fd-group-heading").first());
+    expect(heading.y).toBeGreaterThanOrEqual(stop.y + stop.height);
+  };
+
+  await startAndStopAboveHeadings();
+  for (const type of ["trigger", "output"] as const) {
+    await expect(window.getByTestId(paletteTestId(type)).locator(".fd-tag")).toHaveCount(0);
+  }
+
+  const handle = await boxOf(window.getByTestId(controlTestIds.sidebarResize));
+  await window.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await window.mouse.down();
+  await window.mouse.move(handle.x - 600, handle.y + handle.height / 2, { steps: 10 });
+  await window.mouse.up();
+  expect((await boxOf(sidebar)).width).toBe(panelWidthLimits.sidebar.min);
+
+  await startAndStopAboveHeadings();
+});
+
 test("Side panels hide and show from their own buttons", async () => {
   const target = await launch();
   const { window } = target;
@@ -562,7 +601,7 @@ test("Run status and inspector", async () => {
     timeout: 20_000,
   });
 
-  await expect(window.getByTestId("run-status")).toHaveText("Done · 2 of 2 nodes done");
+  await expect(window.getByTestId("run-status")).toHaveText("Done · 4 of 4 nodes done");
   await expect(window.getByTestId("inspector")).toBeVisible();
 });
 

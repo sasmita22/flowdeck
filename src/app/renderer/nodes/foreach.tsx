@@ -13,6 +13,7 @@ export function ForEachNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="foreach"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "foreach", label: data.label ?? "", sub: data.sub })}
       overlay={
         <text

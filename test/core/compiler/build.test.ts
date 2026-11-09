@@ -11,7 +11,7 @@ import {
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
-import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
 const expectedFiles = [
@@ -43,7 +43,7 @@ const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
 });
 
 const sample = (instructions = "Do the work."): Flow => {
-  const base = flow(
+  const base = onMainFlow(
     [prompt("p", { settings: { instructions } }), agent("a", { settings: { tools: ["Grep"] } })],
     [thenWire("p", "a")],
   );
@@ -224,7 +224,7 @@ describe("build", () => {
         }),
       ),
     );
-    expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["p", "a"]);
+    expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["start", "p", "a", "stop"]);
   });
 
   it("names the saved flow version it was built from, so each version has its own hash", async () => {

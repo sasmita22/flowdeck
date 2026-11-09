@@ -1,12 +1,12 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { FrameRect } from "../nodes/shape.js";
+import { FrameRect, ignoredMarks } from "../nodes/shape.js";
 
-type LoopFrameNode = Node<{ loopId?: string }>;
+type LoopFrameNode = Node<{ loopId?: string; ignored?: boolean }>;
 
 export function LoopFrame({ data, width, height }: NodeProps<LoopFrameNode>) {
   return (
     <div
-      className="fd-node"
+      {...ignoredMarks(data.ignored)}
       data-testid={`loop-frame-${data.loopId ?? ""}`}
       style={{ position: "relative", width, height }}
     >

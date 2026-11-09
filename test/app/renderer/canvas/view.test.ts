@@ -52,14 +52,14 @@ describe("toViewNodes", () => {
         type: "prompt",
         position: { x: 120, y: 80 },
         selected: false,
-        data: { label: "Prompt", highlighted: false },
+        data: { label: "Prompt", highlighted: false, ignored: false },
       },
       {
         id: "script-1",
         type: "script",
         position: { x: 300, y: 40 },
         selected: false,
-        data: { label: "Script", highlighted: false },
+        data: { label: "Script", highlighted: false, ignored: false },
       },
     ]);
   });
@@ -105,6 +105,100 @@ describe("toViewNodes", () => {
 
   it("returns no entries for an empty flow", () => {
     expect(toViewNodes(flow([], []), [], {}, null)).toEqual([]);
+  });
+});
+
+const ignoredOf = (source: Flow) =>
+  toViewNodes(source, [], {}, null).map((node) => [node.id, node.data.ignored]);
+
+describe("toViewNodes and the main flow", () => {
+  it("marks ignored the nodes off the main flow, and only those", () => {
+    const source = flow(
+      [trigger("start"), prompt("a"), output("stop"), prompt("b"), script("c"), script("d")],
+      [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
+    );
+
+    expect(ignoredOf(source)).toEqual([
+      ["start", false],
+      ["a", false],
+      ["stop", false],
+      ["b", true],
+      ["c", true],
+      ["d", true],
+    ]);
+  });
+
+  it("marks ignored a loose Loop's frame and its body, and keeps a wired For each", () => {
+    const source = flow(
+      [
+        trigger("start"),
+        forEach("E"),
+        prompt("x", { parent: "E" }),
+        output("stop"),
+        loop("L"),
+        prompt("y", { parent: "L" }),
+      ],
+      [thenWire("start", "x"), thenWire("x", "stop")],
+    );
+
+    expect(ignoredOf(source)).toEqual([
+      ["loop-frame-L", true],
+      ["foreach-frame-E", false],
+      ["start", false],
+      ["E", false],
+      ["x", false],
+      ["stop", false],
+      ["L", true],
+      ["y", true],
+    ]);
+  });
+
+  it("marks ignored a loose For each frame and a loose Fork bar", () => {
+    const source = flow(
+      [
+        trigger("start"),
+        output("stop"),
+        forEach("E"),
+        prompt("x", { parent: "E" }),
+        fork("F"),
+        prompt("p"),
+      ],
+      [thenWire("start", "stop"), thenWire("F", "p")],
+    );
+
+    expect(ignoredOf(source)).toEqual([
+      ["foreach-frame-E", true],
+      ["start", false],
+      ["stop", false],
+      ["E", true],
+      ["x", true],
+      ["F", true],
+      ["p", true],
+    ]);
+  });
+
+  it("marks nothing ignored when there is no Start", () => {
+    const source = flow(
+      [prompt("a"), output("stop"), loop("L"), prompt("y", { parent: "L" })],
+      [thenWire("a", "stop")],
+    );
+
+    expect(ignoredOf(source)).toEqual([
+      ["loop-frame-L", false],
+      ["a", false],
+      ["stop", false],
+      ["L", false],
+      ["y", false],
+    ]);
+  });
+
+  it("marks nothing ignored when there are two Starts", () => {
+    const source = flow(
+      [trigger("one"), trigger("two"), prompt("a"), output("stop")],
+      [thenWire("one", "a"), thenWire("a", "stop")],
+    );
+
+    expect(ignoredOf(source).map(([, ignored]) => ignored)).toEqual([false, false, false, false]);
   });
 });
 
@@ -192,6 +286,7 @@ describe("toViewNodes with a branch", () => {
     expect(branchData([{ name: "e2e", kind: "yesno", default: true }])).toEqual({
       label: "E2E?",
       highlighted: false,
+      ignored: false,
       sub: "e2e",
     });
   });

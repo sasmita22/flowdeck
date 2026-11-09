@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { flowProblems } from "../compiler/flow-problems.js";
 import { validate, type ValidationError } from "../compiler/validate.js";
 import { rule as portsRule } from "../compiler/rules/ports.js";
 import { nodeDefaults } from "../nodes/defaults.js";
@@ -109,6 +110,10 @@ const problemKey = (flow: Flow, error: ValidationError) => {
 };
 
 export function newProblems(before: Flow, after: Flow): ValidationError[] {
-  const known = new Set(validate(before).map((error) => problemKey(before, error)));
-  return validate(after).filter((error) => !known.has(problemKey(after, error)));
+  const known = new Set(
+    [...validate(before).filter((error) => error.field !== undefined), ...flowProblems(before)].map(
+      (error) => problemKey(before, error),
+    ),
+  );
+  return flowProblems(after).filter((error) => !known.has(problemKey(after, error)));
 }

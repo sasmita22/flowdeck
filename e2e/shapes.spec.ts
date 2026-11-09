@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +33,6 @@ const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, posi
 const everyShape = () => {
   const seeded = flow(
     [
-      at(trigger("trigger"), 10, 10),
       at(prompt("prompt"), 190, 10),
       at(agent("agent"), 10, 80),
       at(script("script"), 190, 80),
@@ -111,7 +111,25 @@ const pointsOf = async (polygon: Locator) =>
 
 const exact = { threshold: 0 };
 
-const nodeShots = ["trigger", "prompt", "agent", "script", "gate", "hardstop", "ask", "output"];
+const nodeShots = ["prompt", "agent", "script", "gate", "hardstop", "ask"];
+
+const circleShot = async (window: Page, id: string, name: string) => {
+  const node = window.getByTestId(`node-${id}`);
+  const circle = await boxOf(node);
+  const label = await boxOf(node.locator("text").last());
+  expect(label.x).toBeGreaterThanOrEqual(circle.x + circle.width);
+  expect(label.y + label.height / 2).toBeCloseTo(circle.y + circle.height / 2, 0);
+  await window.mouse.move(1, 1);
+  await expect.soft(window).toHaveScreenshot(name, {
+    ...exact,
+    clip: {
+      x: circle.x - 8,
+      y: circle.y - 8,
+      width: label.x + label.width - circle.x + 16,
+      height: circle.height + 16,
+    },
+  });
+};
 
 test.beforeEach(async () => {
   launched = undefined;
@@ -148,8 +166,53 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await expect
       .soft(window.getByTestId("loop-frame-loop"))
       .toHaveScreenshot(`${colorScheme}-loop.png`, exact);
+    await circleShot(window, "output", `${colorScheme}-output.png`);
   });
 }
+
+for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
+  test(`Start draws as a circle with its label beside it in the ${colorScheme} theme`, async () => {
+    seedFlow(home, flow([at(trigger("trigger"), 10, 10)], []));
+    launched = await launchOnCanvas({
+      home,
+      logPath: test.info().outputPath("app.log"),
+      colorScheme,
+    });
+    const { window } = launched;
+    await expect(window.getByTestId("node-trigger")).toBeVisible();
+    await window.evaluate(() => document.fonts.ready);
+
+    await circleShot(window, "trigger", `${colorScheme}-trigger.png`);
+  });
+}
+
+test("An old blueprint with Trigger and Output shows Start and Stop", async () => {
+  seedFlow(
+    home,
+    flow(
+      [at(trigger("trigger"), 40, 40), at(output("output"), 240, 40)],
+      [thenWire("trigger", "output")],
+    ),
+  );
+  const db = new Database(join(home, "flowdeck.db"));
+  try {
+    const { sql: lock } = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'nodes_no_update'")
+      .get() as { sql: string };
+    db.exec("DROP TRIGGER nodes_no_update");
+    const relabel = db.prepare("UPDATE nodes SET label = ? WHERE type = ?");
+    expect(relabel.run("Trigger", "trigger").changes).toBe(1);
+    expect(relabel.run("Output", "output").changes).toBe(1);
+    db.exec(lock);
+  } finally {
+    db.close();
+  }
+  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+
+  await expect(window.getByTestId("node-trigger")).toHaveText("Start");
+  await expect(window.getByTestId("node-output")).toHaveText("Stop");
+});
 
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Parallel start and end draw as tall bars in the ${colorScheme} theme`, async () => {

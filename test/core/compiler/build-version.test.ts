@@ -35,7 +35,16 @@ import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
-import { agent, flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  onMainFlow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 
 const repo = "/work/carousell-web";
 const ticketConfig: BuildConfig = {
@@ -51,7 +60,7 @@ const withConfig = (base: Flow, buildConfig: BuildConfig): Flow => ({
 
 const ticketFlow = (buildConfig: BuildConfig = ticketConfig) =>
   withConfig(
-    flow([prompt("p1", { settings: { instructions: "Fix {{ticket}}" } })], []),
+    onMainFlow([prompt("p1", { settings: { instructions: "Fix {{ticket}}" } })], []),
     buildConfig,
   );
 
@@ -507,7 +516,7 @@ describe("buildVersion", () => {
     it("refuses an Agent with blank instructions, naming the node, and reserves nothing", async () => {
       const { store, fs, worktree, deps } = setup();
       const blankAgent = withConfig(
-        flow([agent("a1", { settings: { instructions: "  " } })], []),
+        onMainFlow([agent("a1", { settings: { instructions: "  " } })], []),
         ticketConfig,
       );
 
@@ -778,7 +787,7 @@ describe("buildVersion", () => {
 
     const agentsFlow = (buildConfig: BuildConfig = ticketConfig): Flow =>
       withConfig(
-        flow(
+        onMainFlow(
           [
             labelled(
               prompt("p1", { settings: { instructions: "Fix {{ticket}}" } }),
@@ -1053,10 +1062,10 @@ describe("buildVersion", () => {
       for (const event of left) t.store.appendBuildEvent(pending.pendingId, event);
       const resume = buildResumeOf(t.store.buildEvents(pending.pendingId));
       if (resume === undefined) throw new Error("the build is not resumable");
-      const resumeRun = () =>
+      const resumeRun = (resumed: Flow = agentsFlow()) =>
         runBuild(
           pending,
-          agentsFlow(),
+          resumed,
           resumeRequest(request.name, resume.session),
           t.deps,
           undefined,
@@ -1113,6 +1122,47 @@ describe("buildVersion", () => {
       expect(t.worktree.calls).toEqual([]);
       expect(t.worktree.removed).toEqual([cut()]);
       expect(await t.fs.exists(`${dir()}/manifest.json`)).toBe(false);
+    });
+
+    const withLoose = (source: Flow): Flow => ({
+      ...source,
+      nodes: [...source.nodes, ...flow([agent("loose")], []).nodes],
+    });
+
+    const builtManifest = async (t: ReturnType<typeof traced>) =>
+      JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+
+    it("rebuilds with answers into the same manifest as the main flow alone", async () => {
+      const rebuilt = async (source: Flow) => {
+        const t = traced();
+        const { result } = await t.run(source, { ...request, answers: answered });
+        if (!isBuilt(result)) throw new Error(`build failed: ${JSON.stringify(result)}`);
+        return builtManifest(t);
+      };
+
+      const sprawling = await rebuilt(withLoose(agentsFlow()));
+      const alone = await rebuilt(agentsFlow());
+
+      expect(sprawling.nodes.map((node) => node.id)).toEqual(
+        agentsFlow().nodes.map((node) => node.id),
+      );
+      expect(sprawling).toEqual(alone);
+    });
+
+    it("resumes a build into a manifest that leaves the loose node out", async () => {
+      const t = traced();
+      const { resumeRun } = await laidDownBeforeRestart(t, true);
+
+      const result = await resumeRun(withLoose(agentsFlow()));
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      const manifest = await builtManifest(t);
+      expect(manifest.nodes.map((node) => node.id)).toEqual(
+        agentsFlow().nodes.map((node) => node.id),
+      );
+      expect(writeTurns(t.fake).flatMap((turn) => piecesNamed(turn.text))).not.toContainEqual(
+        expect.stringContaining("loose"),
+      );
     });
 
     it("opens the build session in the workspace with the kit, the settings and the session name", async () => {
@@ -1811,8 +1861,8 @@ describe("buildVersion", () => {
     const twoVersions = () =>
       setup({
         flows: [
-          flow([prompt("p1")], []),
-          flow([prompt("p1"), script("s1")], [thenWire("p1", "s1")]),
+          onMainFlow([prompt("p1")], []),
+          onMainFlow([prompt("p1"), script("s1")], [thenWire("p1", "s1")]),
         ].map((saved) => withConfig(saved, { repo, base: "main", variables: [] })),
       });
 
@@ -1824,7 +1874,7 @@ describe("buildVersion", () => {
       if (!result.ok) throw new Error("build failed");
       expect(store.builds()).toEqual([result.record]);
       expect(result.record.source).toEqual(v1);
-      expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["p1"]);
+      expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["start", "p1", "stop"]);
     });
 
     it("names only the flow and version in the build, whatever else the reference carries", async () => {
@@ -1850,6 +1900,108 @@ describe("buildVersion", () => {
         { flowId: "flow-1", version: 2 },
         { flowId: "flow-1", version: 1 },
       ]);
+    });
+  });
+
+  describe("only the main flow", () => {
+    const request = { name: "fix-login", repo, base: "main", values: { ticket: "FD-1" } };
+
+    const withExtras = (base: Flow, nodes: Flow["nodes"], wires: Flow["wires"] = []): Flow =>
+      withConfig(
+        { ...base, nodes: [...base.nodes, ...nodes], wires: [...base.wires, ...wires] },
+        ticketConfig,
+      );
+
+    const sprawling = () => {
+      const loose = flow([agent("b"), agent("c"), agent("d")], [thenWire("c", "d")]);
+      return withExtras(onMainFlow([agent("a")], []), loose.nodes, loose.wires);
+    };
+
+    const ignored = ["b", "c", "d"];
+
+    const piecesOf = async (source: Flow, nodeIds: readonly string[]) => {
+      const laid = await layDown(source, {
+        home,
+        workspace: { id: firstId, name: request.name, repo, base: "main", values: request.values },
+      });
+      if (!laid.ok) throw new Error("the flow does not lay down");
+      const manifest = JSON.parse(
+        laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
+      ) as Manifest;
+      return manifest.nodes.flatMap((node) =>
+        nodeIds.includes(node.id) && node.file !== undefined ? [node.file] : [],
+      );
+    };
+
+    it("builds the nodes reached from Start, leaving loose nodes, their wires and their pieces out", async () => {
+      const { fs, deps } = setup({ flows: [sprawling()] });
+      const loosePieces = await piecesOf(sprawling(), ignored);
+
+      const result = await buildVersion(v1, request, deps);
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "a", "stop"]);
+      expect(
+        manifest.wires.filter(
+          (wire) => ignored.includes(wire.from.node) || ignored.includes(wire.to.node),
+        ),
+      ).toEqual([]);
+      expect(loosePieces).not.toEqual([]);
+      for (const piece of loosePieces) {
+        expect(Object.keys(manifest.files)).not.toContain(piece);
+        expect(await fs.exists(`${result.dir}/${piece}`)).toBe(false);
+      }
+    });
+
+    it("builds with a loose Agent's blank instructions, and refuses them on the main flow", async () => {
+      const blank = { settings: { instructions: "  " } };
+      const loose = withExtras(onMainFlow([agent("a")], []), [agent("b", blank)] as Flow["nodes"]);
+      const wired = withConfig(
+        onMainFlow([agent("a"), agent("b", blank)], [thenWire("a", "b")]),
+        ticketConfig,
+      );
+
+      const built = await buildVersion(v1, request, setup({ flows: [loose] }).deps);
+      const refusedOnMain = await startBuild(wired, request, setup().deps);
+
+      expect(errorMessages(built)).toEqual([]);
+      expect(built.ok).toBe(true);
+      expect(refusedOnMain).toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: "required-settings", node: "b" })],
+      });
+    });
+
+    it.each([
+      [
+        "no Start",
+        "one-start",
+        withConfig(flow([agent("a"), output("stop")], [thenWire("a", "stop")]), ticketConfig),
+      ],
+      [
+        "two Starts",
+        "one-start",
+        withExtras(onMainFlow([agent("a")], []), [trigger("again")] as Flow["nodes"]),
+      ],
+      [
+        "a Stop only off the main flow",
+        "stop-required",
+        withConfig(
+          flow([trigger("start"), agent("a"), output("stop")], [thenWire("start", "a")]),
+          ticketConfig,
+        ),
+      ],
+    ])("refuses a blueprint with %s at Build, naming %s", async (_, rule, source) => {
+      const { store, deps } = setup();
+
+      const result = await startBuild(source, request, deps);
+
+      expect(result).toEqual({
+        ok: false,
+        errors: expect.arrayContaining([expect.objectContaining({ rule })]),
+      });
+      expect(store.listPendingBuilds()).toEqual([]);
     });
   });
 });

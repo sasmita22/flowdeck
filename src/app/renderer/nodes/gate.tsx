@@ -9,6 +9,7 @@ export function GateNode({ id, data, selected }: NodeProps<ShapeNode>) {
       type="gate"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "gate", label: data.label ?? "" })}
     >
       <TagPill type="gate" />

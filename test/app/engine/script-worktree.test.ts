@@ -14,7 +14,7 @@ import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
-import { flow, script, thenWire } from "../../fixtures/flow-builders.js";
+import { onMainFlow, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 describe("a script-only run started from a saved blueprint", () => {
@@ -66,7 +66,7 @@ describe("a script-only run started from a saved blueprint", () => {
       gitState: new FakeGitState({ [repo.path]: { kind: "branch", name: "main" } }),
       transcriptTurns: async () => [],
     });
-    const blueprint = flow(
+    const blueprint = onMainFlow(
       [
         script("write", {
           settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },

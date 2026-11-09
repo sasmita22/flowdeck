@@ -12,9 +12,23 @@ import * as join from "../../../src/core/nodes/join/defaults.js";
 import * as loop from "../../../src/core/nodes/loop/defaults.js";
 import * as output from "../../../src/core/nodes/output/defaults.js";
 import * as trigger from "../../../src/core/nodes/trigger/defaults.js";
-import { flow } from "../../fixtures/flow-builders.js";
+import {
+  flow,
+  output as stopNode,
+  thenWire,
+  trigger as startNode,
+} from "../../fixtures/flow-builders.js";
 
 type Defaults = { defaultSettings: object; defaultLabel: string };
+
+const onTheMainFlow = (node: { id: string; type: string }) => {
+  if (node.type === "trigger") return flow([node, stopNode("stop")], [thenWire(node.id, "stop")]);
+  if (node.type === "output") return flow([startNode("start"), node], [thenWire("start", node.id)]);
+  return flow(
+    [startNode("start"), node, stopNode("stop")],
+    [thenWire("start", node.id), thenWire("start", "stop")],
+  );
+};
 
 const cases: [type: string, defaults: Defaults, label: string, rules: string[]][] = [
   ["agent", agent, "Agent", ["required-settings"]],
@@ -22,8 +36,8 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["ask", ask, "Ask", ["required-settings"]],
   ["hardstop", hardstop, "Hard stop", []],
   ["loop", loop, "Loop", ["required-settings", "loop-body"]],
-  ["trigger", trigger, "Trigger", []],
-  ["output", output, "Output", []],
+  ["trigger", trigger, "Start", []],
+  ["output", output, "Stop", []],
   ["fork", fork, "Fork", ["parallel-section"]],
   ["join", join, "Join", ["parallel-section"]],
   ["foreach", foreach, "For each", ["loop-body"]],
@@ -32,7 +46,7 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
 
 describe("defaults for every node type", () => {
   it.each(cases)(
-    "%s parses alone and reports only its known rules",
+    "%s parses on the main flow and reports only its known rules",
     (type, defaults, label, rules) => {
       const node = {
         id: `${type}-1`,
@@ -41,7 +55,7 @@ describe("defaults for every node type", () => {
         position: { x: 0, y: 0 },
         settings: defaults.defaultSettings,
       };
-      const built = flow([node], []);
+      const built = onTheMainFlow(node);
 
       expect(parseFlow(built)).toEqual(built);
       expect(defaults.defaultLabel).toBe(label);

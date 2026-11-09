@@ -12,10 +12,10 @@ import {
   type VerifyFileSystem,
 } from "../../../src/core/compiler/verify.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
-import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
-const sample = () => flow([prompt("p"), agent("a")], [thenWire("p", "a")]);
+const sample = () => onMainFlow([prompt("p"), agent("a")], [thenWire("p", "a")]);
 const workspace: BuildDeps["workspace"] = {
   id: "b1111111-0000-4000-8000-000000000001",
   name: "fix-login",

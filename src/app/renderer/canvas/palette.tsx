@@ -38,15 +38,17 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemTyp
       </span>
       <span className="fd-palette-text">
         <span className="fd-palette-head">
-          <span
-            className="fd-tag"
-            style={{
-              color: item.color,
-              background: `color-mix(in srgb, ${item.color} 15%, transparent)`,
-            }}
-          >
-            {item.tag}
-          </span>
+          {item.tag !== "" && (
+            <span
+              className="fd-tag"
+              style={{
+                color: item.color,
+                background: `color-mix(in srgb, ${item.color} 15%, transparent)`,
+              }}
+            >
+              {item.tag}
+            </span>
+          )}
           {item.label}
         </span>
         <span className="fd-palette-description">{item.description}</span>
@@ -95,7 +97,7 @@ export function Palette({
         {groups.length === 0 && <p className="fd-palette-empty">No node matches “{query}”.</p>}
         {groups.map(({ group, items }) => (
           <Fragment key={group}>
-            <h2 className="fd-group-heading">{group}</h2>
+            {group !== "" && <h2 className="fd-group-heading">{group}</h2>}
             {items.map((item) => (
               <Entry key={item.type} item={item} onAdd={onAdd} />
             ))}

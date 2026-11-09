@@ -1,6 +1,16 @@
 {
   "nodes": [
     {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": -240,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
       "id": "f1",
       "label": "Fail",
       "type": "script",
@@ -12,9 +22,45 @@
         "command": "sh",
         "args": ["-c", "exit 1"]
       }
+    },
+    {
+      "id": "stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
     }
   ],
-  "wires": [],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "f1",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "f1",
+        "port": "out"
+      },
+      "to": {
+        "node": "stop",
+        "port": "in"
+      }
+    }
+  ],
   "session": {
     "name": "main",
     "buildConfig": {

@@ -6,7 +6,7 @@ import { checkBuild } from "../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
 import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
-import { agent, fileWire, flow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, fileWire, onMainFlow, prompt, thenWire } from "../fixtures/flow-builders.js";
 import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
 
@@ -28,7 +28,7 @@ const deps: LayDownDeps = {
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const sample = (): Flow => {
-  const base = flow(
+  const base = onMainFlow(
     [
       labelled(prompt("p"), "Draft the spec"),
       labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),

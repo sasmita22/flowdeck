@@ -39,7 +39,7 @@ import {
   trigger,
 } from "../../../fixtures/flow-builders.js";
 
-const unfinished = new Set(["required-settings", "repo-required"]);
+const unfinished = new Set(["required-settings", "repo-required", "one-start", "stop-required"]);
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -837,10 +837,14 @@ describe("newCanvasFlow", () => {
     expect(Object.hasOwn(session, "frame")).toBe(false);
   });
 
-  it("is refused at build only for its repository, which the session settings ask for", () => {
-    expect(validate(newCanvasFlow())).toEqual([
+  it("is refused at build for its repository, its Start and its Stop", () => {
+    expect(validate(newCanvasFlow()).map(({ rule }) => rule)).toEqual(
+      expect.arrayContaining(["repo-required", "one-start", "stop-required"]),
+    );
+    expect(validate(newCanvasFlow())).toHaveLength(3);
+    expect(validate(newCanvasFlow())).toContainEqual(
       expect.objectContaining({ rule: "repo-required", field: "buildConfig.repo" }),
-    ]);
+    );
   });
 });
 
@@ -1111,6 +1115,20 @@ describe("connect beside an invalid node", () => {
     expect(store.getState().undoStack).toEqual(before.undoStack);
   });
 
+  it.each(["script", "branch"] as const)(
+    "connects Start to a freshly dropped %s that is not filled in yet",
+    (type) => {
+      const store = createCanvasStore();
+      store.getState().drop("trigger", { x: 0, y: 0 });
+      store.getState().drop("output", { x: 400, y: 0 });
+      store.getState().connect(end("trigger-1", "out"), end("output-1", "in"));
+      store.getState().drop(type, { x: 200, y: 200 });
+
+      expect(store.getState().connect(end("trigger-1", "out"), end(`${type}-1`, "in"))).toBe(true);
+      expect(store.getState().flow.wires).toContainEqual(then("trigger-1", `${type}-1`));
+    },
+  );
+
   it("wires a parallel section one wire at a time into a valid flow", () => {
     const store = createCanvasStore();
     store.getState().drop("fork", { x: 0, y: 0 });
@@ -1316,6 +1334,27 @@ describe("selectNodeIssues", () => {
     const current = flow([agent("agent-1", { settings: { instructions: "" } })], []);
 
     expect(selectNodeIssues(current)).toEqual({ "agent-1": ["Write what the agent should do."] });
+  });
+
+  describe("reads only the main flow", () => {
+    const blankAgent = agent("agent-1", { settings: { instructions: "" } });
+    const nodes = [trigger("start"), prompt("p1"), output("stop"), blankAgent];
+
+    it("has no entry for an agent with empty instructions off it", () => {
+      const current = flow(nodes, [thenWire("start", "p1"), thenWire("p1", "stop")]);
+
+      expect(selectNodeIssues(current)).toEqual({});
+    });
+
+    it("maps the same agent to its reason once it is on it", () => {
+      const current = flow(nodes, [
+        thenWire("start", "p1"),
+        thenWire("p1", "agent-1"),
+        thenWire("agent-1", "stop"),
+      ]);
+
+      expect(selectNodeIssues(current)).toEqual({ "agent-1": ["Write what the agent should do."] });
+    });
   });
 
   it("returns the same map for the same flow", () => {

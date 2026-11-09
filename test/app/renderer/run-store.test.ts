@@ -18,7 +18,15 @@ import {
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
 import type { NodeState } from "../../../src/core/run/state.js";
-import { flow, prompt } from "../../fixtures/flow-builders.js";
+import {
+  flow,
+  onMainFlow,
+  output,
+  prompt,
+  script,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 
 type RunBridge = Pick<
   FlowdeckBridge,
@@ -33,6 +41,7 @@ type RunBridge = Pick<
   | "runCost"
   | "deleteBuild"
   | "defaultBranch"
+  | "openFlow"
 >;
 
 type Status = "running" | "done" | "failed" | "stopped" | "interrupted";
@@ -72,6 +81,7 @@ const setup = async (
     automatic?: boolean;
     defaultBranch?: string;
     runState?: Promise<unknown>;
+    built?: Flow;
   } = {},
 ) => {
   const calls: string[] = [];
@@ -133,6 +143,12 @@ const setup = async (
       calls.push("defaultBranch");
       return options.defaultBranch ?? "main";
     }),
+    openFlow: vi.fn<FlowdeckBridge["openFlow"]>(async ({ flowId }) => ({
+      flowId,
+      name: "Untitled",
+      version: 4,
+      flow: options.built ?? options.latest ?? flow([prompt("prompt-1")], []),
+    })),
   } satisfies RunBridge;
 
   const canvas = createCanvasStore({ ready: false });
@@ -258,6 +274,8 @@ describe("the Build dialog", () => {
       values: { deep: true },
       buildModel: "",
       error: null,
+      ignored: [],
+      step: "form",
     });
   });
 
@@ -467,6 +485,98 @@ describe("the Build dialog", () => {
 
     expect(run.getState().buildDialog).toBeNull();
     expect(bridge.buildVersion).not.toHaveBeenCalled();
+  });
+});
+
+const labelled = (source: Flow, labels: Record<string, string>): Flow => ({
+  ...source,
+  nodes: source.nodes.map((node) => ({ ...node, label: labels[node.id] ?? node.label })),
+});
+
+const withLooseNodes = (): Flow =>
+  labelled(
+    flow(
+      [trigger("start"), prompt("a"), output("stop"), script("b"), script("c"), script("d")],
+      [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
+    ),
+    { b: "B", c: "C", d: "" },
+  );
+
+const looseNodes = [
+  { id: "b", label: "B" },
+  { id: "c", label: "C" },
+  { id: "d", label: "Script" },
+];
+
+describe("the Build dialog's confirm step", () => {
+  const ready = async (built: Flow) => {
+    const opened = await setup({ built });
+    await opened.run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    opened.run.getState().editBuild({ name: "fix-login" });
+    opened.run.getState().setValue("ticket", "FD-1");
+    return opened;
+  };
+
+  it("lists the nodes off the main flow of the saved version the canvas builds", async () => {
+    const { bridge, run } = await setup({ latest: withLooseNodes() });
+
+    await run.getState().openBuild();
+
+    expect(bridge.openFlow).toHaveBeenCalledWith({ flowId: "flow-1" });
+    expect(run.getState().buildDialog).toMatchObject({ ignored: looseNodes, step: "form" });
+  });
+
+  it("reads the blueprint's saved version when opened from the Blueprints page", async () => {
+    const { bridge, run } = await setup({ built: withLooseNodes() });
+
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+
+    expect(bridge.openFlow).toHaveBeenCalledWith({ flowId: "flow-b" });
+    expect(run.getState().buildDialog).toMatchObject({
+      flowId: "flow-b",
+      version: 4,
+      ignored: looseNodes,
+      step: "form",
+    });
+  });
+
+  it("asks to confirm before building when nodes are ignored", async () => {
+    const { bridge, run } = await ready(withLooseNodes());
+
+    await expect(run.getState().confirmBuild()).resolves.toBeNull();
+
+    expect(bridge.buildVersion).not.toHaveBeenCalled();
+    expect(run.getState().buildDialog).toMatchObject({ name: "fix-login", step: "confirm" });
+  });
+
+  it("builds once on Build anyway", async () => {
+    const { bridge, run } = await ready(withLooseNodes());
+    await run.getState().confirmBuild();
+
+    await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
+
+    expect(bridge.buildVersion).toHaveBeenCalledTimes(1);
+    expect(run.getState().buildDialog).toBeNull();
+  });
+
+  it("builds nothing on Cancel", async () => {
+    const { bridge, run } = await ready(withLooseNodes());
+    await run.getState().confirmBuild();
+    expect(run.getState().buildDialog).toMatchObject({ step: "confirm" });
+
+    run.getState().cancelBuild();
+
+    expect(run.getState().buildDialog).toBeNull();
+    expect(bridge.buildVersion).not.toHaveBeenCalled();
+  });
+
+  it("builds straight away when every node is on the main flow", async () => {
+    const { bridge, run } = await ready(onMainFlow([prompt("a")], []));
+    expect(run.getState().buildDialog).toMatchObject({ ignored: [], step: "form" });
+
+    await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
+
+    expect(bridge.buildVersion).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -20,6 +20,13 @@
       "type": "ask",
       "position": { "x": 480, "y": 0 },
       "settings": { "question": "Continue?", "options": ["yes"] }
+    },
+    {
+      "id": "stop",
+      "label": "Stop",
+      "type": "output",
+      "position": { "x": 720, "y": 0 },
+      "settings": { "name": "result", "type": "text" }
     }
   ],
   "wires": [
@@ -28,7 +35,16 @@
       "from": { "node": "start", "port": "out" },
       "to": { "node": "p1", "port": "in" }
     },
-    { "kind": "then", "from": { "node": "p1", "port": "out" }, "to": { "node": "q", "port": "in" } }
+    {
+      "kind": "then",
+      "from": { "node": "p1", "port": "out" },
+      "to": { "node": "q", "port": "in" }
+    },
+    {
+      "kind": "then",
+      "from": { "node": "q", "port": "out" },
+      "to": { "node": "stop", "port": "in" }
+    }
   ],
   "session": {
     "name": "main",

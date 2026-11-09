@@ -18,6 +18,31 @@ const rightmostX = (path: string): number =>
     ...[...path.matchAll(/H(-?[\d.]+)/g)].map(([, x]) => Number(x)),
   );
 const frames = ["loop", "foreach"] as const;
+const circles = ["trigger", "output"] as const;
+const isCircle = (path: string, radius: number, centre = 24): boolean => {
+  if (!/^[MAZ\d\s,.-]+$/.test(path)) return false;
+  const commands = [...path.matchAll(/([MAZ])([^MAZ]*)/g)].map(([, letter, args]) => ({
+    letter,
+    numbers: (args?.match(/-?[\d.]+/g) ?? []).map(Number),
+  }));
+  const onCircle = (x: number | undefined, y: number | undefined) =>
+    x !== undefined &&
+    y !== undefined &&
+    Math.abs(Math.hypot(x - centre, y - centre) - radius) < 1e-6;
+  const arcs = commands.filter(({ letter }) => letter === "A");
+  return (
+    commands[0]?.letter === "M" &&
+    onCircle(commands[0].numbers[0], commands[0].numbers[1]) &&
+    arcs.length >= 2 &&
+    arcs.every(
+      ({ numbers }) =>
+        numbers.length === 7 &&
+        numbers[0] === radius &&
+        numbers[1] === radius &&
+        onCircle(numbers[5], numbers[6]),
+    )
+  );
+};
 const shaped = paletteItems
   .map(({ type }) => type)
   .filter(
@@ -49,8 +74,10 @@ describe("previewOf", () => {
 describe("previewViewBox", () => {
   it.each([
     ...shaped
-      .filter((type) => type !== "ask" && type !== "branch")
+      .filter((type) => !["ask", "branch", "trigger", "output"].includes(type))
       .map((type) => [type, 178, 56] as const),
+    ["trigger", 56, 56],
+    ["output", 56, 56],
     ["ask", 178, 65],
     ["branch", 124, 56],
     ["fork", 58, 68],
@@ -64,9 +91,20 @@ describe("previewViewBox", () => {
 });
 
 describe("nodeOutline", () => {
-  it("rounds the trigger's left end and the output's right end", () => {
-    expect(nodeOutline("trigger").path).toContain("A24,24 0 0 1 24,0");
-    expect(nodeOutline("output").path).toContain("A24,24 0 0 1 146,48");
+  it.each(circles)("draws %s as a circle of diameter 48", (type) => {
+    expect(isCircle(nodeOutline(type).path, 24)).toBe(true);
+  });
+
+  it("gives the trigger circle no extras", () => {
+    expect(nodeOutline("trigger").extras).toEqual([]);
+  });
+
+  it("gives the output circle a 3 px stroke and one inner ring inset 5 px", () => {
+    const { strokeWidth, extras } = nodeOutline("output");
+    expect(strokeWidth).toBe(3);
+    expect(extras).toHaveLength(1);
+    expect(extras[0]?.element).toBe("path");
+    expect(isCircle(String(extras[0]?.attributes["d"]), 19)).toBe(true);
   });
 
   it("gives the agent its inner ring, the gate its two posts and the branch its hexagon fill", () => {
@@ -86,16 +124,12 @@ describe("nodeOutline", () => {
     expect(nodeOutline("agent").path).toContain("H158 Q170,0 170,12");
   });
 
-  it.each(shaped.filter((type) => type !== "output"))(
+  it.each(shaped.filter((type) => !(circles as readonly string[]).includes(type)))(
     "ends a %s outline 300 wide at x = 300",
     (type) => {
       expect(rightmostX(nodeOutline(type, 300).path)).toBe(300);
     },
   );
-
-  it("rounds a 300-wide output's right end at x = 300", () => {
-    expect(nodeOutline("output", 300).path).toContain("A24,24 0 0 1 276,48");
-  });
 
   it("draws the agent's ring, the gate's right post and the branch fill at the width", () => {
     const attributesOf = (type: "agent" | "gate" | "branch", index: number) =>

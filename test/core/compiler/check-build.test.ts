@@ -11,7 +11,14 @@ import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/
 import { scopeLine, type ScopeParts } from "../../../src/core/compiler/scope-line.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, fileWire, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  fileWire,
+  flow,
+  onMainFlow,
+  prompt,
+  thenWire,
+} from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -24,7 +31,7 @@ const withTools = (base: Flow): Flow => ({
 
 const sample = (): Flow =>
   withTools(
-    flow(
+    onMainFlow(
       [
         labelled(prompt("p"), "Draft the spec"),
         labelled(agent("a", { settings: { tools: ["Grep"] } }), longLabel),
@@ -36,7 +43,7 @@ const sample = (): Flow =>
 
 const twoReviewers = (): Flow =>
   withTools(
-    flow(
+    onMainFlow(
       [
         labelled(prompt("p"), "Draft the spec"),
         labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),

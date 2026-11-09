@@ -23,6 +23,14 @@ describe("nodeWidth", () => {
     expect(nodeWidth({ type: "join", label: "join" })).toBe(28);
   });
 
+  it.each(["trigger", "output"] as const)(
+    "keeps a %s at its 48 px circle whatever the label length",
+    (type) => {
+      expect(nodeWidth({ type, label: "S" })).toBe(48);
+      expect(nodeWidth({ type, label: long })).toBe(48);
+    },
+  );
+
   it("widens an Agent to fit a 60-character label", () => {
     expect(long).toHaveLength(60);
     expect(nodeWidth({ type: "agent", label: long })).toBe(textWidth("agent", long));

@@ -21,6 +21,7 @@ export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
       type="branch"
       selected={selected}
       highlighted={data.highlighted}
+      ignored={data.ignored}
       width={nodeWidth({ type: "branch", label: data.label ?? "", sub: data.sub })}
       handles={ports.map(({ name, direction }) => (
         <Handle

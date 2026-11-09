@@ -5,7 +5,7 @@ const id = "body-nodes";
 
 export const rule: Rule = {
   id,
-  message: "A Trigger or Output cannot sit inside a Loop or For each body.",
+  message: "A Start or Stop cannot sit inside a Loop or For each body.",
   check: (flow) =>
     bodyProblems(flow.nodes)
       .filter((problem) => problem.outOfPlace === true)

@@ -71,3 +71,41 @@ export const flow = (nodes: unknown[], wires: unknown[]): Flow =>
       connectors: [],
     },
   });
+
+type Placed = { id: string; type: string; parent?: string };
+type Linked = { kind: string; from: { node: string }; to: { node: string } };
+
+export const onMainFlow = (nodes: unknown[], wires: unknown[]): Flow => {
+  const placed = nodes as Placed[];
+  const clash = placed.find(
+    (node) =>
+      node.id === "start" ||
+      node.id === "stop" ||
+      node.type === "trigger" ||
+      node.type === "output",
+  );
+  if (clash !== undefined) throw new Error(`onMainFlow adds Start and Stop itself: ${clash.id}`);
+
+  const parentOf = new Map(placed.map((node) => [node.id, node.parent]));
+  const topOf = (id: string): string => {
+    const parent = parentOf.get(id);
+    return parent === undefined ? id : topOf(parent);
+  };
+  const crossing = (wires as Linked[])
+    .filter((wire) => wire.kind === "then" || wire.kind === "file")
+    .map((wire) => ({ from: topOf(wire.from.node), to: topOf(wire.to.node) }))
+    .filter((wire) => wire.from !== wire.to);
+
+  const tops = placed.filter((node) => node.parent === undefined).map((node) => node.id);
+  const entries = tops.filter((id) => !crossing.some((wire) => wire.to === id));
+  const exits = tops.filter((id) => !crossing.some((wire) => wire.from === id));
+
+  return flow(
+    [trigger("start"), ...nodes, output("stop")],
+    [
+      ...entries.map((id) => thenWire("start", id)),
+      ...wires,
+      ...exits.map((id) => thenWire(id, "stop")),
+    ],
+  );
+};

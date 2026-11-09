@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
-import { validate, type ValidationError } from "../../../core/compiler/validate.js";
+import { flowProblems } from "../../../core/compiler/flow-problems.js";
+import type { ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import { bodyProblems } from "../../../core/flow/structure.js";
@@ -258,7 +259,7 @@ export const selectNodeIssues = (flow: Flow): Record<string, string[]> => {
   const cached = issuesByFlow.get(flow);
   if (cached !== undefined) return cached;
   const issues: Record<string, string[]> = {};
-  for (const error of validate(flow)) {
+  for (const error of flowProblems(flow)) {
     if (error.node !== undefined)
       (issues[error.node] ??= []).push(plainReason(error.node, error.message));
   }
@@ -272,7 +273,7 @@ export const selectFieldIssues = (flow: Flow, nodeId: string): Record<string, st
   let byNode = fieldIssuesByFlow.get(flow);
   if (byNode === undefined) {
     byNode = {};
-    for (const error of validate(flow)) {
+    for (const error of flowProblems(flow)) {
       if (error.node === undefined || error.field === undefined) continue;
       const fields = (byNode[error.node] ??= {});
       if (!(error.field in fields)) fields[error.field] = plainReason(error.node, error.message);
@@ -288,7 +289,7 @@ export const selectSessionIssues = (flow: Flow): Record<string, string> => {
   const cached = sessionIssuesByFlow.get(flow);
   if (cached !== undefined) return cached;
   const issues: Record<string, string> = {};
-  for (const { node, field, message } of validate(flow)) {
+  for (const { node, field, message } of flowProblems(flow)) {
     if (node === undefined && field !== undefined && !(field in issues)) issues[field] = message;
   }
   sessionIssuesByFlow.set(flow, issues);

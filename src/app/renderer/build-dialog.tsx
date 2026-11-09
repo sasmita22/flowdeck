@@ -153,6 +153,55 @@ function BuildForm({
   );
 }
 
+function IgnoredStep({
+  dialog,
+  starting,
+  run,
+  onBuild,
+}: {
+  dialog: Dialog;
+  starting: boolean;
+  run: StoreApi<RunState>;
+  onBuild(): void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, width: 380 }}>
+      <p id="build-dialog-title" style={{ margin: 0 }}>
+        These nodes aren't connected to the main flow and will be left out
+      </p>
+      <ul data-testid={buildDialogTestIds.ignored} style={{ margin: 0, paddingLeft: 20 }}>
+        {dialog.ignored.map((node) => (
+          <li key={node.id} data-testid={buildDialogTestIds.ignoredNode(node.id)}>
+            {node.label}
+          </li>
+        ))}
+      </ul>
+      {dialog.error !== null && (
+        <p data-testid={buildDialogTestIds.error} role="alert" style={errorStyle}>
+          {dialog.error}
+        </p>
+      )}
+      <div className="fd-dialog-actions" style={{ justifyContent: "flex-end" }}>
+        <button
+          className="fd-btn"
+          data-testid={buildDialogTestIds.ignoredCancel}
+          onClick={() => run.getState().cancelBuild()}
+        >
+          Cancel
+        </button>
+        <button
+          className="fd-btn fd-btn-primary"
+          data-testid={buildDialogTestIds.buildAnyway}
+          disabled={starting}
+          onClick={onBuild}
+        >
+          Build anyway
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function BuildDialog({
   run,
   nav,
@@ -165,6 +214,7 @@ export function BuildDialog({
   branches: StoreApi<BranchState>;
 }) {
   const dialog = useStore(run, (state) => state.buildDialog);
+  const starting = useStore(run, (state) => state.starting);
   const canBuild = useStore(run, (state) => selectCanBuild(state) && !state.starting);
   const repo = dialog?.repo ?? "";
 
@@ -188,13 +238,17 @@ export function BuildDialog({
         aria-labelledby="build-dialog-title"
         data-testid={buildDialogTestIds.dialog}
       >
-        <BuildForm
-          dialog={dialog}
-          canBuild={canBuild}
-          run={run}
-          branches={branches}
-          onBuild={() => void build()}
-        />
+        {dialog.step === "confirm" ? (
+          <IgnoredStep dialog={dialog} starting={starting} run={run} onBuild={() => void build()} />
+        ) : (
+          <BuildForm
+            dialog={dialog}
+            canBuild={canBuild}
+            run={run}
+            branches={branches}
+            onBuild={() => void build()}
+          />
+        )}
       </div>
     </div>
   );

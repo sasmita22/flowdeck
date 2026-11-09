@@ -1,4 +1,5 @@
 import { MarkerType } from "@xyflow/react";
+import { mainFlow } from "../../../core/flow/main-flow.js";
 import type { CanvasNote, Flow, Node, Wire } from "../../../core/flow/schema.js";
 import { nodeLook } from "../nodes/look.js";
 import {
@@ -34,6 +35,7 @@ export interface ViewNode {
     loopId?: string;
     forEachId?: string;
     text?: string;
+    ignored?: boolean;
   };
 }
 
@@ -110,21 +112,31 @@ const frameView = (
   data,
 });
 
-const toLoopFrameViewNodes = (flow: Flow): ViewNode[] =>
+type IsIgnored = (id: string) => boolean;
+
+const ignoredIn = (flow: Flow): IsIgnored => {
+  const found = mainFlow(flow);
+  if (found === undefined) return () => false;
+  return (id) => !found.reached.has(id);
+};
+
+const toLoopFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
   flow.nodes
     .filter((node) => node.type === "loop")
     .map((loop) =>
       frameView(`loop-frame-${loop.id}`, "loop-frame", bodyFrameBounds(flow, loop), {
         loopId: loop.id,
+        ignored: isIgnored(loop.id),
       }),
     );
 
-const toForEachFrameViewNodes = (flow: Flow): ViewNode[] =>
+const toForEachFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
   flow.nodes
     .filter((node) => node.type === "foreach")
     .map((each) =>
       frameView(`foreach-frame-${each.id}`, "foreach-frame", bodyFrameBounds(flow, each), {
         forEachId: each.id,
+        ignored: isIgnored(each.id),
       }),
     );
 
@@ -165,9 +177,10 @@ export const toViewNodes = (
 ): ViewNode[] => {
   const live = withPositions(flow, followed(flow, dragPositions));
   const framing = withPositions(flow, containerMoves(flow, dragPositions));
+  const isIgnored = ignoredIn(flow);
   return [
-    ...toLoopFrameViewNodes(framing),
-    ...toForEachFrameViewNodes(framing),
+    ...toLoopFrameViewNodes(framing, isIgnored),
+    ...toForEachFrameViewNodes(framing, isIgnored),
     ...(flow.notes ?? []).map((note) =>
       toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
     ),
@@ -181,6 +194,7 @@ export const toViewNodes = (
         data: {
           label: labelFor(node),
           highlighted: node.id === highlighted,
+          ignored: isIgnored(node.id),
           ...(sub !== undefined && { sub }),
         },
       };

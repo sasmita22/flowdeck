@@ -13,6 +13,7 @@ import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { buildVersion } from "../src/core/compiler/build-version.js";
+import type { Flow } from "../src/core/flow/schema.js";
 import { FakeConnectorSource } from "../test/fakes/fake-connector-source.js";
 import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
 import {
@@ -22,6 +23,8 @@ import {
   fork,
   gate,
   join as joinNode,
+  onMainFlow,
+  output,
   prompt,
   script,
   thenWire,
@@ -34,14 +37,15 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 
-const laidOut = (nodes: unknown[], wires: unknown[]) =>
-  flow(
-    nodes.map((node, index) => ({
-      ...(node as object),
-      position: { x: index * 240, y: (index % 2) * 120 },
-    })),
-    wires,
-  );
+const placed = (built: Flow): Flow => ({
+  ...built,
+  nodes: built.nodes.map((node, index) => ({
+    ...node,
+    position: { x: index * 240, y: (index % 2) * 120 },
+  })),
+});
+
+const laidOut = (nodes: unknown[], wires: unknown[]) => placed(onMainFlow(nodes, wires));
 
 const run = promisify(execFile);
 
@@ -304,9 +308,23 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
 });
 
 test("A build whose yes/no value is no takes Branch's no path", async () => {
-  const branched = laidOut(
-    [trigger("t"), branch("b", "deep"), sh("yes", "echo deep"), sh("no", "echo quick")],
-    [thenWire("t", "b"), wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
+  const branched = placed(
+    flow(
+      [
+        trigger("t"),
+        branch("b", "deep"),
+        sh("yes", "echo deep"),
+        sh("no", "echo quick"),
+        output("stop"),
+      ],
+      [
+        thenWire("t", "b"),
+        wire("b", "yes", "yes", "in"),
+        wire("b", "no", "no", "in"),
+        thenWire("yes", "stop"),
+        thenWire("no", "stop"),
+      ],
+    ),
   );
   seedFlow(
     home,
@@ -428,7 +446,7 @@ test("The Cost tab shows each node's tokens, cost and time, and a session line t
     runId = runs.createRun({
       buildDir: built.dir,
       inputs: {},
-      nodeIds: ["p1", "s1", "p2"],
+      nodeIds: ["start", "p1", "s1", "p2", "stop"],
       session: {
         tmuxName: "fd-run-seeded",
         cwd: workFolder(built.record.id),

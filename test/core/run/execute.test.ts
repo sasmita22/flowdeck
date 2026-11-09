@@ -32,13 +32,13 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
-import { agent, flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const fs = new NodeFileSystem();
 
 const scriptOnly = () =>
-  flow(
+  onMainFlow(
     [
       script("write", {
         settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
@@ -140,7 +140,12 @@ describe("the core run path", () => {
 
       expect(result.kind).toBe("loaded");
       if (result.kind !== "loaded") return;
-      expect(result.build.nodes.map((node) => node.id)).toEqual(["write", "check"]);
+      expect(result.build.nodes.map((node) => node.id)).toEqual([
+        "start",
+        "write",
+        "check",
+        "stop",
+      ]);
       expect(result.build.hash).toBe(store.findBuild(buildId)?.hash);
     });
 
@@ -180,14 +185,19 @@ describe("the core run path", () => {
 
       expect(result.kind).toBe("loaded");
       if (result.kind !== "loaded") return;
-      expect(result.build.nodes.map(pieceOf)).toEqual(["piece-write", "piece-check"]);
+      expect(result.build.nodes.map(pieceOf)).toEqual([
+        "piece-start",
+        "piece-write",
+        "piece-check",
+        "piece-stop",
+      ]);
       expect(result.build.kitVersion).toBe("abc123def456");
     });
 
     it("falls back to the node id as the piece of a build that named none", async () => {
       const build = await loaded();
 
-      expect(build.nodes.map(pieceOf)).toEqual(["write", "check"]);
+      expect(build.nodes.map(pieceOf)).toEqual(["start", "write", "check", "stop"]);
       expect(build.kitVersion).toBeUndefined();
     });
 
@@ -328,7 +338,13 @@ describe("the core run path", () => {
 
       expect(code).toBe(0);
       expect(await readFile(join(repo.path, "side-effect.txt"), "utf8")).toBe("ran\n");
-      expect(lines).toEqual(["write started", "write done", "check started", "check done"]);
+      expect(lines).toEqual([
+        "write started",
+        "write done",
+        "check started",
+        "check done",
+        "stop done",
+      ]);
       expect(events.stops()).toBe(1);
       expect(store.runs[0]?.status).toBe("done");
     });
@@ -441,6 +457,8 @@ describe("the core run path", () => {
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
     expect(store.findRun(id)?.status).toBe("stopped");
     expect(store.events(id).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
+      "start running",
+      "start done",
       "write running",
     ]);
   });
@@ -923,7 +941,10 @@ describe("AT-19: a build that named no pieces", () => {
     const store = new FakeStore();
     const workspace = { id, name: "fix-login", repo: "/work/repo", base: "main", values: {} };
     const laid = await layDown(
-      flow([prompt("p1"), agent("a1"), prompt("p2")], [thenWire("p1", "a1"), thenWire("a1", "p2")]),
+      onMainFlow(
+        [prompt("p1"), agent("a1"), prompt("p2")],
+        [thenWire("p1", "a1"), thenWire("a1", "p2")],
+      ),
       { home, workspace },
     );
     if (!laid.ok) throw new Error("build failed");

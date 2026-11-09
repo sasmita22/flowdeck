@@ -1,0 +1,54 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "type": "agent",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "role": "reviewer",
+        "instructions": "Review the change.",
+        "model": "sonnet",
+        "tools": ["Read", "Bash"]
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "review",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "buildConfig": {
+      "repo": "/work/repo",
+      "base": "main",
+      "variables": []
+    },
+    "model": "sonnet",
+    "allowedTools": ["Read", "Bash"],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

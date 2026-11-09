@@ -11,7 +11,7 @@ import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type CanvasNote, type Flow } from "../../../../src/core/flow/schema.js";
 import { flow, loop, prompt, thenWire } from "../../../fixtures/flow-builders.js";
 
-const unfinished = new Set(["required-settings", "repo-required"]);
+const unfinished = new Set(["required-settings", "repo-required", "one-start", "stop-required"]);
 
 type Store = ReturnType<typeof createCanvasStore>;
 

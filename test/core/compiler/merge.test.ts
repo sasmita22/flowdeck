@@ -6,12 +6,12 @@ import { applyMerges, type MergeResult } from "../../../src/core/compiler/merge.
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import type { ScopeParts } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const reviewers = (): Flow =>
-  flow(
+  onMainFlow(
     [
       labelled(prompt("p"), "Draft the spec"),
       labelled(agent("a"), "Review the draft"),

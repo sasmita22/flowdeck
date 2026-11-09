@@ -9,11 +9,13 @@ import { rule as loopCap } from "./rules/loop-cap.js";
 import { rule as loopSingleEntry } from "./rules/loop-single-entry.js";
 import { rule as noCycle } from "./rules/no-cycle.js";
 import { rule as nodeIds } from "./rules/node-ids.js";
+import { rule as oneStart } from "./rules/one-start.js";
 import { rule as parallelSection } from "./rules/parallel-section.js";
 import { rule as ports } from "./rules/ports.js";
 import { rule as references } from "./rules/references.js";
 import { rule as repoRequired } from "./rules/repo-required.js";
 import { rule as requiredSettings } from "./rules/required-settings.js";
+import { rule as stopRequired } from "./rules/stop-required.js";
 import { rule as undeclaredVariable } from "./rules/undeclared-variable.js";
 import { rule as variableNames } from "./rules/variable-names.js";
 
@@ -49,6 +51,8 @@ export const rules = [
   variableNames,
   repoRequired,
   agentTools,
+  oneStart,
+  stopRequired,
 ] satisfies readonly Rule[];
 
 export function validate(flow: Flow): ValidationError[] {

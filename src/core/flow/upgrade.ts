@@ -20,15 +20,27 @@ const folderConfig = (folder: unknown): Fields =>
     ? { ...(typeof folder.repo === "string" ? { repo: folder.repo } : {}), base: folder.branch }
     : {};
 
-const upgradeNode = (node: unknown, variables: Fields[]): unknown => {
-  if (!isFields(node) || !isFields(node.settings)) return node;
+const oldDefaultLabels: Record<string, { from: string; to: string }> = {
+  trigger: { from: "Trigger", to: "Start" },
+  output: { from: "Output", to: "Stop" },
+};
+
+const withUpgradedLabel = (node: Fields): Fields => {
+  const rename = oldDefaultLabels[String(node.type)];
+  return rename !== undefined && node.label === rename.from ? { ...node, label: rename.to } : node;
+};
+
+const upgradeNode = (raw: unknown, variables: Fields[]): unknown => {
+  if (!isFields(raw) || !isFields(raw.settings)) return raw;
+  const node = withUpgradedLabel(raw);
+  const { settings: current } = raw;
   if (node.type === "trigger") {
-    const { inputs, flags, ...settings } = node.settings;
+    const { inputs, flags, ...settings } = current;
     variables.push(...inputVariables(inputs), ...flagVariables(flags));
     return { ...node, settings };
   }
-  if (node.type === "branch" && "flag" in node.settings) {
-    const { flag, ...settings } = node.settings;
+  if (node.type === "branch" && "flag" in current) {
+    const { flag, ...settings } = current;
     return { ...node, settings: { ...settings, variable: flag } };
   }
   return node;

@@ -25,7 +25,7 @@ function OutlinePreview({ preview }: { preview: Of<"node"> }) {
       />
       <g clipPath={`url(#${clip})`}>
         <Extras extras={outline.extras} />
-        <TagChip x={outline.padL} tag={tag} fill={outline.ink ?? group} />
+        {tag !== "" && <TagChip x={outline.padL} tag={tag} fill={outline.ink ?? group} />}
       </g>
     </>
   );

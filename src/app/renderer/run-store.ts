@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Problem } from "../../core/compiler/problems.js";
+import { openedFlowSchema } from "../../core/flow/flow-store.js";
+import { mainFlow } from "../../core/flow/main-flow.js";
 import type { BuildConfig, Variable } from "../../core/flow/schema.js";
 import { unsetVariables } from "../../core/flow/variables.js";
 import { costReportSchema, type CostReport } from "../../core/run/cost.js";
@@ -15,7 +17,7 @@ import {
   type SnapshotStatus,
 } from "../../core/run/snapshot.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
-import { selectDirty, type CanvasState } from "./canvas/store.js";
+import { labelFor, selectDirty, type CanvasState } from "./canvas/store.js";
 import { noBlueprint } from "./library-store.js";
 import type { SaveState } from "./save-store.js";
 
@@ -32,11 +34,14 @@ export type RunBridge = Pick<
   | "runCost"
   | "deleteBuild"
   | "defaultBranch"
+  | "openFlow"
 >;
 
 export type RunChoice = { auto: boolean };
 
 export type RunDialog = { buildId: string };
+
+export type IgnoredNode = { id: string; label: string };
 
 export type BuildDialog = {
   flowId: string;
@@ -47,6 +52,8 @@ export type BuildDialog = {
   variables: Variable[];
   values: Record<string, string | boolean>;
   buildModel: string;
+  ignored: readonly IgnoredNode[];
+  step: "form" | "confirm";
   error: string | null;
 };
 
@@ -232,6 +239,12 @@ export const createRunStore = ({
       return answer.success ? answer.data : "";
     };
 
+    const ignoredIn = async (flowId: string): Promise<IgnoredNode[]> => {
+      const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
+      const main = flow ? mainFlow(flow) : undefined;
+      return (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) }));
+    };
+
     const editDialog = (edit: (dialog: BuildDialog) => BuildDialog) => {
       const { buildDialog } = get();
       if (buildDialog !== null) set({ buildDialog: { ...edit(buildDialog), error: null } });
@@ -313,7 +326,7 @@ export const createRunStore = ({
         const opened = source ?? (await savedSource());
         if (opened === null) return;
         const { flowId, version, buildConfig } = opened;
-        const base = await startingBase(buildConfig);
+        const [base, ignored] = await Promise.all([startingBase(buildConfig), ignoredIn(flowId)]);
         set({
           error: null,
           buildDialog: {
@@ -325,6 +338,8 @@ export const createRunStore = ({
             variables: buildConfig.variables,
             values: defaults(buildConfig.variables),
             buildModel: buildConfig.buildModel ?? "",
+            ignored,
+            step: "form",
             error: null,
           },
         });
@@ -350,6 +365,10 @@ export const createRunStore = ({
       confirmBuild: async () => {
         const dialog = get().buildDialog;
         if (dialog === null || !selectCanBuild(get()) || get().starting) return null;
+        if (dialog.step === "form" && dialog.ignored.length > 0) {
+          set({ buildDialog: { ...dialog, step: "confirm", error: null } });
+          return null;
+        }
         const { flowId, version, name, repo, base, values } = dialog;
         const buildModel = dialog.buildModel.trim();
         set({ starting: true });

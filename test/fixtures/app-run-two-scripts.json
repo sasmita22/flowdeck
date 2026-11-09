@@ -1,6 +1,16 @@
 {
   "nodes": [
     {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": -240,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
       "id": "s1",
       "label": "One",
       "type": "script",
@@ -25,9 +35,33 @@
         "command": "echo",
         "args": ["two"]
       }
+    },
+    {
+      "id": "stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
     }
   ],
   "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "s1",
+        "port": "in"
+      }
+    },
     {
       "kind": "then",
       "from": {
@@ -38,11 +72,26 @@
         "node": "s2",
         "port": "in"
       }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "s2",
+        "port": "out"
+      },
+      "to": {
+        "node": "stop",
+        "port": "in"
+      }
     }
   ],
   "session": {
     "name": "main",
-    "buildConfig": { "repo": "/work/repo", "base": "main", "variables": [] },
+    "buildConfig": {
+      "repo": "/work/repo",
+      "base": "main",
+      "variables": []
+    },
     "model": "haiku",
     "allowedTools": [],
     "permissionMode": "default",
