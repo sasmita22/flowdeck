@@ -84,7 +84,7 @@ An edit that fits the schema is applied even if it breaks a rule below, so a blu
 
 ## Tools
 
-Every tool that works on a blueprint takes an optional `blueprint` (a flow id). Leave it out for the open blueprint. Naming another blueprint opens it on the canvas first, so the user sees the edit.
+Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved blueprint; leave it out for the open one. Edits apply only to the blueprint you were opened on, and only while it is open in the editor; an edit at any other time is refused. When asked to change another blueprint, reply that you can edit only the open one, and that the user can open that blueprint's own Agent pane.
 
 | Tool                | Does                                                                                            | Input                                                                       |
 | ------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |

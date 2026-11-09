@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { StoreApi } from "zustand/vanilla";
+import { blueprintSessionName } from "../../../core/compiler/blueprint-session.js";
 import { validate } from "../../../core/compiler/validate.js";
 import { checkEdit, newProblems, type BlueprintEdit } from "../../../core/flow/blueprint-edits.js";
 import {
@@ -13,7 +14,7 @@ import type { Flow, Node } from "../../../core/flow/schema.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 import { addNode, addWire, deleteNodes, updateNode, type Command } from "../canvas/commands.js";
 import { nextNodeId, placeNode, selectDirty, type CanvasState } from "../canvas/store.js";
-import type { Actions } from "../actions.js";
+import type { NavState } from "../nav-store.js";
 import type { SaveState } from "../save-store.js";
 
 export type ToolHandlerBridge = Pick<
@@ -26,6 +27,9 @@ type Answer = { ok: true; [key: string]: unknown } | { ok: false; reason: string
 const refuse = (reason: string): Answer => ({ ok: false, reason });
 
 const notReady = "the canvas is not ready";
+
+const offBlueprint =
+  "Edits go only to the blueprint this agent was opened on, and only while it is open in the editor.";
 
 const firstPosition = { x: 80, y: 80 };
 
@@ -40,15 +44,24 @@ export function createToolHandler({
   bridge,
   canvas,
   save,
-  actions,
+  nav,
 }: {
   bridge: ToolHandlerBridge;
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
-  actions: Pick<Actions, "openForAgent">;
+  nav: StoreApi<Pick<NavState, "page">>;
 }): void {
   const isOpen = (blueprint: string | undefined) =>
     blueprint === undefined || blueprint === save.getState().flowId;
+
+  const isOwnOpenBlueprint = (session: string) => {
+    const { flowId } = save.getState();
+    return (
+      nav.getState().page.name === "editor" &&
+      flowId !== null &&
+      session === blueprintSessionName(flowId)
+    );
+  };
 
   const readSaved = async (flowId: string) => {
     const reply = await bridge.openFlow({ flowId });
@@ -83,18 +96,8 @@ export function createToolHandler({
     }
   };
 
-  const openTarget = async (blueprint: string | undefined): Promise<Answer | null> => {
-    if (isOpen(blueprint)) return null;
-    if (!(await actions.openForAgent(blueprint as string))) {
-      return refuse("the user kept the open blueprint");
-    }
-    if (!isOpen(blueprint)) return refuse(`Blueprint "${blueprint}" could not be opened.`);
-    return canvas.getState().ready ? null : refuse(notReady);
-  };
-
-  const applyEdit = async (name: string, input: unknown): Promise<Answer> => {
-    const unopened = await openTarget(targetOf(input));
-    if (unopened !== null) return unopened;
+  const applyEdit = (session: string, name: string, input: unknown): Answer => {
+    if (!isOwnOpenBlueprint(session)) return refuse(offBlueprint);
     const before = canvas.getState().flow;
     const check = checkEdit(before, name, input);
     if (!check.ok) return check;
@@ -129,7 +132,7 @@ export function createToolHandler({
     return { ok: true, blueprints: found.map(({ summary }) => summary) };
   };
 
-  const answer = async ({ name, input }: ToolCall): Promise<Answer> => {
+  const answer = async ({ session, name, input }: ToolCall): Promise<Answer> => {
     if (!canvas.getState().ready) return refuse(notReady);
     switch (name) {
       case "read_blueprint":
@@ -139,7 +142,7 @@ export function createToolHandler({
       case "search_blueprints":
         return searchSaved(input);
       default:
-        return applyEdit(name, input);
+        return applyEdit(session, name, input);
     }
   };
 

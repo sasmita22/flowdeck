@@ -2,13 +2,6 @@ import { z } from "zod";
 import type { LoadedFlow } from "./flow-store.js";
 import { NodeType, Variable, Wire, WireKind } from "./schema.js";
 
-const target = {
-  blueprint: z
-    .string()
-    .optional()
-    .describe("The flow id of the blueprint to work on. Leave it out for the open blueprint."),
-};
-
 const partialSettings = z.record(z.string(), z.unknown());
 
 const [thenWire, fileWire] = Wire.options;
@@ -17,33 +10,38 @@ const [textVariable, yesnoVariable] = Variable.options;
 export const toolInputs = {
   list_blueprints: z.object({}),
   search_blueprints: z.object({ query: z.string() }),
-  read_blueprint: z.object(target),
-  add_node: z.object({
+  read_blueprint: z.object({
+    blueprint: z
+      .string()
+      .optional()
+      .describe("The flow id of the blueprint to read. Leave it out for the open blueprint."),
+  }),
+  add_node: z.strictObject({
     type: NodeType,
     label: z.string(),
     parent: z.string().optional(),
     settings: partialSettings.default({}),
-    ...target,
   }),
-  change_node: z.object({
+  change_node: z.strictObject({
     nodeId: z.string(),
     label: z.string().optional(),
     settings: partialSettings.optional(),
-    ...target,
   }),
-  wire: thenWire.extend({
-    kind: WireKind,
-    file: fileWire.shape.file.optional().describe("The file a file wire carries."),
-    ...target,
-  }),
-  delete_node: z.object({ nodeId: z.string(), ...target }),
-  set_variable: textVariable.extend({
-    kind: z.enum([textVariable.shape.kind.value, yesnoVariable.shape.kind.value]),
-    default: z
-      .union([textVariable.shape.default.unwrap(), yesnoVariable.shape.default.unwrap()])
-      .optional(),
-    ...target,
-  }),
+  wire: thenWire
+    .extend({
+      kind: WireKind,
+      file: fileWire.shape.file.optional().describe("The file a file wire carries."),
+    })
+    .strict(),
+  delete_node: z.strictObject({ nodeId: z.string() }),
+  set_variable: textVariable
+    .extend({
+      kind: z.enum([textVariable.shape.kind.value, yesnoVariable.shape.kind.value]),
+      default: z
+        .union([textVariable.shape.default.unwrap(), yesnoVariable.shape.default.unwrap()])
+        .optional(),
+    })
+    .strict(),
   list_builds: z.object({}),
   read_build: z.object({ id: z.string() }),
 };

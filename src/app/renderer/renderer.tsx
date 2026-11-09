@@ -81,7 +81,7 @@ function renderApp(root: HTMLElement) {
   const buildBranches = createBranchStore({ bridge: window.flowdeck });
   const assistant = createAssistantStore({ bridge: window.flowdeck, save });
   const actions = createActions({ nav, save, run, library, assistant });
-  createToolHandler({ bridge: window.flowdeck, canvas, save, actions });
+  createToolHandler({ bridge: window.flowdeck, canvas, save, nav });
 
   createRoot(root).render(
     <App

@@ -394,22 +394,22 @@ test("a leftover fd-bp session is stopped at the next start", async () => {
     .toBe(false);
 });
 
-test("every blueprint is reachable and an edit to a closed one opens it first", async () => {
+test("reads still reach every blueprint", async () => {
   const a = seeded("a", [prompt("plan-step")]);
   const b = seeded("b", [prompt("review-step")]);
   const window = await launch();
   await openOn(window, a);
   await showPane(window, a);
+  const before = await readout(window);
   await writeBlueprintAsks(home, [
     [
       { name: "list_blueprints", input: {} },
       { name: "search_blueprints", input: { query: "review-step" } },
       { name: "read_blueprint", input: { blueprint: b } },
-      { name: "add_node", input: { type: "script", label: "Tests", blueprint: b } },
     ],
   ]);
 
-  await askInPane(window, "add a script to b");
+  await askInPane(window, "what does b do");
 
   await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
   const results = await blueprintResults(home);
@@ -417,7 +417,6 @@ test("every blueprint is reachable and an edit to a closed one opens it first", 
     "list_blueprints",
     "search_blueprints",
     "read_blueprint",
-    "add_node",
   ]);
   const listed = results[0]?.result as { ok: boolean; blueprints: { flowId: string }[] };
   expect(listed.ok).toBe(true);
@@ -429,11 +428,36 @@ test("every blueprint is reachable and an edit to a closed one opens it first", 
     ok: true,
     flow: { nodes: [expect.objectContaining({ id: "review-step" })] },
   });
-  expect(results[3]?.result).toMatchObject({ ok: true, nodeId: "script-1" });
-  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("b");
-  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
-  const shown = await readout(window);
-  expect(shown.nodes.map(({ id }) => id)).toEqual(["review-step", "script-1"]);
+  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("a");
+  expect(await readout(window)).toEqual(before);
+});
+
+test("an edit aimed at another blueprint is refused", async () => {
+  const a = seeded("a", [prompt("plan-step")]);
+  const b = seeded("b", [prompt("review-step")]);
+  const window = await launch();
+  await openOn(window, a);
+  await showPane(window, a);
+  const before = await readout(window);
+  await writeBlueprintAsks(home, [
+    [{ name: "add_node", input: { type: "script", label: "Tests", blueprint: b } }],
+  ]);
+
+  await askInPane(window, "add a script to b");
+
+  await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
+  const results = await blueprintResults(home);
+  expect(results.map(({ name }) => name)).toEqual(["add_node"]);
+  expect(results[0]?.result).toMatchObject({
+    isError: true,
+    content: [{ type: "text", text: expect.stringContaining("blueprint") }],
+  });
+  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("a");
+  expect(await readout(window)).toEqual(before);
+  await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
+  await expect(window.getByTestId("rf__node-script-1")).toHaveCount(0);
+  const saved = rows<{ n: number }>("SELECT count(*) AS n FROM flow_versions WHERE flow_id = ?", b);
+  expect(saved[0]?.n).toBe(1);
   expect(await tmuxAlive(bpName(a))).toBe(true);
 });
 

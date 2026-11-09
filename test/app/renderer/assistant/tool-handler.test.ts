@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createStore } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import { createToolHandler } from "../../../../src/app/renderer/assistant/tool-handler.js";
 import {
@@ -7,6 +8,7 @@ import {
   placeNode,
   selectDirty,
 } from "../../../../src/app/renderer/canvas/store.js";
+import type { NavState, Page } from "../../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
@@ -90,14 +92,18 @@ const fakeBridge = (blueprints: readonly Saved[]) => {
   } satisfies HandlerBridge;
 
   let requests = 0;
-  const call = (name: string, input: unknown): Promise<Record<string, unknown>> => {
+  const call = (
+    name: string,
+    input: unknown,
+    session = "fd-bp-flow-1",
+  ): Promise<Record<string, unknown>> => {
     requests += 1;
     const requestId = `request-${requests}`;
     const answered = new Promise<Record<string, unknown>>((resolve) => {
       waiting.set(requestId, (result) => resolve(result as Record<string, unknown>));
     });
     for (const listener of callListeners) {
-      listener({ requestId, session: "fd-bp-flow-1", name, input });
+      listener({ requestId, session, name, input });
     }
     return answered;
   };
@@ -111,23 +117,20 @@ const fakeBridge = (blueprints: readonly Saved[]) => {
 
 const setup = async ({
   open = true,
-  agentOpen = "proceed",
-}: { open?: boolean; agentOpen?: "proceed" | "cancel" } = {}) => {
+  page = { name: "editor" },
+}: { open?: boolean; page?: Page } = {}) => {
   const blueprints = [openBlueprint(), ...otherBlueprints()];
   const { bridge, call, endTurn } = fakeBridge(blueprints);
   const canvas = createCanvasStore({ ready: false });
   const save = createSaveStore({ bridge, canvas });
   if (open) await save.getState().open();
-  const actions = {
-    openForAgent: vi.fn(async (flowId: string) => {
-      if (agentOpen === "cancel") return false;
-      await save.getState().open(flowId);
-      return true;
-    }),
-  };
-  createToolHandler({ bridge, canvas, save, actions });
-  return { bridge, call, endTurn, canvas, save, blueprints, actions };
+  const nav = createStore<Pick<NavState, "page">>()(() => ({ page }));
+  createToolHandler({ bridge, canvas, save, nav });
+  return { bridge, call, endTurn, canvas, save, blueprints, nav };
 };
+
+const offBlueprint =
+  "Edits go only to the blueprint this agent was opened on, and only while it is open in the editor.";
 
 const selfWire = {
   kind: "then",
@@ -221,18 +224,14 @@ describe("tool handler edits", () => {
     expect(canvas.getState().undoStack).toEqual([]);
   });
 
-  it("applies an edit naming the open blueprint without opening anything", async () => {
-    const { actions, call, canvas } = await setup();
+  it("applies an edit from the open blueprint's session", async () => {
+    const { call, canvas, save } = await setup();
 
-    const applied = await call("change_node", {
-      nodeId: "p1",
-      label: "Planner",
-      blueprint: "flow-1",
-    });
+    const applied = await call("change_node", { nodeId: "p1", label: "Planner" }, "fd-bp-flow-1");
 
     expect(applied).toMatchObject({ ok: true });
     expect(canvas.getState().flow.nodes.find(({ id }) => id === "p1")?.label).toBe("Planner");
-    expect(actions.openForAgent).not.toHaveBeenCalled();
+    expect(save.getState().flowId).toBe("flow-1");
   });
 
   it("closes the undo group at a turn end", async () => {
@@ -334,56 +333,83 @@ describe("tool handler reads", () => {
   });
 });
 
-describe("tool handler edits to a blueprint that is not open", () => {
-  it("opens that blueprint first, then applies the edit on its canvas", async () => {
-    const { actions, call, canvas, save, blueprints } = await setup();
-    const review = blueprints.find(({ flowId }) => flowId === "flow-2");
+describe("tool handler edits off the blueprint, refused", () => {
+  const unchanged = (canvas: Awaited<ReturnType<typeof setup>>["canvas"]) => {
+    const { flow, undoStack } = canvas.getState();
+    const dirty = selectDirty(canvas.getState());
+    return () => {
+      expect(canvas.getState().flow).toBe(flow);
+      expect(canvas.getState().undoStack).toEqual(undoStack);
+      expect(selectDirty(canvas.getState())).toBe(dirty);
+    };
+  };
 
-    const result = await call("add_node", {
-      type: "script",
-      label: "Tests",
-      blueprint: "flow-2",
-    });
+  it("refuses an edit from fd-bp-flow-1 while the canvas holds another blueprint", async () => {
+    const { call, canvas, save } = await setup();
+    await save.getState().open("flow-2");
+    const expectUnchanged = unchanged(canvas);
 
-    expect(actions.openForAgent).toHaveBeenCalledExactlyOnceWith("flow-2");
+    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
+
+    expect(result).toEqual({ ok: false, reason: offBlueprint });
+    expectUnchanged();
     expect(save.getState().flowId).toBe("flow-2");
-    expect(result).toMatchObject({ ok: true, nodeId: "script-1" });
-    expect(canvas.getState().flow.nodes.map(({ label }) => label)).toEqual([
-      ...(review?.flow.nodes.map(({ label }) => label) ?? []),
-      "Tests",
-    ]);
-    expect(canvas.getState().undoStack).toHaveLength(1);
   });
 
-  it("refuses the edit and changes nothing when the user keeps the open blueprint", async () => {
-    const { actions, call, canvas, save } = await setup({ agentOpen: "cancel" });
-    const before = canvas.getState().flow;
+  it("refuses an edit while no saved blueprint is open", async () => {
+    const { call, canvas, save } = await setup();
+    save.getState().startNew();
+    expect(save.getState().flowId).toBeNull();
+    const expectUnchanged = unchanged(canvas);
 
-    const result = await call("change_node", {
-      nodeId: "p1",
-      label: "Planner",
-      blueprint: "flow-2",
-    });
+    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
 
-    expect(actions.openForAgent).toHaveBeenCalledExactlyOnceWith("flow-2");
-    expect(result).toEqual({ ok: false, reason: "the user kept the open blueprint" });
+    expect(result).toEqual({ ok: false, reason: offBlueprint });
+    expectUnchanged();
+  });
+
+  it("refuses an edit while the page is not the editor", async () => {
+    const { call, canvas } = await setup({ page: { name: "blueprints" } });
+    const expectUnchanged = unchanged(canvas);
+
+    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
+
+    expect(result).toEqual({ ok: false, reason: offBlueprint });
+    expectUnchanged();
+  });
+
+  it("refuses an edit naming another blueprint and opens nothing", async () => {
+    const { bridge, call, canvas, save } = await setup();
+    const opens = bridge.openFlow.mock.calls.length;
+    const expectUnchanged = unchanged(canvas);
+
+    const result = await call(
+      "add_node",
+      { type: "script", label: "Tests", blueprint: "flow-2" },
+      "fd-bp-flow-1",
+    );
+
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining("blueprint") });
+    expectUnchanged();
     expect(save.getState().flowId).toBe("flow-1");
-    expect(canvas.getState().flow).toBe(before);
-    expect(canvas.getState().undoStack).toEqual([]);
+    expect(bridge.openFlow).toHaveBeenCalledTimes(opens);
   });
+});
 
+describe("tool handler reads never open", () => {
   it.each([
     ["read_blueprint", { blueprint: "flow-2" }],
     ["list_blueprints", {}],
     ["search_blueprints", { query: "lint" }],
   ])("%s never opens a blueprint", async (name, input) => {
-    const { actions, call, save } = await setup();
+    const { call, canvas, save } = await setup();
+    const before = canvas.getState().flow;
 
     const result = await call(name, input);
 
     expect(result).toMatchObject({ ok: true });
-    expect(actions.openForAgent).not.toHaveBeenCalled();
     expect(save.getState().flowId).toBe("flow-1");
+    expect(canvas.getState().flow).toBe(before);
   });
 });
 

@@ -12,6 +12,7 @@ type JsonSchema = {
   type?: string;
   properties?: Record<string, { type?: string }>;
   required?: string[];
+  additionalProperties?: unknown;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
 };
@@ -92,10 +93,10 @@ describe("blueprintToolDefinitions", () => {
     }
   });
 
-  it.each(editToolNames)("lets %s name a blueprint by flow id, optionally", (name) => {
+  it.each(editToolNames)("gives %s no blueprint argument and refuses extra keys", (name) => {
     for (const branch of inputBranches(name)) {
-      expect(branch.properties?.blueprint?.type).toBe("string");
-      expect(branch.required ?? []).not.toContain("blueprint");
+      expect(branch.properties).not.toHaveProperty("blueprint");
+      expect(branch.additionalProperties).toBe(false);
     }
   });
 

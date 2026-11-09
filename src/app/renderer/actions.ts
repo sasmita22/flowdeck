@@ -16,7 +16,6 @@ export type ActionStores = {
 export type Actions = {
   newBlueprint(): Promise<void>;
   openBlueprint(flowId: string): Promise<void>;
-  openForAgent(flowId: string): Promise<boolean>;
   renameBlueprint(flowId: string, name: string): Promise<void>;
   runBuild(buildId: string): Promise<void>;
   startRun(choice: RunChoice): Promise<void>;
@@ -51,10 +50,6 @@ export const createActions = ({ nav, save, run, library, assistant }: ActionStor
         await save.getState().open(flowId);
         toEditor();
       });
-    },
-    openForAgent: async (flowId) => {
-      toEditor();
-      return save.getState().leave(() => save.getState().open(flowId));
     },
     renameBlueprint: async (flowId, name) => {
       if (save.getState().flowId === flowId) await save.getState().rename(name);
