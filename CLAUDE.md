@@ -111,3 +111,6 @@ better-sqlite3 and node-pty match Electron.
 - Commit and PR titles: conventional, ending with the ticket id, for example
   `feat(engine): start tmux sessions (FD-03)`.
 - Code explains itself: no comments that restate the code, and no ticket ids in code.
+- After any ticket that adds or changes a skill, an agent or model-facing text, run the
+  `audit-ai-guidelines` skill (`.claude/skills/audit-ai-guidelines/`) and update
+  `docs/ai-guidelines-audit.md`.

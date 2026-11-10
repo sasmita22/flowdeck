@@ -11,7 +11,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 ## How it runs
 
-The runner runs `command` through `sh -c`, with each of `args` passed as its own argument, in the run's worktree (the repository folder `CLAUDE.md` names), with no terminal and no input.
+The runner starts `command` as a program, not through a shell, with each of `args` passed as its own argument, in the run's worktree (the repository folder `CLAUDE.md` names), with no terminal and no input. Spaces, globs, `$` and quotes reach the program as written. The orchestrator in plain Claude Code instead runs `command` followed by the shell-quoted `args` as one shell line.
 
 - `successCodes`: exit codes that mean done. Default `[0]`.
 - `retryCodes`: exit codes that mean try once more. Default `[2]`. At most 2 attempts.
@@ -21,7 +21,7 @@ The runner runs `command` through `sh -c`, with each of `args` passed as its own
 
 1. Find the node: `PIECE script:<nodeId>` names it. Read its `settings` in `manifest.json`.
 2. Check each point against the target repo's worktree:
-   - Quoting: spaces, globs, `$` and quotes in the command and args mean what the node intends.
+   - Quoting: `command` is one program name, with no spaces or shell syntax, and each of `args` is one argument, so the command runs the same with no shell in Flowdeck and as the orchestrator's shell line.
    - Working folder: every relative path exists from the worktree root (use Glob).
    - Full paths: every program is one the repo provides (its scripts, its package manager's bin) or a standard tool; a repo-local program is called by its path.
    - Exit codes: the codes the command really gives for success and for a passing retry match `successCodes` and `retryCodes`.

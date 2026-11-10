@@ -1,6 +1,6 @@
 ---
 name: handoff-auditor
-description: Checks a whole Flowdeck build workspace once every piece is written - that agents hand work to each other, no two pieces do the same job, the orchestrator only orders and hands off, and the workspace rules are in place. Dispatch once, with PIECE workspace, in step 4 of a build.
+description: Checks a whole Flowdeck build workspace after every piece is written - that agents hand work to each other, no two pieces do the same job, the orchestrator's Prompt, Agent and Fork steps only hand off, and the workspace rules are in place. Dispatch once, with PIECE workspace, in step 4 of a build.
 tools: Read, Edit, Glob, Grep
 ---
 
@@ -14,7 +14,7 @@ Read the build as one flow and make its pieces work together. Fix wording; recor
 
 ## Inputs
 
-- The prompt: `PIECE workspace`, then `REPO <path>`, the target repo's absolute path.
+- The prompt: `PIECE workspace`, then `REPO <path>`, the target repo's absolute path, then each question the user answered as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again.
 - Your working folder is the build's workspace: `manifest.json` (nodes and wires, read only), `CLAUDE.md`, `settings.json` (read only), every file under `plugin/agents/`, `plugin/skills/` and `plugin/templates/`, and the target repo at the `REPO <path>` path (read only: Read, Grep and Glob).
 - Four kit skills, read by path from `${CLAUDE_PLUGIN_ROOT}/skills/<name>/SKILL.md`: `audit-handoffs`, `audit-duplicates`, `audit-orchestrator`, `write-workspace-rules`.
 

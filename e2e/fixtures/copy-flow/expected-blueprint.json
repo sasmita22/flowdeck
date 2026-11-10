@@ -1,0 +1,136 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "type": "prompt",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Write a short plan for the change."
+      }
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "type": "agent",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "role": "Reviewer of the repository",
+        "instructions": "Read README.md and list the risks it finds.\nExpected output: review-notes.md, the risks found.",
+        "model": "sonnet",
+        "tools": [],
+        "writes": ["review-notes.md"]
+      }
+    },
+    {
+      "id": "apply",
+      "label": "Apply",
+      "type": "prompt",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "instructions": "Read review-notes.md and update the plan to address each risk."
+      }
+    },
+    {
+      "id": "stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "plan",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "plan",
+        "port": "out"
+      },
+      "to": {
+        "node": "review",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "review",
+        "port": "out"
+      },
+      "to": {
+        "node": "apply",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "apply",
+        "port": "out"
+      },
+      "to": {
+        "node": "stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "file",
+      "from": {
+        "node": "review",
+        "port": "file-out"
+      },
+      "to": {
+        "node": "apply",
+        "port": "file-in"
+      },
+      "file": "review-notes.md"
+    }
+  ],
+  "session": {
+    "name": "main",
+    "buildConfig": {
+      "base": "main",
+      "variables": []
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

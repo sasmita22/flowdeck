@@ -97,7 +97,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
     return after.length === 0 ? "" : ` Then go on to ${nodeList(after)}.`;
   };
 
-  const description = `${scopeLine(scope)} Runs this build's flow in plain Claude Code, one step at a time: type /${prefix}:run.`;
+  const description = `${scopeLine(scope)} Runs this build's flow in plain Claude Code, one step at a time: type /${prefix}:run. Use when running this build's whole flow without the Flowdeck app.`;
   const steps = nodes.map(
     (node, index) => `${index + 1}. NODE ${node.id} (${node.label}): ${step(node)}${next(node)}`,
   );
@@ -110,7 +110,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       "---",
       `# Run ${prefix}`,
       "",
-      "Run these steps in order. Only order and hand off: each step goes to its skill or agent; never do a step's work yourself. Wait for each step's result before the next.",
+      "Run these steps in order. Prompt, Agent and Fork steps only hand off: each goes to its skill or agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.",
       "",
       handoffFolderLine(scope.repo),
       "",

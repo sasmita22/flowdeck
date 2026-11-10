@@ -24,7 +24,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 Keep the five sections code laid down, in this order:
 
-- `## Role`: one job, in one or two sentences. A node that mixes two jobs is written as drawn and added to `mixedJobs` in `build-report.json`; never split it.
+- `## Role`: one job, in one or two sentences. A node that mixes two jobs is written as drawn and added to `mixedJobs` in `build-report.json` as `{ "nodeId": "<node id>", "note": "<the two jobs>" }`; never split it.
 - `## Inputs`: every file it reads and who writes it. Files that differ per node come from the prompt's `You are given:` line; say so instead of hard-coding them in a merged agent.
 - `## Steps`: imperative and numbered, built from the node's instructions. Each step reads or produces something named.
 - `## Output`: the files it writes (the prompt's `Write:` line) and their pinned shape: headings or fields, in order, that the next node reads as is. Start from the file's template in `plugin/templates/` when one exists; where the node's own instructions narrow the file's form, the node's own instructions win. In a merged piece where the nodes' output layouts differ, add one line per node, `NODE <id>: <layout>`, so each node keeps its own layout.

@@ -7,6 +7,8 @@ description: How to write the template for a file a File wire carries, so the wr
 
 Each markdown file (`.md`) a File wire carries has one template in `plugin/templates/<file>`; any other file has none, and its writer's `Output` alone pins its shape. Before the writing node runs, the runner copies it into the worktree, and the writer replaces it with the real file. The reader relies on its sections being there. A template is a starting point, not a contract: where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question: shape the template to that form, and the writer replaces the template's content.
 
+A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
+
 ## Steps
 
 1. Read the nodes on its `Written by` and `Read by` lines: their pieces and their node settings in `manifest.json`.
@@ -15,7 +17,7 @@ Each markdown file (`.md`) a File wire carries has one template in `plugin/templ
    - `## Purpose`: one or two lines on what the file carries, from which node to which.
    - `## Content`: the fixed sections, in order. One heading or field per thing a reader uses, each with one line saying what goes there. For a data file (JSON, YAML), show the shape as a fenced example instead.
    - `## Open questions`: keep the heading; the writer lists there what it could not settle.
-4. If a reader needs content the writer's node never produces, shape the template for the reader and add a question naming the reader as `nodeId` and the writer as `otherNodeId`.
+4. If a reader needs content the writer's node never produces, shape the template for the reader and add to `questions` in `build-report.json` `{ "nodeId": "<reader>", "otherNodeId": "<writer>", "text": "<what the reader needs that the writer never produces>" }`.
 
 ## Hard limits
 
