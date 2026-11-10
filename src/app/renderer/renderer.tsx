@@ -56,7 +56,7 @@ function renderApp(root: HTMLElement) {
   syncWindowWidth();
   window.addEventListener("resize", syncWindowWidth);
   const workspace = createWorkspaceStore({ bridge: window.flowdeck, canvas, save });
-  const nav = createNavStore();
+  const nav = createNavStore({ leave: (next) => save.getState().leave(next) });
   const library = createLibraryStore({ bridge: window.flowdeck });
   const buildProgress = createBuildProgressStore(window.flowdeck);
   void buildProgress.getState().connect();

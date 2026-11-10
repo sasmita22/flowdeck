@@ -1,4 +1,5 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import type { SaveState } from "./save-store.js";
 
 export type Page =
   | { name: "editor" }
@@ -62,7 +63,9 @@ export function arrange<T>(
     : found;
 }
 
-export const createNavStore = (): StoreApi<NavState> =>
+export const createNavStore = ({
+  leave,
+}: { leave?: SaveState["leave"] } = {}): StoreApi<NavState> =>
   createStore<NavState>()((set, get) => ({
     page: { name: "blueprints" },
     query: "",
@@ -70,7 +73,12 @@ export const createNavStore = (): StoreApi<NavState> =>
     searchFocus: 0,
     go: (page) => {
       if (JSON.stringify(page) === JSON.stringify(get().page)) return;
-      set({ page, query: "", sort: "recent" });
+      const show = () => set({ page, query: "", sort: "recent" });
+      if (get().page.name === "editor" && leave !== undefined) {
+        void leave(async () => show());
+        return;
+      }
+      show();
     },
     setQuery: (query) => set({ query }),
     setSort: (sort) => set({ sort }),

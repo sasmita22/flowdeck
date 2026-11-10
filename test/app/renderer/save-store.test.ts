@@ -5,6 +5,7 @@ import {
   newCanvasFlow,
   selectDirty,
 } from "../../../src/app/renderer/canvas/store.js";
+import { createNavStore } from "../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../src/app/renderer/save-store.js";
 import { flow, prompt } from "../../fixtures/flow-builders.js";
 
@@ -558,10 +559,87 @@ describe("leaving unsaved changes", () => {
     expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledTimes(2);
 
+    makeDirty(canvas);
     bridge.saveFlow.mockResolvedValueOnce({ kind: "error", message: "disk full" });
     void store.getState().leave(next);
     await store.getState().answerLeave("save");
     expect(next).toHaveBeenCalledTimes(2);
     expect(store.getState()).toMatchObject({ leavePrompt: false, error: "disk full" });
+  });
+
+  it("Don't save puts the canvas back to its saved flow before going on", async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    makeDirty(canvas);
+    const dirtyWhenGoingOn: boolean[] = [];
+    const next = vi.fn(async () => {
+      dirtyWhenGoingOn.push(selectDirty(canvas.getState()));
+    });
+
+    void store.getState().leave(next);
+    await store.getState().answerLeave("discard");
+
+    expect(canvas.getState().flow).toEqual(savedFlow());
+    expect(selectDirty(canvas.getState())).toBe(false);
+    expect(dirtyWhenGoingOn).toEqual([false]);
+  });
+
+  it("Don't save puts a never-saved Untitled blueprint back to an empty canvas", async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(null) });
+    makeDirty(canvas);
+    const next = vi.fn(async () => undefined);
+
+    void store.getState().leave(next);
+    await store.getState().answerLeave("discard");
+
+    expect(canvas.getState().flow).toEqual(newCanvasFlow());
+    expect(selectDirty(canvas.getState())).toBe(false);
+    expect(store.getState().name).toBe("Untitled");
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("leaving the editor asks once", () => {
+  const editorWithEdit = async () => {
+    const { canvas, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    const nav = createNavStore({ leave: store.getState().leave });
+    nav.getState().go({ name: "editor" });
+    makeDirty(canvas);
+    let prompts = 0;
+    store.subscribe((state, before) => {
+      if (state.leavePrompt && !before.leavePrompt) prompts += 1;
+    });
+    return { canvas, store, nav, prompts: () => prompts };
+  };
+
+  it("asks once on a page change, and the next open after Don't save goes straight on", async () => {
+    const { canvas, store, nav, prompts } = await editorWithEdit();
+
+    nav.getState().go({ name: "blueprints" });
+    expect(store.getState().leavePrompt).toBe(true);
+    expect(nav.getState().page).toEqual({ name: "editor" });
+
+    await store.getState().answerLeave("discard");
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+    expect(selectDirty(canvas.getState())).toBe(false);
+
+    const next = vi.fn(async () => undefined);
+    await store.getState().leave(next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(store.getState().leavePrompt).toBe(false);
+    expect(prompts()).toBe(1);
+  });
+
+  it("asks once when opening another blueprint from the editor", async () => {
+    const { canvas, store, nav, prompts } = await editorWithEdit();
+    const next = vi.fn(async () => nav.getState().go({ name: "editor" }));
+
+    void store.getState().leave(next);
+    expect(store.getState().leavePrompt).toBe(true);
+
+    await store.getState().answerLeave("discard");
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "editor" });
+    expect(selectDirty(canvas.getState())).toBe(false);
+    expect(prompts()).toBe(1);
   });
 });
