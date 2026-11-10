@@ -15,15 +15,15 @@ import {
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import {
+  agent,
   branch,
   fileWire,
   flow,
   fork,
+  gate,
   loop,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../test/fixtures/flow-builders.js";
@@ -32,6 +32,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const git = async (repo: string, ...args: string[]) =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -49,16 +50,18 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     for (const cleanup of cleanups.splice(0)) await cleanup();
   }
 });
 
-const launch = async (colorScheme?: "dark") => {
+const launch = async (colorScheme?: "dark", writes?: Record<string, Record<string, string>>) => {
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
     ...(colorScheme === undefined ? {} : { colorScheme }),
+    ...(writes === undefined ? {} : { writes }),
   });
   await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
   return launched.window;
@@ -103,13 +106,7 @@ const reviewShot = async (window: Page, name: string) => {
 };
 
 const twoScripts = () =>
-  flow(
-    [
-      at(script("s1", { settings: { command: "echo", args: ["one"] } }), 80, 120, "One"),
-      at(script("s2", { settings: { command: "echo", args: ["two"] } }), 380, 120, "Two"),
-    ],
-    [thenWire("s1", "s2")],
-  );
+  flow([at(agent("s1"), 80, 120, "One"), at(agent("s2"), 380, 120, "Two")], [thenWire("s1", "s2")]);
 
 const tempRepo = async () => {
   const repo: TmpRepo = await createTmpRepo({ commit: true });
@@ -142,8 +139,8 @@ test("A wire can be selected, deleted with Delete, and brought back with Undo", 
   await expect(edge).toBeAttached();
 });
 
-test("Wiring a Fork to a Prompt is refused with a plain reason", async () => {
-  seedFlow(home, flow([at(fork("f1"), 80, 120, "Split"), at(prompt("p1"), 300, 120, "Draft")], []));
+test("Wiring a Fork to a Gate is refused with a plain reason", async () => {
+  seedFlow(home, flow([at(fork("f1"), 80, 120, "Split"), at(gate("p1"), 300, 120, "Draft")], []));
   const window = await launch();
 
   await connectPorts(window, window.getByTestId("port-f1-out"), window.getByTestId("port-p1-in"));
@@ -161,8 +158,8 @@ test("A refused Build lists every problem in plain words, and a click selects it
     flow(
       [
         at(trigger("start"), -200, 120, "Start"),
-        at(prompt("p1", { settings: { instructions: "" } }), 80, 120, "Draft the plan"),
-        at(script("s1", { settings: { command: "" } }), 900, 700, "Run the tests"),
+        at(agent("p1", { settings: { instructions: "" } }), 80, 120, "Draft the plan"),
+        at(agent("s1", { settings: { instructions: "" } }), 900, 700, "Run the tests"),
         at(output("stop"), 1200, 700, "Stop"),
       ],
       [thenWire("start", "p1"), thenWire("p1", "s1"), thenWire("s1", "stop")],
@@ -179,10 +176,10 @@ test("A refused Build lists every problem in plain words, and a click selects it
   const problems = window.getByTestId("build-problems");
   await expect(problems).toContainText("2 problems");
   await expect(window.getByTestId("build-problem-0")).toHaveText(
-    "Draft the planWrite what the prompt should do.",
+    "Draft the planWrite what the agent should do.",
   );
   await expect(window.getByTestId("build-problem-1")).toHaveText(
-    "Run the testsWrite the command to run.",
+    "Run the testsWrite what the agent should do.",
   );
   await expect(problems).not.toContainText("required-settings");
   await expect(window.getByTestId("run-error")).toHaveCount(0);
@@ -190,7 +187,7 @@ test("A refused Build lists every problem in plain words, and a click selects it
 
   await window.getByTestId("build-problem-1").click();
   await expect.poll(() => selection(window)).toEqual(["s1"]);
-  await expect(window.getByTestId("node-problems")).toHaveText("Write the command to run.");
+  await expect(window.getByTestId("node-problems")).toHaveText("Write what the agent should do.");
   const node = await boxOf(window.getByTestId("node-s1"));
   const canvas = await boxOf(window.getByTestId("canvas"));
   await expect
@@ -207,8 +204,8 @@ test("A Branch picks a yes/no variable, and its wires say yes and no", async () 
     [
       at(trigger("t"), 40, 120),
       at(branch("b", "e2e"), 240, 120),
-      at(script("y"), 460, 60),
-      at(script("n"), 460, 260),
+      at(agent("y"), 460, 60),
+      at(agent("n"), 460, 260),
     ],
     [
       thenWire("t", "b"),
@@ -265,7 +262,7 @@ test("A dropped Agent shows an issue until its task is written", async () => {
 });
 
 const copyable = () =>
-  flow([at(prompt("a"), 80, 120, "Plan"), at(script("b"), 380, 120, "Test")], [thenWire("a", "b")]);
+  flow([at(agent("a"), 80, 120, "Plan"), at(agent("b"), 380, 120, "Test")], [thenWire("a", "b")]);
 
 test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicates", async () => {
   seedFlow(home, copyable());
@@ -277,23 +274,23 @@ test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicat
   await window.keyboard.press("Meta+c");
   await window.keyboard.press("Meta+v");
 
-  await expect.poll(() => selection(window)).toEqual(["prompt-1", "script-1"]);
+  await expect.poll(() => selection(window)).toEqual(["agent-1", "agent-2"]);
   const pasted = await readout(window);
   expect(pasted.nodes.map(({ id, label }) => `${id}:${label}`)).toEqual([
     "a:Plan",
     "b:Test",
-    "prompt-1:Plan",
-    "script-1:Test",
+    "agent-1:Plan",
+    "agent-2:Test",
   ]);
   expect(pasted.wires.map(({ from, to }) => `${from.node}>${to.node}`)).toEqual([
     "a>b",
-    "prompt-1>script-1",
+    "agent-1>agent-2",
   ]);
-  await expect(window.getByTestId("node-prompt-1")).toBeVisible();
+  await expect(window.getByTestId("node-agent-1")).toBeVisible();
 
   await window.getByTestId("node-a").click();
   await window.keyboard.press("Meta+d");
-  await expect.poll(() => selection(window)).toEqual(["prompt-2"]);
+  await expect.poll(() => selection(window)).toEqual(["agent-3"]);
 
   await window.keyboard.press("Meta+z");
   await expect.poll(async () => (await readout(window)).nodes.length).toBe(4);
@@ -303,8 +300,8 @@ const loopWithBody = () =>
   flow(
     [
       at(loop("L", { settings: { cap: 5 } }), 80, 120, "Retry"),
-      at(prompt("p", { parent: "L" }), 100, 200, "Fix"),
-      at(script("s", { parent: "L" }), 320, 200, "Test"),
+      at(agent("p", { parent: "L" }), 100, 200, "Fix"),
+      at(agent("s", { parent: "L" }), 320, 200, "Test"),
     ],
     [thenWire("p", "s")],
   );
@@ -335,11 +332,11 @@ test("Frame only from the node menu adds an empty Loop with the same settings, a
 
   await window.getByTestId("node-L").click({ button: "right" });
   await window.getByTestId("node-menu-duplicate").click();
-  await expect.poll(() => childrenIn(window, "loop-1")).toEqual(["prompt-1", "script-1"]);
+  await expect.poll(() => childrenIn(window, "loop-1")).toEqual(["agent-1", "agent-2"]);
 
   await window.getByTestId("node-L").click();
   await window.keyboard.press("Meta+d");
-  await expect.poll(() => childrenIn(window, "loop-2")).toEqual(["prompt-2", "script-2"]);
+  await expect.poll(() => childrenIn(window, "loop-2")).toEqual(["agent-3", "agent-4"]);
   expect((await readout(window)).wires).toHaveLength(3);
 });
 
@@ -397,10 +394,7 @@ test("A File wire is renamed from its label, stays selected, and Undo brings the
   seedFlow(
     home,
     flow(
-      [
-        at(script("plan", { settings: { command: "true" } }), 80, 160, "Planner"),
-        at(script("build", { settings: { command: "true" } }), 420, 160, "Builder"),
-      ],
+      [at(agent("plan"), 80, 160, "Planner"), at(agent("build"), 420, 160, "Builder")],
       [
         thenWire("plan", "build"),
         fileWire("plan", "build", "brief.md"),
@@ -459,7 +453,7 @@ const zoomOf = async (window: Page) =>
 test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", async () => {
   seedFlow(
     home,
-    flow([at(prompt("near"), 0, 0), at(prompt("far"), 1200, 1000)], [thenWire("near", "far")]),
+    flow([at(agent("near"), 0, 0), at(agent("far"), 1200, 1000)], [thenWire("near", "far")]),
   );
   const window = await launch();
   const canvas = await boxOf(window.getByTestId("canvas"));
@@ -480,10 +474,10 @@ test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", asyn
   await expect.poll(() => zoomOf(window)).toBeLessThan(1);
 });
 
-test("A new blueprint with one Script asks for its repository at Build, then runs", async () => {
+test("A new blueprint with one Agent asks for its repository at Build, then runs", async () => {
   const repo = await tempRepo();
   const window = await launch();
-  await window.getByTestId(paletteTestId("script")).dragTo(window.getByTestId("canvas"), {
+  await window.getByTestId(paletteTestId("agent")).dragTo(window.getByTestId("canvas"), {
     targetPosition: { x: 300, y: 200 },
   });
   await window.getByTestId(paletteTestId("trigger")).dragTo(window.getByTestId("canvas"), {
@@ -495,16 +489,16 @@ test("A new blueprint with one Script asks for its repository at Build, then run
   await connectPorts(
     window,
     window.getByTestId("port-trigger-1-out"),
-    window.getByTestId("port-script-1-in"),
+    window.getByTestId("port-agent-1-in"),
   );
   await connectPorts(
     window,
-    window.getByTestId("port-script-1-out"),
+    window.getByTestId("port-agent-1-out"),
     window.getByTestId("port-output-1-in"),
   );
-  await window.getByTestId("node-script-1").click();
-  await window.getByTestId("node-setting-command").fill("pwd");
-  await window.getByTestId("node-setting-command").press("Enter");
+  await window.getByTestId("node-agent-1").click();
+  await window.getByTestId("node-setting-instructions").fill("Print the working folder.");
+  await window.getByTestId("node-setting-instructions").blur();
 
   await window.getByTestId(controlTestIds.build).click();
 
@@ -519,7 +513,7 @@ test("A new blueprint with one Script asks for its repository at Build, then run
 
   const buildId = await buildAndRun(window, home, "pwd");
 
-  await expect(window.getByTestId("node-status-script-1")).toHaveAttribute("data-status", "done", {
+  await expect(window.getByTestId("node-status-agent-1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
   const app = launched;
@@ -529,8 +523,8 @@ test("A new blueprint with one Script asks for its repository at Build, then run
   try {
     expect(db.prepare("SELECT node_id, finished_at FROM run_nodes ORDER BY node_id").all()).toEqual(
       [
+        { node_id: "agent-1", finished_at: expect.any(String) },
         { node_id: "output-1", finished_at: expect.any(String) },
-        { node_id: "script-1", finished_at: expect.any(String) },
         { node_id: "trigger-1", finished_at: expect.any(String) },
       ],
     );
@@ -546,7 +540,7 @@ test("A new blueprint with one Script asks for its repository at Build, then run
 test("The gear picks the model, permission mode and the repository's base branch", async () => {
   const repo = await tempRepo();
   await git(repo.path, "branch", "dev");
-  seedFlow(home, flow([at(script("s1"), 80, 120)], []), repo.path);
+  seedFlow(home, flow([at(agent("s1"), 80, 120)], []), repo.path);
   const window = await launch("dark");
 
   await window.getByTestId(controlTestIds.sessionChip).click();
@@ -578,17 +572,10 @@ test("The gear picks the model, permission mode and the repository's base branch
   await expect(window.getByTestId("session-chip")).toContainText("Haiku (latest)");
 });
 
-const runInBuild = async (command: string) => {
+const runInBuild = async (writes: Record<string, string> = {}) => {
   const repo = await tempRepo();
-  seedFlow(
-    home,
-    onMainFlow(
-      [at(script("s1", { settings: { command: "sh", args: ["-c", command] } }), 80, 120)],
-      [],
-    ),
-    repo.path,
-  );
-  const window = await launch();
+  seedFlow(home, onMainFlow([at(agent("s1"), 80, 120)], []), repo.path);
+  const window = await launch(undefined, { s1: writes });
   const buildId = await buildAndRun(window, home, "wt");
   await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
@@ -600,7 +587,7 @@ const runInBuild = async (command: string) => {
 const appLog = () => readFile(test.info().outputPath("app.log"), "utf8");
 
 test("A finished run that changed nothing leaves its build's worktree and branch in place", async () => {
-  const { repo, path, branch } = await runInBuild("echo unchanged");
+  const { repo, path, branch } = await runInBuild();
 
   expect(
     (await git(repo.path, "branch", "--list", "--format=%(refname:short)", "flowdeck/*")).trim(),
@@ -612,7 +599,7 @@ test("A finished run that changed nothing leaves its build's worktree and branch
 });
 
 test("A run that wrote a file leaves it in its build's worktree, not the repo, and the Activity has no kept line", async () => {
-  const { window, repo, path } = await runInBuild("echo made > made.txt");
+  const { window, repo, path } = await runInBuild({ "made.txt": "made\n" });
 
   expect(await readFile(join(path, "made.txt"), "utf8")).toBe("made\n");
   await expect(stat(join(repo.path, "made.txt"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -655,7 +642,7 @@ test("Start from branch lists the repository's branches once one is set, and say
   const repo = await tempRepo();
   await git(repo.path, "branch", "dev");
   const plain = await plainFolder();
-  seedFlow(home, withoutRepo(flow([at(script("s1"), 80, 120)], [])));
+  seedFlow(home, withoutRepo(flow([at(agent("s1"), 80, 120)], [])));
   const window = await launch();
   await window.getByTestId(controlTestIds.sessionChip).click();
   await expect(window.getByTestId("session-settings")).toBeVisible();
@@ -699,7 +686,7 @@ test("Start from branch lists the repository's branches once one is set, and say
 test("Browse fills Repository from the folder picker and loads its branches; cancelling changes nothing", async () => {
   const repo = await tempRepo();
   await git(repo.path, "branch", "dev");
-  seedFlow(home, withoutRepo(flow([at(script("s1"), 80, 120)], [])));
+  seedFlow(home, withoutRepo(flow([at(agent("s1"), 80, 120)], [])));
   const window = await launch();
   await window.getByTestId(controlTestIds.sessionChip).click();
   const repoField = window.getByTestId(buildConfigTestIds.repo);

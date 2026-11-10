@@ -13,13 +13,16 @@
     {
       "id": "prep",
       "label": "Prep",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "instructions": "Do the work."
+        "role": "",
+        "instructions": "Do the work.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
@@ -39,27 +42,33 @@
     {
       "id": "left",
       "label": "Left",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 480,
         "y": 0
       },
       "parent": "retry",
       "settings": {
-        "instructions": "Do the work."
+        "role": "",
+        "instructions": "Do the work.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
       "id": "right",
       "label": "Right",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 480,
         "y": 0
       },
       "parent": "retry",
       "settings": {
-        "instructions": "Do the work."
+        "role": "",
+        "instructions": "Do the work.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

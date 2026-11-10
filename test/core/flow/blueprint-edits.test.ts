@@ -10,8 +10,6 @@ import {
   fork,
   join,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -27,7 +25,7 @@ const expectedString = zodMessage(z.string(), 7);
 const expectedArray = zodMessage(z.array(z.string()), "Read");
 
 const blueprint = () =>
-  flow([trigger("start"), agent("a1"), prompt("p1")], [thenWire("start", "a1")]);
+  flow([trigger("start"), agent("a1"), agent("p1")], [thenWire("start", "a1")]);
 
 const refused = (name: string, input: unknown) => {
   const before = blueprint();
@@ -46,6 +44,10 @@ describe("checkEdit refuses", () => {
 
   it("an unknown node type", () => {
     refused("add_node", { type: "teleport", label: "Beam", settings: {} });
+  });
+
+  it.each(["prompt", "script"])("a %s node, a type the blueprint no longer has", (type) => {
+    refused("add_node", { type, label: "Old", settings: {} });
   });
 
   it("add_node settings that fail the type's settings schema", () => {
@@ -177,7 +179,7 @@ describe("newProblems", () => {
   describe("reads only the main flow", () => {
     const blankAgent = agent("blank", { settings: { instructions: "" } });
     const before = flow(
-      [trigger("start"), prompt("a"), output("stop")],
+      [trigger("start"), agent("a"), output("stop")],
       [thenWire("start", "a"), thenWire("a", "stop")],
     );
 
@@ -199,7 +201,7 @@ describe("newProblems", () => {
     });
 
     it.each([
-      ["a Script with no command", script("loose", { settings: { command: "" } }), "out"],
+      ["an Agent with no instructions", agent("loose", { settings: { instructions: "" } }), "out"],
       ["a Branch with no variable picked", branch("loose", ""), "yes"],
     ])(
       "reports nothing when a wire brings %s already on the canvas onto it",
@@ -212,10 +214,10 @@ describe("newProblems", () => {
       },
     );
 
-    it("reports nothing when Start is wired to an unfilled Script while Stop is still loose", () => {
+    it("reports nothing when Start is wired to an unfilled Agent while Stop is still loose", () => {
       const nodes = [
         trigger("start"),
-        script("loose", { settings: { command: "" } }),
+        agent("loose", { settings: { instructions: "" } }),
         output("stop"),
       ];
 
@@ -240,7 +242,7 @@ describe("newProblems", () => {
       trigger("start"),
       agent("a1"),
       agent("a2"),
-      prompt("p1"),
+      agent("p1"),
       branch("b1", "go"),
       output("stop"),
     ];

@@ -23,13 +23,8 @@ export function askOutcome(nodeId: string, reply: WaitReply): HumanOutcome {
   }
 }
 
-const answerContext = (answers: readonly string[]) =>
-  answers.map((answer) => `The user answered: ${answer}`).join(". ");
-
-export function withPromptContext(command: string, answers: readonly string[]): string {
-  return answers.length === 0 ? command : `${command} ${answerContext(answers)}`;
-}
-
-export function withAgentContext(turnText: string, answers: readonly string[]): string {
-  return answers.length === 0 ? turnText : `${answerContext(answers)}. ${turnText}`;
+export function answerContext(answers: readonly string[]): string {
+  return answers.length === 0
+    ? ""
+    : `${answers.map((answer) => `The user answered: ${answer}`).join(". ")}.`;
 }

@@ -11,7 +11,7 @@ import {
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
-import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
 const expectedFiles = [
@@ -20,10 +20,10 @@ const expectedFiles = [
   "manifest.json",
   "plugin/.claude-plugin/plugin.json",
   "plugin/agents/a.md",
+  "plugin/agents/p.md",
   "plugin/hooks/hooks.json",
   "plugin/hooks/no-force-push.sh",
   "plugin/hooks/rules-after-compact.sh",
-  "plugin/skills/p/SKILL.md",
   "plugin/skills/run/SKILL.md",
   "settings.json",
 ];
@@ -44,7 +44,7 @@ const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
 
 const sample = (instructions = "Do the work."): Flow => {
   const base = onMainFlow(
-    [prompt("p", { settings: { instructions } }), agent("a", { settings: { tools: ["Grep"] } })],
+    [agent("p", { settings: { instructions } }), agent("a", { settings: { tools: ["Grep"] } })],
     [thenWire("p", "a")],
   );
   return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };

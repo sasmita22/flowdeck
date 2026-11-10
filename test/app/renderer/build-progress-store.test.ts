@@ -191,8 +191,8 @@ describe("build progress store", () => {
         { type: "component", path: "agents/a.md", kind: "agent", nodeIds: ["n1"], status: "done" },
         {
           type: "component",
-          path: "steps/b.md",
-          kind: "step",
+          path: "agents/b.md",
+          kind: "agent",
           nodeIds: ["n2", "n3"],
           status: "running",
         },
@@ -216,17 +216,17 @@ describe("build progress store", () => {
   it("loads a build's activity, then takes pushed entries for that build, newest version of each", async () => {
     const { store, asked, pushActivity } = await setup(
       [entry(pending("pb-1", "flow-a", 1), atStep(3))],
-      [subagent(1, "script:s1", "running")],
+      [subagent(1, "agents/c.md", "running")],
     );
 
     await store.getState().viewActivity("pb-1");
-    pushActivity({ pendingId: "pb-1", entry: subagent(1, "script:s1", "finished") });
+    pushActivity({ pendingId: "pb-1", entry: subagent(1, "agents/c.md", "finished") });
     pushActivity({ pendingId: "pb-1", entry: subagent(2, "agents/a.md", "running") });
     pushActivity({ pendingId: "pb-2", entry: subagent(3, "agents/b.md", "running") });
 
     expect(asked).toEqual([{ pendingId: "pb-1" }]);
     expect(store.getState().activityFor("pb-1")).toEqual([
-      subagent(1, "script:s1", "finished"),
+      subagent(1, "agents/c.md", "finished"),
       subagent(2, "agents/a.md", "running"),
     ]);
   });
@@ -386,8 +386,8 @@ describe("build progress store", () => {
         ...atStep(3),
         {
           type: "component",
-          path: "steps/merged.md",
-          kind: "step",
+          path: "agents/merged.md",
+          kind: "agent",
           nodeIds: ["n4", "n5"],
           status: "failed",
         },

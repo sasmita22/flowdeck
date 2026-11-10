@@ -42,6 +42,21 @@ describe("agentTurnText", () => {
     );
   });
 
+  it("puts the Ask answers inside the prompt, before Go", () => {
+    const text = agentTurnText(
+      "h1",
+      "review",
+      { id: "a1", given: ["plan.md"], writes: [] },
+      undefined,
+      ["red", "blue"],
+    );
+
+    expect(promptOf(text)).toBe(
+      "NODE a1\nYou are given: plan.md\nThe user answered: red. The user answered: blue.\nGo",
+    );
+    expect(text.endsWith('". Then reply DONE.')).toBe(true);
+  });
+
   it("gives two nodes on one piece two prompts that differ in marker and details", () => {
     const first = agentTurnText("h1", "review", { id: "a1", given: ["a.md"], writes: [] });
     const second = agentTurnText("h1", "review", { id: "a2", given: ["b.md"], writes: [] });

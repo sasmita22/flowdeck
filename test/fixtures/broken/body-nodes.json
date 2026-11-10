@@ -27,14 +27,17 @@
     {
       "id": "work",
       "label": "Work",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 160
       },
       "parent": "retry",
       "settings": {
-        "instructions": "Do the work."
+        "role": "",
+        "instructions": "Do the work.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

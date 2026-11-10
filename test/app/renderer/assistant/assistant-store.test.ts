@@ -3,7 +3,7 @@ import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import { createAssistantStore } from "../../../../src/app/renderer/assistant/assistant-store.js";
 import { createCanvasStore } from "../../../../src/app/renderer/canvas/store.js";
 import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
-import { flow, prompt } from "../../../fixtures/flow-builders.js";
+import { agent, flow } from "../../../fixtures/flow-builders.js";
 
 type SaveReply =
   { kind: "saved"; flowId: string; version: number } | { kind: "error"; message: string };
@@ -16,7 +16,7 @@ const setup = async (options: { saved?: boolean; saveReply?: SaveReply } = {}) =
     openFlow: vi.fn<(payload: { flowId?: string }) => Promise<unknown>>(async () =>
       options.saved === false
         ? null
-        : { flowId: "flow-1", name: "Weekly", version: 1, flow: flow([prompt("p1")], []) },
+        : { flowId: "flow-1", name: "Weekly", version: 1, flow: flow([agent("p1")], []) },
     ),
     renameFlow: vi.fn<(payload: { flowId: string; name: string }) => Promise<unknown>>(
       async () => null,

@@ -53,10 +53,10 @@ const closeWindow = (launched: LaunchedApp) =>
   });
 
 const edit = async ({ window }: LaunchedApp) => {
-  await playwrightPage(window).drag("palette-prompt", "canvas", { x: 200, y: 150 });
+  await playwrightPage(window).drag("palette-agent", "canvas", { x: 200, y: 150 });
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
   const edited = await readout(window);
-  expect(edited.nodes.map((node) => node.type)).toEqual(["prompt"]);
+  expect(edited.nodes.map((node) => node.type)).toEqual(["agent"]);
   return edited;
 };
 
@@ -181,9 +181,9 @@ const savedThenEdited = async (launched: LaunchedApp) => {
   await edit(launched);
   await window.getByTestId(controlTestIds.save).click();
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
-  await playwrightPage(window).drag(paletteTestId("script"), "canvas", { x: 420, y: 150 });
+  await playwrightPage(window).drag(paletteTestId("gate"), "canvas", { x: 420, y: 150 });
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
-  expect((await readout(window)).nodes.map((node) => node.type)).toEqual(["prompt", "script"]);
+  expect((await readout(window)).nodes.map((node) => node.type)).toEqual(["agent", "gate"]);
 };
 
 const onBlueprints = (window: Page) =>
@@ -222,7 +222,7 @@ test("Cancel keeps the editor and the edit", async () => {
   await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
   await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
-  expect(await nodeTypes(window)).toEqual(["prompt", "script"]);
+  expect(await nodeTypes(window)).toEqual(["agent", "gate"]);
 });
 
 test("Save writes a new version then shows Blueprints", async () => {
@@ -236,7 +236,7 @@ test("Save writes a new version then shows Blueprints", async () => {
   await onBlueprints(window);
   await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("2 versions");
   await reopen(window);
-  expect(await nodeTypes(window)).toEqual(["prompt", "script"]);
+  expect(await nodeTypes(window)).toEqual(["agent", "gate"]);
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 
@@ -251,7 +251,7 @@ test("Don't save shows Blueprints and a reopen has no edit", async () => {
   await onBlueprints(window);
   await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("1 version");
   await reopen(window);
-  expect(await nodeTypes(window)).toEqual(["prompt"]);
+  expect(await nodeTypes(window)).toEqual(["agent"]);
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 

@@ -9,12 +9,12 @@ import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-
 import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
-import { agent, fileWire, flow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, thenWire } from "../../fixtures/flow-builders.js";
 import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
 const sample = () => {
   const base = flow(
-    [prompt("p"), agent("a", { settings: { tools: ["Grep"] } })],
+    [agent("p"), agent("a", { settings: { tools: ["Grep"] } })],
     [thenWire("p", "a"), fileWire("p", "a", "plan.md")],
   );
   return {
@@ -76,10 +76,10 @@ describe("emit", () => {
       "manifest.json",
       "plugin/.claude-plugin/plugin.json",
       "plugin/agents/a.md",
+      "plugin/agents/p.md",
       "plugin/hooks/hooks.json",
       "plugin/hooks/no-force-push.sh",
       "plugin/hooks/rules-after-compact.sh",
-      "plugin/skills/p/SKILL.md",
       "plugin/skills/run/SKILL.md",
       "plugin/templates/plan.md",
       "settings.json",
@@ -90,14 +90,14 @@ describe("emit", () => {
     expect(emitted().filter((file) => /^plugin\/(commands|scripts)\//.test(file.path))).toEqual([]);
   });
 
-  it("writes the agent and step skill files that lowering compiled", () => {
+  it("writes the agent files that lowering compiled", () => {
     const files = emitted();
 
     for (const file of lowered().nodeFiles) {
       expect(fileAt(files, file.path)).toBe(file.content);
     }
     expect(lowered().nodeFiles.map((file) => file.path)).toEqual([
-      "plugin/skills/p/SKILL.md",
+      "plugin/agents/p.md",
       "plugin/agents/a.md",
     ]);
   });

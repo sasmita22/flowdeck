@@ -13,7 +13,7 @@ import {
   type ParallelSection,
 } from "../nodes/fork/execute.js";
 import { bodyProblems } from "../flow/structure.js";
-import { firstTurnId, listItems, listPath, withItem } from "../nodes/foreach/execute.js";
+import { firstTurnId, listItems, listPath } from "../nodes/foreach/execute.js";
 import {
   joinComplete,
   notStartedRequest,
@@ -21,12 +21,7 @@ import {
   type JoinOnBranchFail,
   type JoinWait,
 } from "../nodes/join/execute.js";
-import {
-  askOutcome,
-  askRequest,
-  withAgentContext,
-  withPromptContext,
-} from "../nodes/ask/execute.js";
+import { askOutcome, askRequest } from "../nodes/ask/execute.js";
 import { gateOutcome, gateRequest, gateSkips } from "../nodes/gate/execute.js";
 import {
   hardstopCheckTurn,
@@ -41,12 +36,10 @@ import {
   malformedAnswer,
   malformedRequest,
   nextStep,
-  verdictRequest,
   type LoopAnswer,
   type LoopStep,
 } from "../nodes/loop/execute.js";
-import { scriptOutcome, type ExitCodes } from "../nodes/script/execute.js";
-import { agentCallOf, nodeMarker, type AgentCall } from "./agent-calls.js";
+import { agentCallOf, type AgentCall } from "./agent-calls.js";
 import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
 import { contextFull, contextUse, type CompactionReader } from "./context.js";
 import {
@@ -73,22 +66,10 @@ export type RunnableManifest = Pick<Manifest, "nodes"> &
     layout?: VerifyLayout;
   };
 
-export type ScriptResult = { code: number | null; stdout: string; stderr: string };
-
 export type RunnerDeps = {
   prompts: { sendPrompt(text: string): Promise<void>; interrupt(): Promise<void> };
   session: { ensureStarted(): Promise<void> };
   events: TurnEvents;
-  scripts: {
-    run(
-      command: string,
-      args: readonly string[],
-      cwd: string,
-      signal?: AbortSignal,
-      job?: string,
-    ): Promise<ScriptResult>;
-    rejoin?(job: string): Promise<ScriptResult | undefined>;
-  };
   waiter: HumanWaiter;
   files: Pick<VerifyFileSystem, "readFile"> & {
     writeFile(path: string, content: string): Promise<void>;
@@ -96,7 +77,6 @@ export type RunnerDeps = {
   auto?: boolean;
   flags?: Record<string, boolean>;
   onChange?: (line: string) => void;
-  onOutput?: (nodeId: string, stream: "stdout" | "stderr", text: string) => void;
   cwd: string;
   sessionId: string;
   turnTimeoutMs?: number;
@@ -120,7 +100,6 @@ export type RunResult = {
   decisions: HumanDecision[];
 };
 
-type ScriptSettings = { command: string; args?: string[] } & ExitCodes;
 type GateSettings = Parameters<typeof gateRequest>[1];
 type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
@@ -147,9 +126,7 @@ const defaultSettleQuietMs = 5_000;
 const usagePollMs = 50;
 const compactPollMs = 250;
 const runnable = new Set<ManifestNode["type"]>([
-  "prompt",
   "agent",
-  "script",
   "gate",
   "ask",
   "hardstop",
@@ -185,14 +162,6 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 
 const readOrMissing = (files: RunnerDeps["files"], path: string): Promise<string | undefined> =>
   files.readFile(path).catch(() => undefined);
-
-const outputLines = (text: string) =>
-  text === ""
-    ? []
-    : text
-        .replace(/\n$/, "")
-        .split("\n")
-        .map((line) => `  ${line}`);
 
 const lastMessage = (event: TurnEndEvent) => {
   const message = event.payload["last_assistant_message"];
@@ -234,16 +203,6 @@ const decisionEvent = (decision: HumanDecision): RunEvent => ({
   kind: decision.decision === "answered" ? "answered" : "decided",
   payload: decision,
 });
-
-const signalOf = (code: number) => (code > 128 && code <= 128 + 64 ? code - 128 : undefined);
-
-function exitReason(code: number | null): string {
-  if (code === null) return "killed by a signal";
-  const signal = signalOf(code);
-  return signal === undefined
-    ? `exit code ${code}`
-    : `exit code ${code} (usually means it was stopped by signal ${signal})`;
-}
 
 type AgentCalls = { calls: AgentCall[]; unsubscribe: () => void };
 
@@ -488,7 +447,7 @@ export class Runner {
     const held = await this.holdForFiles(node.id, context);
     if (held !== undefined) return held;
     await this.copyTemplates(node.id, context);
-    const { prefix, ensureStarted } = context;
+    const { ensureStarted } = context;
     let failure: string | undefined;
     let reply: string | undefined;
     let doneLine = "done";
@@ -510,7 +469,7 @@ export class Runner {
         { nodeId: node.id, event: { kind: "running" } },
         { nodeId: node.id, event: { kind: "done" } },
       ]);
-    } else if (node.type === "prompt" || node.type === "agent") {
+    } else if (node.type === "agent") {
       const halted = await this.checkBudget(node.id);
       if (halted !== undefined) return halted;
       await this.compactIfFull(node.id, ensureStarted);
@@ -518,17 +477,12 @@ export class Runner {
       let turn: TurnResult;
       try {
         const item = this.roundItem(node, context.nodes);
-        turn =
-          node.type === "prompt"
-            ? await this.runPrompt(node, prefix, ensureStarted, condition, item)
-            : await this.runAgent(node, context, condition, item);
+        turn = await this.runAgent(node, context, condition, item);
       } finally {
         this.inTurn = undefined;
       }
       if (turn.failure === undefined) reply = turn.reply;
       else failure = turn.failure;
-    } else if (node.type === "script") {
-      failure = await this.runScript(node);
     } else {
       const outcome = await this.runHuman(node, context);
       if (outcome.status === "failed") failure = outcome.reason;
@@ -670,7 +624,7 @@ export class Runner {
   private async runLoop(loop: ManifestNode, context: RunContext): Promise<StepResult> {
     const { condition, cap, onCap } = loop.settings as LoopSettings;
     const body = context.nodes.filter((node) => node.parent === loop.id);
-    const verdictTurn = body.findLast((node) => node.type === "prompt" || node.type === "agent");
+    const verdictTurn = body.findLast((node) => node.type === "agent");
     const fail = (reason: string): StepResult => ({ failure: { nodeId: loop.id, reason } });
     let round = loopRound(this.eventsOf(loop.id));
     let resumingRound = round > 0;
@@ -1109,40 +1063,6 @@ export class Runner {
     return this.takeAnswers();
   }
 
-  private async runPrompt(
-    node: ManifestNode,
-    prefix: string,
-    ensureStarted: () => Promise<void>,
-    condition?: string,
-    item?: string,
-  ): Promise<TurnResult> {
-    const action = this.takeAction(node.id);
-    if (action?.kind === "complete") return this.finishTurn(node.id, action.stopMessage, condition);
-    let end: TurnEndEvent;
-    try {
-      if (action?.kind === "wait") {
-        end = await this.armTurnEnd();
-      } else {
-        const answers = this.answersFor(node.id, action);
-        this.emit(`${node.id} started`);
-        await ensureStarted();
-        const turnEnd = this.armTurnEnd(this.deps.now?.());
-        const turn = `/${prefix}:${pieceOf(node)} ${nodeMarker(node.id)}`;
-        const command = withPromptContext(
-          item === undefined ? turn : withItem(turn, item),
-          answers,
-        );
-        await this.deps.prompts.sendPrompt(
-          condition === undefined ? command : `${command} ${verdictRequest(condition)}`,
-        );
-        end = await turnEnd;
-      }
-    } catch (error) {
-      return { failure: messageOf(error) };
-    }
-    return this.finishTurn(node.id, lastMessage(end), condition);
-  }
-
   private async runAgent(
     node: ManifestNode,
     context: RunContext,
@@ -1171,9 +1091,9 @@ export class Runner {
       const target = turnNode(node, context.manifest);
       const turnText =
         condition === undefined
-          ? agentTurnText(prefix, pieceOf(node), target, item)
-          : agentVerdictTurnText(prefix, pieceOf(node), target, condition);
-      await this.deps.prompts.sendPrompt(withAgentContext(turnText, answers));
+          ? agentTurnText(prefix, pieceOf(node), target, item, answers)
+          : agentVerdictTurnText(prefix, pieceOf(node), target, condition, answers);
+      await this.deps.prompts.sendPrompt(turnText);
       end = await turnEnd;
     } catch (error) {
       return { failure: messageOf(error) };
@@ -1291,76 +1211,5 @@ export class Runner {
     }
     if (outcome.status === "done") this.record(node.id, { kind: "done" });
     return outcome;
-  }
-
-  private scriptJob(nodeId: string): string {
-    const running = this.eventsOf(nodeId).findLast((event) => event.kind === "running");
-    return `${nodeId}-${running?.seq ?? 0}`;
-  }
-
-  private scriptAttempt(nodeId: string): number {
-    const events = this.eventsOf(nodeId);
-    const last = events.findLastIndex((event) => event.kind === "running");
-    return events[last - 1]?.kind === "retry" && events[last - 2]?.kind === "running" ? 2 : 1;
-  }
-
-  private async rejoinScript(nodeId: string): Promise<ScriptResult | string> {
-    this.emit(`${nodeId} rejoined`);
-    try {
-      const result = await this.deps.scripts.rejoin?.(this.scriptJob(nodeId));
-      return result ?? "was running when the runner stopped";
-    } catch (error) {
-      return messageOf(error);
-    }
-  }
-
-  private async runScript(node: ManifestNode): Promise<string | undefined> {
-    const action = this.takeAction(node.id);
-    if (action?.kind === "fail") return reasonIn(node.id, action.message);
-    const { command, args, ...codes } = node.settings as ScriptSettings;
-    let rejoined: ScriptResult | undefined;
-    let attempt = 1;
-    if (action?.kind === "wait") {
-      const result = await this.rejoinScript(node.id);
-      if (typeof result === "string") return result;
-      rejoined = result;
-      attempt = this.scriptAttempt(node.id);
-    } else {
-      this.record(node.id, { kind: "running" });
-      this.emit(`${node.id} started`);
-    }
-    for (; ; attempt++) {
-      let result: ScriptResult;
-      try {
-        result =
-          rejoined ??
-          (await this.deps.scripts.run(
-            command,
-            args ?? [],
-            this.deps.cwd,
-            undefined,
-            this.scriptJob(node.id),
-          ));
-      } catch (error) {
-        return messageOf(error);
-      }
-      rejoined = undefined;
-      for (const line of [...outputLines(result.stdout), ...outputLines(result.stderr)]) {
-        this.emit(line);
-      }
-      if (result.stdout !== "") this.deps.onOutput?.(node.id, "stdout", result.stdout);
-      if (result.stderr !== "") this.deps.onOutput?.(node.id, "stderr", result.stderr);
-      const outcome = scriptOutcome(result.code, attempt, codes);
-      if (outcome === "failed") return exitReason(result.code);
-      if (outcome === "done") {
-        this.record(node.id, { kind: "done" });
-        return undefined;
-      }
-      this.recordAll([
-        { nodeId: node.id, event: { kind: "retry" } },
-        { nodeId: node.id, event: { kind: "running" } },
-      ]);
-      this.emit(`${node.id} retry`);
-    }
   }
 }

@@ -17,11 +17,10 @@ import {
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
 import {
+  agent,
   flow,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../test/fixtures/flow-builders.js";
@@ -30,6 +29,7 @@ import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
 import { buildAndRun, buildOnCanvas } from "./build-run.js";
 import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultAppPath = join(repoRoot, "out", "Flowdeck-darwin-arm64", "Flowdeck.app");
@@ -94,6 +94,7 @@ const quit = async ({ child, browser }: Launch) => {
 test.afterAll(async () => {
   for (const launch of launches) await quit(launch);
   launches = [];
+  for (const dir of tempDirs) await killRunSessions(dir);
   for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
   tempDirs = [];
 });
@@ -243,7 +244,7 @@ test("a copy outside the repo opens the window and the engine opens SQLite", asy
   expect(realDbMtime()).toBe(realDbBefore);
 });
 
-test("a copy launched with the minimal PATH runs a script-only flow to done", async () => {
+test("a copy launched with the minimal PATH runs a one-agent flow to done", async () => {
   test.setTimeout(120_000);
   const home = await mkdtemp(join(tmpdir(), "fd-packaged-home-"));
   tempDirs.push(home);
@@ -251,10 +252,7 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   tempDirs.push(repo.path);
   seedFlow(
     home,
-    flow(
-      [trigger("t"), script("s", { settings: { command: "echo", args: ["ok"] } }), output("stop")],
-      [thenWire("t", "s"), thenWire("s", "stop")],
-    ),
+    flow([trigger("t"), agent("s"), output("stop")], [thenWire("t", "s"), thenWire("s", "stop")]),
     repo.path,
   );
 
@@ -264,13 +262,13 @@ test("a copy launched with the minimal PATH runs a script-only flow to done", as
   expect(existsSync(fakeClaudeRan(home))).toBe(true);
 
   const runError = window.getByTestId("run-error");
-  const scriptStatus = window.getByTestId("node-status-s");
+  const agentStatus = window.getByTestId("node-status-s");
   await expect
     .poll(
       async () =>
         (await runError.count()) > 0
           ? await runError.textContent()
-          : await scriptStatus.getAttribute("data-status"),
+          : await agentStatus.getAttribute("data-status"),
       { timeout: 30_000 },
     )
     .toBe("done");
@@ -302,11 +300,7 @@ test("a copy copies the kit out under its home and its build session loads that 
   tempDirs.push(home);
   const repo = await createTmpRepo({ commit: true });
   tempDirs.push(repo.path);
-  seedFlow(
-    home,
-    onMainFlow([script("s", { settings: { command: "echo", args: ["ok"] } })], []),
-    repo.path,
-  );
+  seedFlow(home, onMainFlow([agent("s")], []), repo.path);
   const argvLog = join(home, "argv.log");
 
   const { window } = await launchCopy(home, { FAKE_CLAUDE_LOG: argvLog });
@@ -347,7 +341,7 @@ test("the packaged app copies the MCP server out on start and the blueprint sess
   test.setTimeout(120_000);
   const home = await mkdtemp(join(tmpdir(), "fd-packaged-home-"));
   tempDirs.push(home);
-  const { flowId } = seedBlueprint(home, "mcp-check", flow([prompt("p1")], []));
+  const { flowId } = seedBlueprint(home, "mcp-check", flow([agent("p1")], []));
   const bpSession = `fd-bp-${flowId}`;
   const copiedScript = join(home, "mcp", "flowdeck-mcp.cjs");
 

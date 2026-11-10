@@ -1,23 +1,20 @@
-import type { BuildAnswer } from "./build-report.js";
+import type { BuildAnswer, BuildReport } from "./build-report.js";
 import type { BuildCheckFailure } from "./check-build.js";
 import type { Manifest } from "./lower.js";
 
-type PieceKind = "agent" | "step" | "template" | "script" | "workspace";
+type PieceKind = "agent" | "template" | "workspace" | "shared";
 
 const kit = (name: string) => `flowdeck-build:${name}`;
 
-export const pieceKind = (manifest: Manifest, path: string): PieceKind => {
-  if (path.startsWith("script:")) return "script";
+export const pieceKind = (path: string): PieceKind => {
   if (path === "CLAUDE.md") return "workspace";
   if (path.startsWith("plugin/templates/")) return "template";
-  const node = manifest.nodes.find((candidate) => candidate.file === path);
-  return node?.type === "agent" ? "agent" : "step";
+  if (path.startsWith("plugin/skills/") || path.startsWith("plugin/commands/")) return "shared";
+  return "agent";
 };
 
 export const nodeIdsOf = (manifest: Manifest, path: string): string[] =>
-  path.startsWith("script:")
-    ? [path.slice("script:".length)]
-    : manifest.nodes.flatMap((node) => (node.file === path ? [node.id] : []));
+  manifest.nodes.flatMap((node) => (node.file === path ? [node.id] : []));
 
 const answerNodes = ({ nodeId, otherNodeId }: BuildAnswer): string[] =>
   otherNodeId === undefined ? [nodeId] : [nodeId, otherNodeId];
@@ -38,12 +35,20 @@ const repoLines = (manifest: Manifest): string[] => {
 const failureLine = (failure: BuildCheckFailure) =>
   `FAILED ${failure.file} ${failure.rule}: ${failure.detail}`;
 
+const sharedLines = (manifest: Manifest, path: string, shared: BuildReport["shared"]): string[] => {
+  const nodeIds = nodeIdsOf(manifest, path);
+  return shared.flatMap(({ name, usedBy }) =>
+    usedBy.some((id) => nodeIds.includes(id)) ? [`SHARED ${manifest.prefix ?? ""}:${name}`] : [],
+  );
+};
+
 export const writeTurn = (
   manifest: Manifest,
   pieces: readonly string[],
   round: number,
   failures: readonly BuildCheckFailure[] = [],
   answers: readonly BuildAnswer[] = [],
+  shared: BuildReport["shared"] = [],
 ): string => {
   const carried = round > 1 ? failures : [];
   const given = round === 1 ? answers : [];
@@ -53,8 +58,9 @@ export const writeTurn = (
   const blocks = pieces.map((path) =>
     [
       `PIECE ${path}`,
-      `KIND ${pieceKind(manifest, path)}`,
+      `KIND ${pieceKind(path)}`,
       ...repoLines(manifest),
+      ...sharedLines(manifest, path, shared),
       ...carried.filter((failure) => failure.file === path).map(failureLine),
       ...given.filter((answer) => isAbout(answer, nodeIdsOf(manifest, path))).flatMap(answerLines),
     ].join("\n"),

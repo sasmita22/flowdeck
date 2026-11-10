@@ -48,6 +48,16 @@ describe("buildEventSchema", () => {
       { type: "component", path: "agents/a.md", kind: "agent", nodeIds: ["n1"], status: "waiting" },
     ],
     [
+      "a shared component",
+      {
+        type: "component",
+        path: "plugin/skills/repo-conventions/SKILL.md",
+        kind: "shared",
+        nodeIds: [],
+        status: "waiting",
+      },
+    ],
+    [
       "a workspace component",
       { type: "component", path: ".", kind: "workspace", nodeIds: [], status: "done" },
     ],
@@ -80,7 +90,15 @@ describe("buildEventSchema", () => {
     ],
     [
       "an unknown component status",
-      { type: "component", path: "x", kind: "step", nodeIds: [], status: "skipped" },
+      { type: "component", path: "x", kind: "agent", nodeIds: [], status: "skipped" },
+    ],
+    [
+      "a step component",
+      { type: "component", path: "x", kind: "step", nodeIds: [], status: "done" },
+    ],
+    [
+      "a script component",
+      { type: "component", path: "x", kind: "script", nodeIds: [], status: "done" },
     ],
     ["an unknown event type", { type: "teleport" }],
   ])("rejects %s", (_name, event) => {
@@ -223,6 +241,8 @@ describe("progressOf questions", () => {
     keptApart: [],
     mixedJobs: [],
     pieces: [],
+    needs: [],
+    shared: [],
   });
 
   it("carries the report's questions, each naming its node and the other node", () => {

@@ -1,6 +1,6 @@
 ---
 name: write-node
-description: How to write one blueprint node well - choosing its type, an Agent's role, instructions and expected output, what a Prompt builds on, and when a File wire carries its work. Read before adding a node or editing a node's settings.
+description: How to write one blueprint node well - choosing its type, an Agent's role, instructions and expected output, what it builds on, and when a File wire carries its work. Read before adding a node or editing a node's settings.
 ---
 
 # Write a node
@@ -9,11 +9,10 @@ A node is one step of the user's work. Write it so the build agents can turn it 
 
 ## Choose the type
 
-Pick the type whose "What it does" cell in the `blueprint` skill's Nodes table matches what the step does. Where two seem to fit:
+Every work step is an `agent`: a subagent with its own role, model and tools, which sees only the files it is given. That holds for a step that runs a command too: the Agent's instructions say which command to run and what to report. The other types are not work:
 
-- A turn of the session itself, which sees everything earlier turns did, is a `prompt`. Work handed to a subagent with its own role, model and tools, which sees only the files it is given, is an `agent`.
-- Running a command is a `script`, not an `agent` told to run it.
 - The user looking before the work goes on is a `gate`; the user choosing an answer is an `ask`; a stop that must never be skipped is a `hardstop`.
+- Repeating, parallel work and picking a path are `loop`, `foreach`, `fork` and `join`, and `branch`, around Agents.
 
 If what the user said fits more than one type, ask which they mean instead of picking.
 
@@ -29,15 +28,11 @@ If what the user said fits more than one type, ask which they mean instead of pi
 
 The Agent settings have no expected output field, which is why it is a line in `instructions`. Leave `model` at its default unless the user names one.
 
-## Prompt node
-
-- `instructions`: what the turn does, as steps in order.
-- `expectedOutput`: what the turn leaves for the next node.
-- A Prompt node that is not the first step on the main flow says in its `instructions` what it builds on: the earlier node by its label, or the file it reads through a File wire.
+A good Agent does one job, with its steps in the user's words. An Agent that is not the first step on the main flow says in its `instructions` what it builds on: the file it reads, given in `given` or carried by a File wire, named as the earlier node names it. Every file it leaves for a later node is in `writes` or on a File wire from it.
 
 ## File wires
 
-Use a `file` wire when a later node needs something an earlier node writes as a file: from the writer's `file-out` to the reader's `file-in`. Prompt, Agent and Script nodes have both ports; For each has only `file-in`, for its list file.
+Use a `file` wire when a later node needs something an earlier node writes as a file: from the writer's `file-out` to the reader's `file-in`. Agent nodes have both ports; For each has only `file-in`, for its list file.
 
 An Agent sees only the files it is given, so when an Agent works on what an earlier node produces, that node writes it to a file and a `file` wire carries it to the Agent. A `file` wire carries data, not order: keep the `then` wire between the two nodes as well.
 

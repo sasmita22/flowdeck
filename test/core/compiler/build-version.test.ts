@@ -20,6 +20,7 @@ import {
   type StartedBuild,
 } from "../../../src/core/compiler/build-version.js";
 import { sha256Hex } from "../../../src/core/compiler/hash.js";
+import { applyShared } from "../../../src/core/compiler/shared.js";
 import type { Manifest } from "../../../src/core/compiler/lower.js";
 import { verify } from "../../../src/core/compiler/verify.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
@@ -40,8 +41,6 @@ import {
   flow,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
@@ -60,7 +59,7 @@ const withConfig = (base: Flow, buildConfig: BuildConfig): Flow => ({
 
 const ticketFlow = (buildConfig: BuildConfig = ticketConfig) =>
   withConfig(
-    onMainFlow([prompt("p1", { settings: { instructions: "Fix {{ticket}}" } })], []),
+    onMainFlow([agent("p1", { settings: { instructions: "Fix {{ticket}}" } })], []),
     buildConfig,
   );
 
@@ -790,7 +789,7 @@ describe("buildVersion", () => {
         onMainFlow(
           [
             labelled(
-              prompt("p1", { settings: { instructions: "Fix {{ticket}}" } }),
+              agent("p1", { settings: { instructions: "Fix {{ticket}}" } }),
               "Draft the fix",
             ),
             labelled(agent("a"), "Review the fix"),
@@ -1320,6 +1319,165 @@ describe("buildVersion", () => {
       expect(manifest.nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
     });
 
+    describe("a shared piece", () => {
+      const conventions: BuildReport["shared"][number] = {
+        name: "repo-conventions",
+        kind: "skill",
+        usedBy: ["a", "b"],
+      };
+      const draftPath = "plugin/skills/repo-conventions/SKILL.md";
+      const turnKinds = (fake: FakeBuildAgents) =>
+        fake.turns.map((turn) => (isAuditTurn(turn.text) ? "audit" : "write"));
+
+      it("lays the draft through the file system after the audit, rewrites it with its agents in one write turn, then builds", async () => {
+        const t = traced({ script: { shared: [conventions] } });
+        const pieceA = await pieceOf("a");
+        const pieceB = await pieceOf("b");
+
+        const { result } = await t.run();
+
+        expect(result).toEqual(expect.objectContaining({ ok: true }));
+        expect(turnKinds(t.fake)).toEqual(["write", "audit", "write"]);
+        const rewrite = t.fake.turns[2]?.text ?? "";
+        expect(piecesNamed(rewrite)).toEqual([draftPath, pieceA, pieceB]);
+        expect(rewrite).toContain(`PIECE ${draftPath}\nKIND shared\n`);
+        for (const piece of [pieceA, pieceB]) {
+          expect(rewrite).toMatch(
+            new RegExp(
+              `PIECE ${piece}\\n(?:[A-Z]+ [^\\n]*\\n)*SHARED fix-login:repo-conventions\\n`,
+            ),
+          );
+        }
+        expect(
+          t.fs.calls.some(
+            (call) => call.method === "writeFile" && call.path === `${dir()}/${draftPath}`,
+          ),
+        ).toBe(true);
+        const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+        expect(manifest.files[draftPath]).toBe(
+          sha256Hex(await t.fs.readFile(`${dir()}/${draftPath}`)),
+        );
+      });
+
+      it("rewrites a shared piece that fails the check in the next round", async () => {
+        const t = traced({
+          script: { shared: [conventions], leaveMarker: [{ path: draftPath, rounds: [1] }] },
+        });
+
+        const { result } = await t.run();
+
+        expect(result).toEqual(expect.objectContaining({ ok: true }));
+        expect(turnKinds(t.fake)).toEqual(["write", "audit", "write", "write"]);
+        expect(piecesNamed(t.fake.turns[3]?.text ?? "")).toEqual([draftPath]);
+      });
+
+      it("ends the build needs-you when an entry cannot be laid, asking about it", async () => {
+        const t = traced({
+          script: { shared: [{ ...conventions, usedBy: ["a", "ghost"] }] },
+        });
+
+        const { pending } = await t.run();
+
+        expect(t.ends).toEqual([
+          {
+            pendingId: pending.pendingId,
+            end: expect.objectContaining({
+              outcome: "needs-you",
+              report: expect.objectContaining({
+                questions: [expect.objectContaining({ nodeId: "ghost" })],
+              }),
+            }),
+          },
+        ]);
+        expect(t.fake.turns).toHaveLength(2);
+        expect(stepsOf(t.store, pending.pendingId).filter((event) => event.step === 5)).toEqual([]);
+        await expectTornDown(t);
+      });
+
+      it("resumed after step 4, keeps the filled shared piece and checks it as shared", async () => {
+        const t = traced({ script: { shared: [conventions] } });
+        const laid = await layDown(agentsFlow(), {
+          home,
+          kitVersion: kit.version,
+          workspace: {
+            id: firstId,
+            name: request.name,
+            repo,
+            base: "main",
+            values: request.values,
+          },
+        });
+        if (!laid.ok) throw new Error("the flow does not lay down");
+        const laidManifest = JSON.parse(
+          laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
+        ) as Manifest;
+        const applied = applyShared(laid.files, laidManifest, [conventions]);
+        for (const file of applied.files)
+          await t.fs.writeFile(`${dir()}/${file.path}`, file.content);
+        await t.fs.writeFile(`${cut().path}/README.md`, "Repo notes.\n");
+        const pieces = [
+          ...new Set(applied.manifest.nodes.flatMap((node) => node.file ?? [])),
+          draftPath,
+        ];
+        await t.fake.open({ ...t.fake.opened[0], sessionName, workspaceDir: dir() } as never);
+        await t.fake.turn(
+          sessionName,
+          pieces.map((piece) => `PIECE ${piece}`).join("\n"),
+          () => {},
+        );
+        const filledDraft = await t.fs.readFile(`${dir()}/${draftPath}`);
+        const pending = t.store.startPendingBuild({
+          flowId: "file:fix-login",
+          version: 1,
+          name: request.name,
+          origin: {},
+          startedAt,
+        });
+        if (pending.kind !== "started") throw new Error("pending build not started");
+        const left: BuildEvent[] = [
+          { type: "step", step: 1, status: "running" },
+          { type: "step", step: 1, status: "done" },
+          { type: "step", step: 2, status: "running" },
+          { type: "step", step: 2, status: "done" },
+          {
+            type: "session",
+            name: sessionName,
+            claudeSessionId: "claude-session-1",
+            buildId: firstId,
+            repo,
+            base: "main",
+            values: request.values,
+          },
+          { type: "step", step: 3, status: "running", round: 1 },
+          { type: "step", step: 3, status: "done", round: 1 },
+          { type: "step", step: 4, status: "running" },
+          { type: "step", step: 4, status: "done" },
+          { type: "step", step: 5, status: "running", round: 1 },
+          { type: "step", step: 5, status: "failed", round: 1, message: "x" },
+          { type: "step", step: 3, status: "running", round: 2 },
+        ];
+        for (const event of left) t.store.appendBuildEvent(pending.pendingId, event);
+        const resume = buildResumeOf(t.store.buildEvents(pending.pendingId));
+        if (resume === undefined) throw new Error("the build is not resumable");
+        const turnsBefore = t.fake.turns.length;
+
+        const result = await runBuild(
+          pending,
+          agentsFlow(),
+          resumeRequest(request.name, resume.session),
+          t.deps,
+          undefined,
+          resume,
+        ).catch((error: unknown) => error);
+
+        expect(result).toEqual(expect.objectContaining({ ok: true }));
+        expect(t.fake.turns).toHaveLength(turnsBefore);
+        expect(await t.fs.readFile(`${dir()}/${draftPath}`)).toBe(filledDraft);
+        const locked = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+        expect(locked.files[draftPath]).toBe(sha256Hex(filledDraft));
+      });
+    });
+
     it("stopped during the merge writes, ends stopped with no workspace, its worktree removed and no turn after", async () => {
       const stopping = new AbortController();
       const t = traced({
@@ -1505,7 +1663,7 @@ describe("buildVersion", () => {
 
     it("ends the build needs-you when the audit asks for a merge it cannot apply, asking about it", async () => {
       const t = traced({
-        script: { merges: [{ nodeIds: ["p1", "a"], reason: "Both touch the fix." }] },
+        script: { merges: [{ nodeIds: ["ghost", "a"], reason: "Both touch the fix." }] },
       });
 
       const { pending } = await t.run();
@@ -1516,7 +1674,9 @@ describe("buildVersion", () => {
           end: expect.objectContaining({
             outcome: "needs-you",
             report: expect.objectContaining({
-              questions: [expect.objectContaining({ nodeId: expect.stringMatching(/^(p1|a)$/) })],
+              questions: [
+                expect.objectContaining({ nodeId: expect.stringMatching(/^(ghost|a)$/) }),
+              ],
             }),
           }),
         },
@@ -1861,8 +2021,8 @@ describe("buildVersion", () => {
     const twoVersions = () =>
       setup({
         flows: [
-          onMainFlow([prompt("p1")], []),
-          onMainFlow([prompt("p1"), script("s1")], [thenWire("p1", "s1")]),
+          onMainFlow([agent("p1")], []),
+          onMainFlow([agent("p1"), agent("s1")], [thenWire("p1", "s1")]),
         ].map((saved) => withConfig(saved, { repo, base: "main", variables: [] })),
       });
 

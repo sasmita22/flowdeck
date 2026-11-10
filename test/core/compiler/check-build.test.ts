@@ -9,16 +9,11 @@ import {
 import type { BuildFile, Manifest } from "../../../src/core/compiler/lower.js";
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { scopeLine, type ScopeParts } from "../../../src/core/compiler/scope-line.js";
+import { applyShared, sharedPath } from "../../../src/core/compiler/shared.js";
+import type { BuildReport } from "../../../src/core/compiler/build-report.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import {
-  agent,
-  fileWire,
-  flow,
-  onMainFlow,
-  prompt,
-  thenWire,
-} from "../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -33,9 +28,9 @@ const sample = (): Flow =>
   withTools(
     onMainFlow(
       [
-        labelled(prompt("p"), "Draft the spec"),
+        labelled(agent("p"), "Draft the spec"),
         labelled(agent("a", { settings: { tools: ["Grep"] } }), longLabel),
-        labelled(prompt("s"), "Ship it"),
+        labelled(agent("s"), "Ship it"),
       ],
       [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
     ),
@@ -45,10 +40,10 @@ const twoReviewers = (): Flow =>
   withTools(
     onMainFlow(
       [
-        labelled(prompt("p"), "Draft the spec"),
+        labelled(agent("p"), "Draft the spec"),
         labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
         labelled(agent("b", { settings: { tools: ["Grep"] } }), "Review the draft again"),
-        labelled(prompt("s"), "Ship it"),
+        labelled(agent("s"), "Ship it"),
       ],
       [thenWire("p", "a"), thenWire("a", "b"), thenWire("b", "s")],
     ),
@@ -95,7 +90,9 @@ const unfilledLine = /^@unfilled.*\n\n?/m;
 
 const isPieceFile = (path: string) =>
   path !== orchestratorPath &&
-  (/^plugin\/agents\/[^/]+\.md$/.test(path) || /^plugin\/skills\/[^/]+\/SKILL\.md$/.test(path));
+  (/^plugin\/agents\/[^/]+\.md$/.test(path) ||
+    /^plugin\/skills\/[^/]+\/SKILL\.md$/.test(path) ||
+    /^plugin\/commands\/[^/]+\.md$/.test(path));
 
 const describedOnly = (file: BuildFile): BuildFile => ({
   path: file.path,
@@ -134,6 +131,7 @@ const workspace = async (source: Flow = sample()): Promise<BuildCheckInputs> => 
     readBack: laidDown.map(filledOne),
     manifest: manifestOf(laidDown),
     flow: source,
+    shared: [],
   };
 };
 
@@ -202,6 +200,7 @@ const merged = async (): Promise<BuildCheckInputs & { kept: string }> => {
     readBack: laidDown.map(filledOne),
     manifest,
     flow: source,
+    shared: [],
     kept: keptFile,
   };
 };
@@ -268,7 +267,7 @@ describe("checkBuild", () => {
       );
     });
 
-    it("names a step skill whose description is under the floor", async () => {
+    it("names an agent whose description is under the floor", async () => {
       const inputs = await workspace();
       const file = fileOf(inputs, "p");
 
@@ -312,7 +311,7 @@ describe("checkBuild", () => {
   });
 
   describe("frontmatter and content", () => {
-    it("names a step skill whose frontmatter has no name", async () => {
+    it("names an agent whose frontmatter has no name", async () => {
       const inputs = await workspace();
       const file = fileOf(inputs, "p");
 
@@ -454,6 +453,178 @@ describe("checkBuild", () => {
             .replaceAll(" Then go on to NODE s.", ""),
         ),
         orchestratorPath,
+      );
+    });
+  });
+
+  describe("shared pieces", () => {
+    const sharedFlow = (): Flow => ({
+      ...onMainFlow(
+        [
+          labelled(agent("p"), "Draft the spec"),
+          labelled(agent("a"), "Review the draft"),
+          labelled(agent("b"), "Review the draft again"),
+          labelled(agent("s"), "Ship it"),
+        ],
+        [thenWire("p", "a"), thenWire("a", "b"), thenWire("b", "s")],
+      ),
+    });
+
+    const withAllowed = (inputs: BuildCheckInputs, allowedTools: string[]): BuildCheckInputs => ({
+      ...inputs,
+      manifest: { ...inputs.manifest, session: { ...inputs.manifest.session, allowedTools } },
+    });
+
+    const conventions: BuildReport["shared"][number] = {
+      name: "repo-conventions",
+      kind: "skill",
+      usedBy: ["a", "b"],
+    };
+
+    const sharing = async (
+      entry: BuildReport["shared"][number] = conventions,
+    ): Promise<BuildCheckInputs & { path: string }> => {
+      const source = sharedFlow();
+      const before = await laid(source);
+      const applied = applyShared(before, manifestOf(before), [entry]);
+      expect(applied.accepted).toEqual([entry]);
+      const users = new Set(
+        entry.usedBy.flatMap(
+          (id) => applied.manifest.nodes.find((node) => node.id === id)?.file ?? [],
+        ),
+      );
+      const readBack = applied.files.map(filledOne).map((file) =>
+        users.has(file.path)
+          ? {
+              ...file,
+              content: `${file.content}\nRun \`alpha:${entry.name}\` with the Skill tool.\n`,
+            }
+          : file,
+      );
+      return {
+        laidDown: applied.files,
+        readBack,
+        manifest: applied.manifest,
+        flow: source,
+        shared: applied.accepted,
+        path: sharedPath(entry),
+      };
+    };
+
+    it("passes a shared file it declares and that was laid down, without calling it extra", async () => {
+      const { path, ...inputs } = await sharing();
+
+      expect(inputs.readBack.map((file) => file.path)).toContain(path);
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+
+    it("passes a shared command the same way", async () => {
+      const { path, ...inputs } = await sharing({ ...conventions, kind: "command" });
+
+      expect(path).toBe("plugin/commands/repo-conventions.md");
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+
+    it("still names a plugin/ file that nothing declares as extra", async () => {
+      const inputs = await sharing();
+      const stray = { path: "plugin/skills/stray/SKILL.md", content: "# Stray\n" };
+
+      expectFailsOn({ ...inputs, readBack: [...inputs.readBack, stray] }, stray.path);
+    });
+
+    it("names a shared file that is missing", async () => {
+      const { path, ...inputs } = await sharing();
+
+      expectFailsOn(without(inputs, path), path);
+    });
+
+    it("names a shared file that is empty", async () => {
+      const { path, ...inputs } = await sharing();
+
+      expectFailsOn(
+        edited(inputs, path, () => ""),
+        path,
+      );
+    });
+
+    it("names a shared file whose frontmatter has no description", async () => {
+      const { path, ...inputs } = await sharing();
+
+      expectFailsOn(
+        edited(inputs, path, (content) => withField(content, "description", undefined)),
+        path,
+      );
+    });
+
+    it("names a shared file that still holds the draft marker line", async () => {
+      const { path, ...inputs } = await sharing();
+      const draft = inputs.laidDown.find((file) => file.path === path)?.content ?? "";
+
+      expectFailsOn(
+        edited(inputs, path, () => draft),
+        path,
+      );
+    });
+
+    it("names a shared file whose body has nothing beyond its draft", async () => {
+      const { path, ...inputs } = await sharing();
+      const draft = inputs.laidDown.find((file) => file.path === path);
+
+      expectFailsOn(
+        edited(inputs, path, () => (draft === undefined ? "" : describedOnly(draft).content)),
+        path,
+      );
+    });
+
+    it("names an agent in usedBy whose file never runs the shared piece", async () => {
+      const inputs = await sharing();
+      const file = fileOf(inputs, "b");
+
+      expectFailsOn(
+        edited(inputs, file, (content) => content.replace("`alpha:repo-conventions`", "it")),
+        file,
+      );
+    });
+
+    it("still names a reference to a piece the build does not have", async () => {
+      const inputs = await sharing();
+      const file = fileOf(inputs, "a");
+
+      expectFailsOn(
+        edited(inputs, file, (content) => `${content}\nThen run \`alpha:repo-rules\`.\n`),
+        file,
+      );
+    });
+
+    it("names an agent in usedBy whose tools leave out Skill", async () => {
+      const shared = await sharing();
+      const inputs = withAllowed(shared, ["Read", "Skill", "SlashCommand"]);
+      const file = fileOf(inputs, "b");
+
+      expectFailsOn(
+        edited(inputs, file, (content) => withField(content, "tools", "Read, SlashCommand")),
+        file,
+      );
+    });
+
+    it("passes an agent in usedBy whose tools list Skill, and Skill is allowed", async () => {
+      const shared = await sharing();
+      const inputs = withAllowed(shared, ["Read", "Skill"]);
+      const file = fileOf(inputs, "b");
+
+      expect(
+        checkBuild(edited(inputs, file, (content) => withField(content, "tools", "Read, Skill"))),
+      ).toEqual([]);
+    });
+
+    it("names an agent in usedBy whose tools list Skill when Skill is not allowed", async () => {
+      const shared = await sharing();
+      const inputs = withAllowed(shared, ["Read"]);
+      const file = fileOf(inputs, "b");
+
+      expectFailsOn(
+        edited(inputs, file, (content) => withField(content, "tools", "Read, Skill")),
+        file,
       );
     });
   });

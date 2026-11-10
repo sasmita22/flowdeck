@@ -26,6 +26,44 @@ const send = (event) => {
   socket.on("error", () => undefined);
 };
 const stop = () => send({ hook_event_name: "Stop", last_assistant_message: "ok" });
+const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\\\"]+)/;
+const turnsFile = resolve(__dirname, "turns.json");
+const plannedTurns = existsSync(turnsFile) ? JSON.parse(readFileSync(turnsFile, "utf8")) : {};
+const writesFile = resolve(__dirname, "writes.json");
+const plannedWrites = existsSync(writesFile) ? JSON.parse(readFileSync(writesFile, "utf8")) : {};
+const writeFor = (nodeId) => {
+  for (const [path, content] of Object.entries(plannedWrites[nodeId] ?? {})) {
+    writeFileSync(resolve(process.cwd(), path), content);
+  }
+};
+const outcomeOf = (nodeId) => {
+  const planned = plannedTurns[nodeId] ?? "done";
+  if (!planned.endsWith("-once")) return planned;
+  const seen = resolve(__dirname, "once-" + nodeId);
+  if (existsSync(seen)) return "done";
+  writeFileSync(seen, "");
+  return planned.slice(0, -"-once".length);
+};
+const runTurn = (text) => {
+  const match = dispatched.exec(text);
+  if (match === null) return setTimeout(stop, 50);
+  const [, agentType, nodeId] = match;
+  appendFileSync(resolve(__dirname, "dispatched"), nodeId + "\\n");
+  const outcome = outcomeOf(nodeId);
+  if (outcome === "hold") return;
+  if (outcome === "fail") return setTimeout(stop, 50);
+  writeFor(nodeId);
+  setTimeout(() => {
+    send({
+      hook_event_name: "PostToolUse",
+      tool_name: "Agent",
+      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+      tool_response: { agentType, status: "completed" },
+    });
+    setTimeout(stop, 100);
+  }, 50);
+};
 
 const unfilledLine = /^@unfilled.*\\n\\n?/m;
 const descriptionLine = /^description: (.*)$/m;
@@ -46,7 +84,7 @@ const questionFile = resolve(__dirname, "question");
 const askAfterAudit = (agentType) => {
   if (agentType !== "flowdeck-build:handoff-auditor" || !existsSync(questionFile)) return;
   const question = JSON.parse(readFileSync(questionFile, "utf8"));
-  const report = { version: 1, questions: [question], merges: [], keptApart: [], mixedJobs: [], pieces: [] };
+  const report = { version: 1, questions: [question], merges: [], keptApart: [], mixedJobs: [], pieces: [], needs: [], shared: [] };
   writeFileSync(resolve(process.cwd(), "build-report.json"), JSON.stringify(report, null, 2));
 };
 const usageFile = resolve(__dirname, "usage");
@@ -198,7 +236,7 @@ if (process.env.FLOWDECK_BP_SOCK) {
   process.stdin.on("data", (chunk) => {
     for (const key of chunk) {
       if (key === "\\r" || key === "\\n") {
-        if (typed !== "") setTimeout(stop, 50);
+        if (typed !== "") runTurn(typed);
         typed = "";
       } else if (key === "\\x7f") typed = typed.slice(0, -1);
       else if (key !== "\\x1b") typed += key;
@@ -210,6 +248,13 @@ if (process.env.FLOWDECK_BP_SOCK) {
 `;
 
 export const fakeClaudeRan = (home: string) => join(home, "fake-claude-bin", "ran");
+
+export async function fakeClaudeDispatched(home: string): Promise<string[]> {
+  const text = await readFile(join(home, "fake-claude-bin", "dispatched"), "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line !== "");
+}
+
+export type FakeAgentTurn = "done" | "fail" | "hold" | "fail-once" | "hold-once";
 
 export type BlueprintCall = { name: string; input?: Record<string, unknown> };
 
@@ -237,15 +282,19 @@ export type FakeClaudeLaunchOptions = LaunchOptions & {
   pieceMs?: number;
   question?: { nodeId: string; otherNodeId?: string; text: string };
   usage?: { userHome: string; model: string; inputTokens: number; outputTokens: number };
+  turns?: Record<string, FakeAgentTurn>;
+  writes?: Record<string, Record<string, string>>;
 };
 
 export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Promise<LaunchedApp> {
-  const { ownBin, basePath, pieceMs, question, usage, ...launchOptions } = options;
+  const { ownBin, basePath, pieceMs, question, usage, turns, writes, ...launchOptions } = options;
   const bin = join(options.home, "fake-claude-bin");
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
   if (pieceMs !== undefined) await writeFile(join(bin, "piece-ms"), String(pieceMs));
   if (question !== undefined) await writeFile(join(bin, "question"), JSON.stringify(question));
+  if (turns !== undefined) await writeFile(join(bin, "turns.json"), JSON.stringify(turns));
+  if (writes !== undefined) await writeFile(join(bin, "writes.json"), JSON.stringify(writes));
   if (usage !== undefined) {
     const { userHome, ...counts } = usage;
     const projectsDir = join(userHome, ".claude", "projects", "fd-fake");

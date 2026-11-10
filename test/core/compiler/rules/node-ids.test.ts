@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/node-ids.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { flow, onMainFlow, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, onMainFlow, thenWire } from "../../../fixtures/flow-builders.js";
 
 const errorsFor = (ids: string[]) =>
   rule
     .check(
       flow(
-        ids.map((id) => prompt(id)),
+        ids.map((id) => agent(id)),
         [],
       ),
     )
@@ -27,7 +27,7 @@ describe("node-ids", () => {
   });
 
   it("reports a repeated id once, on its second use", () => {
-    const errors = rule.check(flow([prompt("work"), prompt("work")], []));
+    const errors = rule.check(flow([agent("work"), agent("work")], []));
 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({ rule: "node-ids", node: "work", field: "id" });
@@ -35,7 +35,7 @@ describe("node-ids", () => {
   });
 
   it("reports a node whose id is both unsafe and repeated once", () => {
-    const messages = rule.check(flow([prompt("a/b"), prompt("a/b")], [])).map((e) => e.message);
+    const messages = rule.check(flow([agent("a/b"), agent("a/b")], [])).map((e) => e.message);
 
     expect(messages).toHaveLength(2);
     expect(messages[0]).toMatch(/may only use/);
@@ -43,7 +43,7 @@ describe("node-ids", () => {
   });
 
   it("reports ids that differ only in case once, on the later one", () => {
-    const errors = rule.check(flow([prompt("work"), prompt("Work")], []));
+    const errors = rule.check(flow([agent("work"), agent("Work")], []));
 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({ rule: "node-ids", node: "Work", field: "id" });
@@ -51,7 +51,7 @@ describe("node-ids", () => {
   });
 
   it("makes validate reject a flow whose ids would collide on a case-insensitive disk", () => {
-    const errors = validate(onMainFlow([prompt("p1"), prompt("P1")], [thenWire("p1", "P1")]));
+    const errors = validate(onMainFlow([agent("p1"), agent("P1")], [thenWire("p1", "P1")]));
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "node-ids", node: "P1" },

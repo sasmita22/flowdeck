@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { flow, prompt } from "../test/fixtures/flow-builders.js";
+import { agent, flow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { launchApp, launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 
@@ -69,9 +69,9 @@ test("A fresh launch opens on the Blueprints page, not the canvas", async () => 
 });
 
 test("A pinned blueprint is first under both sorts and in Recent, after a relaunch too, and unpins from Recent", async () => {
-  const zulu = seedBlueprint(home, "Zulu", flow([prompt("p1")], [])).flowId;
-  const alpha = seedBlueprint(home, "Alpha", flow([prompt("p1")], [])).flowId;
-  const mike = seedBlueprint(home, "Mike", flow([prompt("p1")], [])).flowId;
+  const zulu = seedBlueprint(home, "Zulu", flow([agent("p1")], [])).flowId;
+  const alpha = seedBlueprint(home, "Alpha", flow([agent("p1")], [])).flowId;
+  const mike = seedBlueprint(home, "Mike", flow([agent("p1")], [])).flowId;
   let window = await launch();
 
   await window.getByTestId(controlTestIds.back).click();

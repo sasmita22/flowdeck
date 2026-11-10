@@ -7,7 +7,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { onMainFlow, script } from "../test/fixtures/flow-builders.js";
+import { agent, onMainFlow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -85,8 +85,7 @@ const startBuild = async (window: Page, name: string): Promise<string> => {
   return pendingOf() ?? "";
 };
 
-const oneScript = () =>
-  onMainFlow([script("s1", { settings: { command: "sh", args: ["-c", "echo one"] } })], []);
+const oneAgent = () => onMainFlow([agent("s1")], []);
 
 const openBlueprint = async (window: Page, flowId: string) => {
   await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
@@ -111,7 +110,7 @@ test.afterEach(async () => {
 });
 
 test("a finished build shows Built · v1 on the blueprint's card chip and on its canvas bar", async () => {
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await openBlueprint(window, flowId);
@@ -125,8 +124,8 @@ test("a finished build shows Built · v1 on the blueprint's card chip and on its
 });
 
 test("the canvas bar shows only on a blueprint that has been built", async () => {
-  const built = seedBlueprint(home, "Fixer", oneScript(), repo.path);
-  const idle = seedBlueprint(home, "Idle", oneScript(), repo.path);
+  const built = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
+  const idle = seedBlueprint(home, "Idle", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await openBlueprint(window, built.flowId);
@@ -141,7 +140,7 @@ test("the canvas bar shows only on a blueprint that has been built", async () =>
 
 test("while a blueprint builds, its card chip and its canvas bar show the same step, then Built · v1", async () => {
   test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
@@ -166,7 +165,7 @@ test("while a blueprint builds, its card chip and its canvas bar show the same s
 
 test("the Builds page shows steps 3 and 4 and each component going waiting, running, done", async () => {
   test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
@@ -180,7 +179,9 @@ test("the Builds page shows steps 3 and 4 and each component going waiting, runn
   await expect(window.getByTestId(pageTestIds.buildProgress(pendingId))).toBeVisible();
   const step3 = window.getByTestId(pageTestIds.buildStep(pendingId, 3));
   const step4 = window.getByTestId(pageTestIds.buildStep(pendingId, 4));
-  const component = window.getByTestId(pageTestIds.buildComponent(pendingId, "script:s1"));
+  const component = window.getByTestId(
+    pageTestIds.buildComponent(pendingId, "plugin/agents/s1.md"),
+  );
   await expect(step3).toContainText("running", { timeout: watchMs });
   await expect(component).toContainText("waiting");
   await expect(component).toContainText("running", { timeout: watchMs });
@@ -188,12 +189,14 @@ test("the Builds page shows steps 3 and 4 and each component going waiting, runn
   await expect(step3).toContainText("done", { timeout: watchMs });
   await expect(step4).toContainText("running", { timeout: watchMs });
   await expect(step4).toContainText("done", { timeout: watchMs });
-  await expect(window.getByTestId(pageTestIds.buildActivity(pendingId))).toContainText("script:s1");
+  await expect(window.getByTestId(pageTestIds.buildActivity(pendingId))).toContainText(
+    "plugin/agents/s1.md",
+  );
 });
 
 test("the build terminal shows the fd-build session, and Stop ends the build and removes its workspace", async () => {
   test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
@@ -239,7 +242,7 @@ test("the build terminal shows the fd-build session, and Stop ends the build and
 
 test("a build that ends with a question shows it under its nodes with an answer field, the chip says Needs you, and Rebuild with answers starts a new build of the blueprint", async () => {
   test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
@@ -286,7 +289,7 @@ test("a build that ends with a question shows it under its nodes with an answer 
 
 test("the Builds page shows the build's tokens and cost read from its session's transcript", async () => {
   test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneScript(), repo.path);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),

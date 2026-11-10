@@ -20,18 +20,12 @@ import { ports as loopPorts } from "./loop/ports.js";
 import { settings as loopSettings } from "./loop/settings.js";
 import { ports as outputPorts } from "./output/ports.js";
 import { settings as outputSettings } from "./output/settings.js";
-import { ports as promptPorts } from "./prompt/ports.js";
-import { settings as promptSettings } from "./prompt/settings.js";
-import { ports as scriptPorts } from "./script/ports.js";
-import { settings as scriptSettings } from "./script/settings.js";
 import { ports as triggerPorts } from "./trigger/ports.js";
 import { settings as triggerSettings } from "./trigger/settings.js";
 
 export type NodeDefinition = { settings: z.ZodType; ports: readonly Port[] };
 
 export const registry = {
-  prompt: { settings: promptSettings, ports: promptPorts },
-  script: { settings: scriptSettings, ports: scriptPorts },
   agent: { settings: agentSettings, ports: agentPorts },
   gate: { settings: gateSettings, ports: gatePorts },
   ask: { settings: askSettings, ports: askPorts },

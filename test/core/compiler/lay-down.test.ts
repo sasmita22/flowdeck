@@ -7,16 +7,16 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { frontmatter } from "../../fixtures/frontmatter.js";
-import { agent, fileWire, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const sample = (): Flow => {
   const base = onMainFlow(
     [
-      labelled(prompt("p"), "Draft the spec"),
+      labelled(agent("p"), "Draft the spec"),
       labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
-      labelled(prompt("s"), "Ship it"),
+      labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
   );
@@ -132,10 +132,10 @@ describe("layDown", () => {
         });
 
         expect(files.map((file) => file.path).sort()).toEqual([
+          "plugin/agents/draft-the-spec.md",
           "plugin/agents/review-the-draft.md",
-          "plugin/skills/draft-the-spec/SKILL.md",
+          "plugin/agents/ship-it.md",
           "plugin/skills/run/SKILL.md",
-          "plugin/skills/ship-it/SKILL.md",
         ]);
         for (const file of files) {
           const description = String(frontmatter(file.content).description);
@@ -143,17 +143,6 @@ describe("layDown", () => {
         }
       },
     );
-
-    it("keeps the model from calling any step skill", async () => {
-      const steps = pieceFiles(await laidDown(alpha)).filter(
-        (file) => file.path.startsWith("plugin/skills/") && file.path !== orchestratorPath,
-      );
-
-      expect(steps).toHaveLength(2);
-      for (const file of steps) {
-        expect(frontmatter(file.content)["disable-model-invocation"], file.path).toBe(true);
-      }
-    });
   });
 
   describe("AT-17: every reference stays inside the build", () => {

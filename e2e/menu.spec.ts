@@ -11,19 +11,13 @@ import {
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
-import {
-  flow,
-  gate,
-  onMainFlow,
-  prompt,
-  script,
-  thenWire,
-} from "../test/fixtures/flow-builders.js";
+import { agent, flow, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildIdNamed, waitForBuilt } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 
@@ -34,13 +28,13 @@ let repo: TmpRepo;
 let claudeConfig: string;
 let launched: LaunchedApp | undefined;
 
-const twoScripts = () =>
+const twoAgents = () =>
   JSON.parse(
-    readFileSync(new URL("../test/fixtures/app-run-two-scripts.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../test/fixtures/app-run-two-agents.json", import.meta.url), "utf8"),
   ) as unknown;
 
 const withConnectors = (connectors: string[]) => {
-  const base = onMainFlow([prompt("p1")], []);
+  const base = onMainFlow([agent("p1")], []);
   return { ...base, session: { ...base.session, connectors } };
 };
 
@@ -135,6 +129,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
@@ -145,31 +140,31 @@ test("Two blueprints each keep their own canvas, after a reload too", async () =
   let { window } = await launch();
 
   await rename(window, "Alpha");
-  await drop(window, "prompt", 200);
+  await drop(window, "agent", 200);
   await saveNow(window);
 
   await window.getByTestId(controlTestIds.back).click();
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("Blueprints");
   await window.getByTestId(pageTestIds.create).click();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Untitled");
-  await expect(readout(window)).not.toContainText('"prompt-1"');
+  await expect(readout(window)).not.toContainText('"agent-1"');
   await rename(window, "Beta");
-  await drop(window, "script", 200);
+  await drop(window, "gate", 200);
   await saveNow(window);
 
-  await drop(window, "prompt", 420);
+  await drop(window, "agent", 420);
   await window.getByTestId(controlTestIds.back).click();
   await window.getByTestId(pageTestIds.leaveDiscard).click();
   await expect(byPrefix(window, "blueprint-card-")).toHaveCount(2);
   await byPrefix(window, "blueprint-open-", "Alpha").click();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Alpha");
-  await expect(readout(window)).toContainText('"id":"prompt-1"');
-  await expect(readout(window)).not.toContainText('"script-1"');
+  await expect(readout(window)).toContainText('"id":"agent-1"');
+  await expect(readout(window)).not.toContainText('"gate-1"');
 
   ({ window } = await relaunch());
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Beta");
-  await expect(readout(window)).toContainText('"id":"script-1"');
-  await expect(readout(window)).not.toContainText('"prompt-1"');
+  await expect(readout(window)).toContainText('"id":"gate-1"');
+  await expect(readout(window)).not.toContainText('"agent-1"');
 
   await window.getByTestId(controlTestIds.back).click();
   const betaId = (
@@ -189,7 +184,7 @@ test("Two blueprints each keep their own canvas, after a reload too", async () =
   await window.getByTestId(controlTestIds.back).click();
   await byPrefix(window, "blueprint-open-", "Alpha").click();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Alpha");
-  await expect(readout(window)).toContainText('"id":"prompt-1"');
+  await expect(readout(window)).toContainText('"id":"agent-1"');
 
   await closeApp();
   expect(
@@ -214,10 +209,10 @@ const confirmBuild = async (window: Page, name: string) => {
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
   const testInfo = test.info();
   const planner = seedBlueprint(home, "Planner", withConnectors(["slack"]), repo.path);
-  seedBlueprint(home, "Scripts", twoScripts(), repo.path);
+  seedBlueprint(home, "Agents", twoAgents(), repo.path);
   const target = await launch();
   const { window } = target;
-  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Scripts");
+  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Agents");
 
   await window.getByTestId(controlTestIds.back).click();
   await window.getByTestId(pageTestIds.blueprintBuild(planner.flowId)).click();
@@ -225,11 +220,14 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText('"slack"');
-  await window.getByTestId(pageTestIds.buildFile("plugin/skills/p1/SKILL.md")).click();
-  await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText("Do the work.");
-  await expect(
-    window.getByTestId(pageTestIds.buildFile("plugin/skills/p1/SKILL.md")),
-  ).toHaveAttribute("aria-current", "true");
+  await window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md")).click();
+  await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText(
+    "Implement the plan.",
+  );
+  await expect(window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md"))).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
   await expect(window.locator('[data-testid^="build-file-"][aria-current]')).toHaveCount(1);
   await shot(target, testInfo, "build-files");
   for (const row of await window.locator('[data-testid^="build-file-"]').all()) {
@@ -241,18 +239,18 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
 
   await window.getByTestId(pageTestIds.buildBack).click();
   await window.getByTestId("menu-blueprints").click();
-  await byPrefix(window, "blueprint-open-", "Scripts").click();
+  await byPrefix(window, "blueprint-open-", "Agents").click();
   await window.getByTestId(controlTestIds.build).click();
-  await confirmBuild(window, "run-scripts");
-  await expect(window.getByTestId(pageTestIds.title)).toHaveText("run-scripts v1");
-  const scriptsBuild = buildIdNamed(home, "run-scripts");
+  await confirmBuild(window, "run-agents");
+  await expect(window.getByTestId(pageTestIds.title)).toHaveText("run-agents v1");
+  const agentsBuild = buildIdNamed(home, "run-agents");
 
   await window.getByTestId(pageTestIds.buildBack).click();
   await expect(byPrefix(window, "build-card-")).toHaveCount(2);
-  const scriptsCard = window.getByTestId(pageTestIds.buildCard(scriptsBuild));
-  await expect(scriptsCard).toContainText("run-scripts Scripts v1");
+  const agentsCard = window.getByTestId(pageTestIds.buildCard(agentsBuild));
+  await expect(agentsCard).toContainText("run-agents Agents v1");
   await shot(target, testInfo, "builds");
-  await window.getByTestId(pageTestIds.buildRun(scriptsBuild)).click();
+  await window.getByTestId(pageTestIds.buildRun(agentsBuild)).click();
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
     "data-status",
@@ -266,14 +264,14 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
 
   await window.getByTestId(pageTestIds.runBack).click();
   await window.getByTestId("menu-runs").click();
-  const runCard = byPrefix(window, "run-card-", "Scripts");
+  const runCard = byPrefix(window, "run-card-", "Agents");
   await expect(runCard).toHaveCount(1);
   await expect(runCard.locator('[data-testid^="run-result-"]')).toHaveText("done");
-  await expect(runCard).toContainText("Scripts v1");
+  await expect(runCard).toContainText("Agents v1");
   await shot(target, testInfo, "runs");
 
   await window.getByTestId("menu-blueprints").click();
-  await byPrefix(window, "blueprint-open-", "Scripts").click();
+  await byPrefix(window, "blueprint-open-", "Agents").click();
   await window.getByTestId("node-s2").click();
   await window.getByTestId(controlTestIds.delete).click();
   await saveNow(window);
@@ -298,17 +296,17 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
 
   await closeApp();
   const runs = dbRows<{ id: string; build_id: string }>("SELECT id, build_id FROM runs");
-  const scriptsBuilds = dbRows<{ id: string; version: number }>(
-    "SELECT builds.id, version FROM builds JOIN flows ON flows.id = builds.flow_id WHERE flows.name = 'Scripts'",
+  const agentsBuilds = dbRows<{ id: string; version: number }>(
+    "SELECT builds.id, version FROM builds JOIN flows ON flows.id = builds.flow_id WHERE flows.name = 'Agents'",
   );
-  expect(scriptsBuilds).toEqual([{ id: scriptsBuild, version: 1 }]);
+  expect(agentsBuilds).toEqual([{ id: agentsBuild, version: 1 }]);
   expect(runs).toHaveLength(2);
   expect(new Set(runs.map((run) => run.id)).size).toBe(2);
-  expect(runs.map((run) => run.build_id)).toEqual([scriptsBuild, scriptsBuild]);
+  expect(runs.map((run) => run.build_id)).toEqual([agentsBuild, agentsBuild]);
 });
 
 test("Run again on a finished run runs the same build, so Builds keeps one card for both runs", async () => {
-  seedFlow(home, twoScripts(), repo.path);
+  seedFlow(home, twoAgents(), repo.path);
   const { window } = await launch();
 
   const buildId = await buildAndRun(window, home, "twice");
@@ -367,7 +365,7 @@ test("Doctor shows an installed connector and a missing one with its fix, and no
 });
 
 test("Escape in the blueprint's name field keeps its old name", async () => {
-  seedBlueprint(home, "Alpha", flow([prompt("p1")], []), repo.path);
+  seedBlueprint(home, "Alpha", flow([agent("p1")], []), repo.path);
   const { window } = await launch();
   const title = window.getByTestId(controlTestIds.title);
   await expect(title).toHaveValue("Alpha");
@@ -383,7 +381,7 @@ test("Escape in the blueprint's name field keeps its old name", async () => {
 });
 
 test("A run left running by an earlier session shows as interrupted, never live", async () => {
-  const alpha = seedBlueprint(home, "Alpha", flow([prompt("p1")], []), repo.path);
+  const alpha = seedBlueprint(home, "Alpha", flow([agent("p1")], []), repo.path);
   const db = openDatabase({ path: join(home, "flowdeck.db") });
   let stale: string;
   try {
@@ -434,11 +432,7 @@ test("The status bar takes you from the editor to the live run that needs you", 
   seedFlow(
     home,
     onMainFlow(
-      [
-        script("s1", { settings: { command: "echo", args: ["one"] } }),
-        gate("g1"),
-        script("s2", { settings: { command: "echo", args: ["two"] } }),
-      ],
+      [agent("s1"), gate("g1"), agent("s2")],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
     repo.path,

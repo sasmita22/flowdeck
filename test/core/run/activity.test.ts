@@ -588,7 +588,7 @@ describe("node events in the feed", () => {
     const { changed } = foldNodeEvent(
       emptyFeed,
       { nodeId: "s1", at: 9, turnNodes },
-      { kind: "failed", payload: { message: "s1 failed: exit code 3" } },
+      { kind: "failed", payload: { message: "s1 failed: rejected: wrong scope" } },
     );
 
     expect(changed).toEqual({
@@ -596,7 +596,7 @@ describe("node events in the feed", () => {
       nodeId: "s1",
       at: 9,
       kind: "failure",
-      summary: "Script exited with code 3",
+      summary: "Rejected: wrong scope",
     });
   });
 });

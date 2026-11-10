@@ -5,7 +5,9 @@ description: How to write a build's subagent that another step can hand work to 
 
 # Write an Agent
 
-A build agent is dispatched by its full name, `<build-name>:<piece>`. Its file is all it knows. The prompt it gets starts with `NODE <nodeId>`, may list `You are given: <files>` and `Write: <files>` for that node, and ends with `Go` (or `Go.` and one item inside a For each). A merged agent serves several nodes, each passing its own files this way.
+A build agent is dispatched by its full name, `<prefix>:<piece>`, where `<prefix>` is the build name. Its file is all it knows. The prompt it gets starts with `NODE <nodeId>`, may list `You are given: <files>` and `Write: <files>` for that node, and ends with `Go` (or `Go.` and one item inside a For each). A merged agent serves several nodes, each passing its own files this way.
+
+Write the agent from its node's `needs` entry in `build-report.json`, which `analyze-job` wrote: every `Input:` item goes in Inputs, every `Output:` item in Output, every `Tool:` item is one the agent can use (see Frontmatter), and every `Procedure:` item in Steps.
 
 A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
 
@@ -30,9 +32,14 @@ Keep the five sections code laid down, in this order:
 - `## Output`: the files it writes (the prompt's `Write:` line) and their pinned shape: headings or fields, in order, that the next node reads as is. Start from the file's template in `plugin/templates/` when one exists; where the node's own instructions narrow the file's form, the node's own instructions win. In a merged piece where the nodes' output layouts differ, add one line per node, `NODE <id>: <layout>`, so each node keeps its own layout.
 - `## When to stop`: the node's done condition; a stuck path or a retry cap only where the node's own text states one.
 
+## Shared pieces
+
+Each `SHARED <prefix>:<name>` line in your prompt, and each `build-report.json` `shared` entry whose `usedBy` holds the agent's node, names a shared piece that does one of its procedures. Replace that procedure's steps with one step: run `<prefix>:<name>` with the `Skill` tool, then use what it leaves. Keep the steps that differ for this agent. Never restate the shared piece's steps.
+
 ## Frontmatter
 
 - `tools`: keep what the node set. If the node set none and the steps need fewer than every tool, list the fewest that do the job, each one in `settings.json` `permissions.allow`. A tool the steps need that the allow list lacks is never a question: write the piece with the allowed tools.
+- An agent that runs a shared piece and has a `tools:` line lists `Skill` in it.
 - `model`: keep what the node set; never add one.
 - Never change `name`.
 
@@ -43,4 +50,6 @@ Keep the five sections code laid down, in this order:
 - [ ] Role, Inputs, Steps, Output and When to stop are all filled; Output pins a shape.
 - [ ] Every tool is in `settings.json` `permissions.allow`.
 - [ ] The draft marker line is gone and the body says more than the draft.
-- [ ] Every `<build-name>:<piece>` names a piece of this build.
+- [ ] Every `needs` item of the node is in Inputs, Output, `tools` or Steps.
+- [ ] Every shared piece the agent uses is run with the `Skill` tool as `<prefix>:<name>`, and `Skill` is in its `tools:` line when it has one.
+- [ ] Every `<prefix>:<piece>` names a piece of this build or a shared piece in `shared`.

@@ -5,15 +5,7 @@ import {
   parallelSections,
   unlaunched,
 } from "../../../../src/core/nodes/fork/execute.js";
-import {
-  agent,
-  flow,
-  fork,
-  join,
-  loop,
-  prompt,
-  thenWire,
-} from "../../../fixtures/flow-builders.js";
+import { agent, flow, fork, gate, join, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const sectionsOf = (nodes: unknown[], wires: unknown[]) => {
   const parsed = flow(nodes, wires);
@@ -38,7 +30,7 @@ describe("parallelSections", () => {
   });
 
   it("finds nothing in a flow with no fork or join", () => {
-    expect(sectionsOf([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")])).toEqual({
+    expect(sectionsOf([agent("p1"), agent("p2")], [thenWire("p1", "p2")])).toEqual({
       sections: [],
       problems: [],
     });
@@ -50,7 +42,7 @@ describe("parallelSections", () => {
 
   it("names a branch that is not an agent", () => {
     expect(
-      problemNodes([fork("f"), agent("a1"), prompt("p2"), join("j")], around(["a1", "p2"])),
+      problemNodes([fork("f"), agent("a1"), gate("p2"), join("j")], around(["a1", "p2"])),
     ).toEqual(["p2"]);
   });
 
@@ -72,7 +64,7 @@ describe("parallelSections", () => {
   it("names a branch with a second in-wire", () => {
     expect(
       problemNodes(
-        [prompt("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
+        [agent("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
         [...around(["a1", "a2"]), thenWire("p", "a2")],
       ),
     ).toEqual(["a2"]);
@@ -81,7 +73,7 @@ describe("parallelSections", () => {
   it("names a branch with a second out-wire", () => {
     expect(
       problemNodes(
-        [fork("f"), agent("a1"), agent("a2"), join("j"), prompt("p")],
+        [fork("f"), agent("a1"), agent("a2"), join("j"), agent("p")],
         [...around(["a1", "a2"]), thenWire("a2", "p")],
       ),
     ).toEqual(["a2"]);
@@ -99,7 +91,7 @@ describe("parallelSections", () => {
   it("names the fork when a branch leads into no join", () => {
     expect(
       problemNodes(
-        [fork("f"), agent("a1"), agent("a2"), join("j"), prompt("p")],
+        [fork("f"), agent("a1"), agent("a2"), join("j"), agent("p")],
         [thenWire("f", "a1"), thenWire("f", "a2"), thenWire("a1", "j"), thenWire("a2", "p")],
       ),
     ).toContain("f");
@@ -108,7 +100,7 @@ describe("parallelSections", () => {
   it("names a join with an in-wire from a node that is not one of the fork's branches", () => {
     expect(
       problemNodes(
-        [prompt("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
+        [agent("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
         [...around(["a1", "a2"]), thenWire("p", "j")],
       ),
     ).toEqual(["j"]);
@@ -132,7 +124,7 @@ describe("parallelSections", () => {
   });
 
   it("names a join that no fork reaches", () => {
-    expect(problemNodes([prompt("p"), join("j")], [thenWire("p", "j")])).toEqual(["j"]);
+    expect(problemNodes([agent("p"), join("j")], [thenWire("p", "j")])).toEqual(["j"]);
   });
 
   it.each(["f", "a1", "j"])("names %s when it sits inside a loop", (inLoop) => {

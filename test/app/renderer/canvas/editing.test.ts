@@ -14,10 +14,9 @@ import {
   flow,
   forEach,
   fork,
+  gate,
   hardstop,
   loop,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../../../fixtures/flow-builders.js";
@@ -37,9 +36,9 @@ const ends = (current: Flow) => current.wires.map((wire) => `${wire.from.node}>$
 const chain = () =>
   flow(
     [
-      { ...at(prompt("A"), 0, 0), label: "Plan" },
-      { ...at(script("B"), 200, 0), label: "Test" },
-      { ...at(prompt("C"), 400, 0), label: "Fix" },
+      { ...at(agent("A"), 0, 0), label: "Plan" },
+      { ...at(agent("B"), 200, 0), label: "Test" },
+      { ...at(agent("C"), 400, 0), label: "Fix" },
     ],
     [thenWire("A", "B"), thenWire("B", "C"), fileWire("A", "C", "plan.md")],
   );
@@ -93,7 +92,7 @@ describe("selecting and deleting wires", () => {
   });
 
   it("forgets a selected wire that an undo takes away", () => {
-    const store = loaded(flow([prompt("A"), script("B")], []));
+    const store = loaded(flow([agent("A"), agent("B")], []));
     store.getState().connect({ node: "A", port: "out" }, { node: "B", port: "in" });
     store.getState().selectWires([edgeId(wireAt(store.getState().flow, 0))]);
 
@@ -110,18 +109,18 @@ describe("refused connections", () => {
       flow(
         [
           { ...fork("fork-1"), label: "Fork" },
-          { ...prompt("prompt-1"), label: "Prompt" },
+          { ...gate("gate-1"), label: "Check" },
         ],
         [],
       ),
     );
 
     expect(
-      store.getState().connect({ node: "fork-1", port: "out" }, { node: "prompt-1", port: "in" }),
+      store.getState().connect({ node: "fork-1", port: "out" }, { node: "gate-1", port: "in" }),
     ).toBe(false);
 
     expect(store.getState().message).toBe(
-      "Can't connect Fork to Prompt: Prompt is a parallel branch that is not an Agent.",
+      "Can't connect Fork to Check: Check is a parallel branch that is not an Agent.",
     );
     expect(store.getState().flow.wires).toEqual([]);
   });
@@ -157,7 +156,7 @@ describe("refused connections", () => {
 
 describe("deleting a hard stop", () => {
   it("deletes a hard stop added by mistake, and undo brings it back", () => {
-    const store = loaded(flow([prompt("P"), hardstop("H")], [thenWire("P", "H")]));
+    const store = loaded(flow([agent("P"), hardstop("H")], [thenWire("P", "H")]));
     const before = store.getState().flow;
 
     store.getState().deleteNodes(["H"]);
@@ -171,7 +170,7 @@ describe("deleting a hard stop", () => {
 
   it("deletes a Loop together with the hard stop in its body, as one undo step", () => {
     const store = loaded(
-      flow([loop("L"), prompt("P", { parent: "L" }), hardstop("H", { parent: "L" })], []),
+      flow([loop("L"), agent("P", { parent: "L" }), hardstop("H", { parent: "L" })], []),
     );
     const before = store.getState().flow;
 
@@ -192,11 +191,11 @@ describe("copy, paste and duplicate", () => {
     store.getState().paste();
 
     const { flow: after, selection } = store.getState();
-    expect(ids(after)).toEqual(["A", "B", "C", "prompt-1", "script-1"]);
-    expect(nodeOf(after, "prompt-1")).toMatchObject({ label: "Plan", position: { x: 32, y: 32 } });
-    expect(nodeOf(after, "script-1")).toMatchObject({ label: "Test", position: { x: 232, y: 32 } });
-    expect(ends(after)).toEqual(["A>B", "B>C", "A>C", "prompt-1>script-1"]);
-    expect(selection).toEqual(["prompt-1", "script-1"]);
+    expect(ids(after)).toEqual(["A", "B", "C", "agent-1", "agent-2"]);
+    expect(nodeOf(after, "agent-1")).toMatchObject({ label: "Plan", position: { x: 32, y: 32 } });
+    expect(nodeOf(after, "agent-2")).toMatchObject({ label: "Test", position: { x: 232, y: 32 } });
+    expect(ends(after)).toEqual(["A>B", "B>C", "A>C", "agent-1>agent-2"]);
+    expect(selection).toEqual(["agent-1", "agent-2"]);
     expect(store.getState().undoStack).toHaveLength(1);
     store.getState().undo();
     expect(ids(store.getState().flow)).toEqual(["A", "B", "C"]);
@@ -210,32 +209,32 @@ describe("copy, paste and duplicate", () => {
     store.getState().paste();
     store.getState().paste();
 
-    expect(nodeOf(store.getState().flow, "prompt-2")?.position).toEqual({ x: 64, y: 64 });
+    expect(nodeOf(store.getState().flow, "agent-2")?.position).toEqual({ x: 64, y: 64 });
   });
 
   it("copies a Loop with its body, giving the body the new Loop as parent", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0), at(prompt("P", { parent: "L" }), 0, 80)], []));
+    const store = loaded(flow([at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80)], []));
     store.getState().select(["L"]);
 
     store.getState().copy();
     store.getState().paste();
 
     expect(nodeOf(store.getState().flow, "loop-1")?.parent).toBeUndefined();
-    expect(nodeOf(store.getState().flow, "prompt-1")).toMatchObject({
+    expect(nodeOf(store.getState().flow, "agent-1")).toMatchObject({
       parent: "loop-1",
       position: { x: 32, y: 112 },
     });
   });
 
   it("pastes into a selected Loop", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0), at(prompt("P"), 400, 0)], []));
+    const store = loaded(flow([at(loop("L"), 0, 0), at(agent("P"), 400, 0)], []));
     store.getState().select(["P"]);
     store.getState().copy();
 
     store.getState().select(["L"]);
     store.getState().paste();
 
-    expect(nodeOf(store.getState().flow, "prompt-1")?.parent).toBe("L");
+    expect(nodeOf(store.getState().flow, "agent-1")?.parent).toBe("L");
   });
 
   it("refuses to paste a Trigger into a Loop and says why", () => {
@@ -261,7 +260,7 @@ describe("copy, paste and duplicate", () => {
     expect(selection).toEqual(["loop-1"]);
     expect(message).toBeNull();
     expect(selectNodeIssues(after)["loop-1"]).toEqual(
-      expect.arrayContaining([expect.stringMatching(/no prompt or agent in its body/i)]),
+      expect.arrayContaining([expect.stringMatching(/no agent in its body/i)]),
     );
   });
 
@@ -271,7 +270,7 @@ describe("copy, paste and duplicate", () => {
         [
           at(loop("outer"), 0, 0),
           at(loop("inner", { parent: "outer" }), 0, 80),
-          at(prompt("P", { parent: "inner" }), 0, 160),
+          at(agent("P", { parent: "inner" }), 0, 160),
         ],
         [],
       ),
@@ -288,7 +287,7 @@ describe("copy, paste and duplicate", () => {
 
   it("copies notes along with nodes, under new note ids", () => {
     const store = loaded({
-      ...flow([prompt("A")], []),
+      ...flow([agent("A")], []),
       notes: [
         { id: "n1", text: "why", position: { x: 5, y: 5 }, size: { width: 160, height: 90 } },
       ],
@@ -325,8 +324,8 @@ describe("copy, paste and duplicate", () => {
     store.getState().duplicate();
     store.getState().paste();
 
-    expect(ids(store.getState().flow)).toEqual(["A", "B", "C", "script-1", "prompt-1"]);
-    expect(nodeOf(store.getState().flow, "prompt-1")?.label).toBe("Fix");
+    expect(ids(store.getState().flow)).toEqual(["A", "B", "C", "agent-1", "agent-2"]);
+    expect(nodeOf(store.getState().flow, "agent-2")?.label).toBe("Fix");
   });
 });
 
@@ -338,8 +337,8 @@ describe("frame only", () => {
           ...at(loop("L", { settings: { cap: 5, condition: "tests pass" } }), 0, 0),
           label: "Retry",
         },
-        at(prompt("P", { parent: "L" }), 0, 80),
-        at(script("S", { parent: "L" }), 200, 80),
+        at(agent("P", { parent: "L" }), 0, 80),
+        at(agent("S", { parent: "L" }), 200, 80),
       ],
       [thenWire("P", "S")],
     );
@@ -370,9 +369,9 @@ describe("frame only", () => {
       flow(
         [
           at(forEach("F", { file: "units.md" }, "each unit"), 0, 0),
-          at(prompt("P", { parent: "F" }), 0, 80),
+          at(agent("P", { parent: "F" }), 0, 80),
           at(loop("inner", { parent: "F" }), 0, 160),
-          at(prompt("Q", { parent: "inner" }), 0, 240),
+          at(agent("Q", { parent: "inner" }), 0, 240),
         ],
         [thenWire("P", "inner")],
       ),
@@ -409,9 +408,9 @@ describe("frame only", () => {
     store.getState().duplicate();
 
     const after = store.getState().flow;
-    expect(ids(after)).toEqual(["L", "P", "S", "loop-1", "prompt-1", "script-1"]);
-    expect(childrenOf(after, "loop-1")).toEqual(["prompt-1", "script-1"]);
-    expect(ends(after)).toEqual(["P>S", "prompt-1>script-1"]);
+    expect(ids(after)).toEqual(["L", "P", "S", "loop-1", "agent-1", "agent-2"]);
+    expect(childrenOf(after, "loop-1")).toEqual(["agent-1", "agent-2"]);
+    expect(ends(after)).toEqual(["P>S", "agent-1>agent-2"]);
   });
 });
 

@@ -9,7 +9,6 @@ import {
   loop,
   onMainFlow,
   output,
-  prompt,
   thenWire,
   trigger,
   wire,
@@ -67,12 +66,12 @@ describe("validate", () => {
         trigger("start"),
         loop("retry", { settings: { cap: 0, onCap: "fail" } }),
         agent("build", { settings: { instructions: "   " } }),
-        prompt("stray"),
+        agent("stray"),
         forEach("each"),
         agent("each-a", { parent: "each" }),
-        prompt("each-p", { parent: "each" }),
+        agent("each-p", { parent: "each" }),
         { ...forEach("inner"), parent: "retry" },
-        prompt("inner-p", { parent: "inner" }),
+        agent("inner-p", { parent: "inner" }),
         output("stop"),
       ],
       [
@@ -107,7 +106,7 @@ describe("validate", () => {
     ]);
   });
 
-  it.each(["all-types.json", "loop-review.json", "three-prompts.json"])(
+  it.each(["all-types.json", "loop-review.json", "three-agents.json"])(
     "reports only the missing repository for examples/%s",
     (name) => {
       expect(validate(parseFlow(readJson(examplesDir, name))).map(({ rule }) => rule)).toEqual([
@@ -117,10 +116,10 @@ describe("validate", () => {
   );
 
   it("never reports a note, even one that reuses a node's id or has no text", () => {
-    const valid = parseFlow(readJson(examplesDir, "three-prompts.json"));
+    const valid = parseFlow(readJson(examplesDir, "three-agents.json"));
     const broken = parseFlow(readJson(brokenDir, "loop-cap.json"));
     const [firstNode] = valid.nodes;
-    if (firstNode === undefined) throw new Error("three-prompts.json has no nodes");
+    if (firstNode === undefined) throw new Error("three-agents.json has no nodes");
     const notes = [
       { id: firstNode.id, text: "", position: { x: 0, y: 0 }, size: { width: 1, height: 1 } },
       { id: "n 1!", text: "x", position: { x: -5, y: -5 }, size: { width: 200, height: 100 } },

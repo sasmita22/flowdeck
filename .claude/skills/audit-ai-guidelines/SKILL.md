@@ -100,7 +100,7 @@ path. Every test that pins the number or names of skills is updated with it.
 
 Rewording only. These stay as they are:
 
-- the build-turn line grammar (`PIECE`, `KIND`, `REPO`, `FAILED`, `QUESTION`, `ANSWER` blocks);
+- the build-turn line grammar (`PIECE`, `KIND`, `REPO`, `FAILED`, `QUESTION`, `ANSWER`, `SHARED` blocks);
 - the `build-report.json` fields;
 - the verdict reply, a final json fence holding `{"done": bool}`;
 - the build-check strings: the scope line, the standard rules text and version, the hand-off

@@ -37,22 +37,6 @@ const applied = (node: Node, path: string[], value: Parameters<typeof applyNodeS
 describe("describeNodeFields", () => {
   it.each<[NodeType, string[][]]>([
     [
-      "prompt",
-      [
-        ["multiline", "instructions", "node-setting-instructions"],
-        ["multiline", "expectedOutput", "node-setting-expected-output"],
-      ],
-    ],
-    [
-      "script",
-      [
-        ["text", "command", "node-setting-command"],
-        ["list", "args", "node-setting-args"],
-        ["list", "successCodes", "node-setting-success-codes"],
-        ["list", "retryCodes", "node-setting-retry-codes"],
-      ],
-    ],
-    [
       "agent",
       [
         ["text", "role", "node-setting-role"],
@@ -207,12 +191,7 @@ describe("describeNodeFields", () => {
 
 describe("applyNodeSetting", () => {
   it.each<[NodeType, string[], Parameters<typeof applyNodeSetting>[2], Record<string, unknown>]>([
-    ["prompt", ["instructions"], "Line one\nLine two", { instructions: "Line one\nLine two" }],
-    ["prompt", ["expectedOutput"], "A plan", { instructions: "", expectedOutput: "A plan" }],
-    ["script", ["command"], "npm", { command: "npm" }],
-    ["script", ["args"], "test\n\n--run\n", { command: "", args: ["test", "--run"] }],
-    ["script", ["successCodes"], "0\n\n3\n", { command: "", successCodes: [0, 3] }],
-    ["script", ["retryCodes"], "75", { command: "", retryCodes: [75] }],
+    ["agent", ["instructions"], "Line one\nLine two", { instructions: "Line one\nLine two" }],
     ["agent", ["tools"], "Read\nBash", { tools: ["Read", "Bash"] }],
     ["gate", ["shown"], "Check the plan", { shown: "Check the plan", skippable: false }],
     ["gate", ["skippable"], true, { shown: "", skippable: true }],
@@ -243,8 +222,6 @@ describe("applyNodeSetting", () => {
     ["loop", ["onCap"], "retry", "Choose what happens at the round limit"],
     ["join", ["wait"], "any", "Choose when to continue"],
     ["join", ["onBranchFail"], "retry", "Choose what happens when a branch fails"],
-    ["script", ["successCodes"], "0\nok", "Exit codes are whole numbers"],
-    ["script", ["retryCodes"], "2.5", "Exit codes are whole numbers"],
   ])("refuses an invalid %s %s and says why", (type, path, value, reason) => {
     const result = applyNodeSetting(nodeOf(type), path, value);
 

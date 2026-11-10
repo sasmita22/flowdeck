@@ -27,7 +27,7 @@ export function pieceNames(flow: Flow): ReadonlyMap<string, string> {
   const taken = new Set([orchestrator]);
   const names = new Map<string, string>();
   for (const node of flow.nodes) {
-    if (node.type !== "agent" && node.type !== "prompt") continue;
+    if (node.type !== "agent") continue;
     const name = firstFree(baseName(node), taken);
     taken.add(name);
     names.set(node.id, name);

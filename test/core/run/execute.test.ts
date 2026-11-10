@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WaitReply } from "../../../src/ports/waiter.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import { build, layDown, lockBuild } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit, reportPath } from "../../../src/core/compiler/emit.js";
@@ -12,6 +12,7 @@ import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { buildRecord } from "../../../src/core/compiler/record.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
+import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { decideResume } from "../../../src/core/run/resume.js";
 import {
   execute,
@@ -21,32 +22,23 @@ import {
   noClaude,
   runSocketPath,
 } from "../../../src/core/run/execute.js";
-import type { ScriptResult } from "../../../src/core/run/runner.js";
 import type { BuildRecord } from "../../../src/core/run/store.js";
 import type { PermissionDecision } from "../../../src/ports/permission-source.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
-import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
-import { agent, onMainFlow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const fs = new NodeFileSystem();
 
-const scriptOnly = () =>
-  onMainFlow(
-    [
-      script("write", {
-        settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
-      }),
-      script("check", { settings: { command: "test", args: ["-f", "side-effect.txt"] } }),
-    ],
-    [thenWire("write", "check")],
-  );
+const gatesOnly = () => onMainFlow([gate("write"), gate("check")], [thenWire("write", "check")]);
+
+const approve: WaitReply = { decision: "approve" };
 
 const manifestWith = (types: string[]) =>
   ({
@@ -80,7 +72,7 @@ describe("the core run path", () => {
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo();
-    const result = await build(scriptOnly(), {
+    const result = await build(gatesOnly(), {
       fs,
       home,
       workspace: { id: buildId, name: "fix-login", repo: "/work/repo", base: "main", values: {} },
@@ -119,7 +111,9 @@ describe("the core run path", () => {
     const manifestWithoutHash = {
       version: 1,
       session: { name: "main", workingFolder: { kind: "worktree", branch: "main" } },
-      nodes: [{ id: "s", type: "script", label: "s", settings: { command: "npm" } }],
+      nodes: [
+        { id: "s", type: "gate", label: "s", settings: { shown: "Check", skippable: false } },
+      ],
       wires: [],
       files: {},
     };
@@ -158,7 +152,7 @@ describe("the core run path", () => {
     });
 
     it("keeps each node's piece and the kit version a build was made with", async () => {
-      const files = emit(lower(scriptOnly(), { name: "fix-login", values: {} }), {
+      const files = emit(lower(gatesOnly(), { name: "fix-login", values: {} }), {
         repo: "/work/repo",
         base: "main",
       }).map((file) => {
@@ -300,7 +294,7 @@ describe("the core run path", () => {
   });
 
   describe("execute", () => {
-    it("runs a script-only build in the repo and records it done", async () => {
+    it("runs a build with no Claude turn and records it done", async () => {
       const build = await loaded();
       const store = new FakeStore();
       const events = startEvents();
@@ -316,11 +310,10 @@ describe("the core run path", () => {
       const code = await execute(
         {
           fs,
-          scripts: new NodeProcessRunner(),
-          waiter: new FakeWaiter([]),
+          waiter: new FakeWaiter([approve, approve]),
           startEvents: events.startEvents,
           openSession: async () => {
-            throw new Error("Claude must not start for a script-only flow");
+            throw new Error("Claude must not start for a flow with no Claude turn");
           },
           store,
           onChange: (line: string) => lines.push(line),
@@ -337,25 +330,18 @@ describe("the core run path", () => {
       );
 
       expect(code).toBe(0);
-      expect(await readFile(join(repo.path, "side-effect.txt"), "utf8")).toBe("ran\n");
-      expect(lines).toEqual([
-        "write started",
-        "write done",
-        "check started",
-        "check done",
-        "stop done",
-      ]);
+      expect(lines).toEqual(["write approved", "check approved", "stop done"]);
       expect(events.stops()).toBe(1);
       expect(store.runs[0]?.status).toBe("done");
     });
 
-    it("records the run stopped when interrupted while a script runs", async () => {
+    it("records the run stopped when interrupted while a Gate waits", async () => {
       const build = await loaded();
       const store = new FakeStore();
       const events = startEvents();
       let interrupt: (code: number) => void = () => undefined;
-      let release: (result: ScriptResult) => void = () => undefined;
-      const blocked = new Promise<ScriptResult>((resolve) => (release = resolve));
+      let release: (reply: WaitReply) => void = () => undefined;
+      const blocked = new Promise<WaitReply>((resolve) => (release = resolve));
       const { id } = store.createRun({
         buildDir: dir,
         inputs: {},
@@ -367,16 +353,15 @@ describe("the core run path", () => {
       const code = await execute(
         {
           fs,
-          scripts: {
-            run: () => {
+          waiter: {
+            wait: () => {
               interrupt(130);
               return blocked;
             },
           },
-          waiter: new FakeWaiter([]),
           startEvents: events.startEvents,
           openSession: async () => {
-            throw new Error("Claude must not start for a script-only flow");
+            throw new Error("Claude must not start for a flow with no Claude turn");
           },
           store,
           onChange: () => undefined,
@@ -395,7 +380,7 @@ describe("the core run path", () => {
           open: async () => noClaude,
         },
       );
-      release({ code: 0, stdout: "", stderr: "" });
+      release(approve);
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       expect(code).toBe(130);
@@ -403,214 +388,13 @@ describe("the core run path", () => {
     });
   });
 
-  it("kills the running script on a stop, and writes nothing more to the run", async () => {
-    const build = await loaded();
-    const store = new FakeStore();
-    let interrupt: (code: number) => void = () => undefined;
-    const { id } = store.createRun({
-      buildDir: dir,
-      inputs: {},
-      nodeIds: build.nodes.map((node) => node.id),
-      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildId,
-    });
-    const pidFile = join(repo.path, "pid");
-    const runner = new NodeProcessRunner();
-    const started = Date.now();
-
-    const code = await execute(
-      {
-        fs,
-        scripts: {
-          run: (_command, _args, cwd, signal) => {
-            setTimeout(() => interrupt(143), 300);
-            return runner.run("sh", ["-c", `echo $$ > ${pidFile}; exec sleep 30`], cwd, signal);
-          },
-        },
-        waiter: new FakeWaiter([]),
-        startEvents: startEvents().startEvents,
-        openSession: async () => {
-          throw new Error("Claude must not start for a script-only flow");
-        },
-        store,
-        onChange: () => undefined,
-        onInterrupt: (handler: (exitCode: number) => void) => {
-          interrupt = handler;
-          return () => undefined;
-        },
-      },
-      {
-        store,
-        runId: id,
-        manifest: build,
-        cwd: repo.path,
-        auto: false,
-        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
-        open: async () => noClaude,
-      },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const pid = Number(await readFile(pidFile, "utf8"));
-    expect(code).toBe(143);
-    expect(Date.now() - started).toBeLessThan(5000);
-    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
-    expect(store.findRun(id)?.status).toBe("stopped");
-    expect(store.events(id).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
-      "start running",
-      "start done",
-      "write running",
-    ]);
-  });
-
-  it("hands each script's output to onOutput with its node", async () => {
-    const build = await loaded();
-    const store = new FakeStore();
-    const outputs: string[] = [];
-    const { id } = store.createRun({
-      buildDir: dir,
-      inputs: {},
-      nodeIds: build.nodes.map((node) => node.id),
-      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildId,
-    });
-
-    await execute(
-      {
-        fs,
-        scripts: { run: async () => ({ code: 0, stdout: "hi\n", stderr: "" }) },
-        waiter: new FakeWaiter([]),
-        startEvents: startEvents().startEvents,
-        openSession: async () => {
-          throw new Error("Claude must not start for a script-only flow");
-        },
-        store,
-        onChange: () => undefined,
-        onOutput: (nodeId, stream, text) => outputs.push(`${nodeId} ${stream} ${text}`),
-      },
-      {
-        store,
-        runId: id,
-        manifest: build,
-        cwd: repo.path,
-        auto: false,
-        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
-        open: async () => noClaude,
-      },
-    );
-
-    expect(outputs).toEqual(["write stdout hi\n", "check stdout hi\n"]);
-  });
-
-  it("runs each script under a job in the run's script folder, and rejoins one there", async () => {
-    const build = await loaded();
-    const store = new FakeStore();
-    const { id } = store.createRun({
-      buildDir: dir,
-      inputs: {},
-      nodeIds: build.nodes.map((node) => node.id),
-      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildId,
-    });
-    store.append(id, "write", { kind: "running" });
-    const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
-    const jobs = "/fd/runs/r1/scripts";
-    const writeJob = `${jobs}/write-${store.events(id)[0]?.seq}`;
-    scripts.finishes(writeJob, { code: 0, stdout: "", stderr: "" });
-
-    const code = await execute(
-      {
-        fs,
-        scripts,
-        waiter: new FakeWaiter([]),
-        startEvents: startEvents().startEvents,
-        openSession: async () => {
-          throw new Error("Claude must not start for a script-only flow");
-        },
-        store,
-        onChange: () => undefined,
-      },
-      {
-        store,
-        runId: id,
-        manifest: build,
-        cwd: repo.path,
-        auto: false,
-        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
-        open: async () => noClaude,
-        scriptJobs: jobs,
-        actions: async () => ({ write: { kind: "wait" } }),
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(scripts.rejoins).toEqual([writeJob]);
-    expect(scripts.calls.map((call) => call.job)).toEqual([
-      expect.stringMatching(new RegExp(`^${jobs}/check-\\d+$`)),
-    ]);
-  });
-
-  it("still rejoins a script when a Stop hook lands while the run is read back", async () => {
-    const build = await loaded();
-    const store = new FakeStore();
-    const { id } = store.createRun({
-      buildDir: dir,
-      inputs: {},
-      nodeIds: build.nodes.map((node) => node.id),
-      session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
-      buildId,
-    });
-    store.append(id, "write", { kind: "running" });
-    const scripts = new FakeProcessRunner([{ code: 0, stdout: "", stderr: "" }]);
-    const jobs = "/fd/runs/r1/scripts";
-    const writeJob = `${jobs}/write-${store.events(id)[0]?.seq}`;
-    scripts.finishes(writeJob, { code: 0, stdout: "", stderr: "" });
-    const events = new FakeEventSource();
-    let reads = 0;
-
-    const code = await execute(
-      {
-        fs,
-        scripts,
-        waiter: new FakeWaiter([]),
-        startEvents: async () => ({ events, stop: async () => undefined }),
-        openSession: async () => {
-          throw new Error("execute opens the session through the execution");
-        },
-        store,
-        onChange: () => undefined,
-      },
-      {
-        store,
-        runId: id,
-        manifest: build,
-        cwd: repo.path,
-        auto: false,
-        socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
-        open: async () => ({ ...noClaude, sessionId: "c1" }),
-        scriptJobs: jobs,
-        actions: async () => {
-          if (reads++ === 0) events.publish({ kind: "Stop", sessionId: "c1", payload: {} });
-          return { write: { kind: "wait" } };
-        },
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(reads).toBe(2);
-    expect(scripts.rejoins).toEqual([writeJob]);
-    expect(scripts.calls.map((call) => call.job)).toEqual([
-      expect.stringMatching(new RegExp(`^${jobs}/check-\\d+$`)),
-    ]);
-  });
-
   describe("needsClaude", () => {
-    it("is true for a manifest with a prompt node", () => {
-      expect(needsClaude(manifestWith(["script", "prompt"]))).toBe(true);
+    it("is true for a manifest with an agent node", () => {
+      expect(needsClaude(manifestWith(["gate", "agent"]))).toBe(true);
     });
 
-    it("is false for scripts only", () => {
-      expect(needsClaude(manifestWith(["script", "script"]))).toBe(false);
+    it("is false for gates and asks only", () => {
+      expect(needsClaude(manifestWith(["gate", "ask"]))).toBe(false);
     });
 
     it("is true for a hard stop with a condition to check, and false for one without", () => {
@@ -645,13 +429,31 @@ describe("the core run path", () => {
 
 describe("execute wiring", () => {
   const claudeSessionId = "c1";
-  const promptBuild = (budget?: number) =>
+  const agentBuild = (budget?: number) =>
     ({
       hash: "abc123",
       prefix: "fix-login",
       session: budget === undefined ? {} : { budget },
-      nodes: [{ id: "n1", type: "prompt", label: "n1", settings: { instructions: "Do it." } }],
+      nodes: [
+        {
+          id: "n1",
+          type: "agent",
+          label: "n1",
+          settings: { role: "", instructions: "Do it.", model: "sonnet", tools: [] },
+        },
+      ],
     }) as unknown as LoadedBuild;
+  const n1Done = {
+    tool_name: "Agent",
+    tool_input: { subagent_type: "fix-login:n1", prompt: "NODE n1\nGo" },
+    tool_use_id: "toolu-n1",
+    tool_response: {
+      status: "completed",
+      agentId: "agent-n1",
+      agentType: "fix-login:n1",
+      content: [],
+    },
+  };
   const twoDollars = [
     {
       messageId: "m1",
@@ -689,7 +491,6 @@ describe("execute wiring", () => {
     const code = await execute(
       {
         fs,
-        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
         waiter: options.waiter,
         usage: options.usage,
         ...(options.compacts === true ? { compactions: options.usage } : {}),
@@ -719,6 +520,7 @@ describe("execute wiring", () => {
                 return;
               }
               await options.onSend?.({ events, permissions });
+              events.publish({ kind: "PostToolUse", sessionId: claudeSessionId, payload: n1Done });
               events.publish({ kind: "Stop", sessionId: claudeSessionId, payload: {} });
             },
           },
@@ -731,7 +533,7 @@ describe("execute wiring", () => {
 
   it("stops a session whose start finishes after the run was stopped, and sends nothing", async () => {
     const store = new FakeStore();
-    const manifest = promptBuild();
+    const manifest = agentBuild();
     const log: string[] = [];
     let interrupt: (code: number) => void = () => undefined;
     let finishStart: () => void = () => undefined;
@@ -747,7 +549,6 @@ describe("execute wiring", () => {
     const code = await execute(
       {
         fs,
-        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
         waiter: new FakeWaiter([]),
         startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
         openSession: async () => {
@@ -799,12 +600,12 @@ describe("execute wiring", () => {
     expect(store.findRun(id)?.status).toBe("stopped");
   });
 
-  it("pauses at the manifest's budget before sending the first prompt", async () => {
+  it("pauses at the manifest's budget before sending the first agent", async () => {
     const usage = new FakeUsageSource();
     usage.setEntries(claudeSessionId, twoDollars);
     const waiter = new FakeWaiter([{ decision: "stop", reason: "over" }]);
 
-    const { code, sends } = await executeWith({ manifest: promptBuild(1), waiter, usage });
+    const { code, sends } = await executeWith({ manifest: agentBuild(1), waiter, usage });
 
     expect(waiter.calls).toEqual([{ nodeId: "n1", kind: "budget", spend: 2, budget: 1 }]);
     expect(sends).toEqual([]);
@@ -818,13 +619,16 @@ describe("execute wiring", () => {
     ]);
 
     const { code, sends } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter: new FakeWaiter([]),
       usage,
       compacts: true,
     });
 
-    expect(sends).toEqual(["/compact", "/fix-login:n1 NODE n1"]);
+    expect(sends).toEqual([
+      "/compact",
+      agentTurnText("fix-login", "n1", { id: "n1", given: [], writes: [] }),
+    ]);
     expect(code).toBe(0);
   });
 
@@ -833,7 +637,7 @@ describe("execute wiring", () => {
     const decisions: PermissionDecision[] = [];
 
     const { code } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter,
       usage: new FakeUsageSource(),
       onSend: async ({ permissions }) => {
@@ -857,7 +661,7 @@ describe("execute wiring", () => {
     let readsDuringTurn = -1;
 
     const { code } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter: new FakeWaiter([]),
       usage,
       onSend: async () => {
@@ -875,7 +679,7 @@ describe("execute wiring", () => {
     usage.setEntries(claudeSessionId, twoDollars);
 
     const { store, runId } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter: new FakeWaiter([]),
       usage,
     });
@@ -889,7 +693,7 @@ describe("execute wiring", () => {
     usage.setEntries(claudeSessionId, twoDollars);
 
     const { store, runId } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter: new FakeWaiter([]),
       usage,
     });
@@ -912,7 +716,7 @@ describe("execute wiring", () => {
     };
 
     const { store, runId, code, lines } = await executeWith({
-      manifest: promptBuild(),
+      manifest: agentBuild(),
       waiter: new FakeWaiter([]),
       usage,
     });
@@ -942,7 +746,7 @@ describe("AT-19: a build that named no pieces", () => {
     const workspace = { id, name: "fix-login", repo: "/work/repo", base: "main", values: {} };
     const laid = await layDown(
       onMainFlow(
-        [prompt("p1"), agent("a1"), prompt("p2")],
+        [agent("p1"), agent("a1"), agent("p2")],
         [thenWire("p1", "a1"), thenWire("a1", "p2")],
       ),
       { home, workspace },
@@ -975,9 +779,9 @@ describe("AT-19: a build that named no pieces", () => {
     const turns = [
       {
         userText:
-          "<command-message>fix-login:p1</command-message> <command-name>/fix-login:p1</command-name>",
+          'Use the Agent tool with subagent_type "fix-login:p1" and the prompt "Go". Then reply DONE.',
         ended: true,
-        lastAssistantText: "P1",
+        lastAssistantText: "DONE",
       },
       {
         userText:
@@ -1004,7 +808,6 @@ describe("AT-19: a build that named no pieces", () => {
     const code = await execute(
       {
         fs,
-        scripts: { run: async () => ({ code: 0, stdout: "", stderr: "" }) },
         waiter: new FakeWaiter([]),
         usage,
         startEvents: async () => ({ events, stop: async () => undefined }),
@@ -1029,6 +832,21 @@ describe("AT-19: a build that named no pieces", () => {
             interrupt: async () => undefined,
             sendPrompt: async (text) => {
               sends.push(text);
+              events.publish({
+                kind: "PostToolUse",
+                sessionId: claudeSessionId,
+                payload: {
+                  tool_name: "Agent",
+                  tool_input: { subagent_type: "fix-login:p2", prompt: "NODE p2\nGo" },
+                  tool_use_id: "toolu-p2",
+                  tool_response: {
+                    status: "completed",
+                    agentId: "agent-p2",
+                    agentType: "fix-login:p2",
+                    content: [],
+                  },
+                },
+              });
               events.publish({ kind: "Stop", sessionId: claudeSessionId, payload: {} });
             },
           },
@@ -1038,7 +856,7 @@ describe("AT-19: a build that named no pieces", () => {
     );
 
     expect(code).toBe(0);
-    expect(sends).toEqual(["/fix-login:p2 NODE p2"]);
+    expect(sends).toEqual([agentTurnText("fix-login", "p2", { id: "p2", given: [], writes: [] })]);
     expect(store.findRun(runId)?.status).toBe("done");
     const charged = Object.fromEntries(
       store

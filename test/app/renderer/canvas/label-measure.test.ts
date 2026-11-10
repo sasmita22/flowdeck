@@ -44,12 +44,6 @@ describe("label width measured with the drawn font", () => {
     expect(measured).toContain(`600 13px "Instrument Sans", sans-serif|${long}`);
   });
 
-  it("sizes a Script by its label's rendered width in the mono font", () => {
-    const { padL } = nodeOutline("script");
-    expect(nodeWidth({ type: "script", label: long })).toBe(labelX("script") + 601 + padL);
-    expect(measured).toContain(`600 12px Menlo, monospace|${long}`);
-  });
-
   it("measures the same font and text once", () => {
     const label = "Plan the next sprint and its review steps";
     nodeWidth({ type: "agent", label });

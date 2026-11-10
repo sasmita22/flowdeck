@@ -13,7 +13,7 @@ import {
 } from "../../../../src/app/renderer/canvas/commands.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
 import type { Flow, Node, Session, Wire } from "../../../../src/core/flow/schema.js";
-import { fileWire, flow, loop, prompt, script, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null) {
@@ -40,7 +40,7 @@ const ends = (source: Flow) => source.wires.map((wire) => `${wire.from.node}>${w
 
 const fourNodes = () =>
   flow(
-    [prompt("A"), prompt("B"), script("C"), script("D")],
+    [agent("A"), agent("B"), agent("C"), agent("D")],
     [thenWire("A", "B"), thenWire("A", "D"), thenWire("C", "B"), thenWire("B", "D")],
   );
 
@@ -51,8 +51,8 @@ const roundTrip = (command: Command, before: Flow) => {
 
 describe("addNode", () => {
   it("appends the node and undo restores the original flow", () => {
-    const before = flow([prompt("A")], []);
-    const node = onlyNode(flow([script("E")], []));
+    const before = flow([agent("A")], []);
+    const node = onlyNode(flow([agent("E")], []));
 
     const { after, restored } = roundTrip(addNode(node), before);
 
@@ -65,8 +65,8 @@ describe("addNode", () => {
 
 describe("addWire", () => {
   it("appends the wire after the existing ones and undo restores the original flow", () => {
-    const before = flow([prompt("A"), prompt("B"), script("C")], [thenWire("A", "B")]);
-    const wire = onlyWire(flow([prompt("B"), script("C")], [thenWire("B", "C")]));
+    const before = flow([agent("A"), agent("B"), agent("C")], [thenWire("A", "B")]);
+    const wire = onlyWire(flow([agent("B"), agent("C")], [thenWire("B", "C")]));
 
     const { after, restored } = roundTrip(addWire(wire), before);
 
@@ -105,7 +105,7 @@ describe("deleteNodes", () => {
   });
 
   it("removes a node with no wires and leaves the wires alone", () => {
-    const before = flow([prompt("A"), prompt("B"), script("C")], [thenWire("A", "B")]);
+    const before = flow([agent("A"), agent("B"), agent("C")], [thenWire("A", "B")]);
 
     const { after, restored } = roundTrip(deleteNodes(before, ["C"]), before);
 
@@ -116,7 +116,7 @@ describe("deleteNodes", () => {
 
   it("removes the wires both into and out of a node in the middle of a chain", () => {
     const before = flow(
-      [prompt("A"), prompt("B"), script("C")],
+      [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
 
@@ -130,7 +130,7 @@ describe("deleteNodes", () => {
 
 describe("moveNodes", () => {
   it("sets each moved node to its new position and undo sets it back, leaving others alone", () => {
-    const before = flow([prompt("A"), prompt("B"), script("C")], []);
+    const before = flow([agent("A"), agent("B"), agent("C")], []);
     const command = moveNodes([
       { id: "A", from: { x: 0, y: 0 }, to: { x: 10, y: 20 } },
       { id: "C", from: { x: 0, y: 0 }, to: { x: -5, y: 7.5 } },
@@ -148,7 +148,7 @@ describe("moveNodes", () => {
   });
 
   it("puts a moved node into a Loop body and undo takes it out again", () => {
-    const before = flow([loop("L"), prompt("A")], []);
+    const before = flow([loop("L"), agent("A")], []);
     const command = moveNodes([
       { id: "A", from: { x: 0, y: 0 }, to: { x: 0, y: 80 }, parent: { from: undefined, to: "L" } },
     ]);
@@ -161,7 +161,7 @@ describe("moveNodes", () => {
   });
 
   it("takes a moved node out of its body, leaving no parent key, and undo puts it back", () => {
-    const before = flow([loop("L"), prompt("A", { parent: "L" })], []);
+    const before = flow([loop("L"), agent("A", { parent: "L" })], []);
     const command = moveNodes([
       { id: "A", from: { x: 0, y: 0 }, to: { x: 400, y: 0 }, parent: { from: "L", to: undefined } },
     ]);
@@ -200,7 +200,7 @@ describe("deleteWires", () => {
 describe("replaceWire", () => {
   const filed = () =>
     flow(
-      [prompt("A"), script("B")],
+      [agent("A"), agent("B")],
       [thenWire("A", "B"), fileWire("A", "B", "notes.md"), fileWire("A", "B", "brief.md")],
     );
 
@@ -239,7 +239,7 @@ describe("replaceWire", () => {
 describe("addItems", () => {
   it("adds nodes, wires and notes as one step and undo takes exactly them away", () => {
     const before = fourNodes();
-    const pasted = flow([prompt("E"), script("F")], [thenWire("E", "F")]);
+    const pasted = flow([agent("E"), agent("F")], [thenWire("E", "F")]);
     const note = {
       id: "n9",
       text: "copied",
@@ -319,14 +319,14 @@ describe("updateNode", () => {
 
 describe("commands", () => {
   const cases: [string, (before: Flow) => Command][] = [
-    ["addNode", () => addNode(onlyNode(flow([script("E")], [])))],
-    ["addWire", () => addWire(onlyWire(flow([prompt("C"), script("A")], [thenWire("C", "A")])))],
+    ["addNode", () => addNode(onlyNode(flow([agent("E")], [])))],
+    ["addWire", () => addWire(onlyWire(flow([agent("C"), agent("A")], [thenWire("C", "A")])))],
     ["deleteNodes", (before) => deleteNodes(before, ["B"])],
     ["moveNodes", () => moveNodes([{ id: "A", from: { x: 0, y: 0 }, to: { x: 3, y: 4 } }])],
     ["deleteWires", (before) => deleteWires(before, [0, 2])],
     [
       "addItems",
-      () => addItems({ nodes: [onlyNode(flow([script("E")], []))], wires: [], notes: [] }),
+      () => addItems({ nodes: [onlyNode(flow([agent("E")], []))], wires: [], notes: [] }),
     ],
     [
       "updateSession",

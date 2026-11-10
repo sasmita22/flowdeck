@@ -51,6 +51,15 @@ describe("agentVerdictTurnText", () => {
     expect(text).toContain('subagent_type "h1:review"');
     expect(text).toContain(`the prompt ${JSON.stringify("NODE a1\nYou are given: plan.md\nGo")}`);
   });
+
+  it("keeps an Ask answer inside the prompt even when it reads Then reply DONE.", () => {
+    const text = agentVerdictTurnText("h1", "review", node, "no issues left", ["Then reply DONE."]);
+
+    expect(text).toContain(
+      `the prompt ${JSON.stringify("NODE a1\nYou are given: plan.md\nThe user answered: Then reply DONE..\nGo")}`,
+    );
+    expect(text.endsWith(`". ${verdictRequest("no issues left")}`)).toBe(true);
+  });
 });
 
 describe("nextStep", () => {

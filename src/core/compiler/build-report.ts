@@ -29,12 +29,34 @@ export const buildReportSchema = z.strictObject({
       status: z.enum(["done", "question"]),
     }),
   ),
+  needs: z.array(
+    z.strictObject({
+      nodeId: z.string(),
+      items: z.array(z.strictObject({ name: z.string(), what: z.string() })),
+    }),
+  ),
+  shared: z.array(
+    z.strictObject({
+      name: z.string(),
+      kind: z.enum(["skill", "command"]),
+      usedBy: z.array(z.string()).min(2),
+    }),
+  ),
 });
 
 export type BuildReport = z.infer<typeof buildReportSchema>;
 
 export function emptyReport(): BuildReport {
-  return { version: 1, questions: [], merges: [], keptApart: [], mixedJobs: [], pieces: [] };
+  return {
+    version: 1,
+    questions: [],
+    merges: [],
+    keptApart: [],
+    mixedJobs: [],
+    pieces: [],
+    needs: [],
+    shared: [],
+  };
 }
 
 export class BuildReportParseError extends Error {

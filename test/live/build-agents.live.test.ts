@@ -21,7 +21,7 @@ import { scopeLine, scopeOf } from "../../src/core/compiler/scope-line.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import type { Handoff } from "../../src/core/flow/handoff.js";
 import { agentPrompt } from "../../src/core/nodes/agent/execute.js";
-import { flow as builderFlow, prompt } from "../fixtures/flow-builders.js";
+import { agent, onMainFlow } from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import {
   draftsOnly,
@@ -42,15 +42,15 @@ const descriptionFloor = 60;
 const gate = "npm run gate:sample";
 
 const kitSkills = [
+  "analyze-job",
   "audit-duplicates",
   "audit-handoffs",
   "audit-orchestrator",
+  "extract-shared",
   "fit-to-repo",
   "write-agent",
   "write-handoff-template",
-  "write-script",
   "write-skill",
-  "write-step",
   "write-workspace-rules",
 ];
 const madeUpSkill = "write-nothing-at-all";
@@ -144,40 +144,34 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow(
-  steps: (
-    | ({ type: "agent" } & AgentSpec)
-    | { type: "prompt"; id: string; label: string; instructions: string }
-  )[],
+  steps: AgentSpec[],
   allowedTools: string[],
   files: { from: string; to: string; file: string }[] = [],
 ): Flow {
-  const ids = ["t", ...steps.map((step) => step.id)];
+  const ids = ["t", ...steps.map((step) => step.id), "o"];
   return parseFlow({
     nodes: [
       { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
-      ...steps.map((step, index) =>
-        step.type === "prompt"
-          ? {
-              id: step.id,
-              label: step.label,
-              type: "prompt",
-              position: at(index + 1),
-              settings: { instructions: step.instructions },
-            }
-          : {
-              id: step.id,
-              label: step.label,
-              type: "agent",
-              position: at(index + 1),
-              settings: {
-                role: "",
-                instructions: step.instructions,
-                model: "haiku",
-                tools: step.tools,
-                ...(step.writes === undefined ? {} : { writes: step.writes }),
-              },
-            },
-      ),
+      ...steps.map((step, index) => ({
+        id: step.id,
+        label: step.label,
+        type: "agent",
+        position: at(index + 1),
+        settings: {
+          role: "",
+          instructions: step.instructions,
+          model: "haiku",
+          tools: step.tools,
+          ...(step.writes === undefined ? {} : { writes: step.writes }),
+        },
+      })),
+      {
+        id: "o",
+        label: "Done",
+        type: "output",
+        position: at(steps.length + 1),
+        settings: { name: "result", type: "text" },
+      },
     ],
     wires: [
       ...ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
@@ -275,7 +269,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         const flow = liveFlow(
           [
             {
-              type: "agent",
               id: "a1",
               label: "sync with base branch",
               instructions:
@@ -308,7 +301,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         const flow = liveFlow(
           [
             {
-              type: "agent",
               id: "a1",
               label: "Review code",
               instructions:
@@ -317,10 +309,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
               writes: ["review.md"],
             },
             {
-              type: "prompt",
               id: "p1",
               label: "Share review",
               instructions: "Read review.md and reply with its first problem in one line.",
+              tools: ["Read"],
             },
           ],
           ["Read", "Grep", "Glob", "Bash", "Write"],
@@ -344,13 +336,12 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         const flow = liveFlow(
           [
             {
-              type: "prompt",
               id: "p1",
               label: "Take notes",
               instructions: "List the open questions about the login bug.",
+              tools: ["Read"],
             },
             {
-              type: "agent",
               id: "a1",
               label: "Summarise notes",
               instructions: "Read notes.md and write a three-line summary of it to summary.md.",
@@ -378,7 +369,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         const flow = liveFlow(
           [
             {
-              type: "agent",
               id: "a1",
               label: "Review greet.js",
               instructions: "Read src/greet.js and list any bugs you find.",
@@ -386,7 +376,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
               writes: ["review-1.md"],
             },
             {
-              type: "agent",
               id: "a2",
               label: "Look for defects",
               instructions: "Go over the code in src/greet.js and report the defects in it.",
@@ -420,7 +409,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
         const flow = liveFlow(
           [
             {
-              type: "agent",
               id: "a1",
               label: "Check",
               instructions:
@@ -428,7 +416,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
               tools: ["Read", "Grep", "Glob"],
             },
             {
-              type: "agent",
               id: "a2",
               label: "Check",
               instructions:
@@ -466,7 +453,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
     home = await mkdtemp(join(tmpdir(), "fd-home-"));
     repo = await createTmpRepo({ commit: true });
     engine = liveEngine({ home, repo: repo.path });
-    ({ dir: workspaceDir } = await engine.saveAndBuild(builderFlow([prompt("p1")], []), {
+    ({ dir: workspaceDir } = await engine.saveAndBuild(onMainFlow([agent("p1")], []), {
       name: "live-kit",
     }));
     const kit = await prepareKit({ sourceDir: kitSourceDir, home });

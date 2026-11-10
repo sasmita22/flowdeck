@@ -1,11 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionGoneError } from "../../../src/adapters/claude/claude-session.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import {
   createEngineHandler,
@@ -29,19 +28,15 @@ import {
   gate,
   join as joinNode,
   onMainFlow,
-  prompt,
-  script,
   thenWire,
   wire,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
+import { fakeClaudeSession, type FakeTurnHandler } from "../../fixtures/fake-claude-session.js";
 
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
-
-const sh = (id: string, command: string) =>
-  script(id, { settings: { command: "sh", args: ["-c", command] } });
 
 describe("run controls", () => {
   let home: string;
@@ -60,17 +55,25 @@ describe("run controls", () => {
     session: { ...input.session, buildConfig: { ...input.session.buildConfig, repo: repo.path } },
   });
 
-  const runEnvironment = (overrides: Partial<EngineHandlerOptions["run"]> = {}) => ({
-    fs: new NodeFileSystem(),
-    now: Date.now,
-    scripts: new NodeProcessRunner(),
-    waiter: new FakeWaiter([]),
-    startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
-    openSession: async (): Promise<OpenedSession> => {
-      throw new Error("Claude must not start for a script-only flow");
-    },
-    ...overrides,
-  });
+  const runEnvironment = (overrides: Partial<EngineHandlerOptions["run"]> = {}) => {
+    const claude = fakeClaudeSession();
+    return {
+      fs: new NodeFileSystem(),
+      now: Date.now,
+      waiter: new FakeWaiter([]),
+      startEvents: claude.startEvents,
+      openSession: claude.openSession,
+      ...overrides,
+    };
+  };
+
+  const withClaude = (turn: FakeTurnHandler) => {
+    const claude = fakeClaudeSession(turn);
+    handler = handlerWith({
+      run: runEnvironment({ startEvents: claude.startEvents, openSession: claude.openSession }),
+    });
+    return claude;
+  };
 
   const handlerWith = (overrides: Partial<EngineHandlerOptions> = {}) =>
     createEngineHandler({
@@ -140,19 +143,11 @@ describe("run controls", () => {
   const start = async (input: Flow, options: Record<string, unknown> = {}) =>
     startOn(await builtId(input), options);
 
-  const cwdOf = (runId: string) => {
-    const cwd = runs.findRun(runId)?.session.cwd;
-    if (cwd === undefined || cwd === "") throw new Error(`run ${runId} has no folder`);
-    return cwd;
-  };
-
   const buildDirOf = (buildId: string) => {
     const built = runs.findBuild(buildId);
     if (built === undefined) throw new Error(`no build ${buildId}`);
     return built.dir;
   };
-
-  const worktreeOf = (buildId: string) => join(buildDirOf(buildId), basename(repo.path));
 
   const statusOf = (runId: string, nodeId: string) =>
     nodeStatus(runs.events(runId).filter((event) => event.nodeId === nodeId));
@@ -187,17 +182,13 @@ describe("run controls", () => {
   describe("run options", () => {
     const skippableGate = () =>
       onMainFlow(
-        [
-          sh("s1", "true"),
-          gate("g1", { settings: { shown: "Check", skippable: true } }),
-          sh("s2", "true"),
-        ],
+        [agent("s1"), gate("g1", { settings: { shown: "Check", skippable: true } }), agent("s2")],
         [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
 
     const branchOn = (variable: string) => {
       const base = onMainFlow(
-        [branch("b", variable), sh("yes", "true"), sh("no", "true")],
+        [branch("b", variable), agent("yes"), agent("no")],
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
       return {
@@ -251,27 +242,19 @@ describe("run controls", () => {
   });
 
   describe("stop", () => {
-    it("kills the running script and marks the run stopped, writing nothing after", async () => {
-      const runId = await start(
-        onMainFlow(
-          [sh("s1", "echo $$ > pid; exec sleep 30"), sh("s2", "true")],
-          [thenWire("s1", "s2")],
-        ),
-      );
-      await vi.waitFor(async () =>
-        expect(await readFile(join(cwdOf(runId), "pid"), "utf8").catch(() => "")).not.toBe(""),
-      );
-      const pid = Number(await readFile(join(cwdOf(runId), "pid"), "utf8"));
+    it("stops a run during an agent's turn and marks it stopped, writing nothing after", async () => {
+      withClaude((nodeId) => (nodeId === "s1" ? "hold" : "done"));
+      const runId = await start(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]));
+      await vi.waitFor(() => expect(statusOf(runId, "s1")).toBe("sent"));
 
       expect(await call("stop-run", { runId })).toEqual({ stopped: true });
 
       expect(runs.findRun(runId)?.status).toBe("stopped");
-      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(/ESRCH/));
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(runs.events(runId).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
         "start running",
         "start done",
-        "s1 running",
+        "s1 sent",
       ]);
     });
 
@@ -281,7 +264,7 @@ describe("run controls", () => {
 
     describe("on a run left interrupted", () => {
       const interrupted = async (tmuxName: string) => {
-        const buildId = await builtId(onMainFlow([sh("s1", "true")], []));
+        const buildId = await builtId(onMainFlow([agent("s1")], []));
         const { id } = runs.createRun({
           buildDir: buildDirOf(buildId),
           inputs: {},
@@ -325,19 +308,13 @@ describe("run controls", () => {
   });
 
   describe("retry", () => {
-    const readsCode = () =>
-      onMainFlow(
-        [sh("s1", "exit $(cat code.txt)"), sh("s2", "echo after")],
-        [thenWire("s1", "s2")],
-      );
+    const twoAgents = () => onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]);
 
-    it("sends a failed script again once its file is fixed, and the run goes on to done", async () => {
-      const buildId = await builtId(readsCode());
-      const worktree = worktreeOf(buildId);
-      await writeFile(join(worktree, "code.txt"), "3");
-      const runId = await startOn(buildId);
+    it("sends a failed agent again, and the run goes on to done", async () => {
+      let s1Turns = 0;
+      withClaude((nodeId) => (nodeId === "s1" && ++s1Turns === 1 ? "fail" : "done"));
+      const runId = await start(twoAgents());
       expect(await finished(runId)).toBe("failed");
-      await writeFile(join(worktree, "code.txt"), "0");
 
       expect(started(await call("retry-node", { runId, nodeId: "s1" }))).toBe(runId);
 
@@ -349,13 +326,12 @@ describe("run controls", () => {
           .events(runId)
           .filter((event) => event.nodeId === "s1")
           .map((event) => event.kind),
-      ).toEqual(["running", "failed", "retry", "running", "done"]);
+      ).toEqual(["sent", "failed", "retry", "sent", "done"]);
     });
 
     it("refuses a node that has not failed, and a run that is still going", async () => {
-      const buildId = await builtId(readsCode());
-      await writeFile(join(worktreeOf(buildId), "code.txt"), "3");
-      const runId = await startOn(buildId);
+      withClaude((nodeId) => (nodeId === "s1" ? "fail" : nodeId === "nap" ? "hold" : "done"));
+      const runId = await start(twoAgents());
       await finished(runId);
 
       expect(await call("retry-node", { runId, nodeId: "s2" })).toEqual({
@@ -363,7 +339,7 @@ describe("run controls", () => {
         message: "s2 has not failed",
       });
 
-      const going = await start(onMainFlow([sh("nap", "sleep 30")], []));
+      const going = await start(onMainFlow([agent("nap")], []));
       expect(await call("retry-node", { runId: going, nodeId: "nap" })).toMatchObject({
         kind: "error",
       });
@@ -468,27 +444,29 @@ describe("run controls", () => {
   describe("resume", () => {
     const stoppable = () =>
       onMainFlow(
-        [sh("s1", "echo once >> s1.log"), sh("s2", "test -f go || sleep 30"), sh("s3", "true")],
+        [agent("s1"), agent("s2"), agent("s3")],
         [thenWire("s1", "s2"), thenWire("s2", "s3")],
       );
 
     it("goes on from a stopped run without running its finished nodes again", async () => {
+      let s2Turns = 0;
+      const claude = withClaude((nodeId) => (nodeId === "s2" && ++s2Turns === 1 ? "hold" : "done"));
       const runId = await start(stoppable());
-      await vi.waitFor(() => expect(statusOf(runId, "s2")).toBe("running"));
+      await vi.waitFor(() => expect(statusOf(runId, "s2")).toBe("sent"));
       await call("stop-run", { runId });
-      await writeFile(join(cwdOf(runId), "go"), "");
 
       expect(started(await call("resume-run", { runId }))).toBe(runId);
 
       expect(await finished(runId)).toBe("done");
-      expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8")).toBe("once\n");
+      expect(claude.sentTo("s1")).toHaveLength(1);
       expect(["s1", "s2", "s3"].map((id) => statusOf(runId, id))).toEqual(["done", "done", "done"]);
     });
 
     it("refuses a stopped run while another run of its build is going, leaving it stopped", async () => {
-      const buildId = await builtId(onMainFlow([sh("s1", "test -f go || sleep 30")], []));
+      withClaude(() => "hold");
+      const buildId = await builtId(onMainFlow([agent("s1")], []));
       const first = await startOn(buildId);
-      await vi.waitFor(() => expect(statusOf(first, "s1")).toBe("running"));
+      await vi.waitFor(() => expect(statusOf(first, "s1")).toBe("sent"));
       await call("stop-run", { runId: first });
       const second = await startOn(buildId);
 
@@ -499,7 +477,7 @@ describe("run controls", () => {
     });
 
     it("refuses a run that is done", async () => {
-      const runId = await start(onMainFlow([sh("s1", "true")], []));
+      const runId = await start(onMainFlow([agent("s1")], []));
       await finished(runId);
 
       expect(await call("resume-run", { runId })).toEqual({
@@ -525,7 +503,7 @@ describe("run controls", () => {
     it("starts Claude again with --resume when the run's Claude session is gone", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => false });
-      const runId = await start(onMainFlow([prompt("p1")], []));
+      const runId = await start(onMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
 
@@ -539,7 +517,7 @@ describe("run controls", () => {
     it("refuses, changing nothing, when the session ends between the check and the attach", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => true });
-      const runId = await start(onMainFlow([prompt("p1")], []));
+      const runId = await start(onMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
       const before = runs.events(runId);
@@ -556,20 +534,8 @@ describe("run controls", () => {
   });
 
   describe("activity and cost", () => {
-    it("keeps a run's script output, and loads it again with the run", async () => {
-      const runId = await start(onMainFlow([sh("s1", "echo hello; echo oops >&2")], []));
-      await finished(runId);
-
-      const loaded = (await call("load-run", { runId })) as { activity: unknown[] };
-
-      expect(loaded.activity).toEqual([
-        expect.objectContaining({ nodeId: "s1", kind: "output", stream: "stdout", text: "hello" }),
-        expect.objectContaining({ nodeId: "s1", kind: "output", stream: "stderr", text: "oops" }),
-      ]);
-    });
-
     it("answers each node's tokens and cost, and a session total that is their sum", async () => {
-      const runId = await start(onMainFlow([sh("s1", "true")], []));
+      const runId = await start(onMainFlow([agent("s1")], []));
       await finished(runId);
       runs.append(runId, "s1", {
         kind: "usage",

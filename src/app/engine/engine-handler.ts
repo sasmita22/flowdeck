@@ -74,7 +74,7 @@ import {
 } from "../../core/run/delete-build.js";
 import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
 import { turnFailure } from "../../core/run/turns.js";
-import { resumeEntries, retryEntries } from "../../core/run/retry.js";
+import { retryEntries } from "../../core/run/retry.js";
 import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
 import type {
   BuildFileContent,
@@ -830,7 +830,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       call.then(forget, forget);
       return call;
     };
-    const { scripts } = options.run;
     let eventsFailed = false;
     const continuesEarlierRun = launch.actions !== undefined;
     const tracker = createActivityTracker({
@@ -856,16 +855,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         ...options.run,
         waiter: waiterFor(runId),
         store,
-        scripts: {
-          run: (command, args, cwd, signal, job) =>
-            unlessDetached(() => scripts.run(command, args, cwd, signal, job)),
-          ...(scripts.rejoin === undefined
-            ? {}
-            : {
-                rejoin: (job: string, signal?: AbortSignal) =>
-                  unlessDetached(async () => scripts.rejoin?.(job, signal)),
-              }),
-        },
         startEvents: async (path) => {
           const started = await options.run.startEvents(path).catch((error: unknown) => {
             eventsFailed = true;
@@ -880,7 +869,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return { ...started, stop: stopEvents };
         },
         onChange: (line) => console.log(`engine: ${line}`),
-        onOutput: (nodeId, stream, text) => tracker.output(nodeId, stream, text),
         onInterrupt: (handler) => {
           run.interrupt = handler;
           if (run.stopRequested !== undefined) handler(run.stopRequested);
@@ -897,7 +885,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         auto: storedAuto(launch.stored),
         flags: storedFlags(launch.stored, manifest),
         socketPath: launch.socketPath,
-        scriptJobs: join(options.home, "runs", runId, "scripts"),
         open: async () => {
           const opened = await launch.open();
           return {
@@ -1073,12 +1060,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const events = runs.events(runId);
     let entries: EventEntry[];
     try {
-      entries =
-        how.kind === "retry"
-          ? retryEntries(manifest, events, how.nodeId)
-          : status === "stopped"
-            ? resumeEntries(manifest, events)
-            : [];
+      entries = how.kind === "retry" ? retryEntries(manifest, events, how.nodeId) : [];
     } catch (error) {
       return failure(messageOf(error));
     }
@@ -1090,7 +1072,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         manifest,
         events: after,
         turns: await options.transcriptTurns(claudeSessionId),
-        rejoinScripts: true,
         sessionRestarted: restart,
       });
     const pending = entries.map(({ nodeId, event }, index): StoredEvent => ({

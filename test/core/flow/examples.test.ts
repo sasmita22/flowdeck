@@ -8,12 +8,12 @@ const readExample = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
 
 describe("examples", () => {
-  it("parses three-prompts.json", () => {
-    expect(() => parseFlow(readExample("three-prompts.json"))).not.toThrow();
+  it("parses three-agents.json", () => {
+    expect(() => parseFlow(readExample("three-agents.json"))).not.toThrow();
   });
 
   it.each([
-    ["three-prompts.json", ["start", "p1", "p2", "p3", "done"]],
+    ["three-agents.json", ["start", "p1", "p2", "p3", "done"]],
     ["loop-review.json", ["start", "review", "fix", "check", "done"]],
     [
       "all-types.json",
@@ -65,7 +65,7 @@ describe("stored flows", () => {
     expect(storedFlows.map(({ file }) => file)).toEqual(
       expect.arrayContaining([
         "examples/all-types.json",
-        "test/fixtures/prompt-then-ask.json",
+        "test/fixtures/agent-then-ask.json",
         "test/fixtures/broken/no-cycle.json",
       ]),
     );

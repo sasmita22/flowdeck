@@ -19,6 +19,10 @@ const full = {
     { path: "plugin/agents/reviewer.md", status: "done" },
     { path: "plugin/skills/plan/SKILL.md", status: "question" },
   ],
+  needs: [
+    { nodeId: "n3", items: [{ name: "repo-conventions", what: "Reads the repo's lint rules." }] },
+  ],
+  shared: [{ name: "repo-conventions", kind: "skill", usedBy: ["n3", "n4"] }],
 };
 
 describe("buildReportSchema", () => {
@@ -54,6 +58,46 @@ describe("buildReportSchema", () => {
     ]);
   });
 
+  it("accepts a shared command", () => {
+    const report = {
+      ...full,
+      shared: [{ name: "run-checks", kind: "command", usedBy: ["n3", "n4"] }],
+    };
+    expect(buildReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it.each<[string, Record<string, unknown>, (string | number)[]]>([
+    [
+      "a shared entry of kind agent",
+      { shared: [{ name: "x", kind: "agent", usedBy: ["n3", "n4"] }] },
+      ["shared", 0, "kind"],
+    ],
+    [
+      "a shared entry used by one agent",
+      { shared: [{ name: "x", kind: "skill", usedBy: ["n3"] }] },
+      ["shared", 0, "usedBy"],
+    ],
+    [
+      "an unknown key in a shared entry",
+      { shared: [{ name: "x", kind: "skill", usedBy: ["n3", "n4"], extra: true }] },
+      ["shared", 0],
+    ],
+    [
+      "an unknown key in a needs entry",
+      { needs: [{ nodeId: "n3", items: [], extra: true }] },
+      ["needs", 0],
+    ],
+    [
+      "a need missing what",
+      { needs: [{ nodeId: "n3", items: [{ name: "x" }] }] },
+      ["needs", 0, "items", 0, "what"],
+    ],
+  ])("rejects %s, at its path", (_, change, path) => {
+    const result = buildReportSchema.safeParse({ ...full, ...change });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([path]);
+  });
+
   it("rejects a version other than 1", () => {
     expect(buildReportSchema.safeParse({ ...full, version: 2 }).success).toBe(false);
   });
@@ -69,6 +113,8 @@ describe("emptyReport", () => {
       keptApart: [],
       mixedJobs: [],
       pieces: [],
+      needs: [],
+      shared: [],
     });
   });
 });

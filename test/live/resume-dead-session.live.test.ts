@@ -13,7 +13,6 @@ import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
@@ -24,8 +23,11 @@ import type { EnginePush } from "../../src/app/engine/protocol.js";
 import type { Flow } from "../../src/core/flow/schema.js";
 import { nodeStatus } from "../../src/core/run/run-events.js";
 import type { PendingWait } from "../../src/core/run/wait.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
+import { agentType } from "../../src/core/nodes/agent/execute.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
-import { flow, gate, thenWire } from "../fixtures/flow-builders.js";
+import { gate, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
+import { readLines, tokenResults, type TranscriptEntry } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 
@@ -66,10 +68,15 @@ async function removeIfEmpty(folder: string): Promise<void> {
 
 const reply = (id: string, word: string) => ({
   id,
-  type: "prompt",
+  type: "agent",
   label: id,
   position: { x: 0, y: 0 },
-  settings: { instructions: `Reply with the single word ${word} and nothing else. Use no tools.` },
+  settings: {
+    role: "",
+    instructions: `Reply with the single word ${word} and nothing else. Use no tools.`,
+    model: "haiku",
+    tools: [],
+  },
 });
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session ended", () => {
@@ -127,7 +134,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
     "goes on in a new tmux session with claude --resume, on the same conversation, sending each node once",
     { timeout: deadlineMs + 60_000 },
     async () => {
-      const base = flow(
+      const base = onMainFlow(
         [reply("p1", "ALPHA"), gate("g1"), reply("p2", "BRAVO")],
         [thenWire("p1", "g1"), thenWire("g1", "p2")],
       );
@@ -167,7 +174,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
           run: {
             fs,
             now: Date.now,
-            scripts: new NodeProcessRunner(),
             startEvents: async (socketPath) => {
               await mkdir(dirname(socketPath), { recursive: true });
               const server = new HookSocketServer({ socketPath });
@@ -288,15 +294,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
       });
       expect(stores.runs.findRun(runId)?.status).toBe("done");
       expect([sends(runId, "p1"), sends(runId, "p2")]).toEqual([1, 1]);
-      const done = stores.runs
-        .events(runId)
-        .findLast((event) => event.nodeId === "p2" && event.kind === "done");
-      expect(done?.kind === "done" ? done.payload?.stopMessage : undefined).toMatch(/BRAVO/);
       const transcript = await transcriptOf(claudeSessionId);
       if (transcript === undefined) throw new Error("the resumed session wrote no transcript");
+      expect(tokenResults(await readLines<TranscriptEntry>(transcript), "BRAVO")).not.toEqual([]);
       const turns = parseTranscriptTurns(await readFile(transcript, "utf8"));
-      expect(turns.map((turn) => turn.userText.includes(`/${buildName}:p2`))).toContain(true);
-      expect(turns.map((turn) => turn.userText.includes(`/${buildName}:p1`))).toContain(true);
+      const pieces = pieceNames(saved);
+      for (const id of ["p2", "p1"]) {
+        const subagent = `"${agentType(buildName, pieces.get(id) ?? "")}"`;
+        expect(turns.map((turn) => turn.userText.includes(subagent))).toContain(true);
+      }
     },
   );
 });

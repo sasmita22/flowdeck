@@ -59,13 +59,3 @@ export function retryEntries(
       : [],
   );
 }
-
-export const resumeEntries = (
-  manifest: Pick<Manifest, "nodes">,
-  events: readonly StoredEvent[],
-): EventEntry[] =>
-  manifest.nodes.flatMap((node): EventEntry[] =>
-    node.type === "script" && statusIn(events, node.id) === "running"
-      ? [{ nodeId: node.id, event: { kind: "retry" } }]
-      : [],
-  );

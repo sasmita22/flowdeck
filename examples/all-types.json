@@ -13,13 +13,16 @@
     {
       "id": "plan",
       "label": "Plan",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "instructions": "Write a plan for the ticket."
+        "role": "",
+        "instructions": "Write a plan for the ticket.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
@@ -94,14 +97,16 @@
     {
       "id": "lint",
       "label": "Lint",
-      "type": "script",
+      "type": "agent",
       "position": {
         "x": 1440,
         "y": 0
       },
       "settings": {
-        "command": "npm",
-        "args": ["run", "lint"]
+        "role": "",
+        "instructions": "Run `npm run lint` in the repo and report its exit code.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
@@ -174,14 +179,17 @@
     {
       "id": "attempt",
       "label": "Attempt",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 2400,
         "y": 160
       },
       "parent": "retry",
       "settings": {
-        "instructions": "Make the tests pass."
+        "role": "",
+        "instructions": "Make the tests pass.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
@@ -199,14 +207,17 @@
     {
       "id": "e1p1",
       "label": "Build unit",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 2640,
         "y": 160
       },
       "parent": "e1",
       "settings": {
-        "instructions": "Build this unit."
+        "role": "",
+        "instructions": "Build this unit.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

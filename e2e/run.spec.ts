@@ -5,20 +5,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeStatus, type RunEvent } from "../src/core/run/run-events.js";
-import { thenWire } from "../test/fixtures/flow-builders.js";
+import { flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import { dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
-import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun } from "./build-run.js";
+import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
+import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
-const twoScripts = () =>
+const twoAgents = () =>
   JSON.parse(
-    readFileSync(new URL("../test/fixtures/app-run-two-scripts.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../test/fixtures/app-run-two-agents.json", import.meta.url), "utf8"),
   ) as unknown;
 
 test.beforeEach(async () => {
@@ -31,13 +33,14 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
 });
 
 test("Build saves the edit first, the build runs, and the run shows each node's status", async () => {
-  const blueprint = twoScripts() as { wires: unknown[] };
+  const blueprint = twoAgents() as { wires: unknown[] };
   blueprint.wires.push(thenWire("s1", "stop"));
   seedFlow(home, blueprint, repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
@@ -99,8 +102,19 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
   }
 });
 
-test("A script-only run has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
-  seedFlow(home, twoScripts(), repo.path);
+test("A run with no Claude turn has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
+  seedFlow(
+    home,
+    flow(
+      [
+        trigger("start"),
+        gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
+        output("stop"),
+      ],
+      [thenWire("start", "g1"), thenWire("g1", "stop")],
+    ),
+    repo.path,
+  );
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
@@ -108,12 +122,12 @@ test("A script-only run has no terminal: the menu's Open terminal stays disabled
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
   await window.keyboard.press("Escape");
 
-  await buildAndRun(window, home, "scripts");
+  await buildOnCanvas(window, home, "gate-only");
+  await window.getByTestId(pageTestIds.buildDetailRun).click();
+  await window.getByTestId(dialogTestIds.auto).check();
+  await window.getByTestId(dialogTestIds.start).click();
 
-  await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
-  await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
+  await expect(window.getByTestId("node-status-g1")).toHaveAttribute("data-status", "skipped", {
     timeout: 20_000,
   });
   await window.getByTestId("run-tab-terminal").click();
@@ -124,15 +138,17 @@ test("A script-only run has no terminal: the menu's Open terminal stays disabled
   const session = window.getByTestId("inspector-session");
   await expect(session).toContainText("main");
   await expect(session).toHaveAttribute("data-status", "done");
-  await expect(window.getByTestId("inspector-node-s1")).toHaveAttribute("data-status", "done");
-  await expect(window.getByTestId("inspector-node-s2")).toHaveAttribute("data-status", "done");
-  await expect(window.locator('[data-kind="output"][data-node-id="s1"]')).toContainText(
-    "Output: one",
-  );
+  await expect(window.getByTestId("inspector-node-g1")).toHaveAttribute("data-status", "skipped");
+  const runSessions = readFileSync(fakeClaudeRan(home), "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as string[])
+    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length !== 2);
+  expect(runSessions).toEqual([]);
 });
 
-test("A run of a blueprint with an empty-labelled Script shows the node type in the Nodes list", async () => {
-  const blueprint = twoScripts() as { nodes: { id: string; label: string }[] };
+test("A run of a blueprint with an empty-labelled Agent shows the node type in the Nodes list", async () => {
+  const blueprint = twoAgents() as { nodes: { id: string; label: string }[] };
   for (const node of blueprint.nodes) if (node.id === "s1") node.label = "";
   seedFlow(home, blueprint, repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
@@ -143,5 +159,5 @@ test("A run of a blueprint with an empty-labelled Script shows the node type in 
 
   const row = window.getByTestId("inspector-node-s1");
   await expect(row).toHaveAttribute("data-status", "done", { timeout: 20_000 });
-  await expect(row).toContainText("Script");
+  await expect(row).toContainText("Agent");
 });

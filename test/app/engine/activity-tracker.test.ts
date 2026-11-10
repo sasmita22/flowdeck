@@ -244,12 +244,15 @@ describe("createActivityTracker", () => {
     store.appendAll(runId, [
       { nodeId: "p1", event: { kind: "reset" } },
       { nodeId: "p1", event: { kind: "running" } },
-      { nodeId: "p1", event: { kind: "failed", payload: { message: "p1 failed: exit code 3" } } },
+      {
+        nodeId: "p1",
+        event: { kind: "failed", payload: { message: "p1 failed: rejected: wrong scope" } },
+      },
     ]);
 
     expect(activity().map((push) => push.value.entry)).toEqual([
       { id: 1, nodeId: "p2", at: 400, kind: "turn", summary: "All set." },
-      { id: 2, nodeId: "p1", at: 400, kind: "failure", summary: "Script exited with code 3" },
+      { id: 2, nodeId: "p1", at: 400, kind: "failure", summary: "Rejected: wrong scope" },
     ]);
     expect(inner.activity(runId)).toHaveLength(2);
   });

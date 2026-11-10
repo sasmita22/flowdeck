@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/undeclared-variable.js";
 import type { BuildConfig } from "../../../../src/core/flow/schema.js";
-import { agent, flow, gate, prompt, script } from "../../../fixtures/flow-builders.js";
+import { agent, ask, flow, gate } from "../../../fixtures/flow-builders.js";
 
 const check = (nodes: unknown[], variables: BuildConfig["variables"] = []) => {
   const base = flow(nodes, []);
@@ -9,10 +9,8 @@ const check = (nodes: unknown[], variables: BuildConfig["variables"] = []) => {
 };
 
 describe("undeclared-variable", () => {
-  it.each([
-    ["a prompt", prompt("fix", { settings: { instructions: "Fix {{x}}." } })],
-    ["an agent", agent("fix", { settings: { instructions: "Fix {{x}}." } })],
-  ])("reports %s using an undeclared variable, naming the node and the variable", (_, node) => {
+  it("reports an agent using an undeclared variable, naming the node and the variable", () => {
+    const node = agent("fix", { settings: { instructions: "Fix {{x}}." } });
     const errors = check([node], [{ name: "ticket", kind: "text" }]);
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
@@ -25,7 +23,7 @@ describe("undeclared-variable", () => {
     expect(
       check(
         [
-          prompt("fix", { settings: { instructions: "Fix {{ticket}}." } }),
+          agent("fix", { settings: { instructions: "Fix {{ticket}}." } }),
           agent("check", { settings: { instructions: "Run e2e: {{ e2e }}" } }),
         ],
         [
@@ -36,10 +34,16 @@ describe("undeclared-variable", () => {
     ).toEqual([]);
   });
 
-  it("does not scan nodes other than Prompt and Agent", () => {
+  it("names only Agents in its rule message", () => {
+    expect(rule.message).toBe(
+      "Every {{name}} in an Agent must be a variable declared in Build configuration.",
+    );
+  });
+
+  it("does not scan nodes other than Agent", () => {
     expect(
       check([
-        script("run", { settings: { command: "echo {{x}}" } }),
+        ask("run", { settings: { question: "{{x}}?", options: ["yes", "no"] } }),
         gate("look", { settings: { shown: "{{x}}", skippable: false } }),
       ]),
     ).toEqual([]);

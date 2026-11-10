@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,7 +7,6 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import { createAppWaiter, type AppWaiter } from "../../../src/app/engine/app-waiter.js";
 import {
   createEngineHandler,
@@ -26,7 +25,7 @@ import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
-import { onMainFlow, gate, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
@@ -48,17 +47,7 @@ const flowdeckBranches = async (repo: string): Promise<string[]> =>
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
-const sh = (id: string, command: string) =>
-  script(id, { settings: { command: "sh", args: ["-c", command] } });
-
-const isAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
+const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\"]+)/;
 
 describe("an app restart", () => {
   let home: string;
@@ -80,13 +69,25 @@ describe("an app restart", () => {
     sessionId: options.claudeSessionId,
     session: { ensureStarted: async () => undefined },
     prompts: {
-      sendPrompt: async () => {
+      sendPrompt: async (text) => {
         sending.started++;
         await sending.held;
-        setTimeout(
-          () => events.publish({ kind: "Stop", sessionId: options.claudeSessionId, payload: {} }),
-          0,
-        );
+        const [, agentType, nodeId] = dispatched.exec(text) ?? [];
+        setTimeout(() => {
+          if (nodeId !== undefined) {
+            events.publish({
+              kind: "PostToolUse",
+              sessionId: options.claudeSessionId,
+              payload: {
+                tool_name: "Agent",
+                tool_input: { subagent_type: agentType, prompt: `NODE ${nodeId}\nGo` },
+                tool_use_id: `toolu-${nodeId}`,
+                tool_response: { status: "completed", agentId: `agent-${nodeId}`, agentType },
+              },
+            });
+          }
+          events.publish({ kind: "Stop", sessionId: options.claudeSessionId, payload: {} });
+        }, 0);
       },
       interrupt: async () => undefined,
     },
@@ -118,7 +119,6 @@ describe("an app restart", () => {
       run: {
         fs: new NodeFileSystem(),
         now: Date.now,
-        scripts: new NodeProcessRunner(),
         waiter: new FakeWaiter([]),
         startEvents: async () => ({ events, stop: async () => undefined }),
         openSession: async (options) => {
@@ -187,16 +187,11 @@ describe("an app restart", () => {
       (push): push is Extract<EnginePush, { push: "wait" }> =>
         push.push === "wait" && push.runId === runId,
     )?.value as PendingWait | null | undefined;
-  const cwdOf = (runId: string) => {
-    const cwd = runs.findRun(runId)?.session.cwd;
-    if (cwd === undefined || cwd === "") throw new Error(`run ${runId} has no folder`);
-    return cwd;
-  };
   const sessionName = (runId: string) => runs.findRun(runId)?.session.tmuxName ?? "";
 
   const askedAtGate = () =>
     onMainFlow(
-      [prompt("p1"), gate("g1", { settings: { shown: "Check the plan" } }), sh("s2", "true")],
+      [agent("p1"), gate("g1", { settings: { shown: "Check the plan" } }), agent("s2")],
       [thenWire("p1", "g1"), thenWire("g1", "s2")],
     );
 
@@ -241,7 +236,7 @@ describe("an app restart", () => {
       let release: () => void = () => undefined;
       sending.held = new Promise((resolve) => (release = resolve));
       const first = newHandler();
-      await start(first, onMainFlow([prompt("p1")], []));
+      await start(first, onMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       let detached = false;
 
@@ -257,7 +252,7 @@ describe("an app restart", () => {
     it("stops waiting for a prompt that never finishes sending after 8 seconds", async () => {
       sending.held = new Promise(() => undefined);
       const first = newHandler();
-      await start(first, onMainFlow([prompt("p1")], []));
+      await start(first, onMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -272,24 +267,6 @@ describe("an app restart", () => {
       } finally {
         vi.useRealTimers();
       }
-    });
-
-    it("leaves a running script running", async () => {
-      const first = newHandler();
-      const runId = await start(
-        first,
-        onMainFlow([sh("s1", "echo $$ > s1.pid; exec sleep 30")], []),
-      );
-      const pidText = () => readFile(join(cwdOf(runId), "s1.pid"), "utf8").catch(() => "");
-      await vi.waitFor(async () => expect(await pidText()).toMatch(/^\d+\n$/));
-
-      await first.detach();
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const pid = Number(await pidText());
-      expect(isAlive(pid)).toBe(true);
-      expect(runs.findRun(runId)?.status).toBe("running");
-      process.kill(pid, "SIGKILL");
     });
   });
 
@@ -320,35 +297,6 @@ describe("an app restart", () => {
       expect(statusOf(runId, "s2")).toBe("done");
     });
 
-    it("rejoins a script that kept running while the app was closed, without running it again", async () => {
-      const first = newHandler();
-      const runId = await start(
-        first,
-        onMainFlow(
-          [
-            sh(
-              "s1",
-              "echo once >> s1.log; n=0; while [ ! -f go ] && [ $n -lt 300 ]; do sleep 0.05; n=$((n+1)); done",
-            ),
-            sh("s2", "true"),
-          ],
-          [thenWire("s1", "s2")],
-        ),
-      );
-      await vi.waitFor(async () =>
-        expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8").catch(() => "")).toBe("once\n"),
-      );
-      await first.detach();
-
-      const second = newHandler();
-      await second.reattach();
-      await writeFile(join(cwdOf(runId), "go"), "");
-
-      await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"), { timeout: 5000 });
-      expect(await readFile(join(cwdOf(runId), "s1.log"), "utf8")).toBe("once\n");
-      expect(kindsOf(runId, "s1")).toEqual(["running", "done"]);
-    });
-
     it("leaves a run interrupted, with a plain note, when its session has ended", async () => {
       const first = newHandler();
       const runId = await start(first, askedAtGate());
@@ -375,7 +323,7 @@ describe("an app restart", () => {
       const runId = await start(
         first,
         onMainFlow(
-          [prompt("p1"), gate("g1"), prompt("p2")],
+          [agent("p1"), gate("g1"), agent("p2")],
           [thenWire("p1", "g1"), thenWire("g1", "p2")],
         ),
       );
@@ -548,7 +496,7 @@ describe("an app restart", () => {
     ) => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
-      const blueprint = onMainFlow([prompt("p1")], []);
+      const blueprint = onMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
         session: { ...blueprint.session, buildConfig: { repo: repoPath, variables: [] } },
@@ -632,7 +580,7 @@ describe("an app restart", () => {
           script: { questions: [question] },
         }),
       });
-      const blueprint = onMainFlow([prompt("p1")], []);
+      const blueprint = onMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
         session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },

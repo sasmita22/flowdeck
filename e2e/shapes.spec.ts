@@ -15,8 +15,6 @@ import {
   join as joinNode,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -33,15 +31,13 @@ const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, posi
 const everyShape = () => {
   const seeded = flow(
     [
-      at(prompt("prompt"), 190, 10),
       at(agent("agent"), 10, 80),
-      at(script("script"), 190, 80),
       at(gate("gate"), 10, 150),
       at(hardstop("hardstop"), 190, 150),
       at(ask("ask"), 10, 220),
       at(output("output"), 190, 220),
       at(loop("loop"), 60, 360),
-      at(prompt("body", { parent: "loop" }), 60, 450),
+      at(agent("body", { parent: "loop" }), 60, 450),
     ],
     [],
   );
@@ -71,8 +67,8 @@ const forEachShapes = () =>
   flow(
     [
       at(forEach("each"), 40, 40),
-      at(prompt("first", { parent: "each" }), 40, 130),
-      at(prompt("second", { parent: "each" }), 40, 200),
+      at(agent("first", { parent: "each" }), 40, 130),
+      at(agent("second", { parent: "each" }), 40, 200),
     ],
     [thenWire("first", "second")],
   );
@@ -82,8 +78,8 @@ const branchShapes = () => {
     [
       at(trigger("trigger"), 10, 10),
       at({ ...branch("branch", "e2e"), label: "E2E?" }, 220, 10),
-      at(script("yes"), 400, 10),
-      at(script("no"), 220, 120),
+      at(agent("yes"), 400, 10),
+      at(agent("no"), 220, 120),
     ],
     [
       thenWire("trigger", "branch"),
@@ -111,7 +107,7 @@ const pointsOf = async (polygon: Locator) =>
 
 const exact = { threshold: 0 };
 
-const nodeShots = ["prompt", "agent", "script", "gate", "hardstop", "ask"];
+const nodeShots = ["agent", "gate", "hardstop", "ask"];
 
 const circleShot = async (window: Page, id: string, name: string) => {
   const node = window.getByTestId(`node-${id}`);
@@ -325,9 +321,9 @@ test("A parallel start and end show their full tag inside the bar and their labe
       [
         at(trigger("trigger"), 80, 120),
         { ...at(fork("fork"), 298, 40), label: "Split the review" },
-        at(prompt("b1"), 374, 40),
-        at(prompt("b2"), 374, 120),
-        at(prompt("b3"), 374, 200),
+        at(agent("b1"), 374, 40),
+        at(agent("b2"), 374, 120),
+        at(agent("b3"), 374, 200),
         { ...at(joinNode("join"), 592, 120), label: "Wait for all reviewers" },
         at(output("output"), 668, 120),
       ],

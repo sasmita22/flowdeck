@@ -51,12 +51,16 @@ const fileWire = (from: string, to: string, file: string) => ({
   file,
 });
 
-type Step =
-  | { type: "agent"; id: string; label: string; instructions: string; writes?: string[] }
-  | { type: "prompt"; id: string; label: string; instructions: string; expectedOutput: string };
+type Step = {
+  type: "agent";
+  id: string;
+  label: string;
+  instructions: string;
+  writes?: string[];
+};
 
 function liveFlow(steps: Step[], files: ReturnType<typeof fileWire>[]): Flow {
-  const ids = ["t", ...steps.map((step) => step.id)];
+  const ids = ["t", ...steps.map((step) => step.id), "o"];
   return parseFlow({
     nodes: [
       { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
@@ -65,17 +69,21 @@ function liveFlow(steps: Step[], files: ReturnType<typeof fileWire>[]): Flow {
         label: step.label,
         type: step.type,
         position: at(index + 1),
-        settings:
-          step.type === "prompt"
-            ? { instructions: step.instructions, expectedOutput: step.expectedOutput }
-            : {
-                role: "",
-                instructions: step.instructions,
-                model: "haiku",
-                tools: ["Read", "Write"],
-                ...(step.writes === undefined ? {} : { writes: step.writes }),
-              },
+        settings: {
+          role: "",
+          instructions: step.instructions,
+          model: "haiku",
+          tools: ["Read", "Write"],
+          ...(step.writes === undefined ? {} : { writes: step.writes }),
+        },
       })),
+      {
+        id: "o",
+        label: "Done",
+        type: "output",
+        position: at(steps.length + 1),
+        settings: { name: "result", type: "text" },
+      },
     ],
     wires: [...ids.slice(1).map((id, index) => then(ids[index] ?? "", id)), ...files],
     session: {
@@ -236,12 +244,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real cl
         const flow = liveFlow(
           [
             {
-              type: "prompt",
+              type: "agent",
               id: "p1",
               label: "Write plan",
               instructions:
                 'Write this one line to plan.md: "Plan: greet the user by name on the home page."',
-              expectedOutput: "plan.md, one line naming the plan",
             },
             {
               type: "agent",

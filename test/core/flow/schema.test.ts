@@ -15,12 +15,12 @@ const session = (buildConfig: Record<string, unknown> = { base: "main", variable
   buildConfig,
 });
 
-const promptNode = {
+const agentNode = {
   id: "p",
   label: "P",
   position: { x: 0, y: 0 },
-  type: "prompt",
-  settings: { instructions: "Hi" },
+  type: "agent",
+  settings: { role: "", instructions: "Hi", model: "sonnet", tools: [] },
 };
 
 const triggerNode = (settings: Record<string, unknown>) => ({
@@ -40,7 +40,7 @@ const branchNode = (settings: Record<string, unknown>) => ({
 });
 
 const flowWith = (overrides: Record<string, unknown>) => ({
-  nodes: [promptNode],
+  nodes: [agentNode],
   wires: [],
   session: session(),
   ...overrides,
@@ -130,7 +130,7 @@ describe("parseFlow", () => {
   });
 
   it("parses a Trigger with no inputs or flags", () => {
-    const flow = flowWith({ nodes: [triggerNode({}), promptNode] });
+    const flow = flowWith({ nodes: [triggerNode({}), agentNode] });
 
     expect(parseFlow(flow)).toEqual(flow);
   });
@@ -159,7 +159,7 @@ describe("parseFlow", () => {
       type: "loop",
       settings: { condition: "tests pass", onCap: "fail" },
     };
-    const parsed = parseFlow(flowWith({ nodes: [promptNode, loop] }));
+    const parsed = parseFlow(flowWith({ nodes: [agentNode, loop] }));
     expect(parsed.nodes[1]?.settings).toEqual({ condition: "tests pass", cap: 3, onCap: "fail" });
   });
 
@@ -171,13 +171,13 @@ describe("parseFlow", () => {
       type: "loop",
       settings: { condition: "tests pass", cap: "three" },
     };
-    const error = parseError(flowWith({ nodes: [promptNode, loop] }));
+    const error = parseError(flowWith({ nodes: [agentNode, loop] }));
     expect(error.issues.map((issue) => issue.path)).toContainEqual(["nodes", 1, "settings", "cap"]);
     expect(error.message).toContain("settings.cap");
   });
 
   it("rejects an unknown node type at the node's path", () => {
-    const error = parseError(flowWith({ nodes: [{ ...promptNode, type: "banana" }] }));
+    const error = parseError(flowWith({ nodes: [{ ...agentNode, type: "banana" }] }));
     expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
   });
 
@@ -202,19 +202,19 @@ describe("parseFlow", () => {
       type: "join",
       settings: { wait: "first", onBranchFail: "skip" },
     };
-    const flow = flowWith({ nodes: [promptNode, fork, join] });
+    const flow = flowWith({ nodes: [agentNode, fork, join] });
 
     expect(parseFlow(flow)).toEqual(flow);
   });
 
-  it("parses a for each with a prompt in its body", () => {
-    const flow = flowWith({ nodes: [forEach("e1"), { ...promptNode, parent: "e1" }] });
+  it("parses a for each with an agent in its body", () => {
+    const flow = flowWith({ nodes: [forEach("e1"), { ...agentNode, parent: "e1" }] });
 
     expect(parseFlow(flow)).toEqual(flow);
   });
 
   it("names the field path of an absolute for each file", () => {
-    const error = parseError(flowWith({ nodes: [promptNode, forEach("e1", { file: "/abs.md" })] }));
+    const error = parseError(flowWith({ nodes: [agentNode, forEach("e1", { file: "/abs.md" })] }));
     expect(error.issues.map((issue) => issue.path)).toContainEqual([
       "nodes",
       1,
@@ -224,21 +224,27 @@ describe("parseFlow", () => {
   });
 
   it("parses a branch on a variable", () => {
-    const flow = flowWith({ nodes: [promptNode, branchNode({ variable: "e2e" })] });
+    const flow = flowWith({ nodes: [agentNode, branchNode({ variable: "e2e" })] });
 
     expect(parseFlow(flow)).toEqual(flow);
   });
 
   it("parses a branch with the old flag key into a branch on the variable", () => {
-    const parsed = parseFlow(flowWith({ nodes: [promptNode, branchNode({ flag: "e2e" })] }));
+    const parsed = parseFlow(flowWith({ nodes: [agentNode, branchNode({ flag: "e2e" })] }));
 
     expect(parsed.nodes[1]?.settings).toEqual({ variable: "e2e" });
   });
 
-  it("lists the thirteen node types", () => {
+  it.each([
+    ["prompt", { instructions: "Hi" }],
+    ["script", { command: "npm" }],
+  ])("rejects a %s node at the node's path", (type, settings) => {
+    const error = parseError(flowWith({ nodes: [{ ...agentNode, type, settings }] }));
+    expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
+  });
+
+  it("lists the eleven node types", () => {
     expect(NodeType.options).toEqual([
-      "prompt",
-      "script",
       "agent",
       "gate",
       "ask",

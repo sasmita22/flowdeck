@@ -12,7 +12,6 @@ import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
@@ -49,7 +48,6 @@ export function liveEnvironment(fs: NodeFileSystem): Omit<LiveRun, "waiter"> {
   return {
     fs,
     now: Date.now,
-    scripts: new NodeProcessRunner(),
     startEvents: async (socketPath) => {
       await mkdir(dirname(socketPath), { recursive: true });
       const server = new HookSocketServer({ socketPath });

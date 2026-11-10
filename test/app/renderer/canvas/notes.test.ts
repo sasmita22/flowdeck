@@ -9,7 +9,7 @@ import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { noteLook } from "../../../../src/app/renderer/nodes/note-look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type CanvasNote, type Flow } from "../../../../src/core/flow/schema.js";
-import { flow, loop, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const unfinished = new Set(["required-settings", "repo-required", "one-start", "stop-required"]);
 
@@ -40,7 +40,7 @@ const loaded = (input: Flow) => {
 
 const promptAndNote = () =>
   loaded({
-    ...flow([{ ...prompt("prompt-1"), position: { x: 300, y: 0 } }], []),
+    ...flow([{ ...agent("agent-1"), position: { x: 300, y: 0 } }], []),
     notes: [note("n1", { text: "Why", position: { x: 0, y: 0 } })],
   });
 
@@ -58,7 +58,7 @@ describe("nextNoteId", () => {
 
   it("takes the lowest number no note or node uses, ignoring case", () => {
     const current = {
-      ...flow([prompt("N2")], []),
+      ...flow([agent("N2")], []),
       notes: [note("n1"), note("n4")],
     };
     expect(nextNoteId(current)).toBe("n3");
@@ -68,7 +68,7 @@ describe("nextNoteId", () => {
 describe("adding a note", () => {
   it("drops an empty note of the default size at the drop point, selected alone", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 400, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 400, y: 0 }));
 
     act(store, (s) => s.drop("note", { x: 12, y: 34 }));
 
@@ -80,7 +80,7 @@ describe("adding a note", () => {
 
   it("drops a note where it is dropped even over a node", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
 
     act(store, (s) => s.drop("note", { x: 10, y: 10 }));
 
@@ -176,8 +176,8 @@ describe("moving a note", () => {
     const before = store.getState().flow;
 
     act(store, (s) => s.dragTo("n1", { x: 5, y: 5 }));
-    act(store, (s) => s.dragTo("prompt-1", { x: 305, y: 5 }));
-    act(store, (s) => s.endDrag(["n1", "prompt-1"]));
+    act(store, (s) => s.dragTo("agent-1", { x: 305, y: 5 }));
+    act(store, (s) => s.endDrag(["n1", "agent-1"]));
 
     expect(notesOf(store)?.[0]?.position).toEqual({ x: 5, y: 5 });
     expect(store.getState().flow.nodes[0]?.position).toEqual({ x: 305, y: 5 });
@@ -251,7 +251,7 @@ describe("resizing a note", () => {
 describe("deleting a note", () => {
   it("deletes a selected note; undo puts it back in its place and redo deletes it again", () => {
     const store = loaded({
-      ...flow([prompt("prompt-1")], []),
+      ...flow([agent("agent-1")], []),
       notes: [note("n1"), note("n2", { text: "middle" }), note("n3")],
     });
     const before = store.getState().flow;
@@ -272,7 +272,7 @@ describe("deleting a note", () => {
   it("deletes a note and a node selected together as one command", () => {
     const store = promptAndNote();
     const before = store.getState().flow;
-    act(store, (s) => s.select(["n1", "prompt-1"]));
+    act(store, (s) => s.select(["n1", "agent-1"]));
 
     act(store, (s) => s.deleteSelection());
 
@@ -318,7 +318,7 @@ describe("selecting all", () => {
 
     store.getState().selectAll();
 
-    expect(store.getState().selection).toEqual(["prompt-1", "n1"]);
+    expect(store.getState().selection).toEqual(["agent-1", "n1"]);
   });
 });
 
@@ -326,8 +326,8 @@ describe("toViewNodes with notes", () => {
   const noted = (): Flow => ({
     ...flow(
       [
-        { ...prompt("a"), position: { x: 0, y: 0 } },
-        { ...prompt("b"), position: { x: 300, y: 0 } },
+        { ...agent("a"), position: { x: 0, y: 0 } },
+        { ...agent("b"), position: { x: 300, y: 0 } },
       ],
       [thenWire("a", "b")],
     ),
@@ -362,7 +362,7 @@ describe("toViewNodes with notes", () => {
 
   it("puts notes after the frames and before the nodes, so nodes draw over them", () => {
     const looped: Flow = {
-      ...flow([loop("L"), prompt("a", { parent: "L" })], []),
+      ...flow([loop("L"), agent("a", { parent: "L" })], []),
       notes: noted().notes ?? [],
     };
 

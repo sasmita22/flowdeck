@@ -22,8 +22,8 @@ function stored(entries: [string, RunEvent][]): StoredEvent[] {
   return entries.map(([nodeId, event], i) => ({ ...event, nodeId, seq: i + 1, time: "t" }));
 }
 
-const promptTurn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
-  userText: `<command-message>${prefix}:${id}</command-message> <command-name>/${prefix}:${id}</command-name>`,
+const agentTurn = (id: string, ended: boolean, lastAssistantText?: string): TranscriptTurn => ({
+  userText: agentTurnText(prefix, id, { id, given: [], writes: [] }),
   ended,
   ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
 });
@@ -35,7 +35,7 @@ describe("decideResume", () => {
   const manifest = {
     hash,
     prefix,
-    nodes: [node("p1", "prompt"), node("p2", "prompt"), node("p3", "prompt")],
+    nodes: [node("p1", "agent"), node("p2", "agent"), node("p3", "agent")],
   };
   const killedAtP2 = stored([
     ["p1", sent],
@@ -51,7 +51,7 @@ describe("decideResume", () => {
       ["p3", { kind: "running" }],
       ["p3", { kind: "failed", payload: { message: "p3 failed: exit code 1" } }],
     ]);
-    const nodes = [...manifest.nodes, node("p4", "prompt")];
+    const nodes = [...manifest.nodes, node("p4", "agent")];
 
     expect(decideResume({ manifest: { hash, prefix, nodes }, events, turns: [] })).toEqual({});
   });
@@ -59,7 +59,7 @@ describe("decideResume", () => {
   it.each<[string, RunEvent[]]>([
     ["running again after a permission answer", [{ kind: "needs-you" }, { kind: "running" }]],
     ["waiting on a permission answer", [{ kind: "needs-you" }]],
-  ])("settles a Prompt that was %s from its transcript turn", (_, afterSend) => {
+  ])("settles an Agent that was %s from its transcript turn", (_, afterSend) => {
     const events = stored([
       ["p1", sent],
       ["p1", done],
@@ -70,45 +70,45 @@ describe("decideResume", () => {
     const actions = decideResume({
       manifest,
       events,
-      turns: [promptTurn("p1", true, "A"), promptTurn("p2", true, "X")],
+      turns: [agentTurn("p1", true, "A"), agentTurn("p2", true, "X")],
     });
 
     expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "X" } });
   });
 
-  it("sends a Prompt killed between its sent mark and the send", () => {
+  it("sends an Agent killed between its sent mark and the send", () => {
     const actions = decideResume({
       manifest,
       events: killedAtP2,
-      turns: [promptTurn("p1", true, "A")],
+      turns: [agentTurn("p1", true, "A")],
     });
 
     expect(actions).toEqual({ p2: { kind: "send" } });
   });
 
-  it("completes a Prompt whose turn ended while the runner was dead, with its last text", () => {
+  it("completes an Agent whose turn ended while the runner was dead, with its last text", () => {
     const actions = decideResume({
       manifest,
       events: killedAtP2,
-      turns: [promptTurn("p1", true, "A"), promptTurn("p2", true, "X")],
+      turns: [agentTurn("p1", true, "A"), agentTurn("p2", true, "X")],
     });
 
     expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "X" } });
   });
 
-  it("waits for a Prompt whose turn is still running", () => {
+  it("waits for an Agent whose turn is still running", () => {
     const actions = decideResume({
       manifest,
       events: killedAtP2,
-      turns: [promptTurn("p1", true, "A"), promptTurn("p2", false)],
+      turns: [agentTurn("p1", true, "A"), agentTurn("p2", false)],
     });
 
     expect(actions).toEqual({ p2: { kind: "wait" } });
   });
 
-  it("settles a hash-named build's Prompt from a turn sent under its hash, its prefix", () => {
+  it("settles a hash-named build's Agent from a turn sent under its hash, its prefix", () => {
     const oldTurn = (id: string, lastAssistantText: string): TranscriptTurn => ({
-      userText: `<command-message>${hash}:${id}</command-message> <command-name>/${hash}:${id}</command-name>`,
+      userText: agentTurnText(hash, id, { id, given: [], writes: [] }),
       ended: true,
       lastAssistantText,
     });
@@ -124,16 +124,16 @@ describe("decideResume", () => {
 
   it("does not take p1's turn for p10's", () => {
     const actions = decideResume({
-      manifest: { hash, prefix, nodes: [node("p1", "prompt"), node("p10", "prompt")] },
+      manifest: { hash, prefix, nodes: [node("p1", "agent"), node("p10", "agent")] },
       events: stored([["p1", sent]]),
-      turns: [promptTurn("p10", true, "A")],
+      turns: [agentTurn("p10", true, "A")],
     });
 
     expect(actions).toEqual({ p1: { kind: "send" } });
   });
 
   describe("a loop body node in round 2", () => {
-    const loopManifest = { hash, prefix, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] };
+    const loopManifest = { hash, prefix, nodes: [node("l1", "loop"), node("r1", "agent", "l1")] };
     const round2 = stored([
       ["l1", { kind: "running" }],
       ["l1", { kind: "round", payload: { round: 1 } }],
@@ -148,7 +148,7 @@ describe("decideResume", () => {
       const actions = decideResume({
         manifest: loopManifest,
         events: round2,
-        turns: [promptTurn("r1", true, "round one")],
+        turns: [agentTurn("r1", true, "round one")],
       });
 
       expect(actions).toEqual({ r1: { kind: "send" } });
@@ -158,7 +158,7 @@ describe("decideResume", () => {
       const actions = decideResume({
         manifest: loopManifest,
         events: round2,
-        turns: [promptTurn("r1", true, "round one"), promptTurn("r1", false)],
+        turns: [agentTurn("r1", true, "round one"), agentTurn("r1", false)],
       });
 
       expect(actions).toEqual({ r1: { kind: "wait" } });
@@ -170,7 +170,7 @@ describe("decideResume", () => {
       decideResume({
         manifest,
         events: killedAtP2,
-        turns: [promptTurn("p2", true, "X"), promptTurn("p2", true, "Y")],
+        turns: [agentTurn("p2", true, "X"), agentTurn("p2", true, "Y")],
       });
 
     expect(decide).toThrow(ResumeError);
@@ -181,7 +181,9 @@ describe("decideResume", () => {
     const agentManifest = { hash, prefix, nodes: [node("a1", "agent")] };
     const events = stored([["a1", sent]]);
     const turn = (ended: boolean): TranscriptTurn => ({
-      userText: `The user answered: blue. ${agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] })}`,
+      userText: agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] }, undefined, [
+        "blue",
+      ]),
       ended,
       ...(ended ? { lastAssistantText: "DONE" } : {}),
     });
@@ -295,11 +297,6 @@ describe("decideResume", () => {
       ended,
       ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
     });
-    const planTurn = (args: string | undefined, ended: boolean, lastAssistantText?: string) => ({
-      userText: `<command-message>${prefix}:plan</command-message> <command-name>/${prefix}:plan</command-name>${args === undefined ? "" : ` <command-args>${args}</command-args>`}`,
-      ended,
-      ...(lastAssistantText === undefined ? {} : { lastAssistantText }),
-    });
 
     it("AT-20: resumes at a2 when the session died after a1 settled and before a2 was sent", () => {
       const shared = {
@@ -340,30 +337,6 @@ describe("decideResume", () => {
       expect(
         decideResume({ manifest: shared, events, turns: [reviewTurn("a10", true, "A")] }),
       ).toEqual({ a1: { kind: "send" } });
-    });
-
-    it("counts a prompt's turn by the node marker in its command arguments", () => {
-      const shared = {
-        hash,
-        prefix,
-        nodes: [onPiece("p1", "prompt", "plan"), onPiece("p2", "prompt", "plan")],
-      };
-      const events = stored([
-        ["p1", sent],
-        ["p1", done],
-        ["p2", sent],
-      ]);
-
-      expect(
-        decideResume({ manifest: shared, events, turns: [planTurn("NODE p1", true, "A")] }),
-      ).toEqual({ p2: { kind: "send" } });
-      expect(
-        decideResume({
-          manifest: shared,
-          events,
-          turns: [planTurn("NODE p1", true, "A"), planTurn("NODE p2", false)],
-        }),
-      ).toEqual({ p2: { kind: "wait" } });
     });
 
     it("AT-11: resumes after a settled section whose branches share a piece with a later node", () => {
@@ -438,20 +411,25 @@ describe("decideResume", () => {
     });
 
     it("AT-19: counts a turn with no node marker for a piece only one node uses", () => {
-      const single = { hash, prefix, nodes: [onPiece("p1", "prompt", "plan")] };
+      const single = { hash, prefix, nodes: [onPiece("p1", "agent", "plan")] };
       const events = stored([["p1", sent]]);
+      const unmarked: TranscriptTurn = {
+        userText: `Use the Agent tool with subagent_type "${prefix}:plan" and the prompt "Go". Then reply DONE.`,
+        ended: true,
+        lastAssistantText: "X",
+      };
 
-      expect(
-        decideResume({ manifest: single, events, turns: [planTurn(undefined, true, "X")] }),
-      ).toEqual({ p1: { kind: "complete", stopMessage: "X" } });
+      expect(decideResume({ manifest: single, events, turns: [unmarked] })).toEqual({
+        p1: { kind: "complete", stopMessage: "X" },
+      });
     });
   });
 
-  it("fails a Prompt whose turn was cut off by a session that ended, so Retry can send it again", () => {
+  it("fails an Agent whose turn was cut off by a session that ended, so Retry can send it again", () => {
     const actions = decideResume({
       manifest,
       events: killedAtP2,
-      turns: [promptTurn("p1", true, "A"), promptTurn("p2", false)],
+      turns: [agentTurn("p1", true, "A"), agentTurn("p2", false)],
       sessionRestarted: true,
     });
 
@@ -468,34 +446,11 @@ describe("decideResume", () => {
     const actions = decideResume({
       manifest,
       events: killedAtP2,
-      turns: [promptTurn("p1", true, "A"), promptTurn("p2", true, "B")],
+      turns: [agentTurn("p1", true, "A"), agentTurn("p2", true, "B")],
       sessionRestarted: true,
     });
 
     expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "B" } });
-  });
-
-  it("waits for a Script still running in its own process when scripts can be rejoined", () => {
-    const actions = decideResume({
-      manifest: { hash, prefix, nodes: [node("s1", "script")] },
-      events: stored([["s1", { kind: "running" }]]),
-      turns: [],
-      rejoinScripts: true,
-    });
-
-    expect(actions).toEqual({ s1: { kind: "wait" } });
-  });
-
-  it("fails a Script that was running and never reruns it", () => {
-    const actions = decideResume({
-      manifest: { hash, prefix, nodes: [node("s1", "script")] },
-      events: stored([["s1", { kind: "running" }]]),
-      turns: [],
-    });
-
-    expect(actions).toEqual({
-      s1: { kind: "fail", message: "s1 failed: was running when the runner stopped" },
-    });
   });
 
   it.each(["gate", "ask", "hardstop", "loop"] as const)(
@@ -509,7 +464,7 @@ describe("decideResume", () => {
       const human = {
         hash,
         prefix,
-        nodes: [node("h1", type), node("p1", "prompt", type === "loop" ? "h1" : undefined)],
+        nodes: [node("h1", type), node("p1", "agent", type === "loop" ? "h1" : undefined)],
       };
       const asking: [string, RunEvent][] =
         type === "loop"
@@ -533,7 +488,7 @@ describe("decideResume", () => {
   );
 
   it("asks again at a hard stop that was checking its condition when the runner stopped", () => {
-    const manifest = { hash, prefix, nodes: [node("h1", "hardstop"), node("p1", "prompt")] };
+    const manifest = { hash, prefix, nodes: [node("h1", "hardstop"), node("p1", "agent")] };
 
     expect(
       decideResume({ manifest, events: stored([["h1", { kind: "running" }]]), turns: [] }),
@@ -554,7 +509,7 @@ describe("decideResume", () => {
 
     expect(
       decideResume({
-        manifest: { hash, prefix, nodes: [node("l1", "loop"), node("r1", "prompt", "l1")] },
+        manifest: { hash, prefix, nodes: [node("l1", "loop"), node("r1", "agent", "l1")] },
         events,
         turns: [],
       }),

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDialogTestIds, controlTestIds } from "../src/app/renderer/test-ids.js";
-import { flow, output, prompt, script, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import { agent, flow, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
@@ -36,11 +36,11 @@ const ticketFlow = () =>
   flow(
     [
       at(trigger("start"), 10, 10),
-      at(prompt("a"), 120, 10),
+      at(agent("a"), 120, 10),
       at(output("stop"), 360, 10),
-      at(prompt("b"), 10, 140),
-      at(script("c"), 10, 260),
-      at(script("d"), 240, 260),
+      at(agent("b"), 10, 140),
+      at(agent("c"), 10, 260),
+      at(agent("d"), 240, 260),
     ],
     [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
   );
@@ -123,7 +123,7 @@ test("Confirm before ignoring: Cancel builds nothing, Build anyway leaves the lo
 test("Nothing to confirm: a fully wired blueprint builds without the confirm step", async () => {
   const window = await launchBuilder(
     flow(
-      [at(trigger("start"), 10, 10), at(prompt("a"), 120, 10), at(output("stop"), 360, 10)],
+      [at(trigger("start"), 10, 10), at(agent("a"), 120, 10), at(output("stop"), 360, 10)],
       [thenWire("start", "a"), thenWire("a", "stop")],
     ),
   );

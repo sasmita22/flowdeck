@@ -44,9 +44,14 @@ function liveFlow(secret: string) {
       {
         id: "p1",
         label: "Tell",
-        type: "prompt",
+        type: "agent",
         position: at(1),
-        settings: { instructions: `The secret word is ${secret}. Reply only OK.` },
+        settings: {
+          role: "",
+          instructions: `The secret word is ${secret}. Write it to secret.md, then reply with only the secret word.`,
+          model: "haiku",
+          tools: ["Read", "Write"],
+        },
       },
       {
         id: "a1",
@@ -64,10 +69,14 @@ function liveFlow(secret: string) {
       {
         id: "p2",
         label: "Control",
-        type: "prompt",
+        type: "agent",
         position: at(3),
         settings: {
-          instructions: "Write a file control.md whose only content is the secret word I told you.",
+          role: "",
+          instructions:
+            "Write a file control.md whose only content is the secret word in secret.md.",
+          model: "haiku",
+          tools: ["Read", "Write"],
         },
       },
       {
@@ -78,12 +87,23 @@ function liveFlow(secret: string) {
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
+    wires: [
+      then("t", "p1"),
+      then("p1", "a1"),
+      then("a1", "p2"),
+      then("p2", "o"),
+      {
+        kind: "file",
+        from: { node: "p1", port: "file-out" },
+        to: { node: "p2", port: "file-in" },
+        file: "secret.md",
+      },
+    ],
     session: {
       name: "main",
       buildConfig: { base: "main", variables: [] },
       model: "haiku",
-      allowedTools: ["Write"],
+      allowedTools: ["Read", "Write"],
       permissionMode: "acceptEdits",
       connectors: [],
     },
@@ -234,8 +254,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
           "a SubagentStop for the build's agent",
         )
         .toContain(`${buildName}:${piece}`);
+      expect
+        .soft(
+          recorded.some(
+            (event) =>
+              event.kind === "PostToolUse" &&
+              event.payload["tool_name"] === "Agent" &&
+              JSON.stringify(event.payload["tool_response"]).includes(secret),
+          ),
+          "positive control: Tell's reply puts the secret in the main session",
+        )
+        .toBe(true);
       expect.soft(notes ?? "", "the subagent does not know the secret").not.toContain(secret);
-      expect.soft(control ?? "", "positive control: the main session knows it").toContain(secret);
+      expect
+        .soft(control ?? "", "positive control: the File wire hands it to Control")
+        .toContain(secret);
     },
   );
 });

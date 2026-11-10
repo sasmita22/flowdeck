@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
 
 const nth = <T>(list: T[], index: number): T => {
   const item = list[index];
@@ -19,12 +19,20 @@ const fileWire = (from: string, to: string) => ({
 const base = (): Flow =>
   flow(
     [
-      prompt("p1"),
+      agent("p1"),
       agent("a1", { parent: "p1", settings: { given: ["plan.md"] } }),
-      script("s1", { settings: { args: ["test"] } }),
+      agent("s1", { settings: { tools: ["Bash"] } }),
     ],
     [thenWire("p1", "a1"), fileWire("a1", "s1")],
   );
+
+const agentSettings = (extra: { instructions?: string; tools?: string[]; writes?: string[] }) => ({
+  role: "implementer",
+  instructions: "Implement the plan.",
+  model: "sonnet",
+  tools: [],
+  ...extra,
+});
 
 const reverseKeys = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(reverseKeys);
@@ -61,10 +69,13 @@ describe("flowsEqual", () => {
     ["a node position", (f) => (nth(f.nodes, 0).position = { x: 10, y: 0 })],
     ["a node label", (f) => (nth(f.nodes, 0).label = "renamed")],
     ["a node parent", (f) => (nth(f.nodes, 1).parent = "s1")],
-    ["a setting value", (f) => (nth(f.nodes, 0).settings = { instructions: "Other work." })],
+    [
+      "a setting value",
+      (f) => (nth(f.nodes, 0).settings = agentSettings({ instructions: "Other work." })),
+    ],
     [
       "a list setting value",
-      (f) => (nth(f.nodes, 2).settings = { command: "npm", args: ["lint"] }),
+      (f) => (nth(f.nodes, 2).settings = agentSettings({ tools: ["Read"] })),
     ],
     ["a wire end", (f) => (nth(f.wires, 0).to = { node: "s1", port: "in" })],
     ["a removed wire", (f) => f.wires.pop()],
@@ -106,7 +117,7 @@ describe("flowsEqual", () => {
   it("tells an absent optional key from a present one", () => {
     const withoutParent = edited((f) => delete nth(f.nodes, 1).parent);
     const withExpectedOutput = edited(
-      (f) => (nth(f.nodes, 0).settings = { instructions: "Do the work.", expectedOutput: "done" }),
+      (f) => (nth(f.nodes, 0).settings = agentSettings({ writes: ["notes.md"] })),
     );
 
     expect(flowsEqual(base(), withoutParent)).toBe(false);

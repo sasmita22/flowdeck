@@ -4,7 +4,6 @@ import type { Flow, Node, Session, Wire } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
-import { compilePrompt } from "../nodes/prompt/compile.js";
 import { repoFolder } from "../run/workspace.js";
 import { pieceNames } from "./pieces.js";
 
@@ -66,8 +65,6 @@ const compile = (
     values: inputs.values,
   };
   switch (node.type) {
-    case "prompt":
-      return compilePrompt(node, compileInputs);
     case "agent":
       return compileAgent(node, compileInputs);
     default:

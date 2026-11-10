@@ -12,46 +12,38 @@
     },
     {
       "id": "p1",
-      "label": "Plan",
-      "type": "prompt",
+      "label": "Reply",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "instructions": "Write a plan for the ticket."
+        "role": "",
+        "instructions": "Reply with the single word OK.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
-      "id": "p2",
-      "label": "Build",
-      "type": "prompt",
+      "id": "q",
+      "label": "Ask",
+      "type": "ask",
       "position": {
         "x": 480,
         "y": 0
       },
       "settings": {
-        "instructions": "Implement the plan."
+        "question": "Continue?",
+        "options": ["yes"]
       }
     },
     {
-      "id": "p3",
-      "label": "Summarise",
-      "type": "prompt",
-      "position": {
-        "x": 720,
-        "y": 0
-      },
-      "settings": {
-        "instructions": "Summarise what changed."
-      }
-    },
-    {
-      "id": "done",
-      "label": "Done",
+      "id": "stop",
+      "label": "Stop",
       "type": "output",
       "position": {
-        "x": 960,
+        "x": 720,
         "y": 0
       },
       "settings": {
@@ -79,29 +71,18 @@
         "port": "out"
       },
       "to": {
-        "node": "p2",
+        "node": "q",
         "port": "in"
       }
     },
     {
       "kind": "then",
       "from": {
-        "node": "p2",
+        "node": "q",
         "port": "out"
       },
       "to": {
-        "node": "p3",
-        "port": "in"
-      }
-    },
-    {
-      "kind": "then",
-      "from": {
-        "node": "p3",
-        "port": "out"
-      },
-      "to": {
-        "node": "done",
+        "node": "stop",
         "port": "in"
       }
     }
@@ -109,17 +90,13 @@
   "session": {
     "name": "main",
     "buildConfig": {
+      "repo": "/work/repo",
       "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "variables": []
     },
-    "model": "sonnet",
+    "model": "haiku",
     "allowedTools": [],
-    "permissionMode": "default",
+    "permissionMode": "acceptEdits",
     "connectors": []
   }
 }

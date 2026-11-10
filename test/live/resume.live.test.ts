@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { nodeMarker } from "../../src/core/run/agent-calls.js";
-import { flow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -93,7 +93,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
       async () => {
         const parsed = flow(
           (["p1", "p2", "p3"] as const).map((id) =>
-            prompt(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
+            agent(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
           ),
           [thenWire("p1", "p2"), thenWire("p2", "p3")],
         );

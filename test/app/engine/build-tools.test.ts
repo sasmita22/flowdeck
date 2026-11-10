@@ -11,7 +11,6 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
-import { FakeProcessRunner } from "../../fakes/fake-process-runner.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -103,7 +102,6 @@ const setup = ({
       fs,
       now: () => deletedAtTime,
       waiter: new FakeWaiter([]),
-      scripts: new FakeProcessRunner([]),
       startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
       openSession: async (): Promise<OpenedSession> => {
         throw new Error("no run starts in these tests");

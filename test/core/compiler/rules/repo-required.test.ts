@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/repo-required.js";
 import { parseFlow, type Session } from "../../../../src/core/flow/schema.js";
-import { flow, prompt } from "../../../fixtures/flow-builders.js";
+import { agent, flow } from "../../../fixtures/flow-builders.js";
 
 const withConfig = (buildConfig: Session["buildConfig"]) => {
-  const base = flow([prompt("p")], []);
+  const base = flow([agent("p")], []);
   return { ...base, session: { ...base.session, buildConfig } };
 };
 

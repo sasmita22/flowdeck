@@ -1,7 +1,6 @@
 import { handoffFolderLine, handoffOf, withWired, type Handoff } from "../flow/handoff.js";
 import type { Wire } from "../flow/schema.js";
 import { agentPrompt, agentType } from "../nodes/agent/execute.js";
-import { shellQuote } from "./hook-settings.js";
 import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, type ScopeParts } from "./scope-line.js";
@@ -17,11 +16,6 @@ const text = (value: unknown) => (typeof value === "string" ? value : "");
 const nodeList = (ids: readonly string[]) => ids.map((id) => `NODE ${id}`).join(", ");
 
 const quoted = (value: string) => JSON.stringify(value);
-
-const scriptCommand = (settings: Settings) => {
-  const args = Array.isArray(settings.args) ? settings.args.map(String) : [];
-  return [text(settings.command), ...args.map(shellQuote)].join(" ");
-};
 
 export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopeParts): BuildFile {
   const { prefix, nodes, wires } = manifest;
@@ -52,8 +46,6 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
     switch (node.type) {
       case "trigger":
         return "the run starts here.";
-      case "prompt":
-        return `read \`\${CLAUDE_PLUGIN_ROOT}/skills/${pieceOf(node)}/SKILL.md\` by path and follow it.`;
       case "agent": {
         const fork = forkOf(node.id);
         return fork === undefined
@@ -66,8 +58,6 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
         const options = Array.isArray(settings.options) ? settings.options.map(String) : [];
         return `ask in the chat: ${quoted(text(settings.question))} (options: ${options.join(", ")}), and wait for the answer.`;
       }
-      case "script":
-        return `run \`${scriptCommand(settings)}\` in the worktree and check its exit code.`;
       case "loop": {
         const atCap =
           settings.onCap === "ask" ? "ask in the chat what to do" : "stop the run as failed";
@@ -110,7 +100,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       "---",
       `# Run ${prefix}`,
       "",
-      "Run these steps in order. Prompt, Agent and Fork steps only hand off: each goes to its skill or agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.",
+      "Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.",
       "",
       handoffFolderLine(scope.repo),
       "",

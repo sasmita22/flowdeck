@@ -3,26 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { prepareKit } from "../../src/adapters/node-fs/kit-copy.js";
 import { buildReportSchema, type BuildReport } from "../../src/core/compiler/build-report.js";
-import { checkBuild, type BuildCheckFailure } from "../../src/core/compiler/check-build.js";
-import { reportPath } from "../../src/core/compiler/emit.js";
-import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
-import { applyMerges } from "../../src/core/compiler/merge.js";
-import { workspaceListing, workspaceRootFiles } from "../../src/core/compiler/verify.js";
+import type { BuildCheckFailure } from "../../src/core/compiler/check-build.js";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
-import type { BuildAgents } from "../../src/ports/build-agents.js";
 import { liveEngine, realBuildAgents } from "../fixtures/live-engine.js";
+import { checkRecorded, recording, type Workspace } from "../fixtures/recorded-build.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
 
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
-const examplePath = fileURLToPath(new URL("../../examples/three-prompts.json", import.meta.url));
+const examplePath = fileURLToPath(new URL("../../examples/three-agents.json", import.meta.url));
 const buildTimeoutMs = 900_000;
 const builds = 3;
-const fs = new NodeFileSystem();
-
-type Workspace = { laidDown: BuildFile[] | undefined; readBack: BuildFile[] | undefined };
 
 type Outcome = {
   outcome: string;
@@ -31,37 +23,6 @@ type Outcome = {
   pieces: string[];
   merges: string[];
 };
-
-async function filesIn(dir: string): Promise<BuildFile[] | undefined> {
-  const listing = await workspaceListing(fs, dir, [...workspaceRootFiles, reportPath]);
-  if (listing === undefined) return undefined;
-  return Promise.all(
-    listing.paths.map(async (path) => ({ path, content: await listing.read(path) })),
-  );
-}
-
-function recording(agents: BuildAgents, workspace: Workspace): BuildAgents {
-  const dirs = new Map<string, string>();
-  return {
-    open: async (spec) => {
-      dirs.set(spec.sessionName, spec.workspaceDir);
-      workspace.laidDown ??= await filesIn(spec.workspaceDir);
-      await agents.open(spec);
-    },
-    turn: (name, text, onCall) => agents.turn(name, text, onCall),
-    alive: (name) => agents.alive(name),
-    close: async (name) => {
-      const dir = dirs.get(name);
-      if (dir !== undefined && workspace.readBack === undefined) {
-        workspace.readBack = await filesIn(dir);
-      }
-      await agents.close(name);
-    },
-  };
-}
-
-const manifestOf = (files: readonly BuildFile[]): Manifest =>
-  JSON.parse(files.find((file) => file.path === "manifest.json")?.content ?? "{}") as Manifest;
 
 async function buildOnce(flow: Flow, index: number): Promise<Outcome> {
   const home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
@@ -82,17 +43,7 @@ async function buildOnce(flow: Flow, index: number): Promise<Outcome> {
       buildModel: "haiku",
     });
     const report = buildReportSchema.parse(built.outcome.report);
-    const { laidDown, readBack } = workspace;
-    if (laidDown === undefined || readBack === undefined) {
-      throw new Error(`build ${index}: the workspace was not read at open and close`);
-    }
-    const merged = applyMerges(laidDown, manifestOf(laidDown), report.merges);
-    const failures = checkBuild({
-      laidDown: merged.files,
-      readBack,
-      manifest: merged.manifest,
-      flow,
-    });
+    const { failures } = checkRecorded(workspace, report, flow);
     const outcome: Outcome = {
       outcome: built.outcome.outcome,
       report,

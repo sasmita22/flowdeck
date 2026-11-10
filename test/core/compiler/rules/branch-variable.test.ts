@@ -4,12 +4,12 @@ import { rule } from "../../../../src/core/compiler/rules/branch-variable.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type BuildConfig } from "../../../../src/core/flow/schema.js";
 import {
+  agent,
   branch,
   flow,
   forEach,
   loop,
   output,
-  script,
   thenWire,
   trigger,
   wire,
@@ -67,7 +67,7 @@ describe("branch-variable", () => {
   it.each(["yes", "no"])("accepts a branch wired only on %s", (port) => {
     expect(
       check(
-        [trigger("start"), branch("ife2e", "e2e"), script("next"), output("done")],
+        [trigger("start"), branch("ife2e", "e2e"), agent("next"), output("done")],
         [yesno("e2e")],
         [thenWire("start", "ife2e"), wire("ife2e", port, "next", "in"), thenWire("next", "done")],
       ),

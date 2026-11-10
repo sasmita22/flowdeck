@@ -51,6 +51,18 @@ describe("paletteItems", () => {
     expect(description).not.toMatch(/\n/);
   });
 
+  it("offers Agent as the only Work entry, and no Prompt or Script", () => {
+    expect(paletteItems.filter((item) => item.group === "Work").map((item) => item.type)).toEqual([
+      "agent",
+    ]);
+    expect(paletteItems.map((item) => item.testId)).not.toEqual(
+      expect.arrayContaining(["palette-prompt"]),
+    );
+    expect(paletteItems.map((item) => item.testId)).not.toEqual(
+      expect.arrayContaining(["palette-script"]),
+    );
+  });
+
   it("leads with a headingless group, then the node groups in the design's order, then Canvas", () => {
     expect(paletteGroups).toEqual([
       "",

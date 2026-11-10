@@ -15,7 +15,6 @@ const labelCharWidth = 7;
 
 export const labelFonts = {
   body: "600 13px var(--f-body)",
-  mono: "600 12px var(--f-mono)",
 } as const;
 
 const containerTitleFont = "600 11px var(--f-mono)";
@@ -24,7 +23,7 @@ const containerTitleTracking = 0.04 * 11;
 
 export type LabelFont = keyof typeof labelFonts;
 
-const charWidths: Record<LabelFont, number> = { body: 7, mono: 7.2 };
+const charWidths: Record<LabelFont, number> = { body: 7 };
 
 export const isContainer = (node: Pick<Node, "type">): boolean =>
   node.type === "loop" || node.type === "foreach";
@@ -65,8 +64,8 @@ export const labelX = (type: OutlinedType): number =>
   nodeOutline(type).padL + tagWidth(nodeLook(type).tag) + 6;
 
 export const textWidth = (type: OutlinedType, text: string): number => {
-  const { padL, ink } = nodeOutline(type);
-  return labelX(type) + labelTextWidth(text, ink === undefined ? "body" : "mono") + padL;
+  const { padL } = nodeOutline(type);
+  return labelX(type) + labelTextWidth(text, "body") + padL;
 };
 
 export const nodeWidth = ({

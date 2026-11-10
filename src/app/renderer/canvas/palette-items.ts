@@ -34,16 +34,6 @@ const catalog: [NodeType, PaletteGroup, string][] = [
     "Work",
     "A subagent with a fresh, isolated context. Hands back one finding or one file.",
   ],
-  [
-    "prompt",
-    "Work",
-    "One turn inside the session's own context: the session sees everything that came before.",
-  ],
-  [
-    "script",
-    "Work",
-    "A shell command the app runs itself. No model involved, so it always behaves the same.",
-  ],
   ["fork", "Control", "Splits into branches that run at the same time."],
   ["join", "Control", "Waits for the branches before continuing."],
   ["loop", "Control", "Repeats its body until a condition holds, with a cap."],

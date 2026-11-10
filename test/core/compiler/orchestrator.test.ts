@@ -17,8 +17,6 @@ import {
   join,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -33,15 +31,14 @@ const sample = (): Flow =>
   flow(
     [
       trigger("t"),
-      labelled(prompt("p", { settings: { instructions: "Plan it." } }), "Plan"),
+      labelled(agent("p", { settings: { instructions: "Plan it." } }), "Plan"),
       labelled(agent("a", { settings: { given: ["plan.md"], writes: ["code.md"] } }), "Code"),
       gate("g", { settings: { shown: "Check the plan", skippable: false } }),
       ask("k", { settings: { question: "Pick a colour", options: ["red", "blue"] } }),
-      script("s", { settings: { command: "npm", args: ["test", "--", "a b"] } }),
       loop("l", { settings: { condition: "tests pass", cap: 4, onCap: "ask" } }),
       labelled(agent("la", { parent: "l" }), "Fix"),
       forEach("fe", { file: "units.md" }),
-      labelled(prompt("fp", { parent: "fe" }), "Unit"),
+      labelled(agent("fp", { parent: "fe" }), "Unit"),
       branch("b", "proceed"),
       fork("f"),
       labelled(agent("x"), "Check"),
@@ -55,8 +52,7 @@ const sample = (): Flow =>
       thenWire("p", "a"),
       thenWire("a", "g"),
       thenWire("g", "k"),
-      thenWire("k", "s"),
-      thenWire("s", "l"),
+      thenWire("k", "l"),
       thenWire("l", "la"),
       thenWire("l", "fe"),
       thenWire("fe", "fp"),
@@ -128,13 +124,11 @@ describe("orchestratorSkill", () => {
     ).toEqual([]);
   });
 
-  it("reads a Prompt node's step skill by path from the plugin root and follows it", () => {
-    const line = lineOf(skill().content, "p");
+  it("hands work only to agents: no step reads a skill or runs a command, and no line names a Prompt", () => {
+    const { content } = skill();
 
-    expect(line).toContain(
-      "read `${CLAUDE_PLUGIN_ROOT}/skills/plan/SKILL.md` by path and follow it",
-    );
-    expect(line).not.toContain("`plugin/skills/");
+    expect(lineOf(content, "p")).toContain("dispatch `fix-login:plan`");
+    expect(content).not.toMatch(/by path and follow it|check its exit code|Prompt/);
   });
 
   it("dispatches an Agent node by its full name with its node marker and details, and waits", () => {
@@ -149,7 +143,7 @@ describe("orchestratorSkill", () => {
     const declared = flow(
       [
         labelled(agent("a", { settings: { given: ["plan.md"], writes: ["code.md"] } }), "Code"),
-        labelled(prompt("p"), "Ship"),
+        labelled(agent("p"), "Ship"),
       ],
       [
         thenWire("a", "p"),
@@ -170,10 +164,6 @@ describe("orchestratorSkill", () => {
   it("asks in the chat for a Gate and an Ask", () => {
     expect(lineOf(skill().content, "g")).toMatch(/ask in the chat.*Check the plan/i);
     expect(lineOf(skill().content, "k")).toMatch(/ask in the chat.*Pick a colour.*red, blue/i);
-  });
-
-  it("runs a Script's manifest command", () => {
-    expect(lineOf(skill().content, "s")).toContain("run `npm 'test' '--' 'a b'`");
   });
 
   it("repeats a Loop up to its cap and a For each once per item", () => {

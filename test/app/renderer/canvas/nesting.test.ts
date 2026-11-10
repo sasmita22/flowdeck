@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createCanvasStore } from "../../../../src/app/renderer/canvas/store.js";
 import type { Flow } from "../../../../src/core/flow/schema.js";
 import {
+  agent,
   flow,
   forEach,
   gate,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
 } from "../../../fixtures/flow-builders.js";
 
@@ -24,7 +23,7 @@ const nodeOf = (current: Flow, id: string) => current.nodes.find((node) => node.
 const parentOf = (current: Flow, id: string) => nodeOf(current, id)?.parent;
 
 const loopWithBody = () =>
-  flow([at(loop("L"), 0, 0), at(prompt("P", { parent: "L" }), 0, 80), at(script("S"), 400, 0)], []);
+  flow([at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80), at(agent("S"), 400, 0)], []);
 
 const drag = (
   store: ReturnType<typeof loaded>,
@@ -38,30 +37,30 @@ describe("dropping a new node onto a frame", () => {
   it.each([
     ["Loop", at(loop("C"), 0, 0)],
     ["For each", at(forEach("C"), 0, 0)],
-  ])("puts a Prompt dropped on a %s frame in its body, as one undoable step", (_name, frame) => {
+  ])("puts an Agent dropped on a %s frame in its body, as one undoable step", (_name, frame) => {
     const store = loaded(flow([frame], []));
 
-    store.getState().drop("prompt", { x: 100, y: 60 });
+    store.getState().drop("agent", { x: 100, y: 60 });
 
-    expect(nodeOf(store.getState().flow, "prompt-1")).toMatchObject({
+    expect(nodeOf(store.getState().flow, "agent-1")).toMatchObject({
       parent: "C",
       position: { x: 100, y: 60 },
     });
     expect(store.getState().undoStack).toHaveLength(1);
 
     store.getState().undo();
-    expect(nodeOf(store.getState().flow, "prompt-1")).toBeUndefined();
+    expect(nodeOf(store.getState().flow, "agent-1")).toBeUndefined();
 
     store.getState().redo();
-    expect(parentOf(store.getState().flow, "prompt-1")).toBe("C");
+    expect(parentOf(store.getState().flow, "agent-1")).toBe("C");
   });
 
   it("leaves a node dropped outside every frame at the top level", () => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
 
-    store.getState().drop("prompt", { x: 600, y: 600 });
+    store.getState().drop("agent", { x: 600, y: 600 });
 
-    expect(nodeOf(store.getState().flow, "prompt-1")).not.toHaveProperty("parent");
+    expect(nodeOf(store.getState().flow, "agent-1")).not.toHaveProperty("parent");
   });
 
   it.each(["loop", "foreach"] as const)("never puts a dropped %s inside a frame", (type) => {
@@ -99,9 +98,9 @@ describe("dropping a new node onto a frame", () => {
   it("keeps a dropped body node clear of the frame's label", () => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
 
-    store.getState().drop("prompt", { x: 0, y: 0 });
+    store.getState().drop("agent", { x: 0, y: 0 });
 
-    const dropped = nodeOf(store.getState().flow, "prompt-1");
+    const dropped = nodeOf(store.getState().flow, "agent-1");
     expect(dropped?.parent).toBe("L");
     expect(dropped?.position.x).toBeGreaterThanOrEqual(170);
   });
@@ -152,10 +151,10 @@ describe("dragging a node into and out of a frame", () => {
     const store = loaded(
       flow(
         [
-          at(script("A"), -400, 0),
+          at(agent("A"), -400, 0),
           at(loop("L"), 0, 0),
-          at(prompt("P", { parent: "L" }), 0, 80),
-          at(script("B"), 400, 0),
+          at(agent("P", { parent: "L" }), 0, 80),
+          at(agent("B"), 400, 0),
         ],
         [thenWire("A", "P"), thenWire("A", "B")],
       ),
@@ -175,7 +174,7 @@ describe("dragging a Trigger or Output into a frame", () => {
   it("refuses it, and says why", () => {
     const store = loaded(
       flow(
-        [at(loop("L"), 0, 0), at(prompt("P", { parent: "L" }), 0, 80), at(output("O"), 400, 0)],
+        [at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80), at(output("O"), 400, 0)],
         [],
       ),
     );
@@ -190,7 +189,7 @@ describe("dragging a Trigger or Output into a frame", () => {
   it("still takes a Gate", () => {
     const store = loaded(
       flow(
-        [at(loop("L"), 0, 0), at(prompt("P", { parent: "L" }), 0, 80), at(gate("G"), 400, 0)],
+        [at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80), at(gate("G"), 400, 0)],
         [],
       ),
     );
@@ -235,11 +234,11 @@ describe("deleting a container", () => {
     const store = loaded(
       flow(
         [
-          at(script("A"), -400, 0),
+          at(agent("A"), -400, 0),
           at(loop("L"), 0, 0),
-          at(prompt("P", { parent: "L" }), 0, 80),
-          at(script("Q", { parent: "L" }), 240, 80),
-          at(script("B"), 600, 0),
+          at(agent("P", { parent: "L" }), 0, 80),
+          at(agent("Q", { parent: "L" }), 240, 80),
+          at(agent("B"), 600, 0),
         ],
         [thenWire("A", "P"), thenWire("P", "Q"), thenWire("L", "B")],
       ),

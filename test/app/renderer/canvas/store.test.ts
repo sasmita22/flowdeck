@@ -33,8 +33,6 @@ import {
   hardstop,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../../../fixtures/flow-builders.js";
@@ -67,10 +65,10 @@ const then = (from: string, to: string) => ({
 });
 
 const dropFour = (store: Store) => {
-  act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-  act(store, (s) => s.drop("prompt", { x: 200, y: 0 }));
-  act(store, (s) => s.drop("script", { x: 0, y: 200 }));
-  act(store, (s) => s.drop("script", { x: 200, y: 200 }));
+  act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+  act(store, (s) => s.drop("agent", { x: 200, y: 0 }));
+  act(store, (s) => s.drop("gate", { x: 0, y: 200 }));
+  act(store, (s) => s.drop("gate", { x: 200, y: 200 }));
   const [a, b, c, d] = store.getState().flow.nodes.map((node) => node.id);
   if (a === undefined || b === undefined || c === undefined || d === undefined) {
     throw new Error("expected four nodes");
@@ -115,70 +113,70 @@ describe("createCanvasStore", () => {
 });
 
 describe("drop", () => {
-  it("adds one Prompt at the drop position with core defaults, selected alone", () => {
+  it("adds one Agent at the drop position with core defaults, selected alone", () => {
     const store = createCanvasStore();
 
-    act(store, (s) => s.drop("prompt", { x: 120, y: 80 }));
+    act(store, (s) => s.drop("agent", { x: 120, y: 80 }));
 
     const state = store.getState();
     expect(state.flow.nodes).toEqual([
       {
-        id: "prompt-1",
-        type: "prompt",
-        label: "Prompt",
+        id: "agent-1",
+        type: "agent",
+        label: "Agent",
         position: { x: 120, y: 80 },
-        settings: { instructions: "" },
+        settings: { role: "", instructions: "", model: "sonnet", tools: [] },
       },
     ]);
     expect(state.flow.wires).toEqual([]);
-    expect(state.selection).toEqual(["prompt-1"]);
+    expect(state.selection).toEqual(["agent-1"]);
     expect(state.undoStack).toHaveLength(1);
   });
 
-  it("adds one Script at the drop position with core defaults, selected alone", () => {
+  it("adds one Gate at the drop position with core defaults, selected alone", () => {
     const store = createCanvasStore();
 
-    act(store, (s) => s.drop("script", { x: 40, y: 300 }));
+    act(store, (s) => s.drop("gate", { x: 40, y: 300 }));
 
     const state = store.getState();
     expect(state.flow.nodes).toEqual([
       {
-        id: "script-1",
-        type: "script",
-        label: "Script",
+        id: "gate-1",
+        type: "gate",
+        label: "Gate",
         position: { x: 40, y: 300 },
-        settings: { command: "" },
+        settings: { shown: "", skippable: false },
       },
     ]);
-    expect(state.selection).toEqual(["script-1"]);
+    expect(state.selection).toEqual(["gate-1"]);
   });
 
   it("replaces the selection with the node dropped second", () => {
     const store = createCanvasStore();
 
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("prompt", { x: 50, y: 50 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 50, y: 50 }));
 
-    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual(["prompt-1", "prompt-2"]);
-    expect(store.getState().selection).toEqual(["prompt-2"]);
+    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual(["agent-1", "agent-2"]);
+    expect(store.getState().selection).toEqual(["agent-2"]);
   });
 });
 
 describe("connect", () => {
   const twoNodes = () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("script", { x: 200, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
     return store;
   };
 
   it("adds exactly one then wire from an output port to an input port", () => {
     const store = twoNodes();
 
-    const accepted = act(store, (s) => s.connect(end("prompt-1", "out"), end("script-1", "in")));
+    const accepted = act(store, (s) => s.connect(end("agent-1", "out"), end("gate-1", "in")));
 
     expect(accepted).toBe(true);
-    expect(store.getState().flow.wires).toEqual([then("prompt-1", "script-1")]);
+    expect(store.getState().flow.wires).toEqual([then("agent-1", "gate-1")]);
     expect(store.getState().undoStack).toHaveLength(3);
   });
 
@@ -188,19 +186,19 @@ describe("connect", () => {
     { node: string; port: string },
     { node: string; port: string },
   ][] = [
-    ["a self-loop", false, end("prompt-1", "out"), end("prompt-1", "in")],
-    ["a cycle", true, end("script-1", "out"), end("prompt-1", "in")],
-    ["output to output", false, end("prompt-1", "out"), end("script-1", "out")],
-    ["input to input", false, end("prompt-1", "in"), end("script-1", "in")],
-    ["a duplicate wire", true, end("prompt-1", "out"), end("script-1", "in")],
-    ["an unknown node", false, end("prompt-1", "out"), end("ghost-1", "in")],
-    ["an unknown input port", false, end("prompt-1", "out"), end("script-1", "nope")],
-    ["an unknown output port", false, end("prompt-1", "nope"), end("script-1", "in")],
+    ["a self-loop", false, end("agent-1", "out"), end("agent-1", "in")],
+    ["a cycle", true, end("gate-1", "out"), end("agent-1", "in")],
+    ["output to output", false, end("agent-1", "out"), end("gate-1", "out")],
+    ["input to input", false, end("agent-1", "in"), end("gate-1", "in")],
+    ["a duplicate wire", true, end("agent-1", "out"), end("gate-1", "in")],
+    ["an unknown node", false, end("agent-1", "out"), end("ghost-1", "in")],
+    ["an unknown input port", false, end("agent-1", "out"), end("gate-1", "nope")],
+    ["an unknown output port", false, end("agent-1", "nope"), end("gate-1", "in")],
   ];
 
   it.each(refused)("refuses %s and records nothing", (_name, wired, from, to) => {
     const store = twoNodes();
-    if (wired) act(store, (s) => s.connect(end("prompt-1", "out"), end("script-1", "in")));
+    if (wired) act(store, (s) => s.connect(end("agent-1", "out"), end("gate-1", "in")));
     const before = store.getState();
 
     const accepted = act(store, (s) => s.connect(from, to));
@@ -282,7 +280,7 @@ const guarded = () => {
     .getState()
     .load(
       flow(
-        [trigger("T"), prompt("P"), hardstop("H"), output("O")],
+        [trigger("T"), agent("P"), hardstop("H"), output("O")],
         [thenWire("T", "P"), thenWire("P", "H"), thenWire("H", "O")],
       ),
     );
@@ -331,7 +329,7 @@ describe("deleting a hard stop", () => {
     act(store, refuseSelfLoop);
     expect(store.getState().message).not.toBeNull();
 
-    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 300 }));
 
     expect(store.getState().message).toBeNull();
   });
@@ -386,7 +384,7 @@ describe("node menu", () => {
 
   it("records nothing when its Delete names a node an undo removed", () => {
     const store = guarded();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const dropped = store.getState().flow.nodes.at(-1)?.id ?? "";
     store.getState().openNodeMenu(dropped, { x: 10, y: 20 });
     act(store, (s) => s.undo());
@@ -405,15 +403,15 @@ describe("node menu", () => {
 describe("move", () => {
   it("keeps live drag positions out of the flow and records one move on drag end", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const before = store.getState().flow;
 
-    act(store, (s) => s.dragTo("prompt-1", { x: 50, y: 60 }));
+    act(store, (s) => s.dragTo("agent-1", { x: 50, y: 60 }));
 
     expect(store.getState().flow).toBe(before);
-    expect(store.getState().dragPositions).toEqual({ "prompt-1": { x: 50, y: 60 } });
+    expect(store.getState().dragPositions).toEqual({ "agent-1": { x: 50, y: 60 } });
 
-    act(store, (s) => s.endDrag(["prompt-1"]));
+    act(store, (s) => s.endDrag(["agent-1"]));
 
     expect(store.getState().undoStack).toHaveLength(2);
     expect(store.getState().flow.nodes[0]?.position).toEqual({ x: 50, y: 60 });
@@ -426,14 +424,14 @@ describe("move", () => {
 
   it("records one move for nodes dragged together and leaves undragged ids alone", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("script", { x: 0, y: 100 }));
-    act(store, (s) => s.drop("script", { x: 200, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 0, y: 100 }));
+    act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
     const before = store.getState().flow;
 
-    act(store, (s) => s.dragTo("prompt-1", { x: 10, y: 50 }));
-    act(store, (s) => s.dragTo("script-1", { x: 110, y: 50 }));
-    act(store, (s) => s.endDrag(["prompt-1", "script-1", "script-2"]));
+    act(store, (s) => s.dragTo("agent-1", { x: 10, y: 50 }));
+    act(store, (s) => s.dragTo("gate-1", { x: 110, y: 50 }));
+    act(store, (s) => s.endDrag(["agent-1", "gate-1", "gate-2"]));
 
     expect(store.getState().undoStack).toHaveLength(4);
     expect(store.getState().flow.nodes.map((node) => node.position)).toEqual([
@@ -449,11 +447,11 @@ describe("move", () => {
 
   it("records nothing when the drag ends where it started", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 10, y: 10 }));
+    act(store, (s) => s.drop("agent", { x: 10, y: 10 }));
 
-    act(store, (s) => s.endDrag(["prompt-1"]));
-    act(store, (s) => s.dragTo("prompt-1", { x: 10, y: 10 }));
-    act(store, (s) => s.endDrag(["prompt-1"]));
+    act(store, (s) => s.endDrag(["agent-1"]));
+    act(store, (s) => s.dragTo("agent-1", { x: 10, y: 10 }));
+    act(store, (s) => s.endDrag(["agent-1"]));
 
     expect(store.getState().undoStack).toHaveLength(1);
     expect(store.getState().dragPositions).toEqual({});
@@ -463,7 +461,7 @@ describe("move", () => {
 describe("undo and redo", () => {
   it("redo puts the same command back and replays it with the same ids", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const command = store.getState().undoStack.at(-1);
     const after = store.getState().flow;
 
@@ -483,11 +481,11 @@ describe("undo and redo", () => {
   it("undoes several commands newest first and redoes them oldest first", () => {
     const store = createCanvasStore();
     const flows = [store.getState().flow];
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     flows.push(store.getState().flow);
-    act(store, (s) => s.drop("script", { x: 200, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
     flows.push(store.getState().flow);
-    act(store, (s) => s.connect(end("prompt-1", "out"), end("script-1", "in")));
+    act(store, (s) => s.connect(end("agent-1", "out"), end("gate-1", "in")));
     flows.push(store.getState().flow);
 
     for (const expected of [flows[2], flows[1], flows[0]]) {
@@ -513,10 +511,10 @@ describe("undo and redo", () => {
 
   it("clears the redo stack when a new command runs after an undo", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.undo());
 
-    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
 
     expect(store.getState().redoStack).toEqual([]);
   });
@@ -534,26 +532,26 @@ describe("undo and redo", () => {
 
   it("drops ids from the selection that an undo removes", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("prompt", { x: 100, y: 0 }));
-    act(store, (s) => s.select(["prompt-1", "prompt-2"]));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
+    act(store, (s) => s.select(["agent-1", "agent-2"]));
 
     act(store, (s) => s.undo());
 
-    expect(store.getState().selection).toEqual(["prompt-1"]);
+    expect(store.getState().selection).toEqual(["agent-1"]);
   });
 
   it("drops ids from the selection that a redo removes", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("prompt", { x: 100, y: 0 }));
-    act(store, (s) => s.deleteNodes(["prompt-2"]));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
+    act(store, (s) => s.deleteNodes(["agent-2"]));
     act(store, (s) => s.undo());
-    act(store, (s) => s.select(["prompt-1", "prompt-2"]));
+    act(store, (s) => s.select(["agent-1", "agent-2"]));
 
     act(store, (s) => s.redo());
 
-    expect(store.getState().selection).toEqual(["prompt-1"]);
+    expect(store.getState().selection).toEqual(["agent-1"]);
   });
 });
 
@@ -563,27 +561,25 @@ describe("node ids", () => {
     const store = createCanvasStore({ nextId });
     const empty = store.getState().flow;
 
-    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
 
-    expect(nextId).toHaveBeenCalledWith("script", empty);
-    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual(["script-custom"]);
-    expect(store.getState().selection).toEqual(["script-custom"]);
+    expect(nextId).toHaveBeenCalledWith("gate", empty);
+    expect(store.getState().flow.nodes.map((node) => node.id)).toEqual(["gate-custom"]);
+    expect(store.getState().selection).toEqual(["gate-custom"]);
   });
 
   it("numbers from 1 on an empty flow", () => {
-    expect(nextNodeId("prompt", flow([], []))).toBe("prompt-1");
-    expect(nextNodeId("script", flow([], []))).toBe("script-1");
+    expect(nextNodeId("agent", flow([], []))).toBe("agent-1");
+    expect(nextNodeId("gate", flow([], []))).toBe("gate-1");
   });
 
   it("skips ids already used, ignoring case", () => {
-    expect(nextNodeId("prompt", flow([prompt("Prompt-1")], []))).toBe("prompt-2");
-    expect(nextNodeId("prompt", flow([prompt("prompt-1"), prompt("prompt-2")], []))).toBe(
-      "prompt-3",
-    );
+    expect(nextNodeId("agent", flow([agent("Agent-1")], []))).toBe("agent-2");
+    expect(nextNodeId("agent", flow([agent("agent-1"), agent("agent-2")], []))).toBe("agent-3");
   });
 
   it("takes the lowest free number", () => {
-    expect(nextNodeId("prompt", flow([prompt("prompt-2")], []))).toBe("prompt-1");
+    expect(nextNodeId("agent", flow([agent("agent-2")], []))).toBe("agent-1");
   });
 
   it("generates ids the node-ids rule accepts", () => {
@@ -597,10 +593,10 @@ describe("node ids", () => {
 const savedFlow = () =>
   flow(
     [
-      { ...prompt("prompt-1"), position: { x: 10, y: 20 } },
-      { ...script("script-1"), position: { x: 300, y: 20 } },
+      { ...agent("agent-1"), position: { x: 10, y: 20 } },
+      { ...agent("gate-1"), position: { x: 300, y: 20 } },
     ],
-    [thenWire("prompt-1", "script-1")],
+    [thenWire("agent-1", "gate-1")],
   );
 
 describe("edit gate", () => {
@@ -609,11 +605,11 @@ describe("edit gate", () => {
   });
 
   const gated: [string, (state: ReturnType<Store["getState"]>) => unknown][] = [
-    ["drop", (s) => s.drop("prompt", { x: 0, y: 0 })],
-    ["connect", (s) => s.connect(end("prompt-1", "out"), end("script-1", "in"))],
-    ["deleteNodes", (s) => s.deleteNodes(["prompt-1"])],
-    ["dragTo", (s) => s.dragTo("prompt-1", { x: 50, y: 50 })],
-    ["endDrag", (s) => s.endDrag(["prompt-1"])],
+    ["drop", (s) => s.drop("agent", { x: 0, y: 0 })],
+    ["connect", (s) => s.connect(end("agent-1", "out"), end("gate-1", "in"))],
+    ["deleteNodes", (s) => s.deleteNodes(["agent-1"])],
+    ["dragTo", (s) => s.dragTo("agent-1", { x: 50, y: 50 })],
+    ["endDrag", (s) => s.endDrag(["agent-1"])],
     ["updateSession", (s) => s.updateSession({ ...s.flow.session, model: "haiku" })],
     [
       "updateNode",
@@ -628,9 +624,9 @@ describe("edit gate", () => {
 
   const seededNotReady = () => {
     const source = createCanvasStore();
-    act(source, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(source, (s) => s.drop("script", { x: 200, y: 0 }));
-    act(source, (s) => s.drop("prompt", { x: 400, y: 0 }));
+    act(source, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(source, (s) => s.drop("gate", { x: 200, y: 0 }));
+    act(source, (s) => s.drop("agent", { x: 400, y: 0 }));
     act(source, (s) => s.undo());
     const { flow: seeded, undoStack, redoStack } = source.getState();
     const store = createCanvasStore({ ready: false });
@@ -638,8 +634,8 @@ describe("edit gate", () => {
       flow: seeded,
       undoStack,
       redoStack,
-      selection: ["prompt-1", "script-1"],
-      dragPositions: { "prompt-1": { x: 50, y: 50 } },
+      selection: ["agent-1", "gate-1"],
+      dragPositions: { "agent-1": { x: 50, y: 50 } },
     });
     return store;
   };
@@ -658,7 +654,7 @@ describe("edit gate", () => {
   it("records nothing on a fresh store that is not ready", () => {
     const store = createCanvasStore({ ready: false });
 
-    store.getState().drop("prompt", { x: 0, y: 0 });
+    store.getState().drop("agent", { x: 0, y: 0 });
 
     expect(store.getState().flow).toEqual(newCanvasFlow());
     expect(store.getState().undoStack).toEqual([]);
@@ -701,11 +697,11 @@ describe("load", () => {
 
   it("clears undo, redo, selection and drag positions", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
-    act(store, (s) => s.drop("prompt", { x: 100, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
     act(store, (s) => s.undo());
-    act(store, (s) => s.select(["prompt-1"]));
-    act(store, (s) => s.dragTo("prompt-1", { x: 40, y: 40 }));
+    act(store, (s) => s.select(["agent-1"]));
+    act(store, (s) => s.dragTo("agent-1", { x: 40, y: 40 }));
 
     store.getState().load(savedFlow());
 
@@ -730,12 +726,12 @@ describe("load", () => {
     const store = createCanvasStore({ ready: false });
     store.getState().load(savedFlow());
 
-    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 300 }));
 
     expect(store.getState().flow.nodes.map((node) => node.id)).toEqual([
-      "prompt-1",
-      "script-1",
-      "prompt-2",
+      "agent-1",
+      "gate-1",
+      "agent-2",
     ]);
     expect(store.getState().undoStack).toHaveLength(1);
   });
@@ -755,7 +751,7 @@ describe("selectDirty", () => {
   it("is dirty after a drop and clean again after undo back to the loaded flow", () => {
     const store = loadedStore();
 
-    act(store, (s) => s.drop("prompt", { x: 0, y: 300 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 300 }));
     expect(selectDirty(store.getState())).toBe(true);
 
     act(store, (s) => s.undo());
@@ -765,7 +761,7 @@ describe("selectDirty", () => {
   it("stays clean when only the selection changes", () => {
     const store = loadedStore();
 
-    act(store, (s) => s.select(["prompt-1", "script-1"]));
+    act(store, (s) => s.select(["agent-1", "gate-1"]));
     act(store, (s) => s.select([]));
 
     expect(selectDirty(store.getState())).toBe(false);
@@ -775,7 +771,7 @@ describe("selectDirty", () => {
 describe("markSaved", () => {
   it("sets the saved flow, so the current flow reads clean", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const snapshot = store.getState().flow;
     expect(selectDirty(store.getState())).toBe(true);
 
@@ -787,9 +783,9 @@ describe("markSaved", () => {
 
   it("stays dirty when an edit happened after the snapshot was taken", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("prompt", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const snapshot = store.getState().flow;
-    act(store, (s) => s.drop("script", { x: 200, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
 
     store.getState().markSaved(snapshot);
 
@@ -1039,10 +1035,10 @@ describe("highlight", () => {
     const store = loadedStore();
     const before = store.getState();
 
-    store.getState().highlight("prompt-1");
+    store.getState().highlight("agent-1");
 
     const state = store.getState();
-    expect(state.highlighted).toBe("prompt-1");
+    expect(state.highlighted).toBe("agent-1");
     expect(state.selection).toEqual([]);
     expect(state.undoStack).toBe(before.undoStack);
     expect(state.redoStack).toBe(before.redoStack);
@@ -1052,7 +1048,7 @@ describe("highlight", () => {
 
   it("clears the highlight with null", () => {
     const store = loadedStore();
-    store.getState().highlight("prompt-1");
+    store.getState().highlight("agent-1");
 
     store.getState().highlight(null);
 
@@ -1093,8 +1089,8 @@ describe("every node type", () => {
 describe("connect beside an invalid node", () => {
   const withLoneFork = () => {
     const store = createCanvasStore();
-    store.getState().drop("prompt", { x: 0, y: 0 });
-    store.getState().drop("script", { x: 300, y: 0 });
+    store.getState().drop("agent", { x: 0, y: 0 });
+    store.getState().drop("gate", { x: 300, y: 0 });
     store.getState().drop("fork", { x: 0, y: 300 });
     return store;
   };
@@ -1102,20 +1098,20 @@ describe("connect beside an invalid node", () => {
   it("accepts a valid wire while a lone fork is on the canvas", () => {
     const store = withLoneFork();
 
-    expect(store.getState().connect(end("prompt-1", "out"), end("script-1", "in"))).toBe(true);
-    expect(store.getState().flow.wires).toEqual([then("prompt-1", "script-1")]);
+    expect(store.getState().connect(end("agent-1", "out"), end("gate-1", "in"))).toBe(true);
+    expect(store.getState().flow.wires).toEqual([then("agent-1", "gate-1")]);
   });
 
   it("still refuses a wire whose own errors are new", () => {
     const store = withLoneFork();
     const before = store.getState();
 
-    expect(store.getState().connect(end("prompt-1", "in"), end("script-1", "in"))).toBe(false);
+    expect(store.getState().connect(end("agent-1", "in"), end("gate-1", "in"))).toBe(false);
     expect(store.getState().flow).toEqual(before.flow);
     expect(store.getState().undoStack).toEqual(before.undoStack);
   });
 
-  it.each(["script", "branch"] as const)(
+  it.each(["gate", "branch"] as const)(
     "connects Start to a freshly dropped %s that is not filled in yet",
     (type) => {
       const store = createCanvasStore();
@@ -1150,7 +1146,7 @@ describe("selectCanvasEmpty", () => {
     const store = createCanvasStore();
     expect(selectCanvasEmpty(store.getState())).toBe(true);
 
-    store.getState().drop("prompt", { x: 0, y: 0 });
+    store.getState().drop("agent", { x: 0, y: 0 });
 
     expect(selectCanvasEmpty(store.getState())).toBe(false);
   });
@@ -1165,20 +1161,20 @@ describe("selectCanvasEmpty", () => {
   });
 });
 
-const promptWidth = nodeLook("prompt").box.width;
+const promptWidth = nodeLook("agent").box.width;
 const boxOf = (node: Flow["nodes"][number]) => ({ ...node.position, ...nodeLook(node.type).box });
 const overlaps = (a: ReturnType<typeof boxOf>, b: ReturnType<typeof boxOf>) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 describe("placeNode", () => {
   it("returns the request on an empty flow", () => {
-    expect(placeNode(newCanvasFlow(), "prompt", { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
+    expect(placeNode(newCanvasFlow(), "agent", { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
   });
 
   it("moves a request that overlaps a node to that node's right edge plus 48", () => {
-    const current = flow([{ ...prompt("p"), position: { x: 100, y: 100 } }], []);
+    const current = flow([{ ...agent("p"), position: { x: 100, y: 100 } }], []);
 
-    expect(placeNode(current, "script", { x: 120, y: 110 })).toEqual({
+    expect(placeNode(current, "gate", { x: 120, y: 110 })).toEqual({
       x: 100 + promptWidth + 48,
       y: 110,
     });
@@ -1187,13 +1183,13 @@ describe("placeNode", () => {
   it("clears two nodes in a row", () => {
     const current = flow(
       [
-        { ...prompt("p"), position: { x: 100, y: 100 } },
-        { ...prompt("q"), position: { x: 100 + promptWidth + 48, y: 100 } },
+        { ...agent("p"), position: { x: 100, y: 100 } },
+        { ...agent("q"), position: { x: 100 + promptWidth + 48, y: 100 } },
       ],
       [],
     );
 
-    expect(placeNode(current, "prompt", { x: 100, y: 100 })).toEqual({
+    expect(placeNode(current, "agent", { x: 100, y: 100 })).toEqual({
       x: 100 + 2 * (promptWidth + 48),
       y: 100,
     });
@@ -1202,8 +1198,8 @@ describe("placeNode", () => {
   it("keeps two drops at the same point from overlapping", () => {
     const store = createCanvasStore();
 
-    store.getState().drop("prompt", { x: 50, y: 50 });
-    store.getState().drop("prompt", { x: 50, y: 50 });
+    store.getState().drop("agent", { x: 50, y: 50 });
+    store.getState().drop("agent", { x: 50, y: 50 });
 
     const [first, second] = store.getState().flow.nodes;
     if (first === undefined || second === undefined) throw new Error("expected two nodes");
@@ -1217,7 +1213,7 @@ describe("placement beside a wide node", () => {
     flow(
       [
         { ...agent("A"), label: long, position: { x: 100, y: 100 } },
-        { ...prompt("P"), position: { x: 100, y: 300 } },
+        { ...agent("P"), position: { x: 100, y: 300 } },
       ],
       [],
     );
@@ -1228,7 +1224,7 @@ describe("placement beside a wide node", () => {
     store.getState().load(wide());
     store.getState().select(["A"]);
 
-    store.getState().addNext("script");
+    store.getState().addNext("gate");
 
     expect(store.getState().flow.nodes.at(-1)?.position).toEqual({
       x: wideRight() + 48,
@@ -1237,7 +1233,7 @@ describe("placement beside a wide node", () => {
   });
 
   it("counts a drop on only the widened part of a wide node as overlapping", () => {
-    expect(placeNode(wide(), "prompt", { x: 100 + promptWidth + 10, y: 100 })).toEqual({
+    expect(placeNode(wide(), "agent", { x: 100 + promptWidth + 10, y: 100 })).toEqual({
       x: wideRight() + 48,
       y: 100,
     });
@@ -1249,8 +1245,8 @@ describe("placement beside a wide node", () => {
       flow(
         [
           { ...agent("A"), position: { x: 100, y: 100 } },
-          { ...prompt("B"), position: { x: 100 + promptWidth + 48, y: 100 } },
-          { ...prompt("C"), position: { x: 100, y: 200 } },
+          { ...agent("B"), position: { x: 100 + promptWidth + 48, y: 100 } },
+          { ...agent("C"), position: { x: 100, y: 200 } },
         ],
         [],
       ),
@@ -1268,24 +1264,24 @@ describe("placement beside a wide node", () => {
 describe("addNext", () => {
   it("adds right of the one selected node at its y", () => {
     const store = createCanvasStore();
-    store.getState().drop("prompt", { x: 100, y: 100 });
+    store.getState().drop("agent", { x: 100, y: 100 });
 
-    store.getState().addNext("script");
+    store.getState().addNext("gate");
 
     expect(store.getState().flow.nodes[1]?.position).toEqual({
       x: 100 + promptWidth + 48,
       y: 100,
     });
-    expect(store.getState().selection).toEqual(["script-1"]);
+    expect(store.getState().selection).toEqual(["gate-1"]);
   });
 
   it("adds right of the rightmost node when nothing is selected", () => {
     const store = createCanvasStore();
-    store.getState().drop("prompt", { x: 100, y: 100 });
-    store.getState().drop("prompt", { x: 500, y: 40 });
+    store.getState().drop("agent", { x: 100, y: 100 });
+    store.getState().drop("agent", { x: 500, y: 40 });
     store.getState().select([]);
 
-    store.getState().addNext("script");
+    store.getState().addNext("gate");
 
     expect(store.getState().flow.nodes[2]?.position).toEqual({
       x: 500 + promptWidth + 48,
@@ -1296,7 +1292,7 @@ describe("addNext", () => {
   it("adds at (80, 80) on an empty canvas, as one undoable command", () => {
     const store = createCanvasStore();
 
-    store.getState().addNext("prompt");
+    store.getState().addNext("agent");
 
     expect(store.getState().flow.nodes.map((node) => node.position)).toEqual([{ x: 80, y: 80 }]);
     expect(store.getState().undoStack).toHaveLength(1);
@@ -1322,12 +1318,12 @@ describe("selectNodeIssues", () => {
     const current = flow([forEach("foreach-1")], []);
 
     expect(selectNodeIssues(current)).toEqual({
-      "foreach-1": ["Has no prompt or agent in its body."],
+      "foreach-1": ["Has no agent in its body."],
     });
   });
 
   it("has no entry for a valid prompt", () => {
-    expect(selectNodeIssues(flow([prompt("prompt-1")], []))).toEqual({});
+    expect(selectNodeIssues(flow([agent("agent-1")], []))).toEqual({});
   });
 
   it("maps an agent with empty instructions to its reason", () => {
@@ -1338,7 +1334,7 @@ describe("selectNodeIssues", () => {
 
   describe("reads only the main flow", () => {
     const blankAgent = agent("agent-1", { settings: { instructions: "" } });
-    const nodes = [trigger("start"), prompt("p1"), output("stop"), blankAgent];
+    const nodes = [trigger("start"), agent("p1"), output("stop"), blankAgent];
 
     it("has no entry for an agent with empty instructions off it", () => {
       const current = flow(nodes, [thenWire("start", "p1"), thenWire("p1", "stop")]);
@@ -1405,7 +1401,7 @@ describe("updateNode", () => {
 });
 
 describe("selectSelectedNode", () => {
-  const two = () => flow([prompt("a"), script("b")], []);
+  const two = () => flow([agent("a"), agent("b")], []);
 
   it("is the one selected node", () => {
     expect(selectSelectedNode({ flow: two(), selection: ["b"] })?.id).toBe("b");
@@ -1504,7 +1500,7 @@ describe("a node's shown label", () => {
 
 describe("agent edits", () => {
   const agentNode = (id: string): Node => {
-    const [node] = flow([prompt(id)], []).nodes;
+    const [node] = flow([agent(id)], []).nodes;
     if (node === undefined) throw new Error("expected a node");
     return node;
   };
@@ -1558,7 +1554,7 @@ describe("agent edits", () => {
 
   it("closes the group on undo", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     agentAdds(store, "a");
 
     act(store, (s) => s.undo());
@@ -1566,7 +1562,7 @@ describe("agent edits", () => {
 
     expect(store.getState().undoStack).toHaveLength(2);
     act(store, (s) => s.undo());
-    expect(ids(store)).toEqual(["script-1"]);
+    expect(ids(store)).toEqual(["gate-1"]);
   });
 
   it("closes the group on redo", () => {
@@ -1596,7 +1592,7 @@ describe("agent edits", () => {
 
   it("closes the group on load", () => {
     const store = createCanvasStore();
-    const loaded = flow([prompt("p")], []);
+    const loaded = flow([agent("p")], []);
     agentAdds(store, "a");
 
     store.getState().load(loaded);
@@ -1610,7 +1606,7 @@ describe("agent edits", () => {
 
   it("clears the redo stack", () => {
     const store = createCanvasStore();
-    act(store, (s) => s.drop("script", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     act(store, (s) => s.undo());
     expect(store.getState().redoStack).toHaveLength(1);
 

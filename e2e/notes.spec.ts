@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noteTitle } from "../src/app/renderer/canvas/palette-items.js";
 import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
-import { agent, flow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 
@@ -156,9 +156,9 @@ test("A note sits beside the nodes, calm and readable, and never joins the sessi
   seedFlow(home, {
     ...flow(
       [
-        { ...prompt("plan"), label: "Write the plan", position: { x: 40, y: 60 } },
+        { ...agent("plan"), label: "Write the plan", position: { x: 40, y: 60 } },
         { ...agent("build"), label: "Build it", position: { x: 260, y: 60 } },
-        { ...script("test"), label: "npm test", position: { x: 480, y: 60 } },
+        { ...agent("test"), label: "npm test", position: { x: 480, y: 60 } },
       ],
       [thenWire("plan", "build"), thenWire("build", "test")],
     ),
@@ -192,7 +192,7 @@ test("A note sits beside the nodes, calm and readable, and never joins the sessi
 
 test("Cmd+A on the empty canvas selects every node and every note", async () => {
   seedFlow(home, {
-    ...flow([{ ...prompt("plan"), position: { x: 40, y: 60 } }], []),
+    ...flow([{ ...agent("plan"), position: { x: 40, y: 60 } }], []),
     notes: [
       { id: "n1", text: "Why", position: { x: 300, y: 60 }, size: { width: 220, height: 110 } },
     ],

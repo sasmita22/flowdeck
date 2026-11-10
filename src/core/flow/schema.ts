@@ -9,14 +9,10 @@ import { settings as hardstop } from "../nodes/hardstop/settings.js";
 import { settings as join } from "../nodes/join/settings.js";
 import { settings as loop } from "../nodes/loop/settings.js";
 import { settings as output } from "../nodes/output/settings.js";
-import { settings as prompt } from "../nodes/prompt/settings.js";
-import { settings as script } from "../nodes/script/settings.js";
 import { settings as trigger } from "../nodes/trigger/settings.js";
 import { upgradeFlow } from "./upgrade.js";
 
 export const NodeType = z.enum([
-  "prompt",
-  "script",
   "agent",
   "gate",
   "ask",
@@ -78,8 +74,6 @@ const NodeBase = z.object({
 });
 
 export const Node = z.discriminatedUnion("type", [
-  NodeBase.extend({ type: z.literal("prompt"), settings: prompt }),
-  NodeBase.extend({ type: z.literal("script"), settings: script }),
   NodeBase.extend({ type: z.literal("agent"), settings: agent }),
   NodeBase.extend({ type: z.literal("gate"), settings: gate }),
   NodeBase.extend({ type: z.literal("ask"), settings: ask }),

@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { flowProblems } from "../../../src/core/compiler/flow-problems.js";
-import {
-  agent,
-  flow,
-  output,
-  prompt,
-  thenWire,
-  trigger,
-  wire,
-} from "../../fixtures/flow-builders.js";
+import { agent, flow, output, thenWire, trigger, wire } from "../../fixtures/flow-builders.js";
 
 const blankAgent = agent("blank", { settings: { instructions: "" } });
 const ruleAndNode = (problems: ReturnType<typeof flowProblems>) =>
@@ -17,7 +9,7 @@ const ruleAndNode = (problems: ReturnType<typeof flowProblems>) =>
 describe("flowProblems", () => {
   it("raises nothing for a blank Agent off the main flow", () => {
     const loose = flow(
-      [trigger("start"), prompt("a"), output("stop"), blankAgent],
+      [trigger("start"), agent("a"), output("stop"), blankAgent],
       [thenWire("start", "a"), thenWire("a", "stop")],
     );
 
@@ -26,7 +18,7 @@ describe("flowProblems", () => {
 
   it("raises the blank Agent's settings once it is on the main flow", () => {
     const wired = flow(
-      [trigger("start"), prompt("a"), output("stop"), blankAgent],
+      [trigger("start"), agent("a"), output("stop"), blankAgent],
       [thenWire("start", "a"), thenWire("a", "blank"), thenWire("blank", "stop")],
     );
 
@@ -36,7 +28,7 @@ describe("flowProblems", () => {
   });
 
   it("raises every problem in the flow when it has no Start", () => {
-    const noStart = flow([prompt("a"), output("stop"), blankAgent], [thenWire("a", "stop")]);
+    const noStart = flow([agent("a"), output("stop"), blankAgent], [thenWire("a", "stop")]);
 
     expect(ruleAndNode(flowProblems(noStart))).toEqual(
       expect.arrayContaining([
@@ -48,7 +40,7 @@ describe("flowProblems", () => {
 
   it("raises one-start when a second Start is loose", () => {
     const twoStarts = flow(
-      [trigger("start"), trigger("other"), prompt("a"), output("stop")],
+      [trigger("start"), trigger("other"), agent("a"), output("stop")],
       [thenWire("start", "a"), thenWire("a", "stop")],
     );
 
@@ -57,7 +49,7 @@ describe("flowProblems", () => {
 
   it("raises stop-required when the only Stop is loose", () => {
     const looseStop = flow(
-      [trigger("start"), prompt("a"), output("stop")],
+      [trigger("start"), agent("a"), output("stop")],
       [thenWire("start", "a")],
     );
 
@@ -66,7 +58,7 @@ describe("flowProblems", () => {
 
   it("numbers a problem's wire by its place in the whole flow, loose wires included", () => {
     const looseWireFirst = flow(
-      [trigger("start"), prompt("a"), output("stop"), prompt("x"), prompt("y")],
+      [trigger("start"), agent("a"), output("stop"), agent("x"), agent("y")],
       [
         thenWire("x", "y"),
         thenWire("start", "a"),

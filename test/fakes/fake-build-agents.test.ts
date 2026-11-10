@@ -6,7 +6,7 @@ import { checkBuild } from "../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
 import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
-import { agent, fileWire, onMainFlow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, fileWire, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
 
@@ -30,9 +30,9 @@ const labelled = <T extends { label: string }>(node: T, label: string): T => ({ 
 const sample = (): Flow => {
   const base = onMainFlow(
     [
-      labelled(prompt("p"), "Draft the spec"),
+      labelled(agent("p"), "Draft the spec"),
       labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
-      labelled(prompt("s"), "Ship it"),
+      labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
   );
@@ -68,9 +68,7 @@ const laid = async (): Promise<Laid> => {
 const pieceFiles = (manifest: Manifest): string[] => [
   ...new Set(
     manifest.nodes.flatMap((node) =>
-      node.file !== undefined && (node.type === "agent" || node.type === "prompt")
-        ? [node.file]
-        : [],
+      node.file !== undefined && node.type === "agent" ? [node.file] : [],
     ),
   ),
 ];
@@ -94,6 +92,7 @@ const check = async (state: Laid) =>
     readBack: await readBack(state),
     manifest: state.manifest,
     flow: state.source,
+    shared: [],
   });
 
 const openWith = async (state: Laid, script?: FakeBuildScript) => {

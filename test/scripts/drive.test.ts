@@ -169,8 +169,8 @@ describe("parseSteps", () => {
 
   it("accepts drag steps with and without a drop position, and press steps", () => {
     const steps = [
-      { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 200, y: 150 } },
-      { type: "drag", from: "prompt-1-out", to: "script-1-in" },
+      { type: "drag", from: "palette-agent", to: "canvas", toPosition: { x: 200, y: 150 } },
+      { type: "drag", from: "agent-1-out", to: "gate-1-in" },
       { type: "press", key: "Meta+z" },
     ];
 
@@ -178,10 +178,10 @@ describe("parseSteps", () => {
   });
 
   it.each([
-    ["a drag without to", { type: "drag", from: "palette-prompt" }, "drag", "→ at to"],
+    ["a drag without to", { type: "drag", from: "palette-agent" }, "drag", "→ at to"],
     [
       "a drag with a non-numeric toPosition",
-      { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: "200", y: 150 } },
+      { type: "drag", from: "palette-agent", to: "canvas", toPosition: { x: "200", y: 150 } },
       "drag",
       "→ at toPosition.x",
     ],
@@ -196,7 +196,7 @@ describe("parseSteps", () => {
 
   it("accepts close-window and relaunch steps alongside the other step types", () => {
     const steps = [
-      { type: "drag", from: "palette-prompt", to: "canvas" },
+      { type: "drag", from: "palette-agent", to: "canvas" },
       { type: "close-window" },
       { type: "click", testid: "close-save" },
       { type: "relaunch" },
@@ -308,9 +308,9 @@ describe("runSteps", () => {
   it("dispatches drag and press to the page in step order", async () => {
     await runSteps(
       [
-        { type: "drag", from: "palette-prompt", to: "canvas", toPosition: { x: 200, y: 150 } },
+        { type: "drag", from: "palette-agent", to: "canvas", toPosition: { x: 200, y: 150 } },
         { type: "click", testid: "canvas-undo" },
-        { type: "drag", from: "prompt-1-out", to: "script-1-in" },
+        { type: "drag", from: "agent-1-out", to: "gate-1-in" },
         { type: "press", key: "Meta+z" },
         { type: "press", key: "Shift+Meta+z" },
       ],
@@ -319,9 +319,9 @@ describe("runSteps", () => {
     );
 
     expect(page.calls).toEqual([
-      "drag palette-prompt canvas 200,150",
+      "drag palette-agent canvas 200,150",
       "click canvas-undo",
-      "drag prompt-1-out script-1-in centre",
+      "drag agent-1-out gate-1-in centre",
       "press Meta+z",
       "press Shift+Meta+z",
     ]);
@@ -330,7 +330,7 @@ describe("runSteps", () => {
   it("saves evidence only for screenshot steps when drag and press steps run", async () => {
     await runSteps(
       [
-        { type: "drag", from: "palette-script", to: "canvas", toPosition: { x: 10, y: 20 } },
+        { type: "drag", from: "palette-gate", to: "canvas", toPosition: { x: 10, y: 20 } },
         { type: "press", key: "Delete" },
         { type: "screenshot" },
       ],
@@ -338,17 +338,17 @@ describe("runSteps", () => {
       { outDir },
     );
 
-    expect(page.calls).toEqual(["drag palette-script canvas 10,20", "press Delete", "screenshot"]);
+    expect(page.calls).toEqual(["drag palette-gate canvas 10,20", "press Delete", "screenshot"]);
     expect((await readdir(outDir)).sort()).toEqual(["step-3.aria.yml", "step-3.png"]);
   });
 
   it("stops at a failing drag and names it by index and type", async () => {
-    page.failOn = "drag palette-prompt nowhere centre";
+    page.failOn = "drag palette-agent nowhere centre";
 
     await expect(
       runSteps(
         [
-          { type: "drag", from: "palette-prompt", to: "nowhere" },
+          { type: "drag", from: "palette-agent", to: "nowhere" },
           { type: "press", key: "Meta+z" },
         ],
         page,
@@ -614,14 +614,14 @@ describe("openCanvas", () => {
 
 describe("playwrightPage", () => {
   const layout = () => ({
-    "palette-prompt": { x: 0, y: 700, width: 80, height: 40 },
+    "palette-agent": { x: 0, y: 700, width: 80, height: 40 },
     canvas: { x: 120.25, y: 600.625, width: 800, height: 600 },
   });
 
   it("scrolls both ends into view before measuring, then drops on the whole pixel at the offset", async () => {
     const page = new FakePlaywrightPage(layout(), 900);
 
-    await playwrightPage(page.asPage()).drag("palette-prompt", "canvas", { x: 40, y: 30 });
+    await playwrightPage(page.asPage()).drag("palette-agent", "canvas", { x: 40, y: 30 });
 
     expect(page.scrollY).toBe(600);
     expect(page.calls).toEqual(["move 40,120", "down", "move 160,31 steps 10", "up"]);
@@ -630,7 +630,7 @@ describe("playwrightPage", () => {
   it("drops on the centre of the target when no offset is given", async () => {
     const page = new FakePlaywrightPage(layout(), 2000);
 
-    await playwrightPage(page.asPage()).drag("palette-prompt", "canvas");
+    await playwrightPage(page.asPage()).drag("palette-agent", "canvas");
 
     expect(page.calls).toEqual(["move 40,720", "down", "move 520.25,900.625 steps 10", "up"]);
   });
@@ -638,7 +638,7 @@ describe("playwrightPage", () => {
   it("names an element that has no box and presses nothing", async () => {
     const page = new FakePlaywrightPage({ ...layout(), canvas: null }, 2000);
 
-    await expect(playwrightPage(page.asPage()).drag("palette-prompt", "canvas")).rejects.toThrow(
+    await expect(playwrightPage(page.asPage()).drag("palette-agent", "canvas")).rejects.toThrow(
       "canvas is not visible",
     );
     expect(page.calls).toEqual([]);

@@ -4,7 +4,6 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { validate } from "../../../src/core/compiler/validate.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
-import { compilePrompt } from "../../../src/core/nodes/prompt/compile.js";
 import { sectionOf } from "../../fixtures/frontmatter.js";
 import {
   agent,
@@ -12,7 +11,6 @@ import {
   flow,
   loop,
   output,
-  prompt,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
@@ -22,8 +20,8 @@ const sample = (): Flow =>
     [
       agent("a"),
       loop("L"),
-      prompt("x", { parent: "L" }),
-      prompt("p"),
+      agent("x", { parent: "L" }),
+      agent("p"),
       trigger("start"),
       output("done"),
     ],
@@ -69,10 +67,10 @@ describe("lower", () => {
 
     expect(entries.find((node) => node.id === "p")).toStrictEqual({
       id: "p",
-      type: "prompt",
+      type: "agent",
       label: "p",
-      settings: nodeOf(input, "p", "prompt").settings,
-      file: "plugin/skills/p/SKILL.md",
+      settings: nodeOf(input, "p", "agent").settings,
+      file: "plugin/agents/p.md",
       piece: "p",
     });
     expect(entries.find((node) => node.id === "a")).toStrictEqual({
@@ -85,11 +83,11 @@ describe("lower", () => {
     });
     expect(entries.find((node) => node.id === "x")).toStrictEqual({
       id: "x",
-      type: "prompt",
+      type: "agent",
       label: "x",
       parent: "L",
-      settings: nodeOf(input, "x", "prompt").settings,
-      file: "plugin/skills/x/SKILL.md",
+      settings: nodeOf(input, "x", "agent").settings,
+      file: "plugin/agents/x.md",
       piece: "x",
     });
     expect(entries.find((node) => node.id === "L")).toStrictEqual({
@@ -100,12 +98,12 @@ describe("lower", () => {
     });
   });
 
-  it("names each Agent and Prompt node's piece by pieceNames, and points its file at that piece", () => {
+  it("names each Agent node's piece by pieceNames, and points its file at that piece", () => {
     const input = flow(
       [
-        labelled(prompt("p1"), "Sync with base branch"),
+        labelled(agent("p1"), "Sync with base branch"),
         labelled(agent("a1"), "Review"),
-        labelled(prompt("p2"), "Review"),
+        labelled(agent("p2"), "Review"),
         labelled(agent("a2"), "run"),
         trigger("start"),
       ],
@@ -121,13 +119,9 @@ describe("lower", () => {
 
     expect(named).toStrictEqual([
       { id: "start", piece: undefined, file: undefined },
-      {
-        id: "p1",
-        piece: pieces.get("p1"),
-        file: `plugin/skills/${pieces.get("p1")}/SKILL.md`,
-      },
+      { id: "p1", piece: pieces.get("p1"), file: `plugin/agents/${pieces.get("p1")}.md` },
       { id: "a1", piece: pieces.get("a1"), file: `plugin/agents/${pieces.get("a1")}.md` },
-      { id: "p2", piece: pieces.get("p2"), file: `plugin/skills/${pieces.get("p2")}/SKILL.md` },
+      { id: "p2", piece: pieces.get("p2"), file: `plugin/agents/${pieces.get("p2")}.md` },
       { id: "a2", piece: pieces.get("a2"), file: `plugin/agents/${pieces.get("a2")}.md` },
     ]);
     expect(named.map(({ piece }) => piece)).toEqual([
@@ -216,9 +210,9 @@ describe("lower", () => {
     );
   });
 
-  it("fills the build's values into the prompt and agent files", () => {
+  it("fills the build's values into the agent files", () => {
     const input = flow(
-      [prompt("p", { settings: { instructions: "Fix {{ticket}}" } }), agent("a")],
+      [agent("p", { settings: { instructions: "Fix {{ticket}}" } }), agent("a")],
       [thenWire("p", "a")],
     );
     input.session.buildConfig.variables = [{ name: "ticket", kind: "text" }];
@@ -229,25 +223,25 @@ describe("lower", () => {
       ),
     );
 
-    const skill = files["plugin/skills/p/SKILL.md"] ?? "";
-    expect(skill).toContain("Fix FD-99");
-    expect(skill).not.toContain("{{ticket}}");
+    const filled = files["plugin/agents/p.md"] ?? "";
+    expect(filled).toContain("Fix FD-99");
+    expect(filled).not.toContain("{{ticket}}");
   });
 
-  it("compiles one file per prompt and agent node, with its piece and this build's scope, and none for the rest", () => {
+  it("compiles one file per agent node, with its piece and this build's scope, and none for the rest", () => {
     const input = sample();
 
     expect(lower(input, workspace).nodeFiles).toStrictEqual([
-      compilePrompt(nodeOf(input, "p", "prompt"), { piece: "p", scope }),
+      compileAgent(nodeOf(input, "p", "agent"), { piece: "p", scope }),
       compileAgent(nodeOf(input, "a", "agent"), { piece: "a", scope }),
-      compilePrompt(nodeOf(input, "x", "prompt"), { piece: "x", scope }),
+      compileAgent(nodeOf(input, "x", "agent"), { piece: "x", scope }),
     ]);
   });
 
   describe("File wires", () => {
     const handoff = () =>
       flow(
-        [prompt("plan"), agent("build"), prompt("check")],
+        [agent("plan"), agent("build"), agent("check")],
         [
           thenWire("plan", "build"),
           thenWire("build", "check"),
@@ -271,14 +265,14 @@ describe("lower", () => {
         lower(handoff(), workspace).nodeFiles.map(({ path, content }) => [path, content]),
       );
 
-      const plan = files["plugin/skills/plan/SKILL.md"] ?? "";
-      const check = files["plugin/skills/check/SKILL.md"] ?? "";
-      expect(sectionOf(plan, /leaves behind/i)).toContain("plan.md");
-      expect(sectionOf(plan, /builds on/i)).not.toContain("plan.md");
+      const plan = files["plugin/agents/plan.md"] ?? "";
+      const check = files["plugin/agents/check.md"] ?? "";
+      expect(sectionOf(plan, /^## Output$/)).toContain("plan.md");
+      expect(sectionOf(plan, /^## Inputs$/)).not.toContain("plan.md");
       expect(files["plugin/agents/build.md"]).toContain("You are given: plan.md\n");
       expect(files["plugin/agents/build.md"]).toContain("Write: diff.md\n");
-      expect(sectionOf(check, /builds on/i)).toMatch(/plan\.md[\s\S]*diff\.md/);
-      expect(sectionOf(check, /leaves behind/i)).not.toMatch(/plan\.md|diff\.md/);
+      expect(sectionOf(check, /^## Inputs$/)).toMatch(/plan\.md[\s\S]*diff\.md/);
+      expect(sectionOf(check, /^## Output$/)).not.toMatch(/plan\.md|diff\.md/);
     });
   });
 

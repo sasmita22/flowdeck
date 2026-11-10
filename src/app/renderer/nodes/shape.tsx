@@ -81,7 +81,7 @@ export function NodeShape({
   const clip = `fd-clip-${useId().replace(/[^\w-]/g, "")}`;
   const { box: look, outline: stroke } = nodeLook(type);
   const box = { ...look, width: width ?? look.width };
-  const { path: outline, padL, fill, strokeWidth, ink, extras } = nodeOutline(type, box.width);
+  const { path: outline, padL, fill, strokeWidth, extras } = nodeOutline(type, box.width);
   return (
     <div
       {...ignoredMarks(ignored)}
@@ -117,7 +117,7 @@ export function NodeShape({
         </g>
         {overlay}
       </svg>
-      <div style={{ position: "absolute", left: padL, top: 25, color: ink ?? "var(--fg)" }}>
+      <div style={{ position: "absolute", left: padL, top: 25, color: "var(--fg)" }}>
         <NodeStatusBadge nodeId={id} />
       </div>
       <NodeIssueMarker nodeId={id} width={box.width} />
@@ -137,12 +137,11 @@ export function TagChip({ x, tag, fill }: { x: number; tag: string; fill: string
 
 export function TagPill({ type }: { type: OutlinedType }) {
   const { tag, group } = nodeLook(type);
-  const { padL, ink } = nodeOutline(type);
-  const fill = ink ?? group;
+  const { padL } = nodeOutline(type);
   return (
     <>
-      <TagChip x={padL} tag={tag} fill={fill} />
-      <text x={padL + 5} y={19} fill={fill} style={tagTextStyle}>
+      <TagChip x={padL} tag={tag} fill={group} />
+      <text x={padL + 5} y={19} fill={group} style={tagTextStyle}>
         {tag}
       </text>
     </>
@@ -150,14 +149,8 @@ export function TagPill({ type }: { type: OutlinedType }) {
 }
 
 export function Label({ type, text }: { type: OutlinedType; text: string | undefined }) {
-  const { ink } = nodeOutline(type);
   return (
-    <text
-      x={labelX(type)}
-      y={20}
-      fill={ink ?? "var(--fg)"}
-      style={{ font: labelFonts[ink === undefined ? "body" : "mono"] }}
-    >
+    <text x={labelX(type)} y={20} fill="var(--fg)" style={{ font: labelFonts.body }}>
       {text}
     </text>
   );

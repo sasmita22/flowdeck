@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -25,8 +25,6 @@ import {
   join as joinNode,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -34,8 +32,9 @@ import {
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
-import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
+import { fakeClaudeDispatched, launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
+import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const placed = (built: Flow): Flow => ({
   ...built,
@@ -54,10 +53,7 @@ let repo: TmpRepo;
 let bin: string;
 let launched: LaunchedApp | undefined;
 
-const sh = (id: string, command: string, label = id) => ({
-  ...script(id, { settings: { command: "sh", args: ["-c", command] } }),
-  label,
-});
+const named = (id: string, label = id) => ({ ...agent(id), label });
 
 const fakeClaude = `
 const sock = process.env.FLOWDECK_SOCK ?? "";
@@ -81,11 +77,12 @@ process.stdin.on("data", (chunk) => {
 draw();
 `;
 
-const launch = async (ownBin?: string) => {
+const launch = async (ownBin?: string, turns?: Record<string, FakeAgentTurn>) => {
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
     ...(ownBin === undefined ? {} : { ownBin }),
+    ...(turns === undefined ? {} : { turns }),
   });
   await expect(launched.window.getByTestId(controlTestIds.build)).toBeVisible();
   return launched.window;
@@ -133,21 +130,6 @@ const tmuxAlive = async (name: string) => {
   }
 };
 
-const sessionNames = (): { tmux_name: string }[] => {
-  try {
-    return rows("SELECT tmux_name FROM run_sessions");
-  } catch {
-    return [];
-  }
-};
-
-const killTmux = async () => {
-  const names = sessionNames();
-  for (const { tmux_name: name } of names) {
-    await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-  }
-};
-
 const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
 
 const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
@@ -168,35 +150,31 @@ test.afterEach(async () => {
   try {
     await closeApp();
   } finally {
-    await killTmux();
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
 });
 
-test("A script that exits 3 says so on its node and in the inspector, and Retry after the fix goes on to done", async () => {
+test("An agent that fails says so on its node and in the inspector, and Retry goes on to done", async () => {
   seedFlow(
     home,
-    laidOut(
-      [sh("s1", "exit $(cat code.txt)", "Run tests"), sh("s2", "echo shipped", "Ship")],
-      [thenWire("s1", "s2")],
-    ),
+    laidOut([named("s1", "Run tests"), named("s2", "Ship")], [thenWire("s1", "s2")]),
     repo.path,
   );
-  const window = await launch();
+  const window = await launch(undefined, { s1: "fail-once" });
 
-  const folder = workFolder(await buildOnCanvas(window, home, "exit-three"));
-  await writeFile(join(folder, "code.txt"), "3");
-  await runFromDetail(window);
+  await buildAndRun(window, home, "fails-once");
 
-  await expect(window.getByTestId("node-reason-s1")).toHaveText("Script exited with code 3", {
+  await expect(window.getByTestId("node-reason-s1")).toHaveText("No finished Agent call for s1", {
     timeout: 20_000,
   });
-  await expect(window.getByTestId("inspector-reason-s1")).toHaveText("Script exited with code 3");
+  await expect(window.getByTestId("inspector-reason-s1")).toHaveText(
+    "No finished Agent call for s1",
+  );
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed");
   await darkShot(window, "failed.png");
 
-  await writeFile(join(folder, "code.txt"), "0");
   await window.getByTestId("retry-s1").click();
 
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
@@ -208,31 +186,21 @@ test("A script that exits 3 says so on its node and in the inspector, and Retry 
       "SELECT kind FROM events WHERE run_id = ? AND node_id = 's1' ORDER BY seq",
       runId,
     ).map((row) => row.kind),
-  ).toEqual(["running", "failed", "retry", "running", "done"]);
+  ).toEqual(["sent", "failed", "retry", "sent", "done"]);
   expect(latestRun()?.status).toBe("done");
 });
 
-test("Stop ends a long script and marks the run stopped, and Resume skips the finished nodes", async () => {
+test("Stop ends a long agent turn and marks the run stopped, and Resume skips the finished nodes", async () => {
   seedFlow(
     home,
-    laidOut(
-      [
-        sh("s1", "echo once >> s1.log"),
-        sh("s2", "echo $$ > s2.pid; test -f go || exec sleep 60"),
-        sh("s3", "echo last"),
-      ],
-      [thenWire("s1", "s2"), thenWire("s2", "s3")],
-    ),
+    laidOut([agent("s1"), agent("s2"), agent("s3")], [thenWire("s1", "s2"), thenWire("s2", "s3")]),
     repo.path,
   );
-  const window = await launch();
-  const folder = workFolder(await buildAndRun(window, home, "long"));
-  await expect(status(window, "s2")).toHaveAttribute("data-status", "running", {
+  const window = await launch(undefined, { s2: "hold-once" });
+  await buildAndRun(window, home, "long");
+  await expect(status(window, "s2")).toHaveAttribute("data-status", "sent", {
     timeout: 20_000,
   });
-  const pidText = () => readFile(join(folder, "s2.pid"), "utf8").catch(() => "");
-  await expect.poll(pidText).toMatch(/^\d+\n$/);
-  const pid = Number(await pidText());
 
   await window.getByTestId(pageTestIds.runStop).click();
 
@@ -240,26 +208,15 @@ test("Stop ends a long script and marks the run stopped, and Resume skips the fi
     timeout: 20_000,
   });
   expect(latestRun()?.status).toBe("stopped");
-  await expect
-    .poll(() => {
-      try {
-        process.kill(pid, 0);
-        return "alive";
-      } catch {
-        return "gone";
-      }
-    })
-    .toBe("gone");
 
-  await writeFile(join(folder, "go"), "");
   await window.getByTestId(pageTestIds.runResume).click();
 
   await expect(status(window, "s3")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done");
-  expect(await readFile(join(folder, "s1.log"), "utf8")).toBe("once\n");
+  expect((await fakeClaudeDispatched(home)).filter((id) => id === "s1")).toEqual(["s1"]);
   expect(
     rows<{ n: number }>(
-      "SELECT count(*) AS n FROM events WHERE run_id = ? AND node_id = 's1' AND kind = 'running'",
+      "SELECT count(*) AS n FROM events WHERE run_id = ? AND node_id = 's1' AND kind = 'sent'",
       latestRun()?.id,
     ),
   ).toEqual([{ n: 1 }]);
@@ -270,9 +227,9 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
     home,
     laidOut(
       [
-        sh("s1", "echo one"),
+        agent("s1"),
         gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
-        sh("s2", "echo two"),
+        agent("s2"),
       ],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
@@ -310,13 +267,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
 test("A build whose yes/no value is no takes Branch's no path", async () => {
   const branched = placed(
     flow(
-      [
-        trigger("t"),
-        branch("b", "deep"),
-        sh("yes", "echo deep"),
-        sh("no", "echo quick"),
-        output("stop"),
-      ],
+      [trigger("t"), branch("b", "deep"), agent("yes"), agent("no"), output("stop")],
       [
         thenWire("t", "b"),
         wire("b", "yes", "yes", "in"),
@@ -353,39 +304,10 @@ test("A build whose yes/no value is no takes Branch's no path", async () => {
   expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({});
 });
 
-test("Script output shows in Activity and is still there after the run page is opened again", async () => {
-  seedFlow(home, laidOut([sh("s1", "echo hello from s1; echo careful >&2")], []), repo.path);
-  const window = await launch();
-
-  await buildAndRun(window, home, "talk");
-  const output = window.locator('[data-kind="output"][data-node-id="s1"]');
-  await expect(output).toHaveText(["s1 Errors: careful", "s1 Output: hello from s1"], {
-    timeout: 20_000,
-  });
-  const runId = latestRun()?.id ?? "";
-
-  await window.getByTestId(pageTestIds.runBack).click();
-  await window.getByTestId(pageTestIds.runOpen(runId)).click();
-  await expect(output).toHaveText(["s1 Errors: careful", "s1 Output: hello from s1"]);
-
-  await closeApp();
-  const again = await launch();
-  await again.getByTestId(controlTestIds.back).click();
-  await again.getByTestId("menu-runs").click();
-  await again.getByTestId(pageTestIds.runOpen(runId)).click();
-  await expect(again.locator('[data-kind="output"][data-node-id="s1"]')).toHaveText([
-    "s1 Errors: careful",
-    "s1 Output: hello from s1",
-  ]);
-});
-
 test("A gate's question shows on the run page while the inspector is hidden", async () => {
   seedFlow(
     home,
-    laidOut(
-      [sh("s1", "echo one"), gate("g1"), sh("s2", "echo two")],
-      [thenWire("s1", "g1"), thenWire("g1", "s2")],
-    ),
+    laidOut([agent("s1"), gate("g1"), agent("s2")], [thenWire("s1", "g1"), thenWire("g1", "s2")]),
     repo.path,
   );
   const window = await launch();
@@ -412,9 +334,9 @@ test("The Cost tab shows each node's tokens, cost and time, and a session line t
     "Plan and build",
     laidOut(
       [
-        { ...prompt("p1"), label: "Plan" },
-        sh("s1", "npm test", "Run tests"),
-        { ...prompt("p2"), label: "Build" },
+        { ...agent("p1"), label: "Plan" },
+        named("s1", "Run tests"),
+        { ...agent("p2"), label: "Build" },
       ],
       [thenWire("p1", "s1"), thenWire("s1", "p2")],
     ),
@@ -517,7 +439,7 @@ test("Fork and Join show their status during a parallel run, and Stop ends the r
 });
 
 test("Pop out opens the terminal in its own window, attached to the run's session", async () => {
-  seedFlow(home, laidOut([prompt("p1")], []), repo.path);
+  seedFlow(home, laidOut([agent("p1")], []), repo.path);
   const window = await withFakeClaude();
   await buildAndRun(window, home, "pop-out");
   await expect(status(window, "p1")).toHaveAttribute("data-status", "sent", { timeout: 30_000 });

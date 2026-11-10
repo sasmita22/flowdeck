@@ -8,13 +8,13 @@ import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import type { NewBuild, NewRun } from "../../../src/ports/store.js";
-import { flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
 
 const migrationsDir = fileURLToPath(
   new URL("../../../src/adapters/sqlite/migrations/", import.meta.url),
 );
 
-const twoNodes = () => flow([prompt("p1"), script("s1")], [thenWire("p1", "s1")]);
+const twoNodes = () => flow([agent("p1"), agent("s1")], [thenWire("p1", "s1")]);
 
 const newBuild = (overrides: Partial<NewBuild> = {}): NewBuild => ({
   id: "b1",

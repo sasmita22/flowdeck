@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -13,12 +13,13 @@ import {
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { gate, onMainFlow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { waitForBuilt } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const run = promisify(execFile);
 
@@ -41,11 +42,28 @@ const draw = () =>
   process.stdout.write(
     "\\x1b[2J\\x1b[HFake Claude in " + session + "\\r\\n────────\\r\\n❯ " + typed + "\\r\\n────────\\r\\n",
   );
-const stop = () => {
+const send = (event) => {
   const socket = connect(sock, () => {
-    socket.end(JSON.stringify({ hook_event_name: "Stop", session_id: sessionId, last_assistant_message: "ok" }) + "\\n");
+    socket.end(JSON.stringify({ session_id: sessionId, ...event }) + "\\n");
   });
   socket.on("error", () => undefined);
+};
+const stop = () => send({ hook_event_name: "Stop", last_assistant_message: "ok" });
+const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\\\"]+)/;
+const turn = (text) => {
+  const match = dispatched.exec(text);
+  if (match === null) return setTimeout(stop, 50);
+  const [, agentType, nodeId] = match;
+  setTimeout(() => {
+    send({
+      hook_event_name: "PostToolUse",
+      tool_name: "Agent",
+      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+      tool_response: { agentType, status: "completed" },
+    });
+    setTimeout(stop, 100);
+  }, 50);
 };
 process.stdout.on("resize", draw);
 process.stdin.setRawMode(true);
@@ -53,7 +71,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   for (const key of chunk) {
     if (key === "\\r" || key === "\\n") {
-      if (typed !== "") setTimeout(stop, 50);
+      if (typed !== "") turn(typed);
       typed = "";
     } else if (key === "\\x7f") typed = typed.slice(0, -1);
     else if (key !== "\\x1b") typed += key;
@@ -68,9 +86,9 @@ const argvLog = () => join(bin, "argv.log");
 const blueprint = (): Flow => {
   const built = onMainFlow(
     [
-      prompt("p1", { settings: { instructions: "Work on {{ticket}}." } }),
+      agent("p1", { settings: { instructions: "Work on {{ticket}}." } }),
       gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
-      script("s2", { settings: { command: "sh", args: ["-c", "echo two"] } }),
+      agent("s2"),
     ],
     [thenWire("p1", "g1"), thenWire("g1", "s2")],
   );
@@ -120,22 +138,6 @@ const runOf = (buildId: string) =>
       WHERE runs.build_id = ?`,
     buildId,
   );
-
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const killOwnTmux = async () => {
-  let names: { tmux_name: string }[];
-  try {
-    names = rows("SELECT tmux_name FROM run_sessions");
-  } catch {
-    return;
-  }
-  for (const { tmux_name: name } of names) {
-    if (!/^fd-run-[0-9a-f]{8}$/.test(name)) continue;
-    await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-    await rm(join(tmuxSockets, name), { force: true });
-  }
-};
 
 const openBuildDialog = async (window: Page, flowId: string) => {
   await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
@@ -201,7 +203,7 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    await killOwnTmux();
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }

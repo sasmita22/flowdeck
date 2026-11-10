@@ -1,9 +1,11 @@
 import type { Flow } from "../flow/schema.js";
+import type { BuildReport } from "./build-report.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestNode } from "./lower.js";
 import { orchestratorPath } from "./orchestrator.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
+import { SHARED_PIECE_TOOL, sharedPath } from "./shared.js";
 import { standardRules } from "./standard-rules.js";
 
 export type BuildCheckFailure = { file: string; rule: string; detail: string };
@@ -13,6 +15,7 @@ export type BuildCheckInputs = {
   readBack: readonly BuildFile[];
   manifest: Manifest;
   flow: Flow;
+  shared: BuildReport["shared"];
 };
 
 const descriptionFloor = 60;
@@ -45,6 +48,12 @@ const frontmatterOf = (content: string): Map<string, string> => {
   return fields;
 };
 
+const toolsOf = (content: string): string[] =>
+  (frontmatterOf(content).get("tools") ?? "")
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter((tool) => tool !== "");
+
 const bodyOf = (content: string) =>
   content.replace(frontmatterBlock, "").replace(unfilledLine, "").trim();
 
@@ -53,7 +62,7 @@ type Piece = { file: string; piece: string; type: ManifestNode["type"]; labels: 
 const piecesOf = (manifest: Manifest): Piece[] => {
   const byFile = new Map<string, Piece>();
   for (const node of manifest.nodes) {
-    if (node.file === undefined || (node.type !== "agent" && node.type !== "prompt")) continue;
+    if (node.file === undefined || node.type !== "agent") continue;
     const known = byFile.get(node.file);
     if (known === undefined) {
       byFile.set(node.file, {
@@ -70,7 +79,7 @@ const piecesOf = (manifest: Manifest): Piece[] => {
 };
 
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
-  const { laidDown, readBack, manifest, flow } = inputs;
+  const { laidDown, readBack, manifest, flow, shared } = inputs;
   const laid = new Map(laidDown.map((file) => [file.path, file.content]));
   const back = new Map(readBack.map((file) => [file.path, file.content]));
   const failures: BuildCheckFailure[] = [];
@@ -78,7 +87,11 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     failures.push({ file, rule, detail });
   };
   const pieces = piecesOf(manifest);
-  const pieceNames = new Set([...pieces.map((piece) => piece.piece), "run"]);
+  const pieceNames = new Set([
+    ...pieces.map((piece) => piece.piece),
+    "run",
+    ...shared.map((entry) => entry.name),
+  ]);
   const prefix = manifest.prefix ?? "";
   const allowed = new Set(manifest.session.allowedTools);
 
@@ -110,10 +123,7 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     }
 
     if (piece.type === "agent") {
-      const tools = (fields.get("tools") ?? "")
-        .split(",")
-        .map((tool) => tool.trim())
-        .filter((tool) => tool !== "");
+      const tools = toolsOf(content);
       const outside = tools.filter((tool) => !allowed.has(tool));
       if (outside.length > 0)
         fail(piece.file, "tools", `tools outside the session's allow list: ${outside.join(", ")}`);
@@ -121,6 +131,32 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
 
     if (bodyOf(content) === bodyOf(laid.get(piece.file) ?? ""))
       fail(piece.file, "body", "body has nothing beyond its draft");
+  }
+
+  const filesOf = (ids: readonly string[]) => [
+    ...new Set(ids.flatMap((id) => manifest.nodes.find((node) => node.id === id)?.file ?? [])),
+  ];
+  for (const entry of shared) {
+    const path = sharedPath(entry);
+    const content = back.get(path);
+    if (content === undefined || content.trim() === "") {
+      fail(path, "missing", `shared ${entry.kind} ${entry.name} has no content`);
+    } else {
+      if (frontmatterOf(content).get("description") === undefined)
+        fail(path, "frontmatter", "frontmatter has no description");
+      if (bodyOf(content) === bodyOf(laid.get(path) ?? ""))
+        fail(path, "body", "body has nothing beyond its draft");
+    }
+    const reference = `${prefix}:${entry.name}`;
+    for (const file of filesOf(entry.usedBy)) {
+      const agentFile = back.get(file);
+      if (agentFile === undefined) continue;
+      if (!agentFile.includes(reference))
+        fail(file, "shared", `never runs the shared ${entry.kind} ${reference}`);
+      const tools = toolsOf(agentFile);
+      if (tools.length > 0 && !tools.includes(SHARED_PIECE_TOOL))
+        fail(file, "tools", `tools leave out ${SHARED_PIECE_TOOL}, which runs ${reference}`);
+    }
   }
 
   for (const [path, content] of back) {

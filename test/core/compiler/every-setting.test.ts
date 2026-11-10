@@ -15,16 +15,6 @@ const inFile = (file: string, shows: string): Landing => ({ file, shows });
 const atRunTime = (value: unknown): Landing => ({ manifest: "node", value });
 
 const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
-  prompt: {
-    instructions: [
-      "M-prompt-instructions",
-      inFile("plugin/skills/label-prompt/SKILL.md", "M-prompt-instructions"),
-    ],
-    expectedOutput: [
-      "M-prompt-output",
-      inFile("plugin/skills/label-prompt/SKILL.md", "M-prompt-output"),
-    ],
-  },
   agent: {
     role: ["M-agent-role", inFile("plugin/agents/label-agent.md", "M-agent-role")],
     instructions: [
@@ -35,12 +25,6 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
     tools: [["M-agent-tool"], inFile("plugin/agents/label-agent.md", "M-agent-tool")],
     given: [["M-agent-given.md"], inFile("plugin/agents/label-agent.md", "M-agent-given.md")],
     writes: [["M-agent-writes.md"], inFile("plugin/agents/label-agent.md", "M-agent-writes.md")],
-  },
-  script: {
-    command: ["M-script-command", atRunTime("M-script-command")],
-    args: [["M-script-arg"], atRunTime(["M-script-arg"])],
-    successCodes: [[71], atRunTime([71])],
-    retryCodes: [[72], atRunTime([72])],
   },
   gate: {
     shown: ["M-gate-shown", atRunTime("M-gate-shown")],
@@ -104,9 +88,7 @@ const session: Record<string, [unknown, Landing]> = {
 };
 
 const idOf: Record<NodeType, string> = {
-  prompt: "p",
   agent: "a",
-  script: "s",
   gate: "g",
   ask: "k",
   hardstop: "h",
@@ -215,19 +197,14 @@ describe("every setting lands in the build", () => {
     },
   );
 
-  it("puts no prompt or agent text only in the manifest", () => {
+  it("puts no agent text only in the manifest", () => {
     const { byPath } = builtFiles();
     const claudeFiles = [...byPath]
       .filter(([path]) => path !== "manifest.json")
       .map(([, content]) => content)
       .join("\n");
 
-    for (const marker of [
-      "M-prompt-instructions",
-      "M-prompt-output",
-      "M-agent-given.md",
-      "M-agent-writes.md",
-    ]) {
+    for (const marker of ["M-agent-instructions", "M-agent-given.md", "M-agent-writes.md"]) {
       expect(claudeFiles).toContain(marker);
     }
   });

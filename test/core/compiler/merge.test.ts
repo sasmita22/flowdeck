@@ -6,25 +6,27 @@ import { applyMerges, type MergeResult } from "../../../src/core/compiler/merge.
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import type { ScopeParts } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, onMainFlow, prompt, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const reviewers = (): Flow =>
   onMainFlow(
     [
-      labelled(prompt("p"), "Draft the spec"),
+      labelled(agent("p"), "Draft the spec"),
       labelled(agent("a"), "Review the draft"),
       labelled(agent("b"), "Review the draft again"),
       labelled(agent("c"), "Check the draft"),
-      labelled(prompt("s"), "Ship it"),
-      labelled(prompt("t"), "Ship it now"),
+      labelled(gate("g"), "Look at the draft"),
+      labelled(agent("s"), "Ship it"),
+      labelled(agent("t"), "Ship it now"),
     ],
     [
       thenWire("p", "a"),
       thenWire("a", "b"),
       thenWire("b", "c"),
-      thenWire("c", "s"),
+      thenWire("c", "g"),
+      thenWire("g", "s"),
       thenWire("s", "t"),
     ],
   );
@@ -125,18 +127,6 @@ describe("applyMerges", () => {
       expect(paths(files)).toEqual(paths(before.files).filter((path) => !absorbed.includes(path)));
     });
 
-    it("merges prompts too, removing the absorbed step skill", async () => {
-      const before = await laid();
-      const kept = fileOf(before.manifest, "s");
-      const absorbed = fileOf(before.manifest, "t");
-
-      const { files, manifest } = applyMerges(before.files, before.manifest, [merge(["t", "s"])]);
-
-      expect(nodeOf(manifest, "t").piece).toBe(nodeOf(before.manifest, "s").piece);
-      expect(nodeOf(manifest, "t").file).toBe(kept);
-      expect(paths(files)).toEqual(paths(before.files).filter((path) => path !== absorbed));
-    });
-
     it("writes the shared piece as a fresh @unfilled draft made from the first node's fields", async () => {
       const before = await laid();
       const shared = fileOf(before.manifest, "a");
@@ -216,14 +206,15 @@ describe("applyMerges", () => {
   });
 
   describe("a rejected merge becomes a question and is not applied", () => {
-    it("rejects merging nodes of different kinds", async () => {
+    it("rejects merging an agent with a node that is not an agent, naming agents only", async () => {
       const before = await laid();
-      const merges = [merge(["a", "p"])];
+      const merges = [merge(["a", "g"])];
 
       const result = applyMerges(before.files, before.manifest, merges);
 
       expectNothingApplied(result, before);
       expectQuestionsOn(result.rejected, merges);
+      expect(result.rejected[0]?.text).toBe("Nodes a, g cannot share a piece: only agents can.");
     });
 
     it("rejects a merge naming an unknown node", async () => {
@@ -249,7 +240,7 @@ describe("applyMerges", () => {
 
     it("still applies the valid merges beside a rejected one", async () => {
       const before = await laid();
-      const bad = merge(["c", "p"]);
+      const bad = merge(["c", "g"]);
 
       const result = applyMerges(before.files, before.manifest, [bad, merge(["s", "t"])]);
 

@@ -8,16 +8,15 @@ import {
   fork,
   onMainFlow,
   output,
-  prompt,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
 
 describe("plainReason", () => {
   it("drops the node id it starts with and the type tags, and starts with a capital", () => {
-    expect(
-      plainReason("foreach-1", "foreach-1 (foreach) has no prompt or agent in its body."),
-    ).toBe("Has no prompt or agent in its body.");
+    expect(plainReason("foreach-1", "foreach-1 (foreach) has no agent in its body.")).toBe(
+      "Has no agent in its body.",
+    );
   });
 
   it("keeps a message that does not start with the node id", () => {
@@ -30,7 +29,7 @@ describe("plainReason", () => {
 describe("reasonNaming", () => {
   it("puts the node's label where its id started the message", () => {
     expect(
-      reasonNaming("prompt-1", "prompt-1 is a parallel branch that is not an Agent.", "Draft"),
+      reasonNaming("gate-1", "gate-1 is a parallel branch that is not an Agent.", "Draft"),
     ).toBe("Draft is a parallel branch that is not an Agent.");
   });
 });
@@ -58,7 +57,7 @@ describe("plainProblems", () => {
     expect(problems).toEqual([
       { node: "agent-1", field: "instructions", text: "Write what the agent should do." },
       { node: "fork-1", text: "Has 0 branches; a parallel start needs two or more." },
-      { node: "each", text: "Has no prompt or agent in its body." },
+      { node: "each", text: "Has no agent in its body." },
     ]);
     for (const { text } of problems) {
       expect(text).not.toMatch(/required-settings|parallel-section|loop-body/);
@@ -66,7 +65,7 @@ describe("plainProblems", () => {
   });
 
   it("keeps a problem with no node, such as the missing repository", () => {
-    const base = onMainFlow([prompt("p")], []);
+    const base = onMainFlow([agent("p")], []);
     const current = {
       ...base,
       session: { ...base.session, buildConfig: { ...base.session.buildConfig, repo: "" } },

@@ -20,9 +20,12 @@ describe("test ids", () => {
     expect(paletteTestId("note")).toBe("palette-note");
   });
 
-  it("keeps the ids the e2e specs drag exactly", () => {
-    expect(paletteTestId("prompt")).toBe("palette-prompt");
-    expect(paletteTestId("script")).toBe("palette-script");
+  it("names no palette-prompt or palette-script entry", () => {
+    const ids = NodeType.options.map((type) => paletteTestId(type));
+
+    expect(ids).toContain("palette-agent");
+    expect(ids).not.toContain("palette-prompt");
+    expect(ids).not.toContain("palette-script");
   });
 
   it("lists every control id", () => {

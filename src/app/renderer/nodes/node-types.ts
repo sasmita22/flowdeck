@@ -12,15 +12,11 @@ import { JoinNode } from "./join.js";
 import { LoopNode } from "./loop.js";
 import { NoteNode } from "./note.js";
 import { OutputNode } from "./output.js";
-import { PromptNode } from "./prompt.js";
-import { ScriptNode } from "./script.js";
 import { TriggerNode } from "./trigger.js";
 
 export const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
-  prompt: PromptNode,
   agent: AgentNode,
-  script: ScriptNode,
   gate: GateNode,
   hardstop: HardstopNode,
   ask: AskNode,

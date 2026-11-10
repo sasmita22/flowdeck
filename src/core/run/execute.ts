@@ -6,13 +6,7 @@ import type { CompactionReader } from "./context.js";
 import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
-import {
-  Runner,
-  StructureError,
-  structureProblems,
-  type RunnerDeps,
-  type ScriptResult,
-} from "./runner.js";
+import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
 import type { HumanWaiter } from "./wait.js";
@@ -41,16 +35,6 @@ export type OpenedSession = {
 
 export type ExecuteDeps = {
   fs: VerifyFileSystem & Pick<RunnerDeps["files"], "writeFile">;
-  scripts: {
-    run(
-      command: string,
-      args: readonly string[],
-      cwd: string,
-      signal?: AbortSignal,
-      job?: string,
-    ): ReturnType<RunnerDeps["scripts"]["run"]>;
-    rejoin?(job: string, signal?: AbortSignal): Promise<ScriptResult | undefined>;
-  };
   waiter: HumanWaiter;
   startEvents(
     socketPath: string,
@@ -58,14 +42,13 @@ export type ExecuteDeps = {
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   store: Store;
   onChange(line: string): void;
-  onOutput?: RunnerDeps["onOutput"];
   onInterrupt?(handler: (exitCode: number) => void): () => void;
   now?: () => number;
   usage?: UsageReader;
   compactions?: CompactionReader;
 };
 
-export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onOutput" | "onInterrupt">;
+export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onInterrupt">;
 
 export type LoadedBuild = Omit<Manifest, "prefix" | "layout"> & {
   hash: string;
@@ -85,7 +68,6 @@ export type Execution = {
   auto: boolean;
   flags?: Record<string, boolean>;
   socketPath: string;
-  scriptJobs?: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
 };
@@ -95,11 +77,11 @@ const maxSocketPath = 104;
 export const noClaude: OpenedSession = {
   sessionId: "",
   session: {
-    ensureStarted: () => Promise.reject(new Error("This build has no prompt nodes to start")),
+    ensureStarted: () => Promise.reject(new Error("This build has no Claude turns to start")),
   },
   prompts: {
-    sendPrompt: () => Promise.reject(new Error("This build has no prompt nodes to send")),
-    interrupt: () => Promise.reject(new Error("This build has no prompt nodes to interrupt")),
+    sendPrompt: () => Promise.reject(new Error("This build has no Claude turns to send")),
+    interrupt: () => Promise.reject(new Error("This build has no Claude turns to interrupt")),
   },
   stop: async () => undefined,
 };
@@ -156,9 +138,7 @@ const checksACondition = (node: LoadedBuild["nodes"][number]) =>
   node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
 
 export const needsClaude = (manifest: Pick<Manifest, "nodes">) =>
-  manifest.nodes.some(
-    (node) => node.type === "prompt" || node.type === "agent" || checksACondition(node),
-  );
+  manifest.nodes.some((node) => node.type === "agent" || checksACondition(node));
 
 type ResumeRead = { actions: ResumeActions; stop?: TurnEndEvent };
 
@@ -200,7 +180,7 @@ function completeWaitWith(
   );
 }
 
-const turnTypes = new Set(["prompt", "agent", "fork", "hardstop"]);
+const turnTypes = new Set(["agent", "fork", "hardstop"]);
 
 export const turnNodeIds = (manifest: Pick<LoadedBuild, "nodes">): Set<string> =>
   new Set(manifest.nodes.filter((node) => turnTypes.has(node.type)).map((node) => node.id));
@@ -268,24 +248,6 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
   };
 }
 
-function scriptsIn(
-  scripts: ExecuteDeps["scripts"],
-  jobs: string | undefined,
-  signal: AbortSignal,
-  whileRunning: <T>(step: () => Promise<T>) => Promise<T>,
-): RunnerDeps["scripts"] {
-  const jobPath = (job: string | undefined) =>
-    jobs === undefined || job === undefined ? undefined : `${jobs}/${job}`;
-  const run: RunnerDeps["scripts"]["run"] = (command, args, cwd, _signal, job) =>
-    whileRunning(() => scripts.run(command, args, cwd, signal, jobPath(job)));
-  const { rejoin } = scripts;
-  if (jobs === undefined || rejoin === undefined) return { run };
-  return {
-    run,
-    rejoin: (job) => whileRunning(() => rejoin.call(scripts, `${jobs}/${job}`, signal)),
-  };
-}
-
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
   const { store, runId, manifest, cwd, auto, flags = {}, socketPath } = execution;
   const events = await deps.startEvents(socketPath);
@@ -301,12 +263,10 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
     })());
   let stopListening: () => void = () => undefined;
   let wasInterrupted = false;
-  const scriptsStop = new AbortController();
   const interrupted = new Promise<number>((resolve) => {
     if (deps.onInterrupt) {
       stopListening = deps.onInterrupt((code) => {
         wasInterrupted = true;
-        scriptsStop.abort();
         void stopAll().then(() => resolve(code));
       });
     }
@@ -342,13 +302,11 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
           }),
       },
       events: events.events,
-      scripts: scriptsIn(deps.scripts, execution.scriptJobs, scriptsStop.signal, whileRunning),
       waiter: deps.waiter,
       files: deps.fs,
       auto,
       flags,
       onChange: (line) => deps.onChange(line),
-      ...(deps.onOutput === undefined ? {} : { onOutput: deps.onOutput }),
       cwd,
       sessionId: opened.sessionId,
       store: writesUntil(store, () => wasInterrupted),

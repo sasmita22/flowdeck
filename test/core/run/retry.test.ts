@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ManifestNode } from "../../../src/core/compiler/lower.js";
-import { resumeEntries, retryEntries } from "../../../src/core/run/retry.js";
+import { retryEntries } from "../../../src/core/run/retry.js";
 import { nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
@@ -23,7 +23,7 @@ function stored(entries: [string, RunEvent][]): StoredEvent[] {
   return entries.map(([nodeId, event], i) => ({ ...event, nodeId, seq: i + 1, time: "t" }));
 }
 
-const failed = (nodeId: string, cause = "exit code 3"): [string, RunEvent] => [
+const failed = (nodeId: string, cause = "no finished Agent call"): [string, RunEvent] => [
   nodeId,
   { kind: "failed", payload: { message: `${nodeId} failed: ${cause}` } },
 ];
@@ -34,13 +34,13 @@ const kinds = (entries: { nodeId: string; event: RunEvent }[]) =>
 describe("retryEntries", () => {
   it("retries only the failed node of a plain sequence", () => {
     const manifest = {
-      nodes: [node("s1", "script"), node("s2", "script")],
+      nodes: [node("s1", "agent"), node("s2", "agent")],
       wires: [then("s1", "s2")],
     };
     const events = stored([
-      ["s1", { kind: "running" }],
+      ["s1", { kind: "sent" }],
       ["s1", { kind: "done" }],
-      ["s2", { kind: "running" }],
+      ["s2", { kind: "sent" }],
       failed("s2"),
     ]);
 
@@ -48,25 +48,25 @@ describe("retryEntries", () => {
   });
 
   it("refuses a node that has not failed", () => {
-    const manifest = { nodes: [node("s1", "script")], wires: [] };
+    const manifest = { nodes: [node("s1", "agent")], wires: [] };
 
-    expect(() => retryEntries(manifest, stored([["s1", { kind: "running" }]]), "s1")).toThrow(
+    expect(() => retryEntries(manifest, stored([["s1", { kind: "sent" }]]), "s1")).toThrow(
       /s1 has not failed/,
     );
   });
 
   it("retries the failed loop around a failed body node, from either of them", () => {
     const manifest = {
-      nodes: [node("l1", "loop"), node("p1", "prompt", "l1"), node("s1", "script", "l1")],
+      nodes: [node("l1", "loop"), node("p1", "agent", "l1"), node("s1", "agent", "l1")],
       wires: [],
     };
     const events = stored([
       ["l1", { kind: "running" }],
       ["p1", { kind: "sent" }],
       ["p1", { kind: "done" }],
-      ["s1", { kind: "running" }],
+      ["s1", { kind: "sent" }],
       failed("s1"),
-      failed("l1", "s1 failed: exit code 3"),
+      failed("l1", "s1 failed: no finished Agent call"),
     ]);
 
     expect(kinds(retryEntries(manifest, events, "s1")).sort()).toEqual(["l1 retry", "s1 retry"]);
@@ -285,21 +285,5 @@ describe("retryEntries in a parallel section", () => {
     expect(() => retryEntries(section(["a", "b"]), oneDoneOneFailed, "a")).toThrow(
       /a has not failed/,
     );
-  });
-});
-
-describe("resumeEntries", () => {
-  it("runs again a script a stop cut short, and touches nothing else", () => {
-    const manifest = {
-      nodes: [node("s1", "script"), node("s2", "script"), node("p1", "prompt")],
-      wires: [],
-    };
-    const events = stored([
-      ["s1", { kind: "running" }],
-      ["s1", { kind: "done" }],
-      ["s2", { kind: "running" }],
-    ]);
-
-    expect(kinds(resumeEntries(manifest, events))).toEqual(["s2 retry"]);
   });
 });

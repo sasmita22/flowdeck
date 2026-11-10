@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/loop-cap.js";
-import { flow, loop, prompt } from "../../../fixtures/flow-builders.js";
+import { agent, flow, loop } from "../../../fixtures/flow-builders.js";
 
 const fieldsOf = (settings: Record<string, unknown>) =>
   rule
@@ -30,6 +30,6 @@ describe("loop-cap", () => {
   });
 
   it("accepts a flow with no loop", () => {
-    expect(rule.check(flow([prompt("P")], []))).toEqual([]);
+    expect(rule.check(flow([agent("P")], []))).toEqual([]);
   });
 });

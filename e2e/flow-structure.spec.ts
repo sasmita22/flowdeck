@@ -1,10 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
-import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { promisify } from "node:util";
 import {
   controlTestIds,
   pageTestIds,
@@ -13,12 +11,11 @@ import {
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import {
+  agent,
   fileWire,
   flow,
   loop,
   onMainFlow,
-  prompt,
-  script,
   thenWire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
@@ -26,8 +23,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
-
-const exec = promisify(execFile);
+import { killRunSessions } from "./run-sessions.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -36,10 +32,7 @@ let launched: LaunchedApp | undefined;
 
 const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, position: { x, y } });
 
-const sh = (id: string, label: string, command: string) => ({
-  ...script(id, { settings: { command: "sh", args: ["-c", command] } }),
-  label,
-});
+const named = (id: string, label: string) => ({ ...agent(id), label });
 
 const verdictDone = ["```json", '{"done": true}', "```"].join("\n");
 
@@ -52,18 +45,35 @@ const sock = process.env.FLOWDECK_SOCK ?? "";
 let typed = "";
 const draw = () =>
   process.stdout.write("\\x1b[2J\\x1b[HFake Claude\\r\\n────────\\r\\n❯ " + typed + "\\r\\n────────\\r\\n");
-const stop = () => {
+const send = (event) => {
   const socket = connect(sock, () => {
-    socket.end(JSON.stringify({ hook_event_name: "Stop", session_id: sessionId, last_assistant_message: ${JSON.stringify(verdictDone)} }) + "\\n");
+    socket.end(JSON.stringify({ session_id: sessionId, ...event }) + "\\n");
   });
   socket.on("error", () => undefined);
+};
+const stop = () => send({ hook_event_name: "Stop", last_assistant_message: ${JSON.stringify(verdictDone)} });
+const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\\\"]+)/;
+const turn = (text) => {
+  const match = dispatched.exec(text);
+  if (match === null) return setTimeout(stop, 50);
+  const [, agentType, nodeId] = match;
+  setTimeout(() => {
+    send({
+      hook_event_name: "PostToolUse",
+      tool_name: "Agent",
+      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+      tool_response: { agentType, status: "completed" },
+    });
+    setTimeout(stop, 100);
+  }, 50);
 };
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   for (const key of chunk) {
     if (key === "\\r" || key === "\\n") {
-      if (typed !== "") setTimeout(stop, 50);
+      if (typed !== "") turn(typed);
       typed = "";
     } else if (key === "\\x7f") typed = typed.slice(0, -1);
     else if (key !== "\\x1b") typed += key;
@@ -109,7 +119,7 @@ const boxOf = async (locator: Locator) => {
 
 const dropOn = async (
   window: Page,
-  type: "prompt" | "loop" | "foreach" | "trigger" | "output",
+  type: "agent" | "loop" | "foreach" | "trigger" | "output",
   x: number,
   y: number,
 ) => {
@@ -119,7 +129,7 @@ const dropOn = async (
   });
 };
 
-const dropInFrame = async (window: Page, type: "prompt", frame: Locator) => {
+const dropInFrame = async (window: Page, type: "agent", frame: Locator) => {
   const box = await boxOf(frame);
   await dropOn(window, type, box.x + 30, box.y + box.height - 14);
 };
@@ -174,27 +184,6 @@ const kindsOf = (runId: string | undefined, nodeId: string) =>
     nodeId,
   ).map((row) => row.kind);
 
-const sessionNames = (): { tmux_name: string }[] => {
-  try {
-    return rows("SELECT tmux_name FROM run_sessions");
-  } catch {
-    return [];
-  }
-};
-
-const killTmux = async () => {
-  const names = sessionNames();
-  for (const { tmux_name: name } of names) {
-    await exec("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-  }
-};
-
-const exists = (path: string) =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
-
 const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
 
 const seed = (input: Flow) => seedFlow(home, input, repo.path);
@@ -221,45 +210,43 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    await killTmux();
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
 });
 
-test("A Prompt dropped onto a Loop frame is in its body after save and reload, and dragging it out takes it out", async () => {
+test("An Agent dropped onto a Loop frame is in its body after save and reload, and dragging it out takes it out", async () => {
   seed(flow([at(loop("loop-1"), 120, 120)], []));
   let window = await launch();
 
-  await dropInFrame(window, "prompt", window.getByTestId("loop-frame-loop-1"));
+  await dropInFrame(window, "agent", window.getByTestId("loop-frame-loop-1"));
 
-  await expect(window.getByTestId("node-prompt-1")).toBeVisible();
-  expect(await parentIn(window, "prompt-1")).toBe("loop-1");
+  await expect(window.getByTestId("node-agent-1")).toBeVisible();
+  expect(await parentIn(window, "agent-1")).toBe("loop-1");
   const frame = await boxOf(window.getByTestId("loop-frame-loop-1"));
-  const body = await boxOf(window.getByTestId("node-prompt-1"));
+  const body = await boxOf(window.getByTestId("node-agent-1"));
   expect(body.y + body.height).toBeLessThanOrEqual(frame.y + frame.height);
 
   await window.getByTestId(controlTestIds.save).click();
   window = await relaunch();
 
-  await expect(window.getByTestId("node-prompt-1")).toBeVisible();
-  expect(await parentIn(window, "prompt-1")).toBe("loop-1");
+  await expect(window.getByTestId("node-agent-1")).toBeVisible();
+  expect(await parentIn(window, "agent-1")).toBe("loop-1");
   await expect(window.getByTestId("node-issue-loop-1")).toHaveCount(0);
   await darkShot(window, "nested.png");
 
-  await dragBy(window, window.getByTestId("node-prompt-1"), 420, 160);
+  await dragBy(window, window.getByTestId("node-agent-1"), 420, 160);
 
-  await expect.poll(() => parentIn(window, "prompt-1")).toBeUndefined();
-  await expect(window.getByTestId("node-issue-loop-1")).toHaveText(
-    "Has no prompt or agent in its body.",
-  );
+  await expect.poll(() => parentIn(window, "agent-1")).toBeUndefined();
+  await expect(window.getByTestId("node-issue-loop-1")).toHaveText("Has no agent in its body.");
 
   await window.getByTestId(controlTestIds.undo).click();
-  await expect.poll(() => parentIn(window, "prompt-1")).toBe("loop-1");
+  await expect.poll(() => parentIn(window, "agent-1")).toBe("loop-1");
 });
 
 test("Dragging a Loop moves its body with it", async () => {
-  seed(flow([at(loop("L"), 120, 120), at(prompt("P", { parent: "L" }), 140, 200)], []));
+  seed(flow([at(loop("L"), 120, 120), at(agent("P", { parent: "L" }), 140, 200)], []));
   const window = await launch();
   const loopBefore = await boxOf(window.getByTestId("node-L"));
   const bodyBefore = await boxOf(window.getByTestId("node-P"));
@@ -278,7 +265,7 @@ test("Dragging a Loop moves its body with it", async () => {
 });
 
 test("Clicking inside a Loop frame selects the Loop and opens its settings", async () => {
-  seed(flow([at(loop("L"), 120, 120), at(prompt("P", { parent: "L" }), 340, 200)], []));
+  seed(flow([at(loop("L"), 120, 120), at(agent("P", { parent: "L" }), 340, 200)], []));
   const window = await launch();
   const frame = await boxOf(window.getByTestId("loop-frame-L"));
 
@@ -295,10 +282,10 @@ test("Deleting a Loop deletes its body with it, orphaning nothing, and undo brin
   seed(
     flow(
       [
-        at(script("A"), 0, 120),
+        at(agent("A"), 0, 120),
         at(loop("L"), 260, 120),
-        at(prompt("P", { parent: "L" }), 260, 200),
-        at(script("B"), 560, 120),
+        at(agent("P", { parent: "L" }), 260, 200),
+        at(agent("B"), 560, 120),
       ],
       [thenWire("A", "P"), thenWire("L", "B")],
     ),
@@ -321,7 +308,7 @@ test("Deleting a Loop deletes its body with it, orphaning nothing, and undo brin
   expect((await readout(window)).wires).toHaveLength(2);
 });
 
-test("A fresh Loop says on the canvas that its body needs a Prompt or Agent", async () => {
+test("A fresh Loop says on the canvas that its body needs an Agent", async () => {
   seed(flow([], []));
   const window = await launch();
 
@@ -331,7 +318,7 @@ test("A fresh Loop says on the canvas that its body needs a Prompt or Agent", as
   await expect(issue).toHaveText("2 problems");
   await expect(issue).toHaveAttribute(
     "title",
-    "Write when the loop is done.\nHas no prompt or agent in its body.",
+    "Write when the loop is done.\nHas no agent in its body.",
   );
   await expect(window.getByText("LOOP · max 3")).toBeVisible();
 });
@@ -339,7 +326,7 @@ test("A fresh Loop says on the canvas that its body needs a Prompt or Agent", as
 test("A File wire named plan.md draws dashed with its name and survives a reload", async () => {
   seed(
     flow(
-      [at(sh("plan", "Planner", "true"), 80, 160), at(sh("build", "Builder", "true"), 420, 160)],
+      [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
       [thenWire("plan", "build")],
     ),
   );
@@ -372,13 +359,10 @@ test("A File wire named plan.md draws dashed with its name and survives a reload
   await darkShot(window, "file-wire.png");
 });
 
-test("A script-only run holds the next node on its File wire until the file is written", async () => {
+test("A run holds the next node on its File wire until the file is written", async () => {
   seed(
     onMainFlow(
-      [
-        at(sh("plan", "Planner", "if [ -f go ]; then echo '- one' > plan.md; fi"), 80, 160),
-        at(sh("build", "Builder", "cat plan.md > built.txt"), 420, 160),
-      ],
+      [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
       [thenWire("plan", "build"), fileWire("plan", "build", "plan.md")],
     ),
   );
@@ -392,19 +376,17 @@ test("A script-only run holds the next node on its File wire until the file is w
   );
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed");
   const failedRun = latestRunId();
-  expect(kindsOf(failedRun, "plan")).toEqual(["running", "done"]);
+  expect(kindsOf(failedRun, "plan")).toEqual(["sent", "done"]);
   expect(kindsOf(failedRun, "build")).toEqual(["running", "failed"]);
-  expect(await exists(join(folder, "built.txt"))).toBe(false);
 
-  await writeFile(join(folder, "go"), "");
+  await writeFile(join(folder, "plan.md"), "- one\n");
   await window.getByTestId(pageTestIds.runAgain).click();
 
   await expect.poll(() => latestRunId(), { timeout: 20_000 }).not.toBe(failedRun);
   await expect(status(window, "build")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
   });
-  expect(kindsOf(latestRunId(), "build")).toEqual(["running", "done"]);
-  expect(await exists(join(folder, "built.txt"))).toBe(true);
+  expect(kindsOf(latestRunId(), "build")).toEqual(["sent", "done"]);
 });
 
 for (const container of ["loop", "foreach"] as const) {
@@ -413,18 +395,18 @@ for (const container of ["loop", "foreach"] as const) {
     const window = await launch();
     await dropOn(window, container, 420, 260);
     const id = `${container}-1`;
-    await dropInFrame(window, "prompt", window.getByTestId(`${container}-frame-${id}`));
-    await expect.poll(() => parentIn(window, "prompt-1")).toBe(id);
+    await dropInFrame(window, "agent", window.getByTestId(`${container}-frame-${id}`));
+    await expect.poll(() => parentIn(window, "agent-1")).toBe(id);
     if (container === "loop") {
       await window.getByTestId(`node-${id}`).click();
       await window.getByTestId("node-setting-condition").fill("The work is done.");
       await window.getByTestId("node-setting-condition").blur();
     }
-    await window.getByTestId("node-prompt-1").click();
+    await window.getByTestId("node-agent-1").click();
     await window.getByTestId("node-setting-instructions").fill("Say done.");
     await window.getByTestId("node-setting-instructions").blur();
     await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
-    await expect(window.getByTestId("node-issue-prompt-1")).toHaveCount(0);
+    await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
     const canvas = await boxOf(window.getByTestId("canvas"));
     const frame = await boxOf(window.getByTestId(`${container}-frame-${id}`));
     await dropOn(window, "trigger", canvas.x + 20, frame.y);
@@ -448,7 +430,7 @@ for (const container of ["loop", "foreach"] as const) {
       timeout: 30_000,
     });
     await expect(status(window, id)).toHaveAttribute("data-status", "done");
-    await expect(status(window, "prompt-1")).toHaveAttribute("data-status", "done");
+    await expect(status(window, "agent-1")).toHaveAttribute("data-status", "done");
     const rounds = kindsOf(latestRunId(), id).filter((kind) => kind === "round");
     expect(rounds).toHaveLength(container === "loop" ? 1 : 2);
   });

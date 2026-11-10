@@ -18,7 +18,7 @@ const ordered = (flow: Flow) => {
 export const rule: Rule = {
   id,
   message:
-    "A Loop or For each needs a Prompt or Agent in its body, cannot sit inside another, and only they can hold a body.",
+    "A Loop or For each needs an Agent in its body, cannot sit inside another, and only they can hold a body.",
   check: (flow) =>
     bodyProblems(ordered(flow))
       .filter((problem) => problem.parentMissing !== true && problem.outOfPlace !== true)

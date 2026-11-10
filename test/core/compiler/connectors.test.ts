@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { build } from "../../../src/core/compiler/build.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
-import { onMainFlow, prompt } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
 const workspace = {
@@ -16,7 +16,7 @@ const jira = { type: "http", url: "https://mcp.example.com/jira" };
 const mocks = { type: "stdio", command: "npx", args: ["mock-server"], env: { PORT: "9" } };
 
 const withConnectors = (connectors: string[]) => {
-  const base = onMainFlow([prompt("p1")], []);
+  const base = onMainFlow([agent("p1")], []);
   return { ...base, session: { ...base.session, connectors } };
 };
 
