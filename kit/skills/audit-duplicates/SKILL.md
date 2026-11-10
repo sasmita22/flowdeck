@@ -11,7 +11,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 ## Steps
 
-1. List the Agent nodes and the Prompt nodes in `manifest.json`. Compare agents with agents and prompts with prompts only; never across kinds, and never templates or scripts.
+1. List the Agent nodes in `manifest.json`. Compare agents with agents only; never templates, shared pieces or the workspace rules.
 2. For each pair, compare what the pieces do: role, steps, inputs and outputs. Ignore wording, labels and names.
 3. Same job, differing only in their files, settings or values: they merge. Each node keeps passing its own details through its prompt, so the merged piece must be general enough to serve both. Differences in output layout or wording never block a merge and are never a question: they become each node's own details (its given and written files, and a per-node layout line in the merged piece).
 4. Look alike (same or similar label, similar wording) but a different job: they stay apart.
@@ -28,5 +28,5 @@ A question is only for a blueprint input: an empty required field or setting, a 
 ## Checklist
 
 - [ ] Every pair was compared on role, steps, inputs and outputs, not wording.
-- [ ] Each merge joins nodes of one kind, each node in one merge only, with the shared job as the reason.
+- [ ] Each merge joins agent nodes only, each node in one merge only, with the shared job as the reason.
 - [ ] Every look-alike pair left apart is in `keptApart` with the difference as the reason.

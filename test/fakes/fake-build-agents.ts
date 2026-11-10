@@ -15,6 +15,7 @@ export type FakeBuildScript = {
   editCodeOwned?: Scripted[];
   questions?: BuildReport["questions"];
   merges?: BuildReport["merges"];
+  shared?: BuildReport["shared"];
   keptApart?: BuildReport["keptApart"];
   failTurn?: string;
   aliveAfterRestart?: boolean;
@@ -67,12 +68,17 @@ export class FakeBuildAgents implements BuildAgents {
     const round = this.turns.filter((turn) => turn.sessionName === sessionName).length;
     const workspaceDir = this.live.get(sessionName)?.workspaceDir;
 
-    for (const line of text.split("\n")) {
+    const pieces = text.split("\n").flatMap((line) => {
       const marker = markerOf(line);
-      if (!("piece" in marker)) continue;
-      const { piece } = marker;
+      return "piece" in marker ? [marker.piece] : [];
+    });
+    const runs =
+      workspaceDir === undefined
+        ? new Map<string, string[]>()
+        : await this.sharedRuns(workspaceDir, pieces);
+    for (const piece of pieces) {
       onCall({ piece });
-      if (workspaceDir !== undefined) await this.fill(workspaceDir, piece);
+      if (workspaceDir !== undefined) await this.fill(workspaceDir, piece, runs.get(piece) ?? []);
       onCall({ piece, status: "completed" });
     }
 
@@ -86,6 +92,7 @@ export class FakeBuildAgents implements BuildAgents {
         ...emptyReport(),
         questions: script.questions ?? [],
         merges: script.merges ?? [],
+        shared: script.shared ?? [],
         keptApart: script.keptApart ?? [],
       };
       await this.options.fs.writeFile(
@@ -105,7 +112,31 @@ export class FakeBuildAgents implements BuildAgents {
     this.live.delete(sessionName);
   };
 
-  private async fill(workspaceDir: string, piece: string) {
+  private async sharedRuns(
+    workspaceDir: string,
+    pieces: readonly string[],
+  ): Promise<Map<string, string[]>> {
+    const runs = new Map<string, string[]>();
+    const entries = (this.options.script?.shared ?? []).filter((entry) =>
+      pieces.some(
+        (piece) => piece.includes(`/${entry.name}/`) || piece.endsWith(`/${entry.name}.md`),
+      ),
+    );
+    if (entries.length === 0) return runs;
+    const manifest = JSON.parse(
+      await this.options.fs.readFile(join(workspaceDir, "manifest.json")),
+    ) as { prefix?: string; nodes: { id: string; file?: string }[] };
+    for (const entry of entries) {
+      for (const id of entry.usedBy) {
+        const file = manifest.nodes.find((node) => node.id === id)?.file;
+        if (file === undefined) continue;
+        runs.set(file, [...(runs.get(file) ?? []), `${manifest.prefix ?? ""}:${entry.name}`]);
+      }
+    }
+    return runs;
+  }
+
+  private async fill(workspaceDir: string, piece: string, runs: readonly string[]) {
     const path = join(workspaceDir, piece);
     if (!(await this.options.fs.exists(path))) return;
     const round = (this.pieceRounds.get(piece) ?? 0) + 1;
@@ -113,6 +144,10 @@ export class FakeBuildAgents implements BuildAgents {
     const keepMarker = (this.options.script?.leaveMarker ?? []).some(
       (scripted) => scripted.path === piece && inRound(scripted, round),
     );
-    await this.options.fs.writeFile(path, filled(await this.options.fs.readFile(path), keepMarker));
+    const content = filled(await this.options.fs.readFile(path), keepMarker);
+    const runLines = runs
+      .map((reference) => `Run \`${reference}\` with the Skill tool.\n`)
+      .join("");
+    await this.options.fs.writeFile(path, `${content}${runLines}`);
   }
 }

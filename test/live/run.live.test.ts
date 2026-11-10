@@ -149,10 +149,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run with real claude", () 
       const flow = {
         ...fixture,
         nodes: fixture.nodes.map((node) =>
-          node.type === "prompt"
+          node.type === "agent"
             ? {
                 ...node,
                 settings: {
+                  ...node.settings,
                   instructions: node.settings.instructions.replaceAll("{{repo}}", "."),
                 },
               }

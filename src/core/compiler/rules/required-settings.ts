@@ -7,8 +7,6 @@ export const agentPlaceholder = "Describe the agent's task.";
 
 const required: Partial<Record<Node["type"], { field: string; message: string }>> = {
   agent: { field: "instructions", message: "Write what the agent should do." },
-  prompt: { field: "instructions", message: "Write what the prompt should do." },
-  script: { field: "command", message: "Write the command to run." },
   loop: { field: "condition", message: "Write when the loop is done." },
   ask: { field: "question", message: "Write the question to ask." },
 };
@@ -20,8 +18,7 @@ const blank = (value: unknown) => {
 
 export const rule: Rule = {
   id,
-  message:
-    "Agents and Prompts need instructions, Scripts a command, Loops a condition and Asks a question.",
+  message: "Agents need instructions, Loops a condition and Asks a question.",
   check: (flow) =>
     flow.nodes.flatMap((node): ValidationError[] => {
       const need = required[node.type];

@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCanvasStore } from "../../../../src/app/renderer/canvas/store.js";
 import type { Flow } from "../../../../src/core/flow/schema.js";
-import {
-  agent,
-  fileWire,
-  flow,
-  fork,
-  join,
-  prompt,
-  script,
-  thenWire,
-} from "../../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, fork, join, thenWire } from "../../../fixtures/flow-builders.js";
 
 const end = (node: string, port: string) => ({ node, port });
 const fileOut = (node: string) => end(node, "file-out");
@@ -24,7 +15,7 @@ const loaded = (current: Flow) => {
 
 const planned = () =>
   loaded(
-    flow([{ ...prompt("plan"), label: "Planner" }, script("build")], [thenWire("plan", "build")]),
+    flow([{ ...agent("plan"), label: "Planner" }, agent("build")], [thenWire("plan", "build")]),
   );
 
 describe("drawing a File wire", () => {
@@ -183,7 +174,7 @@ describe("renaming a File wire", () => {
   const filed = (...others: unknown[]) =>
     loaded(
       flow(
-        [{ ...prompt("plan"), label: "Planner" }, script("build"), script("check")],
+        [{ ...agent("plan"), label: "Planner" }, agent("build"), agent("check")],
         [
           thenWire("plan", "build"),
           thenWire("build", "check"),

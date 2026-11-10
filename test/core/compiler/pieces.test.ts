@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { pieceNames, pieceOf } from "../../../src/core/compiler/pieces.js";
-import { agent, flow, prompt, script, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import { agent, flow, gate, thenWire, trigger } from "../../fixtures/flow-builders.js";
 
 const labelled = (make: typeof agent) => (id: string, label: string) => ({ ...make(id), label });
 
 const agentNamed = labelled(agent);
-const promptNamed = labelled(prompt);
 
 const namesOf = (nodes: unknown[], wires: unknown[] = []) =>
   Object.fromEntries(pieceNames(flow(nodes, wires)));
 
 describe("pieceNames", () => {
-  it("names an Agent or Prompt in kebab case from its label", () => {
+  it("names an Agent in kebab case from its label", () => {
     expect(
-      namesOf([agentNamed("a", "Sync with base branch"), promptNamed("p", "Write  the PLAN!")]),
+      namesOf([agentNamed("a", "Sync with base branch"), agentNamed("p", "Write  the PLAN!")]),
     ).toEqual({ a: "sync-with-base-branch", p: "write-the-plan" });
   });
 
@@ -22,9 +21,9 @@ describe("pieceNames", () => {
   });
 
   it("falls back to the node type when nothing is left of the label", () => {
-    expect(namesOf([agentNamed("a", "✓✓"), promptNamed("p", "  ")])).toEqual({
+    expect(namesOf([agentNamed("a", "✓✓"), agentNamed("p", "  ")])).toEqual({
       a: "agent",
-      p: "prompt",
+      p: "agent-2",
     });
   });
 
@@ -53,15 +52,8 @@ describe("pieceNames", () => {
     expect(namesOf([agentNamed("a", "Run")])).toEqual({ a: "run-2" });
   });
 
-  it("puts agents and skills in one namespace", () => {
-    expect(namesOf([agentNamed("a", "Review"), promptNamed("p", "Review")])).toEqual({
-      a: "review",
-      p: "review-2",
-    });
-  });
-
   it("gives no piece to any other node type", () => {
-    expect(namesOf([trigger("t"), script("s"), agentNamed("a", "Build")])).toEqual({
+    expect(namesOf([trigger("t"), gate("s"), agentNamed("a", "Build")])).toEqual({
       a: "build",
     });
   });

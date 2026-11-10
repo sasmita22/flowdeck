@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agent, flow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -74,7 +74,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
     repo = await createTmpRepo({ commit: true });
     engine = liveEngine({ home, repo: repo.path });
     const built = await engine.saveAndBuild(
-      flow([prompt("plan-step"), agent("plan-checker")], [thenWire("plan-step", "plan-checker")]),
+      flow([agent("plan-step"), agent("plan-checker")], [thenWire("plan-step", "plan-checker")]),
       { name: buildName },
     );
     ({ hash, workFolder } = built);

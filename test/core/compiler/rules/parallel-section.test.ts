@@ -7,9 +7,9 @@ import {
   flow,
   forEach,
   fork,
+  gate,
   join,
   loop,
-  prompt,
   thenWire,
 } from "../../../fixtures/flow-builders.js";
 
@@ -20,19 +20,19 @@ const cases: [string, unknown[], unknown[], string][] = [
   ["a fork with one branch", [fork("f"), agent("a1"), join("j")], around(["a1"]), "f"],
   [
     "a branch that is not an agent",
-    [fork("f"), agent("a1"), prompt("p2"), join("j")],
+    [fork("f"), agent("a1"), gate("p2"), join("j")],
     around(["a1", "p2"]),
     "p2",
   ],
   [
     "a branch with a second in-wire",
-    [prompt("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
+    [agent("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
     [...around(["a1", "a2"]), thenWire("p", "a2")],
     "a2",
   ],
   [
     "a branch with a second out-wire",
-    [fork("f"), agent("a1"), agent("a2"), join("j"), prompt("p")],
+    [fork("f"), agent("a1"), agent("a2"), join("j"), agent("p")],
     [...around(["a1", "a2"]), thenWire("a2", "p")],
     "a2",
   ],
@@ -44,13 +44,13 @@ const cases: [string, unknown[], unknown[], string][] = [
   ],
   [
     "a branch leading into no join",
-    [fork("f"), agent("a1"), agent("a2"), join("j"), prompt("p")],
+    [fork("f"), agent("a1"), agent("a2"), join("j"), agent("p")],
     [thenWire("f", "a1"), thenWire("f", "a2"), thenWire("a1", "j"), thenWire("a2", "p")],
     "f",
   ],
   [
     "a join wired from a node that is not a branch",
-    [prompt("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
+    [agent("p"), fork("f"), agent("a1"), agent("a2"), join("j")],
     [...around(["a1", "a2"]), thenWire("p", "j")],
     "j",
   ],
@@ -63,7 +63,7 @@ const cases: [string, unknown[], unknown[], string][] = [
     ],
     "j",
   ],
-  ["a join no fork reaches", [prompt("p"), join("j")], [thenWire("p", "j")], "j"],
+  ["a join no fork reaches", [agent("p"), join("j")], [thenWire("p", "j")], "j"],
   [
     "a section inside a loop",
     [loop("L"), fork("f", { parent: "L" }), agent("a1"), agent("a2"), join("j")],
@@ -80,7 +80,7 @@ describe("parallel-section", () => {
   });
 
   it("accepts a flow with no fork or join", () => {
-    expect(rule.check(flow([prompt("p1"), prompt("p2")], [thenWire("p1", "p2")]))).toEqual([]);
+    expect(rule.check(flow([agent("p1"), agent("p2")], [thenWire("p1", "p2")]))).toEqual([]);
   });
 
   it.each(cases)("reports %s as each section problem", (_, nodes, wires, named) => {

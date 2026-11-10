@@ -16,8 +16,12 @@ export function agentVerdictTurnText(
   piece: string,
   node: AgentTurnNode,
   condition: string,
+  answers: readonly string[] = [],
 ): string {
-  return agentTurnText(prefix, piece, node).replace("Then reply DONE.", verdictRequest(condition));
+  return agentTurnText(prefix, piece, node, undefined, answers).replace(
+    /Then reply DONE\.$/,
+    verdictRequest(condition),
+  );
 }
 
 export function nextStep(round: number, cap: number, done: boolean): LoopStep {

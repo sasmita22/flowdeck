@@ -44,9 +44,9 @@ function liveFlow() {
       {
         id: "p1",
         label: "Write",
-        type: "prompt",
+        type: "agent",
         position: at(2),
-        settings: { instructions: promptText },
+        settings: { role: "", instructions: promptText, model: "haiku", tools: ["Write"] },
       },
       {
         id: "o",
@@ -61,7 +61,7 @@ function liveFlow() {
       name: "main",
       buildConfig: { base: "main", variables: [] },
       model: "haiku",
-      allowedTools: [],
+      allowedTools: ["Write"],
       permissionMode: "acceptEdits",
       connectors: [],
     },
@@ -96,7 +96,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
   }, 60_000);
 
   it(
-    "attaches the Ask's answer to the next Prompt, which writes it to colour.md",
+    "attaches the Ask's answer to the next Agent, which writes it to colour.md",
     { timeout: runTimeoutMs },
     async () => {
       engine = liveEngine({
@@ -113,7 +113,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
       expect(promptText).not.toMatch(colourWord);
       expect(
         await readFile(
-          join(built.dir, "plugin", "skills", pieceNames(flow).get("p1") ?? "", "SKILL.md"),
+          join(built.dir, "plugin", "agents", `${pieceNames(flow).get("p1")}.md`),
           "utf8",
         ),
       ).not.toMatch(colourWord);

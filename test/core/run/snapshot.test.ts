@@ -61,16 +61,16 @@ describe("runSnapshot", () => {
   it("carries each failed node's last failure in plain words, and nothing for the others", () => {
     const events: (RunEvent & { nodeId: string })[] = [
       { nodeId: "s1", kind: "running" },
-      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: exit code 1" } },
+      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: rejected: too short" } },
       { nodeId: "s1", kind: "retry" },
       { nodeId: "s1", kind: "running" },
-      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: exit code 3" } },
+      { nodeId: "s1", kind: "failed", payload: { message: "s1 failed: rejected: wrong scope" } },
       { nodeId: "s2", kind: "running" },
     ];
 
     const snapshot = runSnapshot({ runId: "r", status: "failed", nodeIds: ["s1", "s2"], events });
 
-    expect(snapshot.reasons).toEqual({ s1: "Script exited with code 3" });
+    expect(snapshot.reasons).toEqual({ s1: "Rejected: wrong scope" });
     expect(runSnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 

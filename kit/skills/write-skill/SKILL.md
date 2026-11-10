@@ -1,11 +1,11 @@
 ---
 name: write-skill
-description: How to write a build's skill so the right agent picks it up and follows it - the scope line, a description that says what and when, one concern, a body short enough to read in full. Read before writing or checking any skill in a Flowdeck build.
+description: How to write a build's skill so the right agent picks it up and follows it - the scope line, a description that says what and when, one concern, a body short enough to read in full. Read before writing or checking any skill or shared piece in a Flowdeck build.
 ---
 
 # Write a Skill
 
-A build skill is called by its full name, `<build-name>:<piece>`, or read by path by the build's orchestrator. Its description decides whether it is picked; its body is all the reader gets.
+A build skill is called by its full name, `<prefix>:<piece>`, where `<prefix>` is the build name, with the `Skill` tool, or read by path by the build's orchestrator. A shared piece, skill or command, is one too: its agents run it as `<prefix>:<name>`. Its description decides whether it is picked; its body is all the reader gets.
 
 ## Description
 
@@ -23,8 +23,8 @@ A build skill is called by its full name, `<build-name>:<piece>`, or read by pat
 - One concern. If the node mixes two jobs, write it as drawn and add it to `mixedJobs` in `build-report.json` as `{ "nodeId": "<node id>", "note": "<the two jobs>" }`. Never split it.
 - Imperative steps, in order. Each step says what to read and what to produce.
 - Short enough to read in full. You cannot add files, so detail that belongs to another piece stays in that piece; name it instead of repeating it.
-- Name another piece only by its full name `<build-name>:<piece>`, and only a piece of this build (a `piece` in `manifest.json`).
-- Whether it may run on its own is code's call: keep the frontmatter as code wrote it. Step skills carry `disable-model-invocation: true` so only the runner and the orchestrator call them.
+- Name another piece only by its full name `<prefix>:<piece>`, and only a piece of this build (a `piece` in `manifest.json`, or a shared piece in `build-report.json` `shared`).
+- Whether it may run on its own is code's call: keep the frontmatter as code wrote it.
 
 ## Checklist
 
@@ -33,4 +33,4 @@ A build skill is called by its full name, `<build-name>:<piece>`, or read by pat
 - [ ] `name` and every other frontmatter field are as code wrote them.
 - [ ] One concern; a mixed job is flagged, not split.
 - [ ] The draft marker line is gone and the body says more than the draft.
-- [ ] Every `<build-name>:<piece>` names a piece of this build.
+- [ ] Every `<prefix>:<piece>` names a piece or a shared piece of this build.

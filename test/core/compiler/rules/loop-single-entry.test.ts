@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/loop-single-entry.js";
-import { flow, forEach, loop, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, forEach, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const nodes = [
-  prompt("A"),
-  prompt("B"),
+  agent("A"),
+  agent("B"),
   loop("L"),
-  prompt("X", { parent: "L" }),
-  prompt("Y", { parent: "L" }),
+  agent("X", { parent: "L" }),
+  agent("Y", { parent: "L" }),
 ];
 
 describe("loop-single-entry", () => {
@@ -35,11 +35,11 @@ describe("loop-single-entry", () => {
 
   describe("for each bodies", () => {
     const eachNodes = [
-      prompt("A"),
-      prompt("B"),
+      agent("A"),
+      agent("B"),
       forEach("E"),
-      prompt("X", { parent: "E" }),
-      prompt("Y", { parent: "E" }),
+      agent("X", { parent: "E" }),
+      agent("Y", { parent: "E" }),
     ];
 
     it("reports a for each body entered at two nodes, naming it as a for each", () => {

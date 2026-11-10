@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { mainFlow, mainFlowOnly } from "../../../src/core/flow/main-flow.js";
 import {
+  agent,
   fileWire,
   flow,
   forEach,
   loop,
   output,
-  prompt,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
@@ -23,7 +23,7 @@ describe("mainFlow", () => {
   it("reaches what Start leads to and ignores the rest in node order", () => {
     const found = mainFlow(
       flow(
-        [trigger("start"), prompt("b"), prompt("a"), prompt("c"), output("stop"), prompt("d")],
+        [trigger("start"), agent("b"), agent("a"), agent("c"), output("stop"), agent("d")],
         [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
       ),
     );
@@ -33,12 +33,12 @@ describe("mainFlow", () => {
   });
 
   it("is undefined without a Start", () => {
-    expect(mainFlow(flow([prompt("a"), output("stop")], [thenWire("a", "stop")]))).toBeUndefined();
+    expect(mainFlow(flow([agent("a"), output("stop")], [thenWire("a", "stop")]))).toBeUndefined();
   });
 
   it("is undefined with two wired Starts", () => {
     const twoStarts = flow(
-      [trigger("one"), trigger("two"), prompt("a"), output("stop")],
+      [trigger("one"), trigger("two"), agent("a"), output("stop")],
       [thenWire("one", "a"), thenWire("two", "a"), thenWire("a", "stop")],
     );
 
@@ -47,7 +47,7 @@ describe("mainFlow", () => {
 
   it("is undefined with a second, loose Start", () => {
     const twoStarts = flow(
-      [trigger("one"), trigger("two"), prompt("a"), output("stop")],
+      [trigger("one"), trigger("two"), agent("a"), output("stop")],
       [thenWire("one", "a"), thenWire("a", "stop")],
     );
 
@@ -59,10 +59,10 @@ describe("mainFlow", () => {
       flow(
         [
           trigger("start"),
-          prompt("a"),
+          agent("a"),
           loop("l"),
-          prompt("x", { parent: "l" }),
-          prompt("y", { parent: "l" }),
+          agent("x", { parent: "l" }),
+          agent("y", { parent: "l" }),
           output("stop"),
         ],
         [thenWire("start", "a"), thenWire("a", "x"), thenWire("x", "y"), thenWire("y", "stop")],
@@ -79,8 +79,8 @@ describe("mainFlow", () => {
         [
           trigger("start"),
           loop("l"),
-          prompt("x", { parent: "l" }),
-          prompt("y", { parent: "l" }),
+          agent("x", { parent: "l" }),
+          agent("y", { parent: "l" }),
           output("stop"),
         ],
         [thenWire("start", "l"), thenWire("x", "y"), thenWire("l", "stop")],
@@ -96,12 +96,12 @@ describe("mainFlow", () => {
         [
           trigger("start"),
           loop("outer"),
-          prompt("ox", { parent: "outer" }),
+          agent("ox", { parent: "outer" }),
           loop("inner", { parent: "outer" }),
-          prompt("ix", { parent: "inner" }),
-          prompt("iy", { parent: "inner" }),
+          agent("ix", { parent: "inner" }),
+          agent("iy", { parent: "inner" }),
           output("stop"),
-          prompt("loose"),
+          agent("loose"),
         ],
         [thenWire("start", "ix"), thenWire("ix", "iy"), thenWire("outer", "stop")],
       ),
@@ -114,7 +114,7 @@ describe("mainFlow", () => {
   it("keeps the body of a For each frame on the main flow", () => {
     const found = mainFlow(
       flow(
-        [trigger("start"), forEach("each"), prompt("p", { parent: "each" }), output("stop")],
+        [trigger("start"), forEach("each"), agent("p", { parent: "each" }), output("stop")],
         [thenWire("start", "each"), thenWire("each", "stop")],
       ),
     );
@@ -125,7 +125,7 @@ describe("mainFlow", () => {
   it("follows File wires but not event wires", () => {
     const found = mainFlow(
       flow(
-        [trigger("start"), prompt("a"), prompt("b"), prompt("c"), output("stop")],
+        [trigger("start"), agent("a"), agent("b"), agent("c"), output("stop")],
         [
           thenWire("start", "a"),
           fileWire("a", "b", "notes.md"),
@@ -143,7 +143,7 @@ describe("mainFlow", () => {
 describe("mainFlowOnly", () => {
   it("drops ignored nodes and every wire with an ignored end", () => {
     const input = flow(
-      [trigger("start"), prompt("a"), prompt("b"), prompt("c"), output("stop")],
+      [trigger("start"), agent("a"), agent("b"), agent("c"), output("stop")],
       [thenWire("start", "a"), thenWire("a", "stop"), thenWire("b", "stop"), thenWire("b", "c")],
     );
 
@@ -155,14 +155,14 @@ describe("mainFlowOnly", () => {
   });
 
   it("returns the flow unchanged without a Start", () => {
-    const input = flow([prompt("a"), prompt("b"), output("stop")], [thenWire("a", "stop")]);
+    const input = flow([agent("a"), agent("b"), output("stop")], [thenWire("a", "stop")]);
 
     expect(mainFlowOnly(input)).toEqual(input);
   });
 
   it("returns the flow unchanged with two Starts", () => {
     const input = flow(
-      [trigger("one"), trigger("two"), prompt("a"), prompt("b"), output("stop")],
+      [trigger("one"), trigger("two"), agent("a"), agent("b"), output("stop")],
       [thenWire("one", "a"), thenWire("a", "stop")],
     );
 

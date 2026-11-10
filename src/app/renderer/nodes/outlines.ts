@@ -20,7 +20,6 @@ export interface NodeOutline {
   padL: number;
   fill: string;
   strokeWidth: number;
-  ink?: string;
   extras: readonly ShapeExtra[];
 }
 
@@ -68,7 +67,6 @@ const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
         },
       ],
     }),
-  prompt: (w) => outline(roundedRect(w, h, 4), 8),
   agent: (w) =>
     outline(roundedRect(w, h, 12), 10, {
       strokeWidth: 1.6,
@@ -83,12 +81,6 @@ const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
           },
         },
       ],
-    }),
-  script: (w) =>
-    outline(roundedRect(w, h, 6), 8, {
-      fill: "var(--term-bg)",
-      strokeWidth: 1,
-      ink: "var(--term-fg)",
     }),
   gate: (w) =>
     outline(roundedRect(w, h, 3), 12, {

@@ -29,9 +29,7 @@ Every node has an `id` (Flowdeck picks it when you add one), a `label`, a positi
 | Type       | What it does                                           | Settings (default)                                                                                                 | Ports                                                          |
 | ---------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
 | `trigger`  | Start: where the blueprint starts                      | none                                                                                                               | out `out` (then)                                               |
-| `prompt`   | One turn of the session                                | `instructions` (""), `expectedOutput` (optional)                                                                   | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
 | `agent`    | A subagent the session calls                           | `role` (""), `instructions` (""), `model` ("sonnet"), `tools` ([]), `given` and `writes` (optional lists of files) | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
-| `script`   | Runs a command                                         | `command` (""), `args`, `successCodes`, `retryCodes` (optional; exit codes are whole numbers)                      | in `in`, out `out` (then); in `file-in`, out `file-out` (file) |
 | `gate`     | Stops for the user to look before going on             | `shown` (""), `skippable` (false)                                                                                  | in `in`, out `out` (then)                                      |
 | `ask`      | Asks the user a question                               | `question` (""), `options` ([])                                                                                    | in `in`, out `out` (then)                                      |
 | `hardstop` | A stop that cannot be skipped                          | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                  | in `in`, out `out` (then)                                      |
@@ -67,7 +65,7 @@ The session's build configuration holds:
 - `buildModel`: the model the build agents use.
 - `variables`: values the user fills in for each build. Each has a `name` and a kind: `text` (with an optional text `default`) or `yesno` (with an optional true/false `default`).
 
-A Prompt or Agent uses a variable by writing `{{name}}` in its instructions. A Branch picks a `yesno` variable. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and each is declared once. `set_variable` adds a variable or changes the one with the same name; `repo`, `base` and `buildModel` are set by the user in the session settings.
+An Agent uses a variable by writing `{{name}}` in its instructions. A Branch picks a `yesno` variable. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and each is declared once. `set_variable` adds a variable or changes the one with the same name; `repo`, `base` and `buildModel` are set by the user in the session settings.
 
 ## Validator rules
 
@@ -75,18 +73,18 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 
 - `loop-cap`: a Loop needs a whole-number `cap` of at least 1 and an `onCap` action.
 - `hardstop-locked`: a hard stop stays `enabled` and `locked`. Never turn either off.
-- `required-settings`: Agents and Prompts need `instructions`, Scripts a `command`, Loops a `condition`, Asks a `question`.
+- `required-settings`: Agents need `instructions`, Loops a `condition`, Asks a `question`.
 - `ports`: a wire leaves from an output port and arrives at an input port of its node's type, and both take its kind.
 - `references`: wires and parents name nodes that are in the blueprint.
 - `no-cycle`: then wires and parents do not form a cycle outside a loop.
 - `loop-single-entry`: a Loop or For each body has exactly one entry.
 - `node-ids`: node ids are unique and use letters, digits, dashes and underscores.
 - `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop or For each.
-- `loop-body`: a Loop or For each needs a Prompt or Agent in its body, cannot sit inside another, and only they hold a body.
+- `loop-body`: a Loop or For each needs an Agent in its body, cannot sit inside another, and only they hold a body.
 - `body-nodes`: a Start or Stop cannot sit inside a Loop or For each body.
 - `branch-variable`: a Branch picks a `yesno` variable that is declared, and is not inside a body.
 - `file-wires`: a file wire names a file inside the working folder and comes from a node that runs before the one that needs it, not beside it in a parallel section.
-- `undeclared-variable`: every `{{name}}` in a Prompt or Agent is a declared variable.
+- `undeclared-variable`: every `{{name}}` in an Agent is a declared variable.
 - `variable-names`: variable names are unique and safe.
 - `repo-required`: the blueprint names the repository it builds from.
 - `agent-tools`: an Agent asks only for tools in the session's allowed tools.
@@ -114,9 +112,9 @@ The build tools only read. There is no tool to build, run or delete; tell the us
 
 ## Example
 
-Ask: "add a Script node that runs npm test after the planner".
+Ask: "add a step that runs npm test after the planner".
 
 1. `read_blueprint`. Find the node labelled planner and what its `out` wire leads to.
-2. `add_node` with `type` `script`, `label` "npm test", `settings` `{ "command": "npm", "args": ["test"] }`.
+2. `add_node` with `type` `agent`, `label` "npm test", `settings` `{ "role": "Test runner for the change", "instructions": "Run npm test.\nExpected output: a reply listing each failing test, or that all pass." }`.
 3. `wire` a `then` wire from the planner's `out` to the new node's `in`.
 4. If the planner already led somewhere, and the ask does not say where the test goes, ask the user whether the test should sit between them instead of guessing.

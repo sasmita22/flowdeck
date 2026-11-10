@@ -3,24 +3,21 @@ import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gate, onMainFlow, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
-const scriptThenGateThenScript = () => {
+const agentThenGateThenAgent = () => {
   const built = onMainFlow(
-    [
-      script("s1", { settings: { command: "echo", args: ["one"] } }),
-      gate("g1"),
-      script("s2", { settings: { command: "echo", args: ["two"] } }),
-    ],
+    [agent("s1"), gate("g1"), agent("s2")],
     [thenWire("s1", "g1"), thenWire("g1", "s2")],
   );
   return {
@@ -39,13 +36,14 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
 });
 
-test("Approving a gate in the inspector lets the run carry on to the last script", async () => {
-  seedFlow(home, scriptThenGateThenScript(), repo.path);
+test("Approving a gate in the inspector lets the run carry on to the last agent", async () => {
+  seedFlow(home, agentThenGateThenAgent(), repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
@@ -101,7 +99,7 @@ test("Approving a gate in the inspector lets the run carry on to the last script
 });
 
 test("A gate's question shows on the run's page even when a node was selected in the editor", async () => {
-  seedFlow(home, scriptThenGateThenScript(), repo.path);
+  seedFlow(home, agentThenGateThenAgent(), repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();

@@ -12,7 +12,7 @@ import { layDown, workspaceDir } from "../../src/core/compiler/build.js";
 import { buildSessionSettings } from "../../src/core/compiler/build-session.js";
 import { buildHookCommand, shellQuote } from "../../src/core/compiler/hook-settings.js";
 import { buildWorktree } from "../../src/core/run/workspace.js";
-import { agent, onMainFlow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -100,7 +100,7 @@ beforeAll(async () => {
   await run("git", ["-C", repo.path, ...committer, "commit", "--quiet", "-m", "readme"]);
   await run("git", ["-C", repo.path, "branch", "-M", "main"]);
 
-  const laidDown = await layDown(onMainFlow([prompt("p"), agent("a")], [thenWire("p", "a")]), {
+  const laidDown = await layDown(onMainFlow([agent("p"), agent("a")], [thenWire("p", "a")]), {
     home,
     workspace: { ...build, repo: repo.path, base: "main", values: {} },
   });

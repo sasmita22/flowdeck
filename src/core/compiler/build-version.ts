@@ -31,6 +31,7 @@ import { sha256Hex } from "./hash.js";
 import { shellQuote } from "./hook-settings.js";
 import type { BuildFile, Manifest } from "./lower.js";
 import { applyMerges } from "./merge.js";
+import { applyShared, sharedPath } from "./shared.js";
 import { buildRecord } from "./record.js";
 import { validate, type ValidationError } from "./validate.js";
 import { workspaceListing, workspaceRootFiles } from "./verify.js";
@@ -251,16 +252,18 @@ const maxRounds = 3;
 const manifestOf = (files: readonly BuildFile[]): Manifest =>
   JSON.parse(files.find((file) => file.path === manifestPath)?.content ?? "{}") as Manifest;
 
-const componentsOf = (manifest: Manifest, files: readonly BuildFile[]): string[] => [
+const componentsOf = (
+  manifest: Manifest,
+  files: readonly BuildFile[],
+  shared: BuildReport["shared"] = [],
+): string[] => [
   ...new Set(
-    manifest.nodes.flatMap((node) => {
-      if (node.type === "script") return [`script:${node.id}`];
-      return (node.type === "agent" || node.type === "prompt") && node.file !== undefined
-        ? [node.file]
-        : [];
-    }),
+    manifest.nodes.flatMap((node) =>
+      node.type === "agent" && node.file !== undefined ? [node.file] : [],
+    ),
   ),
   ...files.flatMap((file) => (file.path.startsWith("plugin/templates/") ? [file.path] : [])),
+  ...shared.map(sharedPath),
 ];
 
 const componentStatus = (call: AgentCall): ComponentStatus => {
@@ -511,7 +514,7 @@ export async function runBuild(
       append({
         type: "component",
         path: piece,
-        kind: piece === "workspace" ? "workspace" : pieceKind(manifest, piece),
+        kind: piece === "workspace" ? "workspace" : pieceKind(piece),
         nodeIds: nodeIdsOf(manifest, piece),
         status,
       });
@@ -537,6 +540,14 @@ export async function runBuild(
     };
     const asked = () => latest.questions.length > 0;
 
+    let shared: BuildReport["shared"] = [];
+    if (resume !== undefined && resume.round > 1) {
+      await readReport();
+      const kept = applyShared(files, manifest, latest.shared);
+      files = kept.files;
+      manifest = kept.manifest;
+      shared = kept.accepted;
+    }
     let failures: BuildCheckFailure[] = [];
     let pieces = componentsOf(manifest, files);
     for (let round = resume?.round ?? 1; ; round++) {
@@ -564,8 +575,10 @@ export async function runBuild(
           return await stop("needs-you", questionErrors(latest));
         }
         const merged = applyMerges(files, manifest, latest.merges);
-        if (merged.rejected.length > 0) {
-          latest = { ...latest, questions: [...latest.questions, ...merged.rejected] };
+        const laidShared = applyShared(merged.files, merged.manifest, latest.shared);
+        const rejected = [...merged.rejected, ...laidShared.rejected];
+        if (rejected.length > 0) {
+          latest = { ...latest, questions: [...latest.questions, ...rejected] };
           report = latest;
           append({ type: "step", step: 4, status: "done" });
           return await stop("needs-you", questionErrors(latest));
@@ -584,8 +597,31 @@ export async function runBuild(
             append({ type: "merge", nodeIds: nodeIdsOf(merged.manifest, piece), piece });
           files = merged.files;
           manifest = merged.manifest;
+        }
+        if (laidShared.accepted.length > 0) {
+          const before = new Map(files.map((file) => [file.path, file.content]));
+          for (const file of laidShared.files) {
+            if (before.get(file.path) !== file.content)
+              await settled(deps.fs.writeFile(`${dir}/${file.path}`, file.content));
+          }
+          files = laidShared.files;
+          manifest = laidShared.manifest;
+          shared = laidShared.accepted;
+        }
+        const rewrite = [
+          ...new Set([
+            ...merged.mergedPieces,
+            ...shared.flatMap((entry) => [
+              sharedPath(entry),
+              ...entry.usedBy.flatMap(
+                (id) => manifest.nodes.find((node) => node.id === id)?.file ?? [],
+              ),
+            ]),
+          ]),
+        ];
+        if (rewrite.length > 0) {
           const rewritten = await turn(
-            writeTurn(manifest, merged.mergedPieces, 1, [], request.answers),
+            writeTurn(manifest, rewrite, 1, [], request.answers, shared),
           );
           if (rewritten !== undefined) return await turnFailed(4, rewritten);
           if (asked()) {
@@ -609,7 +645,7 @@ export async function runBuild(
                 listing.paths.map(async (path) => ({ path, content: await listing.read(path) })),
               ),
             );
-      failures = checkBuild({ laidDown: files, readBack: back, manifest, flow });
+      failures = checkBuild({ laidDown: files, readBack: back, manifest, flow, shared });
       if (failures.length === 0) {
         const { hash, manifest: locked } = await settled(
           lockBuild(deps.fs, dir, lockedFiles(back, manifest)),
@@ -635,7 +671,7 @@ export async function runBuild(
           lines.map((message) => ({ rule: "build-check", message })),
         );
       }
-      pieces = componentsOf(manifest, files).filter((piece) =>
+      pieces = componentsOf(manifest, files, shared).filter((piece) =>
         failures.some((failure) => failure.file === piece),
       );
     }

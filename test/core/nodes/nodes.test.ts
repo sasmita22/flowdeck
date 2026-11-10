@@ -18,10 +18,6 @@ import { ports as loopPorts } from "../../../src/core/nodes/loop/ports.js";
 import { settings as loopSettings } from "../../../src/core/nodes/loop/settings.js";
 import { ports as outputPorts } from "../../../src/core/nodes/output/ports.js";
 import { settings as outputSettings } from "../../../src/core/nodes/output/settings.js";
-import { ports as promptPorts } from "../../../src/core/nodes/prompt/ports.js";
-import { settings as promptSettings } from "../../../src/core/nodes/prompt/settings.js";
-import { ports as scriptPorts } from "../../../src/core/nodes/script/ports.js";
-import { settings as scriptSettings } from "../../../src/core/nodes/script/settings.js";
 import { registry } from "../../../src/core/nodes/registry.js";
 import { ports as triggerPorts } from "../../../src/core/nodes/trigger/ports.js";
 import { settings as triggerSettings } from "../../../src/core/nodes/trigger/settings.js";
@@ -42,24 +38,6 @@ type Case = {
 };
 
 const cases: Case[] = [
-  {
-    type: "prompt",
-    settings: promptSettings,
-    ports: promptPorts,
-    valid: { instructions: "Summarise" },
-    bad: { instructions: 5 },
-    badPath: ["instructions"],
-    expectedPorts: [inPort, outPort, fileIn, fileOut],
-  },
-  {
-    type: "script",
-    settings: scriptSettings,
-    ports: scriptPorts,
-    valid: { command: "npm", args: ["test"] },
-    bad: { command: "npm", args: "test" },
-    badPath: ["args"],
-    expectedPorts: [inPort, outPort, fileIn, fileOut],
-  },
   {
     type: "agent",
     settings: agentSettings,
@@ -178,12 +156,6 @@ describe.each(cases)("$type node", ({ settings, ports, valid, bad, badPath, expe
 });
 
 describe("required and lenient settings", () => {
-  it("rejects a script without a command", () => {
-    const result = scriptSettings.safeParse({ args: ["test"] });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.path).toEqual(["command"]);
-  });
-
   it("accepts a loop without cap or onCap, capping it at 3", () => {
     expect(loopSettings.parse({ condition: "tests pass" })).toEqual({
       condition: "tests pass",
@@ -199,15 +171,6 @@ describe("required and lenient settings", () => {
     const result = joinSettings.safeParse({ onBranchFail: "retry" });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(["onBranchFail"]);
-  });
-
-  it("accepts whole-number script exit codes and rejects others", () => {
-    expect(
-      scriptSettings.parse({ command: "npm", successCodes: [0, 3], retryCodes: [75] }),
-    ).toEqual({ command: "npm", successCodes: [0, 3], retryCodes: [75] });
-    const result = scriptSettings.safeParse({ command: "npm", retryCodes: [1.5] });
-    expect(result.success).toBe(false);
-    expect(result.error?.issues[0]?.message).toBe("Exit codes are whole numbers");
   });
 
   it("rejects an unknown loop onCap", () => {
@@ -255,8 +218,8 @@ describe("foreach settings", () => {
     expect(result.error?.issues[0]?.path).toEqual(["file"]);
   });
 
-  it("takes the prompt node's input ports and gives no file out", () => {
-    expect(foreachPorts).toEqual(promptPorts.filter((port) => port.name !== "file-out"));
+  it("takes the agent node's input ports and gives no file out", () => {
+    expect(foreachPorts).toEqual(agentPorts.filter((port) => port.name !== "file-out"));
   });
 });
 

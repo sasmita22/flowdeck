@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import {
   createEngineHandler,
   type EngineHandlerOptions,
@@ -74,7 +73,6 @@ describe("engine blueprint sessions", () => {
     run: {
       fs: new NodeFileSystem(),
       now: Date.now,
-      scripts: new NodeProcessRunner(),
       waiter: new FakeWaiter([]),
       startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
       openSession: async (): Promise<OpenedSession> => {

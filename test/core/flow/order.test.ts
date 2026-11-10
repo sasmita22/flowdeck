@@ -5,12 +5,12 @@ import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 const at = { x: 0, y: 0 };
 const withParent = (parent?: string) => (parent === undefined ? {} : { parent });
 
-const prompt = (id: string, parent?: string) => ({
+const agent = (id: string, parent?: string) => ({
   id,
   label: id,
   position: at,
-  type: "prompt",
-  settings: { instructions: id },
+  type: "agent",
+  settings: { role: "", instructions: id, model: "sonnet", tools: [] },
   ...withParent(parent),
 });
 
@@ -59,7 +59,7 @@ function cycleError(input: Flow): FlowCycleError {
 describe("order", () => {
   it("puts a diamond's source first and sink last, whatever the array order", () => {
     const diamond = flow(
-      [prompt("D"), prompt("B"), prompt("C"), prompt("A")],
+      [agent("D"), agent("B"), agent("C"), agent("A")],
       [then("A", "B"), then("A", "C"), then("B", "D"), then("C", "D")],
     );
     expect(order(diamond)).toEqual(["A", "B", "C", "D"]);
@@ -78,7 +78,7 @@ describe("order", () => {
     expect(
       order(
         flow(
-          ids.map((id) => prompt(id)),
+          ids.map((id) => agent(id)),
           [],
         ),
       ),
@@ -86,25 +86,22 @@ describe("order", () => {
   });
 
   it("orders by Then wires only", () => {
-    const input = flow(
-      [prompt("B"), prompt("A")],
-      [wire("file", "A", "B"), wire("event", "A", "B")],
-    );
+    const input = flow([agent("B"), agent("A")], [wire("file", "A", "B"), wire("event", "A", "B")]);
     expect(order(input)).toEqual(["B", "A"]);
   });
 
   it("rejects a cycle outside a loop, naming its nodes", () => {
-    const error = cycleError(flow([prompt("A"), prompt("B")], [then("A", "B"), then("B", "A")]));
+    const error = cycleError(flow([agent("A"), agent("B")], [then("A", "B"), then("B", "A")]));
     expect(error.nodeIds).toEqual(["A", "B"]);
     expect(error.message).toContain("A");
     expect(error.message).toContain("B");
   });
 
   it("rejects a self-wire outside a loop", () => {
-    expect(cycleError(flow([prompt("A")], [then("A", "A")])).nodeIds).toEqual(["A"]);
+    expect(cycleError(flow([agent("A")], [then("A", "A")])).nodeIds).toEqual(["A"]);
   });
 
-  const loopNodes = [prompt("T"), loop("L"), prompt("X", "L"), prompt("Y", "L"), prompt("O")];
+  const loopNodes = [agent("T"), loop("L"), agent("X", "L"), agent("Y", "L"), agent("O")];
 
   it("orders a loop body with a back-wire to an entry wired from outside", () => {
     const input = flow(loopNodes, [then("T", "X"), then("X", "Y"), then("Y", "X"), then("Y", "O")]);
@@ -124,7 +121,7 @@ describe("order", () => {
 
   it("rejects a cycle in a loop body that does not return to the entry", () => {
     const input = flow(
-      [prompt("T"), loop("L"), prompt("X", "L"), prompt("Y", "L"), prompt("Z", "L")],
+      [agent("T"), loop("L"), agent("X", "L"), agent("Y", "L"), agent("Z", "L")],
       [then("T", "X"), then("X", "Y"), then("Y", "Z"), then("Z", "Y")],
     );
     expect(cycleError(input).nodeIds).toEqual(["Y", "Z"]);
@@ -132,33 +129,30 @@ describe("order", () => {
 
   it("rejects a cycle in a loop body with no entry", () => {
     const input = flow(
-      [loop("L"), prompt("X", "L"), prompt("Y", "L")],
+      [loop("L"), agent("X", "L"), agent("Y", "L")],
       [then("X", "Y"), then("Y", "X")],
     );
     expect(cycleError(input).nodeIds).toEqual(["X", "Y"]);
   });
 
   it("rejects a cycle that crosses the loop boundary, naming the loop", () => {
-    const input = flow(
-      [prompt("A"), loop("L"), prompt("X", "L")],
-      [then("A", "X"), then("X", "A")],
-    );
+    const input = flow([agent("A"), loop("L"), agent("X", "L")], [then("A", "X"), then("X", "A")]);
     expect(cycleError(input).nodeIds).toEqual(["A", "L"]);
   });
 
   it("rejects a parent chain that revisits a node", () => {
-    const input = flow([prompt("X", "Y"), prompt("Y", "X")], []);
+    const input = flow([agent("X", "Y"), agent("Y", "X")], []);
     expect(cycleError(input).nodeIds).toEqual(["X", "Y"]);
   });
 
   it("orders a node whose parent is not in the flow at the top level", () => {
-    const input = flow([prompt("A"), prompt("B", "ghost")], [then("A", "B")]);
+    const input = flow([agent("A"), agent("B", "ghost")], [then("A", "B")]);
     expect(order(input)).toEqual(["A", "B"]);
   });
 
   it("ignores a Then wire from a node that is not in the flow", () => {
     const input = flow(
-      [loop("L"), prompt("X", "L"), prompt("Y", "L")],
+      [loop("L"), agent("X", "L"), agent("Y", "L")],
       [then("ghost", "X"), then("X", "Y"), then("Y", "X")],
     );
     expect(cycleError(input).nodeIds).toEqual(["X", "Y"]);

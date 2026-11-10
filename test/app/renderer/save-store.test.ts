@@ -7,7 +7,7 @@ import {
 } from "../../../src/app/renderer/canvas/store.js";
 import { createNavStore } from "../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../src/app/renderer/save-store.js";
-import { flow, prompt } from "../../fixtures/flow-builders.js";
+import { agent, flow } from "../../fixtures/flow-builders.js";
 
 type SaveBridge = Pick<
   FlowdeckBridge,
@@ -50,7 +50,7 @@ const fakeBridge = (options: { latest?: () => Promise<unknown> } = {}) => {
   return { bridge, requestClose };
 };
 
-const savedFlow = () => flow([prompt("prompt-1")], []);
+const savedFlow = () => flow([agent("agent-1")], []);
 
 const setup = async (options: { latest?: () => Promise<unknown> } = {}) => {
   const { bridge, requestClose } = fakeBridge(options);
@@ -61,7 +61,7 @@ const setup = async (options: { latest?: () => Promise<unknown> } = {}) => {
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
-  canvas.getState().drop("script", { x: 200, y: 0 });
+  canvas.getState().drop("gate", { x: 200, y: 0 });
 
 describe("createSaveStore", () => {
   it("starts not saving, with no error and no close prompt", () => {
@@ -122,7 +122,7 @@ describe("dirty reporting", () => {
     bridge.setDirty.mockClear();
 
     makeDirty(canvas);
-    canvas.getState().drop("prompt", { x: 0, y: 300 });
+    canvas.getState().drop("agent", { x: 0, y: 300 });
 
     expect(bridge.setDirty.mock.calls).toEqual([[true]]);
 
@@ -136,7 +136,7 @@ describe("dirty reporting", () => {
     const { bridge, canvas } = await setup({ latest: () => Promise.resolve(savedFlow()) });
     bridge.setDirty.mockClear();
 
-    canvas.getState().select(["prompt-1"]);
+    canvas.getState().select(["agent-1"]);
 
     expect(bridge.setDirty).not.toHaveBeenCalled();
   });
@@ -185,7 +185,7 @@ describe("save", () => {
     bridge.saveFlow.mockReturnValueOnce(reply.promise);
 
     const saving = store.getState().save();
-    canvas.getState().drop("prompt", { x: 0, y: 300 });
+    canvas.getState().drop("agent", { x: 0, y: 300 });
     reply.resolve({ kind: "saved", flowId: "flow-1", version: 1 });
 
     await expect(saving).resolves.toBe(true);

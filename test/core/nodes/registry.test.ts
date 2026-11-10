@@ -13,15 +13,11 @@ import { settings as hardstop } from "../../../src/core/nodes/hardstop/settings.
 import { settings as join } from "../../../src/core/nodes/join/settings.js";
 import { settings as loop } from "../../../src/core/nodes/loop/settings.js";
 import { settings as output } from "../../../src/core/nodes/output/settings.js";
-import { settings as prompt } from "../../../src/core/nodes/prompt/settings.js";
 import { registry } from "../../../src/core/nodes/registry.js";
-import { settings as script } from "../../../src/core/nodes/script/settings.js";
 import { settings as trigger } from "../../../src/core/nodes/trigger/settings.js";
 
 const nodesDir = fileURLToPath(new URL("../../../src/core/nodes/", import.meta.url));
 const folderSettings = {
-  prompt,
-  script,
   agent,
   gate,
   ask,
@@ -46,6 +42,10 @@ describe("node registry", () => {
     expect(folders.sort()).toEqual(types);
   });
 
+  it.each(["prompt", "script"])("has no %s entry", (type) => {
+    expect(Object.keys(registry)).not.toContain(type);
+  });
+
   it.each(NodeType.options)("lists %s with its folder's settings and valid ports", (type) => {
     const entry = entries[type];
     expect(z.array(Port).safeParse(entry?.ports).success).toBe(true);
@@ -53,9 +53,7 @@ describe("node registry", () => {
   });
 
   it.each([
-    ["prompt", ["file-in", "file-out"]],
     ["agent", ["file-in", "file-out"]],
-    ["script", ["file-in", "file-out"]],
     ["foreach", ["file-in"]],
   ])("gives %s its file ports", (type, names) => {
     const filePorts = entries[type]?.ports as Port[];
@@ -64,12 +62,13 @@ describe("node registry", () => {
     );
   });
 
-  it.each(
-    NodeType.options.filter((type) => !["prompt", "agent", "script", "foreach"].includes(type)),
-  )("gives %s no file port", (type) => {
-    const ports = entries[type]?.ports as Port[];
-    expect(ports.filter((port) => port.kind !== "then")).toEqual([]);
-  });
+  it.each(NodeType.options.filter((type) => !["agent", "foreach"].includes(type)))(
+    "gives %s no file port",
+    (type) => {
+      const ports = entries[type]?.ports as Port[];
+      expect(ports.filter((port) => port.kind !== "then")).toEqual([]);
+    },
+  );
 
   it.each(NodeType.options)("names every %s port once, with the file ports in and out", (type) => {
     const ports = entries[type]?.ports as Port[];

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/no-cycle.js";
-import { flow, prompt, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../../../fixtures/flow-builders.js";
 
 describe("no-cycle", () => {
   it("reports each node of a cycle without throwing", () => {
-    const cyclic = flow([prompt("a"), prompt("b")], [thenWire("a", "b"), thenWire("b", "a")]);
+    const cyclic = flow([agent("a"), agent("b")], [thenWire("a", "b"), thenWire("b", "a")]);
     expect(rule.check(cyclic).map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "no-cycle", node: "a" },
       { rule: "no-cycle", node: "b" },
@@ -12,6 +12,6 @@ describe("no-cycle", () => {
   });
 
   it("accepts an acyclic flow", () => {
-    expect(rule.check(flow([prompt("a"), prompt("b")], [thenWire("a", "b")]))).toEqual([]);
+    expect(rule.check(flow([agent("a"), agent("b")], [thenWire("a", "b")]))).toEqual([]);
   });
 });

@@ -12,7 +12,7 @@ import {
   type Port,
   type Wire,
 } from "../../src/core/flow/schema.js";
-import { agent, flow, output, prompt, thenWire, trigger, wire } from "../fixtures/flow-builders.js";
+import { agent, flow, output, thenWire, trigger, wire } from "../fixtures/flow-builders.js";
 import { nodeDefaults } from "../../src/core/nodes/defaults.js";
 import { registry } from "../../src/core/nodes/registry.js";
 import { frontmatterOf } from "../fixtures/kit-frontmatter.js";
@@ -131,7 +131,7 @@ type WireProbe = { refused: boolean; broken: string[] };
 
 const wireProbes = (): WireProbe[] => {
   const base = flow(
-    [trigger("start"), agent("a1"), prompt("p1"), output("stop")],
+    [trigger("start"), agent("a1"), agent("p1"), output("stop")],
     [thenWire("start", "a1"), thenWire("a1", "p1"), thenWire("p1", "stop")],
   );
   const known = new Set(validate(base).map((error) => error.rule));
@@ -185,8 +185,18 @@ describe("the blueprint kit", () => {
       expect(content).toMatch(/expected output/i);
     });
 
-    it("write-node says a Prompt node states what it builds on", () => {
-      expect(writeNode()).toMatch(/Prompt[^.\n]*builds on/);
+    it("write-node makes every work step an Agent", () => {
+      expect(sectionOf(writeNode(), "## Choose the type")).toMatch(
+        /every work step is an `agent`/i,
+      );
+    });
+
+    it("write-node says an Agent that is not the first step states what it builds on", () => {
+      expect(sectionOf(writeNode(), "## Agent node")).toMatch(/Agent[^.\n]*builds on/);
+    });
+
+    it("copy-flow makes every work step an Agent", () => {
+      expect(copyFlow()).toMatch(/every work step[^.\n]*an `agent`/i);
     });
 
     it("copy-flow reads the source with the Read tool", () => {
@@ -335,6 +345,15 @@ describe("the blueprint kit", () => {
       expect(row?.ports).not.toEqual(registryPorts("fork"));
       expect(row?.defaults).not.toEqual(nodeDefaults.fork.settings);
     });
+  });
+
+  it("names no Prompt or Script node in any file", () => {
+    const files = kitFiles();
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(
+      files.filter((file) => /\b(Prompt|Script)s?\b|`(prompt|script)`/.test(readKit(file))),
+    ).toEqual([]);
   });
 
   it("leaves no file marked @unfilled", () => {

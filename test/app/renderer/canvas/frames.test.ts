@@ -9,7 +9,7 @@ import {
   nodeWidth,
   textWidth,
 } from "../../../../src/app/renderer/canvas/frames.js";
-import { nodeLook, tagWidth } from "../../../../src/app/renderer/nodes/look.js";
+import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { nodeOutline } from "../../../../src/app/renderer/nodes/outlines.js";
 import { agent, flow, loop } from "../../../fixtures/flow-builders.js";
 
@@ -35,13 +35,6 @@ describe("nodeWidth", () => {
     expect(long).toHaveLength(60);
     expect(nodeWidth({ type: "agent", label: long })).toBe(textWidth("agent", long));
     expect(textWidth("agent", long)).toBeGreaterThan(170);
-  });
-
-  it("widens a Script by the 12px mono character width after its tag", () => {
-    const { padL } = nodeOutline("script");
-    expect(nodeWidth({ type: "script", label: long })).toBeCloseTo(
-      padL + tagWidth("SH") + 6 + 60 * 7.2 + padL,
-    );
   });
 
   it("takes the width from a sub-line longer than the label", () => {

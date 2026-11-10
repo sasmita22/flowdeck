@@ -18,16 +18,16 @@ import {
   agent,
   flow,
   fork,
+  gate,
   join as joinNode,
-  prompt,
-  script,
   thenWire,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
-import { launchWithFakeClaude } from "./fake-claude.js";
+import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
 
@@ -45,17 +45,17 @@ const shot = {
 };
 const smallest = { width: 960, height: 640 };
 
-const twoScripts = (firstCommand?: { command: string; args: string[] }) => {
-  const seeded = JSON.parse(
-    readFileSync(new URL("../test/fixtures/app-run-two-scripts.json", import.meta.url), "utf8"),
-  ) as { nodes: { id: string; settings: object }[] };
-  const first = seeded.nodes.find((node) => node.id === "s1");
-  if (first !== undefined && firstCommand !== undefined) first.settings = firstCommand;
-  return seeded;
-};
+const twoAgents = () =>
+  JSON.parse(
+    readFileSync(new URL("../test/fixtures/app-run-two-agents.json", import.meta.url), "utf8"),
+  ) as unknown;
 
-const launch = async () => {
-  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
+const launch = async (turns?: Record<string, FakeAgentTurn>) => {
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    ...(turns === undefined ? {} : { turns }),
+  });
   await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
   return launched;
 };
@@ -158,6 +158,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
@@ -198,11 +199,11 @@ test("Readouts hidden, still readable", async () => {
     expect(box.height).toBeLessThanOrEqual(1);
   }
 
-  await drop(window, paletteTestId("prompt"), 200, 150);
+  await drop(window, paletteTestId("agent"), 200, 150);
 
   await expect
     .poll(() => window.locator("body").ariaSnapshot())
-    .toContain('\\"id\\":\\"prompt-1\\"');
+    .toContain('\\"id\\":\\"agent-1\\"');
 });
 
 test("Each sidebar entry previews its node's shape left of its name", async () => {
@@ -298,7 +299,7 @@ test("Sidebar search and toggle", async () => {
 
   await window.getByTestId(controlTestIds.search).fill("loop");
   await expect(window.getByTestId(paletteTestId("loop"))).toBeVisible();
-  await expect(window.getByTestId(paletteTestId("prompt"))).toHaveCount(0);
+  await expect(window.getByTestId(paletteTestId("agent"))).toHaveCount(0);
 
   await window.getByTestId(controlTestIds.sidebarHide).click();
 
@@ -404,7 +405,7 @@ test("Panel buttons hand focus to their counterpart", async () => {
 });
 
 test("Panels appearing on their own leave focus alone", async () => {
-  seedFlow(home, twoScripts(), repo.path);
+  seedFlow(home, twoAgents(), repo.path);
   const { window } = await launch();
 
   await expect(window.getByTestId(controlTestIds.inspectorShow)).not.toBeFocused();
@@ -475,30 +476,30 @@ test("Invalid node shows its reason", async () => {
   const marker = await boxOf(window.getByTestId("node-issue-fork-1"));
   expect(marker.y).toBeGreaterThanOrEqual(bar.y + bar.height);
 
-  await drop(window, paletteTestId("prompt"), 200, 300);
-  await expect(window.getByTestId("node-prompt-1")).toBeVisible();
-  await expect(window.getByTestId("node-issue-prompt-1")).toHaveText(
-    "Write what the prompt should do.",
+  await drop(window, paletteTestId("agent"), 200, 300);
+  await expect(window.getByTestId("node-agent-1")).toBeVisible();
+  await expect(window.getByTestId("node-issue-agent-1")).toHaveText(
+    "Write what the agent should do.",
   );
 });
 
 test("Left to right, no overlap", async () => {
   const { window } = await launch();
 
-  await drop(window, paletteTestId("prompt"), 200, 150);
-  await drop(window, paletteTestId("prompt"), 200, 150);
-  const first = await boxOf(window.getByTestId("node-prompt-1"));
-  const second = await boxOf(window.getByTestId("node-prompt-2"));
+  await drop(window, paletteTestId("agent"), 200, 150);
+  await drop(window, paletteTestId("agent"), 200, 150);
+  const first = await boxOf(window.getByTestId("node-agent-1"));
+  const second = await boxOf(window.getByTestId("node-agent-2"));
   expect(intersects(first, second)).toBe(false);
 
-  await window.getByTestId("node-prompt-1").click();
-  await window.getByTestId(paletteTestId("script")).focus();
+  await window.getByTestId("node-agent-1").click();
+  await window.getByTestId(paletteTestId("gate")).focus();
   await window.keyboard.press("Enter");
-  const next = await boxOf(window.getByTestId("node-script-1"));
+  const next = await boxOf(window.getByTestId("node-gate-1"));
   expect(next.x).toBeGreaterThanOrEqual(first.x + first.width);
   expect(Math.abs(next.y - first.y)).toBeLessThan(2);
 
-  await wire(window, "port-prompt-1-out", "port-script-1-in");
+  await wire(window, "port-agent-1-out", "port-gate-1-in");
   const edge = window.locator(".react-flow__edge-path");
   await expect(edge).toHaveCount(1);
   await expect(edge).toHaveAttribute("marker-end", /url\(/);
@@ -537,10 +538,10 @@ test("Review shots", async () => {
     home,
     flow(
       [
-        { ...prompt("prompt-1"), label: "Prompt", position: { x: 80, y: 80 } },
-        { ...script("script-1"), label: "Script", position: { x: 298, y: 80 } },
+        { ...agent("agent-1"), label: "Plan", position: { x: 80, y: 80 } },
+        { ...gate("gate-1"), label: "Check", position: { x: 298, y: 80 } },
       ],
-      [thenWire("prompt-1", "script-1")],
+      [thenWire("agent-1", "gate-1")],
     ),
   );
   let target = await launch();
@@ -567,20 +568,16 @@ test("Review shots", async () => {
 
   await rm(home, { recursive: true, force: true });
   home = await mkdtemp(join(tmpdir(), "fd-shell-"));
-  seedFlow(home, twoScripts({ command: "sleep", args: ["5"] }), repo.path);
-  target = await launch();
+  seedFlow(home, twoAgents(), repo.path);
+  target = await launch({ s1: "hold" });
   await showDark(target);
   await buildAndRun(target.window, home, "running");
   await expect(target.window.getByTestId("run-status")).toHaveText(/^Running/, {
     timeout: 20_000,
   });
-  await expect(target.window.getByTestId("node-status-s1")).toHaveAttribute(
-    "data-status",
-    "running",
-  );
+  await expect(target.window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "sent");
   await target.window.mouse.move(1, 1);
   await reviewShot(target.window, testInfo, "running-flow");
-  await expect(target.window.getByTestId("run-status")).toHaveText(/^Done/, { timeout: 20_000 });
 
   expect(testInfo.attachments.map(({ name }) => name).sort()).toEqual(
     ["empty-canvas", "menu-open", "palette-open", "running-flow", "small-flow"]
@@ -590,7 +587,7 @@ test("Review shots", async () => {
 });
 
 test("Run status and inspector", async () => {
-  seedFlow(home, twoScripts(), repo.path);
+  seedFlow(home, twoAgents(), repo.path);
   const { window } = await launch();
 
   await expect(window.getByTestId("run-status")).toHaveText("Idle");
@@ -608,7 +605,7 @@ test("Run status and inspector", async () => {
 test("Branch shown", async () => {
   await git(repo.path, "checkout", "--quiet", "-b", "fd-demo");
   await git(repo.path, "branch", "fd-next");
-  const seeded = parseFlow(twoScripts());
+  const seeded = parseFlow(twoAgents());
   seedFlow(home, {
     ...seeded,
     session: { ...seeded.session, buildConfig: { repo: repo.path, variables: [] } },
@@ -630,7 +627,7 @@ test("Branch shown", async () => {
 
 test("A blueprint's base branch shows in the status bar", async () => {
   await git(repo.path, "checkout", "--quiet", "-b", "dev");
-  seedFlow(home, flow([prompt("prompt-1")], []), repo.path);
+  seedFlow(home, flow([agent("agent-1")], []), repo.path);
   const { window } = await launch();
 
   await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));

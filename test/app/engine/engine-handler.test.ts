@@ -10,7 +10,6 @@ import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../../src/adapters/process/process-runner.js";
 import {
   createEngineHandler,
   type EngineHandlerOptions,
@@ -41,18 +40,18 @@ import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
+  agent,
   flow,
   gate,
   loop,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
+import { fakeClaudeSession, type FakeTurnHandler } from "../../fixtures/fake-claude-session.js";
 
 const git = async (repo: string, ...args: string[]): Promise<string> =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -77,7 +76,7 @@ const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
 const savedFlow = () =>
   flow(
-    [trigger("start"), prompt("plan"), output("stop")],
+    [trigger("start"), agent("plan"), output("stop")],
     [thenWire("start", "plan"), thenWire("plan", "stop")],
   );
 
@@ -90,16 +89,22 @@ const failingOpen = () => {
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
-const runEnvironment = (fs: NodeFileSystem, now: () => number = Date.now) => ({
-  fs,
-  now,
-  scripts: new NodeProcessRunner(),
-  waiter: new FakeWaiter([]),
-  startEvents: async () => ({ events: new FakeEventSource(), stop: async () => undefined }),
-  openSession: async () => {
-    throw new Error("Claude must not start for a script-only flow");
-  },
-});
+const napsForever: FakeTurnHandler = (nodeId) => (nodeId === "nap" ? "hold" : "done");
+
+const runEnvironment = (
+  fs: NodeFileSystem,
+  now: () => number = Date.now,
+  turn: FakeTurnHandler = napsForever,
+) => {
+  const claude = fakeClaudeSession(turn);
+  return {
+    fs,
+    now,
+    waiter: new FakeWaiter([]),
+    startEvents: claude.startEvents,
+    openSession: claude.openSession,
+  };
+};
 
 const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOptions => {
   const fs = new NodeFileSystem();
@@ -290,7 +295,7 @@ describe("createEngineHandler", async () => {
     it("saves, lists, renames and opens blueprints, each keeping its own versions", async () => {
       const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
       const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
-      const second = onMainFlow([prompt("other")], []);
+      const second = onMainFlow([agent("other")], []);
 
       const savedA = await handler.handle({
         id: 3,
@@ -440,7 +445,7 @@ describe("createEngineHandler", async () => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
       const runs = new FakeStore();
       flows.create("Report");
-      const { version } = flows.save(onMainFlow([script("s1"), script("s2")], []), "flow-a");
+      const { version } = flows.save(onMainFlow([agent("s1"), agent("s2")], []), "flow-a");
       runs.recordBuild({
         id: "b1",
         hash: "h1",
@@ -498,7 +503,7 @@ describe("createEngineHandler", async () => {
         value: {
           run: expect.objectContaining({ id: runId, status: "failed" }),
           name: "Report",
-          flow: onMainFlow([script("s1"), script("s2")], []),
+          flow: onMainFlow([agent("s1"), agent("s2")], []),
           snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
           activity: [],
         },
@@ -603,21 +608,10 @@ describe("createEngineHandler", async () => {
 
     const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path, variables: [] });
 
-    const twoScripts = () =>
-      atRepo(
-        onMainFlow(
-          [
-            script("write", {
-              settings: { command: "sh", args: ["-c", "echo ran > side-effect.txt"] },
-            }),
-            script("check", { settings: { command: "test", args: ["-f", "side-effect.txt"] } }),
-          ],
-          [thenWire("write", "check")],
-        ),
-      );
+    const twoAgents = () =>
+      atRepo(onMainFlow([agent("write"), agent("check")], [thenWire("write", "check")]));
 
-    const sleeper = () =>
-      atRepo(onMainFlow([script("nap", { settings: { command: "sleep", args: ["3"] } })], []));
+    const sleeper = () => atRepo(onMainFlow([agent("nap")], []));
 
     const collectInto = (sink: EnginePush[]) => (push: EnginePush) => {
       sink.push(push);
@@ -793,7 +787,7 @@ describe("createEngineHandler", async () => {
     });
 
     it("runs a build again and again from its one workspace", async () => {
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const buildId = await builtId();
 
       const first = await startedOn(buildId);
@@ -809,10 +803,10 @@ describe("createEngineHandler", async () => {
     });
 
     it("builds from the latest saved version", async () => {
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const first = await startedRunId();
       await untilFinished(first);
-      const v2 = twoScripts();
+      const v2 = twoAgents();
       flows.save(
         atRepo(
           onMainFlow(
@@ -835,7 +829,7 @@ describe("createEngineHandler", async () => {
     });
 
     it("publishes every node waiting first, and every node done when the run ends", async () => {
-      flows.save(twoScripts());
+      flows.save(twoAgents());
 
       const runId = await startedRunId();
 
@@ -983,7 +977,7 @@ describe("createEngineHandler", async () => {
       const promptAt = () =>
         inFolder(
           flow(
-            [trigger("start"), prompt("plan"), output("stop")],
+            [trigger("start"), agent("plan"), output("stop")],
             [thenWire("start", "plan"), thenWire("plan", "stop")],
           ),
           {
@@ -993,16 +987,20 @@ describe("createEngineHandler", async () => {
           },
         );
 
-      const scriptsIn = (...steps: string[]) =>
-        inFolder(
-          onMainFlow(
-            steps.map((command, index) =>
-              script(`s${index + 1}`, { settings: { command: "sh", args: ["-c", command] } }),
-            ),
-            steps.slice(1).map((_, index) => thenWire(`s${index + 1}`, `s${index + 2}`)),
-          ),
-          { repo: source.path, base: "main", variables: [] },
-        );
+      const twoInSource = () =>
+        inFolder(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]), {
+          repo: source.path,
+          base: "main",
+          variables: [],
+        });
+
+      const writesMade =
+        (outcome: "done" | "fail"): FakeTurnHandler =>
+        async (nodeId, opening) => {
+          if (nodeId !== "s1") return "done";
+          await writeFile(join(opening.cwd, "made.txt"), "one\n");
+          return outcome;
+        };
 
       const sourceWorktreeOf = (buildId: string) => worktreeOf(buildId, source.path);
 
@@ -1079,15 +1077,19 @@ describe("createEngineHandler", async () => {
         expect(flows.loadLatest()?.flow).toEqual(saved);
       });
 
-      it.each([
-        ["changed nothing", ["echo one", "true"], "done"],
-        ["wrote a file", ["echo one > made.txt", "test -f made.txt"], "done"],
-        ["failed", ["echo half > made.txt; exit 3"], "failed"],
+      it.each<[string, FakeTurnHandler, string]>([
+        ["changed nothing", () => "done", "done"],
+        ["wrote a file", writesMade("done"), "done"],
+        ["failed", writesMade("fail"), "failed"],
       ])(
         "keeps the build's worktree and branch after a run that %s, writing no kept notice",
-        async (_, steps, status) => {
-          handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
-          flows.save(scriptsIn(...steps));
+        async (_, turn, status) => {
+          handler = handlerWith({
+            worktree: new GitWorktree(),
+            gitState: gitAt(source.path),
+            run: runEnvironment(new NodeFileSystem(), Date.now, turn),
+          });
+          flows.save(twoInSource());
           const buildId = await builtId();
 
           const runId = await startedOn(buildId);
@@ -1111,7 +1113,7 @@ describe("createEngineHandler", async () => {
           worktree: new FakeWorktree({ failWith: "git worktree add exploded" }),
           gitState: gitAt(source.path),
         });
-        flows.save(scriptsIn("true"));
+        flows.save(twoInSource());
 
         const built = await buildLatest();
 
@@ -1128,7 +1130,7 @@ describe("createEngineHandler", async () => {
       handler = handlerWith({
         prepareHooks: () => ({ kind: "error", message: "No executable node on PATH" }),
       });
-      flows.save(twoScripts());
+      flows.save(twoAgents());
 
       await expectErrorAndNoRun("No executable node on PATH");
     });
@@ -1146,7 +1148,7 @@ describe("createEngineHandler", async () => {
           onMainFlow(
             [
               loop("retry", { settings: { cap: 0, onCap: "fail" } }),
-              prompt("body", { parent: "retry", settings: { instructions: "" } }),
+              agent("body", { parent: "retry", settings: { instructions: "" } }),
             ],
             [],
           ),
@@ -1159,18 +1161,18 @@ describe("createEngineHandler", async () => {
         kind: "error",
         message: [
           "retry: Loop cap 0 is not a whole number of at least 1.",
-          "body: Write what the prompt should do.",
+          "body: Write what the agent should do.",
         ].join("\n"),
         problems: [
           { node: "retry", field: "cap", text: "Loop cap 0 is not a whole number of at least 1." },
-          { node: "body", field: "instructions", text: "Write what the prompt should do." },
+          { node: "body", field: "instructions", text: "Write what the agent should do." },
         ],
       });
     });
 
     it("records the build with the version it was made from", async () => {
-      flows.save(twoScripts());
-      flows.save(twoScripts());
+      flows.save(twoAgents());
+      flows.save(twoAgents());
 
       const runId = await startedRunId();
       await untilFinished(runId);
@@ -1185,8 +1187,8 @@ describe("createEngineHandler", async () => {
       const db = openDatabase({ path: join(home, "flowdeck.db") });
       try {
         const sqlFlows = new SqliteFlowStore({ db, newId: () => "flow-sql" });
-        sqlFlows.save(twoScripts());
-        sqlFlows.save(twoScripts());
+        sqlFlows.save(twoAgents());
+        sqlFlows.save(twoAgents());
         handler = handlerWith({
           openStores: () => ({ runs: new SqliteStore({ db }), flows: sqlFlows }),
         });
@@ -1220,13 +1222,13 @@ describe("createEngineHandler", async () => {
             flow: "flow-sql",
             version: 2,
             node_id: "write",
-            type: "script",
+            type: "agent",
           }),
           expect.objectContaining({
             flow: "flow-sql",
             version: 2,
             node_id: "check",
-            type: "script",
+            type: "agent",
           }),
           expect.objectContaining({
             flow: "flow-sql",
@@ -1243,7 +1245,7 @@ describe("createEngineHandler", async () => {
     });
 
     it("keeps automatic mode with the run, and nothing else it is sent", async () => {
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const buildId = await builtId();
 
       const started = await runBuild(buildId, {
@@ -1258,7 +1260,7 @@ describe("createEngineHandler", async () => {
     });
 
     it("refuses a run-build without a build id", async () => {
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       await builtId();
 
       expect(
@@ -1271,8 +1273,8 @@ describe("createEngineHandler", async () => {
       it("builds a chosen version under a name, lists it, reads its files, and runs it", async () => {
         const worktree = new FakeWorktree();
         handler = handlerWith({ worktree });
-        flows.save(twoScripts());
-        const v1 = twoScripts();
+        flows.save(twoAgents());
+        const v1 = twoAgents();
         flows.save({ ...v1, nodes: v1.nodes.filter((node) => node.id === "write"), wires: [] });
 
         const answered = await handler.handle({
@@ -1336,7 +1338,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("builds one version twice under two names as two builds", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
 
         const first = await builtId({ name: "first" });
         const second = await builtId({ name: "second" });
@@ -1355,15 +1357,8 @@ describe("createEngineHandler", async () => {
       });
 
       it("leaves a loose node out of the workspace manifest and out of the run", async () => {
-        const main = twoScripts();
-        const loose = flow(
-          [
-            script("loose", {
-              settings: { command: "sh", args: ["-c", "echo loose > loose.txt"] },
-            }),
-          ],
-          [],
-        );
+        const main = twoAgents();
+        const loose = flow([agent("loose")], []);
         flows.save({ ...main, nodes: [...main.nodes, ...loose.nodes] });
         const mainIds = main.nodes.map((node) => node.id);
 
@@ -1379,7 +1374,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("answers an unsaved version, an unknown build and a bad payload with errors", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
 
         expect(
           await handler.handle({
@@ -1487,7 +1482,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("answers started with the pending id before the build ends, recording no build yet", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
         worktree.hold();
 
         const answered = await buildVersionOf("flow-1", "fix-login");
@@ -1510,7 +1505,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("pushes the build's progress once for each event, the last Built · v1 with the build id", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
 
         const pendingId = await startedPendingId("flow-1", "fix-login");
         await untilBuilt(pendingId);
@@ -1532,7 +1527,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("refuses a second build of the blueprint while it builds, reserving nothing for it", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
         worktree.hold();
         const pendingId = await startedPendingId("flow-1", "fix-login");
 
@@ -1546,8 +1541,8 @@ describe("createEngineHandler", async () => {
       });
 
       it("lists the open pending builds and each blueprint's latest finished one", async () => {
-        flows.save(twoScripts());
-        const other = flows.save(twoScripts(), { name: "Other" }).flowId;
+        flows.save(twoAgents());
+        const other = flows.save(twoAgents(), { name: "Other" }).flowId;
         const first = await startedPendingId("flow-1", "first");
         await untilBuilt(first);
         const second = await startedPendingId("flow-1", "second");
@@ -1693,7 +1688,7 @@ describe("createEngineHandler", async () => {
           buildAgents: agents,
           run: { ...runEnvironment(new NodeFileSystem()), usage },
         });
-        flows.save(twoScripts());
+        flows.save(twoAgents());
       });
 
       afterEach(async () => {
@@ -1910,7 +1905,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -1970,7 +1965,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -2037,7 +2032,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -2490,6 +2485,8 @@ describe("createEngineHandler", async () => {
                 keptApart: [],
                 mixedJobs: [],
                 pieces: [],
+                needs: [],
+                shared: [],
               },
             });
 
@@ -2581,7 +2578,7 @@ describe("createEngineHandler", async () => {
           }
         }
         handler = handlerWith({ worktree: new SlowWorktree() });
-        flows.save(twoScripts());
+        flows.save(twoAgents());
         const buildId = await builtId();
 
         const deleting = deleteBuild(buildId);
@@ -2595,7 +2592,7 @@ describe("createEngineHandler", async () => {
       });
 
       it("refuses a run of a deleted build and creates no run for it", async () => {
-        flows.save(twoScripts());
+        flows.save(twoAgents());
         const buildId = await builtId();
         expect(await deleteBuild(buildId)).toEqual({ ok: true });
 
@@ -2610,7 +2607,7 @@ describe("createEngineHandler", async () => {
         const source = await createTmpRepo({ commit: true });
         try {
           handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
-          flows.save(inFolder(twoScripts(), { repo: source.path, base: "main", variables: [] }));
+          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }));
           const buildId = await builtId();
           const worktree = worktreeOf(buildId, source.path);
           await writeFile(join(worktree, "work.txt"), "kept\n");
@@ -2639,7 +2636,9 @@ describe("createEngineHandler", async () => {
           permissionMode: "default",
           connectors: [],
         },
-        nodes: [{ id: "s1", type: "script", label: "s1", settings: { command: "true" } }],
+        nodes: [
+          { id: "s1", type: "gate", label: "s1", settings: { shown: "Check", skippable: false } },
+        ],
         wires: [],
         files: {},
       };
@@ -2647,6 +2646,7 @@ describe("createEngineHandler", async () => {
       let db: ReturnType<typeof openDatabase>;
       let store: SqliteStore;
       let hash: string;
+      let waiter: FakeWaiter;
 
       beforeEach(async () => {
         db = openDatabase({ path: join(home, "flowdeck.db") });
@@ -2663,8 +2663,10 @@ describe("createEngineHandler", async () => {
           dir,
           1,
         );
+        waiter = new FakeWaiter([{ decision: "approve" }]);
         handler = handlerWith({
           openStores: () => ({ runs: store, flows: new SqliteFlowStore({ db }) }),
+          run: { ...runEnvironment(new NodeFileSystem()), waiter },
         });
       });
 
@@ -2704,6 +2706,7 @@ describe("createEngineHandler", async () => {
         ).toMatchObject({ ok: true, value: { kind: "started", runId } });
 
         await vi.waitFor(() => expect(store.findRun(runId)?.status).toBe("done"));
+        expect(waiter.calls.map(({ nodeId }) => nodeId)).toEqual(["s1"]);
       });
     });
 
@@ -2717,7 +2720,7 @@ describe("createEngineHandler", async () => {
       flows.save(sleeper());
       const runId = await startedRunId();
       await vi.waitFor(() => {
-        expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("running");
+        expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
       });
 
       await handler.stop();
@@ -2772,7 +2775,7 @@ describe("createEngineHandler", async () => {
 
     it("records the run failed when execution rejects, and accepts a later run of its build", async () => {
       handler = withStartEvents(failingStartEvents);
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const buildId = await builtId();
       const runId = await startedOn(buildId);
 
@@ -2790,7 +2793,7 @@ describe("createEngineHandler", async () => {
       runs.finishRun = () => {
         throw new Error("database is locked");
       };
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const buildId = await builtId();
       const first = await startedOn(buildId);
       runs.stopRun(first);
@@ -2805,7 +2808,7 @@ describe("createEngineHandler", async () => {
     const promptFlow = () =>
       atRepo(
         flow(
-          [trigger("start"), prompt("plan"), output("stop")],
+          [trigger("start"), agent("plan"), output("stop")],
           [thenWire("start", "plan"), thenWire("plan", "stop")],
         ),
       );
@@ -3001,11 +3004,16 @@ describe("createEngineHandler", async () => {
       ]);
     });
 
-    it("announces no session for a script-only run", async () => {
-      flows.save(twoScripts());
+    it("announces no session for a run with no Claude turn", async () => {
+      flows.save(
+        atRepo(onMainFlow([gate("g1", { settings: { shown: "Check", skippable: true } })], [])),
+      );
 
-      const runId = await startedRunId();
+      const started = await runBuild(await builtId(), { auto: true });
+      if (started.kind !== "started") throw new Error(`run did not start: ${started.message}`);
+      const { runId } = started;
       await untilFinished(runId);
+      expect(runs.findRun(runId)?.status).toBe("done");
 
       expect(sessionPushes(runId)).toEqual([]);
       expectOnlyBuildSessionsBesides(runId);
@@ -3019,9 +3027,15 @@ describe("createEngineHandler", async () => {
     ) => {
       let clock = 1000;
       const source = new FakeEventSource();
+      const planDone = {
+        tool_name: "Agent",
+        tool_input: { subagent_type: "fix-login:plan", prompt: "NODE plan\nGo" },
+        tool_use_id: "toolu-plan",
+        tool_response: { status: "completed", agentId: "agent-plan", agentType: "fix-login:plan" },
+      };
       let claudeSessionId = "";
       let cwd = "";
-      const hook = (kind: "PreToolUse" | "Stop", sessionId: string, at: number) =>
+      const hook = (kind: "PreToolUse" | "PostToolUse" | "Stop", sessionId: string, at: number) =>
         source.publish({
           kind,
           sessionId,
@@ -3029,7 +3043,11 @@ describe("createEngineHandler", async () => {
             hook_event_name: kind,
             session_id: sessionId,
             flowdeck_hook_at: at,
-            ...(kind === "PreToolUse" ? toolCall(cwd) : { last_assistant_message: "OK" }),
+            ...(kind === "PreToolUse"
+              ? toolCall(cwd)
+              : kind === "PostToolUse"
+                ? planDone
+                : { last_assistant_message: "OK" }),
           },
         });
       handler = handlerWith({
@@ -3050,6 +3068,7 @@ describe("createEngineHandler", async () => {
                   clock = 1500;
                   hook("PreToolUse", claudeSessionId, 1200);
                   hook("PreToolUse", "another-session", 1300);
+                  hook("PostToolUse", claudeSessionId, 1400);
                   hook("Stop", claudeSessionId, 1500);
                 },
               },
@@ -3165,11 +3184,7 @@ describe("createEngineHandler", async () => {
     const gated = () =>
       atRepo(
         onMainFlow(
-          [
-            script("s1", { settings: { command: "echo", args: ["one"] } }),
-            gate("g1"),
-            script("s2", { settings: { command: "echo", args: ["two"] } }),
-          ],
+          [agent("s1"), gate("g1"), agent("s2")],
           [thenWire("s1", "g1"), thenWire("g1", "s2")],
         ),
       );
@@ -3232,7 +3247,7 @@ describe("createEngineHandler", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const parkedBuild = await builtId();
-      flows.save(twoScripts());
+      flows.save(twoAgents());
       const otherBuild = await builtId();
       const parked = await startedOn(parkedBuild);
       const waitId = await openedWaitId(parked, "g1");
@@ -3328,7 +3343,7 @@ describe("createEngineHandler", async () => {
         runs.findRun = () => {
           throw new Error("database is locked");
         };
-        flows.save(twoScripts());
+        flows.save(twoAgents());
         await startedRunId();
 
         await vi.waitFor(async () => {

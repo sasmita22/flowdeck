@@ -5,12 +5,11 @@ const id = "undeclared-variable";
 
 export const rule: Rule = {
   id,
-  message:
-    "Every {{name}} in a Prompt or Agent must be a variable declared in Build configuration.",
+  message: "Every {{name}} in an Agent must be a variable declared in Build configuration.",
   check: (flow) => {
     const declared = new Set(flow.session.buildConfig.variables.map(({ name }) => name));
     return flow.nodes.flatMap((node): ValidationError[] => {
-      if (node.type !== "prompt" && node.type !== "agent") return [];
+      if (node.type !== "agent") return [];
       return referencedVariables(node.settings.instructions)
         .filter((name) => !declared.has(name))
         .map((name) => ({

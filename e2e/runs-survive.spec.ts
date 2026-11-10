@@ -1,18 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
-import { basename, join } from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { gate, onMainFlow, prompt, script, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
+import { killRunSessions } from "./run-sessions.js";
 
 const run = promisify(execFile);
 
@@ -30,9 +31,6 @@ const laidOut = (nodes: unknown[], wires: unknown[]): Flow => {
     })),
   };
 };
-
-const sh = (id: string, command: string) =>
-  script(id, { settings: { command: "sh", args: ["-c", command] } });
 
 const argvLog = () => join(home, "argv.log");
 
@@ -65,25 +63,6 @@ const quit = async () => {
   await gone;
   launched = undefined;
   await current.close();
-};
-
-const enginePids = async (app: LaunchedApp) =>
-  app.app.evaluate(({ app: electronApp }) =>
-    electronApp
-      .getAppMetrics()
-      .filter(
-        (metric) => metric.type === "Utility" && metric.serviceName === "node.mojom.NodeService",
-      )
-      .map((metric) => metric.pid),
-  );
-
-const isRunning = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 };
 
 const rows = <T>(sql: string, ...params: unknown[]): T[] => {
@@ -124,42 +103,6 @@ const tmuxAlive = async (name: string) => {
   }
 };
 
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const killOwnTmux = async () => {
-  let names: { tmux_name: string }[];
-  try {
-    names = rows("SELECT tmux_name FROM run_sessions");
-  } catch {
-    return;
-  }
-  for (const { tmux_name: name } of names) {
-    if (!/^fd-run-[0-9a-f]{8}$/.test(name)) continue;
-    await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-    await rm(join(tmuxSockets, name), { force: true });
-  }
-};
-
-const killGroup = (pid: number) => {
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
-};
-
-const killOwnScripts = async () => {
-  const runsDir = join(home, "runs");
-  for (const runId of await readdir(runsDir).catch(() => [])) {
-    const scriptsDir = join(runsDir, runId, "scripts");
-    for (const job of await readdir(scriptsDir).catch(() => [])) {
-      if (!job.startsWith("s1-")) continue;
-      const pid = Number(await readFile(join(scriptsDir, job, "pid"), "utf8").catch(() => "0"));
-      if (pid > 0) killGroup(pid);
-    }
-  }
-};
-
 const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
 
 const openRun = async (window: Page, runId: string) => {
@@ -170,7 +113,7 @@ const openRun = async (window: Page, runId: string) => {
 
 const atGate = (last: unknown): Flow =>
   laidOut(
-    [prompt("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } }), last],
+    [agent("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } }), last],
     [thenWire("p1", "g1"), thenWire("g1", (last as { id: string }).id)],
   );
 
@@ -201,15 +144,14 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    await killOwnTmux();
-    await killOwnScripts();
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo.cleanup();
   }
 });
 
 test("Quitting leaves the run and its session going, and a relaunch asks the open question again", async () => {
-  const { id: runId, tmux_name: session } = await startAtGate(atGate(sh("s2", "echo two")));
+  const { id: runId, tmux_name: session } = await startAtGate(atGate(agent("s2")));
   const [before] = rows<{ id: number }>(
     "SELECT id FROM activity WHERE run_id = ? AND node_id = 'p1' ORDER BY seq LIMIT 1",
     runId,
@@ -251,63 +193,8 @@ test("Quitting leaves the run and its session going, and a relaunch asks the ope
   expect(sentTwice(runId)).toEqual([]);
 });
 
-test("After a crash the script keeps running, and the relaunched app finishes the run once", async () => {
-  seedFlow(
-    home,
-    laidOut(
-      [
-        prompt("p1"),
-        sh(
-          "s1",
-          "echo $$ > s1.pid; echo once >> s1.log; n=0; while [ ! -f go ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done",
-        ),
-        sh("s2", "echo two"),
-      ],
-      [thenWire("p1", "s1"), thenWire("s1", "s2")],
-    ),
-    repo.path,
-  );
-  const first = await launch();
-  const buildId = await buildAndRun(first, home, "crash");
-  const folder = join(home, "workspaces", buildId, basename(repo.path));
-  await expect(status(first, "s1")).toHaveAttribute("data-status", "running", { timeout: 30_000 });
-  const pidText = () => readFile(join(folder, "s1.pid"), "utf8").catch(() => "");
-  await expect.poll(pidText).toMatch(/^\d+\n$/);
-  const scriptPid = Number(await pidText());
-  const crashed = launched;
-  if (crashed === undefined) throw new Error("the app is not running");
-  const engines = await enginePids(crashed);
-  const gone = exited(crashed);
-
-  const appPid = crashed.app.process().pid;
-  if (appPid === undefined) throw new Error("the app has no pid");
-  process.kill(appPid, "SIGKILL");
-  await gone;
-  launched = undefined;
-  await crashed.close();
-
-  await expect.poll(() => engines.filter(isRunning), { timeout: 10_000 }).toEqual([]);
-  expect(isRunning(scriptPid)).toBe(true);
-  const { id: runId } = latestRun() ?? { id: "" };
-  const window = await launch();
-  await writeFile(join(folder, "go"), "");
-  await openRun(window, runId);
-  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
-    timeout: 20_000,
-  });
-  expect(await readFile(join(folder, "s1.log"), "utf8")).toBe("once\n");
-  expect(
-    rows<{ kind: string }>(
-      "SELECT kind FROM events WHERE run_id = ? AND node_id = 's1' ORDER BY seq",
-      runId,
-    ).map((row) => row.kind),
-  ).toEqual(["running", "done"]);
-  expect(sentCount(runId, "p1")).toBe(1);
-  expect(sentTwice(runId)).toEqual([]);
-});
-
 test("A run whose session ended while the app was closed shows interrupted, and Resume starts Claude again with --resume", async () => {
-  const input = atGate(prompt("p2"));
+  const input = atGate(agent("p2"));
   const {
     id: runId,
     tmux_name: session,
@@ -357,7 +244,7 @@ test("A run whose session ended while the app was closed shows interrupted, and 
 });
 
 test("After a relaunch the run's terminal opens on its session", async () => {
-  const { id: runId, tmux_name: session } = await startAtGate(atGate(sh("s2", "echo two")));
+  const { id: runId, tmux_name: session } = await startAtGate(atGate(agent("s2")));
   await quit();
 
   const window = await launch();

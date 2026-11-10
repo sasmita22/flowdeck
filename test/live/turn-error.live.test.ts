@@ -71,7 +71,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
     { timeout: runDeadlineMs + 30_000 },
     async () => {
       const parsed = builders.flow(
-        [builders.trigger("t"), builders.prompt("p1", { settings: { instructions: "Say hi." } })],
+        [builders.trigger("t"), builders.agent("p1", { settings: { instructions: "Say hi." } })],
         [builders.thenWire("t", "p1")],
       );
       const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };

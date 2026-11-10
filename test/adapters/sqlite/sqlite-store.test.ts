@@ -11,7 +11,7 @@ import type { BuildEvent } from "../../../src/core/run/build-progress.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../../src/ports/store.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
-import { flow, script } from "../../fixtures/flow-builders.js";
+import { agent, flow } from "../../fixtures/flow-builders.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
   buildDir: `/fd/workspaces/${buildId}`,
@@ -667,7 +667,7 @@ describe("SqliteStore", () => {
       const db = openDatabase({ path });
       opened.push(db);
       const flows = new SqliteFlowStore({ db, newId: () => "flow-1" });
-      const { version } = flows.save(flow([script("s1")], []));
+      const { version } = flows.save(flow([agent("s1")], []));
       const store = new SqliteStore({ db });
       store.recordBuild({ ...another("b2", "fix-signup"), source: { flowId: "flow-1", version } });
       const run = store.createRun(newRun(["s1"], "b2"));

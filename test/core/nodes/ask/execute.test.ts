@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTurnText } from "../../../../src/core/nodes/agent/execute.js";
-import {
-  askOutcome,
-  askRequest,
-  withAgentContext,
-  withPromptContext,
-} from "../../../../src/core/nodes/ask/execute.js";
+import { askOutcome, askRequest } from "../../../../src/core/nodes/ask/execute.js";
 import type { WaitReply } from "../../../../src/core/run/wait.js";
 
 describe("askRequest", () => {
@@ -55,36 +49,4 @@ describe("askOutcome", () => {
       });
     },
   );
-});
-
-describe("withPromptContext", () => {
-  it("leaves the command alone with no answers", () => {
-    expect(withPromptContext("/h1:p1", [])).toBe("/h1:p1");
-  });
-
-  it("appends one answer as arguments", () => {
-    expect(withPromptContext("/h1:p1", ["blue"])).toBe("/h1:p1 The user answered: blue");
-  });
-
-  it("joins several answers in order", () => {
-    expect(withPromptContext("/h1:p1", ["red", "blue"])).toBe(
-      "/h1:p1 The user answered: red. The user answered: blue",
-    );
-  });
-});
-
-describe("withAgentContext", () => {
-  it("leaves the turn text alone with no answers", () => {
-    expect(
-      withAgentContext(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }), []),
-    ).toBe(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }));
-  });
-
-  it("puts the answer before the turn text", () => {
-    expect(
-      withAgentContext(agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] }), ["blue"]),
-    ).toBe(
-      `The user answered: blue. ${agentTurnText("h1", "a1", { id: "a1", given: [], writes: [] })}`,
-    );
-  });
 });

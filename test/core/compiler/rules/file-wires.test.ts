@@ -8,8 +8,6 @@ import {
   fork,
   join,
   loop,
-  prompt,
-  script,
   thenWire,
 } from "../../../fixtures/flow-builders.js";
 
@@ -21,7 +19,7 @@ const reported = (nodes: unknown[], wires: unknown[]) =>
     message,
   }));
 
-const planner = { ...prompt("plan"), label: "Planner" };
+const planner = { ...agent("plan"), label: "Planner" };
 
 describe("file-wires", () => {
   it("accepts a File wire from a node that runs first", () => {
@@ -36,7 +34,7 @@ describe("file-wires", () => {
   it("accepts a File wire into a For each from the node before it", () => {
     expect(
       reported(
-        [planner, forEach("each"), prompt("p1", { parent: "each" })],
+        [planner, forEach("each"), agent("p1", { parent: "each" })],
         [thenWire("plan", "each"), fileWire("plan", "each", "plan.md")],
       ),
     ).toEqual([]);
@@ -131,7 +129,7 @@ describe("file-wires", () => {
   it("accepts a File wire from a parallel branch to the node after the join", () => {
     expect(
       reported(
-        [fork("f"), agent("a"), agent("b"), join("j"), script("after")],
+        [fork("f"), agent("a"), agent("b"), join("j"), agent("after")],
         [
           thenWire("f", "a"),
           thenWire("f", "b"),
@@ -145,7 +143,7 @@ describe("file-wires", () => {
   });
 
   it("reports a File wire from a node to itself", () => {
-    expect(reported([script("s1")], [fileWire("s1", "s1", "out.txt")])).toEqual([
+    expect(reported([agent("s1")], [fileWire("s1", "s1", "out.txt")])).toEqual([
       {
         rule: "file-wires",
         node: "s1",
@@ -158,13 +156,13 @@ describe("file-wires", () => {
   it("accepts a producer in a Loop body feeding a node after the Loop", () => {
     expect(
       reported(
-        [loop("L"), prompt("p1", { parent: "L" }), script("after")],
+        [loop("L"), agent("p1", { parent: "L" }), agent("after")],
         [thenWire("L", "after"), fileWire("p1", "after", "notes.md")],
       ),
     ).toEqual([]);
   });
 
   it("ignores Then wires", () => {
-    expect(reported([prompt("a"), prompt("b")], [thenWire("b", "a")])).toEqual([]);
+    expect(reported([agent("a"), agent("b")], [thenWire("b", "a")])).toEqual([]);
   });
 });

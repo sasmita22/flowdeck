@@ -8,9 +8,7 @@ const types = Object.keys(registry) as NodeType[];
 const groups: Record<NodeType, string> = {
   trigger: "var(--c-io)",
   output: "var(--c-io)",
-  prompt: "var(--c-work)",
   agent: "var(--c-work)",
-  script: "var(--c-work)",
   gate: "var(--c-human)",
   hardstop: "var(--c-human)",
   ask: "var(--c-human)",
@@ -24,9 +22,7 @@ const groups: Record<NodeType, string> = {
 const tags: Record<NodeType, string> = {
   trigger: "",
   output: "",
-  prompt: "STP",
   agent: "AGT",
-  script: "SH",
   gate: "GATE",
   hardstop: "STOP",
   ask: "ASK",
@@ -43,9 +39,7 @@ const outlines: Record<NodeType, string> = {
   agent: "var(--c-work)",
   ask: "var(--c-human)",
   hardstop: "var(--c-human)",
-  prompt: "var(--line)",
   gate: "var(--line)",
-  script: "var(--term-bg)",
   loop: "none",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
@@ -60,6 +54,10 @@ describe("nodeLook", () => {
 
   it("has no look for a type outside the registry", () => {
     expect(nodeLook("nope" as NodeType)).toBeUndefined();
+  });
+
+  it.each(["prompt", "script"])("has no look for %s", (type) => {
+    expect(nodeLook(type as NodeType)).toBeUndefined();
   });
 
   it.each(types)("colours %s with its group token", (type) => {

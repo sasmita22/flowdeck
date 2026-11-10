@@ -1,0 +1,158 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "p1",
+      "label": "Plan",
+      "type": "agent",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "role": "",
+        "instructions": "Write a plan for the ticket.",
+        "model": "sonnet",
+        "tools": []
+      }
+    },
+    {
+      "id": "p2",
+      "label": "Build",
+      "type": "agent",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "role": "",
+        "instructions": "Implement the plan.",
+        "model": "sonnet",
+        "tools": []
+      }
+    },
+    {
+      "id": "p3",
+      "label": "Summarise",
+      "type": "agent",
+      "position": {
+        "x": 720,
+        "y": 0
+      },
+      "settings": {
+        "role": "",
+        "instructions": "Summarise what changed.",
+        "model": "sonnet",
+        "tools": []
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": {
+        "x": 960,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "p1",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p1",
+        "port": "out"
+      },
+      "to": {
+        "node": "p2",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "file",
+      "from": {
+        "node": "p1",
+        "port": "file-out"
+      },
+      "to": {
+        "node": "p2",
+        "port": "file-in"
+      },
+      "file": "plan.md"
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p2",
+        "port": "out"
+      },
+      "to": {
+        "node": "p3",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "file",
+      "from": {
+        "node": "p2",
+        "port": "file-out"
+      },
+      "to": {
+        "node": "p3",
+        "port": "file-in"
+      },
+      "file": "changes.md"
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "p3",
+        "port": "out"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "buildConfig": {
+      "base": "main",
+      "variables": [
+        {
+          "name": "ticket",
+          "kind": "text"
+        }
+      ]
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

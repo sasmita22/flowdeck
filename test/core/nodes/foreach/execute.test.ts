@@ -5,7 +5,7 @@ import {
   listPath,
   withItem,
 } from "../../../../src/core/nodes/foreach/execute.js";
-import { agent, flow, gate, prompt, script } from "../../../fixtures/flow-builders.js";
+import { agent, flow, gate, hardstop } from "../../../fixtures/flow-builders.js";
 
 const lines = (...text: string[]) => text.join("\n");
 
@@ -108,15 +108,11 @@ describe("listPath", () => {
 describe("firstTurnId", () => {
   const body = (nodes: unknown[]) => flow(nodes, []).nodes;
 
-  it("skips non-turn nodes to the first prompt", () => {
-    expect(firstTurnId(body([script("s1"), prompt("p1"), agent("a1")]))).toBe("p1");
+  it("skips non-turn nodes to the first agent", () => {
+    expect(firstTurnId(body([gate("s1"), agent("p1"), agent("a1")]))).toBe("p1");
   });
 
-  it("names an agent that comes before the prompt", () => {
-    expect(firstTurnId(body([agent("a1"), prompt("p1")]))).toBe("a1");
-  });
-
-  it("is undefined for a body with no prompt or agent", () => {
-    expect(firstTurnId(body([script("s1"), gate("g1")]))).toBeUndefined();
+  it("is undefined for a body with no agent", () => {
+    expect(firstTurnId(body([hardstop("s1"), gate("g1")]))).toBeUndefined();
   });
 });

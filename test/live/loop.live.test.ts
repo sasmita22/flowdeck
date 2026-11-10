@@ -18,9 +18,9 @@ const buildName = "live-loop";
 const runTimeoutMs = 300_000;
 const condition = "every error the review reported is fixed";
 const reviewText =
-  "Run `node --check src/greet.js`, `node --check src/total.js` and `node --check src/math.js` as three separate Bash commands. Report each error with its file name and line. Do not change any file.";
+  "Run `node --check src/greet.js`, `node --check src/total.js` and `node --check src/math.js` as three separate Bash commands. Write each error, with its file name and line, to review.md, or NONE if there is none. Do not change any other file.";
 const fixText =
-  "Fix only the errors that the review earlier in this conversation reported, in the files it named. Do not run any command or open any other file. If there is no review earlier in this conversation, change nothing.";
+  "Fix only the errors that review.md reports, in the files it names. Do not run any command or open any other file. If review.md reports no error, change nothing.";
 const namesTheError = /\b(math|check|src)\b/i;
 
 const files = {
@@ -58,18 +58,18 @@ function liveFlow() {
       {
         id: "review",
         label: "Review",
-        type: "prompt",
+        type: "agent",
         position: at(2),
         parent: "l1",
-        settings: { instructions: reviewText },
+        settings: { role: "", instructions: reviewText, model: "haiku", tools: [] },
       },
       {
         id: "fix",
         label: "Fix",
-        type: "prompt",
+        type: "agent",
         position: at(3),
         parent: "l1",
-        settings: { instructions: fixText },
+        settings: { role: "", instructions: fixText, model: "haiku", tools: ["Read", "Edit"] },
       },
       {
         id: "o",
@@ -79,12 +79,23 @@ function liveFlow() {
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
+    wires: [
+      then("t", "review"),
+      then("review", "fix"),
+      then("fix", "review"),
+      then("fix", "o"),
+      {
+        kind: "file",
+        from: { node: "review", port: "file-out" },
+        to: { node: "fix", port: "file-in" },
+        file: "review.md",
+      },
+    ],
     session: {
       name: "main",
       buildConfig: { base: "main", variables: [] },
       model: "haiku",
-      allowedTools: ["Bash(node --check:*)"],
+      allowedTools: ["Bash(node --check:*)", "Read", "Edit"],
       permissionMode: "acceptEdits",
       connectors: [],
     },
@@ -178,7 +189,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
       expect(condition).not.toMatch(namesTheError);
       expect(
         await readFile(
-          join(built.dir, "plugin", "skills", pieceNames(flow).get("fix") ?? "", "SKILL.md"),
+          join(built.dir, "plugin", "agents", `${pieceNames(flow).get("fix")}.md`),
           "utf8",
         ),
       ).not.toMatch(namesTheError);

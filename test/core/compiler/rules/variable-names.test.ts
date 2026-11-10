@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/variable-names.js";
 import type { BuildConfig } from "../../../../src/core/flow/schema.js";
-import { flow, prompt } from "../../../fixtures/flow-builders.js";
+import { agent, flow } from "../../../fixtures/flow-builders.js";
 
 const check = (variables: BuildConfig["variables"]) => {
-  const base = flow([prompt("p")], []);
+  const base = flow([agent("p")], []);
   return rule.check({ ...base, session: { ...base.session, buildConfig: { variables } } });
 };
 

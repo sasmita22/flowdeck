@@ -7,7 +7,7 @@ import {
   selectWorkspaceLabel,
 } from "../../../src/app/renderer/workspace-store.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { flow, prompt } from "../../fixtures/flow-builders.js";
+import { agent, flow } from "../../fixtures/flow-builders.js";
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -23,7 +23,7 @@ const shop = { repo: "/code/shop", variables: [] };
 const blog = { repo: "/code/blog", variables: [] };
 
 const atFolder = (buildConfig: Flow["session"]["buildConfig"]): Flow => {
-  const base = flow([prompt("prompt-1")], []);
+  const base = flow([agent("agent-1")], []);
   return { ...base, session: { ...base.session, buildConfig } };
 };
 
@@ -117,7 +117,7 @@ describe("createWorkspaceStore", () => {
   it("does not ask again for an edit that leaves the repo and base alone", async () => {
     const { bridge, canvas } = await loaded({ latest: atFolder(shop) });
 
-    canvas.getState().drop("script", { x: 300, y: 0 });
+    canvas.getState().drop("gate", { x: 300, y: 0 });
     await settle();
 
     expect(bridge.workspaceInfo).toHaveBeenCalledTimes(1);
@@ -125,7 +125,7 @@ describe("createWorkspaceStore", () => {
 
   it("asks again after a save", async () => {
     const { bridge, canvas, save } = await loaded({ latest: atFolder(shop) });
-    canvas.getState().drop("script", { x: 300, y: 0 });
+    canvas.getState().drop("gate", { x: 300, y: 0 });
 
     await save.getState().save();
     await settle();
@@ -136,7 +136,7 @@ describe("createWorkspaceStore", () => {
 
   it("does not ask again after a save that fails", async () => {
     const { bridge, canvas, save } = await loaded({ latest: atFolder(shop), saveFails: true });
-    canvas.getState().drop("script", { x: 300, y: 0 });
+    canvas.getState().drop("gate", { x: 300, y: 0 });
 
     await save.getState().save();
     await settle();

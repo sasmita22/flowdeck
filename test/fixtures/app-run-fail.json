@@ -13,14 +13,16 @@
     {
       "id": "f1",
       "label": "Fail",
-      "type": "script",
+      "type": "agent",
       "position": {
         "x": 0,
         "y": 0
       },
       "settings": {
-        "command": "sh",
-        "args": ["-c", "exit 1"]
+        "role": "",
+        "instructions": "Run `sh -c 'exit 1'` in the repo and report its exit code.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

@@ -13,27 +13,31 @@
     {
       "id": "s1",
       "label": "One",
-      "type": "script",
+      "type": "agent",
       "position": {
         "x": 0,
         "y": 0
       },
       "settings": {
-        "command": "echo",
-        "args": ["one"]
+        "role": "",
+        "instructions": "Run `echo one` in the repo and report its exit code.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
       "id": "s2",
       "label": "Two",
-      "type": "script",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "command": "echo",
-        "args": ["two"]
+        "role": "",
+        "instructions": "Run `echo two` in the repo and report its exit code.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

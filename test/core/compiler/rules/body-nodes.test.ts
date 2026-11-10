@@ -4,6 +4,7 @@ import { rule } from "../../../../src/core/compiler/rules/body-nodes.js";
 import { rule as loopBody } from "../../../../src/core/compiler/rules/loop-body.js";
 import { structureProblems } from "../../../../src/core/run/runner.js";
 import {
+  agent,
   ask,
   flow,
   forEach,
@@ -11,7 +12,6 @@ import {
   hardstop,
   loop,
   output,
-  prompt,
   trigger,
 } from "../../../fixtures/flow-builders.js";
 
@@ -26,13 +26,13 @@ describe("body-nodes", () => {
   it.each([
     [
       "a Trigger in a Loop",
-      [loop("L"), prompt("p", { parent: "L" }), trigger("t", { parent: "L" })],
+      [loop("L"), agent("p", { parent: "L" }), trigger("t", { parent: "L" })],
       "t",
       "t (trigger) cannot be inside loop L.",
     ],
     [
       "an Output in a For each",
-      [forEach("E"), prompt("p", { parent: "E" }), output("o", { parent: "E" })],
+      [forEach("E"), agent("p", { parent: "E" }), output("o", { parent: "E" })],
       "o",
       "o (output) cannot be inside foreach E.",
     ],
@@ -45,13 +45,13 @@ describe("body-nodes", () => {
     ["an Ask", ask],
     ["a Hard stop", hardstop],
   ])("accepts %s inside a body", (_name, make) => {
-    expect(reported([loop("L"), prompt("p", { parent: "L" }), make("x", { parent: "L" })])).toEqual(
+    expect(reported([loop("L"), agent("p", { parent: "L" }), make("x", { parent: "L" })])).toEqual(
       [],
     );
   });
 
   it("accepts a Trigger and an Output outside every body", () => {
-    expect(reported([trigger("t"), loop("L"), prompt("p", { parent: "L" }), output("o")])).toEqual(
+    expect(reported([trigger("t"), loop("L"), agent("p", { parent: "L" }), output("o")])).toEqual(
       [],
     );
   });
@@ -62,7 +62,7 @@ describe("body-nodes", () => {
         loop("L"),
         trigger("t", { parent: "L" }),
         forEach("E"),
-        prompt("p", { parent: "E" }),
+        agent("p", { parent: "E" }),
         output("o", { parent: "E" }),
       ],
       [],

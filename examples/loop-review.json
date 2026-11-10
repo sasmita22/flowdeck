@@ -27,28 +27,33 @@
     {
       "id": "fix",
       "label": "Fix",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 160
       },
       "parent": "review",
       "settings": {
-        "instructions": "Fix the failing tests."
+        "role": "",
+        "instructions": "Fix the failing tests.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
       "id": "check",
       "label": "Run tests",
-      "type": "script",
+      "type": "agent",
       "position": {
         "x": 480,
         "y": 160
       },
       "parent": "review",
       "settings": {
-        "command": "npm",
-        "args": ["test"]
+        "role": "",
+        "instructions": "Run `npm test` in the repo and report its exit code.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

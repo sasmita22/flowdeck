@@ -16,7 +16,6 @@ import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.
 import { prepareKit } from "../../adapters/node-fs/kit-copy.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
 import { HomeLock } from "../../adapters/process/home-lock.js";
-import { NodeProcessRunner } from "../../adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
 import { openDatabase } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
@@ -64,7 +63,6 @@ const usage = new TranscriptUsage({
 const run: EngineHandlerOptions["run"] = {
   fs,
   now: Date.now,
-  scripts: new NodeProcessRunner(),
   startEvents: async (socketPath) => {
     await mkdir(dirname(socketPath), { recursive: true });
     const server = new HookSocketServer({ socketPath });

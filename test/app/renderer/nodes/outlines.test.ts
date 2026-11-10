@@ -8,6 +8,7 @@ import {
   nodeOutline,
   previewOf,
   previewViewBox,
+  type OutlinedType,
 } from "../../../../src/app/renderer/nodes/outlines.js";
 import type { NodeType } from "../../../../src/core/flow/schema.js";
 
@@ -148,11 +149,7 @@ describe("nodeOutline", () => {
     });
   });
 
-  it("draws the script as a terminal box with terminal ink", () => {
-    expect(nodeOutline("script")).toMatchObject({
-      fill: "var(--term-bg)",
-      ink: "var(--term-fg)",
-      strokeWidth: 1,
-    });
+  it.each(["prompt", "script"])("has no outline for %s", (type) => {
+    expect(() => nodeOutline(type as OutlinedType, 170)).toThrow(TypeError);
   });
 });

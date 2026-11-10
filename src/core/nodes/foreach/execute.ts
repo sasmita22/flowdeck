@@ -50,5 +50,5 @@ export function listPath(cwd: string, file: string): string {
 }
 
 export function firstTurnId(body: readonly Pick<Node, "id" | "type">[]): string | undefined {
-  return body.find((node) => node.type === "prompt" || node.type === "agent")?.id;
+  return body.find((node) => node.type === "agent")?.id;
 }

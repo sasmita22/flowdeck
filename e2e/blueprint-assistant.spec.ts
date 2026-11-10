@@ -3,16 +3,18 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { flow, gate, onMainFlow, prompt, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, flow, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, type LaunchedApp } from "../scripts/drive.js";
 import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { killTmux } from "./blueprint-pane.js";
+import { killRunSessions } from "./run-sessions.js";
 import {
   blueprintResults,
   fakeClaudeRan,
@@ -72,27 +74,11 @@ const tmuxAlive = async (name: string) => {
 const capture = async (name: string) =>
   (await run("tmux", ["-L", name, "capture-pane", "-p", "-t", `=${name}:`])).stdout;
 
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const killTmux = async (name: string) => {
-  await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-  await rm(join(tmuxSockets, name), { force: true });
-};
-
 const killOwnTmux = async () => {
   if (!existsSync(join(home, "flowdeck.db"))) return;
   const flowIds = rows<{ id: string }>("SELECT id FROM flows").map(({ id }) => id);
   for (const flowId of flowIds) await killTmux(bpName(flowId));
-  const runSessions = (() => {
-    try {
-      return rows<{ tmux_name: string }>("SELECT tmux_name FROM run_sessions");
-    } catch {
-      return [];
-    }
-  })();
-  for (const { tmux_name: name } of runSessions) {
-    if (/^fd-run-[0-9a-f]{8}$/.test(name)) await killTmux(name);
-  }
+  await killRunSessions(home);
 };
 
 const launches = async () =>
@@ -126,7 +112,7 @@ const openOn = async (window: Page, flowId: string) => {
   await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
 };
 
-const seeded = (name: string, nodes: unknown[] = [prompt("p1")], wires: unknown[] = []) =>
+const seeded = (name: string, nodes: unknown[] = [agent("p1")], wires: unknown[] = []) =>
   seedBlueprint(home, name, laidOut(nodes, wires)).flowId;
 
 const showPane = async (window: Page, flowId: string) => {
@@ -205,7 +191,7 @@ test("a run's terminal keeps working beside the blueprint terminal", async () =>
   const { flowId } = seedFlow(
     home,
     runnable(
-      [prompt("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } })],
+      [agent("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } })],
       [thenWire("p1", "g1")],
     ),
     repo.path,
@@ -285,30 +271,30 @@ test("agent add_node and wire reach the open canvas unsaved", async () => {
     [
       {
         name: "add_node",
-        input: { type: "script", label: "Tests", settings: { command: "npm", args: ["test"] } },
+        input: { type: "agent", label: "Tests", settings: { instructions: "Run npm test." } },
       },
-      { name: "wire", input: thenWire("p1", "script-1") },
+      { name: "wire", input: thenWire("p1", "agent-1") },
       { name: "read_blueprint", input: {} },
     ],
   ]);
 
-  await askInPane(window, "add a script after p1");
+  await askInPane(window, "add an agent after p1");
 
   await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
-  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
-  await expect(window.getByTestId("rf__edge-p1:out->script-1:in")).toBeAttached();
+  await expect(window.getByTestId("rf__node-agent-1")).toBeVisible();
+  await expect(window.getByTestId("rf__edge-p1:out->agent-1:in")).toBeAttached();
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
   const results = await blueprintResults(home);
   expect(results.map(({ name }) => name)).toEqual(["add_node", "wire", "read_blueprint"]);
-  expect(results[0]?.result).toMatchObject({ ok: true, nodeId: "script-1" });
+  expect(results[0]?.result).toMatchObject({ ok: true, nodeId: "agent-1" });
   expect(results[2]?.result).toMatchObject({
     ok: true,
     unsaved: true,
     flow: {
       nodes: expect.arrayContaining([
-        expect.objectContaining({ id: "script-1", type: "script", label: "Tests" }),
+        expect.objectContaining({ id: "agent-1", type: "agent", label: "Tests" }),
       ]),
-      wires: expect.arrayContaining([thenWire("p1", "script-1")]),
+      wires: expect.arrayContaining([thenWire("p1", "agent-1")]),
     },
   });
   const saved = rows<{ n: number }>(
@@ -326,17 +312,17 @@ test("three edits from one ask are undone by one Undo", async () => {
   const before = await readout(window);
   await writeBlueprintAsks(home, [
     [
-      { name: "add_node", input: { type: "script", label: "Lint" } },
-      { name: "add_node", input: { type: "script", label: "Tests" } },
-      { name: "wire", input: thenWire("p1", "script-1") },
+      { name: "add_node", input: { type: "agent", label: "Lint" } },
+      { name: "add_node", input: { type: "agent", label: "Tests" } },
+      { name: "wire", input: thenWire("p1", "agent-1") },
     ],
   ]);
 
-  await askInPane(window, "add two scripts");
+  await askInPane(window, "add two agents");
   await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
   const after = await readout(window);
-  expect(after.nodes.map(({ id }) => id)).toEqual(["p1", "script-1", "script-2"]);
-  expect(after.wires).toEqual([thenWire("p1", "script-1")]);
+  expect(after.nodes.map(({ id }) => id)).toEqual(["p1", "agent-1", "agent-2"]);
+  expect(after.wires).toEqual([thenWire("p1", "agent-1")]);
 
   await window.getByTestId(controlTestIds.undo).click();
 
@@ -406,8 +392,8 @@ test("a leftover fd-bp session is stopped at the next start", async () => {
 });
 
 test("reads still reach every blueprint", async () => {
-  const a = seeded("a", [prompt("plan-step")]);
-  const b = seeded("b", [prompt("review-step")]);
+  const a = seeded("a", [agent("plan-step")]);
+  const b = seeded("b", [agent("review-step")]);
   const window = await launch();
   await openOn(window, a);
   await showPane(window, a);
@@ -444,17 +430,17 @@ test("reads still reach every blueprint", async () => {
 });
 
 test("an edit aimed at another blueprint is refused", async () => {
-  const a = seeded("a", [prompt("plan-step")]);
-  const b = seeded("b", [prompt("review-step")]);
+  const a = seeded("a", [agent("plan-step")]);
+  const b = seeded("b", [agent("review-step")]);
   const window = await launch();
   await openOn(window, a);
   await showPane(window, a);
   const before = await readout(window);
   await writeBlueprintAsks(home, [
-    [{ name: "add_node", input: { type: "script", label: "Tests", blueprint: b } }],
+    [{ name: "add_node", input: { type: "agent", label: "Tests", blueprint: b } }],
   ]);
 
-  await askInPane(window, "add a script to b");
+  await askInPane(window, "add an agent to b");
 
   await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
   const results = await blueprintResults(home);
@@ -466,7 +452,7 @@ test("an edit aimed at another blueprint is refused", async () => {
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("a");
   expect(await readout(window)).toEqual(before);
   await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
-  await expect(window.getByTestId("rf__node-script-1")).toHaveCount(0);
+  await expect(window.getByTestId("rf__node-agent-1")).toHaveCount(0);
   const saved = rows<{ n: number }>("SELECT count(*) AS n FROM flow_versions WHERE flow_id = ?", b);
   expect(saved[0]?.n).toBe(1);
   expect(await tmuxAlive(bpName(a))).toBe(true);
@@ -476,7 +462,7 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
   test.setTimeout(120_000);
   repo = await createTmpRepo({ commit: true });
   const repoName = repo.path.split("/").at(-1) ?? "";
-  const { flowId } = seedBlueprint(home, "a", runnable([prompt("p1")], []), repo.path);
+  const { flowId } = seedBlueprint(home, "a", runnable([agent("p1")], []), repo.path);
   const seed = new Database(join(home, "flowdeck.db"));
   try {
     seed
@@ -610,11 +596,11 @@ test("Close asks first: Cancel keeps the agent, Stop agent ends it and its folde
   await showPane(window, flowId);
   const pane = window.getByTestId(paneId);
   await writeBlueprintAsks(home, [
-    [{ name: "add_node", input: { type: "script", label: "Tests" } }],
+    [{ name: "add_node", input: { type: "agent", label: "Tests" } }],
   ]);
-  await askInPane(window, "add a script");
+  await askInPane(window, "add an agent");
   await expect(pane).toContainText("asks done: 1", { timeout: 20_000 });
-  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
+  await expect(window.getByTestId("rf__node-agent-1")).toBeVisible();
   const folder = join(home, "bp-sessions", flowId);
   expect(existsSync(folder)).toBe(true);
   const dialog = window.getByTestId(pageTestIds.stopAgentDialog);
@@ -641,8 +627,8 @@ test("Close asks first: Cancel keeps the agent, Stop agent ends it and its folde
   await expect(window.getByTestId(toggleId)).toHaveAttribute("aria-pressed", "false");
   await expect.poll(() => tmuxAlive(bpName(flowId)), { timeout: 10_000 }).toBe(false);
   await expect.poll(() => existsSync(folder), { timeout: 10_000 }).toBe(false);
-  expect((await readout(window)).nodes.map(({ id }) => id)).toEqual(["p1", "script-1"]);
-  await expect(window.getByTestId("rf__node-script-1")).toBeVisible();
+  expect((await readout(window)).nodes.map(({ id }) => id)).toEqual(["p1", "agent-1"]);
+  await expect(window.getByTestId("rf__node-agent-1")).toBeVisible();
 
   await showPane(window, flowId);
   expect(await bpLaunches()).toHaveLength(2);

@@ -13,15 +13,7 @@ import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
 import type { Flow, Variable } from "../../../../src/core/flow/schema.js";
-import {
-  agent,
-  flow,
-  output,
-  prompt,
-  script,
-  thenWire,
-  trigger,
-} from "../../../fixtures/flow-builders.js";
+import { agent, flow, output, thenWire, trigger } from "../../../fixtures/flow-builders.js";
 
 type HandlerBridge = Pick<
   FlowdeckBridge,
@@ -53,15 +45,15 @@ const openBlueprint = (): Saved => ({
   flowId: "flow-1",
   name: "Plan",
   flow: flow(
-    [trigger("start"), prompt("p1"), script("script-1")],
-    [thenWire("start", "p1"), thenWire("p1", "script-1")],
+    [trigger("start"), agent("p1"), agent("agent-1")],
+    [thenWire("start", "p1"), thenWire("p1", "agent-1")],
   ),
 });
 
 const otherBlueprints = (): Saved[] => [
-  { flowId: "flow-2", name: "Review", flow: flow([prompt("lint-step")], []) },
-  { flowId: "flow-3", name: "Lint rules", flow: flow([prompt("p1")], []) },
-  { flowId: "flow-4", name: "Deploy", flow: flow([script("ship")], []) },
+  { flowId: "flow-2", name: "Review", flow: flow([agent("lint-step")], []) },
+  { flowId: "flow-3", name: "Lint rules", flow: flow([agent("p1")], []) },
+  { flowId: "flow-4", name: "Deploy", flow: flow([agent("ship")], []) },
 ];
 
 const fakeBridge = (blueprints: readonly Saved[]) => {
@@ -150,7 +142,7 @@ describe("tool handler edits", () => {
   it("add_node places a node with the next free id and answers its id and problems", async () => {
     const { call, canvas } = await setup();
     const before = canvas.getState().flow;
-    const input = { type: "script", label: "Test", settings: { command: "npm test" } };
+    const input = { type: "agent", label: "Test", settings: { instructions: "Run npm test." } };
     const check = checkEdit(before, "add_node", input);
     if (!check.ok || check.edit.tool !== "add_node") return expect.fail("checkEdit refused");
 
@@ -159,15 +151,15 @@ describe("tool handler edits", () => {
     const after = canvas.getState().flow;
     const added = after.nodes.find((node) => !before.nodes.some(({ id }) => id === node.id));
     expect(added).toMatchObject({
-      id: nextNodeId("script", before),
-      type: "script",
+      id: nextNodeId("agent", before),
+      type: "agent",
       label: "Test",
       settings: check.edit.settings,
     });
-    expect(added?.id).toBe("script-2");
+    expect(added?.id).toBe("agent-2");
     if (added === undefined) return;
-    expect(placeNode(before, "script", added.position)).toEqual(added.position);
-    expect(result).toEqual({ ok: true, nodeId: "script-2", problems: newProblems(before, after) });
+    expect(placeNode(before, "agent", added.position)).toEqual(added.position);
+    expect(result).toEqual({ ok: true, nodeId: "agent-2", problems: newProblems(before, after) });
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
 
@@ -203,7 +195,7 @@ describe("tool handler edits", () => {
 
     expect(result).toMatchObject({ ok: true });
     const after = canvas.getState().flow;
-    expect(after.nodes.map(({ id }) => id)).toEqual(["start", "script-1"]);
+    expect(after.nodes.map(({ id }) => id)).toEqual(["start", "agent-1"]);
     expect(after.wires).toEqual([]);
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
@@ -245,15 +237,15 @@ describe("tool handler edits", () => {
   it("closes the undo group at a turn end", async () => {
     const { call, endTurn, canvas } = await setup();
 
-    await call("add_node", { type: "prompt", label: "One" });
-    await call("add_node", { type: "prompt", label: "Two" });
+    await call("add_node", { type: "agent", label: "One" });
+    await call("add_node", { type: "agent", label: "Two" });
     endTurn();
-    await call("add_node", { type: "prompt", label: "Three" });
+    await call("add_node", { type: "agent", label: "Three" });
 
     expect(canvas.getState().flow.nodes.map(({ label }) => label)).toEqual([
       "start",
       "p1",
-      "script-1",
+      "agent-1",
       "One",
       "Two",
       "Three",
@@ -264,11 +256,11 @@ describe("tool handler edits", () => {
   it("never saves, so agent edits stay unsaved", async () => {
     const { bridge, call, canvas } = await setup();
 
-    await call("add_node", { type: "prompt", label: "One" });
+    await call("add_node", { type: "agent", label: "One" });
     await call("wire", selfWire);
     await call("change_node", { nodeId: "p1", label: "Planner" });
     await call("set_variable", { kind: "yesno", name: "dry" });
-    await call("delete_node", { nodeId: "script-1" });
+    await call("delete_node", { nodeId: "agent-1" });
     await call("read_blueprint", {});
 
     expect(bridge.saveFlow).not.toHaveBeenCalled();
@@ -348,7 +340,7 @@ describe("tool handler reads", () => {
     it("raising no problem for a blank Agent off it", async () => {
       const result = await readSaved(
         flow(
-          [trigger("start"), prompt("a"), output("stop"), blankAgent],
+          [trigger("start"), agent("a"), output("stop"), blankAgent],
           [thenWire("start", "a"), thenWire("a", "stop")],
         ),
       );
@@ -358,7 +350,7 @@ describe("tool handler reads", () => {
 
     it("raising one-start when it has no Start", async () => {
       const result = await readSaved(
-        flow([prompt("a"), output("stop"), blankAgent], [thenWire("a", "stop")]),
+        flow([agent("a"), output("stop"), blankAgent], [thenWire("a", "stop")]),
       );
 
       expect(result.problems).toEqual(
@@ -402,7 +394,7 @@ describe("tool handler edits off the blueprint, refused", () => {
     await save.getState().open("flow-2");
     const expectUnchanged = unchanged(canvas);
 
-    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
+    const result = await call("add_node", { type: "agent", label: "Tests" }, "fd-bp-flow-1");
 
     expect(result).toEqual({ ok: false, reason: offBlueprint });
     expectUnchanged();
@@ -415,7 +407,7 @@ describe("tool handler edits off the blueprint, refused", () => {
     expect(save.getState().flowId).toBeNull();
     const expectUnchanged = unchanged(canvas);
 
-    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
+    const result = await call("add_node", { type: "agent", label: "Tests" }, "fd-bp-flow-1");
 
     expect(result).toEqual({ ok: false, reason: offBlueprint });
     expectUnchanged();
@@ -425,7 +417,7 @@ describe("tool handler edits off the blueprint, refused", () => {
     const { call, canvas } = await setup({ page: { name: "blueprints" } });
     const expectUnchanged = unchanged(canvas);
 
-    const result = await call("add_node", { type: "script", label: "Tests" }, "fd-bp-flow-1");
+    const result = await call("add_node", { type: "agent", label: "Tests" }, "fd-bp-flow-1");
 
     expect(result).toEqual({ ok: false, reason: offBlueprint });
     expectUnchanged();
@@ -438,7 +430,7 @@ describe("tool handler edits off the blueprint, refused", () => {
 
     const result = await call(
       "add_node",
-      { type: "script", label: "Tests", blueprint: "flow-2" },
+      { type: "agent", label: "Tests", blueprint: "flow-2" },
       "fd-bp-flow-1",
     );
 
@@ -468,7 +460,7 @@ describe("tool handler reads never open", () => {
 
 describe("tool handler before the canvas is ready", () => {
   it.each([
-    ["add_node", { type: "prompt", label: "One" }],
+    ["add_node", { type: "agent", label: "One" }],
     ["read_blueprint", {}],
   ])("answers %s with the canvas not ready", async (name, input) => {
     const { call, canvas } = await setup({ open: false });

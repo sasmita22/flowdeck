@@ -43,16 +43,6 @@ const typeForm = (
 });
 
 const forms: Record<NodeType, Form> = {
-  prompt: typeForm(
-    { instructions: "Instructions", expectedOutput: "What it should produce" },
-    { multiline: ["instructions", "expectedOutput"] },
-  ),
-  script: typeForm({
-    command: "Command",
-    args: "Arguments (one per line)",
-    successCodes: "Exit codes that mean done (one per line, 0 when empty)",
-    retryCodes: "Exit codes that run it once more (one per line, 2 when empty)",
-  }),
   agent: typeForm(
     {
       role: "Role",

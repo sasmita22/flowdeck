@@ -13,7 +13,6 @@ import {
   fork,
   join as joinNode,
   output,
-  prompt,
   thenWire,
   trigger,
 } from "../fixtures/flow-builders.js";
@@ -42,7 +41,7 @@ function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
       fork("f"),
       ...Object.entries(seconds).map(([id, sleep]) => sleeper(id, sleep)),
       joinNode("j", { settings: { wait } }),
-      prompt("after", { settings: { instructions: "Reply OK." } }),
+      agent("after", { settings: { instructions: "Reply OK." } }),
       output("o"),
     ],
     [

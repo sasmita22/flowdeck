@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controlTestIds, paletteTestId } from "../src/app/renderer/test-ids.js";
-import { agent, flow, loop, script } from "../test/fixtures/flow-builders.js";
+import { agent, flow, loop } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 
@@ -106,24 +106,13 @@ test("A short-label Agent stays 170 wide", async () => {
   expect((await boxOf(window.getByTestId("node-A"))).width).toBe(170);
 });
 
-test("25-character Agent and Script labels sit inside their nodes", async () => {
+test("A 25-character Agent label sits inside its node", async () => {
   const mid = long.slice(0, 25);
-  seedFlow(
-    home,
-    flow(
-      [
-        { ...agent("A"), label: mid, position: { x: 60, y: 60 } },
-        { ...script("S"), label: mid, position: { x: 60, y: 160 } },
-      ],
-      [],
-    ),
-  );
+  seedFlow(home, flow([{ ...agent("A"), label: mid, position: { x: 60, y: 60 } }], []));
   const window = await launch();
 
-  for (const id of ["A", "S"]) {
-    const outline = await boxOf(window.getByTestId(`node-${id}`).locator(".fd-node-outline"));
-    expect.soft(inside(await boxOf(labelOf(window, id, mid)), outline), id).toEqual(everywhere);
-  }
+  const outline = await boxOf(window.getByTestId("node-A").locator(".fd-node-outline"));
+  expect(inside(await boxOf(labelOf(window, "A", mid)), outline)).toEqual(everywhere);
 });
 
 test("A Loop with a 40-character title keeps it inside the node", async () => {

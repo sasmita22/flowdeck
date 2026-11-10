@@ -30,17 +30,13 @@ type ResumeInput = {
   manifest: { hash: string; prefix: string; nodes: readonly ManifestNode[] };
   events: readonly StoredEvent[];
   turns: readonly TranscriptTurn[];
-  rejoinScripts?: boolean;
   sessionRestarted?: boolean;
 };
 
 const humanTypes = new Set<ManifestNode["type"]>(["gate", "ask", "hardstop", "loop"]);
 
 function turnMarker(node: ManifestNode, prefix: string): string {
-  const piece = pieceOf(node);
-  return node.type === "agent"
-    ? `subagent_type "${agentType(prefix, piece)}"`
-    : `<command-name>/${prefix}:${piece}</command-name>`;
+  return `subagent_type "${agentType(prefix, pieceOf(node))}"`;
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -84,7 +80,7 @@ function settleHuman(events: readonly StoredEvent[]): ResumeAction {
     : { kind: "ask" };
 }
 
-const turnTypes = new Set<ManifestNode["type"]>(["prompt", "agent", "fork"]);
+const turnTypes = new Set<ManifestNode["type"]>(["agent", "fork"]);
 
 const inTurn = (node: ManifestNode, status: NodeState): boolean =>
   status === "sent" ||
@@ -105,13 +101,12 @@ export function decideResume({
   manifest,
   events,
   turns,
-  rejoinScripts = false,
   sessionRestarted = false,
 }: ResumeInput): ResumeActions {
   const actions: ResumeActions = {};
   const pieceUses = new Map<string, number>();
   for (const node of manifest.nodes) {
-    if (node.type !== "agent" && node.type !== "prompt") continue;
+    if (node.type !== "agent") continue;
     const key = turnMarker(node, manifest.prefix);
     pieceUses.set(key, (pieceUses.get(key) ?? 0) + 1);
   }
@@ -134,11 +129,6 @@ export function decideResume({
     if (inTurn(node, status)) {
       const settled = settleTurn(node, manifest.prefix, shared(node), own, turns);
       actions[node.id] = sessionRestarted && settled.kind === "wait" ? cutOff(node.id) : settled;
-    }
-    if (status === "running" && node.type === "script") {
-      actions[node.id] = rejoinScripts
-        ? { kind: "wait" }
-        : { kind: "fail", message: `${node.id} failed: was running when the runner stopped` };
     }
     if (status === "needs-you" && humanTypes.has(node.type)) actions[node.id] = settleHuman(own);
     if (status === "running" && node.type === "hardstop") actions[node.id] = { kind: "ask" };

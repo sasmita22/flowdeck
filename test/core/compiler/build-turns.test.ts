@@ -5,7 +5,7 @@ import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
 import { auditTurn, writeTurn } from "../../../src/core/compiler/build-turns.js";
 import type { BuildCheckFailure } from "../../../src/core/compiler/check-build.js";
 import type { Manifest, ManifestNode } from "../../../src/core/compiler/lower.js";
-import { agent, flow, prompt, script } from "../../fixtures/flow-builders.js";
+import { agent, flow } from "../../fixtures/flow-builders.js";
 
 const kitDir = join(import.meta.dirname, "../../../kit");
 const kitAgents = readdirSync(join(kitDir, "agents")).map((file) => file.replace(/\.md$/, ""));
@@ -35,10 +35,9 @@ const manifest = (): Manifest => {
     layout: "workspace",
     session,
     nodes: [
-      node(prompt("p1"), { file: "plugin/skills/draft-spec/SKILL.md", piece: "draft-spec" }),
+      node(agent("p1"), { file: "plugin/agents/draft-spec.md", piece: "draft-spec" }),
       node(agent("a1"), { file: "plugin/agents/review.md", piece: "review" }),
-      node(script("s1")),
-      node(prompt("p2"), { file: "plugin/skills/ship/SKILL.md", piece: "ship" }),
+      node(agent("p2"), { file: "plugin/agents/ship.md", piece: "ship" }),
     ],
     wires: [],
     files: {},
@@ -46,9 +45,8 @@ const manifest = (): Manifest => {
 };
 
 const allPieces = [
-  "plugin/skills/draft-spec/SKILL.md",
+  "plugin/agents/draft-spec.md",
   "plugin/agents/review.md",
-  "script:s1",
   "plugin/templates/spec.md",
   "CLAUDE.md",
 ];
@@ -85,14 +83,49 @@ describe("writeTurn", () => {
 
   it.each([
     ["plugin/agents/review.md", "agent"],
-    ["plugin/skills/draft-spec/SKILL.md", "step"],
+    ["plugin/agents/draft-spec.md", "agent"],
     ["plugin/templates/spec.md", "template"],
-    ["script:s1", "script"],
     ["CLAUDE.md", "workspace"],
   ])("starts the prompt for %s with its PIECE line, then KIND %s", (path, kind) => {
     const text = writeTurn(manifest(), allPieces, 1);
 
     expect(text).toContain(`PIECE ${path}\nKIND ${kind}\n`);
+  });
+
+  it.each(["plugin/skills/repo-conventions/SKILL.md", "plugin/commands/run-checks.md"])(
+    "gives the shared piece %s the KIND shared",
+    (path) => {
+      const text = writeTurn(manifest(), [...allPieces, path], 1);
+
+      expect(text).toContain(`PIECE ${path}\nKIND shared\n`);
+    },
+  );
+
+  it("gives each agent in a shared piece's usedBy a SHARED line naming it, and no other block", () => {
+    const sharedPath = "plugin/skills/run-tests/SKILL.md";
+    const pieces = [...allPieces, "plugin/agents/ship.md", sharedPath];
+    const shared = [{ name: "run-tests", kind: "skill" as const, usedBy: ["p1", "a1"] }];
+
+    const text = writeTurn(manifest(), pieces, 1, [], [], shared);
+
+    for (const path of ["plugin/agents/draft-spec.md", "plugin/agents/review.md"]) {
+      expect(blockOf(text, path), path).toContain("\nSHARED ship-it:run-tests");
+    }
+    for (const path of [
+      "plugin/agents/ship.md",
+      sharedPath,
+      "plugin/templates/spec.md",
+      "CLAUDE.md",
+    ]) {
+      expect(blockOf(text, path), path).not.toContain("SHARED");
+    }
+    expect(writeTurn(manifest(), pieces, 1)).not.toContain("SHARED");
+  });
+
+  it("gives no piece the kind step or script", () => {
+    const text = writeTurn(manifest(), [...allPieces, "plugin/skills/check/SKILL.md"], 1);
+
+    expect(text).not.toMatch(/^KIND (step|script)$/m);
   });
 
   it("names the target repo's absolute path, read only, in every piece's prompt", () => {
@@ -104,16 +137,16 @@ describe("writeTurn", () => {
   });
 
   it("writes only the pieces it is given", () => {
-    const text = writeTurn(manifest(), ["plugin/skills/ship/SKILL.md"], 1);
+    const text = writeTurn(manifest(), ["plugin/agents/ship.md"], 1);
 
-    expect(pieceLines(text)).toEqual(["PIECE plugin/skills/ship/SKILL.md"]);
-    expect(text).toContain("PIECE plugin/skills/ship/SKILL.md\nKIND step\n");
+    expect(pieceLines(text)).toEqual(["PIECE plugin/agents/ship.md"]);
+    expect(text).toContain("PIECE plugin/agents/ship.md\nKIND agent\n");
   });
 
   const failures: BuildCheckFailure[] = [
     { file: "plugin/agents/review.md", rule: "unfilled", detail: "an @unfilled line is left" },
     {
-      file: "plugin/skills/draft-spec/SKILL.md",
+      file: "plugin/agents/draft-spec.md",
       rule: "description",
       detail: "description is under 60 characters",
     },
@@ -181,7 +214,7 @@ describe("writeTurn", () => {
   it("puts each answer inside the block of every piece serving its nodes, and every answer in the handoff-auditor's block", () => {
     const [shared, shipOnly] = answers;
     if (shared === undefined || shipOnly === undefined) throw new Error("two answers expected");
-    const pieces = [...allPieces, "plugin/skills/ship/SKILL.md"];
+    const pieces = [...allPieces, "plugin/agents/ship.md"];
     const text = writeTurn(manifest(), pieces, 1, [], answers);
     const where = (given: BuildAnswer) =>
       pieces.filter((path) => {
@@ -189,8 +222,8 @@ describe("writeTurn", () => {
         return block.includes(given.text) && block.includes(given.answer);
       });
 
-    expect(where(shared)).toEqual(["plugin/skills/draft-spec/SKILL.md", "plugin/agents/review.md"]);
-    expect(where(shipOnly)).toEqual(["plugin/skills/ship/SKILL.md"]);
+    expect(where(shared)).toEqual(["plugin/agents/draft-spec.md", "plugin/agents/review.md"]);
+    expect(where(shipOnly)).toEqual(["plugin/agents/ship.md"]);
 
     const audit = blockOf(auditTurn(manifest(), answers), "workspace");
     for (const given of answers) {

@@ -14,7 +14,7 @@ import {
   type WidthStorage,
 } from "../../../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../../../src/app/renderer/test-ids.js";
-import { flow, gate, prompt } from "../../fixtures/flow-builders.js";
+import { agent, flow, gate } from "../../fixtures/flow-builders.js";
 
 const noRun = { snapshot: null };
 const aRun = { snapshot: { runId: "run-1", status: "running" as const, nodes: {} } };
@@ -23,7 +23,7 @@ const newShell = (canvas = createCanvasStore()) => createShellStore({ canvas });
 
 const twoNodes = () => {
   const canvas = createCanvasStore();
-  canvas.getState().load(flow([prompt("prompt-1"), gate("gate-1")], []));
+  canvas.getState().load(flow([agent("agent-1"), gate("gate-1")], []));
   return canvas;
 };
 
@@ -188,7 +188,7 @@ describe("session settings", () => {
 
   it("clears the node selection when it opens", () => {
     const canvas = twoNodes();
-    canvas.getState().select(["prompt-1", "gate-1"]);
+    canvas.getState().select(["agent-1", "gate-1"]);
     const shell = newShell(canvas);
 
     shell.getState().toggleSessionSettings();

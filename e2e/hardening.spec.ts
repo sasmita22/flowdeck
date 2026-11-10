@@ -168,7 +168,7 @@ test("an injected remote script is blocked and the canvas still renders", async 
 });
 
 test("a dirty canvas still asks to save on close after a blocked navigation", async () => {
-  await playwrightPage(window).drag("palette-prompt", "canvas", { x: 200, y: 150 });
+  await playwrightPage(window).drag("palette-agent", "canvas", { x: 200, y: 150 });
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
 
   await navigateToRemote(app);

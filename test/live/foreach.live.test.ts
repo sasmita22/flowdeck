@@ -7,7 +7,7 @@ import { parseTranscriptTurns } from "../../src/adapters/claude/transcript-turns
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { TurnEndEvent, TurnEvents } from "../../src/core/run/turns.js";
-import { flow, forEach, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
+import { agent, flow, forEach, output, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -24,7 +24,7 @@ function forEachFlow() {
     [
       trigger("t"),
       forEach("each"),
-      prompt("p1", {
+      agent("p1", {
         parent: "each",
         settings: { instructions: "Reply with only this round's item." },
       }),

@@ -5,8 +5,9 @@ import {
   socketLineSchema,
   toolAnswerSchema,
   toolCallSchema,
+  toolInputs,
 } from "../../../src/core/flow/blueprint-tools.js";
-import { agent, flow, prompt, trigger } from "../../fixtures/flow-builders.js";
+import { agent, flow, trigger } from "../../fixtures/flow-builders.js";
 
 type JsonSchema = {
   type?: string;
@@ -100,6 +101,21 @@ describe("blueprintToolDefinitions", () => {
     }
   });
 
+  it.each(["prompt", "script"])("refuses to add a %s node", (type) => {
+    expect(toolInputs.add_node.safeParse({ type, label: "Old" }).success).toBe(false);
+  });
+
+  it("offers Agent among the node types add_node takes, and no Prompt or Script", () => {
+    const add = definition("add_node");
+    const [branch] = inputBranches("add_node");
+    const types = (branch?.properties?.type as { enum?: string[] } | undefined)?.enum ?? [];
+
+    expect(types).toContain("agent");
+    expect(types).not.toEqual(expect.arrayContaining(["prompt"]));
+    expect(types).not.toEqual(expect.arrayContaining(["script"]));
+    expect(add.description).not.toMatch(/prompt|script/i);
+  });
+
   it("lets read_blueprint name a blueprint, optionally", () => {
     const [branch] = inputBranches("read_blueprint");
     expect(branch?.properties?.blueprint?.type).toBe("string");
@@ -141,7 +157,7 @@ describe("toolCallSchema", () => {
       requestId: "r-1",
       session: "fd-bp-flow-1",
       name: "add_node",
-      input: { type: "prompt" },
+      input: { type: "agent" },
     };
 
     expect(toolCallSchema.safeParse(call)).toEqual({ success: true, data: call });
@@ -172,7 +188,7 @@ describe("searchBlueprints", () => {
       flowId: "f-review",
       name: "Code Review",
       version: 1,
-      flow: flow([trigger("start"), prompt("p1")], []),
+      flow: flow([trigger("start"), agent("p1")], []),
     },
     {
       flowId: "f-ship",

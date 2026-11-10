@@ -17,8 +17,6 @@ import {
   join,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -83,13 +81,13 @@ const oldTrigger = (id: string, flags: Record<string, unknown>): ManifestNode =>
   settings: { inputs: [], flags } as unknown as ManifestNode["settings"],
 });
 
-const oldNode = (id: string, type: "prompt" | "script"): ManifestNode => ({
+const oldNode = (id: string, type: "agent" | "gate"): ManifestNode => ({
   id,
   type,
   label: id,
-  settings: (type === "prompt"
-    ? { instructions: "Go." }
-    : { command: "npm" }) as ManifestNode["settings"],
+  settings: (type === "agent"
+    ? { role: "", instructions: "Go.", model: "sonnet", tools: [] }
+    : { shown: "Check", skippable: false }) as ManifestNode["settings"],
 });
 
 describe("triggerFlags", () => {
@@ -109,15 +107,15 @@ describe("triggerFlags", () => {
   it("ignores nodes that are not triggers", () => {
     expect(
       triggerFlags([
-        oldNode("p", "prompt"),
+        oldNode("p", "agent"),
         oldTrigger("start", { e2e: true }),
-        oldNode("s", "script"),
+        oldNode("s", "gate"),
       ]),
     ).toEqual({ e2e: true });
   });
 
   it("returns no flags for a flow without a trigger", () => {
-    expect(triggerFlags(flow([prompt("p")], []).nodes)).toEqual({});
+    expect(triggerFlags(flow([agent("p")], []).nodes)).toEqual({});
   });
 
   it("keeps the first trigger's default for a repeated flag", () => {
@@ -196,7 +194,7 @@ describe("branchDecision", () => {
 
 describe("branchSkips", () => {
   const e2ePaths = {
-    nodes: [script("e2e"), script("e2e-report"), script("quick")],
+    nodes: [agent("e2e"), agent("e2e-report"), agent("quick")],
     wires: [yes("e2e"), thenWire("e2e", "e2e-report"), no("quick")],
   };
 
@@ -211,7 +209,7 @@ describe("branchSkips", () => {
   it("never skips the node where both paths rejoin, or anything after it", () => {
     expect(
       skipsOf(
-        [script("a"), script("bb"), script("rejoin"), script("after")],
+        [agent("a"), agent("bb"), agent("rejoin"), agent("after")],
         [
           yes("a"),
           thenWire("a", "rejoin"),
@@ -225,24 +223,24 @@ describe("branchSkips", () => {
   });
 
   it.each(["yes", "no"] as const)("skips nothing wired from both ports when taking %s", (taken) => {
-    expect(skipsOf([script("shared")], [yes("shared"), no("shared")], taken)).toEqual([]);
+    expect(skipsOf([agent("shared")], [yes("shared"), no("shared")], taken)).toEqual([]);
   });
 
   it("skips the yes path when taking a no port that has no wire", () => {
-    expect(skipsOf([script("a"), script("c")], [yes("a"), thenWire("a", "c")], "no")).toEqual([
+    expect(skipsOf([agent("a"), agent("c")], [yes("a"), thenWire("a", "c")], "no")).toEqual([
       "a",
       "c",
     ]);
   });
 
   it("skips nothing when the port not taken has no wire", () => {
-    expect(skipsOf([script("a"), script("c")], [yes("a"), thenWire("a", "c")], "yes")).toEqual([]);
+    expect(skipsOf([agent("a"), agent("c")], [yes("a"), thenWire("a", "c")], "yes")).toEqual([]);
   });
 
   it("skips a whole parallel section on the path not taken", () => {
     expect(
       skipsOf(
-        [fork("f"), agent("a1"), agent("a2"), join("j"), script("after"), script("quick")],
+        [fork("f"), agent("a1"), agent("a2"), join("j"), agent("after"), agent("quick")],
         [
           yes("f"),
           thenWire("f", "a1"),
@@ -265,10 +263,10 @@ describe("branchSkips", () => {
       skipsOf(
         [
           container,
-          prompt("body-1", { parent: "body" }),
-          script("body-2", { parent: "body" }),
-          script("after"),
-          script("quick"),
+          agent("body-1", { parent: "body" }),
+          agent("body-2", { parent: "body" }),
+          agent("after"),
+          agent("quick"),
         ],
         [yes("body"), thenWire("body-1", "body-2"), thenWire("body", "after"), no("quick")],
         "no",
@@ -283,11 +281,11 @@ describe("branchSkips", () => {
     expect(
       skipsOf(
         [
-          script("e2e"),
+          agent("e2e"),
           container,
-          prompt("fix", { parent: "body" }),
-          script("check", { parent: "body" }),
-          script("finish"),
+          agent("fix", { parent: "body" }),
+          agent("check", { parent: "body" }),
+          agent("finish"),
         ],
         [
           yes("e2e"),
@@ -305,12 +303,12 @@ describe("branchSkips", () => {
     expect(
       skipsOf(
         [
-          script("e2e"),
-          script("prep"),
+          agent("e2e"),
+          agent("prep"),
           loop("review"),
-          prompt("fix", { parent: "review" }),
-          script("check", { parent: "review" }),
-          script("finish"),
+          agent("fix", { parent: "review" }),
+          agent("check", { parent: "review" }),
+          agent("finish"),
         ],
         [
           yes("e2e"),
@@ -330,11 +328,11 @@ describe("branchSkips", () => {
     expect(
       skipsOf(
         [
-          script("up"),
+          agent("up"),
           loop("review"),
-          prompt("fix", { parent: "review" }),
-          script("check", { parent: "review" }),
-          script("quick"),
+          agent("fix", { parent: "review" }),
+          agent("check", { parent: "review" }),
+          agent("quick"),
         ],
         [
           thenWire("up", "b"),
@@ -371,11 +369,11 @@ describe("branchSkips", () => {
     expect(
       skipsOf(
         [
-          script("y"),
+          agent("y"),
           loop("outer"),
           loop("inner", { parent: "outer" }),
-          prompt("x", { parent: "inner" }),
-          script("z"),
+          agent("x", { parent: "inner" }),
+          agent("z"),
         ],
         [yes("y"), no("x"), thenWire("x", "z")],
         "yes",
@@ -387,11 +385,11 @@ describe("branchSkips", () => {
     expect(
       skipsOf(
         [
-          script("y"),
+          agent("y"),
           loop("review"),
-          prompt("fix", { parent: "review" }),
-          script("check", { parent: "review" }),
-          script("z"),
+          agent("fix", { parent: "review" }),
+          agent("check", { parent: "review" }),
+          agent("z"),
         ],
         [yes("y"), no("z"), thenWire("fix", "check"), thenWire("check", "z")],
         "yes",
@@ -402,7 +400,7 @@ describe("branchSkips", () => {
   it("keeps a node that is also fed from upstream of the branch", () => {
     expect(
       skipsOf(
-        [script("up"), script("a"), script("mixed")],
+        [agent("up"), agent("a"), agent("mixed")],
         [thenWire("up", "b"), thenWire("up", "mixed"), yes("a"), thenWire("a", "mixed")],
         "no",
       ),
@@ -410,29 +408,29 @@ describe("branchSkips", () => {
   });
 
   it("leaves out a node that is not eligible but still skips past it", () => {
-    expect(
-      skipsOf([script("a"), script("c")], [yes("a"), thenWire("a", "c")], "no", ["a"]),
-    ).toEqual(["c"]);
+    expect(skipsOf([agent("a"), agent("c")], [yes("a"), thenWire("a", "c")], "no", ["a"])).toEqual([
+      "c",
+    ]);
   });
 
   it("leaves out an output on the path not taken", () => {
     expect(
-      skipsOf([script("a"), output("done")], [yes("a"), thenWire("a", "done")], "no", ["done"]),
+      skipsOf([agent("a"), output("done")], [yes("a"), thenWire("a", "done")], "no", ["done"]),
     ).toEqual(["a"]);
   });
 
   it("skips nothing for a branch with no out wires", () => {
-    expect(skipsOf([script("a")], [], "no")).toEqual([]);
+    expect(skipsOf([agent("a")], [], "no")).toEqual([]);
   });
 
   it("stops climbing parents that form a cycle", () => {
     expect(
       skipsOf(
         [
-          script("y"),
+          agent("y"),
           loop("p", { parent: "q" }),
           loop("q", { parent: "p" }),
-          script("x", { parent: "p" }),
+          agent("x", { parent: "p" }),
         ],
         [yes("y"), no("x")],
         "yes",
@@ -441,7 +439,7 @@ describe("branchSkips", () => {
   });
 
   it("throws naming a branch that has not decided", () => {
-    const parsed = flow([branch("b", "e2e"), script("a")], [wire("b", "yes", "a", "in")]);
+    const parsed = flow([branch("b", "e2e"), agent("a")], [wire("b", "yes", "a", "in")]);
 
     expect(() =>
       branchSkips({
@@ -485,7 +483,7 @@ describe("branchSkips", () => {
     it("skips a node fed only by the earlier skipped path and its own path not taken", () => {
       expect(
         secondBranchSkips(
-          [script("p"), script("q"), script("X"), script("end")],
+          [agent("p"), agent("q"), agent("X"), agent("end")],
           [
             wire("b1", "yes", "b2", "in"),
             wire("b1", "no", "p", "in"),
@@ -503,7 +501,7 @@ describe("branchSkips", () => {
     it("skips a cleanup that both branches' paths not taken lead to", () => {
       expect(
         secondBranchSkips(
-          [script("x"), script("y"), script("z"), script("cleanup"), script("end")],
+          [agent("x"), agent("y"), agent("z"), agent("cleanup"), agent("end")],
           [
             wire("b1", "yes", "x", "in"),
             wire("b1", "no", "y", "in"),
@@ -543,9 +541,9 @@ describe("branchSkips with several Branches", () => {
         withFlags("start", { b1: true, b2: true }),
         branch("b1", "b1"),
         branch("b2", "b2"),
-        script("q"),
-        script("Z"),
-        script("end"),
+        agent("q"),
+        agent("Z"),
+        agent("end"),
       ],
       [
         thenWire("start", "b1"),
@@ -580,10 +578,10 @@ describe("branchSkips with several Branches", () => {
       [
         withFlags("start", Object.fromEntries(ids.map((id) => [id, true]))),
         ...ids.map((id) => branch(id, id)),
-        ...ids.map((id) => script(`off-${id}`)),
-        script("Z"),
-        script("q"),
-        script("end"),
+        ...ids.map((id) => agent(`off-${id}`)),
+        agent("Z"),
+        agent("q"),
+        agent("end"),
       ],
       [
         thenWire("start", "b1"),
@@ -610,11 +608,11 @@ describe("branchSkips with several Branches", () => {
             branch("b1", "b1"),
             branch("b2", "b2"),
             branch("b3", "b3"),
-            script("a"),
-            script("c"),
-            script("d"),
-            script("j"),
-            script("end"),
+            agent("a"),
+            agent("c"),
+            agent("d"),
+            agent("j"),
+            agent("end"),
           ],
           [
             thenWire("start", "b1"),
@@ -638,13 +636,13 @@ describe("branchSkips with several Branches", () => {
           [
             withFlags("start", { b1: true, b2: true }),
             branch("b1", "b1"),
-            script("x"),
-            script("y"),
-            script("m"),
+            agent("x"),
+            agent("y"),
+            agent("m"),
             branch("b2", "b2"),
-            script("u"),
-            script("v"),
-            script("end"),
+            agent("u"),
+            agent("v"),
+            agent("end"),
           ],
           [
             thenWire("start", "b1"),
@@ -668,14 +666,14 @@ describe("branchSkips with several Branches", () => {
           [
             withFlags("start", { b1: true, b2: true }),
             branch("b1", "b1"),
-            script("e"),
-            script("prep"),
+            agent("e"),
+            agent("prep"),
             loop("review"),
-            prompt("fix", { parent: "review" }),
-            script("check", { parent: "review" }),
+            agent("fix", { parent: "review" }),
+            agent("check", { parent: "review" }),
             branch("b2", "b2"),
-            script("alt"),
-            script("fin"),
+            agent("alt"),
+            agent("fin"),
           ],
           [
             thenWire("start", "b1"),
@@ -702,10 +700,10 @@ describe("branchSkips with several Branches", () => {
             branch("b2", "b2"),
             loop("outer"),
             loop("inner", { parent: "outer" }),
-            prompt("x", { parent: "inner" }),
-            script("q"),
-            script("z"),
-            script("end"),
+            agent("x", { parent: "inner" }),
+            agent("q"),
+            agent("z"),
+            agent("end"),
           ],
           [
             thenWire("start", "b1"),
@@ -728,11 +726,11 @@ describe("branchSkips with several Branches", () => {
             branch("b1", "b1"),
             branch("b2", "b2"),
             loop("review"),
-            prompt("fix", { parent: "review" }),
-            script("check", { parent: "review" }),
-            script("q"),
-            script("z"),
-            script("end"),
+            agent("fix", { parent: "review" }),
+            agent("check", { parent: "review" }),
+            agent("q"),
+            agent("z"),
+            agent("end"),
           ],
           [
             thenWire("start", "b1"),

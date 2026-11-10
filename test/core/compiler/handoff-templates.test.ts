@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
-import { agent, fileWire, flow, prompt, script, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, flow, thenWire } from "../../fixtures/flow-builders.js";
 
 const sample = () =>
   flow(
     [
-      script("s", { settings: { command: "npm" } }),
+      agent("s", { settings: { command: "npm" } }),
       agent("plan", { settings: { tools: [] } }),
       agent("review", { settings: { tools: [] } }),
-      prompt("p"),
+      agent("p"),
     ],
     [
       thenWire("s", "plan"),
@@ -46,7 +46,7 @@ describe("handoffTemplates", () => {
   });
 
   it("writes none when no File wire carries a file", () => {
-    expect(handoffTemplates(flow([prompt("p")], []), "carousell-web")).toEqual([]);
+    expect(handoffTemplates(flow([agent("p")], []), "carousell-web")).toEqual([]);
   });
 
   it("opens each template with an @template line and never an @unfilled one", () => {

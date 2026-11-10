@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validate } from "../../../src/core/compiler/validate.js";
-import { parseFlow } from "../../../src/core/flow/schema.js";
+import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import * as agent from "../../../src/core/nodes/agent/defaults.js";
 import * as ask from "../../../src/core/nodes/ask/defaults.js";
 import * as branch from "../../../src/core/nodes/branch/defaults.js";
@@ -11,6 +11,7 @@ import * as hardstop from "../../../src/core/nodes/hardstop/defaults.js";
 import * as join from "../../../src/core/nodes/join/defaults.js";
 import * as loop from "../../../src/core/nodes/loop/defaults.js";
 import * as output from "../../../src/core/nodes/output/defaults.js";
+import { nodeDefaults } from "../../../src/core/nodes/defaults.js";
 import * as trigger from "../../../src/core/nodes/trigger/defaults.js";
 import {
   flow,
@@ -62,4 +63,12 @@ describe("defaults for every node type", () => {
       expect(validate(built).map((error) => error.rule)).toEqual(rules);
     },
   );
+});
+
+describe("node defaults", () => {
+  it("has an entry for every node type and none for prompt or script", () => {
+    expect(Object.keys(nodeDefaults).sort()).toEqual([...NodeType.options].sort());
+    expect(Object.keys(nodeDefaults)).not.toContain("prompt");
+    expect(Object.keys(nodeDefaults)).not.toContain("script");
+  });
 });

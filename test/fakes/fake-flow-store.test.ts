@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Flow } from "../../src/core/flow/schema.js";
-import { flow, prompt, thenWire } from "../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
 import { FakeFlowStore } from "./fake-flow-store.js";
 
 const nth = <T>(list: T[], index: number): T => {
@@ -11,7 +11,7 @@ const nth = <T>(list: T[], index: number): T => {
 
 const flowOf = (...ids: string[]): Flow =>
   flow(
-    ids.map((id) => prompt(id)),
+    ids.map((id) => agent(id)),
     ids.slice(1).map((id, index) => thenWire(nth(ids, index), id)),
   );
 

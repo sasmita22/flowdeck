@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { claimsShortcut, shortcutFor } from "../../../../src/app/renderer/canvas/shortcuts.js";
-import { flow, prompt } from "../../../fixtures/flow-builders.js";
+import { agent, flow } from "../../../fixtures/flow-builders.js";
 
 describe("shortcutFor", () => {
   it("maps Cmd+Z to undo", () => {
@@ -132,7 +132,7 @@ const canvas = { tagName: "DIV", isContentEditable: false };
 
 describe("claimsShortcut", () => {
   const withNote = {
-    ...flow([prompt("A")], []),
+    ...flow([agent("A")], []),
     notes: [{ id: "n1", text: "", position: { x: 0, y: 0 }, size: { width: 160, height: 90 } }],
   };
   const state = (selection: string[], clipboard: object | null = null, ready = true) => ({

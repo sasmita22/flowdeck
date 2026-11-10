@@ -33,7 +33,7 @@ const expectedCopy = parseFlow(
 );
 const copyAsk = `Copy the flow in ${fixture("source-flow.md")} into this blueprint.`;
 const todoAsk =
-  "Make a blueprint: a Prompt node that lists the TODOs in README.md, then an Agent node that fixes them.";
+  "Make a blueprint: an Agent node that lists the TODOs in README.md, then an Agent node that fixes them.";
 const agentDeadlineMs = 240_000;
 const perAskMs = 360_000;
 
@@ -63,9 +63,8 @@ const structure = (current: Flow) => {
 const isStep = (node: Node) => node.type !== "trigger" && node.type !== "output";
 
 const standardProblems = (current: Flow) => {
-  const { main, nodes } = mainSteps(current);
-  const steps = nodes.filter(isStep);
-  return steps.flatMap((node, index) => {
+  const steps = mainSteps(current).nodes.filter(isStep);
+  return steps.flatMap((node) => {
     const problems: string[] = [];
     if (node.type === "agent") {
       const { role, instructions } = node.settings as { role: string; instructions: string };
@@ -73,19 +72,6 @@ const standardProblems = (current: Flow) => {
       if (instructions.trim() === "") problems.push(`${node.id}: no instructions`);
       if (!/^Expected output:[ \t]*\S/m.test(instructions)) {
         problems.push(`${node.id}: no "Expected output:" line`);
-      }
-    }
-    if (node.type === "prompt" && index > 0) {
-      const text = (node.settings as { instructions: string }).instructions.toLowerCase();
-      const earlierLabels = steps.slice(0, index).map((earlier) => earlier.label);
-      const incomingFiles = main.wires.flatMap((wire) =>
-        wire.kind === "file" && wire.to.node === node.id ? [wire.file] : [],
-      );
-      const named = [...earlierLabels, ...incomingFiles, "builds on"]
-        .map((name) => name.trim().toLowerCase())
-        .filter((name) => name !== "");
-      if (!named.some((name) => text.includes(name))) {
-        problems.push(`${node.id}: does not say what it builds on`);
       }
     }
     return problems;

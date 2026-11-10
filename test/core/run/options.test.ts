@@ -7,7 +7,7 @@ import {
   storedFlags,
   storedOptions,
 } from "../../../src/core/run/options.js";
-import { flow, gate, prompt, script } from "../../fixtures/flow-builders.js";
+import { agent, flow, gate } from "../../fixtures/flow-builders.js";
 
 const manifestOf = (nodes: unknown[]) =>
   lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest;
@@ -19,11 +19,11 @@ const oldTrigger = (inputs: string[], flags: Record<string, unknown>): ManifestN
   settings: { inputs, flags } as unknown as ManifestNode["settings"],
 });
 
-const oldScript = (id: string): ManifestNode => ({
+const oldGate = (id: string): ManifestNode => ({
   id,
-  type: "script",
+  type: "gate",
   label: id,
-  settings: { command: "npm" } as ManifestNode["settings"],
+  settings: { shown: "Check", skippable: false },
 });
 
 const oldManifest = (nodes: ManifestNode[], inputs: string[] = []) => ({ nodes, inputs });
@@ -32,14 +32,14 @@ describe("runChoices", () => {
   it("offers only automatic mode for a build with a skippable gate", () => {
     const manifest = manifestOf([
       gate("g", { settings: { shown: "Check", skippable: true } }),
-      prompt("p"),
+      agent("p"),
     ]);
 
     expect(runChoices(manifest)).toEqual({ automatic: true });
   });
 
   it("offers nothing for a build without a skippable gate", () => {
-    const manifest = manifestOf([script("s"), gate("g"), prompt("p")]);
+    const manifest = manifestOf([agent("s"), gate("g"), agent("p")]);
 
     expect(runChoices(manifest)).toEqual({ automatic: false });
   });
@@ -52,7 +52,7 @@ describe("stored run options", () => {
   });
 
   it("reads back an old build's boolean Trigger flags, and automatic mode, for a resume", () => {
-    const manifest = oldManifest([oldTrigger([], { deep: true }), oldScript("s")]);
+    const manifest = oldManifest([oldTrigger([], { deep: true }), oldGate("s")]);
     const stored = { ticket: "FD-1", deep: false, other: true, auto: true };
 
     expect(storedFlags(stored, manifest)).toEqual({ deep: false });
@@ -63,7 +63,7 @@ describe("stored run options", () => {
 
 describe("optionsClash on an old build", () => {
   const triggerWith = (inputs: string[], flags: Record<string, boolean>) =>
-    oldManifest([oldTrigger(inputs, flags), oldScript("s")], inputs);
+    oldManifest([oldTrigger(inputs, flags), oldGate("s")], inputs);
 
   it("refuses a Trigger flag named auto, which a run reads as the auto option", () => {
     expect(optionsClash(triggerWith([], { auto: true }))).toBe(

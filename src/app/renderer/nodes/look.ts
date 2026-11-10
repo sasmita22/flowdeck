@@ -41,9 +41,7 @@ const look = (
 const looks: Record<NodeType, NodeLook> = {
   trigger: look("trigger", "", io, io, circle.height, circle.width),
   output: look("output", "", io, io, circle.height, circle.width),
-  prompt: look("prompt", "STP", work, line),
   agent: look("agent", "AGT", work, work),
-  script: look("script", "SH", work, "var(--term-bg)"),
   gate: look("gate", "GATE", human, line),
   hardstop: look("hardstop", "STOP", human, human),
   ask: look("ask", "ASK", human, human, 57),

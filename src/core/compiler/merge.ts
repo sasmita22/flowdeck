@@ -18,9 +18,9 @@ type Question = BuildReport["questions"][number];
 
 const manifestPath = "manifest.json";
 
-const mergeable = new Set<ManifestNode["type"]>(["agent", "prompt"]);
+const mergeable = new Set<ManifestNode["type"]>(["agent"]);
 
-const descriptionOf = (content: string): string => {
+export const descriptionOf = (content: string): string => {
   const line = content.split("\n").find((candidate) => candidate.startsWith("description: "));
   const raw = line?.slice("description: ".length) ?? '""';
   return JSON.parse(raw) as string;
@@ -46,7 +46,7 @@ const rejection = (
   if (types.size > 1 || type === undefined || !mergeable.has(type))
     return {
       nodeId: first,
-      text: `Nodes ${merge.nodeIds.join(", ")} cannot share a piece: only nodes of one kind, all agents or all prompts, can.`,
+      text: `Nodes ${merge.nodeIds.join(", ")} cannot share a piece: only agents can.`,
     };
   return undefined;
 };

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -39,7 +39,13 @@ function liveFlow(instructions: string) {
         position: at(0),
         settings: {},
       },
-      { id: "p1", label: "Run", type: "prompt", position: at(1), settings: { instructions } },
+      {
+        id: "p1",
+        label: "Run",
+        type: "agent",
+        position: at(1),
+        settings: { role: "", instructions, model: "haiku", tools: [] },
+      },
       {
         id: "o",
         label: "Done",
@@ -60,8 +66,20 @@ function liveFlow(instructions: string) {
   });
 }
 
-const transcriptEntries = async (path: string | undefined): Promise<TranscriptEntry[]> =>
-  path === undefined ? [] : readLines<TranscriptEntry>(path);
+async function transcriptEntries(path: string | undefined): Promise<TranscriptEntry[]> {
+  if (path === undefined) return [];
+  const subagents = join(path.replace(/\.jsonl$/, ""), "subagents");
+  const names = await readdir(subagents).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  });
+  const files = names
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => join(subagents, name));
+  return (
+    await Promise.all([path, ...files].map((file) => readLines<TranscriptEntry>(file)))
+  ).flat();
+}
 
 function hookDecisions(entries: TranscriptEntry[]): string[] {
   return entries

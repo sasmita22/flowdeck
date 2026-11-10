@@ -13,37 +13,46 @@
     {
       "id": "p1",
       "label": "Plan",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "instructions": "Reply with the single word ONE."
+        "role": "",
+        "instructions": "Reply with the single word ONE.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
       "id": "p2",
       "label": "Build",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 480,
         "y": 0
       },
       "settings": {
-        "instructions": "Reply with the single word TWO."
+        "role": "",
+        "instructions": "Reply with the single word TWO.",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {
       "id": "p3",
       "label": "Summarise",
-      "type": "prompt",
+      "type": "agent",
       "position": {
         "x": 720,
         "y": 0
       },
       "settings": {
-        "instructions": "Use the Write tool to create {{repo}}/ok.txt containing exactly: ok"
+        "role": "",
+        "instructions": "Use the Write tool to create {{repo}}/ok.txt containing exactly: ok",
+        "model": "sonnet",
+        "tools": []
       }
     },
     {

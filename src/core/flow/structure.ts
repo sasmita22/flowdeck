@@ -25,7 +25,7 @@ export function bodyProblems(nodes: readonly StructureNode[]): BodyProblem[] {
     if (isContainer(node)) {
       const body = nodes.filter((child) => child.parent === node.id);
       if (firstTurnId(body) === undefined) {
-        problems.push({ node: node.id, message: `${named} has no prompt or agent in its body` });
+        problems.push({ node: node.id, message: `${named} has no agent in its body` });
       }
       if (parentType !== undefined) {
         problems.push({

@@ -3,11 +3,9 @@ import { plainReason } from "../../../src/core/run/failure.js";
 
 describe("plainReason", () => {
   it.each([
-    ["s2 failed: exit code 3", "Script exited with code 3"],
-    ["s2 failed: killed by a signal", "Script was stopped by a signal"],
     ["s2 failed: rejected: wrong scope", "Rejected: wrong scope"],
     ["s2 failed: The run was stopped", "The run was stopped"],
-    ["l1 failed: s2 failed: exit code 3", "s2 failed: Script exited with code 3"],
+    ["l1 failed: s2 failed: rejected: wrong scope", "s2 failed: Rejected: wrong scope"],
     ["no prefix at all", "No prefix at all"],
     ["build failed: plan.md wasn't written by Planner", "plan.md wasn't written by Planner"],
     [

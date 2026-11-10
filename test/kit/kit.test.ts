@@ -5,20 +5,21 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildReportSchema } from "../../src/core/compiler/build-report.js";
 import { scopeLine } from "../../src/core/compiler/scope-line.js";
+import { SHARED_PIECE_TOOL } from "../../src/core/compiler/shared.js";
 import { frontmatterOf } from "../fixtures/kit-frontmatter.js";
 
 const kitDir = fileURLToPath(new URL("../../kit/", import.meta.url));
 
 const skillNames = [
-  "write-skill",
-  "write-agent",
-  "write-step",
-  "write-handoff-template",
-  "write-script",
-  "fit-to-repo",
-  "audit-handoffs",
+  "analyze-job",
   "audit-duplicates",
+  "audit-handoffs",
   "audit-orchestrator",
+  "extract-shared",
+  "fit-to-repo",
+  "write-agent",
+  "write-handoff-template",
+  "write-skill",
   "write-workspace-rules",
 ];
 
@@ -125,6 +126,8 @@ describe("the build kit", () => {
     ["write-skill", ["mixedJobs"]],
     ["write-agent", ["mixedJobs"]],
     ["write-handoff-template", ["questions"]],
+    ["analyze-job", ["needs"]],
+    ["extract-shared", ["shared"]],
   ])("%s names the build-report.json fields it writes, with their entry shape", (name, fields) => {
     const content = skill(name);
 
@@ -165,7 +168,7 @@ describe("the build kit", () => {
     }
   });
 
-  it.each(["write-handoff-template", "audit-handoffs", "write-agent", "write-step"])(
+  it.each(["write-handoff-template", "audit-handoffs", "write-agent"])(
     "skill %s lets a node's own instructions narrow its file's form over the template",
     (name) => {
       expect(skill(name)).toContain("the node's own instructions win");
@@ -184,7 +187,6 @@ describe("the build kit", () => {
 
   it.each([
     ["skill write-agent", "skills/write-agent/SKILL.md"],
-    ["skill write-step", "skills/write-step/SKILL.md"],
     ["agent piece-auditor", "agents/piece-auditor.md"],
   ])("%s keeps each merged node's own layout as that node's details", (_, path) => {
     expect(readKit(path)).toContain("`NODE <id>: <layout>`");
@@ -195,7 +197,6 @@ describe("the build kit", () => {
     "agents/handoff-auditor.md",
     "skills/audit-handoffs/SKILL.md",
     "skills/fit-to-repo/SKILL.md",
-    "skills/write-script/SKILL.md",
     "skills/write-agent/SKILL.md",
     "skills/audit-orchestrator/SKILL.md",
     "skills/audit-duplicates/SKILL.md",
@@ -255,16 +256,6 @@ describe("the build kit", () => {
     expect(content).not.toContain("stop and report the blocker");
   });
 
-  it("skill write-script keeps the node's command as written instead of asking", () => {
-    const content = skill("write-script");
-
-    expect(content).toContain("stays as the node wrote it");
-    expect(content).not.toContain("fixed mechanically");
-    expect(content).not.toContain("becomes a question");
-    expect(content).not.toContain("add a question");
-    expect(content).not.toContain("one question naming the node");
-  });
-
   it("skill fit-to-repo quotes the repo's gate and adds no obligation", () => {
     const content = skill("fit-to-repo");
 
@@ -306,6 +297,64 @@ describe("the build kit", () => {
 
     expect(content).toContain("keep them apart, never a question");
     expect(content).not.toContain("add a question naming both nodes");
+  });
+
+  it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(
+    "%s reads analyze-job and extract-shared where their outputs are written",
+    (path) => {
+      const names = skillsReadBy(readKit(path));
+
+      if (path === "agents/piece-auditor.md") expect(names).toContain("analyze-job");
+      else {
+        expect(names).toContain("extract-shared");
+        expect(names.indexOf("extract-shared")).toBeGreaterThan(names.indexOf("audit-duplicates"));
+      }
+    },
+  );
+
+  it.each(["skills/extract-shared/SKILL.md", "skills/write-agent/SKILL.md"])(
+    "%s runs a shared piece with the Skill tool as <prefix>:<name>, never SlashCommand",
+    (path) => {
+      const content = readKit(path);
+
+      expect(content).toContain(`the \`${SHARED_PIECE_TOOL}\` tool`);
+      expect(content).toContain("`<prefix>:<name>`");
+      expect(content).not.toContain("SlashCommand");
+    },
+  );
+
+  it("skill extract-shared invents no need and names every file by its path from the repo root", () => {
+    const content = skill("extract-shared");
+
+    expect(content).toContain("Never invent a need");
+    expect(content).toContain("a path from the repo root");
+    expect(content).not.toMatch(/write [^.\n]*(?:to|in) the current directory/i);
+  });
+
+  it("skill extract-shared makes a skill unless the instructions call the procedure a command a person runs by name", () => {
+    expect(skill("extract-shared")).toContain(
+      "a command only when the agents' instructions call the procedure a command a person also runs by name",
+    );
+  });
+
+  it("agent piece-auditor references every SHARED line's piece and keeps the Skill tool", () => {
+    const content = readKit("agents/piece-auditor.md");
+
+    expect(content).toContain("`SHARED <prefix>:<name>`");
+    expect(content).toContain(`keep \`${SHARED_PIECE_TOOL}\` in its \`tools:\` line`);
+  });
+
+  it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(
+    "%s keeps needs and shared in build-report.json when it edits the file",
+    (path) => {
+      expect(readKit(path)).toContain("Keep every `needs` and `shared` entry as it is");
+    },
+  );
+
+  it.each(kitFiles())("%s names no Prompt or Script node and no removed kit skill", (file) => {
+    expect(readKit(file)).not.toMatch(
+      /\bPrompt\b|\bScript\b|write-step|write-script|step skill|script:</,
+    );
   });
 
   it("leaves no file marked @unfilled", () => {

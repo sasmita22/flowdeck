@@ -22,8 +22,6 @@ import {
   join,
   loop,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
   wire,
@@ -32,10 +30,10 @@ import {
 const twoNodes = () =>
   flow(
     [
-      { ...prompt("prompt-1"), label: "Prompt", position: { x: 120, y: 80 } },
-      { ...script("script-1"), label: "Script", position: { x: 300, y: 40 } },
+      { ...agent("agent-1"), label: "Plan", position: { x: 120, y: 80 } },
+      { ...gate("gate-1"), label: "Check", position: { x: 300, y: 40 } },
     ],
-    [thenWire("prompt-1", "script-1")],
+    [thenWire("agent-1", "gate-1")],
   );
 
 const thenBetween = (from: string, fromPort: string, to: string, toPort: string): Wire => ({
@@ -48,28 +46,28 @@ describe("toViewNodes", () => {
   it("maps each node to id, type, position, selected and label, in flow order", () => {
     expect(toViewNodes(twoNodes(), [], {}, null)).toEqual([
       {
-        id: "prompt-1",
-        type: "prompt",
+        id: "agent-1",
+        type: "agent",
         position: { x: 120, y: 80 },
         selected: false,
-        data: { label: "Prompt", highlighted: false, ignored: false },
+        data: { label: "Plan", highlighted: false, ignored: false },
       },
       {
-        id: "script-1",
-        type: "script",
+        id: "gate-1",
+        type: "gate",
         position: { x: 300, y: 40 },
         selected: false,
-        data: { label: "Script", highlighted: false, ignored: false },
+        data: { label: "Check", highlighted: false, ignored: false },
       },
     ]);
   });
 
   it("marks selected only the nodes whose ids are in the selection", () => {
-    const view = toViewNodes(twoNodes(), ["script-1"], {}, null);
+    const view = toViewNodes(twoNodes(), ["gate-1"], {}, null);
 
     expect(view.map((node) => [node.id, node.selected])).toEqual([
-      ["prompt-1", false],
-      ["script-1", true],
+      ["agent-1", false],
+      ["gate-1", true],
     ]);
   });
 
@@ -80,20 +78,20 @@ describe("toViewNodes", () => {
   });
 
   it("takes the drag position when one is held, else the flow position", () => {
-    const view = toViewNodes(twoNodes(), [], { "prompt-1": { x: 500, y: 600 } }, null);
+    const view = toViewNodes(twoNodes(), [], { "agent-1": { x: 500, y: 600 } }, null);
 
     expect(view.map((node) => [node.id, node.position])).toEqual([
-      ["prompt-1", { x: 500, y: 600 }],
-      ["script-1", { x: 300, y: 40 }],
+      ["agent-1", { x: 500, y: 600 }],
+      ["gate-1", { x: 300, y: 40 }],
     ]);
   });
 
   it("marks highlighted only the node whose id is given, without selecting any node", () => {
-    const view = toViewNodes(twoNodes(), [], {}, "script-1");
+    const view = toViewNodes(twoNodes(), [], {}, "gate-1");
 
     expect(view.map((node) => [node.id, node.data.highlighted, node.selected])).toEqual([
-      ["prompt-1", false, false],
-      ["script-1", true, false],
+      ["agent-1", false, false],
+      ["gate-1", true, false],
     ]);
   });
 
@@ -114,7 +112,7 @@ const ignoredOf = (source: Flow) =>
 describe("toViewNodes and the main flow", () => {
   it("marks ignored the nodes off the main flow, and only those", () => {
     const source = flow(
-      [trigger("start"), prompt("a"), output("stop"), prompt("b"), script("c"), script("d")],
+      [trigger("start"), agent("a"), output("stop"), agent("b"), agent("c"), agent("d")],
       [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
     );
 
@@ -133,10 +131,10 @@ describe("toViewNodes and the main flow", () => {
       [
         trigger("start"),
         forEach("E"),
-        prompt("x", { parent: "E" }),
+        agent("x", { parent: "E" }),
         output("stop"),
         loop("L"),
-        prompt("y", { parent: "L" }),
+        agent("y", { parent: "L" }),
       ],
       [thenWire("start", "x"), thenWire("x", "stop")],
     );
@@ -159,9 +157,9 @@ describe("toViewNodes and the main flow", () => {
         trigger("start"),
         output("stop"),
         forEach("E"),
-        prompt("x", { parent: "E" }),
+        agent("x", { parent: "E" }),
         fork("F"),
-        prompt("p"),
+        agent("p"),
       ],
       [thenWire("start", "stop"), thenWire("F", "p")],
     );
@@ -179,7 +177,7 @@ describe("toViewNodes and the main flow", () => {
 
   it("marks nothing ignored when there is no Start", () => {
     const source = flow(
-      [prompt("a"), output("stop"), loop("L"), prompt("y", { parent: "L" })],
+      [agent("a"), output("stop"), loop("L"), agent("y", { parent: "L" })],
       [thenWire("a", "stop")],
     );
 
@@ -194,7 +192,7 @@ describe("toViewNodes and the main flow", () => {
 
   it("marks nothing ignored when there are two Starts", () => {
     const source = flow(
-      [trigger("one"), trigger("two"), prompt("a"), output("stop")],
+      [trigger("one"), trigger("two"), agent("a"), output("stop")],
       [thenWire("one", "a"), thenWire("a", "stop")],
     );
 
@@ -210,9 +208,9 @@ const framed = (source: Flow, nodes: string[]): Flow => ({
 const threeApart = () =>
   flow(
     [
-      { ...prompt("A"), position: { x: 100, y: 50 } },
-      { ...script("B"), position: { x: 400, y: 300 } },
-      { ...prompt("C"), position: { x: 900, y: 900 } },
+      { ...agent("A"), position: { x: 100, y: 50 } },
+      { ...agent("B"), position: { x: 400, y: 300 } },
+      { ...agent("C"), position: { x: 900, y: 900 } },
     ],
     [],
   );
@@ -254,8 +252,8 @@ describe("toViewNodes delete lock", () => {
     const source = flow(
       [
         trigger("T"),
-        prompt("P"),
-        script("S"),
+        agent("P"),
+        agent("S"),
         agent("G"),
         gate("K"),
         ask("Q"),
@@ -301,8 +299,8 @@ describe("toViewNodes with a branch", () => {
     const source = flow(
       [
         trigger("T"),
-        prompt("P"),
-        script("S"),
+        agent("P"),
+        agent("S"),
         agent("G"),
         gate("K"),
         ask("Q"),
@@ -324,10 +322,10 @@ describe("toViewEdges", () => {
   it("maps each wire to its id and its source and target nodes and handles", () => {
     expect(toViewEdges(twoNodes())).toEqual([
       {
-        id: "prompt-1:out->script-1:in",
-        source: "prompt-1",
+        id: "agent-1:out->gate-1:in",
+        source: "agent-1",
         sourceHandle: "out",
-        target: "script-1",
+        target: "gate-1",
         targetHandle: "in",
         markerEnd: { type: MarkerType.ArrowClosed },
       },
@@ -336,7 +334,7 @@ describe("toViewEdges", () => {
 
   it("keeps one entry per wire in flow order", () => {
     const source = flow(
-      [prompt("A"), prompt("B"), script("C")],
+      [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C"), thenWire("A", "C")],
     );
 
@@ -348,12 +346,12 @@ describe("toViewEdges", () => {
   });
 
   it("returns no entries for a flow without wires", () => {
-    expect(toViewEdges(flow([prompt("A")], []))).toEqual([]);
+    expect(toViewEdges(flow([agent("A")], []))).toEqual([]);
   });
 
   it("ends every wire in a closed arrowhead", () => {
     const source = flow(
-      [prompt("A"), prompt("B"), script("C")],
+      [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
 
@@ -367,7 +365,7 @@ describe("toViewEdges", () => {
 describe("toViewEdges selection", () => {
   it("marks the selected wires selected and leaves the rest alone", () => {
     const source = flow(
-      [prompt("A"), prompt("B"), script("C")],
+      [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
 
@@ -381,7 +379,7 @@ describe("toViewEdges selection", () => {
 describe("toViewEdges selected arrowhead", () => {
   it("draws the selected wire's arrowhead in the selection colour and leaves the rest plain", () => {
     const source = flow(
-      [prompt("A"), prompt("B"), script("C")],
+      [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
 
@@ -398,8 +396,8 @@ describe("toViewEdges from a Branch", () => {
       [
         trigger("T", { settings: { flags: { e2e: true } } }),
         branch("B", "e2e"),
-        script("Y"),
-        script("N"),
+        agent("Y"),
+        agent("N"),
       ],
       [thenWire("T", "B"), wire("B", "yes", "Y", "in"), wire("B", "no", "N", "in")],
     );
@@ -414,14 +412,12 @@ describe("toViewEdges from a Branch", () => {
 
 describe("edgeId", () => {
   it("is built from both endpoints as from.node:from.port->to.node:to.port", () => {
-    expect(edgeId(thenBetween("prompt-1", "out", "script-1", "in"))).toBe(
-      "prompt-1:out->script-1:in",
-    );
+    expect(edgeId(thenBetween("agent-1", "out", "gate-1", "in"))).toBe("agent-1:out->gate-1:in");
   });
 
   it("gives different wires different ids", () => {
     const wires = flow(
-      [prompt("A"), prompt("B"), prompt("C")],
+      [agent("A"), agent("B"), agent("C")],
       [
         thenWire("A", "B"),
         thenWire("B", "A"),
@@ -642,28 +638,28 @@ describe("alignedEnds", () => {
 });
 
 describe("toViewNodes for a blank label", () => {
-  const labelOf = (node: ReturnType<typeof script>) =>
+  const labelOf = (node: ReturnType<typeof agent>) =>
     toViewNodes(flow([node], []), [], {}, null).find((view) => view.id === node.id)?.data.label;
 
   it.each([
-    ["script", "", "Script"],
-    ["script", "   ", "Script"],
+    ["agent", "", "Agent"],
+    ["agent", "   ", "Agent"],
     ["loop", "", "Loop"],
   ] as const)("names a %s labelled %j by its type, %j", (type, label, shown) => {
-    const node = type === "loop" ? loop("N") : script("N");
+    const node = type === "loop" ? loop("N") : agent("N");
 
     expect(labelOf({ ...node, label })).toBe(shown);
   });
 
   it("keeps a label that has text", () => {
-    expect(labelOf({ ...script("N"), label: "Run tests" })).toBe("Run tests");
+    expect(labelOf({ ...agent("N"), label: "Run tests" })).toBe("Run tests");
   });
 });
 
 describe("toViewNodes for Loop and For each labels", () => {
   it("gives a Loop its cap and a For each its list file as a sub-line", () => {
     const source = flow(
-      [loop("L", { settings: { cap: 5 } }), forEach("E", { file: "plan.md" }), prompt("A")],
+      [loop("L", { settings: { cap: 5 } }), forEach("E", { file: "plan.md" }), agent("A")],
       [],
     );
     const data = Object.fromEntries(
@@ -728,8 +724,8 @@ describe("toViewNodes while a container is dragged", () => {
     flow(
       [
         { ...loop("L"), position: { x: 0, y: 0 } },
-        { ...prompt("X", { parent: "L" }), position: { x: 0, y: 100 } },
-        { ...prompt("A"), position: { x: 600, y: 0 } },
+        { ...agent("X", { parent: "L" }), position: { x: 0, y: 100 } },
+        { ...agent("A"), position: { x: 600, y: 0 } },
       ],
       [],
     );
@@ -743,7 +739,7 @@ describe("toViewNodes while a container is dragged", () => {
     expect(byId["loop-frame-L"]).toMatchObject(
       enclosing([
         { type: "loop", x: 50, y: 20 },
-        { type: "prompt", x: 50, y: 120 },
+        { type: "agent", x: 50, y: 120 },
       ]),
     );
   });
@@ -758,7 +754,7 @@ describe("toViewNodes while a container is dragged", () => {
 describe("toViewEdges for File wires", () => {
   const handoff = () =>
     flow(
-      [prompt("A"), script("B")],
+      [agent("A"), agent("B")],
       [
         thenWire("A", "B"),
         {

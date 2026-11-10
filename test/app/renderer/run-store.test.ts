@@ -19,11 +19,10 @@ import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 import {
+  agent,
   flow,
   onMainFlow,
   output,
-  prompt,
-  script,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
@@ -56,12 +55,12 @@ const deferred = <T>() => {
 
 const snapshot = (
   status: Status,
-  nodes: Record<string, NodeState> = { "prompt-1": "waiting" },
+  nodes: Record<string, NodeState> = { "agent-1": "waiting" },
   runId = "run-1",
 ) => ({ runId, status, nodes });
 
 const configured = (buildConfig: BuildConfig): Flow => {
-  const base = flow([prompt("prompt-1")], []);
+  const base = flow([agent("agent-1")], []);
   return { ...base, session: { ...base.session, buildConfig } };
 };
 
@@ -147,7 +146,7 @@ const setup = async (
       flowId,
       name: "Untitled",
       version: 4,
-      flow: options.built ?? options.latest ?? flow([prompt("prompt-1")], []),
+      flow: options.built ?? options.latest ?? flow([agent("agent-1")], []),
     })),
   } satisfies RunBridge;
 
@@ -161,7 +160,7 @@ const setup = async (
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
-  canvas.getState().drop("script", { x: 200, y: 0 });
+  canvas.getState().drop("gate", { x: 200, y: 0 });
 
 const card = (
   run: { id: string; status: Status } | null = null,
@@ -465,7 +464,7 @@ describe("the Build dialog", () => {
     await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
-    const problems = [{ node: "prompt-1", field: "text", text: "Write the prompt." }];
+    const problems = [{ node: "agent-1", field: "text", text: "Write the prompt." }];
     bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "Not built", problems });
 
     await expect(run.getState().confirmBuild()).resolves.toBeNull();
@@ -496,7 +495,7 @@ const labelled = (source: Flow, labels: Record<string, string>): Flow => ({
 const withLooseNodes = (): Flow =>
   labelled(
     flow(
-      [trigger("start"), prompt("a"), output("stop"), script("b"), script("c"), script("d")],
+      [trigger("start"), agent("a"), output("stop"), agent("b"), agent("c"), agent("d")],
       [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
     ),
     { b: "B", c: "C", d: "" },
@@ -505,7 +504,7 @@ const withLooseNodes = (): Flow =>
 const looseNodes = [
   { id: "b", label: "B" },
   { id: "c", label: "C" },
-  { id: "d", label: "Script" },
+  { id: "d", label: "Agent" },
 ];
 
 describe("the Build dialog's confirm step", () => {
@@ -571,7 +570,7 @@ describe("the Build dialog's confirm step", () => {
   });
 
   it("builds straight away when every node is on the main flow", async () => {
-    const { bridge, run } = await ready(onMainFlow([prompt("a")], []));
+    const { bridge, run } = await ready(onMainFlow([agent("a")], []));
     expect(run.getState().buildDialog).toMatchObject({ ignored: [], step: "form" });
 
     await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
@@ -929,7 +928,7 @@ describe("controls", () => {
 
 describe("selectNodeDisplay", () => {
   it("is null before any snapshot", () => {
-    expect(selectNodeDisplay({ snapshot: null }, "prompt-1")).toBeNull();
+    expect(selectNodeDisplay({ snapshot: null }, "agent-1")).toBeNull();
   });
 
   it("maps each node's state to its display status, and is null for ids not in the snapshot", () => {

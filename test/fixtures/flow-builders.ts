@@ -15,8 +15,6 @@ const node =
   });
 
 export const trigger = node("trigger", { inputs: [], flags: {} });
-export const prompt = node("prompt", { instructions: "Do the work." });
-export const script = node("script", { command: "npm" });
 export const agent = node("agent", {
   role: "implementer",
   instructions: "Implement the plan.",

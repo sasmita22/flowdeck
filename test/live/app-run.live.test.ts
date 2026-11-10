@@ -22,7 +22,6 @@ import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
-import { NodeProcessRunner } from "../../src/adapters/process/process-runner.js";
 import { SqliteFlowStore } from "../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../src/adapters/sqlite/sqlite-store.js";
@@ -36,7 +35,7 @@ import { displayStatus, type DisplayStatus } from "../../src/core/run/display.js
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
-import { flow as buildFlow, output, prompt, thenWire, trigger } from "../fixtures/flow-builders.js";
+import { agent, flow as buildFlow, output, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { expectPaneToShow } from "../fixtures/pane-text.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
@@ -45,7 +44,7 @@ import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", import.meta.url));
-const askFixturePath = fileURLToPath(new URL("../fixtures/prompt-then-ask.json", import.meta.url));
+const askFixturePath = fileURLToPath(new URL("../fixtures/agent-then-ask.json", import.meta.url));
 const runDeadlineMs = 240_000;
 const promptIds = ["p1", "p2", "p3"];
 const buildName = "live-app-run";
@@ -105,7 +104,6 @@ function liveEnvironment(fs: NodeFileSystem): RunEnvironment & { now: () => numb
   return {
     fs,
     now: Date.now,
-    scripts: new NodeProcessRunner(),
     waiter: { wait: () => new Promise(() => undefined) },
     startEvents: async (socketPath) => {
       await mkdir(dirname(socketPath), { recursive: true });
@@ -202,10 +200,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       {
         ...fixture,
         nodes: fixture.nodes.map((node) =>
-          node.type === "prompt"
+          node.type === "agent"
             ? {
                 ...node,
                 settings: {
+                  ...node.settings,
                   instructions: (instructions[node.id] ?? node.settings.instructions).replaceAll(
                     "{{repo}}",
                     ".",
@@ -460,7 +459,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
   it("runs Claude on the session's model", { timeout: runDeadlineMs + 30_000 }, async () => {
     const snapshots: RunSnapshot[] = [];
     const oneReply = buildFlow(
-      [trigger("start"), prompt("p1", { settings: { instructions: "Reply ok" } }), output("done")],
+      [trigger("start"), agent("p1", { settings: { instructions: "Reply ok" } }), output("done")],
       [thenWire("start", "p1"), thenWire("p1", "done")],
     );
     const { runId, runs } = await startSavedFlow(

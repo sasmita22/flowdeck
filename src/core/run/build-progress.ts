@@ -8,7 +8,7 @@ const stepNumberSchema = z.union([
   z.literal(4),
   z.literal(5),
 ]);
-const componentKindSchema = z.enum(["agent", "step", "template", "script", "workspace"]);
+const componentKindSchema = z.enum(["agent", "template", "workspace", "shared"]);
 const componentStatusSchema = z.enum(["waiting", "running", "done", "failed"]);
 const stepStatusSchema = z.enum(["running", "done", "failed", "skipped"]);
 export const buildOutcomeSchema = z.enum(["built", "needs-you", "failed", "stopped"]);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { flow, prompt } from "../test/fixtures/flow-builders.js";
+import { agent, flow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import {
@@ -21,7 +21,7 @@ import {
   toggleId,
 } from "./blueprint-pane.js";
 
-const ask = "add a Script node that runs npm test after the planner";
+const ask = "add an Agent node that runs npm test after the planner";
 const agentDeadlineMs = 240_000;
 
 let home: string;
@@ -32,13 +32,10 @@ test.setTimeout(360_000);
 
 type Node = Flow["nodes"][number];
 
-const runsNpmTest = (node: Node) => {
-  if (node.type !== "script") return false;
-  const { command, args = [] } = node.settings as { command: string; args?: string[] };
-  return [command, ...args].join(" ").trim().replace(/\s+/g, " ") === "npm test";
-};
+const runsNpmTest = (node: Node) =>
+  node.type === "agent" && node.id !== "planner" && node.settings.instructions.includes("npm test");
 
-const scriptAfterPlanner = (current: Flow) =>
+const agentAfterPlanner = (current: Flow) =>
   current.nodes.find(
     (node) =>
       runsNpmTest(node) &&
@@ -70,8 +67,8 @@ test.afterEach(async () => {
   }
 });
 
-test("a real agent adds a Script node running npm test, wired after the planner", async () => {
-  const id = seedBlueprint(home, "live", flow([prompt("planner")], [])).flowId;
+test("a real agent adds an Agent node running npm test, wired after the planner", async () => {
+  const id = seedBlueprint(home, "live", flow([agent("planner")], [])).flowId;
   flowId = id;
   launched = await launchOnCanvas({
     home,
@@ -84,7 +81,7 @@ test("a real agent adds a Script node running npm test, wired after the planner"
   await window.getByTestId("menu-blueprints").click();
   await window.getByTestId(pageTestIds.blueprintOpen(id)).click();
   await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
-  expect(scriptAfterPlanner(await readout(window))).toBeUndefined();
+  expect(agentAfterPlanner(await readout(window))).toBeUndefined();
 
   await window.getByTestId(toggleId).click();
   await expect
@@ -96,17 +93,17 @@ test("a real agent adds a Script node running npm test, wired after the planner"
   await window.keyboard.press("Enter");
 
   await expect
-    .poll(async () => scriptAfterPlanner(await readout(window))?.id, {
+    .poll(async () => agentAfterPlanner(await readout(window))?.id, {
       timeout: agentDeadlineMs,
       intervals: [2000],
     })
     .toBeDefined();
-  const added = scriptAfterPlanner(await readout(window));
+  const added = agentAfterPlanner(await readout(window));
   await expect(window.getByTestId(`rf__node-${added?.id}`)).toBeVisible();
   await expect(window.getByTestId(`rf__edge-planner:out->${added?.id}:in`)).toBeAttached();
   const answer = await readBlueprintOverSocket(home, bpName(id));
   expect(answer).toMatchObject({ ok: true, unsaved: true });
-  expect(answer.flow && scriptAfterPlanner(answer.flow)?.id).toBe(added?.id);
+  expect(answer.flow && agentAfterPlanner(answer.flow)?.id).toBe(added?.id);
 
   const { models, usage } = await modelsAndUsage(home, id);
   console.log(`agent pane:\n${await capture(bpName(id))}`);
