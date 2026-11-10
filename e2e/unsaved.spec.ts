@@ -9,6 +9,7 @@ import {
   playwrightPage,
   type LaunchedApp,
 } from "../scripts/drive.js";
+import { controlTestIds, pageTestIds, paletteTestId } from "../src/app/renderer/test-ids.js";
 
 let home: string;
 let opened: LaunchedApp[];
@@ -173,4 +174,96 @@ test("After the renderer crashes mid-prompt, closing the window closes the app",
   );
   await closeWindow(first);
   await exited(first);
+});
+
+const savedThenEdited = async (launched: LaunchedApp) => {
+  const { window } = launched;
+  await edit(launched);
+  await window.getByTestId(controlTestIds.save).click();
+  await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
+  await playwrightPage(window).drag(paletteTestId("script"), "canvas", { x: 420, y: 150 });
+  await expect(window.getByTestId("flow-unsaved")).toBeVisible();
+  expect((await readout(window)).nodes.map((node) => node.type)).toEqual(["prompt", "script"]);
+};
+
+const onBlueprints = (window: Page) =>
+  expect(window.getByTestId(pageTestIds.title)).toHaveText("Blueprints");
+
+const reopen = async (window: Page) => {
+  await window.locator('[data-testid^="blueprint-open-"]').click();
+  await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
+};
+
+const leaveAsked = async (window: Page) => {
+  await window.getByTestId(controlTestIds.back).click();
+  await expect(window.getByTestId(pageTestIds.leaveSave)).toBeVisible();
+};
+
+const nodeTypes = async (window: Page) => (await readout(window)).nodes.map((node) => node.type);
+
+test("asks before leaving the editor with unsaved edits", async () => {
+  const launched = await open();
+  await savedThenEdited(launched);
+
+  await leaveAsked(launched.window);
+
+  await expect(launched.window.getByTestId(controlTestIds.save)).toBeVisible();
+  await expect(launched.window.getByTestId(pageTestIds.title)).toHaveCount(0);
+});
+
+test("Cancel keeps the editor and the edit", async () => {
+  const launched = await open();
+  const { window } = launched;
+  await savedThenEdited(launched);
+  await leaveAsked(window);
+
+  await window.getByTestId(pageTestIds.leaveCancel).click();
+
+  await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
+  await expect(window.getByTestId("flow-unsaved")).toBeVisible();
+  expect(await nodeTypes(window)).toEqual(["prompt", "script"]);
+});
+
+test("Save writes a new version then shows Blueprints", async () => {
+  const launched = await open();
+  const { window } = launched;
+  await savedThenEdited(launched);
+  await leaveAsked(window);
+
+  await window.getByTestId(pageTestIds.leaveSave).click();
+
+  await onBlueprints(window);
+  await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("2 versions");
+  await reopen(window);
+  expect(await nodeTypes(window)).toEqual(["prompt", "script"]);
+  await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
+});
+
+test("Don't save shows Blueprints and a reopen has no edit", async () => {
+  const launched = await open();
+  const { window } = launched;
+  await savedThenEdited(launched);
+  await leaveAsked(window);
+
+  await window.getByTestId(pageTestIds.leaveDiscard).click();
+
+  await onBlueprints(window);
+  await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("1 version");
+  await reopen(window);
+  expect(await nodeTypes(window)).toEqual(["prompt"]);
+  await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
+});
+
+test("a clean blueprint leaves with no prompt", async () => {
+  const launched = await open();
+  const { window } = launched;
+  await edit(launched);
+  await window.getByTestId(controlTestIds.save).click();
+  await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
+
+  await window.getByTestId(controlTestIds.back).click();
+
+  await onBlueprints(window);
+  await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
 });

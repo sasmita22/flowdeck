@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appMenuItems,
   arrange,
   createNavStore,
   isListPage,
   selectMenuItem,
+  type Page,
 } from "../../../src/app/renderer/nav-store.js";
 
 describe("createNavStore", () => {
@@ -54,6 +55,100 @@ describe("createNavStore", () => {
 
     nav.getState().go({ name: "run", runId: "run-1" });
     nav.getState().focusSearch();
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+});
+
+describe("leaving the editor", () => {
+  const holdingGuard = () => {
+    const held: (() => Promise<void>)[] = [];
+    const leave = vi.fn(async (next: () => Promise<void>) => {
+      held.push(next);
+    });
+    return { leave, held };
+  };
+
+  const onEditor = (leave?: (next: () => Promise<void>) => Promise<void>) => {
+    const nav = leave === undefined ? createNavStore() : createNavStore({ leave });
+    nav.getState().go({ name: "editor" });
+    return nav;
+  };
+
+  it("changes the page at once when the guard lets it through", () => {
+    const leave = vi.fn(async (next: () => Promise<void>) => {
+      await next();
+    });
+    const nav = onEditor(leave);
+
+    nav.getState().go({ name: "blueprints" });
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+
+  it("stays on the editor while the guard holds, and moves once the guard goes on", async () => {
+    const { leave, held } = holdingGuard();
+    const nav = onEditor(leave);
+
+    nav.getState().go({ name: "blueprints" });
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "editor" });
+
+    await held[0]?.();
+
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+
+  it.each<Page>([
+    { name: "blueprints" },
+    { name: "builds", buildId: "b-0f3a9c2e" },
+    { name: "run", runId: "run-1" },
+  ])("asks the guard before going to $name", (target) => {
+    const { leave } = holdingGuard();
+    const nav = onEditor(leave);
+
+    nav.getState().go(target);
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "editor" });
+  });
+
+  it("asks the guard when search sends the editor to the Blueprints page", () => {
+    const { leave } = holdingGuard();
+    const nav = onEditor(leave);
+
+    nav.getState().focusSearch();
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "editor" });
+  });
+
+  it("does not ask the guard when going to the editor it is already on", () => {
+    const { leave } = holdingGuard();
+    const nav = onEditor(leave);
+
+    nav.getState().go({ name: "editor" });
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(nav.getState().page).toEqual({ name: "editor" });
+  });
+
+  it("does not ask the guard between two pages that are not the editor", () => {
+    const { leave } = holdingGuard();
+    const nav = createNavStore({ leave });
+
+    nav.getState().go({ name: "builds" });
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(nav.getState().page).toEqual({ name: "builds" });
+  });
+
+  it("leaves the editor at once when no guard is given", () => {
+    const nav = onEditor();
+
+    nav.getState().go({ name: "blueprints" });
+
     expect(nav.getState().page).toEqual({ name: "blueprints" });
   });
 });

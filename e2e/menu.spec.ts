@@ -159,9 +159,9 @@ test("Two blueprints each keep their own canvas, after a reload too", async () =
 
   await drop(window, "prompt", 420);
   await window.getByTestId(controlTestIds.back).click();
+  await window.getByTestId(pageTestIds.leaveDiscard).click();
   await expect(byPrefix(window, "blueprint-card-")).toHaveCount(2);
   await byPrefix(window, "blueprint-open-", "Alpha").click();
-  await window.getByTestId(pageTestIds.leaveDiscard).click();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Alpha");
   await expect(readout(window)).toContainText('"id":"prompt-1"');
   await expect(readout(window)).not.toContainText('"script-1"');

@@ -136,6 +136,7 @@ export const createSaveStore = ({
           set({ leavePrompt: false });
           return;
         }
+        if (answer === "discard") canvas.getState().load(canvas.getState().saved);
         const saved = answer === "discard" || (await save());
         set({ leavePrompt: false });
         if (saved) await next();
