@@ -42,10 +42,10 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "e10556c06879bd3ead874e20436808e33a134466ddac3b60559b0f3709322d39",
     "plugin/skills/p/SKILL.md": "d64e21bce63c81b2a331d1c2158bf5aaf22dd92b056b7009500f5b6143b9f599",
-    "plugin/skills/run/SKILL.md": "6c4857b7e09ce23e4d86fe8385c33138d94f3864912abd6978bb9bce352acefa",
+    "plugin/skills/run/SKILL.md": "a0314cd20f787ba57efc692911906f28505490238530dc1ea4177f5cf47d92f9",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "686cb27124583ead4b2d6405ac8531d11ad752eaf88915933abcd4ccd60b2ab0",
+  "hash": "3af2a94ff48198dc6c221f38971cc59cc654ebf0775c227513a44ed751446dce",
   "layout": "workspace",
   "nodes": [
     {
@@ -318,11 +318,11 @@ None.
 ",
   "plugin/skills/run/SKILL.md": "---
 name: "run"
-description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login:run."
+description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login:run. Use when running this build's whole flow without the Flowdeck app."
 ---
 # Run fix-login
 
-Run these steps in order. Only order and hand off: each step goes to its skill or agent; never do a step's work yourself. Wait for each step's result before the next.
+Run these steps in order. Prompt, Agent and Fork steps only hand off: each goes to its skill or agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.
 
 Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 

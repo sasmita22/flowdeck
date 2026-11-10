@@ -336,6 +336,9 @@ test("the MCP server and blueprint kit ship inside app.asar", () => {
     expect.arrayContaining([
       "/.vite/build/flowdeck-mcp.cjs",
       "/.vite/build/kit-blueprint/skills/blueprint/SKILL.md",
+      "/.vite/build/kit-blueprint/skills/write-node/SKILL.md",
+      "/.vite/build/kit-blueprint/skills/copy-flow/SKILL.md",
+      "/.vite/build/kit-blueprint/skills/check-blueprint/SKILL.md",
     ]),
   );
 });

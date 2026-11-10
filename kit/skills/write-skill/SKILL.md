@@ -20,7 +20,7 @@ A build skill is called by its full name, `<build-name>:<piece>`, or read by pat
 
 ## Body
 
-- One concern. If the node mixes two jobs, write it as drawn and add it to `mixedJobs` in `build-report.json`, with a note naming both jobs. Never split it.
+- One concern. If the node mixes two jobs, write it as drawn and add it to `mixedJobs` in `build-report.json` as `{ "nodeId": "<node id>", "note": "<the two jobs>" }`. Never split it.
 - Imperative steps, in order. Each step says what to read and what to produce.
 - Short enough to read in full. You cannot add files, so detail that belongs to another piece stays in that piece; name it instead of repeating it.
 - Name another piece only by its full name `<build-name>:<piece>`, and only a piece of this build (a `piece` in `manifest.json`).

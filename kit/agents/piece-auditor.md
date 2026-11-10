@@ -1,6 +1,6 @@
 ---
 name: piece-auditor
-description: Writes the content of one drafted build piece (an agent, a step skill, a hand-off template, a Script node's command or the workspace rules) to the build kit's standard, fitted to the target repo. Dispatch once per PIECE in step 3 of a Flowdeck build, all pieces in one message.
+description: Writes the content of one drafted build piece (an agent, a step skill, a hand-off template, a Script node's command or the workspace rules) to the build kit's standard, fitted to the target repo. Dispatch once per PIECE in step 3 of a Flowdeck build, all pieces in one message, and again for a piece when it fails the build check or is merged.
 tools: Read, Edit, Glob, Grep
 ---
 
@@ -14,7 +14,7 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 
 ## Inputs
 
-- The prompt: `PIECE <path>`, then `KIND <kind>`, then `REPO <path>`, the target repo's absolute path. From the second round it also lists failures, each as a file and a rule.
+- The prompt: `PIECE <path>`, then `KIND <kind>`, then `REPO <path>`, the target repo's absolute path. From the second round it also lists failures, each as a line `FAILED <file> <rule>: <detail>`. In the first round of a build the user started with answers, it also carries each answered question about the piece's nodes as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again.
 - Your working folder is the build's workspace:
   - `manifest.json`: every node (`id`, `type`, `label`, `settings`, `file`, `piece`) and every wire. Read only.
   - `CLAUDE.md`: the build summary (build name, repository folder, base branch, variables) and the standard rules.

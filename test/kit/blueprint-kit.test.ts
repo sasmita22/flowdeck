@@ -2,9 +2,20 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { rules } from "../../src/core/compiler/validate.js";
+import { rules, validate } from "../../src/core/compiler/validate.js";
+import { checkEdit } from "../../src/core/flow/blueprint-edits.js";
 import { toolNames } from "../../src/core/flow/blueprint-tools.js";
-import { BuildConfig, Variable, WireKind } from "../../src/core/flow/schema.js";
+import {
+  BuildConfig,
+  Variable,
+  WireKind,
+  type Port,
+  type Wire,
+} from "../../src/core/flow/schema.js";
+import { agent, flow, output, prompt, thenWire, trigger, wire } from "../fixtures/flow-builders.js";
+import { nodeDefaults } from "../../src/core/nodes/defaults.js";
+import { registry } from "../../src/core/nodes/registry.js";
+import { frontmatterOf } from "../fixtures/kit-frontmatter.js";
 
 const kitDir = fileURLToPath(new URL("../../kit-blueprint/", import.meta.url));
 
@@ -21,19 +32,128 @@ const kitFiles = (dir = kitDir): string[] => {
   });
 };
 
-const frontmatterOf = (content: string): Map<string, string> => {
-  const block = /^---\n([\s\S]*?)\n---\n/.exec(content)?.[1] ?? "";
-  const fields = new Map<string, string>();
-  for (const line of block.split("\n")) {
-    const match = /^([\w-]+):\s*(.*)$/.exec(line);
-    if (match !== null) fields.set(match[1] ?? "", (match[2] ?? "").trim());
-  }
-  return fields;
-};
-
 const skill = () => readKit("skills/blueprint/SKILL.md");
 
 const variableKinds = Variable.options.map((option) => option.shape.kind.value);
+
+const sectionOf = (content: string, heading: string): string => {
+  const start = content.indexOf(`\n${heading}\n`);
+  if (start === -1) return "";
+  const rest = content.slice(start + heading.length + 2);
+  const end = rest.search(/^## /m);
+  return end === -1 ? rest : rest.slice(0, end);
+};
+
+const tableRows = (section: string): string[][] =>
+  section
+    .split("\n")
+    .filter((line) => line.startsWith("|"))
+    .slice(2)
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split("|")
+        .map((cell) => cell.trim()),
+    );
+
+const backticked = (cell: string): string => /^`([^`]+)`$/.exec(cell)?.[1] ?? cell;
+
+type NodeRow = { type: string; defaults: Record<string, unknown>; ports: string[] };
+
+const portKey = ({ direction, name, kind }: Port) => `${direction} ${name} ${kind}`;
+
+const defaultsIn = (cell: string): Record<string, unknown> => {
+  const defaults: Record<string, unknown> = {};
+  for (const [, key = "", value = ""] of cell.matchAll(/`(\w+)` \(([^;)]+)/g)) {
+    try {
+      defaults[key] = JSON.parse(value.trim());
+    } catch {
+      continue;
+    }
+  }
+  return defaults;
+};
+
+const portsIn = (cell: string): string[] => {
+  const ports: string[] = [];
+  let pending: string[] = [];
+  for (const [, direction, name, kind] of cell.matchAll(/(in|out) `([^`]+)`|\((\w+)\)/g)) {
+    if (kind !== undefined) {
+      ports.push(...pending.map((end) => `${end} ${kind}`));
+      pending = [];
+    } else {
+      pending.push(`${direction ?? ""} ${name ?? ""}`);
+    }
+  }
+  return ports.sort();
+};
+
+const nodeRows = (content: string): NodeRow[] =>
+  tableRows(sectionOf(content, "## Nodes")).map(([type = "", , settings = "", ports = ""]) => ({
+    type: backticked(type),
+    defaults: defaultsIn(settings),
+    ports: portsIn(ports),
+  }));
+
+const toolsIn = (content: string): string[] =>
+  tableRows(sectionOf(content, "## Tools")).map(([name = ""]) => backticked(name));
+
+const ruleIdsIn = (content: string): string[] =>
+  [...sectionOf(content, "## Validator rules").matchAll(/^- `([^`]+)`:/gm)].map(
+    (match) => match[1] ?? "",
+  );
+
+const mismatch = (listed: readonly string[], defined: readonly string[]) => ({
+  unlisted: defined.filter((name) => !listed.includes(name)),
+  undefinedInCode: listed.filter((name) => !defined.includes(name)),
+});
+
+const matched = { unlisted: [], undefinedInCode: [] };
+
+const nodeTypes = Object.keys(registry);
+
+const registryPorts = (type: string): string[] =>
+  [...(registry[type as keyof typeof registry]?.ports ?? [])].map(portKey).sort();
+
+const ruleIds = rules.map((rule) => rule.id);
+
+const refusedWireRulesIn = (content: string): string[] => {
+  const sentence = /[^.]*`wire` edit[^.]*refused[^.]*\./.exec(
+    sectionOf(content, "## Validator rules"),
+  )?.[0];
+  return [...(sentence ?? "").matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1] ?? "")
+    .filter((id) => ruleIds.includes(id))
+    .sort();
+};
+
+type WireProbe = { refused: boolean; broken: string[] };
+
+const wireProbes = (): WireProbe[] => {
+  const base = flow(
+    [trigger("start"), agent("a1"), prompt("p1"), output("stop")],
+    [thenWire("start", "a1"), thenWire("a1", "p1"), thenWire("p1", "stop")],
+  );
+  const known = new Set(validate(base).map((error) => error.rule));
+  return [
+    thenWire("a1", "ghost"),
+    wire("a1", "nope", "p1", "in"),
+    { ...thenWire("a1", "p1"), kind: "event" },
+    thenWire("p1", "a1"),
+  ].map((candidate) => ({
+    refused: !checkEdit(base, "wire", candidate).ok,
+    broken: validate({ ...base, wires: [...base.wires, candidate as Wire] })
+      .map((error) => error.rule)
+      .filter((id) => !known.has(id)),
+  }));
+};
+
+const rulesBrokenBy = (probes: WireProbe[], refused: boolean): string[] =>
+  [
+    ...new Set(
+      probes.filter((probe) => probe.refused === refused).flatMap((probe) => probe.broken),
+    ),
+  ].sort();
 
 describe("the blueprint kit", () => {
   it("is the flowdeck-blueprint plugin", () => {
@@ -43,14 +163,49 @@ describe("the blueprint kit", () => {
     expect(JSON.parse(manifest)).toMatchObject({ name: "flowdeck-blueprint" });
   });
 
-  it("has exactly the blueprint skill", () => {
+  it("has exactly the blueprint skills", () => {
     const skillDirs = existsSync(join(kitDir, "skills"))
       ? readdirSync(join(kitDir, "skills"), { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => entry.name)
       : [];
 
-    expect(skillDirs).toEqual(["blueprint"]);
+    expect(skillDirs).toEqual(["blueprint", "check-blueprint", "copy-flow", "write-node"]);
+  });
+
+  describe("authoring skills", () => {
+    const writeNode = () => readKit("skills/write-node/SKILL.md");
+    const copyFlow = () => readKit("skills/copy-flow/SKILL.md");
+
+    it("write-node covers a node's role, instructions and expected output", () => {
+      const content = writeNode();
+
+      expect(content).toMatch(/\brole\b/i);
+      expect(content).toMatch(/\binstructions\b/i);
+      expect(content).toMatch(/expected output/i);
+    });
+
+    it("write-node says a Prompt node states what it builds on", () => {
+      expect(writeNode()).toMatch(/Prompt[^.\n]*builds on/);
+    });
+
+    it("copy-flow reads the source with the Read tool", () => {
+      expect(copyFlow()).toContain("`Read`");
+    });
+
+    it("copy-flow says no step is added or dropped", () => {
+      expect(copyFlow()).toMatch(/no step[^.\n]*added or dropped/i);
+    });
+
+    it.each(["write-node", "copy-flow", "check-blueprint"])(
+      "%s never tells the pane to fetch",
+      (name) => {
+        const content = readKit(`skills/${name}/SKILL.md`);
+
+        expect(content).not.toBe("");
+        expect(content).not.toMatch(/WebFetch|WebSearch|\bfetch\b/i);
+      },
+    );
   });
 
   it("has a SKILL.md with its name and a description", () => {
@@ -103,6 +258,83 @@ describe("the blueprint kit", () => {
 
   it("says to ask a question instead of editing when an ask is unclear", () => {
     expect(skill()).toMatch(/unclear[^.\n]*question[^.\n]*instead of edit/i);
+  });
+
+  describe("matches the code both ways", () => {
+    const rows = nodeRows(skill());
+
+    it("lists exactly the registry's node types", () => {
+      expect(rows.length).toBeGreaterThan(0);
+      expect(
+        mismatch(
+          rows.map((row) => row.type),
+          nodeTypes,
+        ),
+      ).toEqual(matched);
+    });
+
+    it.each(nodeTypes)("gives the %s node the registry's ports", (type) => {
+      const row = rows.find((candidate) => candidate.type === type);
+
+      expect(row?.ports).toEqual(registryPorts(type));
+    });
+
+    it.each(nodeTypes)("gives the %s node its default settings", (type) => {
+      const row = rows.find((candidate) => candidate.type === type);
+
+      expect(row?.defaults).toEqual(nodeDefaults[type as keyof typeof nodeDefaults].settings);
+    });
+
+    it("lists exactly the blueprint tools", () => {
+      expect(mismatch(toolsIn(skill()), toolNames)).toEqual(matched);
+    });
+
+    it("lists exactly the validator rule ids", () => {
+      expect(mismatch(ruleIdsIn(skill()), ruleIds)).toEqual(matched);
+    });
+
+    it("reads a node table with a row missing or added as a mismatch", () => {
+      const types = rows.map((row) => row.type);
+
+      expect(mismatch(types.slice(1), nodeTypes).unlisted).toEqual([types[0]]);
+      expect(mismatch([...types, "teleport"], nodeTypes).undefinedInCode).toEqual(["teleport"]);
+    });
+
+    it("reads a tool or rule id the code does not have as a mismatch", () => {
+      expect(mismatch([...toolsIn(skill()), "run_build"], toolNames).undefinedInCode).toEqual([
+        "run_build",
+      ]);
+      expect(mismatch([...ruleIdsIn(skill()), "no-gates"], ruleIds).undefinedInCode).toEqual([
+        "no-gates",
+      ]);
+    });
+
+    it("names the rules a wire edit is refused for, as checkEdit refuses it", () => {
+      const probes = wireProbes();
+
+      expect(probes.some((probe) => probe.refused)).toBe(true);
+      expect(probes.some((probe) => !probe.refused && probe.broken.length > 0)).toBe(true);
+      expect(refusedWireRulesIn(skill())).toEqual(rulesBrokenBy(probes, true));
+      expect(
+        rulesBrokenBy(probes, false).filter((id) => refusedWireRulesIn(skill()).includes(id)),
+      ).toEqual([]);
+    });
+
+    it("reads a refused-wire sentence that names a reported rule as a mismatch", () => {
+      const intro =
+        "## Validator rules\n\nA `wire` edit that breaks `ports` or `no-cycle` is refused.\n";
+
+      expect(refusedWireRulesIn(intro)).not.toEqual(rulesBrokenBy(wireProbes(), true));
+    });
+
+    it("reads a changed port or default as a mismatch", () => {
+      const forkRow =
+        '| `fork` | Parallel start | `wait` ("all") | in `in`; out `a`, out `b` (then) |';
+      const [row] = nodeRows(`## Nodes\n\n| h |\n| - |\n${forkRow}\n`);
+
+      expect(row?.ports).not.toEqual(registryPorts("fork"));
+      expect(row?.defaults).not.toEqual(nodeDefaults.fork.settings);
+    });
   });
 
   it("leaves no file marked @unfilled", () => {

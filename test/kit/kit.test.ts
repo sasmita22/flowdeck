@@ -2,8 +2,10 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { buildReportSchema } from "../../src/core/compiler/build-report.js";
 import { scopeLine } from "../../src/core/compiler/scope-line.js";
+import { frontmatterOf } from "../fixtures/kit-frontmatter.js";
 
 const kitDir = fileURLToPath(new URL("../../kit/", import.meta.url));
 
@@ -33,23 +35,38 @@ const kitFiles = (dir = kitDir): string[] => {
   });
 };
 
-const frontmatterOf = (content: string): Map<string, string> => {
-  const block = /^---\n([\s\S]*?)\n---\n/.exec(content)?.[1] ?? "";
-  const fields = new Map<string, string>();
-  for (const line of block.split("\n")) {
-    const match = /^([\w-]+):\s*(.*)$/.exec(line);
-    if (match !== null) fields.set(match[1] ?? "", (match[2] ?? "").trim());
-  }
-  return fields;
+const skill = (name: string) => readKit(`skills/${name}/SKILL.md`);
+
+const kitSkillDirs = (): string[] =>
+  existsSync(join(kitDir, "skills"))
+    ? readdirSync(join(kitDir, "skills"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    : [];
+
+const agentNames = ["piece-auditor", "handoff-auditor"];
+
+const skillsReadBy = (agent: string): string[] => {
+  const fromSkillPath = agent.slice(agent.indexOf("/skills/<name>/SKILL.md"));
+  const section = fromSkillPath.slice(0, fromSkillPath.search(/^## /m));
+  return [...section.matchAll(/`([a-z]+(?:-[a-z]+)+)`/g)].map(([, name]) => name ?? "");
 };
 
-const skill = (name: string) => readKit(`skills/${name}/SKILL.md`);
+const unresolved = (names: readonly string[], dirs: readonly string[]) =>
+  names.filter((name) => !dirs.includes(name));
 
 const scopeLineFragments = scopeLine({ build: "\0", repo: "\0", workspace: "\0" })
   .split("\0")
   .filter((fragment) => fragment.trim() !== "");
 
 const reportFields = Object.keys(buildReportSchema.shape);
+
+const entryKeys = (field: string): string[] => {
+  const array = buildReportSchema.shape[field as keyof typeof buildReportSchema.shape];
+  return array instanceof z.ZodArray && array.element instanceof z.ZodObject
+    ? Object.keys(array.element.shape)
+    : [];
+};
 
 describe("the build kit", () => {
   it("is the flowdeck-build plugin", () => {
@@ -60,13 +77,29 @@ describe("the build kit", () => {
   });
 
   it("has exactly the ten build skills", () => {
-    const skillDirs = existsSync(join(kitDir, "skills"))
-      ? readdirSync(join(kitDir, "skills"), { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name)
-      : [];
+    expect(kitSkillDirs().sort()).toEqual([...skillNames].sort());
+  });
 
-    expect([...skillDirs].sort()).toEqual([...skillNames].sort());
+  it.each(agentNames)("agent %s reads only skills that are kit skill folders", (name) => {
+    const names = skillsReadBy(readKit(`agents/${name}.md`));
+
+    expect(names.length).toBeGreaterThan(0);
+    expect(unresolved(names, kitSkillDirs())).toEqual([]);
+  });
+
+  it("has every kit skill read by an agent", () => {
+    const read = agentNames.flatMap((name) => skillsReadBy(readKit(`agents/${name}.md`)));
+
+    expect(unresolved(kitSkillDirs(), read)).toEqual([]);
+  });
+
+  it("rejects an agent that names a skill with no kit folder", () => {
+    const agent = readKit("agents/handoff-auditor.md").replace(
+      "`audit-handoffs`",
+      "`audit-handofs`",
+    );
+
+    expect(unresolved(skillsReadBy(agent), kitSkillDirs())).toEqual(["audit-handofs"]);
   });
 
   it.each(skillNames)("skill %s has a SKILL.md with its name and a description", (name) => {
@@ -89,13 +122,18 @@ describe("the build kit", () => {
   it.each([
     ["audit-handoffs", ["questions"]],
     ["audit-duplicates", ["merges", "keptApart"]],
-  ])("%s names the build-report.json fields it writes", (name, fields) => {
+    ["write-skill", ["mixedJobs"]],
+    ["write-agent", ["mixedJobs"]],
+    ["write-handoff-template", ["questions"]],
+  ])("%s names the build-report.json fields it writes, with their entry shape", (name, fields) => {
     const content = skill(name);
 
     expect(content).toContain("build-report.json");
     for (const field of fields) {
       expect(reportFields).toContain(field);
       expect(content).toContain(`\`${field}\``);
+      expect(entryKeys(field).length, field).toBeGreaterThan(0);
+      for (const key of entryKeys(field)) expect(content, `${field}.${key}`).toContain(`"${key}"`);
     }
   });
 
@@ -161,6 +199,7 @@ describe("the build kit", () => {
     "skills/write-agent/SKILL.md",
     "skills/audit-orchestrator/SKILL.md",
     "skills/audit-duplicates/SKILL.md",
+    "skills/write-handoff-template/SKILL.md",
   ])("%s says a question is only for a blueprint input", (path) => {
     const content = readKit(path);
 
@@ -168,6 +207,16 @@ describe("the build kit", () => {
     expect(content).toContain("decided inside the node's portion, never a question");
     expect(content).not.toContain("leaves undecided");
   });
+
+  it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(
+    "%s settles a question with its answer and never raises it again",
+    (path) => {
+      const content = readKit(path);
+
+      expect(content).toContain("Each `ANSWER` settles the `QUESTION` before it");
+      expect(content).toContain("never raise that question again");
+    },
+  );
 
   it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(
     "%s has no never-guess banner",
