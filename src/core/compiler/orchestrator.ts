@@ -76,7 +76,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       case "hardstop":
         return `hard rule: if ${text(settings.condition)}, stop the run at once and show ${text(settings.shown)}.`;
       case "output":
-        return `the run's output \`${text(settings.name)}\` (${text(settings.type)}) is ready.`;
+        return `the run ends here; its result is \`${text(settings.name)}\` (${text(settings.type)}), handed back to the user, not a file any step writes.`;
     }
   };
 

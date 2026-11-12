@@ -38,7 +38,7 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["hardstop", hardstop, "Hard stop", []],
   ["loop", loop, "Loop", ["required-settings", "loop-body"]],
   ["trigger", trigger, "Start", []],
-  ["output", output, "Stop", []],
+  ["output", output, "Stop", ["required-settings", "required-settings"]],
   ["fork", fork, "Fork", ["parallel-section"]],
   ["join", join, "Join", ["parallel-section"]],
   ["foreach", foreach, "For each", ["loop-body"]],

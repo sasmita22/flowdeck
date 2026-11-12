@@ -24,6 +24,19 @@ type Outcome = {
   merges: string[];
 };
 
+function questionsNamingTheStop(report: BuildReport, flow: Flow): BuildReport["questions"] {
+  return report.questions.filter((question) =>
+    flow.nodes.some(
+      (node) =>
+        node.type === "output" &&
+        ([question.nodeId, question.otherNodeId].includes(node.id) ||
+          [node.label, node.settings.name].some((word) =>
+            new RegExp(`\\b${word}\\b`).test(question.text),
+          )),
+    ),
+  );
+}
+
 async function buildOnce(flow: Flow, index: number): Promise<Outcome> {
   const home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
   const repo = await createTmpRepo({ commit: true });
@@ -70,6 +83,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("builds of one blueprint", ()
       for (let index = 1; index <= builds; index++) outcomes.push(await buildOnce(flow, index));
 
       for (const outcome of outcomes) {
+        expect(questionsNamingTheStop(outcome.report, flow)).toEqual([]);
         expect(outcome.outcome).toBe("built");
         expect(outcome.failures).toEqual([]);
         expect(outcome.pieces).not.toEqual([]);

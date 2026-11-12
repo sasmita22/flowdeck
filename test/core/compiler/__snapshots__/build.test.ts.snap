@@ -44,10 +44,10 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "plugin/hooks/hooks.json": "59e2e7b56c83a29cdd5a0dc97d28f1b7ce85bacc0409cf6fff7ccf6d0101e4a4",
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "e10556c06879bd3ead874e20436808e33a134466ddac3b60559b0f3709322d39",
-    "plugin/skills/run/SKILL.md": "68832b1c4f8842838d4e6881e375f13276e457560cb1679601bf0097ec2b0bf4",
+    "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "f89ad8f2b6467bf9475e374bfa6640d92c742780f62199d6b68b7b850ea7a12e",
+  "hash": "01c4e94e9aa6b441a26039c3617e3f1c637ef60486838e476c82aaa99f7434cc",
   "layout": "workspace",
   "nodes": [
     {
@@ -344,7 +344,7 @@ Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-we
 1. NODE start (start): the run starts here. Then go on to NODE p.
 2. NODE p (p): dispatch \`fix-login:p\` with the prompt "NODE p\\nGo", and wait for it to return. Then go on to NODE a.
 3. NODE a (a): dispatch \`fix-login:a\` with the prompt "NODE a\\nGo", and wait for it to return. Then go on to NODE stop.
-4. NODE stop (stop): the run's output \`result\` (text) is ready.
+4. NODE stop (stop): the run ends here; its result is \`result\` (text), handed back to the user, not a file any step writes.
 ",
   "settings.json": "{
   "env": {
