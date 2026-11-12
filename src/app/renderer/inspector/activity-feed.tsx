@@ -22,19 +22,6 @@ const entryStyle: CSSProperties = {
   padding: "4px 6px",
 };
 
-const outputStyle: CSSProperties = {
-  margin: "0 6px 4px",
-  maxHeight: 96,
-  overflow: "auto",
-  padding: "4px 6px",
-  borderRadius: 4,
-  background: "var(--term-bg)",
-  color: "var(--term-fg)",
-  font: "var(--fs-xs)/1.4 var(--f-mono)",
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere",
-};
-
 export function ActivityFeed({
   inspector,
   run,
@@ -65,11 +52,6 @@ export function ActivityFeed({
           >
             <strong>{nodeLabel(nodes, entry.nodeId)}</strong> {entryText(entry)}
           </button>
-          {entry.kind === "output" && entry.text.includes("\n") && (
-            <pre data-testid={`activity-output-${entry.id}`} style={outputStyle}>
-              {entry.text}
-            </pre>
-          )}
         </li>
       ))}
     </ol>

@@ -432,6 +432,37 @@ describe("SqliteStore", () => {
     expect(store.activity(id)).toEqual([{ ...running, state: "finished" }]);
   });
 
+  it("skips an old output entry in a run's stored activity and reads back the rest", () => {
+    const store = open();
+    const { id } = store.createRun(newRun());
+    const tool: ActivityEntry = {
+      id: 1,
+      nodeId: "p1",
+      at: 10,
+      kind: "tool",
+      tool: "Bash",
+      summary: "ls",
+    };
+    const later: ActivityEntry = { ...tool, id: 3, at: 30, summary: "pwd" };
+    const output = {
+      id: 2,
+      nodeId: "p1",
+      at: 20,
+      kind: "output",
+      stream: "stdout",
+      summary: "done",
+      text: "done",
+    };
+
+    store.recordActivity(id, tool);
+    raw()
+      .prepare("INSERT INTO activity (run_id, id, node_id, entry) VALUES (?, ?, ?, ?)")
+      .run(id, output.id, output.nodeId, JSON.stringify(output));
+    store.recordActivity(id, later);
+
+    expect(store.activity(id)).toEqual([tool, later]);
+  });
+
   it("rejects a raw UPDATE, DELETE or INSERT OR REPLACE on activity in the database itself", () => {
     const store = open();
     const { id } = store.createRun(newRun());
