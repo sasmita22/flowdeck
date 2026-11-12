@@ -107,7 +107,8 @@ Rewording only. These stay as they are:
   folder line, orchestrator lines, the `@unfilled` marker, `<prefix>:<piece>` references;
 - the sentence `Then reply DONE.` and the code that replaces it;
 - the build agent names;
-- the blueprint session's denied tools; no skill tells the pane to fetch;
+- the blueprint session's allowed and denied tools and its web guard; only `copy-flow` tells the
+  pane to fetch, and only github.com and raw.githubusercontent.com;
 - every phrase a test pins, unless its pin changes with its intent kept and the reason recorded.
 
 ## Evals

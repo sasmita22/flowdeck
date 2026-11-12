@@ -14,8 +14,10 @@ import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import {
   bpName,
   capture,
+  assistantMessages,
   keepEvidence,
   killTmux,
+  lastText,
   modelsAndUsage,
   paneId,
   readBlueprintOverSocket,
@@ -23,6 +25,7 @@ import {
   readyForInput,
   removeTranscripts,
   toggleId,
+  toolCalls,
   turnEnded,
 } from "./blueprint-pane.js";
 
@@ -32,6 +35,11 @@ const expectedCopy = parseFlow(
   JSON.parse(readFileSync(fixture("expected-blueprint.json"), "utf8")),
 );
 const copyAsk = `Copy the flow in ${fixture("source-flow.md")} into this blueprint.`;
+const githubSource =
+  "https://raw.githubusercontent.com/sasmita22/flowdeck/faf19d8c22e9e80a6fdf4e93c11654b3548e7ab5/e2e/fixtures/copy-flow/source-flow.md";
+const githubCopyAsk = `Copy the flow in ${githubSource} into this blueprint.`;
+const copyReply = "No plan file: use only the file names the source gives.";
+const outsideAsk = "Copy the flow in https://docs.python.org/3/ into this blueprint.";
 const todoAsk =
   "Make a blueprint: an Agent node that lists the TODOs in README.md, then an Agent node that fixes them.";
 const agentDeadlineMs = 240_000;
@@ -78,9 +86,19 @@ const standardProblems = (current: Flow) => {
   });
 };
 
+const agentLabels = (current: Flow) =>
+  current.nodes.filter((node) => node.type === "agent").map((node) => node.label);
+
 const squeezed = (text: string) => text.replace(/\s+/g, "");
 
-const askOnFreshBlueprint = async (ask: string, tag: string): Promise<Flow> => {
+const typeAndSend = async (window: LaunchedApp["window"], id: string, text: string) => {
+  await window.getByTestId(paneId).locator("textarea.xterm-helper-textarea").focus();
+  await window.keyboard.type(text);
+  await expect.poll(async () => squeezed(await capture(bpName(id)))).toContain(squeezed(text));
+  await window.keyboard.press("Enter");
+};
+
+const askOnFreshBlueprint = async (ask: string, tag: string, reply?: string): Promise<Flow> => {
   const id = seedBlueprint(home, tag, flow([trigger("start"), output("stop")], [])).flowId;
   flowIds.push(id);
   launched = await launchOnCanvas({
@@ -99,14 +117,23 @@ const askOnFreshBlueprint = async (ask: string, tag: string): Promise<Flow> => {
   await expect
     .poll(() => capture(bpName(id)).then(readyForInput, () => false), { timeout: 60_000 })
     .toBe(true);
-  await window.getByTestId(paneId).locator("textarea.xterm-helper-textarea").focus();
-  await window.keyboard.type(ask);
-  await expect.poll(async () => squeezed(await capture(bpName(id)))).toContain(squeezed(ask));
-  await window.keyboard.press("Enter");
-
+  await typeAndSend(window, id, ask);
   await expect
     .poll(() => turnEnded(home, id), { timeout: agentDeadlineMs, intervals: [2000] })
     .toBe(true);
+
+  if (reply !== undefined && (await lastText(home, id)).includes("?")) {
+    console.log(`${tag}: answered the pane's question with ${JSON.stringify(reply)}`);
+    const before = (await assistantMessages(home, id)).length;
+    await typeAndSend(window, id, reply);
+    await expect
+      .poll(
+        async () =>
+          (await assistantMessages(home, id)).length > before && (await turnEnded(home, id)),
+        { timeout: agentDeadlineMs, intervals: [2000] },
+      )
+      .toBe(true);
+  }
 
   const answer = await readBlueprintOverSocket(home, bpName(id));
   expect(answer.ok).toBe(true);
@@ -155,6 +182,32 @@ test("copies a flow from a local file with the same structure", async () => {
   const copied = await askOnFreshBlueprint(copyAsk, "copy");
   expect(structure(copied)).toEqual(structure(expectedCopy));
   expect(standardProblems(copied)).toEqual([]);
+});
+
+test("copies a flow from a public GitHub link", async () => {
+  test.setTimeout(perAskMs);
+  const copied = await askOnFreshBlueprint(githubCopyAsk, "github-copy", copyReply);
+  const calls = await toolCalls(home, flowIds.at(-1) ?? "");
+  const githubReads = calls.filter(
+    (call) =>
+      (call.name === "WebFetch" && call.input.includes(githubSource)) ||
+      (call.name === "mcp__github__get_file_contents" && call.input.includes("source-flow.md")),
+  );
+  expect(
+    githubReads.filter((call) => call.result?.isError === false).map((call) => call.result?.text),
+  ).toContainEqual(expect.stringContaining("# Review flow"));
+  expect(calls.filter((call) => call.input.includes(fixture("")))).toEqual([]);
+  expect(agentLabels(copied)).toEqual(expect.arrayContaining(agentLabels(expectedCopy)));
+});
+
+test("refuses a link outside GitHub", async () => {
+  test.setTimeout(perAskMs);
+  const refused = await askOnFreshBlueprint(outsideAsk, "outside");
+  expect(structure(refused)).toEqual(structure(flow([trigger("start"), output("stop")], [])));
+  const reply = await lastText(home, flowIds.at(-1) ?? "");
+  expect(reply).toContain("docs.python.org");
+  expect(reply).toContain("github.com");
+  expect(reply).toContain("raw.githubusercontent.com");
 });
 
 test("the same ask gives the same structure three times", async () => {

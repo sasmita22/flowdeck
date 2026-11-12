@@ -118,6 +118,7 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
       nodePath: process.execPath,
       hookScriptPath: "/fd-home/hooks/flowdeck-hook.cjs",
       guardScriptPath: "/fd-home/hooks/flowdeck-build-guard.cjs",
+      webGuardScriptPath: "/fd-home/hooks/flowdeck-web-guard.cjs",
     }),
     ...fakeEngineBuildOptions(fs),
     isFolder,
@@ -628,6 +629,7 @@ describe("createEngineHandler", async () => {
             nodePath: process.execPath,
             hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
             guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+            webGuardScriptPath: `${home}/hooks/flowdeck-web-guard.cjs`,
           }),
           gitState: gitAt(repo.path),
           ...overrides,
@@ -2974,6 +2976,7 @@ describe("createEngineHandler", async () => {
             nodePath,
             hookScriptPath: `${nodePath}-hook.cjs`,
             guardScriptPath: `${nodePath}-guard.cjs`,
+            webGuardScriptPath: `${nodePath}-web-guard.cjs`,
           }),
           run: {
             ...runEnvironment(new NodeFileSystem()),

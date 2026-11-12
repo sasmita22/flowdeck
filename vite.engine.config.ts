@@ -34,6 +34,7 @@ export default defineConfig({
         engine: "src/app/engine/engine.ts",
         "flowdeck-hook": "bin/flowdeck-hook.ts",
         "flowdeck-build-guard": "bin/flowdeck-build-guard.ts",
+        "flowdeck-web-guard": "bin/flowdeck-web-guard.ts",
         "flowdeck-mcp": "bin/flowdeck-mcp.ts",
       },
       fileName: () => "[name].cjs",

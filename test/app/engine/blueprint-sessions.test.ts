@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +13,9 @@ import {
   blueprintSessionFolder,
   blueprintSessionSettings,
   blueprintSocketPath,
+  githubMcpServer,
 } from "../../../src/core/compiler/blueprint-session.js";
-import { hookCommand } from "../../../src/core/compiler/hook-settings.js";
+import { hookCommand, shellQuote } from "../../../src/core/compiler/hook-settings.js";
 import type { OpenedSession } from "../../../src/core/run/execute.js";
 import type { BlueprintSessionSpec } from "../../../src/ports/blueprint-sessions.js";
 import { FakeBlueprintSessions } from "../../fakes/fake-blueprint-sessions.js";
@@ -22,6 +23,7 @@ import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
+import { FakeGithubTokenSource } from "../../fakes/fake-github-token.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -55,7 +57,26 @@ describe("engine blueprint sessions", () => {
     nodePath: process.execPath,
     hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
     guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+    webGuardScriptPath: `${home}/hooks/flowdeck-web-guard.cjs`,
   });
+
+  const flowdeckServer = () => ({
+    command: mcpNodePath,
+    args: [scriptPath],
+    env: {
+      FLOWDECK_BP_SOCK: blueprintSocketPath(home),
+      FLOWDECK_BP_SESSION: "fd-bp-flow-1",
+    },
+  });
+
+  const blueprintWith = (token: string | undefined): EngineHandlerOptions["blueprint"] => ({
+    sessions,
+    kitDir,
+    mcpScript: { nodePath: mcpNodePath, scriptPath },
+    githubToken: new FakeGithubTokenSource(token),
+  });
+
+  const mcpConfigOf = (flowId: string) => join(blueprintSessionFolder(home, flowId), "mcp.json");
 
   const optionsFor = (
     at: string,
@@ -82,7 +103,7 @@ describe("engine blueprint sessions", () => {
     worktree: new FakeWorktree(),
     gitState: new FakeGitState(),
     transcriptTurns: async () => [],
-    blueprint: { sessions, kitDir, mcpScript: { nodePath: mcpNodePath, scriptPath } },
+    blueprint: blueprintWith(undefined),
     ...overrides,
   });
 
@@ -147,7 +168,7 @@ describe("engine blueprint sessions", () => {
       expect(await sessions.alive("fd-bp-flow-1")).toBe(true);
     });
 
-    it("writes settings.json from blueprintSessionSettings with the prepared Stop hook command", async () => {
+    it("writes settings.json from blueprintSessionSettings with the prepared Stop hook and web guard commands", async () => {
       const handler = handlerAt(home);
 
       await call(handler, "blueprint-session-start", { flowId: "flow-1" });
@@ -155,31 +176,45 @@ describe("engine blueprint sessions", () => {
       const written = JSON.parse(
         await readFile(join(blueprintSessionFolder(home, "flow-1"), "settings.json"), "utf8"),
       );
-      expect(written).toEqual(
-        blueprintSessionSettings({ home, hookCommand: hookCommand(hooks()) }),
+      const prepared = hooks();
+      expect(written).toStrictEqual(
+        blueprintSessionSettings({
+          home,
+          hookCommand: hookCommand(prepared),
+          webGuardCommand: [prepared.nodePath, prepared.webGuardScriptPath]
+            .map(shellQuote)
+            .join(" "),
+        }),
       );
     });
 
-    it("writes mcp.json naming the flowdeck server, its socket and its session", async () => {
-      const handler = handlerAt(home);
+    it("without a GitHub token writes mcp.json with only the flowdeck server and still starts the pane", async () => {
+      const handler = handlerAt(home, { blueprint: blueprintWith(undefined) });
 
       await call(handler, "blueprint-session-start", { flowId: "flow-1" });
 
-      const written = JSON.parse(
-        await readFile(join(blueprintSessionFolder(home, "flow-1"), "mcp.json"), "utf8"),
-      );
-      expect(written).toEqual({
-        mcpServers: {
-          flowdeck: {
-            command: mcpNodePath,
-            args: [scriptPath],
-            env: {
-              FLOWDECK_BP_SOCK: blueprintSocketPath(home),
-              FLOWDECK_BP_SESSION: "fd-bp-flow-1",
-            },
-          },
-        },
+      const written = JSON.parse(await readFile(mcpConfigOf("flow-1"), "utf8"));
+      expect(written).toStrictEqual({ mcpServers: { flowdeck: flowdeckServer() } });
+      expect(sessions.started.map((spec) => spec.session)).toEqual(["fd-bp-flow-1"]);
+    });
+
+    it("with a GitHub token writes the github server second, in a private mcp.json, and nowhere else", async () => {
+      const handler = handlerAt(home, { blueprint: blueprintWith("fake-gh-token") });
+
+      await call(handler, "blueprint-session-start", { flowId: "flow-1" });
+
+      const written = JSON.parse(await readFile(mcpConfigOf("flow-1"), "utf8"));
+      expect(written).toStrictEqual({
+        mcpServers: { flowdeck: flowdeckServer(), github: githubMcpServer("fake-gh-token") },
       });
+      expect(Object.keys(written.mcpServers)).toStrictEqual(["flowdeck", "github"]);
+      expect((await stat(mcpConfigOf("flow-1"))).mode & 0o777).toBe(0o600);
+      expect(sessions.started.map((spec) => spec.session)).toEqual(["fd-bp-flow-1"]);
+      expect(JSON.stringify(sessions.started)).not.toContain("fake-gh-token");
+      expect(
+        await readFile(join(blueprintSessionFolder(home, "flow-1"), "settings.json"), "utf8"),
+      ).not.toContain("fake-gh-token");
+      expect(JSON.stringify(pushes)).not.toContain("fake-gh-token");
     });
 
     it("publishes the session push and answers with the session name", async () => {

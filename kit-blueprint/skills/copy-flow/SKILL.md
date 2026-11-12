@@ -1,6 +1,6 @@
 ---
 name: copy-flow
-description: How to copy an existing flow described in a local file onto the open blueprint faithfully - one node per step, the same order and the same wires, no step added or dropped. Read when the user asks to copy, recreate or rebuild a flow from a file.
+description: How to copy an existing flow described in a local file or GitHub link onto the open blueprint faithfully - one node per step, the same order and the same wires, no step added or dropped. Read when the user asks to copy, recreate or rebuild a flow from a file or GitHub link.
 ---
 
 # Copy a flow
@@ -9,8 +9,12 @@ The user has a flow written down somewhere else, for example a workflow file or 
 
 ## Read the source
 
-1. Read the file with the `Read` tool, at the path the user gives. If no path is given, ask for it.
-2. You can read only files on this machine. When the user gives a web address instead of a path, say so and ask them to save the page as a local file and give its path.
+1. If the user gives neither a path nor a link, ask for it.
+2. Read the source by where it is:
+   - A file or a cloned repo on this machine: read it with the `Read` tool, and find files in it with `Glob` and `Grep`.
+   - A GitHub link, on github.com or raw.githubusercontent.com: use the GitHub tools (`mcp__github__get_file_contents` and the rest) when you have them, because they return the file exactly and are the only way into a private repo. Otherwise fetch the link, preferring the raw file.
+   - A GitHub link that cannot be read while you have no GitHub tools: the repo may be private. Tell the user to run `gh auth login` and reopen the pane.
+   - Any other web address: say that only github.com and raw.githubusercontent.com links or files on this machine can be read.
 3. List the source's steps in order. For each one note what it does, the files it reads and the files it leaves.
 
 ## Copy it

@@ -2,6 +2,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { webGuardDecision } from "../../bin/flowdeck-web-guard.js";
+import { GITHUB_READ_TOOLS } from "../../src/core/compiler/blueprint-session.js";
 import { rules, validate } from "../../src/core/compiler/validate.js";
 import { checkEdit } from "../../src/core/flow/blueprint-edits.js";
 import { toolNames } from "../../src/core/flow/blueprint-tools.js";
@@ -207,15 +209,50 @@ describe("the blueprint kit", () => {
       expect(copyFlow()).toMatch(/no step[^.\n]*added or dropped/i);
     });
 
-    it.each(["write-node", "copy-flow", "check-blueprint"])(
-      "%s never tells the pane to fetch",
-      (name) => {
-        const content = readKit(`skills/${name}/SKILL.md`);
+    it("copy-flow names github.com and raw.githubusercontent.com and no other host", () => {
+      const hosts = [...copyFlow().matchAll(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/gi)]
+        .map((match) => match[0].toLowerCase())
+        .filter((name) => !/\.(md|json|ya?ml|ts|js|cjs|txt)$/.test(name));
 
-        expect(content).not.toBe("");
-        expect(content).not.toMatch(/WebFetch|WebSearch|\bfetch\b/i);
-      },
-    );
+      expect([...new Set(hosts)].sort()).toStrictEqual(["github.com", "raw.githubusercontent.com"]);
+    });
+
+    it("copy-flow no longer asks to save the page and names gh auth login", () => {
+      const content = copyFlow();
+
+      expect(content).not.toMatch(/save the page/i);
+      expect(content).toContain("gh auth login");
+    });
+
+    it("copy-flow names only GitHub tools the pane is allowed", () => {
+      const named = [...copyFlow().matchAll(/mcp__github__(\w+)/g)].map((match) => match[1]);
+
+      expect(named).not.toHaveLength(0);
+      for (const tool of named) expect(GITHUB_READ_TOOLS).toContain(tool);
+    });
+
+    it("copy-flow refuses other addresses in the web guard's words", () => {
+      const reason = webGuardDecision(undefined)?.hookSpecificOutput.permissionDecisionReason ?? "";
+      const clause = reason.replace(/\.$/, "").replace(/^./, (first) => first.toLowerCase());
+
+      expect(clause).not.toBe("");
+      expect(copyFlow()).toContain(`say that ${clause}.`);
+    });
+
+    it("blueprint's copy-flow pointer mentions a GitHub link", () => {
+      const pointer = skill()
+        .split("\n")
+        .find((line) => line.includes("`copy-flow`"));
+
+      expect(pointer).toMatch(/GitHub link/i);
+    });
+
+    it.each(["write-node", "check-blueprint"])("%s never tells the pane to fetch", (name) => {
+      const content = readKit(`skills/${name}/SKILL.md`);
+
+      expect(content).not.toBe("");
+      expect(content).not.toMatch(/WebFetch|WebSearch|\bfetch\b/i);
+    });
   });
 
   it("has a SKILL.md with its name and a description", () => {

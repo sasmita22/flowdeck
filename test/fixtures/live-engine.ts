@@ -234,6 +234,9 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
       nodePath: process.execPath,
       hookScriptPath,
       guardScriptPath,
+      webGuardScriptPath: fileURLToPath(
+        new URL("../../bin/flowdeck-web-guard.ts", import.meta.url),
+      ),
     }),
     buildAgents: {
       open: async (spec) => {

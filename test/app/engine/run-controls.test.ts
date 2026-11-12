@@ -86,6 +86,7 @@ describe("run controls", () => {
         nodePath: process.execPath,
         hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
         guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+        webGuardScriptPath: `${home}/hooks/flowdeck-web-guard.cjs`,
       }),
       ...fakeEngineBuildOptions(new NodeFileSystem()),
       isFolder,

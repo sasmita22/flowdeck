@@ -9,6 +9,7 @@ import {
   blueprintSessionName,
   blueprintSessionSettings,
   blueprintSocketPath,
+  githubMcpServer,
 } from "../../core/compiler/blueprint-session.js";
 import { buildAnswerSchema, type BuildAnswer } from "../../core/compiler/build-report.js";
 import {
@@ -86,6 +87,7 @@ import { buildWorktree, repoFolder } from "../../core/run/workspace.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema, type HumanWaiter } from "../../core/run/wait.js";
 import type { BlueprintSessions } from "../../ports/blueprint-sessions.js";
+import type { GithubTokenSource } from "../../ports/github-token.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
@@ -142,6 +144,7 @@ export type EngineHandlerOptions = {
         sessions: BlueprintSessions;
         kitDir: string;
         mcpScript: { nodePath: string; scriptPath: string };
+        githubToken: GithubTokenSource;
       }
     | undefined;
 };
@@ -1429,7 +1432,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const startBlueprintSession = async (flowId: string): Promise<BlueprintSessionStarted> => {
-    const { sessions, kitDir, mcpScript } = blueprintOrThrow();
+    const { sessions, kitDir, mcpScript, githubToken } = blueprintOrThrow();
     const session = blueprintSessionName(flowId);
     if (!(await sessions.alive(session))) {
       const hooks = options.prepareHooks();
@@ -1441,14 +1444,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       const settings = blueprintSessionSettings({
         home: options.home,
         hookCommand: hookCommand(hooks),
+        webGuardCommand: [hooks.nodePath, hooks.webGuardScriptPath].map(shellQuote).join(" "),
       });
       await options.fs.writeFile(settingsPath, JSON.stringify(settings));
+      const token = await githubToken.token();
       await writeSessionMcpConfig(options.fs, mcpConfigPath, {
         flowdeck: {
           command: mcpScript.nodePath,
           args: [mcpScript.scriptPath],
           env: { FLOWDECK_BP_SOCK: socketPath, FLOWDECK_BP_SESSION: session },
         },
+        ...(token === undefined ? {} : { github: githubMcpServer(token) }),
       });
       await sessions.start({
         session,
