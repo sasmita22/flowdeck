@@ -4,7 +4,7 @@ import { NodeType, Variable, Wire, WireKind } from "./schema.js";
 
 const partialSettings = z.record(z.string(), z.unknown());
 
-const [thenWire, fileWire] = Wire.options;
+const [{ shape: wireShape }] = Wire.options;
 const [textVariable, yesnoVariable] = Variable.options;
 
 export const toolInputs = {
@@ -27,12 +27,7 @@ export const toolInputs = {
     label: z.string().optional(),
     settings: partialSettings.optional(),
   }),
-  wire: thenWire
-    .extend({
-      kind: WireKind,
-      file: fileWire.shape.file.optional().describe("The file a file wire carries."),
-    })
-    .strict(),
+  wire: z.strictObject({ ...wireShape, kind: WireKind }),
   delete_node: z.strictObject({ nodeId: z.string() }),
   set_variable: textVariable
     .extend({

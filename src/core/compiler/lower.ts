@@ -1,4 +1,3 @@
-import { handoffOf } from "../flow/handoff.js";
 import { order } from "../flow/order.js";
 import type { Flow, Node, Session, Wire } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
@@ -50,7 +49,6 @@ export type LoweredManifest = Omit<Manifest, "files"> &
 const compile = (
   node: Node,
   piece: string | undefined,
-  wires: readonly Wire[],
   inputs: LowerInputs,
 ): BuildFile | undefined => {
   if (piece === undefined) return undefined;
@@ -61,7 +59,6 @@ const compile = (
       repo: repoFolder(inputs.repo ?? ""),
       workspace: inputs.workspace ?? "",
     },
-    wired: handoffOf(node.id, wires),
     values: inputs.values,
   };
   switch (node.type) {
@@ -89,7 +86,7 @@ export function lower(
   const pieces = pieceNames(flow);
   const compiled = nodes.map((node) => {
     const piece = pieces.get(node.id);
-    return { node, piece, file: compile(node, piece, flow.wires, inputs) };
+    return { node, piece, file: compile(node, piece, inputs) };
   });
   const session = { ...flow.session };
   delete session.frame;

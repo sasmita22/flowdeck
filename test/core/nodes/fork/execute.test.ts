@@ -222,6 +222,27 @@ describe("forkTurnText", () => {
   });
 });
 
+describe("forkTurnText for a branch that produces a value", () => {
+  const prompts = (turn: string) =>
+    [...turn.matchAll(/the prompt ("(?:[^"\\]|\\.)*")/g)].map(
+      (match) => JSON.parse(match[1] ?? '""') as string,
+    );
+
+  it("asks only the producing branch's agent for its json answer under the value's key", () => {
+    const [producing, plain] = prompts(
+      forkTurnText("h1", [
+        { id: "a1", piece: "a1", given: [], writes: [], produces: "tests-passed" },
+        { id: "a2", piece: "a2", given: [], writes: [] },
+      ]),
+    );
+
+    expect(producing).toMatch(/fenced code block tagged json/);
+    expect(producing).toContain('"tests-passed": true');
+    expect(producing).toContain('"tests-passed": false');
+    expect(plain).toBe("NODE a2\nGo");
+  });
+});
+
 describe("unlaunched", () => {
   it("returns the branch nodes with no launch, in branch order", () => {
     expect(unlaunched(["a1", "a2", "a3"], ["a2", "x9"])).toEqual(["a1", "a3"]);

@@ -11,6 +11,7 @@ import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { buildRecord } from "../../../src/core/compiler/record.js";
+import { handoffPairs } from "../../../src/core/flow/handoff.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { decideResume } from "../../../src/core/run/resume.js";
@@ -107,14 +108,17 @@ describe("the core run path", () => {
     };
   };
 
-  const legacyBuild = async () => {
+  const legacyBuild = async (
+    nodes: unknown[] = [
+      { id: "s", type: "gate", label: "s", settings: { shown: "Check", skippable: false } },
+    ],
+    wires: unknown[] = [],
+  ) => {
     const manifestWithoutHash = {
       version: 1,
       session: { name: "main", workingFolder: { kind: "worktree", branch: "main" } },
-      nodes: [
-        { id: "s", type: "gate", label: "s", settings: { shown: "Check", skippable: false } },
-      ],
-      wires: [],
+      nodes,
+      wires,
       files: {},
     };
     const hash = hashBuild([
@@ -236,6 +240,37 @@ describe("the core run path", () => {
       expect(result.build.prefix).toBe(hash);
       expect(result.build.layout).toBe("legacy");
       expect(result.build.worktree).toBeUndefined();
+    });
+
+    it("runs an old build's File wire as a hand-off pair, leaving its verified manifest as it was", async () => {
+      const agentNode = (id: string) => ({
+        id,
+        type: "agent",
+        label: id,
+        settings: { instructions: `Do ${id}.` },
+      });
+      const { hash, legacyDir } = await legacyBuild(
+        [agentNode("plan"), agentNode("build")],
+        [
+          { kind: "then", from: { node: "plan", port: "out" }, to: { node: "build", port: "in" } },
+          {
+            kind: "file",
+            from: { node: "plan", port: "file-out" },
+            to: { node: "build", port: "file-in" },
+            file: "plan.md",
+          },
+        ],
+      );
+      const onDisk = await readFile(join(legacyDir, "manifest.json"), "utf8");
+
+      const result = await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) });
+
+      if (result.kind !== "loaded") throw new Error(`build not loaded: ${result.message}`);
+      expect(handoffPairs(result.build.nodes)).toEqual([
+        { file: "plan.md", reader: "build", writers: ["plan"] },
+      ]);
+      expect(result.build.wires.map((wire) => wire.kind)).toEqual(["then"]);
+      expect(await readFile(join(legacyDir, "manifest.json"), "utf8")).toBe(onDisk);
     });
 
     it("still names any file an old build did not write, anywhere in its folder", async () => {

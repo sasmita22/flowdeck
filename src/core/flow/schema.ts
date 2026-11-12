@@ -26,7 +26,7 @@ export const NodeType = z.enum([
   "branch",
 ]);
 
-export const WireKind = z.enum(["then", "file", "event"]);
+export const WireKind = z.enum(["then", "event"]);
 
 export const Port = z.object({
   name: z.string(),
@@ -39,7 +39,6 @@ const wireEnds = { from: Endpoint, to: Endpoint };
 
 export const Wire = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("then"), ...wireEnds }),
-  z.object({ kind: z.literal("file"), ...wireEnds, file: z.string().min(1) }),
   z.object({ kind: z.literal("event"), ...wireEnds }),
 ]);
 

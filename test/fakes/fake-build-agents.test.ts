@@ -6,7 +6,7 @@ import { checkBuild } from "../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
 import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
-import { agent, fileWire, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
 
@@ -30,11 +30,14 @@ const labelled = <T extends { label: string }>(node: T, label: string): T => ({ 
 const sample = (): Flow => {
   const base = onMainFlow(
     [
-      labelled(agent("p"), "Draft the spec"),
-      labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
+      labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
+      labelled(
+        agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }),
+        "Review the draft",
+      ),
       labelled(agent("s"), "Ship it"),
     ],
-    [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
+    [thenWire("p", "a"), thenWire("a", "s")],
   );
   return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
 };

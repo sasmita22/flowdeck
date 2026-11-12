@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parseFlow } from "../../../src/core/flow/schema.js";
 import { upgradeFlow } from "../../../src/core/flow/upgrade.js";
+import { agent, fileWire, thenWire } from "../../fixtures/flow-builders.js";
 
 type RawNode = { id: string; type: string; settings: Record<string, unknown> };
 type RawFlow = { nodes: RawNode[]; session: Record<string, unknown> };
@@ -196,5 +198,60 @@ describe("upgradeFlow on a blueprint already in the new shape", () => {
     const once = upgradeFlow(structuredClone(old));
 
     expect(upgradeFlow(structuredClone(once))).toEqual(once);
+  });
+});
+
+describe("parseFlow on a saved blueprint", () => {
+  const saved = (nodes: unknown[], wires: unknown[]) => ({
+    nodes,
+    wires,
+    session: {
+      ...sessionBase,
+      buildConfig: {
+        base: "main",
+        variables: [{ name: "e2e", kind: "yesno", default: true }],
+      },
+    },
+  });
+
+  const settingsOf = (flow: { nodes: { id: string; settings: object }[] }, id: string) =>
+    flow.nodes.find((n) => n.id === id)?.settings;
+
+  it("turns a Plan to Build File wire into Plan writes and Build given, with no wire left", () => {
+    const flow = parseFlow(
+      saved(
+        [agent("plan"), agent("build")],
+        [thenWire("plan", "build"), fileWire("plan", "build", "plan.md")],
+      ),
+    );
+
+    expect(settingsOf(flow, "plan")).toMatchObject({ writes: ["plan.md"] });
+    expect(settingsOf(flow, "build")).toMatchObject({ given: ["plan.md"] });
+    expect(flow.wires).toEqual([thenWire("plan", "build")]);
+  });
+
+  it("does not repeat a file the Agents already name", () => {
+    const flow = parseFlow(
+      saved(
+        [
+          agent("plan", { settings: { writes: ["plan.md"] } }),
+          agent("build", { settings: { given: ["plan.md"] } }),
+        ],
+        [fileWire("plan", "build", "plan.md")],
+      ),
+    );
+
+    expect(settingsOf(flow, "plan")).toMatchObject({ writes: ["plan.md"] });
+    expect(settingsOf(flow, "build")).toMatchObject({ given: ["plan.md"] });
+    expect(flow.wires).toEqual([]);
+  });
+
+  it.each([
+    ["a variable", { variable: "e2e" }],
+    ["a pre-upgrade flag", { flag: "e2e" }],
+  ])("loads a Branch on %s with no decidedBy", (_, settings) => {
+    const flow = parseFlow(saved([node("b", "branch", settings)], []));
+
+    expect(settingsOf(flow, "b")).toEqual({ variable: "e2e" });
   });
 });

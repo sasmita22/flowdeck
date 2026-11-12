@@ -139,25 +139,23 @@ describe("orchestratorSkill", () => {
     expect(line).toContain("wait");
   });
 
-  it("lists a file once in a dispatch when the node declares the file its File wire carries", () => {
-    const declared = flow(
+  it("dispatches a writer and its reader each with the files they hand on, each file once", () => {
+    const paired = flow(
       [
-        labelled(agent("a", { settings: { given: ["plan.md"], writes: ["code.md"] } }), "Code"),
-        labelled(agent("p"), "Ship"),
+        labelled(
+          agent("a", { settings: { given: ["plan.md"], writes: ["code.md", "code.md"] } }),
+          "Code",
+        ),
+        labelled(agent("p", { settings: { given: ["code.md"] } }), "Ship"),
       ],
-      [
-        thenWire("a", "p"),
-        {
-          kind: "file",
-          from: { node: "a", port: "file-out" },
-          to: { node: "p", port: "file-in" },
-          file: "code.md",
-        },
-      ],
+      [thenWire("a", "p")],
     );
 
-    expect(lineOf(skill(declared).content, "a")).toContain(
+    expect(lineOf(skill(paired).content, "a")).toContain(
       JSON.stringify("NODE a\nYou are given: plan.md\nWrite: code.md\nGo"),
+    );
+    expect(lineOf(skill(paired).content, "p")).toContain(
+      JSON.stringify("NODE p\nYou are given: code.md\nGo"),
     );
   });
 
@@ -177,6 +175,58 @@ describe("orchestratorSkill", () => {
     expect(lineOf(skill().content, "b")).toMatch(
       /proceed.*build summary.*yes.*NODE f.*no.*NODE h/i,
     );
+  });
+
+  it("reads a value-decided Branch's answer from the Agent that produced it, asking rather than guessing", () => {
+    const line = lineOf(
+      skill(
+        flow(
+          [
+            trigger("t"),
+            labelled(agent("c", { settings: { produces: "tests-passed" } }), "Check"),
+            {
+              ...branch("b", ""),
+              settings: { variable: "", decidedBy: "value", value: "tests-passed" },
+            },
+            labelled(agent("y"), "Ship"),
+            labelled(agent("n"), "Fix"),
+            output("o"),
+          ],
+          [
+            thenWire("t", "c"),
+            thenWire("c", "b"),
+            wire("b", "yes", "y", "in"),
+            wire("b", "no", "n", "in"),
+            thenWire("y", "o"),
+            thenWire("n", "o"),
+          ],
+        ),
+      ).content,
+      "b",
+    );
+
+    expect(line).toMatch(/tests-passed.*NODE c/);
+    expect(line).not.toMatch(/build summary/i);
+    expect(line).toMatch(/missing|malformed|unreadable/i);
+    expect(line).toMatch(/ask/i);
+    expect(line).toMatch(/guess/i);
+    expect(line).toMatch(/yes.*NODE y.*no.*NODE n/);
+  });
+
+  it("asks an Agent that produces a value for its json answer in its dispatch prompt", () => {
+    const line = lineOf(
+      skill(
+        flow(
+          [trigger("t"), labelled(agent("c", { settings: { produces: "tests-passed" } }), "Check")],
+          [thenWire("t", "c")],
+        ),
+      ).content,
+      "c",
+    );
+
+    expect(line).toMatch(/fenced code block tagged json/);
+    expect(line).toContain('\\"tests-passed\\": true');
+    expect(line).toContain('\\"tests-passed\\": false');
   });
 
   it("dispatches every Fork branch agent by full name in one message", () => {

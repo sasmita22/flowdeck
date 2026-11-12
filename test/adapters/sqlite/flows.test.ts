@@ -68,7 +68,7 @@ describe("SqliteFlowStore", () => {
   });
 
   describe("round trip", () => {
-    it("reopens a saved flow with every type, parent, optional field, file and event wire exactly", () => {
+    it("reopens a saved flow with every type, parent, optional field and event wire exactly", () => {
       open().save(roundTripFlow());
 
       const loaded = open().loadLatest();
@@ -168,7 +168,7 @@ describe("SqliteFlowStore", () => {
     });
   });
 
-  it("writes each wire as plain rows: kind, node id and port name of each end, and file", () => {
+  it("writes each wire as plain rows: kind, node id and port name of each end, and no file", () => {
     const flow = roundTripFlow();
     open().save(flow);
 
@@ -186,10 +186,9 @@ describe("SqliteFlowStore", () => {
         from_port: wire.from.port,
         to_node: wire.to.node,
         to_port: wire.to.port,
-        file: wire.kind === "file" ? wire.file : null,
+        file: null,
       })),
     );
-    expect(rows.filter((row) => (row as { file: string | null }).file !== null)).toHaveLength(1);
   });
 
   it("snapshots each node's registry ports in order", () => {
@@ -622,6 +621,63 @@ describe("SqliteFlowStore", () => {
       store.pin("flow-b", false);
 
       expect(open().list()).toEqual(unpinned);
+    });
+  });
+
+  describe("a version saved with a File wire", () => {
+    const agentSettings = {
+      role: "implementer",
+      instructions: "Implement the plan.",
+      model: "sonnet",
+      tools: [],
+    };
+
+    const storeFileWireVersion = () => {
+      open();
+      const db = raw();
+      db.transaction(() => {
+        db.prepare(
+          "INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Plan and build', 't')",
+        ).run();
+        const insertNode = db.prepare(
+          `INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
+           VALUES ('flow-1', 1, ?, ?, 'agent', ?, 0, 0, NULL, ?)`,
+        );
+        insertNode.run(0, "plan", "Plan", JSON.stringify(agentSettings));
+        insertNode.run(1, "build", "Build", JSON.stringify(agentSettings));
+        const insertWire = db.prepare(
+          `INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
+           VALUES ('flow-1', 1, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        insertWire.run(0, "then", "plan", "out", "build", "in", null);
+        insertWire.run(1, "file", "plan", "file-out", "build", "file-in", "plan.md");
+        db.prepare(
+          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES ('flow-1', 1, ?, '[]', 't')",
+        ).run(
+          JSON.stringify({
+            name: "main",
+            buildConfig: { base: "main", variables: [] },
+            model: "sonnet",
+            allowedTools: [],
+            permissionMode: "default",
+            connectors: [],
+          }),
+        );
+      })();
+    };
+
+    it("loads with the file in Plan writes and Build given, and only the Then wire", () => {
+      storeFileWireVersion();
+
+      const flow = open().load({ flowId: "flow-1", version: 1 })?.flow;
+
+      expect(flow?.nodes.map((node) => [node.id, node.settings])).toEqual([
+        ["plan", { ...agentSettings, writes: ["plan.md"] }],
+        ["build", { ...agentSettings, given: ["plan.md"] }],
+      ]);
+      expect(flow?.wires).toEqual([
+        { kind: "then", from: { node: "plan", port: "out" }, to: { node: "build", port: "in" } },
+      ]);
     });
   });
 

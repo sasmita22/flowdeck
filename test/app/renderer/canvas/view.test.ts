@@ -751,50 +751,6 @@ describe("toViewNodes while a container is dragged", () => {
   });
 });
 
-describe("toViewEdges for File wires", () => {
-  const handoff = () =>
-    flow(
-      [agent("A"), agent("B")],
-      [
-        thenWire("A", "B"),
-        {
-          kind: "file",
-          from: { node: "A", port: "file-out" },
-          to: { node: "B", port: "file-in" },
-          file: "plan.md",
-        },
-        {
-          kind: "file",
-          from: { node: "A", port: "file-out" },
-          to: { node: "B", port: "file-in" },
-          file: "notes.md",
-        },
-      ],
-    );
-
-  it("draws each File wire as a file edge that carries its file name", () => {
-    const [, plan, notes] = toViewEdges(handoff());
-
-    expect(plan).toEqual({
-      id: "A:file-out->B:file-in:plan.md",
-      source: "A",
-      sourceHandle: "file-out",
-      target: "B",
-      targetHandle: "file-in",
-      markerEnd: { type: MarkerType.ArrowClosed },
-      type: "file",
-      data: { file: "plan.md" },
-    });
-    expect(notes?.id).toBe("A:file-out->B:file-in:notes.md");
-  });
-
-  it("leaves the Then wire beside them a plain edge", () => {
-    const [then] = toViewEdges(handoff());
-
-    expect(then).not.toHaveProperty("type");
-  });
-});
-
 describe("containerText", () => {
   it.each([
     ["loop", "Loop", "max 3", "LOOP · max 3"],

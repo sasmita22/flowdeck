@@ -80,15 +80,6 @@ describe("compileAgent", () => {
     expect(lines(compiled().content).some((line) => line.startsWith("@unfilled"))).toBe(true);
   });
 
-  it("lists a file once when the node declares the file its File wire carries", () => {
-    const { content } = compiled(agentNode({ writes: ["review.md"], given: ["plan.md"] }), {
-      wired: { given: ["plan.md"], writes: ["review.md"] },
-    });
-
-    expect(content).toContain("Write: review.md\n");
-    expect(content).toContain("You are given: plan.md\n");
-  });
-
   it("lays out the sections Role, Inputs, Steps, Output and When to stop, in that order", () => {
     expect(lines(compiled().content).filter((line) => line.startsWith("## "))).toEqual([
       "## Role",
@@ -119,15 +110,14 @@ describe("compileAgent", () => {
     expect(body).toContain("Write: review.md\n");
   });
 
-  it("adds the files its wires carry after its own, each file once", () => {
+  it("names each file once", () => {
     const body = bodyOf(
-      compiled(agentNode({ given: ["plan.md"], writes: ["review.md", "review.md"] }), {
-        wired: { given: ["plan.md", "ticket.md"], writes: ["notes.md"] },
-      }).content,
+      compiled(agentNode({ given: ["plan.md", "plan.md"], writes: ["review.md", "review.md"] }))
+        .content,
     );
 
-    expect(body).toContain("You are given: plan.md, ticket.md\n");
-    expect(body).toContain("Write: review.md, notes.md\n");
+    expect(body).toContain("You are given: plan.md\n");
+    expect(body).toContain("Write: review.md\n");
   });
 
   it("says under Inputs that hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace", () => {

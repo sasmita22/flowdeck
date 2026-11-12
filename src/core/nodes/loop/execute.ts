@@ -1,5 +1,5 @@
 import type { HumanDecision, WaitReply, WaitRequest } from "../../run/wait.js";
-import { agentTurnText, type AgentTurnNode } from "../agent/execute.js";
+import { agentCallText, yesNoEntry, type AgentTurnNode } from "../agent/execute.js";
 
 export type LoopStep = { kind: "exit" } | { kind: "round"; round: number } | { kind: "cap" };
 
@@ -7,8 +7,14 @@ export type LoopAnswer =
   | { choice: "done" | "again" | "continue"; decision: HumanDecision }
   | { choice: "fail"; reason: string; decision?: HumanDecision };
 
+const oneLine = (condition: string) => condition.replace(/[\r\n]+/g, " ");
+
 export function verdictRequest(condition: string): string {
-  return `End your reply with a fenced code block tagged json that holds {"done": true} if this condition holds, else {"done": false}. Condition: ${condition.replace(/[\r\n]+/g, " ")}`;
+  return `End your reply with a fenced code block tagged json that holds {"done": true} if this condition holds, else {"done": false}. Condition: ${oneLine(condition)}`;
+}
+
+function verdictAndValueRequest(condition: string, name: string): string {
+  return `End your reply with a fenced code block tagged json that holds one object with "done": true if this condition holds, else "done": false, and your yes/no answer for ${JSON.stringify(name)}: ${yesNoEntry(name, true)} for yes, else ${yesNoEntry(name, false)}. Condition: ${oneLine(condition)}`;
 }
 
 export function agentVerdictTurnText(
@@ -18,10 +24,11 @@ export function agentVerdictTurnText(
   condition: string,
   answers: readonly string[] = [],
 ): string {
-  return agentTurnText(prefix, piece, node, undefined, answers).replace(
-    /Then reply DONE\.$/,
-    verdictRequest(condition),
-  );
+  const request =
+    node.produces === undefined
+      ? verdictRequest(condition)
+      : verdictAndValueRequest(condition, node.produces);
+  return `${agentCallText(prefix, piece, node, undefined, answers)} ${request}`;
 }
 
 export function nextStep(round: number, cap: number, done: boolean): LoopStep {

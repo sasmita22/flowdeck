@@ -1,5 +1,6 @@
 import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
+import { fileWiresToSettings } from "../flow/file-wires.js";
 import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
@@ -110,9 +111,9 @@ export async function loadBuild(
       message: verified.problems.map(({ path, problem }) => `${path}: ${problem}`).join("\n"),
     };
   }
-  const manifest = JSON.parse(await deps.fs.readFile(`${row.dir}/manifest.json`)) as Manifest & {
-    hash: string;
-  };
+  const manifest = fileWiresToSettings(
+    JSON.parse(await deps.fs.readFile(`${row.dir}/manifest.json`)),
+  ) as Manifest & { hash: string };
   const problems = structureProblems(manifest.nodes, manifest.wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
   return {

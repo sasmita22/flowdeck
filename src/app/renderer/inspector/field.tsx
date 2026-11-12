@@ -129,7 +129,8 @@ export function Field({
     null,
   );
   const [attempt, setAttempt] = useState(0);
-  const raw = valueAt(values, field.path);
+  const raw =
+    valueAt(values, field.path) ?? (field.control === "select" ? field.fallback : undefined);
   const value = textOf(raw);
   const stored = JSON.stringify(raw);
   const stillRefused = refused !== null && refused.stored === stored ? refused.reason : undefined;

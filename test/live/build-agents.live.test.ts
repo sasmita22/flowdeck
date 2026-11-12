@@ -133,6 +133,7 @@ type AgentSpec = {
   label: string;
   instructions: string;
   tools: string[];
+  given?: string[];
   writes?: string[];
 };
 
@@ -143,11 +144,7 @@ const then = (from: string, to: string) => ({
   to: { node: to, port: "in" },
 });
 
-function liveFlow(
-  steps: AgentSpec[],
-  allowedTools: string[],
-  files: { from: string; to: string; file: string }[] = [],
-): Flow {
+function liveFlow(steps: AgentSpec[], allowedTools: string[]): Flow {
   const ids = ["t", ...steps.map((step) => step.id), "o"];
   return parseFlow({
     nodes: [
@@ -162,6 +159,7 @@ function liveFlow(
           instructions: step.instructions,
           model: "haiku",
           tools: step.tools,
+          ...(step.given === undefined ? {} : { given: step.given }),
           ...(step.writes === undefined ? {} : { writes: step.writes }),
         },
       })),
@@ -173,15 +171,7 @@ function liveFlow(
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [
-      ...ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
-      ...files.map(({ from, to, file }) => ({
-        kind: "file",
-        from: { node: from, port: "file-out" },
-        to: { node: to, port: "file-in" },
-        file,
-      })),
-    ],
+    wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
     session: {
       name: "main",
       buildConfig: { base: "main", variables: [], buildModel: "haiku" },
@@ -313,10 +303,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
               label: "Share review",
               instructions: "Read review.md and reply with its first problem in one line.",
               tools: ["Read"],
+              given: ["review.md"],
             },
           ],
           ["Read", "Grep", "Glob", "Bash", "Write"],
-          [{ from: "a1", to: "p1", file: "review.md" }],
         );
         expect(JSON.stringify(flow)).not.toContain(gate);
 

@@ -72,13 +72,6 @@ test("An Agent renamed to 60 characters shows the whole label inside its outline
   expect
     .soft(inside(await boxOf(label), await boxOf(node.locator(".fd-node-outline"))))
     .toEqual(everywhere);
-
-  const fileOut = await window.getByTestId("port-agent-1-file-out").evaluate((handle) => ({
-    left: parseFloat((handle as HTMLElement).style.left),
-    nodeWidth: (handle.closest("[data-testid='node-agent-1']") as HTMLElement).offsetWidth,
-  }));
-  expect(fileOut.left).toBeGreaterThan(146);
-  expect(fileOut.left).toBe(fileOut.nodeWidth - 24);
 });
 
 test("A Loop around a 60-character Agent grows to enclose it", async () => {

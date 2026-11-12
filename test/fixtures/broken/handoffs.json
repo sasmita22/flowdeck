@@ -22,7 +22,24 @@
         "role": "",
         "instructions": "Do the work.",
         "model": "sonnet",
-        "tools": []
+        "tools": [],
+        "given": ["plan.md"]
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "type": "agent",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "role": "",
+        "instructions": "Write the plan.",
+        "model": "sonnet",
+        "tools": [],
+        "writes": ["plan.md"]
       }
     },
     {
@@ -58,21 +75,20 @@
         "port": "out"
       },
       "to": {
-        "node": "done",
+        "node": "plan",
         "port": "in"
       }
     },
     {
-      "kind": "file",
+      "kind": "then",
       "from": {
-        "node": "work",
-        "port": "file-out"
+        "node": "plan",
+        "port": "out"
       },
       "to": {
-        "node": "work",
-        "port": "file-in"
-      },
-      "file": "plan.md"
+        "node": "done",
+        "port": "in"
+      }
     }
   ],
   "session": {

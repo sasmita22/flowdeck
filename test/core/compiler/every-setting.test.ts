@@ -25,6 +25,7 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
     tools: [["M-agent-tool"], inFile("plugin/agents/label-agent.md", "M-agent-tool")],
     given: [["M-agent-given.md"], inFile("plugin/agents/label-agent.md", "M-agent-given.md")],
     writes: [["M-agent-writes.md"], inFile("plugin/agents/label-agent.md", "M-agent-writes.md")],
+    produces: ["M-agent-produces", atRunTime("M-agent-produces")],
   },
   gate: {
     shown: ["M-gate-shown", atRunTime("M-gate-shown")],
@@ -59,7 +60,9 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
     file: ["M-foreach-file.md", atRunTime("M-foreach-file.md")],
   },
   branch: {
+    decidedBy: ["variable", atRunTime("variable")],
     variable: ["M-variable", atRunTime("M-variable")],
+    value: ["M-branch-value", atRunTime("M-branch-value")],
   },
 };
 

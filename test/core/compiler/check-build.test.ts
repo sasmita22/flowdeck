@@ -13,7 +13,7 @@ import { applyShared, sharedPath } from "../../../src/core/compiler/shared.js";
 import type { BuildReport } from "../../../src/core/compiler/build-report.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, fileWire, flow, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -28,11 +28,11 @@ const sample = (): Flow =>
   withTools(
     onMainFlow(
       [
-        labelled(agent("p"), "Draft the spec"),
-        labelled(agent("a", { settings: { tools: ["Grep"] } }), longLabel),
+        labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
+        labelled(agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }), longLabel),
         labelled(agent("s"), "Ship it"),
       ],
-      [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
+      [thenWire("p", "a"), thenWire("a", "s")],
     ),
   );
 
@@ -376,17 +376,30 @@ describe("checkBuild", () => {
   });
 
   describe("references", () => {
-    it("names a File wire whose template is missing", async () => {
+    it("names a hand-off file whose template is missing", async () => {
       expectFailsOn(
         without(await workspace(), "plugin/templates/spec.md"),
         "plugin/templates/spec.md",
       );
     });
 
-    it("asks no template for a File-wire file that is not markdown", async () => {
+    it("asks no template for a hand-off file that is not markdown", async () => {
       const base = sample();
       const plain = withTools(
-        flow(base.nodes, [...base.wires, fileWire("p", "a", "greeting.txt")]),
+        flow(
+          base.nodes.map((node) =>
+            node.type === "agent" && (node.id === "p" || node.id === "a")
+              ? {
+                  ...node,
+                  settings: {
+                    ...node.settings,
+                    [node.id === "p" ? "writes" : "given"]: ["spec.md", "greeting.txt"],
+                  },
+                }
+              : node,
+          ),
+          base.wires,
+        ),
       );
       const inputs = await workspace(plain);
       const readBack = inputs.readBack.filter(

@@ -74,6 +74,22 @@ describe("branch-variable", () => {
     ).toEqual([]);
   });
 
+  it("leaves a Branch decided by a value an earlier Agent produces to branch-value", () => {
+    const valueBranch = {
+      ...branch("ifpassed", ""),
+      settings: { variable: "", decidedBy: "value", value: "tests-passed" },
+    };
+    const producer = agent("check", { settings: { produces: "tests-passed" } });
+
+    expect(
+      check(
+        [trigger("start"), producer, valueBranch],
+        [],
+        [thenWire("start", "check"), thenWire("check", "ifpassed")],
+      ),
+    ).toEqual([]);
+  });
+
   it("is the only problem in its broken fixture", () => {
     const fixture = parseFlow(
       JSON.parse(

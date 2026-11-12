@@ -1,13 +1,13 @@
 ---
 name: write-handoff-template
-description: How to write the template for a file a File wire carries, so the writing node and the reading nodes agree on its shape - fixed sections the reader can rely on. Read before writing or checking a hand-off template in plugin/templates/ of a Flowdeck build.
+description: How to write the template for a file one Agent hands another (its `writes` matching a later Agent's `given`), so the writing node and the reading nodes agree on its shape - fixed sections the reader can rely on. Read before writing or checking a hand-off template in plugin/templates/ of a Flowdeck build.
 ---
 
 # Write a Hand-off Template
 
-Each markdown file (`.md`) a File wire carries has one template in `plugin/templates/<file>`; any other file has none, and its writer's `Output` alone pins its shape. Before the writing node runs, the runner copies it into the worktree, and the writer replaces it with the real file. The reader relies on its sections being there. A template is a starting point, not a contract: where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question: shape the template to that form, and the writer replaces the template's content.
+Each markdown file (`.md`) one Agent writes and another is given has one template in `plugin/templates/<file>`; any other file has none, and its writer's `Output` alone pins its shape. Before the writing node runs, the runner copies it into the worktree, and the writer replaces it with the real file. The reader relies on its sections being there. A template is a starting point, not a contract: where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question: shape the template to that form, and the writer replaces the template's content.
 
-A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
+A question is only for a blueprint input: an empty required field or setting, a missing hand-off or wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
 
 ## Steps
 

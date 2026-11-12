@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { checkEdit, newProblems } from "../../../src/core/flow/blueprint-edits.js";
+import { WireKind } from "../../../src/core/flow/schema.js";
 import { defaultSettings as agentDefaults } from "../../../src/core/nodes/agent/defaults.js";
 import {
   agent,
   branch,
-  fileWire,
   flow,
   fork,
   join,
@@ -88,12 +88,21 @@ describe("checkEdit refuses", () => {
   });
 
   it("a wire whose kind does not match its ports", () => {
-    refused("wire", {
+    expect(refused("wire", { ...wire("a1", "out", "p1", "in"), kind: "event" })).toContain(
+      "not Event wires",
+    );
+  });
+
+  it("a File wire, as a kind the wire tool does not take", () => {
+    const reason = refused("wire", {
       kind: "file",
       file: "plan.md",
-      from: { node: "a1", port: "out" },
+      from: { node: "a1", port: "file-out" },
       to: { node: "p1", port: "file-in" },
     });
+
+    expect(reason).toContain(zodMessage(WireKind, "file"));
+    expect(reason).not.toMatch(/file wire/i);
   });
 });
 
@@ -119,7 +128,6 @@ describe("checkEdit accepts", () => {
     ["change_node", { nodeId: "a1", label: "Builder", settings: { model: "haiku" } }],
     ["delete_node", { nodeId: "p1" }],
     ["wire", wire("a1", "out", "p1", "in")],
-    ["wire", fileWire("a1", "p1", "plan.md")],
     ["set_variable", { name: "ticket", kind: "text", default: "FD-1" }],
   ])("a well-formed %s", (name, input) => {
     expect(checkEdit(blueprint(), name, input)).toMatchObject({ ok: true });

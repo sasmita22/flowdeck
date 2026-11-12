@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FlowParseError, NodeType, parseFlow } from "../../../src/core/flow/schema.js";
+import {
+  FlowParseError,
+  NodeType,
+  parseFlow,
+  Wire,
+  WireKind,
+} from "../../../src/core/flow/schema.js";
 import { forEach } from "../../fixtures/flow-builders.js";
 
 const sessionBase = {
@@ -181,10 +187,18 @@ describe("parseFlow", () => {
     expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
   });
 
-  it("rejects a file wire without a file", () => {
-    const wire = { kind: "file", from: { node: "p", port: "out" }, to: { node: "p", port: "in" } };
-    const error = parseError(flowWith({ wires: [wire] }));
-    expect(error.issues.map((issue) => issue.path)).toContainEqual(["wires", 0, "file"]);
+  it("has Then and Event wires only", () => {
+    expect(WireKind.options).toEqual(["then", "event"]);
+  });
+
+  it("refuses a File wire", () => {
+    const wire = {
+      kind: "file",
+      file: "plan.md",
+      from: { node: "p", port: "file-out" },
+      to: { node: "q", port: "file-in" },
+    };
+    expect(Wire.safeParse(wire).success).toBe(false);
   });
 
   it("parses a fork and a join", () => {

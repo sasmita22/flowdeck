@@ -17,7 +17,6 @@ import type { Flow } from "../src/core/flow/schema.js";
 import {
   agent,
   branch,
-  fileWire,
   flow,
   fork,
   gate,
@@ -390,59 +389,34 @@ test("A node is renamed in place by double-click or Enter, and Escape keeps the 
     .toEqual(["Plan", "Test"]);
 });
 
-test("A File wire is renamed from its label, stays selected, and Undo brings the old name back", async () => {
+test("An Agent's files are set in the inspector, the wire stays a Then wire, and Undo takes them back", async () => {
   seedFlow(
     home,
     flow(
       [at(agent("plan"), 80, 160, "Planner"), at(agent("build"), 420, 160, "Builder")],
-      [
-        thenWire("plan", "build"),
-        fileWire("plan", "build", "brief.md"),
-        fileWire("plan", "build", "notes.md"),
-      ],
+      [thenWire("plan", "build")],
     ),
   );
   const window = await launch();
-  const notesId = "plan:file-out->build:file-in:notes.md";
-  const planId = "plan:file-out->build:file-in:plan.md";
-  const files = async () =>
-    (await readout(window)).wires.flatMap((wire) => (wire.kind === "file" ? [wire.file] : []));
-  const label = await boxOf(window.getByTestId("file-wire-plan-build-notes.md"));
-  const clickLabel = () =>
-    window.mouse.click(label.x + label.width / 2, label.y + label.height / 2);
+  const settingsOf = async (id: string) =>
+    (await readout(window)).nodes.find((node) => node.id === id)?.settings;
 
-  await clickLabel();
-  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([notesId]));
-  await clickLabel();
-  const field = window.getByTestId(`file-wire-name-${notesId}`);
-  await expect(field).toBeFocused();
-  await field.fill("plan.md");
-  await field.press("Enter");
+  await window.getByTestId("node-plan").click();
+  await window.getByTestId("node-setting-writes").fill("plan.md");
+  await window.getByTestId("node-setting-writes").blur();
+  await window.getByTestId("node-build").click();
+  await window.getByTestId("node-setting-given").fill("plan.md");
+  await window.getByTestId("node-setting-given").blur();
 
-  await expect(field).toHaveCount(0);
-  await expect(window.getByTestId("file-wire-plan-build-plan.md")).toHaveText("plan.md");
-  await expect(window.getByTestId(`rf__edge-${planId}`)).toHaveClass(/selected/);
-  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([planId]));
-  expect(await files()).toEqual(["brief.md", "plan.md"]);
+  await expect.poll(() => settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
+  await expect.poll(() => settingsOf("build")).toMatchObject({ given: ["plan.md"] });
+  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
 
   await window.keyboard.press("Meta+z");
-  await expect(window.getByTestId("file-wire-plan-build-notes.md")).toHaveText("notes.md");
-  await expect(window.getByTestId(`rf__edge-${notesId}`)).toHaveClass(/selected/);
-  await expect(window.getByTestId(readoutTestIds.wires)).toHaveText(JSON.stringify([notesId]));
-  expect(await files()).toEqual(["brief.md", "notes.md"]);
-
-  await clickLabel();
-  await expect(field).toBeFocused();
-  await field.fill("brief.md");
-  await field.press("Enter");
-
-  await expect(window.getByTestId("canvas-message")).toHaveText(
-    "Can't connect Planner to Builder: they are already joined.",
-  );
-  expect(await files()).toEqual(["brief.md", "notes.md"]);
-  await window.keyboard.press("Escape");
-  await expect(window.getByTestId("file-wire-plan-build-notes.md")).toHaveText("notes.md");
-  await expect(window.getByTestId("file-wire-plan-build-brief.md")).toHaveText("brief.md");
+  await expect.poll(() => settingsOf("build")).not.toMatchObject({ given: ["plan.md"] });
+  await expect(window.getByTestId("node-setting-given")).toHaveValue("");
+  expect(await settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
+  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
 });
 
 const zoomOf = async (window: Page) =>

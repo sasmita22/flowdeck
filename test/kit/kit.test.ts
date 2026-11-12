@@ -357,6 +357,10 @@ describe("the build kit", () => {
     );
   });
 
+  it.each(kitFiles())("%s names no File wire", (file) => {
+    expect(readKit(file)).not.toMatch(/\bfile`?[- ]wires?\b/i);
+  });
+
   it("leaves no file marked @unfilled", () => {
     const files = kitFiles();
 

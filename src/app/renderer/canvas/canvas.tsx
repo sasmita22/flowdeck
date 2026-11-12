@@ -25,8 +25,6 @@ import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
 import { BranchEdge } from "./branch-edge.js";
-import { FileEdge } from "./file-edge.js";
-import { FileNamePrompt } from "./file-name-prompt.js";
 import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
@@ -39,7 +37,7 @@ import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.j
 
 const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
-const edgeTypes = { aligned: AlignedEdge, file: FileEdge, branch: BranchEdge };
+const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge };
 
 const containerOfFrame = (node: ViewNode): string | undefined =>
   node.type === "loop-frame"
@@ -392,7 +390,6 @@ function Board({
           >
             <Background variant={BackgroundVariant.Dots} gap={18} size={2} color="var(--dot)" />
             <ZoomControls />
-            {!readOnly && <FileNamePrompt store={store} />}
             {!readOnly && <RenameField store={store} />}
             {!readOnly && <EditorEffects store={store} onSave={onSave} />}
           </ReactFlow>

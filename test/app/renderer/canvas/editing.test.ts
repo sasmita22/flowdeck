@@ -10,7 +10,6 @@ import { edgeId } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
-  fileWire,
   flow,
   forEach,
   fork,
@@ -40,7 +39,7 @@ const chain = () =>
       { ...at(agent("B"), 200, 0), label: "Test" },
       { ...at(agent("C"), 400, 0), label: "Fix" },
     ],
-    [thenWire("A", "B"), thenWire("B", "C"), fileWire("A", "C", "plan.md")],
+    [thenWire("A", "B"), thenWire("B", "C")],
   );
 
 const wireAt = (current: Flow, index: number): Wire => {
@@ -58,22 +57,13 @@ describe("selecting and deleting wires", () => {
     expect(selectCanDelete(store.getState())).toBe(true);
     store.getState().deleteSelection();
 
-    expect(ends(store.getState().flow)).toEqual(["A>B", "A>C"]);
+    expect(ends(store.getState().flow)).toEqual(["A>B"]);
     expect(ids(store.getState().flow)).toEqual(["A", "B", "C"]);
     expect(store.getState().selectedWires).toEqual([]);
     store.getState().undo();
     expect(store.getState().flow).toEqual(before);
     store.getState().redo();
-    expect(ends(store.getState().flow)).toEqual(["A>B", "A>C"]);
-  });
-
-  it("deletes a selected File wire the same way", () => {
-    const store = loaded(chain());
-
-    store.getState().selectWires([edgeId(wireAt(store.getState().flow, 2))]);
-    store.getState().deleteSelection();
-
-    expect(store.getState().flow.wires.map((wire) => wire.kind)).toEqual(["then", "then"]);
+    expect(ends(store.getState().flow)).toEqual(["A>B"]);
   });
 
   it("deletes selected nodes and a selected wire elsewhere as one undo step", () => {
@@ -133,16 +123,6 @@ describe("refused connections", () => {
     expect(store.getState().message).toBe("Can't connect Plan to Test: they are already joined.");
   });
 
-  it("says a file port joins only another file port", () => {
-    const store = loaded(chain());
-
-    store.getState().connect({ node: "A", port: "file-out" }, { node: "C", port: "in" });
-
-    expect(store.getState().message).toBe(
-      "Can't connect Plan to Fix: a file port joins only another file port.",
-    );
-  });
-
   it("explains a drag the canvas itself turned down, such as output to output", () => {
     const store = loaded(chain());
 
@@ -194,7 +174,7 @@ describe("copy, paste and duplicate", () => {
     expect(ids(after)).toEqual(["A", "B", "C", "agent-1", "agent-2"]);
     expect(nodeOf(after, "agent-1")).toMatchObject({ label: "Plan", position: { x: 32, y: 32 } });
     expect(nodeOf(after, "agent-2")).toMatchObject({ label: "Test", position: { x: 232, y: 32 } });
-    expect(ends(after)).toEqual(["A>B", "B>C", "A>C", "agent-1>agent-2"]);
+    expect(ends(after)).toEqual(["A>B", "B>C", "agent-1>agent-2"]);
     expect(selection).toEqual(["agent-1", "agent-2"]);
     expect(store.getState().undoStack).toHaveLength(1);
     store.getState().undo();

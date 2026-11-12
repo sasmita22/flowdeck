@@ -1,12 +1,11 @@
 import { scopeLine, type ScopeParts } from "../../compiler/scope-line.js";
-import { handoffFolderLine, handoffText, withWired, type Handoff } from "../../flow/handoff.js";
+import { declaredHandoff, handoffFolderLine, handoffText } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
 import { fillVariables, type VariableValues } from "../../flow/variables.js";
 
 export type AgentCompileInputs = {
   piece: string;
   scope: ScopeParts;
-  wired?: Handoff;
   values?: VariableValues;
 };
 
@@ -19,9 +18,9 @@ export function compileAgent(
   path: string;
   content: string;
 } {
-  const { piece, scope, wired = { given: [], writes: [] }, values = {} } = inputs;
-  const { role, instructions, model, tools, given = [], writes = [] } = node.settings;
-  const files = withWired({ given, writes }, wired);
+  const { piece, scope, values = {} } = inputs;
+  const { role, instructions, model, tools } = node.settings;
+  const { given, writes } = declaredHandoff(node.settings);
   const draft = role === "" ? node.label : role;
   const fields: [string, string | undefined][] = [
     ["name", piece],
@@ -39,11 +38,11 @@ export function compileAgent(
     draft,
     "## Inputs",
     handoffFolderLine(scope.repo),
-    orNone(handoffText({ given: files.given, writes: [] })),
+    orNone(handoffText({ given, writes: [] })),
     "## Steps",
     fillVariables(instructions, values),
     "## Output",
-    orNone(handoffText({ given: [], writes: files.writes })),
+    orNone(handoffText({ given: [], writes })),
     "## When to stop",
     "Stop once the output is written.",
   ].join("\n\n");

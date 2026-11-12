@@ -10,14 +10,7 @@ import {
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import {
-  agent,
-  fileWire,
-  flow,
-  loop,
-  onMainFlow,
-  thenWire,
-} from "../test/fixtures/flow-builders.js";
+import { agent, flow, loop, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -32,7 +25,10 @@ let launched: LaunchedApp | undefined;
 
 const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, position: { x, y } });
 
-const named = (id: string, label: string) => ({ ...agent(id), label });
+const named = (id: string, label: string, settings: Record<string, unknown> = {}) => ({
+  ...agent(id, { settings }),
+  label,
+});
 
 const verdictDone = ["```json", '{"done": true}', "```"].join("\n");
 
@@ -101,8 +97,8 @@ const relaunch = async () => {
 };
 
 type Readout = {
-  nodes: { id: string; parent?: string }[];
-  wires: { kind: string; file?: string; from: { node: string }; to: { node: string } }[];
+  nodes: { id: string; parent?: string; settings: object }[];
+  wires: { kind: string; from: { node: string }; to: { node: string } }[];
 };
 
 const readout = async (window: Page): Promise<Readout> =>
@@ -323,7 +319,7 @@ test("A fresh Loop says on the canvas that its body needs an Agent", async () =>
   await expect(window.getByText("LOOP · max 3")).toBeVisible();
 });
 
-test("A File wire named plan.md draws dashed with its name and survives a reload", async () => {
+test("Planner writes plan.md and Builder is given it, set in the inspector, and it survives a reload", async () => {
   seed(
     flow(
       [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
@@ -331,44 +327,43 @@ test("A File wire named plan.md draws dashed with its name and survives a reload
     ),
   );
   let window = await launch();
-  await window.getByTestId("node-plan").hover();
+  await expect(window.getByTestId("port-plan-file-out")).toHaveCount(0);
+  await expect(window.getByTestId("port-build-file-in")).toHaveCount(0);
 
-  await connectPorts(
-    window,
-    window.getByTestId("port-plan-file-out"),
-    window.getByTestId("port-build-file-in"),
-  );
-  await expect(window.getByTestId("file-name-form")).toBeVisible();
-  await window.getByTestId("file-name-input").fill("plan.md");
-  await window.getByTestId("file-name-input").press("Enter");
+  await window.getByTestId("node-plan").click();
+  await window.getByTestId("node-setting-writes").fill("plan.md");
+  await window.getByTestId("node-setting-writes").blur();
+  await window.getByTestId("node-build").click();
+  await window.getByTestId("node-setting-given").fill("plan.md");
+  await window.getByTestId("node-setting-given").blur();
 
-  const label = window.getByTestId("file-wire-plan-build-plan.md");
-  await expect(label).toHaveText("plan.md");
-  await expect(window.getByTestId("file-name-form")).toHaveCount(0);
-  expect((await readout(window)).wires).toContainEqual(fileWire("plan", "build", "plan.md"));
-  const path = window.locator(
-    '[data-testid="rf__edge-plan:file-out->build:file-in:plan.md"] path.react-flow__edge-path',
-  );
-  await expect(path).toHaveCSS("stroke-dasharray", "6px, 4px");
-
+  const settingsOf = async (id: string) =>
+    (await readout(window)).nodes.find((node) => node.id === id)?.settings;
+  await expect.poll(() => settingsOf("build")).toMatchObject({ given: ["plan.md"] });
   await window.getByTestId(controlTestIds.save).click();
   window = await relaunch();
 
-  await expect(window.getByTestId("file-wire-plan-build-plan.md")).toHaveText("plan.md");
-  expect((await readout(window)).wires).toContainEqual(fileWire("plan", "build", "plan.md"));
-  await darkShot(window, "file-wire.png");
+  expect(await settingsOf("plan")).toMatchObject({ writes: ["plan.md"] });
+  expect(await settingsOf("build")).toMatchObject({ given: ["plan.md"] });
+  expect((await readout(window)).wires).toEqual([thenWire("plan", "build")]);
+  await window.getByTestId("node-build").click();
+  await expect(window.getByTestId("node-setting-given")).toHaveValue("plan.md");
+  await darkShot(window, "handoff.png");
 });
 
-test("A run holds the next node on its File wire until the file is written", async () => {
+test("A run holds the reader until the file it is given is written", async () => {
   seed(
     onMainFlow(
-      [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
-      [thenWire("plan", "build"), fileWire("plan", "build", "plan.md")],
+      [
+        at(named("plan", "Planner", { writes: ["plan.md"] }), 80, 160),
+        at(named("build", "Builder", { given: ["plan.md"] }), 420, 160),
+      ],
+      [thenWire("plan", "build")],
     ),
   );
   const window = await launch();
 
-  const folder = workFolder(await buildAndRun(window, home, "file-wire"));
+  const folder = workFolder(await buildAndRun(window, home, "handoff"));
 
   await expect(window.getByTestId("node-reason-build")).toHaveText(
     "plan.md wasn't written by Planner",

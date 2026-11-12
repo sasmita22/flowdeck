@@ -47,6 +47,35 @@ describe("examples", () => {
   });
 });
 
+type ExampleNode = { id: string; type: string; settings: { given?: string[]; writes?: string[] } };
+type ExampleFlow = { nodes: ExampleNode[]; wires: { kind: string }[] };
+
+describe("example hand-offs", () => {
+  it.each(["three-agents.json", "loop-review.json", "all-types.json"])(
+    "%s has no File wire",
+    (name) => {
+      const { wires } = readExample(name) as ExampleFlow;
+      expect(wires.filter((wire) => wire.kind === "file")).toEqual([]);
+    },
+  );
+
+  it.each(["plan.md", "changes.md"])(
+    "three-agents.json hands %s from one Agent's writes to another Agent's given",
+    (file) => {
+      const agents = (readExample("three-agents.json") as ExampleFlow).nodes.filter(
+        (node) => node.type === "agent",
+      );
+      const writers = agents.filter((node) => node.settings.writes?.includes(file));
+      const readers = agents.filter((node) => node.settings.given?.includes(file));
+
+      expect(writers).not.toEqual([]);
+      expect(readers.some((reader) => writers.some((writer) => writer.id !== reader.id))).toBe(
+        true,
+      );
+    },
+  );
+});
+
 const flowFolders = ["examples/", "test/fixtures/", "test/fixtures/broken/"];
 
 const storedFlows = flowFolders.flatMap((folder) => {

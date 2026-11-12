@@ -9,14 +9,14 @@ Follow the flow in `manifest.json` order, along its wires, and check each hand-o
 
 `manifest.json` `outputs` holds one `{ "node", "name", "type" }` per Stop node: what the run hands back to the user when it ends. It is not a file, so no node writes it and it never needs a writer.
 
-A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
+A question is only for a blueprint input: an empty required field or setting, a missing hand-off or wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
 
 ## Checks
 
-1. **Every read has a writer.** For each file a piece reads (its node's `given` settings, its incoming File wires, and the files its text says it reads), find the node that writes it earlier in the flow. A file that already exists in the target repo needs no writer (check with Glob). A Stop's output, in `outputs` and on the orchestrator's Stop line, is not a file a piece reads, so check 1 never applies to it.
+1. **Every read has a writer.** For each file a piece reads (its node's `given` setting and the files its text says it reads), find the node that writes it, by its `writes` setting, earlier in the flow on every path to the reader. A file that already exists in the target repo needs no writer (check with Glob). A Stop's output, in `outputs` and on the orchestrator's Stop line, is not a file a piece reads, so check 1 never applies to it.
 2. **Shapes match.** The writer's `Output` and the file's template, when it has one, give the sections the reader's `Inputs` and steps use, with the same names. A template is a starting point, not a contract: where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question, and the writer replaces the template's content.
 3. **Every loop has a cap.** A Loop node has its cap in `manifest.json`. A retry cap or a stop-and-report applies only to a retry the node's own text states, as that text states it; never add one.
-4. **Nothing waits forever.** No step waits on a file, an answer or a branch that never comes on some path: a Join waiting on a branch that may be skipped, a reader that runs before its writer on one Branch path.
+4. **Nothing waits forever.** No step waits on a file, an answer or a branch that never comes on some path: a Join waiting on a branch that may be skipped, a reader that runs before its writer on one Branch path. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on.
 5. **No two pieces claim the same job.** Leave the call to `audit-duplicates`; note the pair for it.
 
 ## What to do with a finding

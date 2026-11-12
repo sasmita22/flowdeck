@@ -10,10 +10,10 @@ An Agent node's instructions say what the agent does. Before the agent is writte
 ## Steps
 
 1. Find the piece's nodes in `manifest.json`: every node whose `file` is the piece's path. A merged piece serves several nodes; analyze each one.
-2. For each node, read its `settings` (`role`, `instructions`, `given`, `writes`, `tools`) and its incoming and outgoing File wires.
+2. For each node, read its `settings` (`role`, `instructions`, `given`, `writes`, `produces`, `tools`).
 3. List its needs, from those settings alone:
    - **Input**: each file or value it reads, and where it comes from.
-   - **Output**: each file it writes, or the state it leaves (a branch, a commit).
+   - **Output**: each file it writes, the yes/no value it produces, or the state it leaves (a branch, a commit).
    - **Tool**: each tool the node sets, or each one its instructions need when it sets none.
    - **Procedure**: each piece of work the instructions spell out as a series of steps, or call by a name, such as "run the tests and report the failures".
 4. Name each need in kebab-case, verb first, from the instructions' own words: `run-tests`, `read-review-notes`. Give one procedure the same name wherever it appears, in any node, so `extract-shared` can match it. Never put a node id, label or file name in a procedure's name.

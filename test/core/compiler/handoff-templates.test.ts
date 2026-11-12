@@ -1,51 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
-import { agent, fileWire, flow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
+
+const handing = (id: string, given: string[], writes: string[]) =>
+  agent(id, { settings: { tools: [], given, writes } });
 
 const sample = () =>
   flow(
     [
-      agent("s", { settings: { command: "npm" } }),
-      agent("plan", { settings: { tools: [] } }),
-      agent("review", { settings: { tools: [] } }),
+      handing("s", [], ["notes/plan.md"]),
+      handing("plan", ["notes/plan.md"], ["review.md"]),
+      handing("review", ["notes/plan.md", "review.md"], []),
       agent("p"),
     ],
-    [
-      thenWire("s", "plan"),
-      thenWire("plan", "review"),
-      fileWire("s", "plan", "notes/plan.md"),
-      fileWire("s", "review", "notes/plan.md"),
-      fileWire("plan", "review", "review.md"),
-    ],
+    [thenWire("s", "plan"), thenWire("plan", "review")],
   );
+
+const paths = (files: { path: string }[]) => files.map((file) => file.path);
 
 const sections = (content: string) => content.split("\n").filter((line) => line.startsWith("## "));
 
 describe("handoffTemplates", () => {
-  it("writes one template per distinct file a File wire carries", () => {
-    expect(handoffTemplates(sample(), "carousell-web").map((file) => file.path)).toEqual([
+  it("writes one template per distinct file one Agent writes and another is given", () => {
+    expect(paths(handoffTemplates(sample(), "carousell-web"))).toEqual([
       "plugin/templates/notes/plan.md",
       "plugin/templates/review.md",
     ]);
   });
 
-  it("writes none for a File-wire file that is not markdown", () => {
-    const plain = flow(
-      [agent("w", { settings: { tools: [] } }), agent("r", { settings: { tools: [] } })],
-      [
-        thenWire("w", "r"),
-        fileWire("w", "r", "greeting.txt"),
-        fileWire("w", "r", "data.json"),
-        fileWire("w", "r", "notes.md"),
-      ],
-    );
+  it("writes none for a hand-off file that is not markdown", () => {
+    const files = ["greeting.txt", "data.json", "notes.md"];
+    const plain = flow([handing("w", [], files), handing("r", files, [])], [thenWire("w", "r")]);
 
-    expect(handoffTemplates(plain, "carousell-web").map((file) => file.path)).toEqual([
-      "plugin/templates/notes.md",
-    ]);
+    expect(paths(handoffTemplates(plain, "carousell-web"))).toEqual(["plugin/templates/notes.md"]);
   });
 
-  it("writes none when no File wire carries a file", () => {
+  it.each([
+    ["a given file no other Agent writes", handing("r", ["ticket.md"], [])],
+    ["a written file no other Agent is given", handing("w", [], ["report.md"])],
+    ["a file one Agent is given and writes itself", handing("e", ["notes.md"], ["notes.md"])],
+  ])("writes none for %s", (_, node) => {
+    expect(handoffTemplates(flow([node], []), "carousell-web")).toEqual([]);
+  });
+
+  it("writes none when no Agent hands on a file", () => {
     expect(handoffTemplates(flow([agent("p")], []), "carousell-web")).toEqual([]);
   });
 
@@ -76,10 +74,21 @@ describe("handoffTemplates", () => {
       (file) => file.content,
     );
 
-    expect(plan).toMatch(/Written by: NODE s\b/);
-    expect(plan).toMatch(/Read by: NODE plan, NODE review\b/);
-    expect(review).toMatch(/Written by: NODE plan\b/);
-    expect(review).toMatch(/Read by: NODE review\b/);
+    expect(plan).toMatch(/Written by: NODE s\n/);
+    expect(plan).toMatch(/Read by: NODE plan, NODE review\n/);
+    expect(review).toMatch(/Written by: NODE plan\n/);
+    expect(review).toMatch(/Read by: NODE review\n/);
+  });
+
+  it("names every writer of a file several Agents write", () => {
+    const shared = flow(
+      [handing("a", [], ["plan.md"]), handing("b", [], ["plan.md"]), handing("r", ["plan.md"], [])],
+      [thenWire("a", "b"), thenWire("b", "r")],
+    );
+    const [plan = ""] = handoffTemplates(shared, "carousell-web").map((file) => file.content);
+
+    expect(plan).toMatch(/Written by: NODE a, NODE b\n/);
+    expect(plan).toMatch(/Read by: NODE r\n/);
   });
 
   it("gives every template the same fixed sections", () => {
