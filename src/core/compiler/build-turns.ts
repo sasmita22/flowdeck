@@ -69,10 +69,20 @@ export const writeTurn = (
     `Round ${round}. Dispatch ${kit("piece-auditor")} once for each piece below, all calls in one message.`,
     "Each call's prompt is that piece's block, exactly as written.",
     ...(loose.length > 0
-      ? ["", "Files outside these pieces that also failed the check:", ...loose.map(failureLine)]
+      ? [
+          "",
+          "Files outside these pieces that also failed the check:",
+          "These files belong to no piece in this round: give them to no agent, put them in no block and edit none of them yourself. Dispatch only for the pieces listed in this turn; if none is listed, dispatch nothing.",
+          ...loose.map(failureLine),
+        ]
       : []),
     ...(unplaced.length > 0
-      ? ["", "Answers about nodes outside these pieces:", ...unplaced.flatMap(answerLines)]
+      ? [
+          "",
+          "Answers about nodes outside these pieces:",
+          "No piece in this turn serves these nodes: put these answers in no block and act on none of them yourself; they reach those nodes outside this turn.",
+          ...unplaced.flatMap(answerLines),
+        ]
       : []),
     "",
     blocks.join("\n\n"),

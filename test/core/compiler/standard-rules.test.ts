@@ -10,10 +10,9 @@ const expected = [
   "4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.",
   "5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.",
   "6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.",
-  "7. Any loop stops after 3 tries on the same issue and reports the blocker.",
-  "8. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.",
-  "9. State every change and every deviation from the instructions with its reason.",
-  "10. Never rewrite shared history: no force pushes.",
+  "7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.",
+  "8. State every change and every deviation from the instructions with its reason.",
+  "9. Never rewrite shared history: no force pushes.",
   "",
 ].join("\n");
 
