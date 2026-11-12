@@ -93,6 +93,7 @@ const setup = ({
       nodePath: "/usr/local/bin/node",
       hookScriptPath: `${home}/hooks/flowdeck-hook.cjs`,
       guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+      webGuardScriptPath: `${home}/hooks/flowdeck-web-guard.cjs`,
     }),
     ...fakeEngineBuildOptions(fs),
     isFolder: () => true,

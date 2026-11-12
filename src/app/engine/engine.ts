@@ -10,6 +10,7 @@ import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
 import { parseTranscriptTurns } from "../../adapters/claude/transcript-turns.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
+import { GhTokenSource } from "../../adapters/gh/gh-token-source.js";
 import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
 import { HookSocketServer } from "../../adapters/hook-socket/hook-socket-server.js";
@@ -114,6 +115,7 @@ const prepareBlueprint = async (): Promise<EngineHandlerOptions["blueprint"]> =>
       }),
       kitDir: blueprintKit.dir,
       mcpScript: prepareMcpScript({ bundleDir: __dirname, home, path: process.env["PATH"] }),
+      githubToken: new GhTokenSource(),
     };
   } catch (error) {
     console.log(`engine: blueprint error ${errorText(error)}`);
@@ -138,6 +140,7 @@ const createHandler = async () =>
         home,
         sourcePath: join(__dirname, "flowdeck-hook.cjs"),
         guardSourcePath: join(__dirname, "flowdeck-build-guard.cjs"),
+        webGuardSourcePath: join(__dirname, "flowdeck-web-guard.cjs"),
         pathEnv: process.env["PATH"],
       }),
     buildAgents,

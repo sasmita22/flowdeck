@@ -50,7 +50,7 @@ const transcriptsOf = async (home: string, id: string) =>
     file.endsWith(".jsonl"),
   );
 
-const assistantMessages = async (home: string, id: string) => {
+export const assistantMessages = async (home: string, id: string) => {
   const messages: Record<string, unknown>[] = [];
   for (const transcript of await transcriptsOf(home, id)) {
     const lines = (await readFile(join(projectFolder(home, id), transcript), "utf8")).split("\n");
@@ -62,6 +62,72 @@ const assistantMessages = async (home: string, id: string) => {
     }
   }
   return messages;
+};
+
+export const lastText = async (home: string, id: string) =>
+  (await assistantMessages(home, id))
+    .flatMap((message) => (Array.isArray(message["content"]) ? message["content"] : []))
+    .flatMap((block: { type?: string; text?: string }) =>
+      block.type === "text" && block.text !== undefined ? [block.text] : [],
+    )
+    .at(-1) ?? "";
+
+type Block = {
+  type?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: unknown;
+  is_error?: boolean;
+};
+
+export type ToolCall = {
+  name: string;
+  input: string;
+  result: { text: string; isError: boolean } | undefined;
+};
+
+const transcriptFiles = async (home: string, id: string) => {
+  const folder = projectFolder(home, id);
+  const files: string[] = [];
+  for (const transcript of await transcriptsOf(home, id)) {
+    files.push(join(folder, transcript));
+    const subagents = join(folder, transcript.replace(/\.jsonl$/, ""), "subagents");
+    const nested = await readdir(subagents).catch(() => [] as string[]);
+    files.push(
+      ...nested.filter((file) => file.endsWith(".jsonl")).map((file) => join(subagents, file)),
+    );
+  }
+  return files;
+};
+
+export const toolCalls = async (home: string, id: string): Promise<ToolCall[]> => {
+  const blocks: Block[] = [];
+  for (const file of await transcriptFiles(home, id)) {
+    for (const line of (await readFile(file, "utf8")).split("\n").filter(Boolean)) {
+      const content = (JSON.parse(line) as { message?: { content?: unknown } }).message?.content;
+      if (Array.isArray(content)) blocks.push(...(content as Block[]));
+    }
+  }
+  const results = new Map(
+    blocks
+      .filter((block) => block.type === "tool_result")
+      .map((block) => [
+        block.tool_use_id,
+        {
+          text: typeof block.content === "string" ? block.content : JSON.stringify(block.content),
+          isError: block.is_error === true,
+        },
+      ]),
+  );
+  return blocks
+    .filter((block) => block.type === "tool_use")
+    .map((block) => ({
+      name: block.name ?? "",
+      input: JSON.stringify(block.input ?? {}),
+      result: results.get(block.id),
+    }));
 };
 
 export const modelsAndUsage = async (home: string, id: string) => {

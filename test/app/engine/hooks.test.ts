@@ -9,6 +9,7 @@ describe("prepareHooks", () => {
   let home: string;
   let sourcePath: string;
   let guardSourcePath: string;
+  let webGuardSourcePath: string;
 
   const binFolder = async (name: string, node: { executable: boolean } | "none") => {
     const dir = join(folder, name);
@@ -29,6 +30,8 @@ describe("prepareHooks", () => {
     await writeFile(sourcePath, "console.log('hook v2');\n");
     guardSourcePath = join(folder, "dist", "flowdeck-build-guard.cjs");
     await writeFile(guardSourcePath, "console.log('guard v2');\n");
+    webGuardSourcePath = join(folder, "dist", "flowdeck-web-guard.cjs");
+    await writeFile(webGuardSourcePath, "console.log('web guard v2');\n");
   });
 
   afterEach(async () => {
@@ -38,17 +41,29 @@ describe("prepareHooks", () => {
   it("copies the hook script under the home's hooks folder, creating it, and returns that path", async () => {
     const bin = await binFolder("bin", { executable: true });
 
-    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath,
+      webGuardSourcePath,
+      pathEnv: bin,
+    });
 
     const copy = join(home, "hooks", "flowdeck-hook.cjs");
     expect(result).toMatchObject({ kind: "ok", nodePath: join(bin, "node"), hookScriptPath: copy });
     expect(await readFile(copy, "utf8")).toBe("console.log('hook v2');\n");
   });
 
-  it("copies the build guard script beside the hook script and returns its path", async () => {
+  it("copies the build and web guard scripts beside the hook script and returns their paths", async () => {
     const bin = await binFolder("bin", { executable: true });
 
-    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath,
+      webGuardSourcePath,
+      pathEnv: bin,
+    });
 
     const hooksDir = join(home, "hooks");
     expect(result).toEqual({
@@ -56,9 +71,13 @@ describe("prepareHooks", () => {
       nodePath: join(bin, "node"),
       hookScriptPath: join(hooksDir, "flowdeck-hook.cjs"),
       guardScriptPath: join(hooksDir, "flowdeck-build-guard.cjs"),
+      webGuardScriptPath: join(hooksDir, "flowdeck-web-guard.cjs"),
     });
     expect(await readFile(join(hooksDir, "flowdeck-build-guard.cjs"), "utf8")).toBe(
       "console.log('guard v2');\n",
+    );
+    expect(await readFile(join(hooksDir, "flowdeck-web-guard.cjs"), "utf8")).toBe(
+      "console.log('web guard v2');\n",
     );
   });
 
@@ -67,7 +86,7 @@ describe("prepareHooks", () => {
     await mkdir(join(home, "hooks"));
     await writeFile(join(home, "hooks", "flowdeck-hook.cjs"), "console.log('hook v1');\n");
 
-    prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: bin });
+    prepareHooks({ home, sourcePath, guardSourcePath, webGuardSourcePath, pathEnv: bin });
 
     expect(await readFile(join(home, "hooks", "flowdeck-hook.cjs"), "utf8")).toBe(
       "console.log('hook v2');\n",
@@ -84,6 +103,7 @@ describe("prepareHooks", () => {
       home,
       sourcePath,
       guardSourcePath,
+      webGuardSourcePath,
       pathEnv: [empty, notExecutable, first, second].join(":"),
     });
 
@@ -98,6 +118,7 @@ describe("prepareHooks", () => {
       home,
       sourcePath,
       guardSourcePath,
+      webGuardSourcePath,
       pathEnv: `${empty}:${notExecutable}`,
     });
 
@@ -108,7 +129,13 @@ describe("prepareHooks", () => {
   });
 
   it("returns an error naming node and PATH when PATH is not set", () => {
-    const result = prepareHooks({ home, sourcePath, guardSourcePath, pathEnv: undefined });
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath,
+      webGuardSourcePath,
+      pathEnv: undefined,
+    });
 
     expect(result).toEqual({
       kind: "error",
@@ -123,6 +150,7 @@ describe("prepareHooks", () => {
       home,
       sourcePath: join(folder, "dist", "missing.cjs"),
       guardSourcePath,
+      webGuardSourcePath,
       pathEnv: bin,
     });
 
@@ -136,6 +164,21 @@ describe("prepareHooks", () => {
       home,
       sourcePath,
       guardSourcePath: join(folder, "dist", "missing-guard.cjs"),
+      webGuardSourcePath,
+      pathEnv: bin,
+    });
+
+    expect(result).toEqual({ kind: "error", message: expect.stringMatching(/\S/) });
+  });
+
+  it("returns an error, without throwing, when the web guard source is missing", async () => {
+    const bin = await binFolder("bin", { executable: true });
+
+    const result = prepareHooks({
+      home,
+      sourcePath,
+      guardSourcePath,
+      webGuardSourcePath: join(folder, "dist", "missing-web-guard.cjs"),
       pathEnv: bin,
     });
 

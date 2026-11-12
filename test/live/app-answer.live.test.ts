@@ -219,6 +219,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
           nodePath: process.execPath,
           hookScriptPath,
           guardScriptPath: `${home}/hooks/flowdeck-build-guard.cjs`,
+          webGuardScriptPath: `${home}/hooks/flowdeck-web-guard.cjs`,
         }),
         ...fakeEngineBuildOptions(fs),
         connectors: new FakeConnectorSource(),
