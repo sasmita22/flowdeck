@@ -132,6 +132,13 @@ describe("checkEdit accepts", () => {
   ])("a well-formed %s", (name, input) => {
     expect(checkEdit(blueprint(), name, input)).toMatchObject({ ok: true });
   });
+
+  it("tidy_layout with no input, as an edit that carries nothing", () => {
+    expect(checkEdit(blueprint(), "tidy_layout", {})).toEqual({
+      ok: true,
+      edit: { tool: "tidy_layout" },
+    });
+  });
 });
 
 describe("newProblems", () => {

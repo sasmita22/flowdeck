@@ -12,8 +12,22 @@ import {
 import { flowSummarySchema, openedFlowSchema } from "../../../core/flow/flow-store.js";
 import type { Flow, Node } from "../../../core/flow/schema.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
-import { addNode, addWire, deleteNodes, updateNode, type Command } from "../canvas/commands.js";
-import { nextNodeId, placeNode, selectDirty, type CanvasState } from "../canvas/store.js";
+import {
+  addNode,
+  addWire,
+  deleteNodes,
+  moveNodes,
+  updateNode,
+  type Command,
+} from "../canvas/commands.js";
+import { tidyMoves } from "../canvas/layout.js";
+import {
+  defaultCanvasSize,
+  nextNodeId,
+  placeNode,
+  selectDirty,
+  type CanvasState,
+} from "../canvas/store.js";
 import type { NavState } from "../nav-store.js";
 import type { SaveState } from "../save-store.js";
 
@@ -30,6 +44,9 @@ const notReady = "the canvas is not ready";
 
 const offBlueprint =
   "Edits go only to the blueprint this agent was opened on, and only while it is open in the editor.";
+
+const changedWhileLaying =
+  "The blueprint changed while it was being laid out; nothing moved. Call tidy_layout again.";
 
 const firstPosition = { x: 80, y: 80 };
 
@@ -63,6 +80,15 @@ export function createToolHandler({
     );
   };
 
+  let structural = false;
+  let lastWasTidy = false;
+  let askGroup: Command | undefined;
+
+  const layoutOf = (flow: Flow) =>
+    tidyMoves(flow, canvas.getState().canvasSize ?? defaultCanvasSize);
+
+  const bumpFit = () => canvas.setState(({ fitSeq }) => ({ fitSeq: fitSeq + 1 }));
+
   const readSaved = async (flowId: string) => {
     const reply = await bridge.openFlow({ flowId });
     return reply === null ? null : openedFlowSchema.parse(reply);
@@ -70,7 +96,10 @@ export function createToolHandler({
 
   const listSaved = async () => z.array(flowSummarySchema).parse(await bridge.listFlows());
 
-  const commandFor = (flow: Flow, edit: BlueprintEdit): { command: Command; nodeId?: string } => {
+  const commandFor = (
+    flow: Flow,
+    edit: Exclude<BlueprintEdit, { tool: "tidy_layout" }>,
+  ): { command: Command; nodeId?: string } => {
     switch (edit.tool) {
       case "add_node": {
         const nodeId = nextNodeId(edit.type, flow);
@@ -96,13 +125,48 @@ export function createToolHandler({
     }
   };
 
-  const applyEdit = (session: string, name: string, input: unknown): Answer => {
+  const tidyLayout = async (session: string, before: Flow): Promise<Answer> => {
+    const moves = await layoutOf(before);
+    if (!isOwnOpenBlueprint(session)) return refuse(offBlueprint);
+    if (canvas.getState().flow !== before) return refuse(changedWhileLaying);
+    if (moves.length > 0) {
+      if (!canvas.getState().applyAgent(moveNodes(moves))) return refuse(notReady);
+      askGroup = canvas.getState().undoStack.at(-1);
+      bumpFit();
+    }
+    lastWasTidy = true;
+    return { ok: true, problems: newProblems(before, canvas.getState().flow) };
+  };
+
+  const tidyAtTurnEnd = () => {
+    const { flow: snapshot, undoStack } = canvas.getState();
+    const group = undoStack.at(-1);
+    const due = structural && !lastWasTidy && group !== undefined && group === askGroup;
+    canvas.getState().endAgentGroup();
+    structural = false;
+    lastWasTidy = false;
+    askGroup = undefined;
+    if (!due) return;
+    layoutOf(snapshot).then(
+      (moves) => {
+        if (moves.length === 0 || nav.getState().page.name !== "editor") return;
+        canvas.getState().foldIntoTop(group, snapshot, moves);
+      },
+      (error: unknown) => canvas.getState().tidyFailed(error),
+    );
+  };
+
+  const applyEdit = async (session: string, name: string, input: unknown): Promise<Answer> => {
     if (!isOwnOpenBlueprint(session)) return refuse(offBlueprint);
     const before = canvas.getState().flow;
     const check = checkEdit(before, name, input);
     if (!check.ok) return check;
+    if (check.edit.tool === "tidy_layout") return tidyLayout(session, before);
     const { command, nodeId } = commandFor(before, check.edit);
     if (!canvas.getState().applyAgent(command)) return refuse(notReady);
+    askGroup = canvas.getState().undoStack.at(-1);
+    structural ||= check.edit.tool === "add_node" || check.edit.tool === "wire";
+    lastWasTidy = false;
     const problems = newProblems(before, canvas.getState().flow);
     return nodeId === undefined ? { ok: true, problems } : { ok: true, nodeId, problems };
   };
@@ -158,5 +222,5 @@ export function createToolHandler({
     answer(call.data).then(reply, (error: unknown) => reply(refuse(messageOf(error))));
   });
 
-  bridge.onToolTurnEnd(() => canvas.getState().endAgentGroup());
+  bridge.onToolTurnEnd(tidyAtTurnEnd);
 }

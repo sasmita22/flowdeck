@@ -280,11 +280,24 @@ describe("the blueprint kit", () => {
     expect(fields.get("description") ?? "").not.toBe("");
   });
 
-  it("names all ten tools", () => {
+  it("names all eleven tools, each with a row in its tools table", () => {
     const content = skill();
 
-    expect(toolNames).toHaveLength(10);
-    for (const name of toolNames) expect(content, name).toContain(`\`${name}\``);
+    expect(toolNames).toHaveLength(11);
+    expect(toolsIn(content)).toEqual(expect.arrayContaining([...toolNames]));
+    expect(frontmatterOf(content).get("description")).toContain("eleven tools");
+  });
+
+  it("no longer forbids tidying the layout", () => {
+    expect(skill()).not.toContain("Do not tidy");
+  });
+
+  it("check-blueprint calls tidy_layout before its check step", () => {
+    const content = readKit("skills/check-blueprint/SKILL.md");
+    const tidy = content.indexOf("`tidy_layout`");
+
+    expect(tidy).toBeGreaterThan(-1);
+    expect(tidy).toBeLessThan(content.indexOf("`read_blueprint`"));
   });
 
   it("names the two wire kinds", () => {

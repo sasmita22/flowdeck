@@ -832,6 +832,8 @@ body,
 }
 
 .fd-canvas {
+  --canvas-corner: 200px;
+  --canvas-corner-height: 32px;
   position: relative;
   flex: 1;
   min-width: 0;
@@ -990,12 +992,19 @@ body,
   pointer-events: all;
 }
 
+.fd-canvas-toast-area {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  container-type: inline-size;
+  pointer-events: none;
+}
+
 .fd-canvas-toast {
   position: absolute;
   bottom: var(--space-5);
   left: 50%;
-  z-index: 6;
-  max-width: min(560px, calc(100% - 2 * var(--space-5)));
+  max-width: min(560px, calc(100% - 2 * (var(--canvas-corner) + var(--space-3))));
   padding: var(--space-2) var(--space-3);
   border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line));
   border-radius: 8px;
@@ -1007,13 +1016,32 @@ body,
   pointer-events: none;
 }
 
+@container (width < 664px) {
+  .fd-canvas-toast {
+    right: var(--space-3);
+    bottom: calc(var(--space-3) + var(--canvas-corner-height) + var(--space-2));
+    left: var(--space-3);
+    width: fit-content;
+    max-width: none;
+    margin-inline: auto;
+    transform: none;
+  }
+}
+
+.fd-canvas-tidy {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 5;
+}
+
 .fd-empty-hint {
   position: absolute;
   inset: 0;
   z-index: 4;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: fit-content;
+  height: fit-content;
+  margin: auto;
   color: var(--muted);
   font-size: var(--fs-lg);
   pointer-events: none;

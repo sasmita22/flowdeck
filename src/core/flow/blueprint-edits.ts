@@ -14,7 +14,8 @@ export type BlueprintEdit =
   | { tool: "change_node"; nodeId: string; label?: string; settings?: Settings }
   | { tool: "wire"; wire: Wire }
   | { tool: "delete_node"; nodeId: string }
-  | { tool: "set_variable"; variable: Variable };
+  | { tool: "set_variable"; variable: Variable }
+  | { tool: "tidy_layout" };
 
 export type EditCheck = { ok: true; edit: BlueprintEdit } | { ok: false; reason: string };
 
@@ -29,7 +30,7 @@ const settingsFor = (type: NodeType, settings: Settings): Settings | string =>
   parsed(registry[type].settings as z.ZodType<Settings>, settings);
 
 const isEditTool = (name: string): name is ToolName & BlueprintEdit["tool"] =>
-  ["add_node", "change_node", "wire", "delete_node", "set_variable"].includes(name);
+  ["add_node", "change_node", "wire", "delete_node", "set_variable", "tidy_layout"].includes(name);
 
 export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
   if (!isEditTool(name)) return refuse(`"${name}" is not a blueprint edit.`);
@@ -99,6 +100,11 @@ export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
       const variable = parsed(Variable, data);
       if (typeof variable === "string") return refuse(variable);
       return { ok: true, edit: { tool: name, variable } };
+    }
+    case "tidy_layout": {
+      const data = parsed(toolInputs.tidy_layout, input);
+      if (typeof data === "string") return refuse(data);
+      return { ok: true, edit: { tool: name } };
     }
   }
 }

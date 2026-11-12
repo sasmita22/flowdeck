@@ -29,9 +29,17 @@ const toolNames = [
   "set_variable",
   "list_builds",
   "read_build",
+  "tidy_layout",
 ];
 
-const editToolNames = ["add_node", "change_node", "wire", "delete_node", "set_variable"];
+const editToolNames = [
+  "add_node",
+  "change_node",
+  "wire",
+  "delete_node",
+  "set_variable",
+  "tidy_layout",
+];
 
 const definition = (name: string) => {
   const found = blueprintToolDefinitions().find((tool) => tool.name === name);
@@ -47,7 +55,7 @@ const objectBranches = (schema: JsonSchema): JsonSchema[] => {
 const inputBranches = (name: string) => objectBranches(definition(name).inputSchema as JsonSchema);
 
 describe("blueprintToolDefinitions", () => {
-  it("offers exactly the ten blueprint tools and nothing that builds, runs or deletes a build", () => {
+  it("offers exactly the eleven blueprint tools and nothing that builds, runs or deletes a build", () => {
     const names = blueprintToolDefinitions().map((tool) => tool.name);
 
     expect([...names].sort()).toEqual([...toolNames].sort());
@@ -133,6 +141,14 @@ describe("blueprintToolDefinitions", () => {
     expect(toolInputs.wire.safeParse(fileWire).success).toBe(false);
     expect(branch?.properties).not.toHaveProperty("file");
     expect(JSON.stringify(definition("wire"))).not.toMatch(/file/i);
+  });
+
+  it("tells the agent to tidy the layout as the last edit of an ask that added nodes or wires, then check", () => {
+    const { description } = definition("tidy_layout");
+
+    expect(description).toMatch(/last edit/i);
+    expect(description).toMatch(/nodes or wires/i);
+    expect(description).toMatch(/then check/i);
   });
 
   it("lets read_blueprint name a blueprint, optionally", () => {

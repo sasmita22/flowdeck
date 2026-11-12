@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, the one-session rule, build configuration and variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
+description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, the one-session rule, build configuration and variables, validator rules, and the eleven tools. Read before answering any question about a blueprint or changing one.
 ---
 
 # Blueprints
@@ -11,7 +11,7 @@ You are working beside the user's Flowdeck canvas. A blueprint is a drawing of m
 
 1. Call `read_blueprint` before any edit, every time, so you change what is on the canvas now and not what you remember.
 2. If an ask is unclear, ask the user a question instead of editing. Unclear means you would have to guess a node, a port, a setting value, a file name or which blueprint is meant. Say what you would do and the choice you need.
-3. Make only the edits the ask needs. Do not tidy, rename or rewire anything else.
+3. Make only the edits the ask needs. Do not rename or rewire anything else.
 4. Load the `write-node` skill before adding a node or editing a node's settings.
 5. Load the `copy-flow` skill when asked to copy, recreate or rebuild a flow from a file or a GitHub link.
 6. After your edits, read each answer. A refused edit changed nothing: fix the input from its `reason` or ask the user. An applied edit can still report `problems` (see Validator rules); tell the user about any you did not fix.
@@ -109,6 +109,7 @@ Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved bluepri
 | `wire`              | Connects an output port to an input port                                                        | `kind`, `from` and `to` (each `{ node, port }`) |
 | `delete_node`       | Deletes a node and its wires                                                                    | `nodeId`                                        |
 | `set_variable`      | Adds a build variable, or changes the one with the same name                                    | `name`, `kind`, `default`                       |
+| `tidy_layout`       | Lays out the open blueprint; the last edit of an ask that added nodes or wires                  | none                                            |
 | `list_builds`       | Lists the builds made from blueprints                                                           | none                                            |
 | `read_build`        | Reads one build                                                                                 | `id`                                            |
 

@@ -39,6 +39,7 @@ export const toolInputs = {
     .strict(),
   list_builds: z.object({}),
   read_build: z.object({ id: z.string() }),
+  tidy_layout: z.strictObject({}),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -55,6 +56,8 @@ const descriptions: Record<ToolName, string> = {
   set_variable: "Add a build variable, or change the one with the same name.",
   list_builds: "List the builds made from blueprints.",
   read_build: "Read one build.",
+  tidy_layout:
+    "Lay out the open blueprint. It moves nodes only and is part of the ask's one undo step. Call it as the last edit of every ask that added nodes or wires, then check the blueprint.",
 };
 
 export const toolNames = Object.keys(toolInputs) as ToolName[];

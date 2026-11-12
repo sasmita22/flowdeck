@@ -63,6 +63,7 @@ describe("test ids", () => {
       "blueprint-terminal-toggle",
       "blueprint-terminal-minimize",
       "blueprint-terminal-close",
+      "canvas-tidy",
     ]);
     expect(controlTestIds).not.toHaveProperty("fileWireName");
   });
