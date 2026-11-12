@@ -236,8 +236,6 @@ describe("entryText", () => {
     [tool(1), "Bash ls"],
     [subagent(1, "running"), "general-purpose Run a1 running"],
     [{ ...base, kind: "turn", summary: "Wrote it." }, "Turn ended: Wrote it."],
-    [{ ...base, kind: "output", stream: "stdout", summary: "hi", text: "hi" }, "Output: hi"],
-    [{ ...base, kind: "output", stream: "stderr", summary: "boom", text: "boom" }, "Errors: boom"],
     [
       { ...base, kind: "failure", summary: "Script exited with code 3" },
       "Failed: Script exited with code 3",

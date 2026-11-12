@@ -40,8 +40,6 @@ export function entryText(entry: ActivityEntry): string {
       return `${entry.agentType} ${entry.summary} ${entry.state}`;
     case "turn":
       return `Turn ended: ${entry.summary}`;
-    case "output":
-      return `${entry.stream === "stdout" ? "Output" : "Errors"}: ${entry.summary}`;
     case "failure":
       return `Failed: ${entry.summary}`;
     case "context":

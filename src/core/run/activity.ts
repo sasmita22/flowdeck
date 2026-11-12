@@ -17,12 +17,6 @@ export const activityEntrySchema = z.discriminatedUnion("kind", [
     agentId: z.string().optional(),
   }),
   z.object({ ...base, kind: z.literal("turn") }),
-  z.object({
-    ...base,
-    kind: z.literal("output"),
-    stream: z.enum(["stdout", "stderr"]),
-    text: z.string(),
-  }),
   z.object({ ...base, kind: z.literal("failure") }),
   z.object({ ...base, kind: z.literal("context") }),
   z.object({ ...base, kind: z.literal("pr"), url: z.string() }),
@@ -55,7 +49,6 @@ export const feedOf = (entries: readonly ActivityEntry[]): ActivityFeed => ({
 export type FoldResult = { feed: ActivityFeed; changed: ActivityEntry | undefined };
 
 const summaryLimit = 80;
-const outputLimit = 2000;
 const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const pullRequestUrl = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const defaultAgentType = "general-purpose";
@@ -238,29 +231,5 @@ export function foldNodeEvent(
     ...common,
     kind: "turn",
     summary: message === "" ? "Turn ended" : cut(message),
-  });
-}
-
-export function foldOutput(
-  feed: ActivityFeed,
-  {
-    nodeId,
-    at,
-    stream,
-    text,
-  }: { nodeId: string; at: number; stream: "stdout" | "stderr"; text: string },
-): FoldResult {
-  const trimmed = text.trim();
-  if (trimmed === "") return { feed, changed: undefined };
-  const kept = trimmed.length > outputLimit ? `…${trimmed.slice(1 - outputLimit)}` : trimmed;
-  const firstLine = trimmed.split("\n")[0]?.trim() ?? "";
-  return added(feed, {
-    id: feed.nextId,
-    nodeId,
-    at,
-    kind: "output",
-    stream,
-    summary: cut(firstLine),
-    text: kept,
   });
 }

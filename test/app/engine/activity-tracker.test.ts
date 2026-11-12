@@ -20,7 +20,6 @@ describe("createActivityTracker", () => {
   let store: Store;
   let source: FakeEventSource;
   let unwatch: () => void;
-  let output: (nodeId: string, stream: "stdout" | "stderr", text: string) => void;
 
   const hook = (
     kind: "PreToolUse" | "PostToolUse" | "SubagentStop",
@@ -76,7 +75,6 @@ describe("createActivityTracker", () => {
       turnNodes: new Set(["p2"]),
       place: { cwd: "/repo", home: "/Users/me" },
     });
-    output = (nodeId, stream, text) => tracker.output(nodeId, stream, text);
     store = tracker.store(inner);
     clock = 100;
     store.append(runId, "p1", { kind: "sent" });
@@ -257,23 +255,6 @@ describe("createActivityTracker", () => {
     expect(inner.activity(runId)).toHaveLength(2);
   });
 
-  it("writes script output it is handed as an output entry on that node", () => {
-    clock = 410;
-    output("p2", "stdout", "hello\n");
-
-    expect(activity().map((push) => push.value.entry)).toEqual([
-      {
-        id: 1,
-        nodeId: "p2",
-        at: 410,
-        kind: "output",
-        stream: "stdout",
-        summary: "hello",
-        text: "hello",
-      },
-    ]);
-  });
-
   it("writes a pr entry for the URL gh pr create printed", () => {
     hook("PostToolUse", 350, {
       tool_name: "Bash",
@@ -306,7 +287,10 @@ describe("createActivityTracker", () => {
       place: { cwd: "/repo" },
     });
 
-    tracker.output("p1", "stdout", "new");
+    tracker.store(stored).append(id, "p1", {
+      kind: "failed",
+      payload: { message: "p1 failed: boom" },
+    });
 
     expect(stored.activity(id).map((entry) => entry.id)).toEqual([7, 8]);
   });

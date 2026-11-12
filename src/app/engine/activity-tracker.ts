@@ -2,7 +2,6 @@ import {
   feedOf,
   foldHookEvent,
   foldNodeEvent,
-  foldOutput,
   type ActivityEntry,
   type ActivityFeed,
   type ActivityHookEvent,
@@ -28,7 +27,6 @@ export type ActivityTrackerOptions = {
 export type ActivityTracker = {
   store(inner: Store): Store;
   watch(events: TurnEvents, sessionId: string): () => void;
-  output(nodeId: string, stream: "stdout" | "stderr", text: string): void;
 };
 
 export function createActivityTracker(options: ActivityTrackerOptions): ActivityTracker {
@@ -108,8 +106,6 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
         for (const unsubscribe of unsubscribes) unsubscribe();
       };
     },
-    output: (nodeId, stream, text) =>
-      apply((current) => foldOutput(current, { nodeId, at: now(), stream, text })),
   };
 }
 

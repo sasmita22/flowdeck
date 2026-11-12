@@ -7,7 +7,6 @@ import {
   feedOf,
   foldHookEvent,
   foldNodeEvent,
-  foldOutput,
   type ActivityEntry,
   type ActivityFeed,
   type ActivityHookEvent,
@@ -616,42 +615,6 @@ describe("context compaction in the feed", () => {
       kind: "context",
       summary: "Context compacted at 162k tokens",
     });
-  });
-});
-
-describe("script output in the feed", () => {
-  it("adds one entry per stream with the output trimmed, its first line as the summary", () => {
-    const { changed } = foldOutput(emptyFeed, {
-      nodeId: "s1",
-      at: 3,
-      stream: "stderr",
-      text: "\n  boom\nat line 2\n\n",
-    });
-
-    expect(changed).toEqual({
-      id: 1,
-      nodeId: "s1",
-      at: 3,
-      kind: "output",
-      stream: "stderr",
-      summary: "boom",
-      text: "boom\nat line 2",
-    });
-  });
-
-  it("keeps the last part of a very long output", () => {
-    const text = `${"x".repeat(5000)}END`;
-
-    const { changed } = foldOutput(emptyFeed, { nodeId: "s1", at: 3, stream: "stdout", text });
-
-    expect(changed?.kind === "output" && changed.text.length).toBeLessThanOrEqual(2000);
-    expect(changed?.kind === "output" && changed.text.endsWith("END")).toBe(true);
-  });
-
-  it("adds nothing for blank output", () => {
-    expect(
-      foldOutput(emptyFeed, { nodeId: "s1", at: 3, stream: "stdout", text: " \n" }).changed,
-    ).toBeUndefined();
   });
 });
 
