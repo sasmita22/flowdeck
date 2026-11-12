@@ -421,6 +421,11 @@ for (const container of ["loop", "foreach"] as const) {
       window.getByTestId(`port-${id}-out`),
       window.getByTestId("port-output-1-in"),
     );
+    await window.getByTestId("node-output-1").click();
+    await window.getByTestId("node-setting-name").fill("result");
+    await window.getByTestId("node-setting-name").blur();
+    await window.getByTestId("node-setting-type").fill("text");
+    await window.getByTestId("node-setting-type").blur();
 
     const buildId = await buildOnCanvas(window, home, container);
     await writeFile(join(workFolder(buildId), "items.txt"), "- alpha\n- bravo\n");

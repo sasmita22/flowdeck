@@ -210,6 +210,24 @@ describe("orchestratorSkill", () => {
     expect(lineOf(skill().content, "h")).toMatch(/hard rule.*tests fail/i);
   });
 
+  it("states a Stop's output as the run's result handed back to the user, not a file a step writes", () => {
+    const stopped = flow(
+      [
+        trigger("t"),
+        labelled(output("o", { settings: { name: "summary", type: "markdown" } }), "Done"),
+      ],
+      [thenWire("t", "o")],
+    );
+    const line = lineOf(skill(stopped).content, "o");
+
+    expect(line).toMatch(/^\d+\. NODE o \(Done\): /);
+    expect(line).toContain("the run ends here");
+    expect(line).toContain("`summary` (markdown)");
+    expect(line).toContain("handed back to the user");
+    expect(line).toContain("not a file any step writes");
+    expect(line).not.toContain("is ready");
+  });
+
   it("changes when a wire changes, and is the same for the same flow", () => {
     const base = sample();
     const rewired = {

@@ -499,6 +499,11 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
   await window.getByTestId("node-agent-1").click();
   await window.getByTestId("node-setting-instructions").fill("Print the working folder.");
   await window.getByTestId("node-setting-instructions").blur();
+  await window.getByTestId("node-output-1").click();
+  await window.getByTestId("node-setting-name").fill("result");
+  await window.getByTestId("node-setting-name").blur();
+  await window.getByTestId("node-setting-type").fill("text");
+  await window.getByTestId("node-setting-type").blur();
 
   await window.getByTestId(controlTestIds.build).click();
 

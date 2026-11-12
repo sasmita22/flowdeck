@@ -180,6 +180,21 @@ describe("connect", () => {
     expect(store.getState().undoStack).toHaveLength(3);
   });
 
+  it("wires Start to a Stop freshly dropped with its empty output", () => {
+    const store = createCanvasStore();
+    act(store, (s) => s.drop("trigger", { x: 0, y: 0 }));
+    act(store, (s) => s.drop("output", { x: 200, y: 0 }));
+    const [start, stop] = store.getState().flow.nodes;
+    if (start === undefined || stop === undefined) throw new Error("expected two nodes");
+    expect(stop.settings).toEqual({ name: "", type: "" });
+
+    const accepted = act(store, (s) => s.connect(end(start.id, "out"), end(stop.id, "in")));
+
+    expect(store.getState().message).toBeNull();
+    expect(accepted).toBe(true);
+    expect(store.getState().flow.wires).toEqual([then(start.id, stop.id)]);
+  });
+
   const refused: [
     string,
     boolean,

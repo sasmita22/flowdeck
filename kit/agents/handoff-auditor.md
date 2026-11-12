@@ -15,7 +15,8 @@ Read the build as one flow and make its pieces work together. Fix wording; recor
 ## Inputs
 
 - The prompt: `PIECE workspace`, then `REPO <path>`, the target repo's absolute path, then each question the user answered as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again.
-- Your working folder is the build's workspace: `manifest.json` (nodes and wires, read only), `CLAUDE.md`, `settings.json` (read only), every file under `plugin/agents/`, `plugin/skills/` and `plugin/templates/`, and the target repo at the `REPO <path>` path (read only: Read, Grep and Glob).
+- Your working folder is the build's workspace: `manifest.json` (nodes, wires and `outputs`, read only), `CLAUDE.md`, `settings.json` (read only), every file under `plugin/agents/`, `plugin/skills/` and `plugin/templates/`, and the target repo at the `REPO <path>` path (read only: Read, Grep and Glob).
+- `manifest.json` `outputs`: one `{ "node", "name", "type" }` per Stop node: what the run hands back to the user when it ends. It is not a file, so no node writes it and it never needs a writer.
 - Five kit skills, read by path from `${CLAUDE_PLUGIN_ROOT}/skills/<name>/SKILL.md`: `audit-handoffs`, `audit-duplicates`, `extract-shared`, `audit-orchestrator`, `write-workspace-rules`.
 
 ## Steps
