@@ -116,6 +116,25 @@ describe("blueprintToolDefinitions", () => {
     expect(add.description).not.toMatch(/prompt|script/i);
   });
 
+  it.each(["then", "event"])("lets wire take a %s wire", (kind) => {
+    const input = { kind, from: { node: "a1", port: "out" }, to: { node: "p1", port: "in" } };
+    expect(toolInputs.wire.safeParse(input).success).toBe(true);
+  });
+
+  it("refuses a File wire and never mentions one in the wire tool", () => {
+    const fileWire = {
+      kind: "file",
+      file: "plan.md",
+      from: { node: "a1", port: "file-out" },
+      to: { node: "p1", port: "file-in" },
+    };
+    const [branch] = inputBranches("wire");
+
+    expect(toolInputs.wire.safeParse(fileWire).success).toBe(false);
+    expect(branch?.properties).not.toHaveProperty("file");
+    expect(JSON.stringify(definition("wire"))).not.toMatch(/file/i);
+  });
+
   it("lets read_blueprint name a blueprint, optionally", () => {
     const [branch] = inputBranches("read_blueprint");
     expect(branch?.properties?.blueprint?.type).toBe("string");

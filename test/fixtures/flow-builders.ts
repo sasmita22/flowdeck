@@ -90,7 +90,7 @@ export const onMainFlow = (nodes: unknown[], wires: unknown[]): Flow => {
     return parent === undefined ? id : topOf(parent);
   };
   const crossing = (wires as Linked[])
-    .filter((wire) => wire.kind === "then" || wire.kind === "file")
+    .filter((wire) => wire.kind === "then")
     .map((wire) => ({ from: topOf(wire.from.node), to: topOf(wire.to.node) }))
     .filter((wire) => wire.from !== wire.to);
 

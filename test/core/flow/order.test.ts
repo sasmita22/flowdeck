@@ -27,7 +27,6 @@ const wire = (kind: string, from: string, to: string) => ({
   kind,
   from: { node: from, port: "out" },
   to: { node: to, port: "in" },
-  ...(kind === "file" ? { file: "notes.md" } : {}),
 });
 
 const then = (from: string, to: string) => wire("then", from, to);
@@ -86,7 +85,7 @@ describe("order", () => {
   });
 
   it("orders by Then wires only", () => {
-    const input = flow([agent("B"), agent("A")], [wire("file", "A", "B"), wire("event", "A", "B")]);
+    const input = flow([agent("B"), agent("A")], [wire("event", "A", "B")]);
     expect(order(input)).toEqual(["B", "A"]);
   });
 

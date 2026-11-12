@@ -9,7 +9,7 @@ import {
   type CanvasState,
 } from "../canvas/store.js";
 import { Field, type Commit } from "./field.js";
-import { applyNodeSetting, describeNodeFields } from "./node-form.js";
+import { applyNodeSetting, describeNodeFields, missingYesNoVariable } from "./node-form.js";
 
 const headingStyle: CSSProperties = { fontSize: "var(--fs-md)", margin: "12px 0 4px" };
 
@@ -20,12 +20,10 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const flow = useStore(canvas, (state) => state.flow);
   if (node === null) return null;
   const item = paletteItems.find((entry) => entry.type === node.type);
-  const fields = describeNodeFields(node.type, flow);
+  const fields = describeNodeFields(node.type, flow, node.settings);
   const issues = selectFieldIssues(flow, node.id);
   const problems = selectNodeIssues(flow)[node.id] ?? [];
-  const noVariables =
-    node.type === "branch" &&
-    !flow.session.buildConfig.variables.some(({ kind }) => kind === "yesno");
+  const noVariables = missingYesNoVariable(node, flow);
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {

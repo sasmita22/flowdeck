@@ -165,7 +165,7 @@ export class SqliteFlowStore implements FlowStore {
           wire.from.port,
           wire.to.node,
           wire.to.port,
-          wire.kind === "file" ? wire.file : null,
+          null,
         );
       });
 

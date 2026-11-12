@@ -1,3 +1,4 @@
+import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
@@ -181,14 +182,12 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
   if (!(back.get("CLAUDE.md") ?? "").includes(standardRules.text))
     fail("CLAUDE.md", "standard-rules", "the standard rules are missing or altered");
 
-  const fileWires = new Set(
-    flow.wires.flatMap((wire) =>
-      wire.kind === "file" && hasTemplate(wire.file) ? [wire.file] : [],
-    ),
+  const handedOn = new Set(
+    handoffPairs(flow.nodes).flatMap((pair) => (hasTemplate(pair.file) ? [pair.file] : [])),
   );
-  for (const file of fileWires) {
+  for (const file of handedOn) {
     if (!back.has(templatePath(file)))
-      fail(templatePath(file), "template", `File wire ${file} has no template`);
+      fail(templatePath(file), "template", `hand-off file ${file} has no template`);
   }
 
   const orchestrator = back.get(orchestratorPath);

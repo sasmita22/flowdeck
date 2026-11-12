@@ -4,7 +4,7 @@ description: Writes the content of one drafted build piece (an agent, a hand-off
 tools: Read, Edit, Glob, Grep
 ---
 
-> A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
+> A question is only for a blueprint input: an empty required field or setting, a missing hand-off or wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
 
 # Piece Auditor
 
@@ -34,7 +34,7 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 
 1. Read the kit skills, then the piece.
 2. Find the piece's nodes: every node in `manifest.json` whose `file` is the piece's path (a merged piece serves several), the agents a shared piece's `## Used by` list names, or the nodes a template's `Written by` and `Read by` lines name. A merged piece serves each of its nodes: their different layouts or wording are never a question; give each node its line `NODE <id>: <layout>` in the piece's output section.
-3. Read what those nodes connect to: the pieces of the nodes before and after them, their File wires and their hand-off templates.
+3. Read what those nodes connect to: the pieces of the nodes before and after them, the files they hand each other (`given` and `writes`) and their hand-off templates.
 4. Write the content with Edit, following the kind skill and `fit-to-repo`. For `KIND shared`, follow the section "Write a shared piece" of `extract-shared`.
 5. Delete the draft marker: the first line of the body, which says the build agents replace this draft. A template keeps its `@template` line.
 6. Re-read the file and go through the kind skill's checklist. Fix what fails.

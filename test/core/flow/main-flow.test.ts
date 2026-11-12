@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { mainFlow, mainFlowOnly } from "../../../src/core/flow/main-flow.js";
 import {
   agent,
-  fileWire,
   flow,
   forEach,
   loop,
@@ -122,16 +121,11 @@ describe("mainFlow", () => {
     expect(reachedIds(found)).toEqual(["each", "p", "start", "stop"]);
   });
 
-  it("follows File wires but not event wires", () => {
+  it("does not follow event wires", () => {
     const found = mainFlow(
       flow(
         [trigger("start"), agent("a"), agent("b"), agent("c"), output("stop")],
-        [
-          thenWire("start", "a"),
-          fileWire("a", "b", "notes.md"),
-          eventWire("a", "c"),
-          thenWire("b", "stop"),
-        ],
+        [thenWire("start", "a"), thenWire("a", "b"), eventWire("a", "c"), thenWire("b", "stop")],
       ),
     );
 

@@ -1,6 +1,6 @@
 ---
 name: write-node
-description: How to write one blueprint node well - choosing its type, an Agent's role, instructions and expected output, what it builds on, and when a File wire carries its work. Read before adding a node or editing a node's settings.
+description: How to write one blueprint node well - choosing its type, an Agent's role, instructions and expected output, what it builds on, the files it hands on, and the yes/no value it produces. Read before adding a node or editing a node's settings.
 ---
 
 # Write a node
@@ -18,23 +18,24 @@ If what the user said fits more than one type, ask which they mean instead of pi
 
 ## Agent node
 
-| Part            | Where it goes                                                | What it says                                                                            |
-| --------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| Role            | `role`                                                       | Who the subagent is, in one line, for example "Reviewer of the change against the plan" |
-| Instructions    | `instructions`                                               | What to do, as steps in order, then what to hand back                                   |
-| Expected output | The last line of `instructions`, starting `Expected output:` | The file it writes and what that file holds, or the reply it ends with                  |
-| Files           | `given` and `writes`, or File wires (see below)              | The files it reads and the files it leaves                                              |
-| Tools           | `tools`                                                      | Only tools in the session's allowed tools (`agent-tools`)                               |
+| Part            | Where it goes                                                | What it says                                                                                  |
+| --------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Role            | `role`                                                       | Who the subagent is, in one line, for example "Reviewer of the change against the plan"       |
+| Instructions    | `instructions`                                               | What to do, as steps in order, then what to hand back                                         |
+| Expected output | The last line of `instructions`, starting `Expected output:` | The file it writes and what that file holds, or the reply it ends with                        |
+| Files           | `given` and `writes` (see below)                             | The files it reads and the files it leaves                                                    |
+| Produces        | `produces` (optional)                                        | The name of a yes/no value it answers at the end of its turn, for a later Branch to decide on |
+| Tools           | `tools`                                                      | Only tools in the session's allowed tools (`agent-tools`)                                     |
 
 The Agent settings have no expected output field, which is why it is a line in `instructions`. Leave `model` at its default unless the user names one.
 
-A good Agent does one job, with its steps in the user's words. An Agent that is not the first step on the main flow says in its `instructions` what it builds on: the file it reads, given in `given` or carried by a File wire, named as the earlier node names it. Every file it leaves for a later node is in `writes` or on a File wire from it.
+A good Agent does one job, with its steps in the user's words. An Agent that is not the first step on the main flow says in its `instructions` what it builds on: the file it reads, listed in `given`, named as the earlier node names it. Every file it leaves for a later node is in `writes`.
 
-## File wires
+## Hand-offs
 
-Use a `file` wire when a later node needs something an earlier node writes as a file: from the writer's `file-out` to the reader's `file-in`. Agent nodes have both ports; For each has only `file-in`, for its list file.
+An Agent sees only the files it is given, so when an Agent works on what an earlier Agent produces, the earlier one lists the file in its `writes` and the later one lists the same name in its `given`. That match is the hand-off. A `given` file no Agent writes is a file already in the repo. The writer must run before the reader on every path, never beside it in a parallel section; `then` wires set that order.
 
-An Agent sees only the files it is given, so when an Agent works on what an earlier node produces, that node writes it to a file and a `file` wire carries it to the Agent. A `file` wire carries data, not order: keep the `then` wire between the two nodes as well.
+When a later step picks a path from a yes or no the work decides, the Agent that decides it names the value in `produces`, and the Branch is decided by that value. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on.
 
 Name the file for what it holds, with the extension of its format, for example `plan.md` or `review-notes.md`. A `.md` file gets a hand-off template in the build. The writer's instructions and the reader's instructions use the same name.
 

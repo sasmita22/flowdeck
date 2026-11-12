@@ -1,5 +1,4 @@
 import type { CanvasNote, Flow, Node, Session, Wire } from "../../../core/flow/schema.js";
-import { edgeId } from "./view.js";
 
 export interface Command {
   do(flow: Flow): Flow;
@@ -191,12 +190,4 @@ export const updateNode = (next: Node): Command => {
     },
     undo: (flow) => replace(flow, previous),
   };
-};
-
-export const replaceWire = (old: Wire, next: Wire): Command => {
-  const swap = (from: Wire, to: Wire) => (flow: Flow) => ({
-    ...flow,
-    wires: flow.wires.map((wire) => (edgeId(wire) === edgeId(from) ? to : wire)),
-  });
-  return { do: swap(old, next), undo: swap(next, old) };
 };

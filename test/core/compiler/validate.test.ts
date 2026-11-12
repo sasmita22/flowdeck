@@ -45,15 +45,18 @@ describe("validate", () => {
     expect(brokenFixtures).not.toContain("session-folder.json");
   });
 
-  it.each(["undeclared-variable", "variable-names", "branch-variable", "repo-required"])(
-    "reports exactly %s for its broken fixture",
-    (ruleId) => {
-      const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
+  it.each([
+    "undeclared-variable",
+    "variable-names",
+    "branch-variable",
+    "branch-value",
+    "repo-required",
+  ])("reports exactly %s for its broken fixture", (ruleId) => {
+    const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
 
-      expect(errors.length).toBeGreaterThan(0);
-      expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
-    },
-  );
+    expect(errors.length).toBeGreaterThan(0);
+    expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
+  });
 
   it("has one broken fixture per rule", () => {
     const fixtureIds = brokenFixtures.map((name) => name.replace(/\.json$/, ""));

@@ -9,13 +9,16 @@ import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-
 import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
-import { agent, fileWire, flow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
 import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
 const sample = () => {
   const base = flow(
-    [agent("p"), agent("a", { settings: { tools: ["Grep"] } })],
-    [thenWire("p", "a"), fileWire("p", "a", "plan.md")],
+    [
+      agent("p", { settings: { writes: ["plan.md"] } }),
+      agent("a", { settings: { tools: ["Grep"], given: ["plan.md"] } }),
+    ],
+    [thenWire("p", "a")],
   );
   return {
     ...base,
@@ -102,10 +105,12 @@ describe("emit", () => {
     ]);
   });
 
-  it("writes one hand-off template per File-wire file", () => {
+  it("writes one hand-off template per hand-off file", () => {
     const files = emitted();
+    const templates = handoffTemplates(sample(), "carousell-web");
 
-    for (const template of handoffTemplates(sample(), "carousell-web")) {
+    expect(templates.map((template) => template.path)).toEqual(["plugin/templates/plan.md"]);
+    for (const template of templates) {
       expect(fileAt(files, template.path)).toBe(template.content);
     }
   });

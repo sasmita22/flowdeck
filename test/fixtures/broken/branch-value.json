@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "label": "Start",
+      "type": "trigger",
+      "position": { "x": 0, "y": 0 },
+      "settings": {}
+    },
+    {
+      "id": "ifpassed",
+      "label": "Tests passed?",
+      "type": "branch",
+      "position": { "x": 240, "y": 0 },
+      "settings": { "variable": "", "decidedBy": "value", "value": "tests-passed" }
+    },
+    {
+      "id": "check",
+      "label": "Check",
+      "type": "agent",
+      "position": { "x": 480, "y": 0 },
+      "settings": {
+        "role": "",
+        "instructions": "Run the tests.",
+        "model": "sonnet",
+        "tools": [],
+        "produces": "tests-passed"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "type": "output",
+      "position": { "x": 720, "y": 0 },
+      "settings": { "name": "result", "type": "text" }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": { "node": "start", "port": "out" },
+      "to": { "node": "ifpassed", "port": "in" }
+    },
+    {
+      "kind": "then",
+      "from": { "node": "ifpassed", "port": "yes" },
+      "to": { "node": "check", "port": "in" }
+    },
+    {
+      "kind": "then",
+      "from": { "node": "check", "port": "out" },
+      "to": { "node": "done", "port": "in" }
+    }
+  ],
+  "session": {
+    "name": "main",
+    "buildConfig": {
+      "repo": "/work/repo",
+      "base": "main",
+      "variables": []
+    },
+    "model": "sonnet",
+    "allowedTools": [],
+    "permissionMode": "default",
+    "connectors": []
+  }
+}

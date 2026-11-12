@@ -7,18 +7,21 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { frontmatter } from "../../fixtures/frontmatter.js";
-import { agent, fileWire, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
 const sample = (): Flow => {
   const base = onMainFlow(
     [
-      labelled(agent("p"), "Draft the spec"),
-      labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
+      labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
+      labelled(
+        agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }),
+        "Review the draft",
+      ),
       labelled(agent("s"), "Ship it"),
     ],
-    [thenWire("p", "a"), thenWire("a", "s"), fileWire("p", "a", "spec.md")],
+    [thenWire("p", "a"), thenWire("a", "s")],
   );
   return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
 };

@@ -22,34 +22,19 @@ export const ignoredMarks = (ignored: boolean | undefined) =>
 
 export const BODY_HEIGHT = 48;
 
-const FILE_PORT_INSET = 24;
-
 const REASON_OVERHANG = 30;
 
-export const ports = (id: string, type: NodeType, width = nodeLook(type).box.width) => {
-  return nodeLook(type).ports.map(({ name, direction, kind }) =>
-    kind === "file" ? (
-      <Handle
-        key={name}
-        id={name}
-        className="fd-file-port"
-        type={direction === "in" ? "target" : "source"}
-        position={Position.Bottom}
-        style={{ left: direction === "in" ? FILE_PORT_INSET : width - FILE_PORT_INSET }}
-        title={direction === "in" ? "Files this step needs" : "Files this step writes"}
-        data-testid={`port-${id}-${name}`}
-      />
-    ) : (
-      <Handle
-        key={name}
-        id={name}
-        type={direction === "in" ? "target" : "source"}
-        position={direction === "in" ? Position.Left : Position.Right}
-        style={{ top: BODY_HEIGHT / 2 }}
-        data-testid={`port-${id}-${name}`}
-      />
-    ),
-  );
+export const ports = (id: string, type: NodeType) => {
+  return nodeLook(type).ports.map(({ name, direction }) => (
+    <Handle
+      key={name}
+      id={name}
+      type={direction === "in" ? "target" : "source"}
+      position={direction === "in" ? Position.Left : Position.Right}
+      style={{ top: BODY_HEIGHT / 2 }}
+      data-testid={`port-${id}-${name}`}
+    />
+  ));
 };
 
 export const Extras = ({ extras }: { extras: readonly ShapeExtra[] }) =>
@@ -64,7 +49,7 @@ export function NodeShape({
   highlighted,
   ignored,
   width,
-  handles = ports(id, type, width),
+  handles = ports(id, type),
   overlay,
   children,
 }: {

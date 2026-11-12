@@ -2,10 +2,12 @@ import type { z } from "zod";
 import { agentPlaceholder } from "../../../core/compiler/rules/required-settings.js";
 import { agentModelChoices } from "../../../core/flow/choices.js";
 import type { Flow, Node, NodeType } from "../../../core/flow/schema.js";
+import { decidedByValue, defaultDecidedBy } from "../../../core/nodes/branch/settings.js";
 import { registry } from "../../../core/nodes/registry.js";
 import {
   assignField,
   describeFields,
+  producedChoices,
   withChoices,
   yesNoChoices,
   type FieldDescription,
@@ -25,12 +27,14 @@ const typeForm = (
     optionLabels = {},
     choices = {},
     placeholders = {},
+    fallbacks = {},
   }: {
     multiline?: string[];
     hidden?: string[];
     optionLabels?: Form["optionLabels"];
     choices?: NonNullable<Form["choices"]>;
     placeholders?: NonNullable<Form["placeholders"]>;
+    fallbacks?: NonNullable<Form["fallbacks"]>;
   } = {},
 ): Form => ({
   prefix: "node-setting",
@@ -40,6 +44,7 @@ const typeForm = (
   hidden: new Set(hidden),
   choices,
   placeholders,
+  fallbacks,
 });
 
 const forms: Record<NodeType, Form> = {
@@ -51,6 +56,7 @@ const forms: Record<NodeType, Form> = {
       tools: "Allowed tools (one per line)",
       given: "Files it is given (one per line)",
       writes: "Files it writes (one per line)",
+      produces: "Yes/no value it produces (optional)",
     },
     {
       multiline: ["instructions"],
@@ -94,7 +100,15 @@ const forms: Record<NodeType, Form> = {
     },
   ),
   foreach: typeForm({ file: "List file, one item per line" }),
-  branch: typeForm({ variable: "Yes/no variable" }),
+  branch: typeForm(
+    { decidedBy: "Decided by", variable: "Yes/no variable", value: "Value it reads" },
+    {
+      optionLabels: {
+        decidedBy: { variable: "A build variable", value: "A value an earlier Agent produces" },
+      },
+      fallbacks: { decidedBy: defaultDecidedBy },
+    },
+  ),
 };
 
 const lockedMessage = "Hard stop is locked";
@@ -103,14 +117,25 @@ type SettingsSchema = z.ZodObject<z.ZodRawShape>;
 
 const schemaOf = (type: NodeType) => registry[type].settings as SettingsSchema;
 
+const branchFields = (
+  fields: readonly FieldDescription[],
+  flow: Pick<Flow, "session" | "nodes"> | undefined,
+  settings: Readonly<Record<string, unknown>>,
+): FieldDescription[] => {
+  const byValue = decidedByValue(settings);
+  const shown = fields.filter(({ path }) => path[0] !== (byValue ? "variable" : "value"));
+  return byValue
+    ? withChoices(shown, "value", producedChoices(flow?.nodes ?? []))
+    : withChoices(shown, "variable", yesNoChoices(flow?.session.buildConfig ?? { variables: [] }));
+};
+
 export const describeNodeFields = (
   type: NodeType,
-  flow?: Pick<Flow, "session">,
+  flow?: Pick<Flow, "session" | "nodes">,
+  settings: Readonly<Record<string, unknown>> = {},
 ): FieldDescription[] => {
   const fields = describeFields(schemaOf(type), forms[type]);
-  return type === "branch"
-    ? withChoices(fields, "variable", yesNoChoices(flow?.session.buildConfig ?? { variables: [] }))
-    : fields;
+  return type === "branch" ? branchFields(fields, flow, settings) : fields;
 };
 
 export type SettingResult = { node: Node } | { error: string };
@@ -146,3 +171,8 @@ export const renameFlag = (flags: Flags, from: string, to: string): Flags => {
 
 export const removeFlag = (flags: Flags, name: string): Flags =>
   Object.fromEntries(Object.entries(flags).filter(([key]) => key !== name));
+
+export const missingYesNoVariable = (node: Node, flow: Flow): boolean =>
+  node.type === "branch" &&
+  !decidedByValue(node.settings) &&
+  !flow.session.buildConfig.variables.some(({ kind }) => kind === "yesno");

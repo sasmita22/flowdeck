@@ -61,7 +61,13 @@ function liveFlow() {
         type: "agent",
         position: at(2),
         parent: "l1",
-        settings: { role: "", instructions: reviewText, model: "haiku", tools: [] },
+        settings: {
+          role: "",
+          instructions: reviewText,
+          model: "haiku",
+          tools: [],
+          writes: ["review.md"],
+        },
       },
       {
         id: "fix",
@@ -69,7 +75,13 @@ function liveFlow() {
         type: "agent",
         position: at(3),
         parent: "l1",
-        settings: { role: "", instructions: fixText, model: "haiku", tools: ["Read", "Edit"] },
+        settings: {
+          role: "",
+          instructions: fixText,
+          model: "haiku",
+          tools: ["Read", "Edit"],
+          given: ["review.md"],
+        },
       },
       {
         id: "o",
@@ -79,18 +91,7 @@ function liveFlow() {
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [
-      then("t", "review"),
-      then("review", "fix"),
-      then("fix", "review"),
-      then("fix", "o"),
-      {
-        kind: "file",
-        from: { node: "review", port: "file-out" },
-        to: { node: "fix", port: "file-in" },
-        file: "review.md",
-      },
-    ],
+    wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
     session: {
       name: "main",
       buildConfig: { base: "main", variables: [] },

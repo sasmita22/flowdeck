@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentProducesTestId,
+  branchDecidedByTestId,
+  branchValueTestId,
   branchVariableTestId,
   buildConfigTestIds,
   buildDialogTestIds,
@@ -55,14 +58,13 @@ describe("test ids", () => {
       "palette-search",
       "build-progress-stop",
       "build-model",
-      expect.any(Function),
       "node-menu-duplicate",
       "node-menu-frame-only",
       "blueprint-terminal-toggle",
       "blueprint-terminal-minimize",
       "blueprint-terminal-close",
     ]);
-    expect(controlTestIds.fileWireName("a->b:notes.md")).toBe("file-wire-name-a->b:notes.md");
+    expect(controlTestIds).not.toHaveProperty("fileWireName");
   });
 
   it("lists the readouts", () => {
@@ -214,6 +216,9 @@ describe("test ids", () => {
 
   it("names the Branch variable picker and the Doctor's worktree list", () => {
     expect(branchVariableTestId).toBe("node-setting-variable");
+    expect(branchDecidedByTestId).toBe("node-setting-decided-by");
+    expect(branchValueTestId).toBe("node-setting-value");
+    expect(agentProducesTestId).toBe("node-setting-produces");
     expect(pageTestIds.doctorWorktrees).toBe("doctor-worktrees");
   });
 
@@ -225,7 +230,7 @@ describe("test ids", () => {
       dialogTestIds,
       buildDialogTestIds,
       buildConfigTestIds,
-      { branchVariableTestId },
+      { branchVariableTestId, branchDecidedByTestId, branchValueTestId, agentProducesTestId },
     ];
     const ids = groups.flatMap((group) =>
       Object.values(group).flatMap((id: string | ((value: string) => string)) =>

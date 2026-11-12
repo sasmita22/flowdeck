@@ -12,7 +12,6 @@ import {
   type CanvasNote,
   type Flow,
   type Node,
-  type Port,
   type Session,
   type Variable,
   type Wire,
@@ -38,7 +37,6 @@ import {
   deleteNodes as deleteNodesCommand,
   deleteWires,
   moveNodes,
-  replaceWire,
   updateNode as updateNodeCommand,
   updateNote,
   updateSession,
@@ -65,8 +63,6 @@ export type NoteBox = { x: number; y: number; width: number; height: number };
 
 export type NodeMenu = { nodeId: string; x: number; y: number };
 
-export type Naming = { from: WireEnd; to: WireEnd };
-
 export type Focus = { node: string; seq: number };
 
 export interface CanvasState {
@@ -82,11 +78,9 @@ export interface CanvasState {
   noteBoxes: Record<string, NoteBox>;
   message: string | null;
   menu: NodeMenu | null;
-  naming: Naming | null;
   clipboard: Items | null;
   pastes: number;
   renaming: string | null;
-  renamingWire: string | null;
   focus: Focus | null;
   opened: number;
   drop(type: CanvasItemType, position: Position): void;
@@ -96,8 +90,6 @@ export interface CanvasState {
   resizeNote(id: string, box: NoteBox): void;
   connect(from: WireEnd, to: WireEnd): boolean;
   refuseConnection(): void;
-  nameFile(file: string): boolean;
-  cancelNaming(): void;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
   select(ids: readonly string[]): void;
@@ -110,9 +102,6 @@ export interface CanvasState {
   startRename(id?: string): void;
   rename(label: string): void;
   cancelRename(): void;
-  startWireRename(edgeId: string): void;
-  renameWire(file: string): void;
-  cancelWireRename(): void;
   focusNode(id: string): void;
   openNodeMenu(nodeId: string, at: Position): void;
   closeNodeMenu(): void;
@@ -307,17 +296,7 @@ export const selectCanvasEmpty = (state: Pick<CanvasState, "flow">): boolean =>
 
 const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.port;
 
-const sameWire = (a: Wire, b: Wire) =>
-  sameEnd(a.from, b.from) &&
-  sameEnd(a.to, b.to) &&
-  (a.kind !== "file" || b.kind !== "file" || a.file === b.file);
-
-const portKind = (flow: Flow, end: WireEnd, direction: Port["direction"]) => {
-  const node = flow.nodes.find((candidate) => candidate.id === end.node);
-  if (node === undefined) return undefined;
-  const ports: readonly Port[] = nodeLook(node.type).ports;
-  return ports.find((port) => port.name === end.port && port.direction === direction)?.kind;
-};
+const sameWire = (a: Wire, b: Wire) => sameEnd(a.from, b.from) && sameEnd(a.to, b.to);
 
 const cannotConnect = (flow: Flow, from: WireEnd, to: WireEnd, reason: string) =>
   `Can't connect ${labelOf(flow, from.node)} to ${labelOf(flow, to.node)}: ${reason}`;
@@ -346,9 +325,6 @@ const keptWires = (selected: readonly string[], flow: Flow) => {
   const present = new Set(flow.wires.map(edgeId));
   return selected.filter((id) => present.has(id));
 };
-
-const swapped = (ids: readonly string[], from: string, to: string) =>
-  ids.map((id) => (id === from ? to : id));
 
 const both = (first: Command, second: Command): Command => ({
   do: (flow) => second.do(first.do(flow)),
@@ -382,8 +358,6 @@ export function createCanvasStore(
       if (ready()) run(buildConfigCommand(edit));
     };
 
-    const wireRenames = new WeakMap<Command, { from: string; to: string }>();
-
     let agentGroup: Command | null = null;
 
     const record = (
@@ -403,10 +377,10 @@ export function createCanvasStore(
       });
     };
 
-    const run = (command: Command, selection = get().selection, wires = get().selectedWires) => {
+    const run = (command: Command, selection = get().selection) => {
       agentGroup = null;
       const { flow, undoStack } = get();
-      record(command, command.do(flow), undoStack, selection, wires);
+      record(command, command.do(flow), undoStack, selection);
     };
 
     const nodeDeletion = (flow: Flow, ids: readonly string[]): Command | undefined => {
@@ -575,11 +549,9 @@ export function createCanvasStore(
       noteBoxes: {},
       message: null,
       menu: null,
-      naming: null,
       clipboard: null,
       pastes: 0,
       renaming: null,
-      renamingWire: null,
       focus: null,
       opened: 0,
 
@@ -640,39 +612,12 @@ export function createCanvasStore(
 
       connect: (from, to) => {
         if (!ready()) return false;
-        const { flow } = get();
-        const kinds = [portKind(flow, from, "out"), portKind(flow, to, "in")];
-        if (kinds.includes("file")) {
-          if (kinds[0] !== kinds[1]) {
-            set({
-              message: cannotConnect(flow, from, to, "a file port joins only another file port."),
-            });
-            return false;
-          }
-          set({ naming: { from: { ...from }, to: { ...to } }, message: null });
-          return false;
-        }
         return addChecked({ kind: "then", from: { ...from }, to: { ...to } });
-      },
-
-      nameFile: (file) => {
-        const { naming } = get();
-        if (!ready() || naming === null) return false;
-        const added = addChecked({
-          kind: "file",
-          from: { ...naming.from },
-          to: { ...naming.to },
-          file: file.trim(),
-        });
-        if (added) set({ naming: null });
-        return added;
       },
 
       refuseConnection: () => {
         if (ready()) set({ message: wrongWay });
       },
-
-      cancelNaming: () => set({ naming: null }),
 
       deleteNodes,
 
@@ -731,33 +676,6 @@ export function createCanvasStore(
       },
 
       cancelRename: () => set({ renaming: null }),
-
-      startWireRename: (id) => {
-        if (!ready()) return;
-        if (!get().flow.wires.some((wire) => wire.kind === "file" && edgeId(wire) === id)) return;
-        set({ renamingWire: id, menu: null });
-      },
-
-      renameWire: (file) => {
-        const { renamingWire, flow, selectedWires } = get();
-        set({ renamingWire: null });
-        const old = flow.wires.find((wire) => edgeId(wire) === renamingWire);
-        const name = file.trim();
-        if (!ready() || old?.kind !== "file" || name === old.file) return;
-        const next: Wire = { ...old, file: name };
-        const command = replaceWire(old, next);
-        const others = flow.wires.filter((wire) => wire !== old);
-        const refused = refusal(others, next, command);
-        if (refused !== null) {
-          set({ message: refused });
-          return;
-        }
-        const ids = { from: edgeId(old), to: edgeId(next) };
-        wireRenames.set(command, ids);
-        run(command, get().selection, swapped(selectedWires, ids.from, ids.to));
-      },
-
-      cancelWireRename: () => set({ renamingWire: null }),
 
       focusNode: (id) => {
         set({
@@ -900,17 +818,12 @@ export function createCanvasStore(
         const command = undoStack.at(-1);
         if (command === undefined) return;
         const next = command.undo(flow);
-        const renamed = wireRenames.get(command);
-        const wires = get().selectedWires;
         set({
           flow: next,
           undoStack: undoStack.slice(0, -1),
           redoStack: [...redoStack, command],
           selection: kept(selection, next),
-          selectedWires: keptWires(
-            renamed === undefined ? wires : swapped(wires, renamed.to, renamed.from),
-            next,
-          ),
+          selectedWires: keptWires(get().selectedWires, next),
         });
       },
 
@@ -921,17 +834,12 @@ export function createCanvasStore(
         const command = redoStack.at(-1);
         if (command === undefined) return;
         const next = command.do(flow);
-        const renamed = wireRenames.get(command);
-        const wires = get().selectedWires;
         set({
           flow: next,
           undoStack: [...undoStack, command],
           redoStack: redoStack.slice(0, -1),
           selection: kept(selection, next),
-          selectedWires: keptWires(
-            renamed === undefined ? wires : swapped(wires, renamed.from, renamed.to),
-            next,
-          ),
+          selectedWires: keptWires(get().selectedWires, next),
         });
       },
 
@@ -949,7 +857,6 @@ export function createCanvasStore(
           dragPositions: {},
           noteBoxes: {},
           renaming: null,
-          renamingWire: null,
           focus: null,
           opened: get().opened + 1,
         });

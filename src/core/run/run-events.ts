@@ -5,6 +5,7 @@ import type { HumanDecision } from "./wait.js";
 export const donePayload = z.object({
   stopMessage: z.string().optional(),
   toolUseIds: z.array(z.string()).optional(),
+  produced: z.object({ name: z.string(), answer: z.boolean() }).optional(),
 });
 
 export type RunEvent =

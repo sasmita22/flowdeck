@@ -1,9 +1,8 @@
-import type { Wire } from "../flow/schema.js";
+import { handoffPairs, type HandoffPair } from "../flow/handoff.js";
+import type { Node } from "../flow/schema.js";
 import type { BuildFile } from "./lower.js";
 
 export const templateMarker = "@template";
-
-type FileWire = Extract<Wire, { kind: "file" }>;
 
 const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -31,27 +30,22 @@ export const templatePath = (file: string): string => `plugin/templates/${file}`
 export const hasTemplate = (file: string): boolean => file.endsWith(".md");
 
 export function handoffTemplates(
-  flow: {
-    nodes: readonly { id: string }[];
-    wires: readonly Wire[];
-  },
+  flow: { nodes: readonly { id: string; settings: Node["settings"] }[] },
   folder: string,
 ): BuildFile[] {
   const nodeIds = flow.nodes.map((node) => node.id);
-  const wires = flow.wires.filter(
-    (wire): wire is FileWire => wire.kind === "file" && hasTemplate(wire.file),
-  );
-  const ends = (file: string, end: (wire: FileWire) => string) => {
-    const ids = new Set(wires.filter((wire) => wire.file === file).map(end));
+  const pairs = handoffPairs(flow.nodes).filter((pair) => hasTemplate(pair.file));
+  const ends = (file: string, end: (pair: HandoffPair) => readonly string[]) => {
+    const ids = new Set(pairs.filter((pair) => pair.file === file).flatMap(end));
     return nodeIds.filter((id) => ids.has(id));
   };
-  return [...new Set(wires.map((wire) => wire.file))].sort(byName).map((file) => ({
+  return [...new Set(pairs.map((pair) => pair.file))].sort(byName).map((file) => ({
     path: templatePath(file),
     content: templateOf(
       file,
       folder,
-      ends(file, (wire) => wire.from.node),
-      ends(file, (wire) => wire.to.node),
+      ends(file, (pair) => pair.writers),
+      ends(file, (pair) => [pair.reader]),
     ),
   }));
 }

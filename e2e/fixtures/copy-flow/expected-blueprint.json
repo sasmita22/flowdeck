@@ -53,7 +53,8 @@
         "role": "",
         "instructions": "Read review-notes.md and update the plan to address each risk.",
         "model": "sonnet",
-        "tools": []
+        "tools": [],
+        "given": ["review-notes.md"]
       }
     },
     {
@@ -114,18 +115,6 @@
         "node": "stop",
         "port": "in"
       }
-    },
-    {
-      "kind": "file",
-      "from": {
-        "node": "review",
-        "port": "file-out"
-      },
-      "to": {
-        "node": "apply",
-        "port": "file-in"
-      },
-      "file": "review-notes.md"
     }
   ],
   "session": {

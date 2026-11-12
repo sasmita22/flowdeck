@@ -5,15 +5,7 @@ import { validate } from "../../../src/core/compiler/validate.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
 import { sectionOf } from "../../fixtures/frontmatter.js";
-import {
-  agent,
-  fileWire,
-  flow,
-  loop,
-  output,
-  thenWire,
-  trigger,
-} from "../../fixtures/flow-builders.js";
+import { agent, flow, loop, output, thenWire, trigger } from "../../fixtures/flow-builders.js";
 
 const sample = (): Flow =>
   flow(
@@ -238,26 +230,24 @@ describe("lower", () => {
     ]);
   });
 
-  describe("File wires", () => {
+  describe("hand-off files", () => {
     const handoff = () =>
       flow(
-        [agent("plan"), agent("build"), agent("check")],
         [
-          thenWire("plan", "build"),
-          thenWire("build", "check"),
-          fileWire("plan", "build", "plan.md"),
-          fileWire("plan", "check", "plan.md"),
-          fileWire("build", "check", "diff.md"),
+          agent("plan", { settings: { writes: ["plan.md"] } }),
+          agent("build", { settings: { given: ["plan.md"], writes: ["diff.md"] } }),
+          agent("check", { settings: { given: ["plan.md", "diff.md"] } }),
         ],
+        [thenWire("plan", "build"), thenWire("build", "check")],
       );
 
-    it("keeps every File wire, with its file, in the manifest", () => {
+    it("carries only the flow's Then wires in the manifest", () => {
       const input = handoff();
 
-      expect(lower(input, workspace).manifest.wires).toStrictEqual(input.wires);
-      expect(
-        lower(input, workspace).manifest.wires.filter((wire) => wire.kind === "file"),
-      ).toHaveLength(3);
+      expect(lower(input, workspace).manifest.wires).toStrictEqual([
+        thenWire("plan", "build"),
+        thenWire("build", "check"),
+      ]);
     });
 
     it("tells each producer what to write and each consumer what it is given", () => {

@@ -1,8 +1,9 @@
 import type { Flow } from "../flow/schema.js";
 import { rule as agentTools } from "./rules/agent-tools.js";
 import { rule as bodyNodes } from "./rules/body-nodes.js";
+import { rule as branchValue } from "./rules/branch-value.js";
 import { rule as branchVariable } from "./rules/branch-variable.js";
-import { rule as fileWires } from "./rules/file-wires.js";
+import { rule as handoffs } from "./rules/handoffs.js";
 import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
 import { rule as loopBody } from "./rules/loop-body.js";
 import { rule as loopCap } from "./rules/loop-cap.js";
@@ -46,7 +47,8 @@ export const rules = [
   loopBody,
   bodyNodes,
   branchVariable,
-  fileWires,
+  branchValue,
+  handoffs,
   undeclaredVariable,
   variableNames,
   repoRequired,

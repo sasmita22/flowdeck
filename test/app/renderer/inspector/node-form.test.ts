@@ -4,6 +4,7 @@ import {
   addFlag,
   applyNodeSetting,
   describeNodeFields,
+  missingYesNoVariable,
   removeFlag,
   renameFlag,
   setFlag,
@@ -14,7 +15,7 @@ import {
 } from "../../../../src/app/renderer/inspector/schema-form.js";
 import { NodeType, type Node } from "../../../../src/core/flow/schema.js";
 import { registry } from "../../../../src/core/nodes/registry.js";
-import { branch, flow, trigger } from "../../../fixtures/flow-builders.js";
+import { agent, branch, flow, trigger } from "../../../fixtures/flow-builders.js";
 import { z } from "zod";
 
 const summary = (field: FieldDescription) => [field.control, field.path.join("."), field.testId];
@@ -45,6 +46,7 @@ describe("describeNodeFields", () => {
         ["list", "tools", "node-setting-tools"],
         ["list", "given", "node-setting-given"],
         ["list", "writes", "node-setting-writes"],
+        ["text", "produces", "node-setting-produces"],
       ],
     ],
     [
@@ -93,7 +95,13 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["foreach", [["text", "file", "node-setting-file"]]],
-    ["branch", [["select", "variable", "node-setting-variable"]]],
+    [
+      "branch",
+      [
+        ["select", "decidedBy", "node-setting-decided-by"],
+        ["select", "variable", "node-setting-variable"],
+      ],
+    ],
   ])("describes the %s settings", (type, expected) => {
     expect(describeNodeFields(type).map(summary)).toEqual(expected);
   });
@@ -166,8 +174,8 @@ describe("describeNodeFields", () => {
 
     const fields = describeNodeFields("branch", current);
 
-    expect(fields).toHaveLength(1);
-    expect(fields[0]).toMatchObject({
+    expect(fields).toHaveLength(2);
+    expect(fields[1]).toMatchObject({
       control: "select",
       path: ["variable"],
       label: "Yes/no variable",
@@ -176,9 +184,71 @@ describe("describeNodeFields", () => {
   });
 
   it("offers no variable to pick when none is yes/no", () => {
-    const [variable] = describeNodeFields("branch", flow([branch("B", "deep")], []));
+    const [, variable] = describeNodeFields("branch", flow([branch("B", "deep")], []));
 
     expect(variable).toMatchObject({ control: "select", options: [] });
+  });
+
+  describe("a Branch's Decided by", () => {
+    const producer = (id: string, produces?: string) =>
+      agent(id, produces === undefined ? {} : { settings: { produces } });
+    const producers = flow(
+      [
+        trigger("T"),
+        producer("check", "tests-passed"),
+        producer("plain"),
+        producer("review", "approved"),
+        producer("again", "tests-passed"),
+        branch("B", ""),
+      ],
+      [],
+    );
+
+    it("offers a build variable, the default, or a value an earlier Agent produces", () => {
+      const [decidedBy] = describeNodeFields("branch", producers);
+
+      expect(decidedBy).toMatchObject({
+        control: "select",
+        path: ["decidedBy"],
+        testId: "node-setting-decided-by",
+        label: "Decided by",
+        options: ["variable", "value"],
+        optionLabels: {
+          variable: "A build variable",
+          value: "A value an earlier Agent produces",
+        },
+      });
+    });
+
+    it("shows a build variable as picked when a Branch has no Decided by", () => {
+      const [decidedBy] = describeNodeFields("branch", producers, { variable: "deep" });
+
+      expect(decidedBy).toMatchObject({ fallback: "variable" });
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ["with no Decided by, as old blueprints have", { variable: "deep" }],
+      ["decided by a build variable", { decidedBy: "variable", variable: "deep" }],
+    ])("shows the variable picker for a Branch %s", (_, settings) => {
+      expect(describeNodeFields("branch", producers, settings).map(summary)).toEqual([
+        ["select", "decidedBy", "node-setting-decided-by"],
+        ["select", "variable", "node-setting-variable"],
+      ]);
+    });
+
+    it("shows a value picker listing each value the flow's Agents produce, once, in place of the variable", () => {
+      const fields = describeNodeFields("branch", producers, {
+        variable: "",
+        decidedBy: "value",
+        value: "tests-passed",
+      });
+
+      expect(fields.map(summary)).toEqual([
+        ["select", "decidedBy", "node-setting-decided-by"],
+        ["select", "value", "node-setting-value"],
+      ]);
+      expect(fields[1]).toMatchObject({ options: ["tests-passed", "approved"] });
+    });
   });
 
   it("gives a hard stop no switch to turn it off or unlock it", () => {
@@ -204,6 +274,8 @@ describe("applyNodeSetting", () => {
     ["join", ["onBranchFail"], "skip", { wait: "all", onBranchFail: "skip" }],
     ["foreach", ["file"], "plan/units.txt", { file: "plan/units.txt" }],
     ["branch", ["variable"], "deep", { variable: "deep" }],
+    ["branch", ["decidedBy"], "value", { decidedBy: "value" }],
+    ["agent", ["produces"], "tests-passed", { produces: "tests-passed" }],
   ])("sets %s %s and keeps the settings valid", (type, path, value, expected) => {
     const before = nodeOf(type);
 
@@ -226,6 +298,21 @@ describe("applyNodeSetting", () => {
     const result = applyNodeSetting(nodeOf(type), path, value);
 
     expect(result).toEqual({ error: reason });
+  });
+
+  it("picks the value a value-decided Branch reads", () => {
+    const valueMode = applied(nodeOf("branch"), ["decidedBy"], "value");
+
+    expect(applied(valueMode, ["value"], "tests-passed").settings).toMatchObject({
+      decidedBy: "value",
+      value: "tests-passed",
+    });
+  });
+
+  it("refuses done as a produced value, the name a Loop's verdict uses", () => {
+    expect(applyNodeSetting(nodeOf("agent"), ["produces"], "done")).toEqual({
+      error: expect.stringContaining("done") as string,
+    });
   });
 
   it("keeps the loop cap when the text is not a number", () => {
@@ -275,5 +362,35 @@ describe("trigger flags", () => {
 
   it("removes a flag", () => {
     expect(removeFlag({ a: true, b: false }, "a")).toEqual({ b: false });
+  });
+});
+
+describe("missingYesNoVariable", () => {
+  const noVariables = flow([trigger("T")], []);
+  const branchNode = (settings: Record<string, unknown>) =>
+    ({ ...branch("B", ""), settings: { variable: "", ...settings } }) as Node;
+
+  it("is true for a Branch decided by a build variable when there is no yes/no variable", () => {
+    expect(missingYesNoVariable(branchNode({ decidedBy: "variable" }), noVariables)).toBe(true);
+  });
+
+  it("is false for a Branch decided by a value an earlier Agent produces", () => {
+    expect(missingYesNoVariable(branchNode({ decidedBy: "value" }), noVariables)).toBe(false);
+  });
+
+  it("is false once the session has a yes/no variable", () => {
+    const withYesNo = {
+      ...noVariables,
+      session: {
+        ...noVariables.session,
+        buildConfig: { variables: [{ name: "deep", kind: "yesno" as const }] },
+      },
+    };
+
+    expect(missingYesNoVariable(branchNode({ decidedBy: "variable" }), withYesNo)).toBe(false);
+  });
+
+  it("is false for a node that is not a Branch", () => {
+    expect(missingYesNoVariable(agent("A") as Node, noVariables)).toBe(false);
   });
 });

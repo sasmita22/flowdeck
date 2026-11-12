@@ -1,3 +1,4 @@
+import { decidedByValue } from "../../nodes/branch/settings.js";
 import type { Rule, ValidationError } from "../validate.js";
 
 const id = "branch-variable";
@@ -16,14 +17,15 @@ export const rule: Rule = {
       if (node.type !== "branch") return [];
       const errors: ValidationError[] = [];
       const { variable } = node.settings;
-      if (variable === "") {
+      const byVariable = !decidedByValue(node.settings);
+      if (byVariable && variable === "") {
         errors.push({
           rule: id,
           node: node.id,
           field: "variable",
           message: `${node.id} has no variable picked; pick a yes/no variable to branch on.`,
         });
-      } else if (!yesno.has(variable)) {
+      } else if (byVariable && !yesno.has(variable)) {
         errors.push({
           rule: id,
           node: node.id,

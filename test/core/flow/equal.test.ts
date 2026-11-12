@@ -9,13 +9,6 @@ const nth = <T>(list: T[], index: number): T => {
   return item;
 };
 
-const fileWire = (from: string, to: string) => ({
-  kind: "file",
-  from: { node: from, port: "out" },
-  to: { node: to, port: "in" },
-  file: "plan.md",
-});
-
 const base = (): Flow =>
   flow(
     [
@@ -23,7 +16,7 @@ const base = (): Flow =>
       agent("a1", { parent: "p1", settings: { given: ["plan.md"] } }),
       agent("s1", { settings: { tools: ["Bash"] } }),
     ],
-    [thenWire("p1", "a1"), fileWire("a1", "s1")],
+    [thenWire("p1", "a1"), thenWire("a1", "s1")],
   );
 
 const agentSettings = (extra: { instructions?: string; tools?: string[]; writes?: string[] }) => ({

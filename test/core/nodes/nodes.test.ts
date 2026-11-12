@@ -24,8 +24,6 @@ import { settings as triggerSettings } from "../../../src/core/nodes/trigger/set
 
 const inPort = { name: "in", direction: "in", kind: "then" };
 const outPort = { name: "out", direction: "out", kind: "then" };
-const fileIn = { name: "file-in", direction: "in", kind: "file" };
-const fileOut = { name: "file-out", direction: "out", kind: "file" };
 
 type Case = {
   type: string;
@@ -52,7 +50,7 @@ const cases: Case[] = [
     },
     bad: { role: "reviewer", instructions: "Review", model: "sonnet", tools: "Read" },
     badPath: ["tools"],
-    expectedPorts: [inPort, outPort, fileIn, fileOut],
+    expectedPorts: [inPort, outPort],
   },
   {
     type: "gate",
@@ -133,7 +131,7 @@ const cases: Case[] = [
     valid: { file: "plan.md" },
     bad: { file: 1 },
     badPath: ["file"],
-    expectedPorts: [inPort, outPort, fileIn],
+    expectedPorts: [inPort, outPort],
   },
 ];
 
@@ -216,10 +214,6 @@ describe("foreach settings", () => {
     const result = foreachSettings.safeParse({});
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(["file"]);
-  });
-
-  it("takes the agent node's input ports and gives no file out", () => {
-    expect(foreachPorts).toEqual(agentPorts.filter((port) => port.name !== "file-out"));
   });
 });
 

@@ -47,8 +47,8 @@ export interface ViewEdge {
   targetHandle: string;
   markerEnd: { type: MarkerType };
   selected?: boolean;
-  type?: "aligned" | "file" | "branch";
-  data?: { align: Align } | { file: string } | { label: string };
+  type?: "aligned" | "branch";
+  data?: { align: Align } | { label: string };
 }
 
 export type Align = "source" | "target";
@@ -60,8 +60,7 @@ export const alignedEnds = <Ends extends EdgeEnds>(ends: Ends, align: Align): En
 
 export const edgeId = (wire: Wire): string => {
   const { from, to } = wire;
-  const ends = `${from.node}:${from.port}->${to.node}:${to.port}`;
-  return wire.kind === "file" ? `${ends}:${wire.file}` : ends;
+  return `${from.node}:${from.port}->${to.node}:${to.port}`;
 };
 
 const isBarType = (type: Node["type"] | undefined) => type === "fork" || type === "join";
@@ -226,7 +225,6 @@ export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewE
         type: MarkerType.ArrowClosed,
         ...(isSelected && { color: "var(--select)" }),
       },
-      ...(wire.kind === "file" && { type: "file" as const, data: { file: wire.file } }),
       ...(align !== null && { type: "aligned" as const, data: { align } }),
       ...(fromBranch && { type: "branch" as const, data: { label: wire.from.port } }),
       ...(isSelected && { selected: true }),

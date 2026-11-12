@@ -51,6 +51,7 @@ function liveFlow(secret: string) {
           instructions: `The secret word is ${secret}. Write it to secret.md, then reply with only the secret word.`,
           model: "haiku",
           tools: ["Read", "Write"],
+          writes: ["secret.md"],
         },
       },
       {
@@ -77,6 +78,7 @@ function liveFlow(secret: string) {
             "Write a file control.md whose only content is the secret word in secret.md.",
           model: "haiku",
           tools: ["Read", "Write"],
+          given: ["secret.md"],
         },
       },
       {
@@ -87,18 +89,7 @@ function liveFlow(secret: string) {
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [
-      then("t", "p1"),
-      then("p1", "a1"),
-      then("a1", "p2"),
-      then("p2", "o"),
-      {
-        kind: "file",
-        from: { node: "p1", port: "file-out" },
-        to: { node: "p2", port: "file-in" },
-        file: "secret.md",
-      },
-    ],
+    wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
     session: {
       name: "main",
       buildConfig: { base: "main", variables: [] },
@@ -267,7 +258,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude
         .toBe(true);
       expect.soft(notes ?? "", "the subagent does not know the secret").not.toContain(secret);
       expect
-        .soft(control ?? "", "positive control: the File wire hands it to Control")
+        .soft(control ?? "", "positive control: the hand-off gives it to Control")
         .toContain(secret);
     },
   );

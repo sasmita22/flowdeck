@@ -337,21 +337,16 @@ describe("Runner", () => {
       expect(lines).toEqual(["a1 started", "a1 done"]);
     });
 
-    it("names a file once in the turn when the node declares the file its File wire carries", async () => {
+    it("names a file once in the turn of a writer another node is given it by", async () => {
       const { deps, calls } = turnHarness([[agentDone("a1"), stopped]]);
       const writer = node("a1", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] });
+      const reader = node("p2", "agent", { instructions: "Read notes.md.", given: ["notes.md"] });
       const handoff: RunnableManifest = {
         hash,
         prefix,
-        nodes: [writer, agent("p2")],
+        nodes: [writer, reader],
         wires: [
           { kind: "then", from: { node: "a1", port: "out" }, to: { node: "p2", port: "in" } },
-          {
-            kind: "file",
-            from: { node: "a1", port: "file-out" },
-            to: { node: "p2", port: "file-in" },
-            file: "notes.md",
-          },
         ],
       };
 
@@ -2682,6 +2677,55 @@ describe("Runner parallel section", () => {
     expect(waiter.calls).toEqual([]);
   });
 
+  it("stores the value a branch produces, for a Branch after the join to read", async () => {
+    const fence = "```";
+    const flow = builders.flow(
+      [
+        builders.fork("f"),
+        builders.agent("a1", { settings: { produces: "a" } }),
+        builders.agent("a2"),
+        builders.join("j", { settings: { wait: "all", onBranchFail: "stop" } }),
+        {
+          ...builders.branch("b", ""),
+          settings: { variable: "", decidedBy: "value", value: "a" },
+        },
+        builders.agent("after"),
+        builders.agent("other"),
+      ],
+      [
+        builders.thenWire("f", "a1"),
+        builders.thenWire("f", "a2"),
+        builders.thenWire("a1", "j"),
+        builders.thenWire("a2", "j"),
+        builders.thenWire("j", "b"),
+        builders.wire("b", "yes", "after", "in"),
+        builders.wire("b", "no", "other", "in"),
+      ],
+    );
+    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+    const h = sectionHarness({
+      onFork: (s) => {
+        s.launch("a1");
+        s.launch("a2");
+        s.stop("Launched.");
+      },
+    });
+    const running = runOn(h.deps, { hash, prefix, nodes, wires });
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", `Checked.\n${fence}json\n{"a": true}\n${fence}`);
+    h.session.subagentStop("a2", "a2 reply");
+    h.session.stop("All done.");
+    const result = await running;
+
+    expect(eventsOf(h.deps.store, "a1").at(-1)).toMatchObject({
+      kind: "done",
+      payload: { produced: { name: "a", answer: true } },
+    });
+    expect(result.outcome).toBe("done");
+    expect(result.states).toMatchObject({ b: "done", after: "done", other: "skipped" });
+  });
+
   it("does not complete a three-branch join on a duplicate finished call", async () => {
     const h = sectionHarness();
     const running = runOn(h.deps, sectionManifest());
@@ -3399,10 +3443,10 @@ describe("Runner parallel section", () => {
       const h = sectionHarness();
       const flow = builders.flow(
         [
-          builders.agent("plan"),
+          builders.agent("plan", { settings: { writes: ["plan.md"] } }),
           builders.fork("f"),
           builders.agent("a1"),
-          builders.agent("a2"),
+          builders.agent("a2", { settings: { given: ["plan.md"] } }),
           builders.join("j", { settings: { wait: "first", onBranchFail: "stop" } }),
         ],
         [
@@ -3411,7 +3455,6 @@ describe("Runner parallel section", () => {
           builders.thenWire("f", "a2"),
           builders.thenWire("a1", "j"),
           builders.thenWire("a2", "j"),
-          builders.fileWire("plan", "a2", "plan.md"),
         ],
       );
       const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
@@ -3593,6 +3636,290 @@ describe("Runner branch on a yes/no variable", () => {
 
     expect(ran(calls)).toEqual(["quick", "finish"]);
     expect(result.states).toMatchObject({ b: "done", e2e: "skipped" });
+  });
+
+  it("follows the build value for a Branch on proceed-e2e that names variable mode", async () => {
+    const { deps, calls } = harness();
+    const m = toManifest(
+      [
+        start(true),
+        {
+          ...builders.branch("b", ""),
+          settings: { decidedBy: "variable", variable: "proceed-e2e" },
+        },
+        step("e2e"),
+        step("quick"),
+      ],
+      [builders.thenWire("start", "b"), yes("e2e"), no("quick")],
+      { "proceed-e2e": false },
+    );
+
+    const result = await runOn(deps, m);
+
+    expect(result.outcome).toBe("done");
+    expect(ran(calls)).toEqual(["quick"]);
+    expect(result.states).toMatchObject({ b: "done", e2e: "skipped", quick: "done" });
+  });
+
+  describe("decided by a value an earlier Agent produces", () => {
+    const fence = "```";
+    const answering = (answer: boolean, name = "a") =>
+      `Checked.\n${fence}json\n{"${name}": ${answer}}\n${fence}`;
+    const producer = (id: string, name = "a") =>
+      builders.agent(id, { settings: { produces: name } });
+    const valueBranch = (name = "a") => ({
+      ...builders.branch("b", ""),
+      settings: { variable: "", decidedBy: "value", value: name },
+    });
+    const eventsOf = (store: FakeStore, nodeId: string) =>
+      store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
+    const seeded = (deps: TestDeps, m: RunnableManifest, entries: [string, RunEvent][]) => {
+      const { id } = deps.store.createRun(newRun(m));
+      for (const [nodeId, event] of entries) deps.store.append(id, nodeId, event);
+      return id;
+    };
+    const checkThenBranch = () =>
+      toManifest(
+        [builders.trigger("start"), producer("check"), valueBranch(), step("ship"), step("fix")],
+        [
+          builders.thenWire("start", "check"),
+          builders.thenWire("check", "b"),
+          yes("ship"),
+          no("fix"),
+        ],
+      );
+    const checkDone = (payload: DonePayload): [string, RunEvent][] => [
+      ["check", { kind: "sent" }],
+      ["check", { kind: "done", payload }],
+    ];
+    type DonePayload = NonNullable<Extract<RunEvent, { kind: "done" }>["payload"]>;
+    const answered = (answer: string) => ({
+      nodeId: "b",
+      decision: "answered" as const,
+      answer,
+    });
+
+    it("takes yes at step 8 when the Agent at step 3 answers yes, skipping no", async () => {
+      const steps = ["s1", "s2", "check", "s4", "s5", "s6", "s7"];
+      const m = toManifest(
+        [
+          builders.trigger("start"),
+          ...steps.map((id) => (id === "check" ? producer(id) : step(id))),
+          valueBranch(),
+          step("ship"),
+          step("fix"),
+        ],
+        [
+          builders.thenWire("start", "s1"),
+          ...steps.slice(1).map((id, at) => builders.thenWire(steps[at] ?? "", id)),
+          builders.thenWire("s7", "b"),
+          yes("ship"),
+          no("fix"),
+        ],
+      );
+      const { deps, calls } = harness({
+        replies: [
+          undefined,
+          undefined,
+          answering(true),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ],
+      });
+
+      const result = await runOn(deps, m);
+
+      expect(result.outcome).toBe("done");
+      expect(ran(calls)).toEqual([...steps, "ship"]);
+      expect(eventsOf(deps.store, "check").at(-1)).toMatchObject({
+        kind: "done",
+        payload: { produced: { name: "a", answer: true } },
+      });
+      expect(kindsOf(deps.store, "fix")).toEqual(["skipped"]);
+      expect(result.states).toMatchObject({ b: "done", ship: "done", fix: "skipped" });
+    });
+
+    it("takes no when the producer answers no", async () => {
+      const { deps, calls } = harness({ replies: [answering(false)] });
+
+      const result = await runOn(deps, checkThenBranch());
+
+      expect(ran(calls)).toEqual(["check", "fix"]);
+      expect(result.states).toMatchObject({ b: "done", ship: "skipped", fix: "done" });
+    });
+
+    it("reads the latest answer when several Agents produce the value", async () => {
+      const m = toManifest(
+        [
+          builders.trigger("start"),
+          producer("first"),
+          producer("second"),
+          valueBranch(),
+          step("ship"),
+          step("fix"),
+        ],
+        [
+          builders.thenWire("start", "first"),
+          builders.thenWire("first", "second"),
+          builders.thenWire("second", "b"),
+          yes("ship"),
+          no("fix"),
+        ],
+      );
+      const { deps, calls } = harness({ replies: [answering(false), answering(true)] });
+
+      await runOn(deps, m);
+
+      expect(ran(calls)).toEqual(["first", "second", "ship"]);
+    });
+
+    it.each([
+      ["no json block", "Checked, all good."],
+      ["only a Loop's done", `${fence}json\n{"done": true}\n${fence}`],
+      ["no reply", undefined],
+    ])(
+      "asks on the Branch, never picking a path, when the producer's reply has %s",
+      async (_, reply) => {
+        const waiter = new FakeWaiter([{ decision: "answer", answer: "no" }]);
+        const { deps, calls } = harness({ replies: [reply], waiter });
+
+        const result = await runOn(deps, checkThenBranch());
+
+        expect(waiter.calls).toEqual([
+          expect.objectContaining({ nodeId: "b", kind: "ask", options: ["yes", "no", "fail"] }),
+        ]);
+        expect(ran(calls)).toEqual(["check", "fix"]);
+        expect(eventsOf(deps.store, "b").map((event) => event.kind)).toEqual(
+          expect.arrayContaining(["needs-you", "answered", "done"]),
+        );
+        expect(result.states).toMatchObject({ b: "done", ship: "skipped", fix: "done" });
+      },
+    );
+
+    it("fails the run at the Branch when the answer to its question is fail", async () => {
+      const waiter = new FakeWaiter([{ decision: "answer", answer: "fail" }]);
+      const { deps, calls } = harness({ replies: ["Checked."], waiter });
+
+      const result = await runOn(deps, checkThenBranch());
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "b" });
+      expect(ran(calls)).toEqual(["check"]);
+      expect(result.states).toMatchObject({ ship: "waiting", fix: "waiting" });
+    });
+
+    it.each<[string, DonePayload]>([
+      ["the producer's stored answer", { produced: { name: "a", answer: true } }],
+      [
+        "a producer done event stored without one, read again from its reply",
+        { stopMessage: answering(true) },
+      ],
+    ])(
+      "takes the same path on resume from %s, sending the producer no new turn",
+      async (_, payload) => {
+        const { deps, calls } = harness();
+        const m = checkThenBranch();
+        const runId = seeded(deps, m, checkDone(payload));
+
+        const result = await new Runner({ ...deps, runId }).run(m, { actions: {} });
+
+        expect(result.outcome).toBe("done");
+        expect(ran(calls)).toEqual(["ship"]);
+        expect(result.states).toMatchObject({ check: "done", ship: "done", fix: "skipped" });
+      },
+    );
+
+    it("reuses the answer given at the Branch on resume, without asking again", async () => {
+      const { deps, calls } = harness({ waiter: new FakeWaiter([]) });
+      const m = checkThenBranch();
+      const runId = seeded(deps, m, [
+        ...checkDone({ stopMessage: "Checked." }),
+        ["b", { kind: "needs-you" }],
+        ["b", { kind: "answered", payload: answered("yes") }],
+      ]);
+
+      const result = await new Runner({ ...deps, runId }).run(m, {
+        actions: { b: { kind: "reuse", decision: answered("yes") } },
+      });
+
+      expect(result.outcome).toBe("done");
+      expect(ran(calls)).toEqual(["ship"]);
+      expect(result.states).toMatchObject({ b: "done", ship: "done", fix: "skipped" });
+    });
+  });
+
+  describe("a file two writers write", () => {
+    const writer = (id: string, label: string) => ({
+      ...builders.agent(id, { settings: { writes: ["plan.md"] } }),
+      label,
+    });
+    const writtenOnOneArm = (e2e: boolean) =>
+      toManifest(
+        [
+          start(e2e),
+          builders.branch("b", "e2e"),
+          writer("w1", "First"),
+          writer("w2", "Second"),
+          builders.agent("build", { settings: { given: ["plan.md"] } }),
+        ],
+        [
+          builders.thenWire("start", "b"),
+          yes("w1"),
+          no("build"),
+          builders.thenWire("w1", "w2"),
+          builders.thenWire("w2", "build"),
+        ],
+      );
+    const writtenOnEachArm = (e2e: boolean) =>
+      toManifest(
+        [
+          start(e2e),
+          builders.branch("b", "e2e"),
+          writer("w1", "First"),
+          writer("w2", "Second"),
+          builders.agent("build", { settings: { given: ["plan.md"] } }),
+        ],
+        [
+          builders.thenWire("start", "b"),
+          yes("w1"),
+          no("w2"),
+          builders.thenWire("w1", "build"),
+          builders.thenWire("w2", "build"),
+        ],
+      );
+
+    it("names both writers when neither ran on the path taken", async () => {
+      const { deps, calls, lines } = harness();
+
+      const result = await runOn(deps, writtenOnOneArm(false));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
+      expect(ran(calls)).toEqual([]);
+      const failure = lines.at(-1) ?? "";
+      expect(failure.startsWith("build failed: plan.md wasn't written by ")).toBe(true);
+      expect(failure).toContain("First");
+      expect(failure).toContain("Second");
+    });
+
+    it("names only the writer that ran on the path taken", async () => {
+      const { deps, lines } = harness();
+
+      const result = await runOn(deps, writtenOnEachArm(true));
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
+      expect(lines.at(-1)).toBe("build failed: plan.md wasn't written by First");
+    });
+
+    it("runs the reader once a writer has written the file", async () => {
+      const files = new FakeFileSystem({ [`${cwd}/plan.md`]: "- one\n" });
+      const { deps, calls } = harness({ files });
+
+      const result = await runOn(deps, writtenOnEachArm(false));
+
+      expect(result.outcome).toBe("done");
+      expect(ran(calls)).toEqual(["w2", "build"]);
+    });
   });
 
   describe("in a hash-named build, whose manifest has Trigger flags and no values", () => {
@@ -4047,36 +4374,30 @@ describe("Runner compaction", () => {
   });
 });
 
-describe("Runner File wires", () => {
+describe("Runner hand-off pairs", () => {
   const plan = `${cwd}/plan.md`;
   const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
-  const planner = { ...agent("plan"), label: "Planner" };
+  const planner = node("plan", "agent", { instructions: "Write plan.md.", writes: ["plan.md"] });
+  const labelled = { ...planner, label: "Planner" };
+  const builder = (id: string, given = ["plan.md"]) =>
+    node(id, "agent", { instructions: "Build it.", given });
   const afterPlanner = (calls: string[]) =>
     sends(calls).filter((call) => !call.includes('the prompt "NODE plan'));
   const consumerTurn = (id: string) =>
     `send ${agentTurnText(prefix, id, { id, given: ["plan.md"], writes: [] })}`;
-  const handoff = (consumer: ManifestNode, ...rest: ManifestNode[]): RunnableManifest => {
-    const nodes = [planner, consumer, ...rest];
-    const wires = [
-      {
-        kind: "then" as const,
-        from: { node: "plan", port: "out" },
-        to: { node: consumer.id, port: "in" },
-      },
-      {
-        kind: "file" as const,
-        from: { node: "plan", port: "file-out" },
-        to: { node: consumer.id, port: "file-in" },
-        file: "plan.md",
-      },
-    ];
-    return { hash, prefix, nodes, wires };
-  };
+  const handoff = (consumer: ManifestNode, ...rest: ManifestNode[]): RunnableManifest => ({
+    hash,
+    prefix,
+    nodes: [labelled, consumer, ...rest],
+    wires: [
+      { kind: "then", from: { node: "plan", port: "out" }, to: { node: consumer.id, port: "in" } },
+    ],
+  });
 
-  it("starts the next node once the file its wire names is in the working folder", async () => {
+  it("starts the reader once the file its writer writes is in the working folder", async () => {
     const { deps, calls } = harness({ files: new FakeFileSystem({ [plan]: "- one\n" }) });
 
-    const result = await runOn(deps, handoff(agent("build")));
+    const result = await runOn(deps, handoff(builder("build")));
 
     expect(result.outcome).toBe("done");
     expect(afterPlanner(calls)).toEqual([consumerTurn("build")]);
@@ -4096,16 +4417,16 @@ describe("Runner File wires", () => {
       },
     };
 
-    const result = await runOn(writing, handoff(agent("build")));
+    const result = await runOn(writing, handoff(builder("build")));
 
     expect(result.outcome).toBe("done");
     expect(afterPlanner(calls)).toEqual([consumerTurn("build")]);
   });
 
-  it("fails the next node, naming the file and its producer, when the file was not written", async () => {
+  it("fails the reader, naming the file and its writer, when the file was not written", async () => {
     const { deps, calls, lines } = harness();
 
-    const result = await runOn(deps, handoff(agent("build"), agent("after")));
+    const result = await runOn(deps, handoff(builder("build"), agent("after")));
 
     expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
     expect(result.states).toEqual({ plan: "done", build: "failed", after: "waiting" });
@@ -4113,14 +4434,23 @@ describe("Runner File wires", () => {
     expect(afterPlanner(calls)).toEqual([]);
   });
 
-  it("holds a For each that reads the wired file, so it fails on the wire, not the read", async () => {
-    const { deps, lines } = harness();
-    const each = forEach("e1");
+  it("runs a reader given a file no other node writes, without holding it", async () => {
+    const { deps, calls } = harness();
+    const m: RunnableManifest = { hash, prefix, nodes: [builder("build", ["README.md"])] };
 
-    const result = await runOn(deps, handoff(each, inEach(agent("p1"))));
+    const result = await runOn(deps, m);
+
+    expect(result.outcome).toBe("done");
+    expect(sends(calls)).toHaveLength(1);
+  });
+
+  it("does not hold a For each, which is no reader, on the file it reads", async () => {
+    const { deps, lines } = harness();
+
+    const result = await runOn(deps, handoff(forEach("e1"), inEach(agent("p1"))));
 
     expect(result).toMatchObject({ outcome: "failed", failedNode: "e1" });
-    expect(lines.at(-1)).toBe("e1 failed: plan.md wasn't written by Planner");
+    expect(lines.at(-1)).not.toContain("wasn't written by");
   });
 
   it("checks again in every round of a For each body", async () => {
@@ -4142,14 +4472,10 @@ describe("Runner File wires", () => {
     const m: RunnableManifest = {
       hash,
       prefix,
-      nodes: [forEach("e1"), inEach(agent("p1")), inEach(agent("s1"))],
-      wires: [
-        {
-          kind: "file",
-          from: { node: "p1", port: "file-out" },
-          to: { node: "s1", port: "file-in" },
-          file: "notes.md",
-        },
+      nodes: [
+        forEach("e1"),
+        inEach(node("p1", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] })),
+        inEach(builder("s1", ["notes.md"])),
       ],
     };
 
@@ -4161,7 +4487,7 @@ describe("Runner File wires", () => {
 
   it("does not check a node that already finished before a resume", async () => {
     const { deps, calls } = harness();
-    const m = handoff(agent("build"));
+    const m = handoff(builder("build"));
     const { id } = deps.store.createRun(newRun(m));
     deps.store.append(id, "plan", { kind: "sent" });
     deps.store.append(id, "plan", { kind: "done" });
@@ -4178,10 +4504,10 @@ describe("Runner File wires", () => {
     const { deps, calls, lines } = harness();
     const flow = builders.flow(
       [
-        { ...builders.agent("plan"), label: "Planner" },
+        { ...builders.agent("plan", { settings: { writes: ["plan.md"] } }), label: "Planner" },
         builders.fork("f"),
         builders.agent("a1"),
-        builders.agent("a2"),
+        builders.agent("a2", { settings: { given: ["plan.md"] } }),
         builders.join("j"),
       ],
       [
@@ -4190,7 +4516,6 @@ describe("Runner File wires", () => {
         builders.thenWire("f", "a2"),
         builders.thenWire("a1", "j"),
         builders.thenWire("a2", "j"),
-        builders.fileWire("plan", "a2", "plan.md"),
       ],
     );
     const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
@@ -4212,19 +4537,12 @@ describe("Runner hand-off templates", () => {
   const handoff: RunnableManifest = {
     hash,
     prefix,
-    nodes: [agent("write"), agent("read")],
+    nodes: [
+      node("write", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] }),
+      node("read", "agent", { instructions: "Read notes.md.", given: ["notes.md"] }),
+    ],
     wires: [
-      {
-        kind: "then",
-        from: { node: "write", port: "out" },
-        to: { node: "read", port: "in" },
-      },
-      {
-        kind: "file",
-        from: { node: "write", port: "file-out" },
-        to: { node: "read", port: "file-in" },
-        file: "notes.md",
-      },
+      { kind: "then", from: { node: "write", port: "out" }, to: { node: "read", port: "in" } },
     ],
   };
   const contentOf = async (files: FakeFileSystem, path: string) =>
@@ -4319,15 +4637,12 @@ describe("Runner non-markdown hand-off files", () => {
   const handoff: RunnableManifest = {
     hash,
     prefix,
-    nodes: [agent("write"), agent("read")],
+    nodes: [
+      node("write", "agent", { instructions: "Write greeting.txt.", writes: ["greeting.txt"] }),
+      node("read", "agent", { instructions: "Read greeting.txt.", given: ["greeting.txt"] }),
+    ],
     wires: [
       { kind: "then", from: { node: "write", port: "out" }, to: { node: "read", port: "in" } },
-      {
-        kind: "file",
-        from: { node: "write", port: "file-out" },
-        to: { node: "read", port: "file-in" },
-        file: "greeting.txt",
-      },
     ],
   };
   const writerTurn = agentTurnText(prefix, "write", {
@@ -4420,14 +4735,8 @@ describe("Runner by node", () => {
     piece: string,
     settings: Record<string, unknown> = {},
   ): ManifestNode => ({ ...node(id, type, settings), piece });
-  const reviewer = (id: string, given: string[]) =>
-    pieceNode(id, "agent", "review", { instructions: "Review it.", given });
-  const fileWire = (from: string, to: string, file: string) => ({
-    kind: "file" as const,
-    from: { node: from, port: "file-out" },
-    to: { node: to, port: "file-in" },
-    file,
-  });
+  const reviewer = (id: string, given: string[], writes: string[] = []) =>
+    pieceNode(id, "agent", "review", { instructions: "Review it.", given, writes });
   const thenWire = (from: string, to: string) => ({
     kind: "then" as const,
     from: { node: from, port: "out" },
@@ -4436,8 +4745,11 @@ describe("Runner by node", () => {
   const sharedManifest: RunnableManifest = {
     hash,
     prefix,
-    nodes: [pieceNode("p1", "agent", "plan"), reviewer("a1", ["spec.md"]), reviewer("a2", [])],
-    wires: [fileWire("a1", "a2", "notes.md")],
+    nodes: [
+      pieceNode("p1", "agent", "plan"),
+      reviewer("a1", ["spec.md"], ["notes.md"]),
+      reviewer("a2", ["notes.md"]),
+    ],
   };
   const a1Turn = agentTurnText(prefix, "review", {
     id: "a1",

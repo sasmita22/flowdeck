@@ -1,6 +1,8 @@
-import { handoffFolderLine, handoffOf, withWired, type Handoff } from "../flow/handoff.js";
+import { handoffFolderLine } from "../flow/handoff.js";
 import type { Wire } from "../flow/schema.js";
-import { agentPrompt, agentType } from "../nodes/agent/execute.js";
+import { agentPrompt, agentTurnNode, agentType } from "../nodes/agent/execute.js";
+import { producersOf } from "../nodes/branch/execute.js";
+import { decidedByValue } from "../nodes/branch/settings.js";
 import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, type ScopeParts } from "./scope-line.js";
@@ -30,12 +32,8 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
   const inside = (id: string) => nodes.filter((node) => node.parent === id).map((node) => node.id);
   const forkOf = (id: string) => into(id).find((from) => byId.get(from)?.type === "fork");
 
-  const details = (node: ManifestNode): Handoff & { id: string } => {
-    const { given = [], writes = [] } = node.settings as Partial<Handoff>;
-    return { id: node.id, ...withWired({ given, writes }, handoffOf(node.id, wires)) };
-  };
   const dispatch = (node: ManifestNode) =>
-    `\`${agentType(prefix, pieceOf(node))}\` with the prompt ${quoted(agentPrompt(details(node)))}`;
+    `\`${agentType(prefix, pieceOf(node))}\` with the prompt ${quoted(agentPrompt(agentTurnNode(node)))}`;
   const branchCall = (id: string) => {
     const node = byId.get(id);
     return node?.type === "agent" ? dispatch(node) : `NODE ${id}`;
@@ -65,8 +63,14 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       }
       case "foreach":
         return `for each item listed in \`${text(settings.file)}\`, run the steps inside it (${nodeList(inside(node.id))}) once, passing the item along.`;
-      case "branch":
-        return `read the value of \`${text(settings.variable)}\` from the build summary in CLAUDE.md; if yes, go to ${nodeList(outOf(node.id, "yes"))}; if no, go to ${nodeList(outOf(node.id, "no"))}.`;
+      case "branch": {
+        const paths = `if yes, go to ${nodeList(outOf(node.id, "yes"))}; if no, go to ${nodeList(outOf(node.id, "no"))}.`;
+        if (!decidedByValue(settings)) {
+          return `read the value of \`${text(settings.variable)}\` from the build summary in CLAUDE.md; ${paths}`;
+        }
+        const name = text(settings.value);
+        return `read \`${name}\` from the json answer the latest of ${nodeList([...producersOf(nodes, name)])} returned (true is yes, false is no); if it is missing or malformed, ask in the chat for yes or no and never guess; ${paths}`;
+      }
       case "fork":
         return `dispatch every branch in one message, in parallel: ${outOf(node.id).map(branchCall).join("; ")}.`;
       case "join":

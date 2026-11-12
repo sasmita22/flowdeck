@@ -116,6 +116,18 @@ describe("donePayload", () => {
     expect(nodeStatus([sent, done])).toBe("done");
   });
 
+  it("round-trips the value a producing Agent answered", () => {
+    const done: RunEvent = {
+      kind: "done",
+      payload: { stopMessage: "Checked.", produced: { name: "tests-passed", answer: true } },
+    };
+
+    expect(stored(done.payload)).toEqual({
+      stopMessage: "Checked.",
+      produced: { name: "tests-passed", answer: true },
+    });
+  });
+
   it.each([{}, { stopMessage: "DONE" }])(
     "still parses a finishing event without them: %j",
     (payload) => {

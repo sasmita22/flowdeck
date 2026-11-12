@@ -4,7 +4,7 @@ description: Checks a whole Flowdeck build workspace after every piece is writte
 tools: Read, Edit, Glob, Grep
 ---
 
-> A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
+> A question is only for a blueprint input: an empty required field or setting, a missing hand-off or wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question. Each question goes into `build-report.json` `questions` with its node id. Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
 
 # Hand-off Auditor
 

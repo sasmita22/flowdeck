@@ -44,7 +44,7 @@ export function workspaceClaudeMd(
 export const reportPath = "build-report.json";
 
 export function emit(lowered: ReturnType<typeof lower>, target: EmitTarget): BuildFile[] {
-  const { session, prefix, values, nodes, wires } = lowered.manifest;
+  const { session, prefix, values, nodes } = lowered.manifest;
   const scope = { build: prefix, repo: repoFolder(target.repo), workspace: target.workspace ?? "" };
   const settings = {
     env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
@@ -52,7 +52,7 @@ export function emit(lowered: ReturnType<typeof lower>, target: EmitTarget): Bui
   };
   const files: BuildFile[] = [
     ...lowered.nodeFiles,
-    ...handoffTemplates({ nodes, wires }, scope.repo),
+    ...handoffTemplates({ nodes }, scope.repo),
     orchestratorSkill(lowered.manifest, scope),
     ...guardHookFiles(),
     { path: "settings.json", content: canonicalJson(settings) },

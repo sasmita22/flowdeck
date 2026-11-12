@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { modelChoices, permissionModes, type Choice } from "../../../core/flow/choices.js";
-import { Session, type BuildConfig } from "../../../core/flow/schema.js";
+import { Session, type BuildConfig, type Node } from "../../../core/flow/schema.js";
+import { producedName } from "../../../core/nodes/agent/settings.js";
 
 type Path = readonly string[];
 
@@ -22,6 +23,7 @@ export type FieldDescription =
       options: string[];
       optionLabels: Record<string, string>;
       variants: Record<string, FieldDescription[]>;
+      fallback?: string;
     };
 
 type AnyObject = z.ZodObject<z.ZodRawShape>;
@@ -43,6 +45,7 @@ export type Form = {
   hidden?: ReadonlySet<string>;
   choices?: Readonly<Record<string, readonly Choice[]>>;
   placeholders?: Readonly<Record<string, string>>;
+  fallbacks?: Readonly<Record<string, string>>;
 };
 
 const sessionLabels: Record<string, string> = {
@@ -138,6 +141,7 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   }
   if (inner instanceof z.ZodEnum) {
     const options = inner.options.map(String);
+    const fallback = form.fallbacks?.[path.join(".")];
     return [
       {
         control: "select",
@@ -147,6 +151,7 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
         options,
         optionLabels: optionLabelsOf(form, path, options),
         variants: {},
+        ...(fallback === undefined ? {} : { fallback }),
       },
     ];
   }
@@ -217,6 +222,9 @@ const asChoices = (values: readonly string[]): Choice[] =>
 
 export const yesNoChoices = (buildConfig: Pick<BuildConfig, "variables">): Choice[] =>
   asChoices(buildConfig.variables.filter(({ kind }) => kind === "yesno").map(({ name }) => name));
+
+export const producedChoices = (nodes: readonly Pick<Node, "settings">[]): Choice[] =>
+  asChoices([...new Set(nodes.flatMap(({ settings }) => producedName(settings) ?? []))]);
 
 export const sessionFields = (): FieldDescription[] => describeFields(sessionSettingsSchema);
 

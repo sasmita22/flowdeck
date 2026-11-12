@@ -8,12 +8,11 @@ import {
   updateSession,
   addItems,
   deleteWires,
-  replaceWire,
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
 import type { Flow, Node, Session, Wire } from "../../../../src/core/flow/schema.js";
-import { agent, fileWire, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null) {
@@ -197,45 +196,6 @@ describe("deleteWires", () => {
   });
 });
 
-describe("replaceWire", () => {
-  const filed = () =>
-    flow(
-      [agent("A"), agent("B")],
-      [thenWire("A", "B"), fileWire("A", "B", "notes.md"), fileWire("A", "B", "brief.md")],
-    );
-
-  const wireAt = (source: Flow, index: number): Wire => {
-    const wire = source.wires[index];
-    if (wire === undefined) throw new Error(`flow has no wire at ${String(index)}`);
-    return wire;
-  };
-
-  it("puts the new wire in the old one's place and undo puts the old one back there", () => {
-    const before = filed();
-    const old = wireAt(before, 1);
-    const next = { ...old, file: "plan.md" } as Wire;
-
-    const command = replaceWire(old, next);
-    const after = command.do(before);
-
-    expect(after.wires).toEqual([wireAt(before, 0), next, wireAt(before, 2)]);
-    expect(after.nodes).toEqual(before.nodes);
-    expect(command.undo(after)).toEqual(before);
-    expect(command.do(command.undo(after))).toEqual(after);
-  });
-
-  it("replaces the last wire without moving the others", () => {
-    const before = filed();
-    const old = wireAt(before, 2);
-    const next = { ...old, file: "plan.md" } as Wire;
-
-    const { after, restored } = roundTrip(replaceWire(old, next), before);
-
-    expect(after.wires).toEqual([wireAt(before, 0), wireAt(before, 1), next]);
-    expect(restored).toEqual(before);
-  });
-});
-
 describe("addItems", () => {
   it("adds nodes, wires and notes as one step and undo takes exactly them away", () => {
     const before = fourNodes();
@@ -333,14 +293,6 @@ describe("commands", () => {
       (before) => updateSession({ ...before.session, model: "haiku", allowedTools: ["Read"] }),
     ],
     ["updateNode", (before) => updateNode({ ...onlyNode(before), label: "Renamed" })],
-    [
-      "replaceWire",
-      (before) => {
-        const old = before.wires[1];
-        if (old === undefined) throw new Error("expected a second wire");
-        return replaceWire(old, { ...old, to: { node: "C", port: "in" } });
-      },
-    ],
   ];
 
   it.each(cases)("%s never mutates the flow it is given", (_name, make) => {

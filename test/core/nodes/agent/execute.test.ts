@@ -4,6 +4,7 @@ import {
   agentTurnText,
   agentType,
 } from "../../../../src/core/nodes/agent/execute.js";
+import { agentVerdictTurnText } from "../../../../src/core/nodes/loop/execute.js";
 import type { AgentCall } from "../../../../src/core/run/agent-calls.js";
 
 const bare = (id: string) => ({ id, given: [], writes: [] });
@@ -69,6 +70,41 @@ describe("agentTurnText", () => {
 
   it("names the agent <prefix>:<node id> for a build that named no pieces", () => {
     expect(agentTurnText("h1", "a1", bare("a1"))).toContain('subagent_type "h1:a1"');
+  });
+});
+
+describe("a turn for an Agent that produces a value", () => {
+  const producer = { ...bare("a1"), produces: "tests-passed" };
+  const jsonRequests = (text: string) => text.match(/fenced code block tagged json/g) ?? [];
+
+  it("asks for a json answer under the value's own key, yes as true and no as false", () => {
+    const text = agentTurnText("h1", "review", producer);
+
+    expect(promptOf(text)?.startsWith("NODE a1\n")).toBe(true);
+    expect(text).not.toMatch(/Then reply DONE\.$/);
+    expect(jsonRequests(text)).toHaveLength(1);
+    expect(text).toContain('"tests-passed": true');
+    expect(text).toContain('"tests-passed": false');
+  });
+
+  it("asks for the answer once, in the main session's reply, not in the subagent's prompt", () => {
+    const text = agentTurnText("h1", "review", producer);
+
+    expect(promptOf(text)).toBe("NODE a1\nGo");
+  });
+
+  it("asks nothing more of an Agent that produces no value", () => {
+    expect(agentTurnText("h1", "review", bare("a1"))).toMatch(/Then reply DONE\.$/);
+  });
+
+  it("asks a Loop's last step that also produces a value for one block holding done and the value", () => {
+    const text = agentVerdictTurnText("h1", "review", producer, "no issues left");
+
+    expect(jsonRequests(text)).toHaveLength(1);
+    expect(text).toContain('"done": true');
+    expect(text).toContain('"tests-passed": true');
+    expect(text).toContain('"tests-passed": false');
+    expect(text).toContain("no issues left");
   });
 });
 

@@ -1,3 +1,5 @@
+import { fileWiresToSettings } from "./file-wires.js";
+
 type Fields = Record<string, unknown>;
 
 const isFields = (value: unknown): value is Fields =>
@@ -61,7 +63,8 @@ const upgradeSession = (session: Fields, variables: Fields[]): Fields => {
   };
 };
 
-export function upgradeFlow(raw: unknown): unknown {
+export function upgradeFlow(saved: unknown): unknown {
+  const raw = fileWiresToSettings(saved);
   if (!isFields(raw) || !Array.isArray(raw.nodes) || !isFields(raw.session)) return raw;
   const variables: Fields[] = [];
   const nodes = raw.nodes.map((node) => upgradeNode(node, variables));

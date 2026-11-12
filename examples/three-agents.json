@@ -22,7 +22,8 @@
         "role": "",
         "instructions": "Write a plan for the ticket.",
         "model": "sonnet",
-        "tools": []
+        "tools": [],
+        "writes": ["plan.md"]
       }
     },
     {
@@ -37,7 +38,9 @@
         "role": "",
         "instructions": "Implement the plan.",
         "model": "sonnet",
-        "tools": []
+        "tools": [],
+        "given": ["plan.md"],
+        "writes": ["changes.md"]
       }
     },
     {
@@ -52,7 +55,8 @@
         "role": "",
         "instructions": "Summarise what changed.",
         "model": "sonnet",
-        "tools": []
+        "tools": [],
+        "given": ["changes.md"]
       }
     },
     {
@@ -93,18 +97,6 @@
       }
     },
     {
-      "kind": "file",
-      "from": {
-        "node": "p1",
-        "port": "file-out"
-      },
-      "to": {
-        "node": "p2",
-        "port": "file-in"
-      },
-      "file": "plan.md"
-    },
-    {
       "kind": "then",
       "from": {
         "node": "p2",
@@ -114,18 +106,6 @@
         "node": "p3",
         "port": "in"
       }
-    },
-    {
-      "kind": "file",
-      "from": {
-        "node": "p2",
-        "port": "file-out"
-      },
-      "to": {
-        "node": "p3",
-        "port": "file-in"
-      },
-      "file": "changes.md"
     },
     {
       "kind": "then",

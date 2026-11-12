@@ -487,6 +487,27 @@ describe("decideResume", () => {
     },
   );
 
+  it("reuses the answer given at a Branch that asked for its value, and asks again with none", () => {
+    const manifest = { hash, prefix, nodes: [node("c1", "agent"), node("b1", "branch")] };
+    const asked: [string, RunEvent][] = [
+      ["c1", sent],
+      ["c1", done],
+      ["b1", { kind: "needs-you" }],
+    ];
+    const decision = { nodeId: "b1", decision: "answered" as const, answer: "yes" };
+
+    expect(
+      decideResume({
+        manifest,
+        events: stored([...asked, ["b1", { kind: "answered", payload: decision }]]),
+        turns: [],
+      }),
+    ).toEqual({ b1: { kind: "reuse", decision } });
+    expect(decideResume({ manifest, events: stored(asked), turns: [] })).toEqual({
+      b1: { kind: "ask" },
+    });
+  });
+
   it("asks again at a hard stop that was checking its condition when the runner stopped", () => {
     const manifest = { hash, prefix, nodes: [node("h1", "hardstop"), node("p1", "agent")] };
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { webGuardDecision } from "../../bin/flowdeck-web-guard.js";
 import { GITHUB_READ_TOOLS } from "../../src/core/compiler/blueprint-session.js";
 import { rules, validate } from "../../src/core/compiler/validate.js";
@@ -60,7 +61,12 @@ const tableRows = (section: string): string[][] =>
 
 const backticked = (cell: string): string => /^`([^`]+)`$/.exec(cell)?.[1] ?? cell;
 
-type NodeRow = { type: string; defaults: Record<string, unknown>; ports: string[] };
+type NodeRow = {
+  type: string;
+  settings: string;
+  defaults: Record<string, unknown>;
+  ports: string[];
+};
 
 const portKey = ({ direction, name, kind }: Port) => `${direction} ${name} ${kind}`;
 
@@ -93,6 +99,7 @@ const portsIn = (cell: string): string[] => {
 const nodeRows = (content: string): NodeRow[] =>
   tableRows(sectionOf(content, "## Nodes")).map(([type = "", , settings = "", ports = ""]) => ({
     type: backticked(type),
+    settings,
     defaults: defaultsIn(settings),
     ports: portsIn(ports),
   }));
@@ -118,6 +125,13 @@ const registryPorts = (type: string): string[] =>
   [...(registry[type as keyof typeof registry]?.ports ?? [])].map(portKey).sort();
 
 const ruleIds = rules.map((rule) => rule.id);
+
+const settingKeys = (type: string): string[] => {
+  const schema = registry[type as keyof typeof registry].settings;
+  return schema instanceof z.ZodObject ? Object.keys(schema.shape) : [];
+};
+
+const namesFileWire = (text: string): boolean => /\bfile`?[- ]wires?\b/i.test(text);
 
 const refusedWireRulesIn = (content: string): string[] => {
   const sentence = /[^.]*`wire` edit[^.]*refused[^.]*\./.exec(
@@ -197,6 +211,10 @@ describe("the blueprint kit", () => {
       expect(sectionOf(writeNode(), "## Agent node")).toMatch(/Agent[^.\n]*builds on/);
     });
 
+    it("write-node names the Agent's produces setting", () => {
+      expect(sectionOf(writeNode(), "## Agent node")).toContain("`produces`");
+    });
+
     it("copy-flow makes every work step an Agent", () => {
       expect(copyFlow()).toMatch(/every work step[^.\n]*an `agent`/i);
     });
@@ -269,10 +287,10 @@ describe("the blueprint kit", () => {
     for (const name of toolNames) expect(content, name).toContain(`\`${name}\``);
   });
 
-  it("names the three wire kinds", () => {
+  it("names the two wire kinds", () => {
     const content = skill();
 
-    expect(WireKind.options).toEqual(["then", "file", "event"]);
+    expect(WireKind.options).toEqual(["then", "event"]);
     for (const kind of WireKind.options) expect(content, kind).toContain(`\`${kind}\``);
   });
 
@@ -324,6 +342,21 @@ describe("the blueprint kit", () => {
       const row = rows.find((candidate) => candidate.type === type);
 
       expect(row?.ports).toEqual(registryPorts(type));
+    });
+
+    it.each(nodeTypes)("names every setting the %s node's schema has", (type) => {
+      const row = rows.find((candidate) => candidate.type === type);
+
+      expect(settingKeys(type).filter((key) => !row?.settings.includes(`\`${key}\``))).toEqual([]);
+    });
+
+    it("reads a setting left out of a node row as a mismatch", () => {
+      const row = rows.find((candidate) => candidate.type === "agent");
+      const without = row?.settings.replace("`role`", "role") ?? "";
+
+      expect(settingKeys("agent").filter((key) => !without.includes(`\`${key}\``))).toContain(
+        "role",
+      );
     });
 
     it.each(nodeTypes)("gives the %s node its default settings", (type) => {
@@ -391,6 +424,20 @@ describe("the blueprint kit", () => {
     expect(
       files.filter((file) => /\b(Prompt|Script)s?\b|`(prompt|script)`/.test(readKit(file))),
     ).toEqual([]);
+  });
+
+  it("names no File wire in any file", () => {
+    const files = kitFiles();
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((file) => namesFileWire(readKit(file)))).toEqual([]);
+  });
+
+  it("reads a File wire, a `file` wire or the file-wires rule as naming a File wire", () => {
+    expect(namesFileWire("a File wire carries it")).toBe(true);
+    expect(namesFileWire("`file-wires`: a rule")).toBe(true);
+    expect(namesFileWire("a `file` wire for each file")).toBe(true);
+    expect(namesFileWire("a file the writer leaves")).toBe(false);
   });
 
   it("leaves no file marked @unfilled", () => {

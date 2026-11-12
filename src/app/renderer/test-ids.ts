@@ -28,7 +28,6 @@ export const controlTestIds = {
   search: "palette-search",
   buildStop: "build-progress-stop",
   buildModel: "build-model",
-  fileWireName: (edgeId: string) => `file-wire-name-${edgeId}`,
   nodeMenuDuplicate: "node-menu-duplicate",
   nodeMenuFrameOnly: "node-menu-frame-only",
   blueprintTerminalToggle: "blueprint-terminal-toggle",
@@ -146,3 +145,9 @@ export const buildConfigTestIds = {
 } as const;
 
 export const branchVariableTestId = "node-setting-variable";
+
+export const branchDecidedByTestId = "node-setting-decided-by";
+
+export const branchValueTestId = "node-setting-value";
+
+export const agentProducesTestId = "node-setting-produces";

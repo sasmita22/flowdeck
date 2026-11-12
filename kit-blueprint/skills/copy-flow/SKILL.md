@@ -21,7 +21,7 @@ The user has a flow written down somewhere else, for example a workflow file or 
 
 1. Call `read_blueprint`, as for any edit.
 2. Add one node per source step, in the source's order. Make every work step an `agent`, including one that runs a command; a step where the user looks, answers or must stop takes its type from the `write-node` skill. Fill each node by that skill, keeping the source's own words for its instructions. Use the source's step name as the label.
-3. Add the same wires: a `then` wire from each step to the next in the source's order, and a `file` wire for each file one step hands another, named as the source names it.
+3. Add the same wires: a `then` wire from each step to the next in the source's order. For each file one step hands another, list it in the writer's `writes` and the reader's `given`, named as the source names it.
 4. Start and Stop are not steps. Use the blueprint's own Start and Stop, adding one only where the blueprint has none; wire Start to the first step and the last step to Stop.
 5. No step is added or dropped. A check, a retry or a gate the source does not have stays out, and every step the source has goes in, even one that looks redundant.
 
