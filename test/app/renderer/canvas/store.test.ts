@@ -17,7 +17,14 @@ import {
 import { nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { addNode } from "../../../../src/app/renderer/canvas/commands.js";
+import { addNode, moveNodes, updateNode } from "../../../../src/app/renderer/canvas/commands.js";
+import { tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
+
+vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../src/app/renderer/canvas/layout.js")>();
+  return { ...actual, tidyMoves: vi.fn(actual.tidyMoves) };
+});
 import {
   NodeType,
   parseFlow,
@@ -31,7 +38,9 @@ import {
   forEach,
   fork,
   hardstop,
+  join,
   loop,
+  onMainFlow,
   output,
   thenWire,
   trigger,
@@ -1689,6 +1698,206 @@ describe("agent edits", () => {
         { name: "deep", kind: "text" },
         { name: "ticket", kind: "text" },
       ]);
+    });
+  });
+});
+
+describe("tidy", () => {
+  const defaultCanvas = { width: 1600, height: 1000 };
+
+  const messy = (): Flow => ({
+    ...onMainFlow(
+      [
+        agent("a", { settings: { instructions: "Write the plan." } }),
+        fork("F"),
+        agent("b1"),
+        agent("b2"),
+        join("J"),
+        loop("L"),
+        agent("x", { parent: "L" }),
+        { ...agent("c"), label: "Wrap up" },
+      ],
+      [
+        thenWire("a", "F"),
+        thenWire("F", "b1"),
+        thenWire("F", "b2"),
+        thenWire("b1", "J"),
+        thenWire("b2", "J"),
+        thenWire("J", "x"),
+        thenWire("x", "c"),
+      ],
+    ),
+    notes: [{ id: "n1", text: "hi", position: { x: 0, y: 0 }, size: { width: 200, height: 100 } }],
+  });
+
+  const longChain = (): Flow => {
+    const ids = Array.from({ length: 30 }, (_, index) => `s${index + 1}`);
+    return onMainFlow(
+      ids.map((id) => agent(id)),
+      ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
+    );
+  };
+
+  const loaded = (source: Flow) => {
+    const store = createCanvasStore();
+    store.getState().load(source);
+    return store;
+  };
+
+  const laidOut = async (source: Flow, size = defaultCanvas) =>
+    moveNodes(await tidyMoves(source, size)).do(source);
+
+  const positionsOf = (current: Flow) =>
+    Object.fromEntries(current.nodes.map(({ id, position }) => [id, position]));
+
+  it("adds one undo entry, marks the blueprint unsaved, and one undo restores every position", async () => {
+    const store = loaded(messy());
+    const before = store.getState().flow;
+
+    await store.getState().tidy();
+
+    expect(positionsOf(store.getState().flow)).not.toEqual(positionsOf(before));
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(selectDirty(store.getState())).toBe(true);
+
+    store.getState().undo();
+
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("changes nothing but node positions", async () => {
+    const store = loaded(messy());
+    const before = store.getState().flow;
+
+    await store.getState().tidy();
+
+    const after = store.getState().flow;
+    expect(positionsOf(after)).not.toEqual(positionsOf(before));
+    expect(after).toEqual({
+      ...before,
+      nodes: before.nodes.map((node) => ({ ...node, position: positionsOf(after)[node.id] })),
+    });
+  });
+
+  it("shows a layout failure on the canvas and changes nothing", async () => {
+    const store = loaded(messy());
+    const { flow: before, fitSeq } = store.getState();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(tidyMoves).mockRejectedValueOnce(new Error("layout engine crashed"));
+
+    await store.getState().tidy();
+
+    expect(store.getState().message).toBe("Can't tidy the layout: layout engine crashed");
+    expect(logged).toHaveBeenCalled();
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toHaveLength(0);
+    expect(store.getState().fitSeq).toBe(fitSeq);
+    logged.mockRestore();
+  });
+
+  it("bumps the fit signal once, not the opened count, when nodes move", async () => {
+    const store = loaded(messy());
+    const { fitSeq, opened } = store.getState();
+
+    await store.getState().tidy();
+
+    expect(store.getState().fitSeq).toBe(fitSeq + 1);
+    expect(store.getState().opened).toBe(opened);
+  });
+
+  it("adds no undo entry and leaves the fit signal alone when nothing moves", async () => {
+    const store = loaded(await laidOut(messy()));
+    const { flow: before, fitSeq } = store.getState();
+
+    await store.getState().tidy();
+
+    expect(store.getState().undoStack).toEqual([]);
+    expect(store.getState().fitSeq).toBe(fitSeq);
+    expect(store.getState().flow).toBe(before);
+  });
+
+  it("drops its result when the flow changed while the layout ran", async () => {
+    const store = loaded(messy());
+    const { fitSeq } = store.getState();
+
+    const pending = store.getState().tidy();
+    store.getState().drop("gate", { x: 900, y: 900 });
+    const edited = store.getState().flow;
+    await pending;
+
+    expect(store.getState().flow).toBe(edited);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(store.getState().fitSeq).toBe(fitSeq);
+  });
+
+  it("lays out for a 1600 by 1000 canvas until the canvas size is set", async () => {
+    const source = longChain();
+    const store = loaded(source);
+    expect(store.getState().canvasSize).toBeNull();
+
+    await store.getState().tidy();
+
+    expect(store.getState().flow).toEqual(await laidOut(source));
+  });
+
+  it("lays out for the canvas size it was given", async () => {
+    const source = longChain();
+    const wide = { width: 100000, height: 1000 };
+    const store = loaded(source);
+
+    store.getState().setCanvasSize(wide);
+    await store.getState().tidy();
+
+    expect(store.getState().canvasSize).toEqual(wide);
+    expect(await laidOut(source, wide)).not.toEqual(await laidOut(source));
+    expect(store.getState().flow).toEqual(await laidOut(source, wide));
+  });
+
+  describe("foldIntoTop", () => {
+    const agentEdited = async () => {
+      const store = loaded(messy());
+      const original = store.getState().flow;
+      const [first] = original.nodes;
+      if (first === undefined) throw new Error("expected a node");
+      const expected = updateNode({ ...first, label: "Renamed" });
+      store.getState().applyAgent(expected);
+      const snapshot = store.getState().flow;
+      const moves = await tidyMoves(snapshot, defaultCanvas);
+      const other = updateNode({ ...first, label: "Other" });
+      return { store, original, expected, other, snapshot, moves };
+    };
+
+    it("folds the moves into the top undo entry and bumps the fit signal", async () => {
+      const { store, original, expected, snapshot, moves } = await agentEdited();
+      const { fitSeq } = store.getState();
+
+      expect(store.getState().foldIntoTop(expected, snapshot, moves)).toBe(true);
+
+      expect(store.getState().flow).toEqual(moveNodes(moves).do(snapshot));
+      expect(store.getState().undoStack).toHaveLength(1);
+      expect(store.getState().fitSeq).toBe(fitSeq + 1);
+
+      store.getState().undo();
+
+      expect(store.getState().flow).toEqual(original);
+    });
+
+    it.each([
+      ["the top undo entry is another command", "top"],
+      ["the flow is not the snapshot", "flow"],
+    ])("changes nothing and returns false when %s", async (_, stale) => {
+      const { store, original, expected, other, snapshot, moves } = await agentEdited();
+      const before = store.getState();
+
+      const folded =
+        stale === "top"
+          ? store.getState().foldIntoTop(other, snapshot, moves)
+          : store.getState().foldIntoTop(expected, original, moves);
+
+      expect(folded).toBe(false);
+      expect(store.getState().flow).toBe(before.flow);
+      expect(store.getState().undoStack).toBe(before.undoStack);
+      expect(store.getState().fitSeq).toBe(before.fitSeq);
     });
   });
 });

@@ -44,6 +44,7 @@ import {
   type Items,
   type Move,
 } from "./commands.js";
+import { tidyMoves } from "./layout.js";
 import { edgeId } from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
@@ -65,6 +66,10 @@ export type NodeMenu = { nodeId: string; x: number; y: number };
 
 export type Focus = { node: string; seq: number };
 
+export type CanvasSize = { width: number; height: number };
+
+export const defaultCanvasSize: CanvasSize = { width: 1600, height: 1000 };
+
 export interface CanvasState {
   flow: Flow;
   saved: Flow;
@@ -83,6 +88,8 @@ export interface CanvasState {
   renaming: string | null;
   focus: Focus | null;
   opened: number;
+  canvasSize: CanvasSize | null;
+  fitSeq: number;
   drop(type: CanvasItemType, position: Position): void;
   addNext(type: CanvasItemType): void;
   editNoteText(id: string, text: string): void;
@@ -117,6 +124,10 @@ export interface CanvasState {
   updateNode(next: Node): void;
   applyAgent(command: Command): boolean;
   endAgentGroup(): void;
+  setCanvasSize(size: CanvasSize): void;
+  tidy(): Promise<void>;
+  tidyFailed(error: unknown): void;
+  foldIntoTop(expected: Command, snapshot: Flow, moves: Move[]): boolean;
   variableCommand(variable: Variable): Command;
   undo(): void;
   redo(): void;
@@ -554,6 +565,8 @@ export function createCanvasStore(
       renaming: null,
       focus: null,
       opened: 0,
+      canvasSize: null,
+      fitSeq: 0,
 
       drop: (type, position) => {
         if (!ready()) return;
@@ -799,6 +812,39 @@ export function createCanvasStore(
 
       endAgentGroup: () => {
         agentGroup = null;
+      },
+
+      setCanvasSize: (size) => set({ canvasSize: size }),
+
+      tidy: async () => {
+        if (!ready()) return;
+        const { flow, canvasSize } = get();
+        let moves: Move[];
+        try {
+          moves = await tidyMoves(flow, canvasSize ?? defaultCanvasSize);
+        } catch (error) {
+          get().tidyFailed(error);
+          return;
+        }
+        if (get().flow !== flow || moves.length === 0) return;
+        run(moveNodes(moves));
+        set({ fitSeq: get().fitSeq + 1 });
+      },
+
+      tidyFailed: (error) => {
+        console.error("Tidy layout failed", error);
+        set({
+          message: `Can't tidy the layout: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      },
+
+      foldIntoTop: (expected, snapshot, moves) => {
+        const { flow, undoStack } = get();
+        if (undoStack.at(-1) !== expected || flow !== snapshot) return false;
+        const tidied = moveNodes(moves);
+        record(both(expected, tidied), tidied.do(flow), undoStack.slice(0, -1));
+        set({ fitSeq: get().fitSeq + 1 });
+        return true;
       },
 
       variableCommand: (variable) =>

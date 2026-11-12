@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import { createToolHandler } from "../../../../src/app/renderer/assistant/tool-handler.js";
+import { moveNodes } from "../../../../src/app/renderer/canvas/commands.js";
+import { tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
 import {
   createCanvasStore,
   nextNodeId,
@@ -14,6 +16,12 @@ import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
 import type { Flow, Variable } from "../../../../src/core/flow/schema.js";
 import { agent, flow, output, thenWire, trigger } from "../../../fixtures/flow-builders.js";
+
+vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../src/app/renderer/canvas/layout.js")>();
+  return { ...actual, tidyMoves: vi.fn(actual.tidyMoves) };
+});
 
 type HandlerBridge = Pick<
   FlowdeckBridge,
@@ -471,5 +479,285 @@ describe("tool handler before the canvas is ready", () => {
     expect(result).toEqual({ ok: false, reason: "the canvas is not ready" });
     expect(canvas.getState().flow).toBe(before);
     expect(canvas.getState().undoStack).toEqual([]);
+  });
+});
+
+describe("tool handler tidy", () => {
+  const defaultSize = { width: 1600, height: 1000 };
+
+  const tidied = async (from: Flow) => moveNodes(await tidyMoves(from, defaultSize)).do(from);
+
+  type Canvas = Awaited<ReturnType<typeof setup>>["canvas"];
+
+  const settled = async (canvas: Canvas) => {
+    await tidyMoves(canvas.getState().flow, defaultSize);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+
+  const tidiedTo = (canvas: Canvas, expected: Flow) =>
+    vi.waitFor(() => expect(canvas.getState().flow).toEqual(expected), { timeout: 2_000 });
+
+  it("tidy_layout lays the blueprint out as tidyMoves does, inside the ask's one undo step", async () => {
+    const { call, endTurn, canvas } = await setup();
+    const before = canvas.getState().flow;
+    await call("add_node", { type: "agent", label: "One" });
+    await call("add_node", { type: "agent", label: "Two" });
+    const added = canvas.getState().flow;
+    const expected = await tidied(added);
+    expect(expected).not.toEqual(added);
+
+    const result = await call("tidy_layout", {});
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(canvas.getState().flow).toEqual(expected);
+    expect(canvas.getState().fitSeq).toBe(1);
+    endTurn();
+    await settled(canvas);
+    expect(canvas.getState().undoStack).toHaveLength(1);
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+  });
+
+  it("runs no second layout at the turn end of an ask whose last edit is tidy_layout", async () => {
+    const { call, endTurn, canvas } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    await call("tidy_layout", {});
+    const laidOut = canvas.getState().flow;
+    expect(laidOut).toEqual(await tidied(laidOut));
+    expect(canvas.getState().fitSeq).toBe(1);
+
+    endTurn();
+    await settled(canvas);
+
+    expect(canvas.getState().flow).toBe(laidOut);
+    expect(canvas.getState().fitSeq).toBe(1);
+  });
+
+  it("lays out once for an ask whose last edit is tidy_layout, on the tool call and not at the turn end", async () => {
+    const { call, endTurn } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    vi.mocked(tidyMoves).mockClear();
+
+    await call("tidy_layout", {});
+    endTurn();
+
+    expect(tidyMoves).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["one node", ["One"]],
+    ["three nodes", ["One", "Two", "Three"]],
+  ])(
+    "lays out once, at the turn end, for an ask that adds %s without tidy_layout",
+    async (_, labels) => {
+      const { call, endTurn, canvas } = await setup();
+      const layouts = vi.mocked(tidyMoves);
+      layouts.mockClear();
+      for (const label of labels) await call("add_node", { type: "agent", label });
+      expect(layouts).not.toHaveBeenCalled();
+      const expected = await tidied(canvas.getState().flow);
+      layouts.mockClear();
+
+      endTurn();
+      await tidiedTo(canvas, expected);
+
+      expect(layouts).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("tidy_layout on a tidy blueprint answers ok and adds no undo step", async () => {
+    const { call, canvas } = await setup();
+    await canvas.getState().tidy();
+    const laidOut = canvas.getState().flow;
+    const { undoStack, fitSeq } = canvas.getState();
+
+    const result = await call("tidy_layout", {});
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(canvas.getState().flow).toBe(laidOut);
+    expect(canvas.getState().undoStack).toEqual(undoStack);
+    expect(canvas.getState().fitSeq).toBe(fitSeq);
+  });
+
+  it("tidies an ask that added nodes without tidy_layout at its turn end, inside its undo step", async () => {
+    const { call, endTurn, canvas } = await setup();
+    const before = canvas.getState().flow;
+    await call("add_node", { type: "agent", label: "One" });
+    await call("add_node", { type: "agent", label: "Two" });
+    await call("add_node", { type: "agent", label: "Three" });
+    const expected = await tidied(canvas.getState().flow);
+    expect(expected).not.toEqual(canvas.getState().flow);
+
+    endTurn();
+
+    await tidiedTo(canvas, expected);
+    expect(canvas.getState().undoStack).toHaveLength(1);
+    expect(canvas.getState().fitSeq).toBe(1);
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+  });
+
+  it("tidies at the turn end when a node is added after tidy_layout", async () => {
+    const { call, endTurn, canvas } = await setup();
+    const before = canvas.getState().flow;
+    await call("add_node", { type: "agent", label: "One" });
+    await call("tidy_layout", {});
+    await call("add_node", { type: "agent", label: "Two" });
+    const expected = await tidied(canvas.getState().flow);
+    expect(expected).not.toEqual(canvas.getState().flow);
+
+    endTurn();
+
+    await tidiedTo(canvas, expected);
+    expect(canvas.getState().undoStack).toHaveLength(1);
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+  });
+
+  it("moves nothing at the turn end of an ask that added no nodes or wires", async () => {
+    const { call, endTurn, canvas } = await setup();
+    await call("change_node", { nodeId: "p1", label: "Planner" });
+    await call("set_variable", { kind: "yesno", name: "dry" });
+    const edited = canvas.getState().flow;
+    expect(await tidied(edited)).not.toEqual(edited);
+
+    endTurn();
+    await settled(canvas);
+
+    expect(canvas.getState().flow).toBe(edited);
+    expect(canvas.getState().fitSeq).toBe(0);
+  });
+
+  it("tidies each of two asks in a row once", async () => {
+    const { call, endTurn, canvas } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    const first = await tidied(canvas.getState().flow);
+    endTurn();
+    await tidiedTo(canvas, first);
+    await call("add_node", { type: "agent", label: "Two" });
+    const second = await tidied(canvas.getState().flow);
+    expect(second).not.toEqual(canvas.getState().flow);
+
+    endTurn();
+
+    await tidiedTo(canvas, second);
+    await settled(canvas);
+    expect(canvas.getState().undoStack).toHaveLength(2);
+    expect(canvas.getState().fitSeq).toBe(2);
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(first);
+  });
+
+  it.each<[string, (context: Awaited<ReturnType<typeof setup>>) => Promise<unknown>]>([
+    [
+      "the next ask edits right after the turn end",
+      ({ call }) => call("change_node", { nodeId: "p1", label: "Planner" }),
+    ],
+    ["undo runs", async ({ canvas }) => canvas.getState().undo()],
+    [
+      "the editor is no longer shown",
+      async ({ nav }) => nav.setState({ page: { name: "blueprints" } }),
+    ],
+  ])("drops the turn-end tidy when %s before it resolves", async (_, act) => {
+    const context = await setup();
+    const { call, endTurn, canvas } = context;
+    await call("add_node", { type: "agent", label: "One" });
+    const added = canvas.getState().flow;
+    expect(await tidied(added)).not.toEqual(added);
+
+    endTurn();
+    await act(context);
+    const acted = canvas.getState().flow;
+    await settled(canvas);
+
+    expect(canvas.getState().flow).toBe(acted);
+    expect(canvas.getState().fitSeq).toBe(0);
+  });
+
+  const deferredLayout = () => {
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(tidyMoves).mockImplementationOnce(async (...args) => {
+      const actual = await vi.importActual<
+        typeof import("../../../../src/app/renderer/canvas/layout.js")
+      >("../../../../src/app/renderer/canvas/layout.js");
+      const moves = await actual.tidyMoves(...args);
+      await released;
+      return moves;
+    });
+    return release;
+  };
+
+  it("refuses tidy_layout and moves nothing when the blueprint changes while it lays out", async () => {
+    const { call, canvas } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    const release = deferredLayout();
+
+    const answer = call("tidy_layout", {});
+    await call("change_node", { nodeId: "p1", label: "Planner" });
+    const { flow, undoStack, fitSeq } = canvas.getState();
+    release();
+
+    expect(await answer).toEqual({
+      ok: false,
+      reason:
+        "The blueprint changed while it was being laid out; nothing moved. Call tidy_layout again.",
+    });
+    expect(canvas.getState().flow).toBe(flow);
+    expect(canvas.getState().undoStack).toEqual(undoStack);
+    expect(canvas.getState().fitSeq).toBe(fitSeq);
+  });
+
+  it("refuses tidy_layout and moves nothing when the editor opens another blueprint while it lays out", async () => {
+    const { call, canvas, save } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    const release = deferredLayout();
+
+    const answer = call("tidy_layout", {});
+    await vi.waitFor(() => expect(tidyMoves).toHaveBeenCalled());
+    await save.getState().open("flow-2");
+    const { flow, undoStack, fitSeq } = canvas.getState();
+    release();
+
+    expect(await answer).toEqual({ ok: false, reason: offBlueprint });
+    expect(canvas.getState().flow).toBe(flow);
+    expect(canvas.getState().undoStack).toEqual(undoStack);
+    expect(canvas.getState().fitSeq).toBe(fitSeq);
+  });
+
+  it("shows on the canvas when the turn-end tidy fails", async () => {
+    const { call, endTurn, canvas } = await setup();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await call("add_node", { type: "agent", label: "One" });
+    const added = canvas.getState().flow;
+    vi.mocked(tidyMoves).mockRejectedValueOnce(new Error("layout engine crashed"));
+
+    endTurn();
+
+    await vi.waitFor(() =>
+      expect(canvas.getState().message).toBe("Can't tidy the layout: layout engine crashed"),
+    );
+    expect(logged).toHaveBeenCalled();
+    expect(canvas.getState().flow).toBe(added);
+    logged.mockRestore();
+  });
+
+  it("keeps the next ask's edit intact when it lands right after a turn end", async () => {
+    const { call, endTurn, canvas } = await setup();
+    await call("add_node", { type: "agent", label: "One" });
+    const added = canvas.getState().flow;
+
+    endTurn();
+    await call("change_node", { nodeId: "p1", label: "Planner" });
+    await settled(canvas);
+
+    const after = canvas.getState().flow;
+    expect(after.nodes.find(({ id }) => id === "p1")?.label).toBe("Planner");
+    expect(after.nodes.map(({ position }) => position)).toEqual(
+      added.nodes.map(({ position }) => position),
+    );
+    expect(canvas.getState().undoStack).toHaveLength(2);
   });
 });

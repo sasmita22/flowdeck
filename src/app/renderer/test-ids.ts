@@ -33,6 +33,7 @@ export const controlTestIds = {
   blueprintTerminalToggle: "blueprint-terminal-toggle",
   blueprintTerminalMinimize: "blueprint-terminal-minimize",
   blueprintTerminalClose: "blueprint-terminal-close",
+  tidy: "canvas-tidy",
 } as const;
 
 export const blueprintTerminalTestId = "blueprint-terminal";

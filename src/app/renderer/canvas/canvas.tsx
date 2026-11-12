@@ -175,12 +175,30 @@ function EmptyHint({
   );
 }
 
+function TidyButton({ store }: { store: StoreApi<CanvasState> }) {
+  const empty = useStore(store, selectCanvasEmpty);
+  return (
+    <button
+      className="fd-btn fd-canvas-tidy"
+      data-testid={controlTestIds.tidy}
+      title="Tidy layout"
+      aria-label="Tidy layout"
+      disabled={empty}
+      onClick={() => void store.getState().tidy()}
+    >
+      Tidy
+    </button>
+  );
+}
+
 function CanvasMessage({ store }: { store: StoreApi<CanvasState> }) {
   const message = useStore(store, (state) => state.message);
   if (message === null) return null;
   return (
-    <div className="fd-canvas-toast" data-testid="canvas-message" role="status">
-      {message}
+    <div className="fd-canvas-toast-area">
+      <div className="fd-canvas-toast" data-testid="canvas-message" role="status">
+        {message}
+      </div>
     </div>
   );
 }
@@ -218,6 +236,26 @@ function useFocus(store: StoreApi<CanvasState>) {
     const height = node.measured.height ?? 0;
     void setCenter(x + width / 2, y + height / 2, { zoom: getZoom(), duration: 200 });
   }, [focus, getInternalNode, getZoom, setCenter]);
+}
+
+function useCanvasSize(store: StoreApi<CanvasState>) {
+  const width = useFlowStore((state) => state.width);
+  const height = useFlowStore((state) => state.height);
+  useEffect(() => {
+    if (width === 0 || height === 0) return;
+    store.getState().setCanvasSize({ width, height });
+  }, [store, width, height]);
+}
+
+function useFitOnTidy(store: StoreApi<CanvasState>) {
+  const fitSeq = useStore(store, (state) => state.fitSeq);
+  const { fitView } = useReactFlow();
+  const seen = useRef(fitSeq);
+  useEffect(() => {
+    if (seen.current === fitSeq) return;
+    seen.current = fitSeq;
+    void fitView();
+  }, [fitSeq, fitView]);
 }
 
 function useCanvasKeys(store: StoreApi<CanvasState>, onSave: (() => void) | undefined) {
@@ -402,6 +440,7 @@ function Board({
         readOnly={readOnly}
       />
       {!readOnly && <EmptyHint store={store} shell={shell} />}
+      {!readOnly && <TidyButton store={store} />}
       {!readOnly && <NodeMenu store={store} />}
       {!readOnly && <CanvasMessage store={store} />}
       <Readout store={store} />
@@ -418,6 +457,8 @@ function EditorEffects({
 }) {
   useFitOnOpen(store);
   useFocus(store);
+  useCanvasSize(store);
+  useFitOnTidy(store);
   useCanvasKeys(store, onSave);
   return null;
 }

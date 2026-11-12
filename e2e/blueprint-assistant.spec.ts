@@ -329,6 +329,105 @@ test("three edits from one ask are undone by one Undo", async () => {
   await expect.poll(() => readout(window)).toEqual(before);
 });
 
+const positionsOf = ({ nodes }: Flow) =>
+  Object.fromEntries(nodes.map(({ id, position }) => [id, position]));
+
+const piled = (nodes: unknown[], wires: unknown[], at = { x: 0, y: 0 }): Flow =>
+  flow(
+    nodes.map((node) => ({ ...(node as object), position: at })),
+    wires,
+  );
+
+test("tidy_layout lays the blueprint out as the Tidy button does, and one Undo reverts the ask", async () => {
+  const flowId = seedBlueprint(
+    home,
+    "messy",
+    piled([agent("p1"), agent("p2"), agent("p3")], [thenWire("p1", "p2"), thenWire("p2", "p3")]),
+  ).flowId;
+  const window = await launch();
+  await openOn(window, flowId);
+  await showPane(window, flowId);
+  const before = await readout(window);
+  await window.getByTestId("canvas-tidy").click();
+  await expect
+    .poll(async () => positionsOf(await readout(window)))
+    .not.toEqual(positionsOf(before));
+  const byButton = positionsOf(await readout(window));
+  await window.getByTestId(controlTestIds.undo).click();
+  await expect.poll(() => readout(window)).toEqual(before);
+  await writeBlueprintAsks(home, [[{ name: "tidy_layout", input: {} }]]);
+
+  await askInPane(window, "tidy the blueprint");
+
+  await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
+  expect((await blueprintResults(home))[0]?.result).toMatchObject({ ok: true });
+  await expect.poll(async () => positionsOf(await readout(window))).toEqual(byButton);
+
+  await window.getByTestId(controlTestIds.undo).click();
+
+  await expect.poll(() => readout(window)).toEqual(before);
+});
+
+test("an ask that adds nodes without tidy_layout ends tidied, and one Undo reverts the nodes and the tidy", async () => {
+  const flowId = seedBlueprint(home, "a", piled([agent("p1")], [], { x: 900, y: 600 })).flowId;
+  const window = await launch();
+  await openOn(window, flowId);
+  await showPane(window, flowId);
+  const before = await readout(window);
+  await writeBlueprintAsks(home, [
+    [
+      { name: "add_node", input: { type: "agent", label: "Lint" } },
+      { name: "add_node", input: { type: "agent", label: "Tests" } },
+      { name: "add_node", input: { type: "agent", label: "Docs" } },
+      { name: "wire", input: thenWire("p1", "agent-1") },
+      { name: "wire", input: thenWire("agent-1", "agent-2") },
+      { name: "wire", input: thenWire("agent-2", "agent-3") },
+    ],
+  ]);
+
+  await askInPane(window, "add three agents after p1");
+
+  await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
+  const chain = ["p1", "agent-1", "agent-2", "agent-3"];
+  const inFlowOrder = async () => {
+    const at = positionsOf(await readout(window));
+    return chain.every(
+      (id, index) => index === 0 || (at[id]?.x ?? 0) > (at[chain[index - 1] ?? ""]?.x ?? 0),
+    );
+  };
+  await expect.poll(inFlowOrder, { timeout: 10_000 }).toBe(true);
+  const tidied = await readout(window);
+  await window.getByTestId("canvas-tidy").click();
+  await window.waitForTimeout(1_000);
+  expect(await readout(window)).toEqual(tidied);
+
+  await window.getByTestId(controlTestIds.undo).click();
+
+  await expect.poll(() => readout(window)).toEqual(before);
+});
+
+test("an ask that only changes a setting moves no node", async () => {
+  const flowId = seedBlueprint(
+    home,
+    "messy",
+    piled([agent("p1"), agent("p2")], [thenWire("p1", "p2")]),
+  ).flowId;
+  const window = await launch();
+  await openOn(window, flowId);
+  await showPane(window, flowId);
+  const before = positionsOf(await readout(window));
+  await writeBlueprintAsks(home, [
+    [{ name: "change_node", input: { nodeId: "p1", label: "Planner" } }],
+  ]);
+
+  await askInPane(window, "rename p1");
+
+  await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
+  await expect.poll(async () => (await readout(window)).nodes[0]?.label).toBe("Planner");
+  await window.waitForTimeout(1_000);
+  expect(positionsOf(await readout(window))).toEqual(before);
+});
+
 test("opening another blueprint ends the session; leaving the editor does not", async () => {
   const a = seeded("a");
   const b = seeded("b");

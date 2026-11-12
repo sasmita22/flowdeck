@@ -42,6 +42,7 @@ const copyReply = "No plan file: use only the file names the source gives.";
 const outsideAsk = "Copy the flow in https://docs.python.org/3/ into this blueprint.";
 const todoAsk =
   "Make a blueprint: an Agent node that lists the TODOs in README.md, then an Agent node that fixes them.";
+const fiveStepAsk = "Make a five-step flow of Agent nodes: plan, write, test, review, ship.";
 const agentDeadlineMs = 240_000;
 const perAskMs = 360_000;
 
@@ -98,7 +99,17 @@ const typeAndSend = async (window: LaunchedApp["window"], id: string, text: stri
   await window.keyboard.press("Enter");
 };
 
-const askOnFreshBlueprint = async (ask: string, tag: string, reply?: string): Promise<Flow> => {
+const positionsOf = ({ nodes }: Flow) =>
+  Object.fromEntries(nodes.map(({ id, position }) => [id, position]));
+
+const isFlowdeckEdit = (name: string) => /^mcp__flowdeck__(?!list_|search_|read_)/.test(name);
+
+const askOnFreshBlueprint = async (
+  ask: string,
+  tag: string,
+  reply?: string,
+  beforeClose?: (window: LaunchedApp["window"]) => Promise<void>,
+): Promise<Flow> => {
   const id = seedBlueprint(home, tag, flow([trigger("start"), output("stop")], [])).flowId;
   flowIds.push(id);
   launched = await launchOnCanvas({
@@ -146,6 +157,7 @@ const askOnFreshBlueprint = async (ask: string, tag: string, reply?: string): Pr
   console.log(`${tag}: models ${JSON.stringify(models)} usage ${JSON.stringify(usage)}`);
   expect(models.length).toBeGreaterThan(0);
   for (const model of models) expect(model).toMatch(/haiku/);
+  await beforeClose?.(window);
 
   const current = launched;
   launched = undefined;
@@ -225,4 +237,19 @@ test("writes nodes to the standard", async () => {
   const written = await askOnFreshBlueprint(todoAsk, "standard");
   expect(mainSteps(written).nodes.filter((node) => node.type === "agent")).not.toHaveLength(0);
   expect(standardProblems(written)).toEqual([]);
+});
+
+test("lays out a five-step flow with tidy_layout as the ask's last edit", async () => {
+  test.setTimeout(perAskMs);
+  await askOnFreshBlueprint(fiveStepAsk, "tidy", undefined, async (window) => {
+    const tidied = positionsOf(await readout(window));
+    await window.getByTestId(controlTestIds.tidy).click();
+    await window.waitForTimeout(1_000);
+    expect(positionsOf(await readout(window))).toEqual(tidied);
+  });
+  const edits = (await toolCalls(home, flowIds.at(-1) ?? "")).filter((call) =>
+    isFlowdeckEdit(call.name),
+  );
+  expect(edits.map((call) => call.name)).toContain("mcp__flowdeck__add_node");
+  expect(edits.at(-1)?.name).toBe("mcp__flowdeck__tidy_layout");
 });
