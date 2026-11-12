@@ -241,6 +241,77 @@ describe("writeTurn", () => {
       writeTurn(manifest(), allPieces, 2, failures),
     );
   });
+
+  const looseHeading = "Files outside these pieces that also failed the check:";
+  const looseInstruction =
+    "These files belong to no piece in this round: give them to no agent, put them in no block and edit none of them yourself. Dispatch only for the pieces listed in this turn; if none is listed, dispatch nothing.";
+  const answersHeading = "Answers about nodes outside these pieces:";
+  const answersInstruction =
+    "No piece in this turn serves these nodes: put these answers in no block and act on none of them yourself; they reach those nodes outside this turn.";
+  const lineAfter = (text: string, heading: string) => {
+    const lines = text.split("\n");
+    const at = lines.indexOf(heading);
+    return at === -1 ? undefined : lines[at + 1];
+  };
+  const inNoBlock = (text: string, pieces: readonly string[], content: string) => {
+    for (const path of pieces) expect(blockOf(text, path), path).not.toContain(content);
+  };
+
+  it("instructs the session directly under the loose files, outside every piece's block", () => {
+    const pieces = ["plugin/agents/review.md"];
+    const loose: BuildCheckFailure = {
+      file: "settings.json",
+      rule: "code-owned",
+      detail: "differs from what code wrote",
+    };
+    const text = writeTurn(manifest(), pieces, 2, [...failures, loose]);
+
+    expect(lineAfter(text, looseHeading)).toBe(looseInstruction);
+    expect(text.split(looseInstruction)).toHaveLength(2);
+    inNoBlock(text, pieces, looseInstruction);
+    inNoBlock(text, pieces, "settings.json");
+    expect(pieceLines(text)).toEqual(["PIECE plugin/agents/review.md"]);
+  });
+
+  it("gives no loose-files instruction when every failure is on a piece", () => {
+    const text = writeTurn(manifest(), allPieces, 2, failures);
+
+    expect(text).not.toContain(looseHeading);
+    expect(text).not.toContain(looseInstruction);
+  });
+
+  it.each([
+    ["a round", allPieces],
+    ["a rewrite", ["plugin/agents/review.md"]],
+  ])(
+    "in %s, puts an unplaced answer under its section, below the instruction, and in no block",
+    (_caller, pieces) => {
+      const shipOnly = answers[1];
+      if (shipOnly === undefined) throw new Error("two answers expected");
+      const shared = [{ name: "run-tests", kind: "skill" as const, usedBy: ["p1", "a1"] }];
+      const text = writeTurn(manifest(), pieces, 1, [], answers, shared);
+      const lines = text.split("\n");
+      const heading = lines.indexOf(answersHeading);
+      const firstPiece = lines.findIndex((line) => line.startsWith("PIECE "));
+
+      expect(lineAfter(text, answersHeading)).toBe(answersInstruction);
+      expect(text.split(answersInstruction)).toHaveLength(2);
+      for (const line of [`ANSWER ${shipOnly.answer}`, `QUESTION p2: ${shipOnly.text}`]) {
+        expect(lines.indexOf(line), line).toBeGreaterThan(heading + 1);
+        expect(lines.indexOf(line), line).toBeLessThan(firstPiece);
+      }
+      inNoBlock(text, pieces, answersInstruction);
+      inNoBlock(text, pieces, shipOnly.answer);
+      expect(pieceLines(text)).toEqual(pieces.map((path) => `PIECE ${path}`));
+    },
+  );
+
+  it("gives no answers instruction when every answer is placed in a piece", () => {
+    const text = writeTurn(manifest(), [...allPieces, "plugin/agents/ship.md"], 1, [], answers);
+
+    expect(text).not.toContain(answersHeading);
+    expect(text).not.toContain(answersInstruction);
+  });
 });
 
 describe("auditTurn", () => {

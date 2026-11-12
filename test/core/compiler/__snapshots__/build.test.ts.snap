@@ -19,10 +19,9 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
 5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
 6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
-7. Any loop stops after 3 tries on the same issue and reports the blocker.
-8. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
-9. State every change and every deviation from the instructions with its reason.
-10. Never rewrite shared history: no force pushes.
+7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+8. State every change and every deviation from the instructions with its reason.
+9. Never rewrite shared history: no force pushes.
 ",
   "build-report.json": "{
   "keptApart": [],
@@ -37,17 +36,17 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 ",
   "manifest.json": "{
   "files": {
-    "CLAUDE.md": "049c6336c110d220d76b4fdd24bf5952a34704033da558dd93e4198c5c9727f3",
+    "CLAUDE.md": "4746a2efd86b8420fd06f5dc5efcfd6f8112b221b65cb67f292618b64ffce168",
     "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
     "plugin/agents/a.md": "4934aa74780a4ea28f467a14b00836d6526f2595ffc1b90d013802c54abc633b",
     "plugin/agents/p.md": "be7dac079510a1c843ed0729687f58d71a748c462ddb110f65caa96bc7ea0b6b",
     "plugin/hooks/hooks.json": "59e2e7b56c83a29cdd5a0dc97d28f1b7ce85bacc0409cf6fff7ccf6d0101e4a4",
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
-    "plugin/hooks/rules-after-compact.sh": "e10556c06879bd3ead874e20436808e33a134466ddac3b60559b0f3709322d39",
+    "plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
     "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "01c4e94e9aa6b441a26039c3617e3f1c637ef60486838e476c82aaa99f7434cc",
+  "hash": "f9d13c6d3a36e2e832709f13b1d73f6f17b37e2b37fb6e05ddd2003ccea2e1fd",
   "layout": "workspace",
   "nodes": [
     {
@@ -325,10 +324,9 @@ These rules still apply after the conversation was compacted:
 4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
 5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
 6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
-7. Any loop stops after 3 tries on the same issue and reports the blocker.
-8. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
-9. State every change and every deviation from the instructions with its reason.
-10. Never rewrite shared history: no force pushes.
+7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+8. State every change and every deviation from the instructions with its reason.
+9. Never rewrite shared history: no force pushes.
 FLOWDECK_RULES
 ",
   "plugin/skills/run/SKILL.md": "---

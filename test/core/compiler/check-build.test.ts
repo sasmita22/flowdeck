@@ -303,7 +303,7 @@ describe("checkBuild", () => {
     it("names CLAUDE.md when one standard rule is altered", async () => {
       expectFailsOn(
         edited(await workspace(), "CLAUDE.md", (content) =>
-          content.replace("after 3 tries", "after 5 tries"),
+          content.replace("no force pushes", "no rebases"),
         ),
         "CLAUDE.md",
       );

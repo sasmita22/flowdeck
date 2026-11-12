@@ -2659,7 +2659,7 @@ describe("Runner parallel section", () => {
     h.session.subagentStop("a3", "a3 reply");
     await sleep(quietMs * 3);
     expect(sends(h.calls)).toEqual([forkSend()]);
-    h.session.stop("All three are done.");
+    h.session.stop("DONE");
     await sleep(quietMs / 3);
     expect(sends(h.calls)).toEqual([forkSend()]);
     const result = await running;
@@ -2677,7 +2677,7 @@ describe("Runner parallel section", () => {
     expect(order.indexOf("f done")).toBeGreaterThan(order.indexOf("j done"));
     expect(eventsOf(h.deps.store, "f").at(-1)).toMatchObject({
       kind: "done",
-      payload: { stopMessage: "All three are done." },
+      payload: { stopMessage: "DONE" },
     });
     expect(waiter.calls).toEqual([]);
   });
@@ -2727,6 +2727,9 @@ describe("Runner parallel section", () => {
     expect(order.indexOf("a1 skipped")).toBeGreaterThan(order.indexOf("a2 done"));
     expect(order.indexOf("j done")).toBeGreaterThan(order.indexOf("a3 skipped"));
     expect(order.indexOf("f done")).toBeGreaterThan(order.indexOf("j done"));
+    const forkDone = eventsOf(h.deps.store, "f").at(-1);
+    expect(forkDone).toMatchObject({ kind: "done" });
+    expect(forkDone).not.toHaveProperty("payload.stopMessage");
   });
 
   it("waits for first: a sibling that stops while the session is interrupted ends done, not skipped", async () => {

@@ -198,6 +198,12 @@ describe("forkTurnText", () => {
     expect(text).toMatch(/(do not|don't|never) wait/i);
   });
 
+  it("ends by asking for DONE, keeping the calls written with the prompt", () => {
+    expect(text).toMatch(/Then reply DONE\.$/);
+    expect(text).toContain("with the prompt");
+    expect(text).not.toContain("and the prompt");
+  });
+
   it("names only the branches it is given", () => {
     expect(forkTurnText("h1", [branch("a1")])).not.toContain(agentType("h1", "a2"));
   });
