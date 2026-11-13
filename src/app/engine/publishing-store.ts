@@ -45,6 +45,9 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
+    buildSnapshot: (key) => store.buildSnapshot(key),
+    listSnapshotGaps: () => store.listSnapshotGaps(),
+    addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
     recordActivity: (id, entry) => store.recordActivity(id, entry),
     activity: (id) => store.activity(id),
     append(id, nodeId, event) {

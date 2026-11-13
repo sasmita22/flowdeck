@@ -21,6 +21,7 @@ import {
 import { selectInspectorOpen, type ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
 import { pageTestIds } from "../test-ids.js";
+import { BlueprintPicture } from "./blueprint-picture.js";
 
 const tone = {
   running: "live",
@@ -56,10 +57,9 @@ export function RunPage({
   );
   const live = useStore(run, (state) => selectRunSnapshot(state, runId));
   const buildId = loaded?.run.buildId;
-  const flows = useStore(library, (state) => state.flows);
   const builds = useStore(library, (state) => state.builds);
   const runs = useStore(library, (state) => state.runs);
-  const card = selectBuildCards({ flows, builds, runs }).find((build) => build.id === buildId);
+  const card = selectBuildCards({ builds, runs }).find((build) => build.id === buildId);
   const starting = useStore(run, (state) => state.starting);
 
   useEffect(() => {
@@ -115,7 +115,9 @@ export function RunPage({
           <span aria-hidden="true">/</span>
           <span className="fd-flow-title" data-testid={pageTestIds.title}>
             {loaded?.name ?? "Run"}
-            {loaded?.run.source === undefined ? "" : ` v${loaded.run.source.version}`}
+            {loaded === null || loaded.run.blueprintVersion === null
+              ? ""
+              : ` v${loaded.run.blueprintVersion}`}
           </span>
           {card !== undefined && <code className="fd-hash">{card.name}</code>}
         </nav>
@@ -169,6 +171,9 @@ export function RunPage({
           )}
         </div>
       </header>
+      {buildId !== undefined && (
+        <BlueprintPicture library={library} pictureKey={{ buildId }} testId={buildId} />
+      )}
       <div className="fd-main" style={{ position: "relative" }}>
         {status === "interrupted" && loaded?.note !== undefined && (
           <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">

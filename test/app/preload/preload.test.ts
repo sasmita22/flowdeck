@@ -6,6 +6,7 @@ import {
   type FlowdeckBridge,
 } from "../../../src/app/preload/bridge.js";
 import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
+import type { SnapshotKey } from "../../../src/core/run/store.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => void;
 
@@ -72,6 +73,8 @@ describe("preload run-state wiring", () => {
     ],
     ["listBuilds", "flowdeck:list-builds", undefined],
     ["buildFiles", "flowdeck:build-files", { buildId: "b1" }],
+    ["buildPicture", "flowdeck:build-picture", { buildId: "b1" }],
+    ["buildPicture", "flowdeck:build-picture", { pendingId: "pending-1" }],
     ["runBuild", "flowdeck:run-build", { buildId: "b1", auto: true }],
     ["runOptions", "flowdeck:run-options", { buildId: "b1" }],
     ["stopRun", "flowdeck:stop-run", { runId: "run-1" }],
@@ -121,6 +124,7 @@ describe("preload run-state wiring", () => {
     ["build-stop", "stopBuild"],
     ["build-activity", "getBuildActivity"],
     ["build-rebuild", "buildRebuild"],
+    ["build-picture", "buildPicture"],
     ["blueprint-session-start", "startBlueprintSession"],
     ["blueprint-session-stop", "stopBlueprintSession"],
   ] as const)(
@@ -156,6 +160,7 @@ describe("preload run-state wiring", () => {
       buildModel?: string;
     }>();
     expectTypeOf<Parameters<EngineCalls["buildFiles"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["buildPicture"]>[0]>().toEqualTypeOf<SnapshotKey>();
     expectTypeOf<Parameters<EngineCalls["runBuild"]>[0]>().toEqualTypeOf<{
       buildId: string;
       auto?: boolean;

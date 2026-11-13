@@ -1,3 +1,4 @@
+import type { Flow } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
 import type { BuildEvent, BuildOutcome, PendingBuild, StoredBuildEvent } from "./build-progress.js";
@@ -43,6 +44,8 @@ export type BuildRecord = {
   dir: string;
   createdAt: number;
   source?: BuildSource;
+  blueprintName: string | null;
+  blueprintVersion: number | null;
 };
 
 export type RunRecord = Omit<NewRun, "buildId"> & {
@@ -60,16 +63,33 @@ export type RunSummary = {
   totalCost: number | null;
   nodeCount: number;
   source?: BuildSource;
+  buildName: string | null;
+  blueprintName: string | null;
+  blueprintVersion: number | null;
 };
 
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
 
 export type EventEntry = { nodeId: string; event: RunEvent };
 
+export type NewBuildSnapshot = { blueprintName: string; version: number; flow: Flow; svg: string };
+
+export type BuildSnapshot = NewBuildSnapshot & { pendingId: string | null; buildId: string | null };
+
+export type SnapshotKey = { pendingId: string } | { buildId: string };
+
+export type SnapshotGap = {
+  pendingId: string | null;
+  buildId: string | null;
+  flowId: string | null;
+  version: number | null;
+  blueprintName: string | null;
+};
+
 export type NewPendingBuild = Pick<
   PendingBuild,
   "flowId" | "version" | "name" | "origin" | "startedAt"
->;
+> & { snapshot?: NewBuildSnapshot };
 
 export type PendingBuildStart =
   { kind: "started"; pendingId: string } | { kind: "busy"; reason: "blueprint" | "name" };
@@ -119,4 +139,10 @@ export interface Store {
   pendingBuild(id: string): PendingBuild | null;
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void;
   buildActivity(pendingId: string): ActivityEntry[];
+  buildSnapshot(key: SnapshotKey): BuildSnapshot | null;
+  listSnapshotGaps(): SnapshotGap[];
+  addSnapshotIfMissing(
+    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
+    snapshot: NewBuildSnapshot,
+  ): boolean;
 }

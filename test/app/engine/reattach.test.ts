@@ -30,6 +30,7 @@ import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
 import type { BuildAgents, BuildTurnResult } from "../../../src/ports/build-agents.js";
+import type { FlowStore } from "../../../src/ports/flow-store.js";
 
 const git = async (repo: string, ...args: string[]): Promise<string> =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -47,13 +48,27 @@ const flowdeckBranches = async (repo: string): Promise<string[]> =>
 const isFolder = (path: string) =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
+const unreadable = (): never => {
+  throw new Error("blueprints unreadable");
+};
+
+const unreadableFlows = (): FlowStore => ({
+  create: unreadable,
+  list: unreadable,
+  rename: unreadable,
+  pin: unreadable,
+  save: unreadable,
+  loadLatest: unreadable,
+  load: unreadable,
+});
+
 const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\"]+)/;
 
 describe("an app restart", () => {
   let home: string;
   let repo: TmpRepo;
   let runs: FakeStore;
-  let flows: FakeFlowStore;
+  let flows: FlowStore;
   let pushes: EnginePush[];
   let events: FakeEventSource;
   let opened: OpenSessionOptions[];
@@ -570,6 +585,70 @@ describe("an app restart", () => {
       ).toHaveLength(1);
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
       expect(worktree.calls).toEqual([]);
+    });
+
+    it.each([
+      { blueprints: "returns no version", broken: () => new FakeFlowStore() },
+      { blueprints: "throws on every call", broken: unreadableFlows },
+    ])(
+      "resumes a build mid step 3 from its snapshot when the blueprint store $blueprints",
+      async ({ broken }) => {
+        const { pendingId, name, spec } = await leftMidTurn();
+        const snapshot = runs.buildSnapshot({ pendingId });
+        if (snapshot === null) throw new Error("the build kept no snapshot");
+        alive.add(spec.sessionName);
+        const after = new FakeBuildAgents({
+          fs: new NodeFileSystem(),
+          script: { aliveAfterRestart: true },
+        });
+        flows = broken();
+        pushes = [];
+
+        const second = newHandler({ buildAgents: after });
+        await second.reattach();
+        await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+        events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+
+        await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
+        expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
+        const built = runs.findBuildByName(name);
+        const claudeMd = await new NodeFileSystem().readFile(join(built?.dir ?? "", "CLAUDE.md"));
+        expect(claudeMd.split("\n").filter((line) => line.startsWith("- Blueprint: "))).toEqual([
+          `- Blueprint: ${snapshot.blueprintName}, version ${snapshot.version}`,
+        ]);
+      },
+    );
+
+    it("ends a build left going with no snapshot failed, saying the snapshot is missing", async () => {
+      const startPendingBuild = runs.startPendingBuild.bind(runs);
+      vi.spyOn(runs, "startPendingBuild").mockImplementation(
+        ({ flowId, version, name, origin, startedAt }) =>
+          startPendingBuild({ flowId, version, name, origin, startedAt }),
+      );
+      const { pendingId, spec } = await leftMidTurn();
+      expect(runs.buildSnapshot({ pendingId })).toBeNull();
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      flows = new FakeFlowStore();
+      const logged = vi.spyOn(console, "log");
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(logged).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`build ${pendingId} not reattached \\(.*snapshot`)),
+      );
+      expect(after.turns).toEqual([]);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
     });
 
     it("gives a reattached rebuild's step-4 audit the answers its origin keeps", async () => {

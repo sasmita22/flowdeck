@@ -8,12 +8,14 @@ import {
 } from "../../core/flow/flow-store.js";
 import {
   buildFileContentSchema,
+  buildPictureSchema,
   buildRecordSchema,
   loadedRunSchema,
   runSummarySchema,
   type BuildFileContent,
   type LoadedRun,
 } from "../../core/run/listing.js";
+import type { SnapshotKey } from "../../core/run/store.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 
 export type LibraryBridge = Pick<
@@ -24,6 +26,7 @@ export type LibraryBridge = Pick<
   | "renameFlow"
   | "pinFlow"
   | "buildFiles"
+  | "buildPicture"
   | "openFlow"
   | "doctor"
   | "loadRun"
@@ -45,17 +48,17 @@ export type LibraryState = {
   doctor: DoctorReport | null;
   worktrees: string[] | null;
   viewedRun: LoadedRun | null;
+  pictures: Record<string, string | null>;
   refresh(): Promise<void>;
   openRun(runId: string): Promise<void>;
   rename(flowId: string, name: string): Promise<boolean>;
   pin(flowId: string, pinned: boolean): Promise<void>;
   openFiles(buildId: string): Promise<void>;
   selectFile(path: string): void;
+  loadPicture(key: SnapshotKey): Promise<void>;
   diagnose(flowId: string | null, openConnectors: readonly string[]): Promise<void>;
   listWorktrees(): Promise<void>;
 };
-
-export const noBlueprint = "Not from a blueprint";
 
 export type BuildCard = {
   id: string;
@@ -70,36 +73,36 @@ export type BuildCard = {
 
 export type RunCard = RunSummary & { name: string; version: number | null };
 
-const nameIn = (flows: readonly FlowSummary[], flowId: string | undefined) =>
-  flows.find((flow) => flow.flowId === flowId)?.name ?? noBlueprint;
+const pictureKey = (key: SnapshotKey) =>
+  "buildId" in key ? `build:${key.buildId}` : `pending:${key.pendingId}`;
+
+export const selectPicture = (
+  state: Pick<LibraryState, "pictures">,
+  key: SnapshotKey,
+): string | null | undefined => state.pictures[pictureKey(key)];
 
 const latestRun = (runs: readonly RunSummary[], buildId: string) => {
   const run = runs.find((listed) => listed.buildId === buildId);
   return run === undefined ? null : { id: run.id, status: run.status };
 };
 
-export const selectBuildCards = (
-  state: Pick<LibraryState, "flows" | "builds" | "runs">,
-): BuildCard[] =>
-  state.builds.map((build) => {
-    const blueprint = nameIn(state.flows, build.source?.flowId);
-    return {
-      id: build.id,
-      name: build.name ?? blueprint,
-      blueprint,
-      version: build.source?.version ?? null,
-      createdAt: build.createdAt,
-      flowId: build.source?.flowId ?? null,
-      old: build.old,
-      run: latestRun(state.runs, build.id),
-    };
-  });
+export const selectBuildCards = (state: Pick<LibraryState, "builds" | "runs">): BuildCard[] =>
+  state.builds.map((build) => ({
+    id: build.id,
+    name: build.name ?? build.blueprintName ?? build.id,
+    blueprint: build.blueprintName ?? "",
+    version: build.blueprintVersion,
+    createdAt: build.createdAt,
+    flowId: build.source?.flowId ?? null,
+    old: build.old,
+    run: latestRun(state.runs, build.id),
+  }));
 
-export const selectRunCards = (state: Pick<LibraryState, "flows" | "runs">): RunCard[] =>
+export const selectRunCards = (state: Pick<LibraryState, "runs">): RunCard[] =>
   state.runs.map((run) => ({
     ...run,
-    name: nameIn(state.flows, run.source?.flowId),
-    version: run.source?.version ?? null,
+    name: run.buildName ?? run.blueprintName ?? run.buildId ?? run.id,
+    version: run.blueprintVersion,
   }));
 
 export const pinnedFirst = <T extends Pick<FlowSummary, "pinned">>(flows: readonly T[]): T[] => [
@@ -124,6 +127,7 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
     doctor: null,
     worktrees: null,
     viewedRun: null,
+    pictures: {},
 
     openRun: async (runId) => {
       try {
@@ -181,6 +185,15 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
           .parse(await bridge.buildFiles({ buildId }))
           .sort(manifestFirst);
         set({ files: { buildId, list, selected: list[0]?.path ?? null }, error: null });
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
+    loadPicture: async (key) => {
+      try {
+        const { svg } = buildPictureSchema.parse(await bridge.buildPicture(key));
+        set((state) => ({ pictures: { ...state.pictures, [pictureKey(key)]: svg }, error: null }));
       } catch (error) {
         set({ error: messageOf(error) });
       }

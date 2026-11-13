@@ -18,7 +18,6 @@ import {
 } from "../../core/run/snapshot.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 import { labelFor, selectDirty, type CanvasState } from "./canvas/store.js";
-import { noBlueprint } from "./library-store.js";
 import type { SaveState } from "./save-store.js";
 
 export type RunBridge = Pick<
@@ -126,7 +125,7 @@ export const selectRunDisabled = (
 
 export const selectRunHint = (card: { old: boolean; blueprint: string }): string | null => {
   if (!card.old) return null;
-  return card.blueprint === noBlueprint
+  return card.blueprint === ""
     ? "Builds from before named builds can't run again."
     : "Make a new build from this blueprint";
 };

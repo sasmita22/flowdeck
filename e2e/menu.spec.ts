@@ -267,7 +267,7 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   const runCard = byPrefix(window, "run-card-", "Agents");
   await expect(runCard).toHaveCount(1);
   await expect(runCard.locator('[data-testid^="run-result-"]')).toHaveText("done");
-  await expect(runCard).toContainText("Agents v1");
+  await expect(runCard).toContainText("run-agents v1");
   await shot(target, testInfo, "runs");
 
   await window.getByTestId("menu-blueprints").click();

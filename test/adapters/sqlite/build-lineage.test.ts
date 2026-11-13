@@ -190,14 +190,6 @@ describe("build lineage", () => {
       ]);
     });
 
-    it("refuses a build naming a flow version that was never saved", () => {
-      const { db } = stores();
-
-      expect(() => insertBuild(db, { id: "b1", flowId: "nope", version: 3 })).toThrow(
-        /saved flow version/,
-      );
-    });
-
     it("writes nothing of a build whose node file is not one of its files", () => {
       const { db, runs } = stores();
       const broken = newBuild({

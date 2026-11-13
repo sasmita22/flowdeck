@@ -19,6 +19,7 @@ import { selectKeptNote, selectRunDisabled, selectRunHint, type RunState } from 
 import type { TerminalState } from "../terminal/store.js";
 import { TerminalView } from "../terminal/terminal-pane.js";
 import { controlTestIds, pageTestIds } from "../test-ids.js";
+import { BlueprintPicture } from "./blueprint-picture.js";
 import { Empty, PageHead } from "./page-head.js";
 
 const versionText = (card: Pick<BuildCard, "version">) =>
@@ -31,10 +32,9 @@ function useRunDisabled(run: StoreApi<RunState>, card: BuildCard | undefined) {
 }
 
 function useCards(library: StoreApi<LibraryState>) {
-  const flows = useStore(library, (state) => state.flows);
   const builds = useStore(library, (state) => state.builds);
   const runs = useStore(library, (state) => state.runs);
-  return selectBuildCards({ flows, builds, runs });
+  return selectBuildCards({ builds, runs });
 }
 
 function BuildFiles({
@@ -92,6 +92,7 @@ function BuildFiles({
           </button>
         </div>
       </header>
+      <BlueprintPicture library={library} pictureKey={{ buildId }} testId={buildId} />
       <div className="fd-files">
         <ul className="fd-file-list" aria-label="Files">
           {files?.list.map((file) => (
@@ -275,11 +276,13 @@ function BuildQuestions({
 function BuildProgressView({
   pendingId,
   nav,
+  library,
   buildProgress,
   terminal,
 }: {
   pendingId: string;
   nav: StoreApi<NavState>;
+  library: StoreApi<LibraryState>;
   buildProgress: StoreApi<BuildProgressState>;
   terminal: StoreApi<TerminalState>;
 }) {
@@ -326,6 +329,7 @@ function BuildProgressView({
           )}
         </div>
       </header>
+      <BlueprintPicture library={library} pictureKey={{ pendingId }} testId={pendingId} />
       <ol className="fd-build-steps">
         {progress.steps.map((step) => (
           <li key={step.step} data-testid={pageTestIds.buildStep(pendingId, step.step)}>
@@ -394,7 +398,7 @@ function BuildCardView({
         >
           {card.name}{" "}
           <span className="fd-muted">
-            {card.blueprint === card.name ? "" : `${card.blueprint} `}
+            {card.blueprint === "" || card.blueprint === card.name ? "" : `${card.blueprint} `}
             {versionText(card)}
           </span>
         </button>
@@ -486,6 +490,7 @@ export function BuildsPage({
       <BuildProgressView
         pendingId={buildId}
         nav={nav}
+        library={library}
         buildProgress={buildProgress}
         terminal={terminal}
       />

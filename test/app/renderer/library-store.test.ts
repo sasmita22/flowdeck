@@ -4,6 +4,7 @@ import {
   createLibraryStore,
   pinnedFirst,
   selectBuildCards,
+  selectPicture,
   selectRunCards,
   type LibraryBridge,
 } from "../../../src/app/renderer/library-store.js";
@@ -26,42 +27,97 @@ const builds = [
     name: "fix-login",
     old: false,
     dir: "/fd/workspaces/b-fix",
-    createdAt: 6,
+    createdAt: 7,
     source: { flowId: "flow-a", version: 2 },
+    blueprintName: "Old report",
+    blueprintVersion: 2,
   },
   {
     id: "b-idle",
-    name: "docs",
+    name: null,
     old: false,
     dir: "/fd/workspaces/b-idle",
-    createdAt: 5,
+    createdAt: 6,
     source: { flowId: "flow-a", version: 2 },
+    blueprintName: "Old report",
+    blueprintVersion: 2,
   },
-  { id: "0123456789", name: null, old: true, dir: "/fd/builds/0123456789", createdAt: 4 },
+  {
+    id: "b-gap",
+    name: null,
+    old: false,
+    dir: "/fd/workspaces/b-gap",
+    createdAt: 5,
+    source: { flowId: "flow-a", version: 1 },
+    blueprintName: null,
+    blueprintVersion: null,
+  },
+  {
+    id: "0123456789",
+    name: null,
+    old: true,
+    dir: "/fd/builds/0123456789",
+    createdAt: 4,
+    blueprintName: null,
+    blueprintVersion: null,
+  },
 ];
+
+const fromFixLogin = {
+  buildId: "b-fix",
+  source: { flowId: "flow-a", version: 2 },
+  buildName: "fix-login",
+  blueprintName: "Old report",
+  blueprintVersion: 2,
+};
 
 const runs = [
   {
     id: "run-2",
     status: "interrupted",
-    buildId: "b-fix",
     createdAt: "2026-01-04T00:00:00.000Z",
     endedAt: null,
     totalCost: null,
     nodeCount: 2,
-    source: { flowId: "flow-a", version: 2 },
+    ...fromFixLogin,
   },
   {
     id: "run-1",
     status: "done",
-    buildId: "b-fix",
     createdAt: "2026-01-03T00:00:00.000Z",
     endedAt: "2026-01-03T00:01:05.000Z",
     totalCost: 0.25,
     nodeCount: 2,
+    ...fromFixLogin,
+  },
+  {
+    id: "run-idle",
+    status: "done",
+    buildId: "b-idle",
+    createdAt: "2026-01-02T00:00:00.000Z",
+    endedAt: "2026-01-02T00:01:00.000Z",
+    totalCost: null,
+    nodeCount: 1,
     source: { flowId: "flow-a", version: 2 },
+    buildName: null,
+    blueprintName: "Old report",
+    blueprintVersion: 2,
+  },
+  {
+    id: "run-old",
+    status: "done",
+    buildId: "0123456789",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    endedAt: "2026-01-01T00:01:00.000Z",
+    totalCost: null,
+    nodeCount: 1,
+    buildName: null,
+    blueprintName: null,
+    blueprintVersion: null,
   },
 ];
+
+const picture = '<svg xmlns="http://www.w3.org/2000/svg"><rect data-kind="background"/></svg>';
 
 const fakeBridge = () =>
   ({
@@ -93,6 +149,9 @@ const fakeBridge = () =>
     })),
     doctor: vi.fn(async () => ({ installed: [], needed: [] })),
     doctorWorktrees: vi.fn(async () => []),
+    buildPicture: vi.fn(async (key: { pendingId: string } | { buildId: string }) =>
+      "buildId" in key ? { svg: picture } : { svg: null },
+    ),
     loadRun: vi.fn(async () => ({
       run: runs[1],
       name: "Report",
@@ -222,52 +281,114 @@ describe("an interrupted run", () => {
 });
 
 describe("cards", () => {
-  it("keys each build by its id, names it, marks an old one, and gives it its latest run", async () => {
-    const library = createLibraryStore({ bridge: fakeBridge() });
+  const withBlueprints = async (listed: typeof flows) => {
+    const bridge = fakeBridge();
+    bridge.listFlows.mockResolvedValue(listed);
+    const library = createLibraryStore({ bridge });
     await library.getState().refresh();
+    return library.getState();
+  };
 
-    expect(selectBuildCards(library.getState())).toEqual([
-      {
-        id: "b-fix",
-        name: "fix-login",
-        blueprint: "Report",
-        version: 2,
-        createdAt: 6,
-        flowId: "flow-a",
-        old: false,
-        run: { id: "run-2", status: "interrupted" },
-      },
-      {
-        id: "b-idle",
-        name: "docs",
-        blueprint: "Report",
-        version: 2,
-        createdAt: 5,
-        flowId: "flow-a",
-        old: false,
-        run: null,
-      },
-      {
-        id: "0123456789",
-        name: "Not from a blueprint",
-        blueprint: "Not from a blueprint",
-        version: null,
-        createdAt: 4,
-        flowId: null,
-        old: true,
-        run: null,
-      },
+  const buildCards = [
+    {
+      id: "b-fix",
+      name: "fix-login",
+      blueprint: "Old report",
+      version: 2,
+      createdAt: 7,
+      flowId: "flow-a",
+      old: false,
+      run: { id: "run-2", status: "interrupted" },
+    },
+    {
+      id: "b-idle",
+      name: "Old report",
+      blueprint: "Old report",
+      version: 2,
+      createdAt: 6,
+      flowId: "flow-a",
+      old: false,
+      run: { id: "run-idle", status: "done" },
+    },
+    {
+      id: "b-gap",
+      name: "b-gap",
+      blueprint: "",
+      version: null,
+      createdAt: 5,
+      flowId: "flow-a",
+      old: false,
+      run: null,
+    },
+    {
+      id: "0123456789",
+      name: "0123456789",
+      blueprint: "",
+      version: null,
+      createdAt: 4,
+      flowId: null,
+      old: true,
+      run: { id: "run-old", status: "done" },
+    },
+  ];
+
+  it("names each build card from the build and its snapshot with no blueprints listed", async () => {
+    expect(selectBuildCards(await withBlueprints([]))).toEqual(buildCards);
+  });
+
+  it("shows the blueprint name the build was made from, not the blueprint's name now", async () => {
+    expect(selectBuildCards(await withBlueprints(flows))).toEqual(buildCards);
+  });
+
+  it("names each run card from its build and snapshot with no blueprints listed", async () => {
+    expect(
+      selectRunCards(await withBlueprints([])).map(({ id, name, version }) => ({
+        id,
+        name,
+        version,
+      })),
+    ).toEqual([
+      { id: "run-2", name: "fix-login", version: 2 },
+      { id: "run-1", name: "fix-login", version: 2 },
+      { id: "run-idle", name: "Old report", version: 2 },
+      { id: "run-old", name: "0123456789", version: null },
     ]);
   });
 
-  it("names each run's blueprint and version", async () => {
-    const library = createLibraryStore({ bridge: fakeBridge() });
-    await library.getState().refresh();
+  it("never says a card is not from a blueprint", async () => {
+    const state = await withBlueprints([]);
+    const shown = JSON.stringify([selectBuildCards(state), selectRunCards(state)]);
 
-    expect(selectRunCards(library.getState())).toEqual([
-      expect.objectContaining({ id: "run-2", name: "Report", version: 2, buildId: "b-fix" }),
-      expect.objectContaining({ id: "run-1", name: "Report", version: 2, buildId: "b-fix" }),
-    ]);
+    expect(shown).not.toContain("Not from a blueprint");
+  });
+});
+
+describe("pictures", () => {
+  it("has no picture for a build until it is asked for, then keeps the one the engine gives", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    expect(selectPicture(library.getState(), { buildId: "b-fix" })).toBeUndefined();
+
+    await library.getState().loadPicture({ buildId: "b-fix" });
+
+    expect(bridge.buildPicture).toHaveBeenCalledTimes(1);
+    expect(bridge.buildPicture).toHaveBeenCalledWith({ buildId: "b-fix" });
+    expect(selectPicture(library.getState(), { buildId: "b-fix" })).toBe(picture);
+  });
+
+  it("keeps a pending build's answer apart from a build with the same id, and keeps a null answer", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().loadPicture({ buildId: "b-fix" });
+
+    expect(selectPicture(library.getState(), { pendingId: "b-fix" })).toBeUndefined();
+
+    await library.getState().loadPicture({ pendingId: "b-fix" });
+
+    expect(bridge.buildPicture).toHaveBeenLastCalledWith({ pendingId: "b-fix" });
+    expect(selectPicture(library.getState(), { pendingId: "b-fix" })).toBeNull();
+    expect(selectPicture(library.getState(), { buildId: "b-fix" })).toBe(picture);
   });
 });
 

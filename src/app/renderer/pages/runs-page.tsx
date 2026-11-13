@@ -30,13 +30,12 @@ export function RunsPage({
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
 }) {
-  const flows = useStore(library, (state) => state.flows);
   const runs = useStore(library, (state) => state.runs);
   const loaded = useStore(library, (state) => state.loaded);
   const snapshots = useStore(run, (state) => state.snapshots);
   const query = useStore(nav, (state) => state.query);
   const sort = useStore(nav, (state) => state.sort);
-  const cards = arrange(selectRunCards({ flows, runs }), { query, sort }, (card) => card.name);
+  const cards = arrange(selectRunCards({ runs }), { query, sort }, (card) => card.name);
   const now = Date.now();
   return (
     <>

@@ -29,7 +29,7 @@ import { hookCommand, shellQuote } from "../../core/compiler/hook-settings.js";
 import { plainProblems, type Problem } from "../../core/compiler/problems.js";
 import type { ValidationError } from "../../core/compiler/validate.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
-import type { OpenedFlow } from "../../core/flow/flow-store.js";
+import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
 import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
 import {
   progressOf,
@@ -76,12 +76,14 @@ import {
 import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
 import { turnFailure } from "../../core/run/turns.js";
 import { retryEntries } from "../../core/run/retry.js";
+import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
-import type {
-  BuildFileContent,
-  BuildVersionResult,
-  ListedRun,
-  LoadedRun,
+import {
+  snapshotKeySchema,
+  type BuildFileContent,
+  type BuildVersionResult,
+  type ListedRun,
+  type LoadedRun,
 } from "../../core/run/listing.js";
 import { buildWorktree, repoFolder } from "../../core/run/workspace.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
@@ -256,6 +258,9 @@ function detachable(store: Store, detached: () => boolean): Store {
     pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
+    buildSnapshot: (key) => store.buildSnapshot(key),
+    listSnapshotGaps: () => store.listSnapshotGaps(),
+    addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
     recordBuild: (build) => store.recordBuild(build),
     deleteBuild: (id) => store.deleteBuild(id),
     append(id, nodeId, event) {
@@ -377,6 +382,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       opened = { kind: "ready", stores: options.openStores() };
     } catch (error) {
       opened = { kind: "error", message: messageOf(error) };
+      return opened;
+    }
+    try {
+      const { failures } = backfillSnapshots({
+        store: opened.stores.runs,
+        flows: opened.stores.flows,
+      });
+      for (const { gap, error } of failures) {
+        const which =
+          gap.buildId === null ? `pending build ${gap.pendingId}` : `build ${gap.buildId}`;
+        console.log(`engine: snapshot backfill skipped ${which} error ${messageOf(error)}`);
+      }
+    } catch (error) {
+      console.log(`engine: snapshot backfill error ${messageOf(error)}`);
     }
     return opened;
   };
@@ -646,18 +665,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     });
   };
 
-  const buildFlowVersion = async (
+  const startFromSaved = async (
     stores: EngineStores,
+    saved: Omit<LoadedFlow, "flowId">,
     { flowId, version, buildModel, ...request }: z.infer<typeof buildVersionPayload>,
     answers?: readonly BuildAnswer[],
   ): Promise<BuiltVersion> => {
-    const saved = stores.flows.load({ flowId, version });
-    if (saved === null) {
-      return refusedBuild({
-        ok: false,
-        errors: [{ rule: "version", message: `${flowId} has no saved version ${version}` }],
-      });
-    }
     const buildRequest = {
       name: request.name,
       values: request.values as VariableValues,
@@ -697,6 +710,21 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return started;
   };
 
+  const buildFlowVersion = async (
+    stores: EngineStores,
+    payload: z.infer<typeof buildVersionPayload>,
+  ): Promise<BuiltVersion> => {
+    const { flowId, version } = payload;
+    const saved = stores.flows.load({ flowId, version });
+    if (saved === null) {
+      return refusedBuild({
+        ok: false,
+        errors: [{ rule: "version", message: `${flowId} has no saved version ${version}` }],
+      });
+    }
+    return startFromSaved(stores, saved, payload);
+  };
+
   const rebuildBuild = async (
     stores: EngineStores,
     pendingId: string,
@@ -711,9 +739,16 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (!kept.success) {
       throw new Error(`Build ${asked.name} did not keep its inputs; build the blueprint again`);
     }
+    const snapshot = stores.runs.buildSnapshot({ pendingId });
+    if (snapshot === null) {
+      throw new Error(
+        `Build ${asked.name} has no snapshot of its blueprint; build the blueprint again`,
+      );
+    }
     const { answers: answeredBefore = [], ...inputs } = kept.data.request;
-    return buildFlowVersion(
+    return startFromSaved(
       stores,
+      { name: snapshot.blueprintName, version: snapshot.version, flow: snapshot.flow },
       { flowId: asked.flowId, version: asked.version, name: asked.name, ...inputs },
       [...answeredBefore, ...answers],
     );
@@ -752,22 +787,23 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (!(await options.buildAgents.alive(session.name))) {
       return failLeftBuild(runs, pending, "its session has ended");
     }
-    const saved = stores.flows.load({ flowId: pending.flowId, version: pending.version });
-    if (saved === null) return failLeftBuild(runs, pending, "its blueprint cannot be read");
+    const snapshot = runs.buildSnapshot({ pendingId: pending.id });
+    if (snapshot === null)
+      return failLeftBuild(runs, pending, "it has no snapshot of its blueprint");
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failLeftBuild(runs, pending, hooks.message);
     options.publish({ push: "session", runId: pending.id, value: session.name });
     runPendingBuild({
       stores,
       pending,
-      flow: saved.flow,
+      flow: snapshot.flow,
       request: {
         ...resumeRequest(pending.name, session),
         ...keptAnswersOf(pending),
       },
       origin: {
         source: { flowId: pending.flowId, version: pending.version },
-        blueprint: { name: saved.name, version: saved.version },
+        blueprint: { name: snapshot.blueprintName, version: snapshot.version },
       },
       deps: await buildDeps(stores, hooks, session.name),
       resume,
@@ -1405,17 +1441,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return [...all.filter((run) => isActive(run.id)), ...rest];
   };
 
-  const loadRun = ({ runs, flows }: EngineStores, runId: string): LoadedRun => {
+  const loadRun = ({ runs }: EngineStores, runId: string): LoadedRun => {
     const record = runs.findRun(runId);
     const summary = runs.listRuns().find((candidate) => candidate.id === runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const run = listed(summary);
-    const saved = run.source === undefined ? null : flows.load(run.source);
+    const built = run.buildId === undefined ? null : runs.buildSnapshot({ buildId: run.buildId });
     return {
       ...(run.status === "interrupted" ? { note: notes.get(runId) ?? closedNote } : {}),
       run,
-      name: saved?.name ?? null,
-      flow: saved?.flow ?? null,
+      name: run.buildName,
+      flow: built?.flow ?? null,
       snapshot: runSnapshot({
         runId,
         status: run.status,
@@ -1581,6 +1617,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             buildFiles(storesOrThrow(), buildId),
           );
+        case "build-picture":
+          return parsedAnswer(request, snapshotKeySchema, (key) => ({
+            svg: storesOrThrow().runs.buildSnapshot(key)?.svg ?? null,
+          }));
         case "delete-build":
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             removeBuild(storesOrThrow(), buildId),

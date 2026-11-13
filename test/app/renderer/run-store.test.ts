@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
-import { noBlueprint } from "../../../src/app/renderer/library-store.js";
 import {
   createRunStore,
   needsSessionSetup,
@@ -809,10 +808,10 @@ describe("selectRunDisabled", () => {
   });
 
   it("does not point an old build with no blueprint at one", () => {
-    expect(selectRunHint({ old: true, blueprint: noBlueprint })).toBe(
+    expect(selectRunHint({ old: true, blueprint: "" })).toBe(
       "Builds from before named builds can't run again.",
     );
-    expect(selectRunHint({ old: false, blueprint: noBlueprint })).toBeNull();
+    expect(selectRunHint({ old: false, blueprint: "" })).toBeNull();
   });
 
   it("is true for every build while a run is starting", async () => {
