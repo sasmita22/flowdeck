@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { parseFlow } from "../../core/flow/schema.js";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
 import type { VariableValues } from "../../core/flow/variables.js";
 import type { RunEvent } from "../../core/run/run-events.js";
@@ -13,8 +14,10 @@ import { BuildRunningError } from "../../core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
+  BuildSnapshot,
   EventEntry,
   NewBuild,
+  NewBuildSnapshot,
   NewPendingBuild,
   NewRun,
   PendingBuildEnd,
@@ -22,6 +25,8 @@ import type {
   RunRecord,
   RunStatus,
   RunSummary,
+  SnapshotGap,
+  SnapshotKey,
   Store,
   StoredEvent,
 } from "../../ports/store.js";
@@ -52,6 +57,9 @@ type RunSummaryRow = {
   node_count: number;
   flow_id: string | null;
   version: number | null;
+  build_name: string | null;
+  blueprint_name: string | null;
+  blueprint_version: number | null;
 };
 
 const toRunSummary = (row: RunSummaryRow): RunSummary => ({
@@ -65,6 +73,9 @@ const toRunSummary = (row: RunSummaryRow): RunSummary => ({
   ...(row.flow_id === null || row.version === null
     ? {}
     : { source: { flowId: row.flow_id, version: row.version } }),
+  buildName: row.build_name,
+  blueprintName: row.blueprint_name,
+  blueprintVersion: row.blueprint_version,
 });
 
 type BuildRow = {
@@ -79,10 +90,14 @@ type BuildRow = {
   created_at: number;
   flow_id: string | null;
   version: number | null;
+  blueprint_name: string | null;
+  blueprint_version: number | null;
 };
 
-const buildColumns =
-  'id, hash, name, repo, base, "values", deleted_at, dir, created_at, flow_id, version';
+const buildsWithSnapshot = `SELECT builds.id, builds.hash, builds.name, builds.repo, builds.base,
+       builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
+       builds.version, build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
+  FROM builds LEFT JOIN build_snapshots ON build_snapshots.build_id = builds.id`;
 
 const toBuild = (row: BuildRow): BuildRecord => ({
   id: row.id,
@@ -97,6 +112,8 @@ const toBuild = (row: BuildRow): BuildRecord => ({
   ...(row.flow_id === null || row.version === null
     ? {}
     : { source: { flowId: row.flow_id, version: row.version } }),
+  blueprintName: row.blueprint_name,
+  blueprintVersion: row.blueprint_version,
 });
 
 type EventRow = {
@@ -139,6 +156,32 @@ const toPendingBuild = (row: PendingBuildRow): PendingBuild => ({
 });
 
 type BuildBodyRow = { seq: number; at: number; body_json: string };
+
+type SnapshotRow = {
+  pending_id: string | null;
+  build_id: string | null;
+  blueprint_name: string;
+  version: number;
+  flow_json: string;
+  svg: string;
+};
+
+const toSnapshot = (row: SnapshotRow): BuildSnapshot => ({
+  blueprintName: row.blueprint_name,
+  version: row.version,
+  flow: parseFlow(JSON.parse(row.flow_json)),
+  svg: row.svg,
+  pendingId: row.pending_id,
+  buildId: row.build_id,
+});
+
+type SnapshotGapRow = {
+  pending_id: string | null;
+  build_id: string | null;
+  flow_id: string | null;
+  version: number | null;
+  blueprint_name: string | null;
+};
 
 const buildRunningMessage = "build is running";
 
@@ -222,8 +265,10 @@ export class SqliteStore implements Store {
                 CASE WHEN runs.status = 'running' THEN NULL
                      ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
                 (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
-                builds.flow_id, builds.version
+                builds.flow_id, builds.version, builds.name AS build_name,
+                build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
            FROM runs LEFT JOIN builds ON builds.id = runs.build_id
+                LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id
           WHERE builds.deleted_at IS NULL
           ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
       )
@@ -373,14 +418,14 @@ export class SqliteStore implements Store {
   }
 
   findBuild(id: string): BuildRecord | undefined {
-    const row = this.db.prepare(`SELECT ${buildColumns} FROM builds WHERE id = ?`).get(id) as
+    const row = this.db.prepare(`${buildsWithSnapshot} WHERE builds.id = ?`).get(id) as
       BuildRow | undefined;
     return row === undefined ? undefined : toBuild(row);
   }
 
   findBuildByName(name: string): BuildRecord | undefined {
     const row = this.db
-      .prepare(`SELECT ${buildColumns} FROM builds WHERE name = ? AND deleted_at IS NULL`)
+      .prepare(`${buildsWithSnapshot} WHERE builds.name = ? AND builds.deleted_at IS NULL`)
       .get(name) as BuildRow | undefined;
     return row === undefined ? undefined : toBuild(row);
   }
@@ -390,7 +435,7 @@ export class SqliteStore implements Store {
   }
 
   listBuilds(): BuildRecord[] {
-    return this.selectBuilds("WHERE deleted_at IS NULL");
+    return this.selectBuilds("WHERE builds.deleted_at IS NULL");
   }
 
   listBuildsWithDeleted(): BuildRecord[] {
@@ -399,7 +444,7 @@ export class SqliteStore implements Store {
 
   private selectBuilds(where: string): BuildRecord[] {
     const rows = this.db
-      .prepare(`SELECT ${buildColumns} FROM builds ${where} ORDER BY created_at DESC, rowid DESC`)
+      .prepare(`${buildsWithSnapshot} ${where} ORDER BY builds.created_at DESC, builds.rowid DESC`)
       .all() as BuildRow[];
     return rows.map(toBuild);
   }
@@ -407,18 +452,23 @@ export class SqliteStore implements Store {
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {
     const pendingId = randomUUID();
     try {
-      this.db
-        .prepare(
-          "INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          pendingId,
-          build.flowId,
-          build.version,
-          build.name,
-          JSON.stringify(build.origin),
-          build.startedAt,
-        );
+      this.db.transaction(() => {
+        this.db
+          .prepare(
+            "INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            pendingId,
+            build.flowId,
+            build.version,
+            build.name,
+            JSON.stringify(build.origin),
+            build.startedAt,
+          );
+        if (build.snapshot !== undefined) {
+          this.insertSnapshot({ pendingId, buildId: null }, build.snapshot, build.startedAt);
+        }
+      })();
     } catch (error) {
       if (!(error instanceof Database.SqliteError) || error.code !== "SQLITE_CONSTRAINT_UNIQUE") {
         throw error;
@@ -444,18 +494,27 @@ export class SqliteStore implements Store {
   }
 
   endPendingBuild(pendingId: string, end: PendingBuildEnd): void {
-    const ended = this.db
-      .prepare(
-        "UPDATE pending_builds SET ended_at = ?, outcome = ?, build_id = ?, report_json = ? WHERE id = ? AND ended_at IS NULL",
-      )
-      .run(
-        end.endedAt,
-        end.outcome,
-        end.buildId ?? null,
-        end.report === undefined ? null : JSON.stringify(end.report),
-        pendingId,
-      );
-    if (ended.changes === 0) throw new Error(`no open pending build ${pendingId}`);
+    this.db.transaction(() => {
+      const ended = this.db
+        .prepare(
+          "UPDATE pending_builds SET ended_at = ?, outcome = ?, build_id = ?, report_json = ? WHERE id = ? AND ended_at IS NULL",
+        )
+        .run(
+          end.endedAt,
+          end.outcome,
+          end.buildId ?? null,
+          end.report === undefined ? null : JSON.stringify(end.report),
+          pendingId,
+        );
+      if (ended.changes === 0) throw new Error(`no open pending build ${pendingId}`);
+      if (end.buildId !== undefined) {
+        this.db
+          .prepare(
+            "UPDATE build_snapshots SET build_id = ? WHERE pending_id = ? AND build_id IS NULL",
+          )
+          .run(end.buildId, pendingId);
+      }
+    })();
   }
 
   listPendingBuilds(): PendingBuild[] {
@@ -508,6 +567,50 @@ export class SqliteStore implements Store {
     });
   }
 
+  buildSnapshot(key: SnapshotKey): BuildSnapshot | null {
+    const [column, id] =
+      "pendingId" in key ? ["pending_id", key.pendingId] : ["build_id", key.buildId];
+    const row = this.db
+      .prepare(
+        `SELECT pending_id, build_id, blueprint_name, version, flow_json, svg FROM build_snapshots WHERE ${column} = ?`,
+      )
+      .get(id) as SnapshotRow | undefined;
+    return row === undefined ? null : toSnapshot(row);
+  }
+
+  listSnapshotGaps(): SnapshotGap[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id AS pending_id, build_id, flow_id, version,
+                json_extract(origin_json, '$.blueprint.name') AS blueprint_name,
+                0 AS part, rowid AS ordinal
+           FROM pending_builds
+          WHERE NOT EXISTS (SELECT 1 FROM build_snapshots WHERE pending_id = pending_builds.id)
+         UNION ALL
+         SELECT NULL, id, flow_id, version, NULL, 1, rowid
+           FROM builds
+          WHERE NOT EXISTS (SELECT 1 FROM build_snapshots WHERE build_id = builds.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM pending_builds WHERE name = builds.name AND ended_at IS NULL)
+         ORDER BY part, ordinal`,
+      )
+      .all() as SnapshotGapRow[];
+    return rows.map((row) => ({
+      pendingId: row.pending_id,
+      buildId: row.build_id,
+      flowId: row.flow_id,
+      version: row.version,
+      blueprintName: row.blueprint_name,
+    }));
+  }
+
+  addSnapshotIfMissing(
+    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
+    snapshot: NewBuildSnapshot,
+  ): boolean {
+    return this.insertSnapshot(gap, snapshot, this.now().getTime());
+  }
+
   buildFiles(id: string): BuildFileRecord[] {
     return this.db
       .prepare("SELECT path, sha256 FROM build_files WHERE build_id = ? ORDER BY path")
@@ -524,6 +627,30 @@ export class SqliteStore implements Store {
     } catch (error) {
       throw asBuildRunning(error, buildId);
     }
+  }
+
+  private insertSnapshot(
+    keys: Pick<SnapshotGap, "pendingId" | "buildId">,
+    snapshot: NewBuildSnapshot,
+    createdAt: number,
+  ): boolean {
+    const inserted = this.db
+      .prepare(
+        `INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, flow_json, svg, created_at)
+         SELECT @pendingId, @buildId, @blueprintName, @version, @flowJson, @svg, @createdAt
+          WHERE NOT EXISTS (
+            SELECT 1 FROM build_snapshots WHERE pending_id = @pendingId OR build_id = @buildId)`,
+      )
+      .run({
+        pendingId: keys.pendingId,
+        buildId: keys.buildId,
+        blueprintName: snapshot.blueprintName,
+        version: snapshot.version,
+        flowJson: JSON.stringify(snapshot.flow),
+        svg: snapshot.svg,
+        createdAt,
+      });
+    return inserted.changes > 0;
   }
 
   private appendBuildRow(

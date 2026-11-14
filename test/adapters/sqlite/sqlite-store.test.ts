@@ -147,9 +147,10 @@ describe("SqliteStore", () => {
       { name: "008_named_builds.sql" },
       { name: "009_build_progress.sql" },
       { name: "010_flow_pinned.sql" },
+      { name: "011_build_snapshots.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 10]);
+    expect(before).toEqual([1, 1, 3, 1, 11]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -668,6 +669,9 @@ describe("SqliteStore", () => {
           id: second.id,
           status: "running",
           buildId: "b1",
+          buildName: "fix-login",
+          blueprintName: null,
+          blueprintVersion: null,
           createdAt: "2026-01-02T00:00:00.000Z",
           endedAt: null,
           totalCost: null,
@@ -677,6 +681,9 @@ describe("SqliteStore", () => {
           id: third.id,
           status: "stopped",
           buildId: "b1",
+          buildName: "fix-login",
+          blueprintName: null,
+          blueprintVersion: null,
           createdAt: "2026-01-03T00:00:00.000Z",
           endedAt: null,
           totalCost: null,
@@ -686,6 +693,9 @@ describe("SqliteStore", () => {
           id: first.id,
           status: "done",
           buildId: "b1",
+          buildName: "fix-login",
+          blueprintName: null,
+          blueprintVersion: null,
           createdAt: "2026-01-01T00:00:00.000Z",
           endedAt: "2026-01-01T00:00:09.000Z",
           totalCost: 0.25,

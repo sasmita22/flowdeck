@@ -58,6 +58,8 @@ const oldRow = (hash: string, dir: string): BuildRecord => ({
   deletedAt: null,
   dir,
   createdAt: 0,
+  blueprintName: null,
+  blueprintVersion: null,
 });
 
 const rows = (...records: BuildRecord[]) => ({

@@ -116,6 +116,18 @@ describe("test ids", () => {
     ]);
   });
 
+  it("names the blueprint picture's controls by the build or pending build it shows", () => {
+    expect([
+      pageTestIds.buildPictureToggle("pb-1"),
+      pageTestIds.buildPictureImage("pb-1"),
+      pageTestIds.buildPictureEmpty("b-1"),
+    ]).toEqual([
+      "build-picture-toggle-pb-1",
+      "build-picture-image-pb-1",
+      "build-picture-empty-b-1",
+    ]);
+  });
+
   it("names a build in progress by its blueprint and its pending build", () => {
     expect(Object.keys(pageTestIds)).toEqual(
       expect.arrayContaining([

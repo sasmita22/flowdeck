@@ -9,8 +9,10 @@ import { BuildRunningError } from "../../src/core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
+  BuildSnapshot,
   EventEntry,
   NewBuild,
+  NewBuildSnapshot,
   NewPendingBuild,
   NewRun,
   PendingBuildEnd,
@@ -18,11 +20,26 @@ import type {
   RunRecord,
   RunStatus,
   RunSummary,
+  SnapshotGap,
+  SnapshotKey,
   Store,
   StoredEvent,
 } from "../../src/ports/store.js";
 
 const copy = <T>(value: T): T => structuredClone(value);
+
+const blueprintNameIn = (origin: unknown): string | null => {
+  const blueprint: unknown =
+    typeof origin === "object" && origin !== null && "blueprint" in origin
+      ? origin.blueprint
+      : undefined;
+  return typeof blueprint === "object" &&
+    blueprint !== null &&
+    "name" in blueprint &&
+    typeof blueprint.name === "string"
+    ? blueprint.name
+    : null;
+};
 
 export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
@@ -36,6 +53,7 @@ export class FakeStore implements Store {
   private readonly pendingBuilds: PendingBuild[] = [];
   private readonly buildEventLog: { pendingId: string; event: StoredBuildEvent }[] = [];
   private readonly buildActivityLog: { pendingId: string; entry: ActivityEntry }[] = [];
+  private readonly snapshots: BuildSnapshot[] = [];
   private nextRun = 1;
   private nextPending = 1;
   private nextSeq = 1;
@@ -68,7 +86,9 @@ export class FakeStore implements Store {
   listRuns(): RunSummary[] {
     const summaries = this.runRecords.flatMap((run, index): RunSummary[] => {
       if (run.buildId !== undefined && this.deletedAt.has(run.buildId)) return [];
-      const source = this.buildRecords.find((known) => known.id === run.buildId)?.source;
+      const built = this.buildRecords.find((known) => known.id === run.buildId);
+      const source = built?.source;
+      const snapshot = run.buildId === undefined ? undefined : this.snapshotOf(run.buildId);
       const last = this.events(run.id).at(-1);
       const summary: RunSummary = {
         id: run.id,
@@ -79,6 +99,9 @@ export class FakeStore implements Store {
         totalCost: this.costs.get(run.id) ?? null,
         nodeCount: run.nodeIds.length,
         ...(source === undefined ? {} : { source: copy(source) }),
+        buildName: built?.name ?? null,
+        blueprintName: snapshot?.blueprintName ?? null,
+        blueprintVersion: snapshot?.version ?? null,
       };
       return [summary];
     });
@@ -153,7 +176,11 @@ export class FakeStore implements Store {
     }
     if (open.some((known) => known.name === build.name)) return { kind: "busy", reason: "name" };
     const pendingId = `pending-${this.nextPending++}`;
-    this.pendingBuilds.push({ ...copy(build), id: pendingId });
+    const { snapshot, ...pendingBuild } = build;
+    this.pendingBuilds.push({ ...copy(pendingBuild), id: pendingId });
+    if (snapshot !== undefined) {
+      this.snapshots.push({ ...copy(snapshot), pendingId, buildId: null });
+    }
     return { kind: "started", pendingId };
   }
 
@@ -175,6 +202,15 @@ export class FakeStore implements Store {
     if (!record) throw new Error(`FakeStore: no pending build ${pendingId}`);
     if (record.endedAt !== undefined) {
       throw new Error(`FakeStore: pending build ${pendingId} has ended`);
+    }
+    const unlinked = this.snapshots.find(
+      (known) => known.pendingId === pendingId && known.buildId === null,
+    );
+    if (end.buildId !== undefined && unlinked !== undefined) {
+      if (this.snapshotOf(end.buildId) !== undefined) {
+        throw new Error(`FakeStore: UNIQUE snapshot build id ${end.buildId}`);
+      }
+      unlinked.buildId = end.buildId;
     }
     Object.assign(record, copy(end));
   }
@@ -212,6 +248,54 @@ export class FakeStore implements Store {
     return this.buildActivityLog
       .filter((known) => known.pendingId === pendingId)
       .map(({ entry }) => copy(entry));
+  }
+
+  buildSnapshot(key: SnapshotKey): BuildSnapshot | null {
+    const known =
+      "pendingId" in key
+        ? this.snapshots.find((snapshot) => snapshot.pendingId === key.pendingId)
+        : this.snapshotOf(key.buildId);
+    return known === undefined ? null : copy(known);
+  }
+
+  listSnapshotGaps(): SnapshotGap[] {
+    const pending = this.pendingBuilds
+      .filter((known) => !this.snapshots.some((snapshot) => snapshot.pendingId === known.id))
+      .map((known): SnapshotGap => ({
+        pendingId: known.id,
+        buildId: known.buildId ?? null,
+        flowId: known.flowId,
+        version: known.version,
+        blueprintName: blueprintNameIn(known.origin),
+      }));
+    const building = new Set(this.listPendingBuilds().map((known) => known.name));
+    const built = this.buildRecords
+      .filter((known) => this.snapshotOf(known.id) === undefined && !building.has(known.name))
+      .map((known): SnapshotGap => ({
+        pendingId: null,
+        buildId: known.id,
+        flowId: known.source?.flowId ?? null,
+        version: known.source?.version ?? null,
+        blueprintName: null,
+      }));
+    return [...pending, ...built];
+  }
+
+  addSnapshotIfMissing(
+    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
+    snapshot: NewBuildSnapshot,
+  ): boolean {
+    if (gap.pendingId === null && gap.buildId === null) {
+      throw new Error("FakeStore: a snapshot names a pending build or a build");
+    }
+    const taken = this.snapshots.some(
+      (known) =>
+        (gap.pendingId !== null && known.pendingId === gap.pendingId) ||
+        (gap.buildId !== null && known.buildId === gap.buildId),
+    );
+    if (taken) return false;
+    this.snapshots.push({ ...copy(snapshot), pendingId: gap.pendingId, buildId: gap.buildId });
+    return true;
   }
 
   buildFiles(id: string): BuildFileRecord[] {
@@ -259,19 +343,28 @@ export class FakeStore implements Store {
 
   private allBuilds(): BuildRecord[] {
     return this.buildRecords
-      .map(({ id, hash, name, repo, base, values, dir, source }, index): BuildRecord => ({
-        id,
-        hash,
-        name,
-        repo,
-        base,
-        values: copy(values),
-        deletedAt: this.deletedAt.get(id) ?? null,
-        dir,
-        createdAt: index + 1,
-        ...(source === undefined ? {} : { source: copy(source) }),
-      }))
+      .map(({ id, hash, name, repo, base, values, dir, source }, index): BuildRecord => {
+        const snapshot = this.snapshotOf(id);
+        return {
+          id,
+          hash,
+          name,
+          repo,
+          base,
+          values: copy(values),
+          deletedAt: this.deletedAt.get(id) ?? null,
+          dir,
+          createdAt: index + 1,
+          ...(source === undefined ? {} : { source: copy(source) }),
+          blueprintName: snapshot?.blueprintName ?? null,
+          blueprintVersion: snapshot?.version ?? null,
+        };
+      })
       .reverse();
+  }
+
+  private snapshotOf(buildId: string): BuildSnapshot | undefined {
+    return this.snapshots.find((snapshot) => snapshot.buildId === buildId);
   }
 
   private refuseWhileRunning(buildId: string | undefined): void {

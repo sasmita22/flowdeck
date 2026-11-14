@@ -89,6 +89,9 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       pendingBuild: (id) => inner.pendingBuild(id),
       appendBuildActivity: (pendingId, entry) => inner.appendBuildActivity(pendingId, entry),
       buildActivity: (pendingId) => inner.buildActivity(pendingId),
+      buildSnapshot: (key) => inner.buildSnapshot(key),
+      listSnapshotGaps: () => inner.listSnapshotGaps(),
+      addSnapshotIfMissing: (gap, snapshot) => inner.addSnapshotIfMissing(gap, snapshot),
       append(id, nodeId, event) {
         inner.append(id, nodeId, event);
         track(id, [{ nodeId, event }]);

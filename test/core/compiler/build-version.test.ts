@@ -20,6 +20,7 @@ import {
   type StartedBuild,
 } from "../../../src/core/compiler/build-version.js";
 import { sha256Hex } from "../../../src/core/compiler/hash.js";
+import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import { applyShared } from "../../../src/core/compiler/shared.js";
 import type { Manifest } from "../../../src/core/compiler/lower.js";
 import { verify } from "../../../src/core/compiler/verify.js";
@@ -2060,6 +2061,82 @@ describe("buildVersion", () => {
         { flowId: "flow-1", version: 2 },
         { flowId: "flow-1", version: 1 },
       ]);
+    });
+  });
+
+  describe("the build's snapshot", () => {
+    const request = { name: "fix-login", repo, base: "main", values: { ticket: "FD-1" } };
+
+    const labelled = (label: string): Flow => {
+      const base = ticketFlow({ variables: ticketConfig.variables });
+      const nodes = base.nodes.map((node) => (node.id === "p1" ? { ...node, label } : node));
+      return { ...base, nodes: [...nodes, agent("loose")] as Flow["nodes"] };
+    };
+
+    const startedFrom = async (t: ReturnType<typeof setup>) => {
+      const saved = t.flows.load(v1);
+      if (saved === null) throw new Error("nothing saved");
+      const origin: BuildOrigin = {
+        source: v1,
+        blueprint: { name: saved.name, version: saved.version },
+      };
+      const started = await startBuild(saved.flow, request, t.deps, origin);
+      if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
+      return { saved, started };
+    };
+
+    it("keeps the version as saved, its blueprint name and its picture with the pending build", async () => {
+      const t = setup({ flows: [labelled("Planner")] });
+
+      const { saved, started } = await startedFrom(t);
+
+      expect(t.store.buildSnapshot({ pendingId: started.pendingId })).toEqual({
+        pendingId: started.pendingId,
+        buildId: null,
+        blueprintName: saved.name,
+        version: 1,
+        flow: labelled("Planner"),
+        svg: flowSvg(labelled("Planner")),
+      });
+    });
+
+    it("is read by the build's id once the build is recorded", async () => {
+      const { store, deps } = setup({ flows: [labelled("Planner")] });
+
+      const result = await buildVersion(v1, request, deps);
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      expect(store.buildSnapshot({ buildId: result.record.id })).toEqual(
+        expect.objectContaining({
+          buildId: result.record.id,
+          version: 1,
+          flow: labelled("Planner"),
+          svg: flowSvg(labelled("Planner")),
+        }),
+      );
+    });
+
+    it("keeps the old label after the blueprint is saved again with the Agent renamed", async () => {
+      const { flows, store, deps } = setup({ flows: [labelled("Planner")] });
+      const result = await buildVersion(v1, request, deps);
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+
+      flows.save(labelled("Reviewer"), "flow-1");
+
+      expect(flows.loadLatest()?.version).toBe(2);
+      const snapshot = store.buildSnapshot({ buildId: result.record.id });
+      expect(snapshot?.flow.nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
+      expect(snapshot?.svg).toContain("Planner");
+      expect(snapshot?.svg).not.toContain("Reviewer");
+    });
+
+    it("is not written for a flow given as a file", async () => {
+      const { store, deps } = setup();
+
+      const started = await startBuild(ticketFlow(), request, deps);
+
+      if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
+      expect(store.buildSnapshot({ pendingId: started.pendingId })).toBeNull();
     });
   });
 

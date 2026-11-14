@@ -240,6 +240,9 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
+    buildSnapshot: (key) => store.buildSnapshot(key),
+    listSnapshotGaps: () => store.listSnapshotGaps(),
+    addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
     append(id, nodeId, event) {
       if (!stopped()) store.append(id, nodeId, event);
     },

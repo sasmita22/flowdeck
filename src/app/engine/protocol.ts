@@ -24,6 +24,7 @@ export type EngineRequest = {
     | "build-activity"
     | "list-builds"
     | "build-files"
+    | "build-picture"
     | "run-build"
     | "run-options"
     | "stop-run"

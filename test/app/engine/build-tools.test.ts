@@ -42,6 +42,8 @@ const oldBuild: BuildRecord = {
   deletedAt: null,
   dir: `${home}/builds/oldhash1`,
   createdAt: 1,
+  blueprintName: null,
+  blueprintVersion: null,
 };
 
 class StoreWithOldBuild extends FakeStore {

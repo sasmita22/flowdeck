@@ -14,6 +14,9 @@ export const runSummarySchema = z.object({
   totalCost: z.number().nullable(),
   nodeCount: z.number().int(),
   source: sourceSchema.optional(),
+  buildName: z.string().nullable(),
+  blueprintName: z.string().nullable(),
+  blueprintVersion: z.number().int().nullable(),
 });
 
 export type ListedRun = z.infer<typeof runSummarySchema>;
@@ -36,7 +39,16 @@ export const buildRecordSchema = z.object({
   dir: z.string(),
   createdAt: z.number(),
   source: sourceSchema.optional(),
+  blueprintName: z.string().nullable(),
+  blueprintVersion: z.number().int().nullable(),
 });
+
+export const snapshotKeySchema = z.union([
+  z.object({ pendingId: z.string() }),
+  z.object({ buildId: z.string() }),
+]);
+
+export const buildPictureSchema = z.object({ svg: z.string().nullable() });
 
 export const buildFileContentSchema = z.object({
   path: z.string(),

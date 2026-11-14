@@ -16,6 +16,7 @@ const bridge = (
   buildVersion: vi.fn(),
   listBuilds: vi.fn(),
   buildFiles: vi.fn(),
+  buildPicture: vi.fn(),
   runBuild: vi.fn(),
   listRuns: vi.fn(),
   loadRun: vi.fn(),

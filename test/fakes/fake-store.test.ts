@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BuildRunningError } from "../../src/core/run/store.js";
+import { flowSvg } from "../../src/core/flow/flow-svg.js";
+import { BuildRunningError, type NewBuildSnapshot } from "../../src/core/run/store.js";
 import type { ActivityEntry } from "../../src/core/run/activity.js";
 import type { BuildEvent } from "../../src/core/run/build-progress.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../src/ports/store.js";
+import { agent, flow } from "../fixtures/flow-builders.js";
 import { FakeStore } from "./fake-store.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
@@ -34,6 +36,15 @@ const pending = (flowId = "flow-1", name = "nightly"): NewPendingBuild => ({
   name,
   origin: { kind: "canvas" },
   startedAt: 1_000,
+});
+
+const savedFlow = flow([agent("a1")], []);
+
+const snapshot = (blueprintName: string): NewBuildSnapshot => ({
+  blueprintName,
+  version: 3,
+  flow: savedFlow,
+  svg: flowSvg(savedFlow),
 });
 
 const startedId = (store: FakeStore, build: NewPendingBuild): string => {
@@ -313,6 +324,33 @@ describe("FakeStore", () => {
       expect(store.findRun(interrupted.id)?.status).toBe("stopped");
       expect(store.findRun(finished.id)?.status).toBe("done");
       expect(store.createRun(newRun()).status).toBe("running");
+    });
+
+    it("refuses to lock a pending build onto a build id that already has a snapshot, leaving the build open", () => {
+      const store = new FakeStore();
+      store.addSnapshotIfMissing({ pendingId: null, buildId: "b1" }, snapshot("First"));
+      const id = startedId(store, { ...pending(), snapshot: snapshot("Second") });
+
+      expect(() =>
+        store.endPendingBuild(id, { outcome: "built", endedAt: 2_000, buildId: "b1" }),
+      ).toThrow();
+      expect(store.buildSnapshot({ buildId: "b1" })).toMatchObject({
+        blueprintName: "First",
+        pendingId: null,
+      });
+      expect(store.buildSnapshot({ pendingId: id })).toMatchObject({ buildId: null });
+      expect(store.pendingBuild(id)?.endedAt).toBeUndefined();
+    });
+
+    it("sets a snapshot's build id once, keeping the first", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+      store.addSnapshotIfMissing({ pendingId: id, buildId: "b1" }, snapshot("First"));
+
+      store.endPendingBuild(id, { outcome: "built", endedAt: 2_000, buildId: "b2" });
+
+      expect(store.buildSnapshot({ pendingId: id })).toMatchObject({ buildId: "b1" });
+      expect(store.buildSnapshot({ buildId: "b2" })).toBeNull();
     });
   });
 

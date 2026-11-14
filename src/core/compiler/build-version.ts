@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
+import { flowSvg } from "../flow/flow-svg.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
 import type { BuildConfig, Flow } from "../flow/schema.js";
 import { unsetVariables, type VariableValues } from "../flow/variables.js";
@@ -235,6 +236,16 @@ export async function startBuild(
     name: request.name,
     origin: origin ?? null,
     startedAt: deps.now(),
+    ...(origin === undefined
+      ? {}
+      : {
+          snapshot: {
+            blueprintName: origin.blueprint.name,
+            version: origin.blueprint.version,
+            flow: saved,
+            svg: flowSvg(saved),
+          },
+        }),
   });
   if (start.kind === "busy") {
     return {

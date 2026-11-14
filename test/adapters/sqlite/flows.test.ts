@@ -799,6 +799,7 @@ describe("SqliteFlowStore", () => {
       { name: "008_named_builds.sql" },
       { name: "009_build_progress.sql" },
       { name: "010_flow_pinned.sql" },
+      { name: "011_build_snapshots.sql" },
     ]);
   });
 });

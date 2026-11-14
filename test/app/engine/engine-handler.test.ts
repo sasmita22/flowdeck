@@ -19,6 +19,7 @@ import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { workspaceDir } from "../../../src/core/compiler/build.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
+import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
@@ -28,6 +29,7 @@ import type {
   BuildAgentsOpenSpec,
   BuildTurnResult,
 } from "../../../src/ports/build-agents.js";
+import type { FlowStore } from "../../../src/ports/flow-store.js";
 import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
@@ -81,6 +83,20 @@ const savedFlow = () =>
   );
 
 const newBlueprint = () => ({ flowId: null, flow: savedFlow() });
+
+const unreadable = (): never => {
+  throw new Error("blueprints unreadable");
+};
+
+const unreadableFlows = (): FlowStore => ({
+  create: unreadable,
+  list: unreadable,
+  rename: unreadable,
+  pin: unreadable,
+  save: unreadable,
+  loadLatest: unreadable,
+  load: unreadable,
+});
 
 const failingOpen = () => {
   throw new Error("boom");
@@ -442,11 +458,13 @@ describe("createEngineHandler", async () => {
   });
 
   describe("runs", () => {
+    const builtFlow = () => onMainFlow([agent("s1"), agent("s2")], []);
+
     const seededRun = () => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
       const runs = new FakeStore();
       flows.create("Report");
-      const { version } = flows.save(onMainFlow([agent("s1"), agent("s2")], []), "flow-a");
+      const { version } = flows.save(builtFlow(), "flow-a");
       runs.recordBuild({
         id: "b1",
         hash: "h1",
@@ -459,6 +477,10 @@ describe("createEngineHandler", async () => {
         files: [],
         nodes: [],
       });
+      runs.addSnapshotIfMissing(
+        { pendingId: null, buildId: "b1" },
+        { blueprintName: "Report", version, flow: builtFlow(), svg: flowSvg(builtFlow()) },
+      );
       const { id } = runs.createRun({
         buildDir: "/fd-home/workspaces/b1",
         inputs: {},
@@ -476,7 +498,7 @@ describe("createEngineHandler", async () => {
       return { flows, runs, runId: id };
     };
 
-    it("lists runs with the build and the blueprint version they came from", async () => {
+    it("lists runs with the build, its name and the blueprint version they came from", async () => {
       const { flows, runs, runId } = seededRun();
       const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
 
@@ -489,22 +511,45 @@ describe("createEngineHandler", async () => {
             status: "failed",
             buildId: "b1",
             source: { flowId: "flow-a", version: 1 },
+            buildName: "report",
+            blueprintName: "Report",
+            blueprintVersion: 1,
           }),
         ],
       });
     });
 
-    it("loads one run with its blueprint version's canvas and each node's status from its events", async () => {
-      const { flows, runs, runId } = seededRun();
+    it("lists builds with the blueprint name and version of their snapshot", async () => {
+      const { flows, runs } = seededRun();
       const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
+        id: 1,
+        ok: true,
+        value: [
+          expect.objectContaining({
+            id: "b1",
+            name: "report",
+            blueprintName: "Report",
+            blueprintVersion: 1,
+          }),
+        ],
+      });
+    });
+
+    it("loads one run with its build's name, its snapshot's canvas and each node's status, reading no blueprint", async () => {
+      const { runs, runId } = seededRun();
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
 
       expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
         id: 1,
         ok: true,
         value: {
           run: expect.objectContaining({ id: runId, status: "failed" }),
-          name: "Report",
-          flow: onMainFlow([agent("s1"), agent("s2")], []),
+          name: "report",
+          flow: builtFlow(),
           snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
           activity: [],
         },
@@ -512,6 +557,43 @@ describe("createEngineHandler", async () => {
       expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
         { id: 2, ok: false, error: "No run nope" },
       );
+    });
+
+    it("loads a run of a build with no snapshot with the build's name and no canvas, reading no blueprint", async () => {
+      const { runs } = seededRun();
+      runs.recordBuild({
+        id: "b2",
+        hash: "h2",
+        name: "before-snapshots",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: "/fd-home/workspaces/b2",
+        source: { flowId: "flow-a", version: 1 },
+        files: [],
+        nodes: [],
+      });
+      const { id: runId } = runs.createRun({
+        buildDir: "/fd-home/workspaces/b2",
+        inputs: {},
+        nodeIds: ["s1", "s2"],
+        session: {
+          tmuxName: "fd-run-z",
+          cwd: "/fd-home/workspaces/b2/repo",
+          claudeSessionId: "c3",
+        },
+        buildId: "b2",
+      });
+      runs.finishRun(runId, "failed");
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
+        id: 1,
+        ok: true,
+        value: expect.objectContaining({ name: "before-snapshots", flow: null }),
+      });
     });
 
     it("shows a run left running by an earlier session as interrupted, in the list and on its own", async () => {
@@ -542,6 +624,181 @@ describe("createEngineHandler", async () => {
         }),
       });
       expect(runs.findRun(stale)?.status).toBe("running");
+    });
+  });
+
+  describe("build-picture", () => {
+    const pictured = () => onMainFlow([agent("draw")], []);
+
+    const pictureStores = () => {
+      const runs = new FakeStore();
+      runs.recordBuild({
+        id: "b1",
+        hash: "h1",
+        name: "pictured",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: "/fd-home/workspaces/b1",
+        source: { flowId: "flow-a", version: 1 },
+        files: [],
+        nodes: [],
+      });
+      runs.addSnapshotIfMissing(
+        { pendingId: null, buildId: "b1" },
+        { blueprintName: "Report", version: 1, flow: pictured(), svg: flowSvg(pictured()) },
+      );
+      runs.recordBuild({
+        id: "b2",
+        hash: "h2",
+        name: "flow-less",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: "/fd-home/workspaces/b2",
+        files: [],
+        nodes: [],
+      });
+      const going = runs.startPendingBuild({
+        flowId: "flow-a",
+        version: 2,
+        name: "going",
+        origin: {
+          source: { flowId: "flow-a", version: 2 },
+          blueprint: { name: "Report", version: 2 },
+        },
+        startedAt: 1_000,
+        snapshot: {
+          blueprintName: "Report",
+          version: 2,
+          flow: pictured(),
+          svg: "<svg>going</svg>",
+        },
+      });
+      if (going.kind !== "started") throw new Error("the pending build did not start");
+      return { runs, pendingId: going.pendingId };
+    };
+
+    const picture = (
+      handler: ReturnType<typeof createEngineHandler>,
+      id: number,
+      payload: unknown,
+    ) => handler.handle({ id, type: "build-picture" as never, payload });
+
+    it("answers a build's picture and a pending build's picture from their snapshots, reading no blueprint", async () => {
+      const { runs, pendingId } = pictureStores();
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(await picture(handler, 1, { buildId: "b1" })).toEqual({
+        id: 1,
+        ok: true,
+        value: { svg: flowSvg(pictured()) },
+      });
+      expect(await picture(handler, 2, { pendingId })).toEqual({
+        id: 2,
+        ok: true,
+        value: { svg: "<svg>going</svg>" },
+      });
+    });
+
+    it("answers no picture for a flow-less build and an unknown one", async () => {
+      const { runs } = pictureStores();
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(await picture(handler, 1, { buildId: "b2" })).toEqual({
+        id: 1,
+        ok: true,
+        value: { svg: null },
+      });
+      expect(await picture(handler, 2, { buildId: "nope" })).toEqual({
+        id: 2,
+        ok: true,
+        value: { svg: null },
+      });
+      expect(await picture(handler, 3, { pendingId: "nope" })).toEqual({
+        id: 3,
+        ok: true,
+        value: { svg: null },
+      });
+    });
+  });
+
+  describe("snapshots of builds made before them", () => {
+    let dir: string;
+    let db: ReturnType<typeof openDatabase>;
+    let store: SqliteStore;
+    let flows: SqliteFlowStore;
+    const saved = () => onMainFlow([agent("old")], []);
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), "fd-backfill-"));
+      db = openDatabase({ path: join(dir, "flowdeck.db") });
+      store = new SqliteStore({ db });
+      flows = new SqliteFlowStore({ db, newId: () => "flow-old" });
+      flows.create("Old report");
+      const { version } = flows.save(saved(), "flow-old");
+      store.recordBuild({
+        id: "b-old",
+        hash: "h-old",
+        name: "old-build",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        dir: join(dir, "workspaces", "b-old"),
+        source: { flowId: "flow-old", version },
+        files: [],
+        nodes: [],
+      });
+    });
+
+    afterEach(async () => {
+      db.close();
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("gives an old build its snapshot before the first request is answered", async () => {
+      const handler = createEngineHandler(options({ openStores: () => ({ runs: store, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
+        id: 1,
+        ok: true,
+        value: [
+          expect.objectContaining({
+            id: "b-old",
+            blueprintName: "Old report",
+            blueprintVersion: 1,
+          }),
+        ],
+      });
+      expect(store.buildSnapshot({ buildId: "b-old" })).toMatchObject({
+        blueprintName: "Old report",
+        version: 1,
+        flow: saved(),
+        svg: flowSvg(saved()),
+      });
+    });
+
+    it("logs a blueprint that cannot be read while filling snapshots, and still answers", async () => {
+      vi.spyOn(flows, "load").mockImplementation(() => {
+        throw new Error("flow_versions is locked");
+      });
+      const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      const handler = createEngineHandler(options({ openStores: () => ({ runs: store, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
+        id: 1,
+        ok: true,
+        value: [expect.objectContaining({ id: "b-old", blueprintName: null })],
+      });
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining("flow_versions is locked"));
+      expect(store.buildSnapshot({ buildId: "b-old" })).toBeNull();
     });
   });
 
@@ -2376,6 +2633,80 @@ describe("createEngineHandler", async () => {
           });
           expect(stepThreeTurnOf(2)).toContain(firstAnswer.answer);
           expect(stepThreeTurnOf(2)).toContain(secondAnswer.answer);
+        });
+
+        it("starts the rebuild from the asked build's snapshot when no blueprint can be read, and gives it the same snapshot", async () => {
+          asking();
+          const asked = await askedBuild();
+          const askedSnapshot = runs.buildSnapshot({ pendingId: asked });
+          expect(askedSnapshot).not.toBeNull();
+          for (const method of [
+            "create",
+            "list",
+            "rename",
+            "pin",
+            "save",
+            "loadLatest",
+            "load",
+          ] as const) {
+            vi.spyOn(flows, method).mockImplementation(unreadable);
+          }
+
+          const first = await rebuiltPendingId(asked, [firstAnswer]);
+          await endPush(first);
+
+          expect(runs.buildSnapshot({ pendingId: first })).toEqual({
+            ...askedSnapshot,
+            pendingId: first,
+            buildId: null,
+          });
+          expect(runs.pendingBuild(first)).toMatchObject({
+            flowId: "flow-1",
+            version: 1,
+            name: "fix-login",
+            origin: {
+              source: { flowId: "flow-1", version: 1 },
+              blueprint: {
+                name: askedSnapshot?.blueprintName,
+                version: askedSnapshot?.version,
+              },
+              request: { values: {}, ...firstRequest(), answers: [firstAnswer] },
+            },
+          });
+          expect(stepThreeTurnOf(1)).toContain(firstAnswer.answer);
+        });
+
+        it("refuses a needs-you build that has no snapshot, naming it, and starts nothing", async () => {
+          await handler.handle({ id: nextId++, type: "store-status" });
+          const start = runs.startPendingBuild({
+            flowId: "flow-1",
+            version: 1,
+            name: "no-snapshot",
+            origin: {
+              source: { flowId: "flow-1", version: 1 },
+              blueprint: { name: "Untitled", version: 1 },
+              request: { values: {}, ...firstRequest() },
+            },
+            startedAt: 1_000,
+          });
+          if (start.kind !== "started") throw new Error("the old build did not start");
+          runs.endPendingBuild(start.pendingId, {
+            outcome: "needs-you",
+            endedAt: 2_000,
+            report: { version: 1, questions },
+          });
+
+          const refused = await rebuild({ pendingId: start.pendingId, answers: [firstAnswer] });
+
+          expect(refusal(refused)).toBe(true);
+          expect(refused).toMatchObject({ error: expect.stringContaining("no-snapshot") });
+          await settle();
+
+          expect(runs.listPendingBuilds()).toEqual([]);
+          expect(runs.listLatestEndedPendingBuilds().map((ended) => ended.id)).toEqual([
+            start.pendingId,
+          ]);
+          expect(agents.fake.opened).toEqual([]);
         });
 
         it("refuses an unknown build, an empty answer, and no answers, starting nothing", async () => {
