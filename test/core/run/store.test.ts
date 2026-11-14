@@ -371,3 +371,88 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
     });
   });
 });
+
+describe.each(kinds)("%s concurrent builds of one blueprint", (_name, kind) => {
+  const open = withStores(kind);
+
+  it("starts a second open build of a blueprint under another name, and refuses the same name", () => {
+    const store = open();
+    started(store, pending("fix-a", "flow-1"));
+
+    expect(store.startPendingBuild(pending("fix-b", "flow-1"))).toEqual({
+      kind: "started",
+      pendingId: expect.any(String),
+    });
+    expect(store.startPendingBuild(pending("fix-a", "flow-1"))).toEqual({
+      kind: "busy",
+      reason: "name",
+    });
+  });
+});
+
+describe.each(kinds)("%s latest ended pending build per build name", (_name, kind) => {
+  const open = withStores(kind);
+
+  const ended = (
+    store: Store,
+    name: string,
+    flowId: string,
+    end: Parameters<Store["endPendingBuild"]>[1],
+  ): string => {
+    const id = started(store, pending(name, flowId));
+    store.endPendingBuild(id, end);
+    return id;
+  };
+
+  it("lists two ended builds of one blueprint under different names", () => {
+    const store = open();
+    const a = ended(store, "fix-a", "flow-1", { outcome: "failed", endedAt: 2_000 });
+    const b = ended(store, "fix-b", "flow-1", { outcome: "failed", endedAt: 3_000 });
+
+    expect(store.listLatestEndedPendingBuildsByName().map(({ id }) => id)).toEqual([a, b]);
+  });
+
+  it("keeps only the newer of two failed builds of one name", () => {
+    const store = open();
+    ended(store, "fix-a", "flow-1", { outcome: "failed", endedAt: 2_000 });
+    const newer = ended(store, "fix-a", "flow-1", { outcome: "failed", endedAt: 3_000 });
+
+    expect(store.listLatestEndedPendingBuildsByName()).toEqual([
+      expect.objectContaining({ id: newer, name: "fix-a", outcome: "failed", endedAt: 3_000 }),
+    ]);
+  });
+
+  it("lists nothing for a name whose latest ended build is built", () => {
+    const store = open();
+    ended(store, "fix-a", "flow-1", { outcome: "failed", endedAt: 2_000 });
+    ended(store, "fix-a", "flow-1", { outcome: "built", endedAt: 3_000, buildId: "b1" });
+    const other = ended(store, "fix-b", "flow-2", { outcome: "failed", endedAt: 2_500 });
+
+    expect(store.listLatestEndedPendingBuildsByName().map(({ id }) => id)).toEqual([other]);
+  });
+
+  it("lists stopped and needs-you builds with their outcome and report", () => {
+    const store = open();
+    const report = { version: 1, questions: [{ nodeId: "a1", text: "Which repo?" }] };
+    const stopped = ended(store, "fix-a", "flow-1", { outcome: "stopped", endedAt: 2_000 });
+    const asked = ended(store, "fix-b", "flow-1", {
+      outcome: "needs-you",
+      endedAt: 3_000,
+      report,
+    });
+
+    expect(store.listLatestEndedPendingBuildsByName()).toEqual([
+      expect.objectContaining({ id: stopped, outcome: "stopped" }),
+      expect.objectContaining({ id: asked, outcome: "needs-you", report }),
+    ]);
+  });
+
+  it("returns no open build, even one sharing a name with an ended build", () => {
+    const store = open();
+    const failed = ended(store, "fix-a", "flow-1", { outcome: "failed", endedAt: 2_000 });
+    started(store, pending("fix-a", "flow-1"));
+    started(store, pending("fix-b", "flow-2"));
+
+    expect(store.listLatestEndedPendingBuildsByName().map(({ id }) => id)).toEqual([failed]);
+  });
+});

@@ -84,7 +84,7 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       buildEvents: (pendingId) => inner.buildEvents(pendingId),
       endPendingBuild: (pendingId, end) => inner.endPendingBuild(pendingId, end),
       listPendingBuilds: () => inner.listPendingBuilds(),
-      listLatestEndedPendingBuilds: () => inner.listLatestEndedPendingBuilds(),
+      listLatestEndedPendingBuildsByName: () => inner.listLatestEndedPendingBuildsByName(),
       findPendingBuildByName: (name) => inner.findPendingBuildByName(name),
       pendingBuild: (id) => inner.pendingBuild(id),
       appendBuildActivity: (pendingId, entry) => inner.appendBuildActivity(pendingId, entry),

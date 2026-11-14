@@ -7,12 +7,11 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { agent, onMainFlow } from "../test/fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildOnCanvas } from "./build-run.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -85,13 +84,28 @@ const startBuild = async (window: Page, name: string): Promise<string> => {
   return pendingOf() ?? "";
 };
 
-const oneAgent = () => onMainFlow([agent("s1")], []);
+const spread = (flow: ReturnType<typeof onMainFlow>) => ({
+  ...flow,
+  nodes: flow.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+});
+
+const oneAgent = () => spread(onMainFlow([agent("s1")], []));
+
+const twoAgents = () => spread(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]));
 
 const openBlueprint = async (window: Page, flowId: string) => {
   await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
   await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
   await expect(window.getByTestId(controlTestIds.build)).toBeVisible();
 };
+
+const toBuilds = async (window: Page) => {
+  await window.getByTestId("menu-builds").click();
+  await expect(window.getByTestId(pageTestIds.title)).toHaveText("Builds");
+};
+
+const builtIdNamed = (name: string) =>
+  rows<{ id: string }>("SELECT id FROM builds WHERE name = ?", name)[0]?.id;
 
 test.beforeEach(async () => {
   launched = undefined;
@@ -109,61 +123,7 @@ test.afterEach(async () => {
   }
 });
 
-test("a finished build shows Built · v1 on the blueprint's card chip and on its canvas bar", async () => {
-  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
-  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
-  const { window } = launched;
-  await openBlueprint(window, flowId);
-
-  await buildOnCanvas(window, home, "fix-a");
-
-  await window.getByTestId("menu-blueprints").click();
-  await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText("Built · v1");
-  await openBlueprint(window, flowId);
-  await expect(window.getByTestId(pageTestIds.canvasBuildBar)).toContainText("Built · v1");
-});
-
-test("the canvas bar shows only on a blueprint that has been built", async () => {
-  const built = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
-  const idle = seedBlueprint(home, "Idle", oneAgent(), repo.path);
-  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
-  const { window } = launched;
-  await openBlueprint(window, built.flowId);
-
-  await buildOnCanvas(window, home, "fix-a");
-
-  await openBlueprint(window, built.flowId);
-  await expect(window.getByTestId(pageTestIds.canvasBuildBar)).toBeVisible();
-  await openBlueprint(window, idle.flowId);
-  await expect(window.getByTestId(pageTestIds.canvasBuildBar)).toHaveCount(0);
-});
-
-test("while a blueprint builds, its card chip and its canvas bar show the same step, then Built · v1", async () => {
-  test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
-  launched = await launchWithFakeClaude({
-    home,
-    logPath: test.info().outputPath("app.log"),
-    pieceMs,
-  });
-  const { window } = launched;
-  await openBlueprint(window, flowId);
-
-  await startBuild(window, "fix-a");
-
-  await window.getByTestId("menu-blueprints").click();
-  const chip = window.getByTestId(pageTestIds.buildChip(flowId));
-  await expect(chip).toHaveText("Building · step 3 of 5", { timeout: watchMs });
-  await openBlueprint(window, flowId);
-  const bar = window.getByTestId(pageTestIds.canvasBuildBar);
-  await expect(bar).toContainText("Building · step 3 of 5");
-
-  await expect(bar).toContainText("Built · v1", { timeout: watchMs });
-  await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
-  await expect(chip).toHaveText("Built · v1");
-});
-
-test("the Builds page shows steps 3 and 4 and each component going waiting, running, done", async () => {
+test("a build in progress shows a Building card on Builds and a live marker on the Builds menu item, opens its pipeline, then becomes a built card and the marker goes", async () => {
   test.setTimeout(90_000);
   const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({
@@ -176,21 +136,149 @@ test("the Builds page shows steps 3 and 4 and each component going waiting, runn
 
   const pendingId = await startBuild(window, "fix-a");
 
+  await toBuilds(window);
+  const card = window.getByTestId(pageTestIds.buildingCard(pendingId));
+  await expect(card).toContainText("Building · step 3 of 5", { timeout: watchMs });
+  await expect(card).toContainText("fix-a");
+  await expect(window.getByTestId(controlTestIds.menuBuildsLive)).toBeVisible();
+  await expect(window.getByTestId("menu-builds")).toContainText(", 1 building");
+
+  await card.click();
   await expect(window.getByTestId(pageTestIds.buildProgress(pendingId))).toBeVisible();
-  const step3 = window.getByTestId(pageTestIds.buildStep(pendingId, 3));
-  const step4 = window.getByTestId(pageTestIds.buildStep(pendingId, 4));
-  const component = window.getByTestId(
-    pageTestIds.buildComponent(pendingId, "plugin/agents/s1.md"),
+  await expect(window.getByTestId(pageTestIds.title)).toHaveText("fix-a");
+  await expect(window.getByTestId(pageTestIds.buildBuiltLink(pendingId))).toBeVisible({
+    timeout: watchMs,
+  });
+
+  const buildId = builtIdNamed("fix-a") ?? "";
+  await toBuilds(window);
+  await expect(window.getByTestId(pageTestIds.buildCard(buildId))).toContainText("fix-a");
+  await expect(card).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.menuBuildsLive)).toHaveCount(0);
+});
+
+test("while a build runs and after it is built, the blueprint card, the editor and the canvas show nothing about it, and Build stays enabled", async () => {
+  test.setTimeout(90_000);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    pieceMs,
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+  const pendingId = await startBuild(window, "fix-a");
+  await toBuilds(window);
+  const card = window.getByTestId(pageTestIds.buildingCard(pendingId));
+  await expect(card).toContainText("Building · step 3 of 5", { timeout: watchMs });
+
+  const expectNothingAboutTheBuild = async () => {
+    await window.getByTestId("menu-blueprints").click();
+    const blueprint = window.getByTestId(pageTestIds.blueprintCard(flowId));
+    await expect(blueprint).toBeVisible();
+    await expect(blueprint).not.toContainText(/Building|Built|Needs you|Failed/);
+    await openBlueprint(window, flowId);
+    await expect(window.getByTestId("node-s1")).toBeVisible();
+    await expect(window.getByTestId("node-status-s1")).toHaveCount(0);
+    await expect(window.getByText(/Building ·|Built v|Built ·/)).toHaveCount(0);
+    await expect(window.getByTestId(controlTestIds.build)).toBeEnabled();
+  };
+
+  await expectNothingAboutTheBuild();
+  await window.getByTestId(controlTestIds.back).click();
+  await toBuilds(window);
+  await expect(card).toContainText("Building · step", { timeout: watchMs });
+
+  await expect.poll(() => builtIdNamed("fix-a"), { timeout: watchMs }).toBeDefined();
+  await expect(window.getByTestId(pageTestIds.buildCard(builtIdNamed("fix-a") ?? ""))).toBeVisible({
+    timeout: watchMs,
+  });
+  await expectNothingAboutTheBuild();
+});
+
+test("a build whose first check fails shows a round 2 lane, round 1 Verify shows the failure lines, and an agent row shows only that agent's activity", async () => {
+  test.setTimeout(90_000);
+  const { flowId } = seedBlueprint(home, "Fixer", twoAgents(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    unfilledInRound1: "plugin/agents/s1.md",
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  const pendingId = await startBuild(window, "fix-a");
+
+  const progress = window.getByTestId(pageTestIds.buildProgress(pendingId));
+  await expect(progress).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.buildBuiltLink(pendingId))).toBeVisible({
+    timeout: watchMs,
+  });
+  const round2Write = window.getByTestId(pageTestIds.buildStage(pendingId, 3, 2));
+  await expect(round2Write).toContainText("3 Write · round 2");
+  await expect(round2Write).toContainText("done");
+  await expect(window.getByTestId(pageTestIds.buildStage(pendingId, 5, 2))).toContainText(
+    "5 Verify · round 2",
   );
-  await expect(step3).toContainText("running", { timeout: watchMs });
-  await expect(component).toContainText("waiting");
-  await expect(component).toContainText("running", { timeout: watchMs });
-  await expect(component).toContainText("done", { timeout: watchMs });
-  await expect(step3).toContainText("done", { timeout: watchMs });
-  await expect(step4).toContainText("running", { timeout: watchMs });
-  await expect(step4).toContainText("done", { timeout: watchMs });
-  await expect(window.getByTestId(pageTestIds.buildActivity(pendingId))).toContainText(
-    "plugin/agents/s1.md",
+
+  const round1Verify = window.getByTestId(pageTestIds.buildStage(pendingId, 5, 1));
+  await expect(round1Verify).toContainText("failed");
+  await round1Verify.click();
+  const log = window.getByTestId(pageTestIds.buildActivity(pendingId));
+  await expect(log).toContainText("plugin/agents/s1.md body: body has nothing beyond its draft");
+
+  await window.getByTestId(pageTestIds.buildStage(pendingId, 3, 1)).click();
+  await expect(log).toContainText("plugin/agents/s1.md");
+  await expect(log).toContainText("plugin/agents/s2.md");
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, "plugin/agents/s2.md")).click();
+  await expect(log).toContainText("plugin/agents/s2.md");
+  await expect(log).not.toContainText("plugin/agents/s1.md");
+});
+
+test("a build that ends needing you shows a Needs you card on Builds, its page shows the questions, and Rebuild with answers starts a new build listed as building", async () => {
+  test.setTimeout(90_000);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    pieceMs,
+    question: { nodeId: "s1", otherNodeId: "s0", text: "Which command runs the tests?" },
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  const pendingId = await startBuild(window, "fix-a");
+
+  await toBuilds(window);
+  const card = window.getByTestId(pageTestIds.buildingCard(pendingId));
+  await expect(card).toContainText("Needs you", { timeout: watchMs });
+  await card.click();
+  const question = window.getByTestId(pageTestIds.buildQuestion(pendingId, 0));
+  await expect(question).toContainText("s1 · s0");
+  await expect(question).toContainText("Which command runs the tests?");
+
+  const answer = window.getByTestId(pageTestIds.buildAnswer(pendingId, 0));
+  const rebuild = window.getByTestId(pageTestIds.buildRebuild(pendingId));
+  await expect(rebuild).toBeDisabled();
+  await answer.fill("npm test");
+  await expect(rebuild).toBeEnabled();
+  await rebuild.click();
+
+  const rebuilt = () =>
+    rows<{ id: string; name: string; origin_json: string }>(
+      "SELECT id, name, origin_json FROM pending_builds WHERE flow_id = ? AND id != ?",
+      flowId,
+      pendingId,
+    );
+  await expect.poll(() => rebuilt().length).toBe(1);
+  const [next] = rebuilt();
+  expect(next?.name).toBe("fix-a");
+  expect(next?.origin_json).toContain("npm test");
+
+  await toBuilds(window);
+  await expect(window.getByTestId(pageTestIds.buildingCard(next?.id ?? ""))).toContainText(
+    "Building · step",
+    { timeout: watchMs },
   );
 });
 
@@ -209,9 +297,10 @@ test("the build terminal shows the fd-build session, and Stop ends the build and
 
   const progress = window.getByTestId(pageTestIds.buildProgress(pendingId));
   await expect(progress).toBeVisible();
-  await expect(window.getByTestId(pageTestIds.buildStep(pendingId, 3))).toContainText("running", {
-    timeout: watchMs,
-  });
+  await expect(window.getByTestId(pageTestIds.buildStage(pendingId, 3, 1))).toContainText(
+    "running",
+    { timeout: watchMs },
+  );
   const [session] = buildSessions(pendingId);
   expect(session?.name).toMatch(/^fd-build-/);
   const name = session?.name ?? "";
@@ -236,58 +325,11 @@ test("the build terminal shows the fd-build session, and Stop ends the build and
   expect((await worktreePaths()).filter((path) => path.includes(buildId))).toEqual([]);
   expect(await buildBranches()).toEqual([]);
   await expect(progress).toBeVisible();
-  await window.getByTestId("menu-blueprints").click();
-  await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText("Failed");
+  await toBuilds(window);
+  await expect(window.getByTestId(pageTestIds.buildingCard(pendingId))).toContainText("Stopped");
 });
 
-test("a build that ends with a question shows it under its nodes with an answer field, the chip says Needs you, and Rebuild with answers starts a new build of the blueprint", async () => {
-  test.setTimeout(90_000);
-  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
-  launched = await launchWithFakeClaude({
-    home,
-    logPath: test.info().outputPath("app.log"),
-    question: { nodeId: "s1", otherNodeId: "s0", text: "Which command runs the tests?" },
-  });
-  const { window } = launched;
-  await openBlueprint(window, flowId);
-
-  const pendingId = await startBuild(window, "fix-a");
-
-  const progress = window.getByTestId(pageTestIds.buildProgress(pendingId));
-  await expect(progress).toContainText("Needs you", { timeout: watchMs });
-  const question = window.getByTestId(pageTestIds.buildQuestion(pendingId, 0));
-  await expect(question).toContainText("s1 · s0");
-  await expect(question).toContainText("Which command runs the tests?");
-
-  const answer = window.getByTestId(pageTestIds.buildAnswer(pendingId, 0));
-  const rebuild = window.getByTestId(pageTestIds.buildRebuild(pendingId));
-  await expect(answer).toBeVisible();
-  await expect(rebuild).toBeDisabled();
-  await answer.fill("npm test");
-  await expect(rebuild).toBeEnabled();
-  await rebuild.click();
-
-  const rebuilt = () =>
-    rows<{ version: number; name: string; outcome: string | null; origin_json: string }>(
-      "SELECT version, name, outcome, origin_json FROM pending_builds WHERE flow_id = ? AND id != ?",
-      flowId,
-      pendingId,
-    );
-  await expect.poll(() => rebuilt().length).toBe(1);
-  const [next] = rebuilt();
-  expect(next).toMatchObject({ version: 1, name: "fix-a" });
-  expect(next?.origin_json).toContain("npm test");
-  await expect.poll(() => rebuilt()[0]?.outcome, { timeout: watchMs }).not.toBeNull();
-  expect(
-    rows<{ outcome: string }>("SELECT outcome FROM pending_builds WHERE id = ?", pendingId),
-  ).toEqual([{ outcome: "needs-you" }]);
-  await expect(progress).toContainText("Needs you");
-
-  await window.getByTestId("menu-blueprints").click();
-  await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText("Needs you");
-});
-
-test("the Builds page shows the build's tokens and cost read from its session's transcript", async () => {
+test("the pipeline page shows the build's tokens and cost read from its session's transcript", async () => {
   test.setTimeout(90_000);
   const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
   launched = await launchWithFakeClaude({

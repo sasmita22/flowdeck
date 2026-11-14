@@ -29,12 +29,6 @@ export const buildIdNamed = (home: string, name: string): string => {
   return row.id;
 };
 
-const flowIdOfPendingBuild = async (home: string, name: string): Promise<string> => {
-  const sql = "SELECT flow_id FROM pending_builds WHERE name = ? ORDER BY started_at DESC";
-  await expect.poll(() => firstRow<{ flow_id: string }>(home, sql, name)?.flow_id).toBeDefined();
-  return firstRow<{ flow_id: string }>(home, sql, name)?.flow_id ?? "";
-};
-
 export async function buildOnCanvas(
   window: Page,
   home: string,
@@ -55,17 +49,15 @@ export async function buildOnCanvas(
 }
 
 export async function waitForBuilt(window: Page, home: string, name: string): Promise<string> {
-  const flowId = await flowIdOfPendingBuild(home, name);
   const builtSql = "SELECT id FROM builds WHERE name = ? AND deleted_at IS NULL";
   await expect
     .poll(() => firstRow<{ id: string }>(home, builtSql, name)?.id, { timeout: 20_000 })
     .toBeDefined();
-  await window.getByTestId("menu-blueprints").click();
-  await expect(window.getByTestId(pageTestIds.buildChip(flowId))).toHaveText(/^Built · v\d+$/, {
-    timeout: 20_000,
-  });
   const buildId = buildIdNamed(home, name);
   await window.getByTestId("menu-builds").click();
+  await expect(window.getByTestId(pageTestIds.buildCard(buildId))).toBeVisible({
+    timeout: 20_000,
+  });
   await window.getByTestId(pageTestIds.buildOpen(buildId)).click();
   await expect(window.getByTestId(pageTestIds.buildDetailRun)).toBeVisible();
   return buildId;

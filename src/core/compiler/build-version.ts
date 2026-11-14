@@ -41,6 +41,7 @@ export type BuildRequest = {
   name: string;
   repo?: string;
   base?: string;
+  buildModel?: string;
   values: VariableValues;
   answers?: readonly BuildAnswer[];
 };
@@ -141,8 +142,7 @@ const untilStopped = <T>(signal: AbortSignal | undefined, work: Promise<T>): Pro
   });
 };
 
-const busy: Record<"blueprint" | "name", (name: string) => string> = {
-  blueprint: () => "This blueprint is already building.",
+const busy: Record<"name", (name: string) => string> = {
   name: (name) => `A build named ${name} is already building.`,
 };
 
@@ -193,7 +193,7 @@ export type BuildOrigin = {
   request?: BuildInputs;
 };
 
-const withRequestTarget = (flow: Flow, { repo, base }: BuildRequest): Flow => ({
+const withRequestTarget = (flow: Flow, { repo, base, buildModel }: BuildRequest): Flow => ({
   ...flow,
   session: {
     ...flow.session,
@@ -201,6 +201,7 @@ const withRequestTarget = (flow: Flow, { repo, base }: BuildRequest): Flow => ({
       ...flow.session.buildConfig,
       ...(repo === undefined ? {} : { repo }),
       ...(base === undefined ? {} : { base }),
+      ...(buildModel === undefined ? {} : { buildModel }),
     },
   },
 });
@@ -257,6 +258,11 @@ export async function startBuild(
 }
 
 const manifestPath = "manifest.json";
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const labelsOf = (manifest: Manifest, path: string): string[] =>
+  manifest.nodes.flatMap((node) => (node.file === path ? [node.label] : []));
 
 const maxRounds = 3;
 
@@ -342,6 +348,7 @@ export async function runBuild(
   let session: string | undefined;
   let opening: string | undefined;
   let recorded = false;
+  let failureAppended = false;
   const stopped = () => !recorded && deps.signal?.aborted === true;
   const checkpoint = () => {
     if (stopped()) throw new BuildStopped();
@@ -471,8 +478,16 @@ export async function runBuild(
     );
     report = latest;
     if (resume === undefined) {
-      await deps.worktree.add(worktree);
+      const cut = { path: worktree.path, branch: worktree.branch, base };
+      try {
+        await deps.worktree.add(worktree);
+      } catch (error) {
+        append({ type: "worktree", status: "failed", ...cut, message: messageOf(error) });
+        failureAppended = true;
+        throw error;
+      }
       workspace = { dir, worktree };
+      append({ type: "worktree", status: "done", ...cut });
     }
 
     current = 3;
@@ -487,6 +502,7 @@ export async function runBuild(
         repo,
         base,
         values: identity.values,
+        ...(buildConfig.buildModel === undefined ? {} : { model: buildConfig.buildModel }),
       });
       await settled(
         deps.fs.writeFile(
@@ -527,6 +543,7 @@ export async function runBuild(
         path: piece,
         kind: piece === "workspace" ? "workspace" : pieceKind(piece),
         nodeIds: nodeIdsOf(manifest, piece),
+        labels: labelsOf(manifest, piece),
         status,
       });
     const turn = async (text: string): Promise<string | undefined> => {
@@ -688,12 +705,9 @@ export async function runBuild(
     }
   } catch (error) {
     if (recorded) throw error;
-    append({
-      type: "step",
-      step: current,
-      status: "failed",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    if (!failureAppended) {
+      append({ type: "step", step: current, status: "failed", message: messageOf(error) });
+    }
     try {
       await tearDown();
     } finally {

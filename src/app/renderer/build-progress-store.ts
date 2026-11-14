@@ -2,12 +2,13 @@ import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { BuildAnswer } from "../../core/compiler/build-report.js";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
+import { buildPipelineOf, type BuildPipeline } from "../../core/run/build-pipeline.js";
 import {
+  buildingCardOf,
   buildProgressEntrySchema,
-  nodeAuditStatus,
+  type BuildingCard,
   type BuildProgress,
   type BuildProgressEntry,
-  type ComponentStatus,
 } from "../../core/run/build-progress.js";
 import { buildVersionResultSchema } from "../../core/run/listing.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
@@ -36,11 +37,7 @@ export type BuildProgressState = {
   connect(): Promise<void>;
   viewActivity(pendingId: string): Promise<void>;
   activityFor(pendingId: string): ActivityEntry[];
-  chipFor(flowId: string): string | undefined;
-  barFor(flowId: string): { pendingId: string; chip: string } | undefined;
   progressFor(pendingId: string): BuildProgress | undefined;
-  isBuilding(flowId: string): boolean;
-  nodeAuditStatus(flowId: string, nodeId: string): ComponentStatus | undefined;
   stop(pendingId: string): Promise<void>;
   setAnswer(pendingId: string, index: number, text: string): void;
   answerFor(pendingId: string, index: number): string;
@@ -57,7 +54,50 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(record).filter(([kept]) => kept !== key));
 
-const isOpen = (entry: BuildProgressEntry) => entry.progress.outcomeLabel === undefined;
+const endsLater = (entry: BuildProgressEntry, than: BuildProgressEntry) =>
+  (entry.endedAt ?? 0) > (than.endedAt ?? 0) ||
+  (entry.endedAt === than.endedAt && entry.startedAt > than.startedAt);
+
+const latestEndedByName = (entries: readonly BuildProgressEntry[]): BuildProgressEntry[] => {
+  const latest = new Map<string, BuildProgressEntry>();
+  for (const entry of entries) {
+    const kept = latest.get(entry.name);
+    if (kept === undefined || endsLater(entry, kept)) latest.set(entry.name, entry);
+  }
+  return [...latest.values()];
+};
+
+export const selectBuildingCards = (state: Pick<BuildProgressState, "entries">): BuildingCard[] => {
+  const entries = Object.values(state.entries);
+  const open = entries.filter((entry) => entry.outcome === undefined);
+  const ended = latestEndedByName(entries.filter((entry) => entry.outcome !== undefined));
+  return [...open, ...ended]
+    .flatMap((entry) => buildingCardOf(entry) ?? [])
+    .sort((a, b) => b.startedAt - a.startedAt);
+};
+
+export const selectBuildingCount = (state: Pick<BuildProgressState, "entries">): number =>
+  Object.values(state.entries).filter((entry) => entry.outcome === undefined).length;
+
+export const selectPipeline =
+  (pendingId: string) =>
+  (state: Pick<BuildProgressState, "entries" | "activity">): BuildPipeline | undefined => {
+    const entry = state.entries[pendingId];
+    if (entry === undefined) return undefined;
+    const { name, startedAt, endedAt, outcome, buildId, events } = entry;
+    return buildPipelineOf(
+      {
+        id: pendingId,
+        name,
+        startedAt,
+        ...(endedAt === undefined ? {} : { endedAt }),
+        ...(outcome === undefined ? {} : { outcome }),
+        ...(buildId === undefined ? {} : { buildId }),
+      },
+      events,
+      state.activity[pendingId] ?? noActivity,
+    );
+  };
 
 export const createBuildProgressStore = (
   bridge: BuildProgressBridge,
@@ -65,11 +105,6 @@ export const createBuildProgressStore = (
   createStore<BuildProgressState>()((set, get) => {
     const put = (entry: BuildProgressEntry) =>
       set({ entries: { ...get().entries, [entry.pendingId]: entry } });
-
-    const currentFor = (flowId: string): BuildProgressEntry | undefined => {
-      const own = Object.values(get().entries).filter((entry) => entry.flowId === flowId);
-      return own.find(isOpen) ?? own.at(-1);
-    };
 
     const putActivity = (pendingId: string, entry: ActivityEntry) => {
       const { activity } = get();
@@ -132,22 +167,7 @@ export const createBuildProgressStore = (
 
       activityFor: (pendingId) => get().activity[pendingId] ?? noActivity,
 
-      chipFor: (flowId) => currentFor(flowId)?.progress.chip,
-      barFor: (flowId) => {
-        const entry = currentFor(flowId);
-        return entry === undefined
-          ? undefined
-          : { pendingId: entry.pendingId, chip: entry.progress.chip };
-      },
       progressFor: (pendingId) => get().entries[pendingId]?.progress,
-      isBuilding: (flowId) => {
-        const entry = currentFor(flowId);
-        return entry !== undefined && isOpen(entry);
-      },
-      nodeAuditStatus: (flowId, nodeId) => {
-        const entry = currentFor(flowId);
-        return entry === undefined ? undefined : nodeAuditStatus(entry.progress, nodeId);
-      },
       stop: async (pendingId) => {
         await bridge.stopBuild({ pendingId });
       },

@@ -473,10 +473,7 @@ export class SqliteStore implements Store {
       if (!(error instanceof Database.SqliteError) || error.code !== "SQLITE_CONSTRAINT_UNIQUE") {
         throw error;
       }
-      const blueprintTaken = this.db
-        .prepare("SELECT 1 FROM pending_builds WHERE flow_id = ? AND ended_at IS NULL")
-        .get(build.flowId);
-      return { kind: "busy", reason: blueprintTaken === undefined ? "name" : "blueprint" };
+      return { kind: "busy", reason: "name" };
     }
     return { kind: "started", pendingId };
   }
@@ -526,13 +523,13 @@ export class SqliteStore implements Store {
     return rows.map(toPendingBuild);
   }
 
-  listLatestEndedPendingBuilds(): PendingBuild[] {
+  listLatestEndedPendingBuildsByName(): PendingBuild[] {
     const rows = this.db
       .prepare(
         `SELECT ${pendingColumns} FROM pending_builds AS ended
-         WHERE ended_at IS NOT NULL AND NOT EXISTS (
+         WHERE ended_at IS NOT NULL AND outcome IS NOT 'built' AND NOT EXISTS (
            SELECT 1 FROM pending_builds AS later
-           WHERE later.flow_id = ended.flow_id AND later.ended_at IS NOT NULL
+           WHERE later.name = ended.name AND later.ended_at IS NOT NULL
              AND (later.ended_at > ended.ended_at
                OR (later.ended_at = ended.ended_at AND later.rowid > ended.rowid))
          )

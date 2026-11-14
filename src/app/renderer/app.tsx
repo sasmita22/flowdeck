@@ -16,6 +16,7 @@ import { LeavePrompt } from "./leave-prompt.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState, Page } from "./nav-store.js";
 import { BlueprintsPage } from "./pages/blueprints-page.js";
+import { BuildPipelinePage } from "./pages/build-pipeline-page.js";
 import { BuildsPage } from "./pages/builds-page.js";
 import { DoctorPage } from "./pages/doctor-page.js";
 import { EditorPage } from "./pages/editor-page.js";
@@ -184,15 +185,7 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
   const { nav, library, run, save, canvas, buildProgress, terminal, actions } = stores;
   switch (page.name) {
     case "blueprints":
-      return (
-        <BlueprintsPage
-          nav={nav}
-          library={library}
-          run={run}
-          buildProgress={buildProgress}
-          actions={actions}
-        />
-      );
+      return <BlueprintsPage nav={nav} library={library} run={run} actions={actions} />;
     case "builds":
       return (
         <BuildsPage
@@ -201,8 +194,17 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
           library={library}
           run={run}
           buildProgress={buildProgress}
-          terminal={terminal}
           actions={actions}
+        />
+      );
+    case "building":
+      return (
+        <BuildPipelinePage
+          pendingId={page.pendingId}
+          nav={nav}
+          library={library}
+          buildProgress={buildProgress}
+          terminal={terminal}
         />
       );
     case "runs":
@@ -215,13 +217,19 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
 }
 
 function Library({ page, stores }: { page: Page; stores: AppStores }) {
-  const { nav, library, run, actions } = stores;
+  const { nav, library, run, buildProgress, actions } = stores;
   useEffect(() => {
     void library.getState().refresh();
   }, [library, page]);
   return (
     <div className="fd-library">
-      <AppMenu nav={nav} library={library} run={run} actions={actions} />
+      <AppMenu
+        nav={nav}
+        library={library}
+        run={run}
+        buildProgress={buildProgress}
+        actions={actions}
+      />
       <section className="fd-page" aria-label="Page">
         <div className="fd-page-inner">
           <ListPage page={page} stores={stores} />
@@ -243,7 +251,6 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         shell={stores.shell}
         nav={stores.nav}
         branches={stores.branches}
-        buildProgress={stores.buildProgress}
         assistant={stores.assistant}
         blueprintTerminal={stores.blueprintTerminal}
       />

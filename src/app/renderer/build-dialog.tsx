@@ -224,10 +224,10 @@ export function BuildDialog({
 
   if (dialog === null) return null;
   const build = async () => {
-    const buildId = await run.getState().confirmBuild();
-    if (buildId === null) return;
+    const pendingId = await run.getState().confirmBuild();
+    if (pendingId === null) return;
     void library.getState().refresh();
-    nav.getState().go({ name: "builds", buildId });
+    nav.getState().go({ name: "building", pendingId });
   };
   return (
     <div className="fd-overlay">

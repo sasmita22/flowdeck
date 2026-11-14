@@ -1,24 +1,15 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type {
-  BuildCost,
-  BuildQuestion,
-  BuildStepNumber,
-  ComponentProgress,
-  StepProgress,
-} from "../../../core/run/build-progress.js";
+import type { BuildingCard, BuildOutcome } from "../../../core/run/build-progress.js";
 import type { Actions } from "../actions.js";
-import type { BuildProgressState } from "../build-progress-store.js";
-import { formatDuration, formatWhen } from "../format.js";
+import { selectBuildingCards, type BuildProgressState } from "../build-progress-store.js";
+import { formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
-import { entryText } from "../inspector/store.js";
 import { selectBuildCards, type BuildCard, type LibraryState } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
 import { selectKeptNote, selectRunDisabled, selectRunHint, type RunState } from "../run-store.js";
-import type { TerminalState } from "../terminal/store.js";
-import { TerminalView } from "../terminal/terminal-pane.js";
-import { controlTestIds, pageTestIds } from "../test-ids.js";
+import { pageTestIds } from "../test-ids.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
 import { Empty, PageHead } from "./page-head.js";
 
@@ -117,252 +108,47 @@ function BuildFiles({
   );
 }
 
-const stepNames: Record<BuildStepNumber, string> = {
-  1: "Check the blueprint",
-  2: "Lay down the files",
-  3: "Agents write",
-  4: "Agents check the hand-offs",
-  5: "Verify and lock",
+const buildingTones: Record<BuildOutcome | "building", string> = {
+  building: "live",
+  built: "ok",
+  "needs-you": "warn",
+  failed: "fail",
+  stopped: "quiet",
 };
 
-const stepStatusText = (step: StepProgress) => {
-  const round = step.round === undefined ? "" : ` · round ${step.round}`;
-  const took = step.tookMs === undefined ? "" : ` · ${formatDuration(step.tookMs)}`;
-  return `${step.status}${round}${took}`;
-};
-
-const componentText = (component: ComponentProgress) =>
-  component.nodeIds.length > 1
-    ? `${component.status} · merged ${component.nodeIds.join(", ")}`
-    : component.status;
-
-const costText = (cost: BuildCost) =>
-  `${cost.inputTokens} in · ${cost.outputTokens} out · $${cost.usd.toFixed(2)}`;
-
-function BuildTerminal({
-  pendingId,
-  terminal,
-}: {
-  pendingId: string;
-  terminal: StoreApi<TerminalState>;
-}) {
-  const [open, setOpen] = useState(false);
-  const available = useStore(terminal, (state) => state.runId === pendingId && state.available);
-
-  useEffect(() => {
-    void terminal.getState().view(pendingId);
-  }, [terminal, pendingId]);
-
-  return (
-    <section aria-label="Build terminal">
-      <button
-        className="fd-btn"
-        data-testid={pageTestIds.buildTerminal(pendingId)}
-        disabled={!available}
-        title={available ? undefined : "The build session is not open"}
-        onClick={() => setOpen(!open)}
-      >
-        {open ? "Hide terminal" : "Terminal"}
-      </button>
-      {open && available && (
-        <TerminalView store={terminal} style={{ width: "100%", height: "40vh", marginTop: 8 }} />
-      )}
-    </section>
-  );
-}
-
-function BuildActivity({
-  pendingId,
-  buildProgress,
-}: {
-  pendingId: string;
-  buildProgress: StoreApi<BuildProgressState>;
-}) {
-  const entries = useStore(buildProgress, (state) => state.activityFor(pendingId));
-
-  useEffect(() => {
-    void buildProgress.getState().viewActivity(pendingId);
-  }, [buildProgress, pendingId]);
-
-  return (
-    <section data-testid={pageTestIds.buildActivity(pendingId)} aria-label="Activity">
-      <h2 className="fd-page-note">Activity</h2>
-      {entries.length === 0 ? (
-        <p className="fd-muted">No activity yet</p>
-      ) : (
-        <ol className="fd-build-steps">
-          {entries.map((entry) => (
-            <li key={entry.id}>
-              <span>{entry.nodeId}</span>
-              <span className="fd-muted">{entryText(entry)}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-const answerStyle: CSSProperties = { flexBasis: "100%", maxWidth: 480 };
-
-const rebuildErrorStyle: CSSProperties = {
-  margin: 0,
-  color: "var(--warn)",
-  fontSize: "var(--fs-sm)",
-};
-
-function BuildQuestions({
-  pendingId,
-  questions,
-  answerable,
-  buildProgress,
-}: {
-  pendingId: string;
-  questions: readonly BuildQuestion[];
-  answerable: boolean;
-  buildProgress: StoreApi<BuildProgressState>;
-}) {
-  const drafts = useStore(buildProgress, (state) => state.drafts[pendingId]);
-  const canRebuild = useStore(buildProgress, (state) => state.canRebuild(pendingId));
-  const error = useStore(buildProgress, (state) => state.rebuildErrorFor(pendingId));
-  return (
-    <>
-      <ol className="fd-build-steps" aria-label="Questions">
-        {questions.map((question, index) => (
-          <li key={index} data-testid={pageTestIds.buildQuestion(pendingId, index)}>
-            <span>
-              {question.nodeId}
-              {question.otherNodeId === undefined ? "" : ` · ${question.otherNodeId}`}
-            </span>
-            <span>{question.text}</span>
-            {answerable && (
-              <input
-                type="text"
-                aria-label={`Answer to: ${question.text}`}
-                placeholder="Your answer"
-                style={answerStyle}
-                data-testid={pageTestIds.buildAnswer(pendingId, index)}
-                value={drafts?.[index] ?? ""}
-                onChange={(event) =>
-                  buildProgress.getState().setAnswer(pendingId, index, event.target.value)
-                }
-              />
-            )}
-          </li>
-        ))}
-      </ol>
-      {answerable && (
-        <div className="fd-page-bar">
-          <button
-            className="fd-btn fd-btn-primary"
-            data-testid={pageTestIds.buildRebuild(pendingId)}
-            title="Build this blueprint again with these answers"
-            disabled={!canRebuild}
-            onClick={() => void buildProgress.getState().rebuild(pendingId)}
-          >
-            Rebuild with answers
-          </button>
-          {error !== undefined && (
-            <p role="alert" style={rebuildErrorStyle}>
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-function BuildProgressView({
-  pendingId,
+function BuildingCardView({
+  card,
+  outcome,
   nav,
-  library,
-  buildProgress,
-  terminal,
 }: {
-  pendingId: string;
+  card: BuildingCard;
+  outcome: BuildOutcome | undefined;
   nav: StoreApi<NavState>;
-  library: StoreApi<LibraryState>;
-  buildProgress: StoreApi<BuildProgressState>;
-  terminal: StoreApi<TerminalState>;
 }) {
-  const progress = useStore(buildProgress, (state) => state.progressFor(pendingId));
-  if (progress === undefined) return null;
-  const open = progress.outcomeLabel === undefined;
-  const tookMs = progress.steps.reduce((total, step) => total + (step.tookMs ?? 0), 0);
   return (
-    <section data-testid={pageTestIds.buildProgress(pendingId)} aria-label="Build progress">
-      <header className="fd-page-head">
-        <nav className="fd-crumbs" aria-label="Breadcrumb">
-          <button
-            className="fd-crumb"
-            data-testid={pageTestIds.buildBack}
-            onClick={() => nav.getState().go({ name: "builds" })}
-          >
-            Builds
-          </button>
-          <span aria-hidden="true">/</span>
-          <h1 className="fd-page-title fd-page-title-small" data-testid={pageTestIds.title}>
-            {progress.chip}
-          </h1>
-        </nav>
-        <div className="fd-page-bar">
-          {progress.outcomeLabel !== undefined && (
-            <p className="fd-page-note" role="status">
-              {progress.outcomeLabel} in {formatDuration(tookMs)}
-            </p>
-          )}
-          {progress.cost !== undefined && (
-            <p className="fd-page-note" data-testid={pageTestIds.buildCost(pendingId)}>
-              {costText(progress.cost)}
-            </p>
-          )}
-          {open && (
-            <button
-              className="fd-btn"
-              data-testid={controlTestIds.buildStop}
-              title="Stop the build and remove its workspace"
-              onClick={() => void buildProgress.getState().stop(pendingId)}
-            >
-              Stop
-            </button>
-          )}
-        </div>
-      </header>
-      <BlueprintPicture library={library} pictureKey={{ pendingId }} testId={pendingId} />
-      <ol className="fd-build-steps">
-        {progress.steps.map((step) => (
-          <li key={step.step} data-testid={pageTestIds.buildStep(pendingId, step.step)}>
-            <span>{stepNames[step.step]}</span>
-            <span className="fd-muted">{stepStatusText(step)}</span>
-            {step.message !== undefined && <span className="fd-muted">{step.message}</span>}
-          </li>
-        ))}
-      </ol>
-      {progress.components.length > 0 && (
-        <ul className="fd-build-steps" aria-label="Components">
-          {progress.components.map((component) => (
-            <li
-              key={component.path}
-              data-testid={pageTestIds.buildComponent(pendingId, component.path)}
-            >
-              <span>{component.path}</span>
-              <span className="fd-muted">{componentText(component)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {progress.questions !== undefined && (
-        <BuildQuestions
-          pendingId={pendingId}
-          questions={progress.questions}
-          answerable={progress.answerable === true}
-          buildProgress={buildProgress}
-        />
-      )}
-      <BuildActivity pendingId={pendingId} buildProgress={buildProgress} />
-      {open && <BuildTerminal pendingId={pendingId} terminal={terminal} />}
-    </section>
+    <button
+      className="fd-card fd-card-link"
+      data-testid={pageTestIds.buildingCard(card.pendingId)}
+      title="See this build's pipeline"
+      onClick={() => nav.getState().go({ name: "building", pendingId: card.pendingId })}
+    >
+      <span className="fd-card-top">
+        <span className="fd-card-name">
+          {card.buildName}{" "}
+          <span className="fd-muted">
+            {card.blueprintName ?? ""}
+            {card.blueprintVersion === undefined ? "" : ` v${card.blueprintVersion}`}
+          </span>
+        </span>
+        <span className={`fd-badge fd-badge-${buildingTones[outcome ?? "building"]}`}>
+          {card.badge}
+        </span>
+        {card.live && <span className="fd-live-dot" aria-hidden="true" />}
+      </span>
+      <span className="fd-card-meta">
+        <span>Started {formatWhen(card.startedAt)}</span>
+      </span>
+    </button>
   );
 }
 
@@ -465,7 +251,6 @@ export function BuildsPage({
   library,
   run,
   buildProgress,
-  terminal,
   actions,
 }: {
   buildId: string | undefined;
@@ -473,33 +258,20 @@ export function BuildsPage({
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
   buildProgress: StoreApi<BuildProgressState>;
-  terminal: StoreApi<TerminalState>;
   actions: Actions;
 }) {
   const cards = useCards(library);
-  const inProgress = useStore(
-    buildProgress,
-    (state) => buildId !== undefined && state.progressFor(buildId) !== undefined,
-  );
+  const entries = useStore(buildProgress, (state) => state.entries);
+  const buildingCards = useMemo(() => selectBuildingCards({ entries }), [entries]);
   const loaded = useStore(library, (state) => state.loaded);
   const query = useStore(nav, (state) => state.query);
   const sort = useStore(nav, (state) => state.sort);
   const kept = useStore(run, (state) => state.kept);
-  if (buildId !== undefined && inProgress) {
-    return (
-      <BuildProgressView
-        pendingId={buildId}
-        nav={nav}
-        library={library}
-        buildProgress={buildProgress}
-        terminal={terminal}
-      />
-    );
-  }
   if (buildId !== undefined) {
     return <BuildFiles buildId={buildId} nav={nav} library={library} run={run} actions={actions} />;
   }
   const shown = arrange(cards, { query, sort }, (card) => card.name);
+  const shownBuilding = arrange(buildingCards, { query, sort }, (card) => card.buildName);
   return (
     <>
       <PageHead title="Builds" nav={nav} searchLabel="Search builds" />
@@ -508,10 +280,18 @@ export function BuildsPage({
           {selectKeptNote(kept)}
         </p>
       )}
-      {loaded && cards.length === 0 && (
+      {loaded && cards.length === 0 && buildingCards.length === 0 && (
         <Empty>No builds yet. Build a saved blueprint from its card or from the editor.</Empty>
       )}
       <div className="fd-cards">
+        {shownBuilding.map((card) => (
+          <BuildingCardView
+            key={card.pendingId}
+            card={card}
+            outcome={entries[card.pendingId]?.outcome}
+            nav={nav}
+          />
+        ))}
         {shown.map((card) => (
           <BuildCardView
             key={card.id}

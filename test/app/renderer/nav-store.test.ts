@@ -159,6 +159,10 @@ describe("isListPage", () => {
     expect(isListPage({ name: "builds", buildId: "b-0f3a9c2e" })).toBe(false);
   });
 
+  it("is false for a build in progress, named by its pending id", () => {
+    expect(isListPage({ name: "building", pendingId: "pb-1" })).toBe(false);
+  });
+
   it("opens search on the Builds list, not on one build's page", () => {
     const nav = createNavStore();
     nav.getState().go({ name: "builds", buildId: "b-0f3a9c2e" });
@@ -174,6 +178,7 @@ describe("selectMenuItem", () => {
     expect(selectMenuItem({ name: "editor" })).toBe("blueprints");
     expect(selectMenuItem({ name: "blueprints" })).toBe("blueprints");
     expect(selectMenuItem({ name: "builds", buildId: "b-1" })).toBe("builds");
+    expect(selectMenuItem({ name: "building", pendingId: "pb-1" })).toBe("builds");
     expect(selectMenuItem({ name: "run", runId: "r" })).toBe("runs");
     expect(selectMenuItem({ name: "doctor" })).toBe("doctor");
   });

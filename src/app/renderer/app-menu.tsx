@@ -1,12 +1,13 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { Actions } from "./actions.js";
+import { selectBuildingCount, type BuildProgressState } from "./build-progress-store.js";
 import { Icon, type IconName } from "./icons.js";
 import { pinnedFirst, type LibraryState } from "./library-store.js";
 import { appMenuItems, selectMenuItem, type MenuItemId, type NavState } from "./nav-store.js";
 import { PinButton } from "./pin-button.js";
 import { selectRunningCount, type RunState } from "./run-store.js";
-import { pageTestIds } from "./test-ids.js";
+import { controlTestIds, pageTestIds } from "./test-ids.js";
 
 const menuIcons: Record<MenuItemId, IconName> = {
   blueprints: "blueprints",
@@ -21,16 +22,19 @@ export function AppMenu({
   nav,
   library,
   run,
+  buildProgress,
   actions,
 }: {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
+  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 }) {
   const current = useStore(nav, (state) => selectMenuItem(state.page));
   const flows = useStore(library, (state) => state.flows);
   const running = useStore(run, selectRunningCount);
+  const building = useStore(buildProgress, selectBuildingCount);
   const recent = pinnedFirst(flows.filter((flow) => flow.versions > 0)).slice(0, recentCount);
   return (
     <nav className="fd-app-menu" aria-label="App">
@@ -72,6 +76,17 @@ export function AppMenu({
                 aria-hidden="true"
               />
               <span className="fd-visually-hidden">, {running} running</span>
+            </>
+          )}
+          {item.id === "builds" && building > 0 && (
+            <>
+              <span
+                className="fd-live-dot"
+                data-testid={controlTestIds.menuBuildsLive}
+                title={building === 1 ? "A build is building" : `${building} builds are building`}
+                aria-hidden="true"
+              />
+              <span className="fd-visually-hidden">, {building} building</span>
             </>
           )}
         </button>

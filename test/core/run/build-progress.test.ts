@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildEventSchema,
-  nodeAuditStatus,
+  buildingCardOf,
+  buildProgressEntrySchema,
   progressOf,
   type BuildEvent,
+  type BuildProgressEntry,
   type BuildOutcome,
   type PendingBuild,
   type StoredBuildEvent,
@@ -71,6 +73,51 @@ describe("buildEventSchema", () => {
         repo: "/repo",
         base: "main",
         values: { ticket: "FD-1", dry: true },
+      },
+    ],
+    [
+      "a component with its node labels",
+      {
+        type: "component",
+        path: "agents/a.md",
+        kind: "agent",
+        nodeIds: ["n1", "n2"],
+        labels: ["Draft the fix", "Review the fix"],
+        status: "running",
+      },
+    ],
+    [
+      "a session with its build model",
+      {
+        type: "session",
+        name: "fd-build-p1",
+        claudeSessionId: "c1",
+        buildId: "b1",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        model: "haiku",
+      },
+    ],
+    [
+      "a worktree cut",
+      {
+        type: "worktree",
+        status: "done",
+        path: "/home/workspaces/b1/repo",
+        branch: "flowdeck/nightly-b1b1b1b1",
+        base: "main",
+      },
+    ],
+    [
+      "a worktree that could not be cut, with git's message",
+      {
+        type: "worktree",
+        status: "failed",
+        path: "/home/workspaces/b1/repo",
+        branch: "flowdeck/nightly-b1b1b1b1",
+        base: "no-such-branch",
+        message: "fatal: invalid reference: no-such-branch",
       },
     ],
     ["a failed check", { type: "check-failed", round: 1, failures: ["frontmatter"] }],
@@ -279,25 +326,99 @@ describe("progressOf questions", () => {
   });
 });
 
-describe("nodeAuditStatus", () => {
-  const progress = progressOf(
-    pending(),
-    stored([
-      [1, component("agents/a.md", ["n1"], "running")],
-      [2, component("skills/shared/SKILL.md", ["n2", "n3"], "failed")],
-      [3, component("agents/a.md", ["n1"], "done")],
-    ]),
-  );
+const entry = (over: Partial<BuildProgressEntry> = {}): BuildProgressEntry => ({
+  pendingId: "p1",
+  name: "fix-a",
+  startedAt: 1_000,
+  events: [],
+  progress: progressOf(pending(), []),
+  ...over,
+});
 
-  it("takes a node's status from the component that holds it", () => {
-    expect(nodeAuditStatus(progress, "n1")).toBe("done");
+describe("buildingCardOf", () => {
+  it("names the build, its blueprint and version, and when it started", () => {
+    const card = buildingCardOf(
+      entry({ blueprintName: "Nightly triage", blueprintVersion: 3, startedAt: 5_000 }),
+    );
+
+    expect(card).toEqual({
+      pendingId: "p1",
+      buildName: "fix-a",
+      blueprintName: "Nightly triage",
+      blueprintVersion: 3,
+      startedAt: 5_000,
+      badge: "Building · step 1 of 5",
+      live: true,
+    });
   });
 
-  it.each(["n2", "n3"])("gives %s the status of the merged component", (nodeId) => {
-    expect(nodeAuditStatus(progress, nodeId)).toBe("failed");
+  it("shows the step of the latest step event on an open build", () => {
+    const events = stored([
+      [1, step(1, "running")],
+      [2, step(1, "done")],
+      [3, step(2, "running")],
+      [4, step(2, "done")],
+      [5, step(3, "running", 1)],
+    ]);
+
+    expect(buildingCardOf(entry({ events }))?.badge).toBe("Building · step 3 of 5");
   });
 
-  it("has no status for a node no component holds", () => {
-    expect(nodeAuditStatus(progress, "n9")).toBeUndefined();
+  it("shows step 1 before any step event", () => {
+    expect(buildingCardOf(entry())?.badge).toBe("Building · step 1 of 5");
+  });
+
+  it.each<[Exclude<BuildOutcome, "built">, string]>([
+    ["needs-you", "Needs you"],
+    ["failed", "Failed"],
+    ["stopped", "Stopped"],
+  ])("badges a build that ended %s as %s, not live", (outcome, badge) => {
+    const events = stored([[1, step(3, "running", 1)]]);
+
+    expect(buildingCardOf(entry({ events, endedAt: 9_000, outcome }))).toMatchObject({
+      badge,
+      live: false,
+    });
+  });
+
+  it("has no card for a build that ended built", () => {
+    expect(
+      buildingCardOf(entry({ endedAt: 9_000, outcome: "built", buildId: "b1" })),
+    ).toBeUndefined();
+  });
+
+  it("has no blueprint name or version when the entry has none", () => {
+    const card = buildingCardOf(entry());
+
+    expect(card).not.toHaveProperty("blueprintName");
+    expect(card).not.toHaveProperty("blueprintVersion");
+  });
+});
+
+describe("buildProgressEntrySchema", () => {
+  it("parses an entry with no blueprint id", () => {
+    expect(buildProgressEntrySchema.safeParse(entry())).toEqual({ success: true, data: entry() });
+  });
+
+  it("strips a blueprint id the entry still carries", () => {
+    const parsed = buildProgressEntrySchema.parse({ ...entry(), flowId: "f1" });
+
+    expect(parsed).not.toHaveProperty("flowId");
+  });
+
+  it("keeps each event with its seq and time", () => {
+    const events = stored([
+      [1_000, step(1, "running")],
+      [1_200, component("agents/a.md", ["n1"], "running")],
+    ]);
+    const ended = entry({
+      events,
+      endedAt: 9_000,
+      outcome: "failed",
+      blueprintName: "Nightly triage",
+      blueprintVersion: 3,
+    });
+
+    expect(buildProgressEntrySchema.parse(ended)).toEqual(ended);
   });
 });

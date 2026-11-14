@@ -673,7 +673,7 @@ describe("an app restart", () => {
       })) as { pendingId: string };
       await vi.waitFor(() =>
         expect(
-          runs.listLatestEndedPendingBuilds().find((ended) => ended.id === asked.pendingId)
+          runs.listLatestEndedPendingBuildsByName().find((ended) => ended.id === asked.pendingId)
             ?.outcome,
         ).toBe("needs-you"),
       );

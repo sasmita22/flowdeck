@@ -35,10 +35,10 @@ describe("test ids", () => {
     expect(Object.values(controlTestIds)).toEqual([
       "canvas-save",
       "canvas-build",
-      "editor-built",
       "nav-back",
       "flow-title",
       "menu-more",
+      "menu-builds-live",
       "session-settings-open",
       "terminal-open",
       "menu-terminal-close",
@@ -66,6 +66,8 @@ describe("test ids", () => {
       "canvas-tidy",
     ]);
     expect(controlTestIds).not.toHaveProperty("fileWireName");
+    expect(controlTestIds).not.toHaveProperty("built");
+    expect(controlTestIds.menuBuildsLive).toBe("menu-builds-live");
   });
 
   it("lists the readouts", () => {
@@ -128,36 +130,27 @@ describe("test ids", () => {
     ]);
   });
 
-  it("names a build in progress by its blueprint and its pending build", () => {
-    expect(Object.keys(pageTestIds)).toEqual(
-      expect.arrayContaining([
-        "buildChip",
-        "canvasBuildBar",
-        "buildProgress",
-        "buildStep",
-        "buildComponent",
-        "buildQuestion",
-        "buildActivity",
-        "buildTerminal",
-        "buildCost",
-      ]),
-    );
+  it("names a build in progress by its pending build", () => {
     expect([
-      pageTestIds.buildChip("f1"),
-      pageTestIds.canvasBuildBar,
+      pageTestIds.buildingCard("pb-1"),
       pageTestIds.buildProgress("pb-1"),
-      pageTestIds.buildStep("pb-1", 2),
-      pageTestIds.buildComponent("pb-1", "steps/02.md"),
+      pageTestIds.buildStage("pb-1", 3, 2),
+      pageTestIds.buildRow("pb-1", 3, 2, "agents/a.md"),
+      pageTestIds.buildWorktree("pb-1"),
+      pageTestIds.buildElapsed("pb-1"),
+      pageTestIds.buildBuiltLink("pb-1"),
       pageTestIds.buildQuestion("pb-1", 0),
       pageTestIds.buildActivity("pb-1"),
       pageTestIds.buildTerminal("pb-1"),
       pageTestIds.buildCost("pb-1"),
     ]).toEqual([
-      "build-chip-f1",
-      "canvas-build-bar",
+      "building-card-pb-1",
       "build-progress-pb-1",
-      "build-step-pb-1-2",
-      "build-component-pb-1-steps/02.md",
+      "build-stage-pb-1-3-2",
+      "build-row-pb-1-3-2-agents/a.md",
+      "build-worktree-pb-1",
+      "build-elapsed-pb-1",
+      "build-built-link-pb-1",
       "build-question-pb-1-0",
       "build-activity-pb-1",
       "build-terminal-pb-1",
@@ -165,20 +158,36 @@ describe("test ids", () => {
     ]);
   });
 
-  it("gives each step, component and question of a pending build its own id", () => {
-    expect(Object.keys(pageTestIds)).toEqual(
-      expect.arrayContaining(["buildStep", "buildComponent", "buildQuestion"]),
-    );
+  it("names nothing for a build on its blueprint, its canvas or the old progress view", () => {
+    for (const gone of ["buildChip", "canvasBuildBar", "buildStep", "buildComponent"]) {
+      expect(pageTestIds).not.toHaveProperty(gone);
+    }
+  });
+
+  it("gives each stage per round, row per round and path, and question its own id", () => {
     const ids = [
-      pageTestIds.buildStep("pb-1", 1),
-      pageTestIds.buildStep("pb-1", 2),
-      pageTestIds.buildStep("pb-2", 1),
-      pageTestIds.buildComponent("pb-1", "a.md"),
-      pageTestIds.buildComponent("pb-1", "b.md"),
-      pageTestIds.buildComponent("pb-2", "a.md"),
+      pageTestIds.buildingCard("pb-1"),
+      pageTestIds.buildingCard("pb-2"),
+      pageTestIds.buildStage("pb-1", 3, 1),
+      pageTestIds.buildStage("pb-1", 3, 2),
+      pageTestIds.buildStage("pb-1", 5, 1),
+      pageTestIds.buildStage("pb-2", 3, 1),
+      pageTestIds.buildRow("pb-1", 3, 1, "a.md"),
+      pageTestIds.buildRow("pb-1", 3, 2, "a.md"),
+      pageTestIds.buildRow("pb-1", 4, 1, "a.md"),
+      pageTestIds.buildRow("pb-1", 3, 1, "b.md"),
+      pageTestIds.buildRow("pb-2", 3, 1, "a.md"),
+      pageTestIds.buildWorktree("pb-1"),
+      pageTestIds.buildWorktree("pb-2"),
+      pageTestIds.buildElapsed("pb-1"),
+      pageTestIds.buildElapsed("pb-2"),
+      pageTestIds.buildBuiltLink("pb-1"),
+      pageTestIds.buildBuiltLink("pb-2"),
       pageTestIds.buildQuestion("pb-1", 0),
       pageTestIds.buildQuestion("pb-1", 1),
       pageTestIds.buildQuestion("pb-2", 0),
+      pageTestIds.buildProgress("pb-1"),
+      pageTestIds.buildCard("pb-1"),
     ];
 
     expect(new Set(ids).size).toBe(ids.length);

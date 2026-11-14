@@ -77,6 +77,8 @@ const fill = (path) => {
   const content = described(readFileSync(file, "utf8"));
   writeFileSync(file, content.replace(unfilledLine, "").trimEnd() + "\\n\\nFilled by the fake build session.\\n");
 };
+const unfilledOnceFile = resolve(__dirname, "unfilled-once");
+const unfilledOnce = existsSync(unfilledOnceFile) ? readFileSync(unfilledOnceFile, "utf8") : "";
 const pieceMsFile = resolve(__dirname, "piece-ms");
 const pieceMs = existsSync(pieceMsFile) ? Number(readFileSync(pieceMsFile, "utf8")) : 0;
 const spacing = 300 + 2 * pieceMs;
@@ -101,6 +103,7 @@ const writeUsage = () => {
 const buildTurn = (text) => {
   writeUsage();
   const agentType = /flowdeck-build:[a-z-]+/.exec(text)?.[0] ?? "";
+  const firstRound = /\\bRound 1\\./.test(text);
   const blocks = text.split(/\\n\\s*\\n/).map((block) => block.trim()).filter((block) => block.startsWith("PIECE "));
   blocks.forEach((block, index) => {
     setTimeout(() => {
@@ -108,7 +111,7 @@ const buildTurn = (text) => {
       const call = { tool_name: "Agent", tool_use_id: "fake-" + index, tool_input: { subagent_type: agentType, prompt: block } };
       send({ hook_event_name: "PreToolUse", ...call });
       const finish = () => {
-        fill(path);
+        if (!(firstRound && path === unfilledOnce)) fill(path);
         send({ hook_event_name: "PostToolUse", ...call, tool_response: { agentType, status: "completed" } });
       };
       if (pieceMs === 0) finish();
@@ -280,6 +283,7 @@ export type FakeClaudeLaunchOptions = LaunchOptions & {
   ownBin?: string;
   basePath?: string;
   pieceMs?: number;
+  unfilledInRound1?: string;
   question?: { nodeId: string; otherNodeId?: string; text: string };
   usage?: { userHome: string; model: string; inputTokens: number; outputTokens: number };
   turns?: Record<string, FakeAgentTurn>;
@@ -287,11 +291,22 @@ export type FakeClaudeLaunchOptions = LaunchOptions & {
 };
 
 export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Promise<LaunchedApp> {
-  const { ownBin, basePath, pieceMs, question, usage, turns, writes, ...launchOptions } = options;
+  const {
+    ownBin,
+    basePath,
+    pieceMs,
+    unfilledInRound1,
+    question,
+    usage,
+    turns,
+    writes,
+    ...launchOptions
+  } = options;
   const bin = join(options.home, "fake-claude-bin");
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
   if (pieceMs !== undefined) await writeFile(join(bin, "piece-ms"), String(pieceMs));
+  if (unfilledInRound1 !== undefined) await writeFile(join(bin, "unfilled-once"), unfilledInRound1);
   if (question !== undefined) await writeFile(join(bin, "question"), JSON.stringify(question));
   if (turns !== undefined) await writeFile(join(bin, "turns.json"), JSON.stringify(turns));
   if (writes !== undefined) await writeFile(join(bin, "writes.json"), JSON.stringify(writes));

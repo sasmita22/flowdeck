@@ -1,6 +1,6 @@
 import type { VariableValues } from "../../core/flow/variables.js";
 import type { ActivityEntry } from "../../core/run/activity.js";
-import type { BuildProgress } from "../../core/run/build-progress.js";
+import type { BuildProgressEntry } from "../../core/run/build-progress.js";
 import type { RunSnapshot } from "../../core/run/snapshot.js";
 import type { PendingWait } from "../../core/run/wait.js";
 
@@ -54,13 +54,7 @@ export type EnginePush =
   | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
   | { push: "build-activity"; pendingId: string; entry: ActivityEntry }
   | { push: "wait"; runId: string; value: PendingWait | null }
-  | {
-      push: "build-progress";
-      pendingId: string;
-      flowId: string;
-      progress: BuildProgress;
-      buildId?: string;
-    };
+  | ({ push: "build-progress" } & BuildProgressEntry);
 
 export type EngineMessage = EngineResponse | EnginePush;
 

@@ -92,7 +92,7 @@ export type NewPendingBuild = Pick<
 > & { snapshot?: NewBuildSnapshot };
 
 export type PendingBuildStart =
-  { kind: "started"; pendingId: string } | { kind: "busy"; reason: "blueprint" | "name" };
+  { kind: "started"; pendingId: string } | { kind: "busy"; reason: "name" };
 
 export type PendingBuildEnd = {
   outcome: BuildOutcome;
@@ -134,7 +134,7 @@ export interface Store {
   buildEvents(pendingId: string): StoredBuildEvent[];
   endPendingBuild(pendingId: string, end: PendingBuildEnd): void;
   listPendingBuilds(): PendingBuild[];
-  listLatestEndedPendingBuilds(): PendingBuild[];
+  listLatestEndedPendingBuildsByName(): PendingBuild[];
   findPendingBuildByName(name: string): PendingBuild | undefined;
   pendingBuild(id: string): PendingBuild | null;
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void;

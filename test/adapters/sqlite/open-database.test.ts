@@ -44,6 +44,7 @@ const allMigrations = [
   { name: "009_build_progress.sql" },
   { name: "010_flow_pinned.sql" },
   { name: "011_build_snapshots.sql" },
+  { name: "012_drop_pending_builds_one_per_flow.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -96,7 +97,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies every migration, 001 to 011, to a new database file", () => {
+  it("applies every migration, 001 to 012, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
@@ -240,13 +241,15 @@ describe("openDatabase", () => {
       expect(db.prepare(`SELECT body_json FROM ${table}`).all()).toEqual([{ body_json: "{}" }]);
     });
 
-    it("refuses a second open build of the same blueprint", () => {
+    it("a second open build of the same blueprint under another name inserts", () => {
       const db = open();
       startPending(db, "pb-1", { flowId: "flow-1", name: "first" });
 
-      expect(() => startPending(db, "pb-2", { flowId: "flow-1", name: "second" })).toThrow(
-        /UNIQUE/,
-      );
+      startPending(db, "pb-2", { flowId: "flow-1", name: "second" });
+
+      expect(
+        db.prepare("SELECT id FROM pending_builds WHERE ended_at IS NULL ORDER BY id").all(),
+      ).toEqual([{ id: "pb-1" }, { id: "pb-2" }]);
     });
 
     it("refuses a second open build with the same name", () => {

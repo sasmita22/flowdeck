@@ -351,7 +351,7 @@ describe("the Build dialog", () => {
     expect(selectCanBuild(run.getState())).toBe(false);
   });
 
-  it("builds with the name, repo, base and values, closes, and keeps the build as the last one", async () => {
+  it("builds with the name, repo, base and values, and closes", async () => {
     const { bridge, run } = await setup();
     await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
     run.getState().editBuild({ name: "fix-login" });
@@ -367,11 +367,7 @@ describe("the Build dialog", () => {
       base: "main",
       values: { ticket: "FD-1", deep: true },
     });
-    expect(run.getState()).toMatchObject({
-      buildDialog: null,
-      error: null,
-      lastBuild: { id: "b-0f3a9c2e", name: "fix-login", flowId: "flow-b", version: 4 },
-    });
+    expect(run.getState()).toMatchObject({ buildDialog: null, error: null });
   });
 
   it("builds with the build model given in the dialog", async () => {
@@ -425,7 +421,6 @@ describe("the Build dialog", () => {
     await expect(run.getState().confirmBuild()).resolves.toBeNull();
 
     expect(run.getState().buildDialog).toMatchObject({ name: "fix-login", error: message });
-    expect(run.getState().lastBuild).toBeNull();
   });
 
   it("clears the refusal once the name is edited", async () => {

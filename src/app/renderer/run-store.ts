@@ -58,8 +58,6 @@ export type BuildDialog = {
 
 export type BuildSource = { flowId: string; version: number; buildConfig: BuildConfig };
 
-export type BuiltVersion = { id: string; name: string; flowId: string; version: number };
-
 export type BuildCardRun = {
   old: boolean;
   run: { id: string; status: SnapshotStatus } | null;
@@ -73,7 +71,6 @@ export type RunState = {
   starting: boolean;
   error: string | null;
   problems: Problem[] | null;
-  lastBuild: BuiltVersion | null;
   buildDialog: BuildDialog | null;
   dialog: RunDialog | null;
   kept: KeptBuild | null;
@@ -296,7 +293,6 @@ export const createRunStore = ({
       starting: false,
       error: null,
       problems: null,
-      lastBuild: null,
       buildDialog: null,
       dialog: null,
       kept: null,
@@ -398,15 +394,8 @@ export const createRunStore = ({
           set({ starting: false, error: null, problems: null, buildDialog: null });
           return result.data.pendingId;
         }
-        const { id } = result.data;
-        set({
-          starting: false,
-          error: null,
-          problems: null,
-          buildDialog: null,
-          lastBuild: { id, name, flowId, version },
-        });
-        return id;
+        set({ starting: false, error: null, problems: null, buildDialog: null });
+        return result.data.id;
       },
 
       cancelBuild: () => set({ buildDialog: null }),
