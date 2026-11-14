@@ -401,13 +401,24 @@ describe("FakeStore", () => {
   });
 
   describe("pending builds", () => {
-    it("is busy for a second build of the same blueprint while one is open", () => {
+    it("starts a second build of the same blueprint under another name while one is open", () => {
       const store = new FakeStore();
-      store.startPendingBuild(pending("flow-1", "nightly"));
+      const first = startedId(store, pending("flow-1", "nightly"));
 
-      expect(store.startPendingBuild(pending("flow-1", "weekly"))).toEqual({
+      const second = store.startPendingBuild(pending("flow-1", "weekly"));
+
+      expect(second).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(second).not.toEqual({ kind: "started", pendingId: first });
+    });
+
+    it("reports the name when a blueprint with an open build is built again under a taken name", () => {
+      const store = new FakeStore();
+      store.startPendingBuild(pending("flow-1", "weekly"));
+      store.startPendingBuild(pending("flow-2", "nightly"));
+
+      expect(store.startPendingBuild(pending("flow-1", "nightly"))).toEqual({
         kind: "busy",
-        reason: "blueprint",
+        reason: "name",
       });
     });
 
@@ -434,7 +445,7 @@ describe("FakeStore", () => {
       });
     });
 
-    it("frees the blueprint and the name once the build ends", () => {
+    it("frees the name once the build ends", () => {
       const store = new FakeStore();
       const first = startedId(store, pending());
       expect(store.startPendingBuild(pending()).kind).toBe("busy");
@@ -485,22 +496,24 @@ describe("FakeStore", () => {
       expect(store.buildActivity(id)).toEqual(entries);
     });
 
-    it("lists each blueprint's latest ended build with its outcome, build id and report, never an open one", () => {
+    it("lists each name's latest ended build with its outcome and report, dropping a name that ended built, never an open one", () => {
       const store = new FakeStore();
       const report = { version: 1, questions: [{ nodeId: "a1", text: "Which repo?" }] };
-      const older = startedId(store, pending("flow-1", "first"));
-      store.endPendingBuild(older, { outcome: "built", endedAt: 2_000, buildId: "b1" });
-      const latest = startedId(store, pending("flow-1", "second"));
-      store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000, report });
-      const other = startedId(store, pending("flow-2", "third"));
-      store.endPendingBuild(other, { outcome: "built", endedAt: 2_500, buildId: "b3" });
+      const first = startedId(store, pending("flow-1", "first"));
+      store.endPendingBuild(first, { outcome: "failed", endedAt: 2_000 });
+      const second = startedId(store, pending("flow-1", "second"));
+      store.endPendingBuild(second, { outcome: "needs-you", endedAt: 3_000, report });
+      const olderThird = startedId(store, pending("flow-2", "third"));
+      store.endPendingBuild(olderThird, { outcome: "failed", endedAt: 2_200 });
+      const third = startedId(store, pending("flow-2", "third"));
+      store.endPendingBuild(third, { outcome: "built", endedAt: 2_500, buildId: "b3" });
       startedId(store, pending("flow-1", "fourth"));
       startedId(store, pending("flow-3", "fifth"));
 
-      expect(store.listLatestEndedPendingBuilds()).toEqual([
-        expect.objectContaining({ id: other, flowId: "flow-2", outcome: "built", buildId: "b3" }),
+      expect(store.listLatestEndedPendingBuildsByName()).toEqual([
+        expect.objectContaining({ id: first, flowId: "flow-1", name: "first", outcome: "failed" }),
         expect.objectContaining({
-          id: latest,
+          id: second,
           flowId: "flow-1",
           name: "second",
           outcome: "needs-you",

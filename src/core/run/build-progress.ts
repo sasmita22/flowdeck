@@ -26,6 +26,7 @@ const sessionEventSchema = z.object({
   repo: z.string(),
   base: z.string(),
   values: z.record(z.string(), z.union([z.string(), z.boolean()])).readonly(),
+  model: z.string().optional(),
 });
 
 const buildCostSchema = z.object({
@@ -47,9 +48,18 @@ export const buildEventSchema = z.discriminatedUnion("type", [
     path: z.string(),
     kind: componentKindSchema,
     nodeIds: z.array(z.string()),
+    labels: z.array(z.string()).optional(),
     status: componentStatusSchema,
   }),
   sessionEventSchema,
+  z.object({
+    type: z.literal("worktree"),
+    status: z.enum(["done", "failed"]),
+    path: z.string(),
+    branch: z.string(),
+    base: z.string(),
+    message: z.string().optional(),
+  }),
   z.object({
     type: z.literal("check-failed"),
     round: z.number().int(),
@@ -102,9 +112,17 @@ export const buildProgressSchema = z.object({
   answerable: z.literal(true).exactOptional(),
 });
 
+const storedBuildEventSchema = buildEventSchema.and(z.object({ seq: z.number(), at: z.number() }));
+
 export const buildProgressEntrySchema = z.object({
   pendingId: z.string(),
-  flowId: z.string(),
+  name: z.string(),
+  startedAt: z.number(),
+  endedAt: z.number().exactOptional(),
+  outcome: buildOutcomeSchema.exactOptional(),
+  blueprintName: z.string().exactOptional(),
+  blueprintVersion: z.number().exactOptional(),
+  events: z.array(storedBuildEventSchema),
   progress: buildProgressSchema,
   buildId: z.string().exactOptional(),
 });
@@ -201,8 +219,40 @@ export const progressOf = (
   };
 };
 
-export const nodeAuditStatus = (
-  progress: BuildProgress,
-  nodeId: string,
-): ComponentStatus | undefined =>
-  progress.components.find((component) => component.nodeIds.includes(nodeId))?.status;
+export type BuildingCard = {
+  pendingId: string;
+  buildName: string;
+  blueprintName?: string;
+  blueprintVersion?: number;
+  startedAt: number;
+  badge: string;
+  live: boolean;
+};
+
+const ENDED_BADGE: Record<Exclude<BuildOutcome, "built">, string> = {
+  "needs-you": "Needs you",
+  failed: "Failed",
+  stopped: "Stopped",
+};
+
+const badgeOf = (
+  outcome: Exclude<BuildOutcome, "built"> | undefined,
+  events: readonly StoredBuildEvent[],
+): string => {
+  if (outcome !== undefined) return ENDED_BADGE[outcome];
+  const current = events.findLast((event) => event.type === "step")?.step ?? 1;
+  return `Building · step ${current} of 5`;
+};
+
+export const buildingCardOf = (entry: BuildProgressEntry): BuildingCard | undefined => {
+  if (entry.outcome === "built") return undefined;
+  return {
+    pendingId: entry.pendingId,
+    buildName: entry.name,
+    ...(entry.blueprintName === undefined ? {} : { blueprintName: entry.blueprintName }),
+    ...(entry.blueprintVersion === undefined ? {} : { blueprintVersion: entry.blueprintVersion }),
+    startedAt: entry.startedAt,
+    badge: badgeOf(entry.outcome, entry.events),
+    live: entry.outcome === undefined,
+  };
+};

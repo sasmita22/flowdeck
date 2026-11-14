@@ -171,9 +171,6 @@ export class FakeStore implements Store {
 
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {
     const open = this.listPendingBuilds();
-    if (open.some((known) => known.flowId === build.flowId)) {
-      return { kind: "busy", reason: "blueprint" };
-    }
     if (open.some((known) => known.name === build.name)) return { kind: "busy", reason: "name" };
     const pendingId = `pending-${this.nextPending++}`;
     const { snapshot, ...pendingBuild } = build;
@@ -219,16 +216,19 @@ export class FakeStore implements Store {
     return this.pendingBuilds.filter((known) => known.endedAt === undefined).map(copy);
   }
 
-  listLatestEndedPendingBuilds(): PendingBuild[] {
+  listLatestEndedPendingBuildsByName(): PendingBuild[] {
     const latest = new Map<string, PendingBuild>();
     for (const known of this.pendingBuilds) {
       if (known.endedAt === undefined) continue;
-      const kept = latest.get(known.flowId);
+      const kept = latest.get(known.name);
       if (kept?.endedAt === undefined || known.endedAt >= kept.endedAt) {
-        latest.set(known.flowId, known);
+        latest.set(known.name, known);
       }
     }
-    return [...latest.values()].sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0)).map(copy);
+    return [...latest.values()]
+      .filter((known) => known.outcome !== "built")
+      .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+      .map(copy);
   }
 
   findPendingBuildByName(name: string): PendingBuild | undefined {

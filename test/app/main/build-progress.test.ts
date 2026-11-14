@@ -29,7 +29,9 @@ const progressPush = (
 ): EnginePush => ({
   push: "build-progress",
   pendingId,
-  flowId: "flow-1",
+  name: "fix-login",
+  startedAt: 0,
+  events: atStep(step),
   progress: progressOf(
     pending(pendingId, buildId === undefined ? undefined : "built"),
     atStep(step),
@@ -39,8 +41,7 @@ const progressPush = (
 
 const updateOf = (push: EnginePush) => {
   if (push.push !== "build-progress") throw new Error("not a build-progress push");
-  const { pendingId, flowId, progress, buildId } = push;
-  return { pendingId, flowId, progress, ...(buildId === undefined ? {} : { buildId }) };
+  return Object.fromEntries(Object.entries(push).filter(([key]) => key !== "push"));
 };
 
 const setup = () => {
@@ -99,5 +100,41 @@ describe("createBuildProgressRelay", () => {
     expect(relay.latest("pending-2")).toEqual(updateOf(second));
     expect(relay.latest("pending-3")).toBeNull();
     expect(sent).toHaveLength(4);
+  });
+
+  it("relays every field of an ended build's entry, and no blueprint id", () => {
+    const { relay, sent } = setup();
+    const events = atStep(5);
+    const progress = progressOf(pending("pending-1", "built"), events);
+
+    relay.onPush({
+      push: "build-progress",
+      pendingId: "pending-1",
+      name: "fix-login",
+      startedAt: 1_000,
+      endedAt: 9_000,
+      outcome: "built",
+      blueprintName: "Nightly",
+      blueprintVersion: 3,
+      events,
+      progress,
+      buildId: "build-1",
+    });
+
+    const relayed = {
+      pendingId: "pending-1",
+      name: "fix-login",
+      startedAt: 1_000,
+      endedAt: 9_000,
+      outcome: "built",
+      blueprintName: "Nightly",
+      blueprintVersion: 3,
+      events,
+      progress,
+      buildId: "build-1",
+    };
+    expect(sent).toEqual([relayed]);
+    expect(sent[0]).not.toHaveProperty("flowId");
+    expect(relay.latest("pending-1")).toEqual(relayed);
   });
 });

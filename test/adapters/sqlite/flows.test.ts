@@ -800,6 +800,7 @@ describe("SqliteFlowStore", () => {
       { name: "009_build_progress.sql" },
       { name: "010_flow_pinned.sql" },
       { name: "011_build_snapshots.sql" },
+      { name: "012_drop_pending_builds_one_per_flow.sql" },
     ]);
   });
 });

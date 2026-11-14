@@ -148,9 +148,10 @@ describe("SqliteStore", () => {
       { name: "009_build_progress.sql" },
       { name: "010_flow_pinned.sql" },
       { name: "011_build_snapshots.sql" },
+      { name: "012_drop_pending_builds_one_per_flow.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 11]);
+    expect(before).toEqual([1, 1, 3, 1, 12]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -727,14 +728,14 @@ describe("SqliteStore", () => {
         )
         .run(id, flowId, name);
 
-    it("is busy for a second build of the same blueprint while one is open", () => {
+    it("starts a second build of the same blueprint under another name while one is open", () => {
       const store = open();
-      store.startPendingBuild(pending("flow-1", "nightly"));
+      const first = startedId(store, pending("flow-1", "nightly"));
 
-      expect(store.startPendingBuild(pending("flow-1", "weekly"))).toEqual({
-        kind: "busy",
-        reason: "blueprint",
-      });
+      const second = store.startPendingBuild(pending("flow-1", "weekly"));
+
+      expect(second).toEqual({ kind: "started", pendingId: expect.stringMatching(uuid) });
+      expect(second).not.toEqual({ kind: "started", pendingId: first });
     });
 
     it("finds the open build of a name, and none once it has ended", () => {
@@ -760,35 +761,32 @@ describe("SqliteStore", () => {
       });
     });
 
-    it("reports the blueprint when both the blueprint and the name are taken", () => {
+    it("reports the name when a blueprint with an open build is built again under a taken name", () => {
       const store = open();
       store.startPendingBuild(pending("flow-1", "weekly"));
       store.startPendingBuild(pending("flow-2", "nightly"));
 
       expect(store.startPendingBuild(pending("flow-1", "nightly"))).toEqual({
         kind: "busy",
-        reason: "blueprint",
+        reason: "name",
       });
     });
 
-    it("maps an open row the database already holds to busy, by blueprint and by name", () => {
+    it("starts beside an open row the database already holds for the blueprint, and maps one holding the name to busy", () => {
       const store = open();
       const db = raw();
       holdOpen(db, "held-flow", "flow-1", "held");
       holdOpen(db, "held-name", "flow-9", "nightly");
 
-      expect(store.startPendingBuild(pending("flow-1", "weekly"))).toEqual({
-        kind: "busy",
-        reason: "blueprint",
-      });
+      expect(store.startPendingBuild(pending("flow-1", "weekly")).kind).toBe("started");
       expect(store.startPendingBuild(pending("flow-2", "nightly"))).toEqual({
         kind: "busy",
         reason: "name",
       });
-      expect(count(db, "pending_builds")).toBe(2);
+      expect(count(db, "pending_builds")).toBe(3);
     });
 
-    it("frees the blueprint and the name once the build ends", () => {
+    it("frees the name once the build ends", () => {
       const store = open();
       const first = startedId(store, pending());
       expect(store.startPendingBuild(pending()).kind).toBe("busy");
@@ -800,22 +798,24 @@ describe("SqliteStore", () => {
       expect(again).not.toEqual({ kind: "started", pendingId: first });
     });
 
-    it("lists each blueprint's latest ended build with its outcome, build id and report, never an open one", () => {
+    it("lists each name's latest ended build with its outcome and report, dropping a name that ended built, never an open one", () => {
       const store = open();
       const report = { version: 1, questions: [{ nodeId: "a1", text: "Which repo?" }] };
-      const older = startedId(store, pending("flow-1", "first"));
-      store.endPendingBuild(older, { outcome: "built", endedAt: 2_000, buildId: "b1" });
-      const latest = startedId(store, pending("flow-1", "second"));
-      store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000, report });
-      const other = startedId(store, pending("flow-2", "third"));
-      store.endPendingBuild(other, { outcome: "built", endedAt: 2_500, buildId: "b3" });
+      const first = startedId(store, pending("flow-1", "first"));
+      store.endPendingBuild(first, { outcome: "failed", endedAt: 2_000 });
+      const second = startedId(store, pending("flow-1", "second"));
+      store.endPendingBuild(second, { outcome: "needs-you", endedAt: 3_000, report });
+      const olderThird = startedId(store, pending("flow-2", "third"));
+      store.endPendingBuild(olderThird, { outcome: "failed", endedAt: 2_200 });
+      const third = startedId(store, pending("flow-2", "third"));
+      store.endPendingBuild(third, { outcome: "built", endedAt: 2_500, buildId: "b3" });
       startedId(store, pending("flow-1", "fourth"));
       startedId(store, pending("flow-3", "fifth"));
 
-      expect(store.listLatestEndedPendingBuilds()).toEqual([
-        expect.objectContaining({ id: other, flowId: "flow-2", outcome: "built", buildId: "b3" }),
+      expect(store.listLatestEndedPendingBuildsByName()).toEqual([
+        expect.objectContaining({ id: first, flowId: "flow-1", name: "first", outcome: "failed" }),
         expect.objectContaining({
-          id: latest,
+          id: second,
           flowId: "flow-1",
           name: "second",
           outcome: "needs-you",
@@ -933,10 +933,11 @@ describe("SqliteStore", () => {
       expect(() =>
         reopened.endPendingBuild(ended, { outcome: "failed", endedAt: 3_000 }),
       ).toThrow();
-      expect(reopened.startPendingBuild(pending("flow-2", "other"))).toEqual({
+      expect(reopened.startPendingBuild(pending("flow-2", "weekly"))).toEqual({
         kind: "busy",
-        reason: "blueprint",
+        reason: "name",
       });
+      expect(reopened.startPendingBuild(pending("flow-2", "other")).kind).toBe("started");
       expect(reopened.startPendingBuild(pending("flow-1", "nightly")).kind).toBe("started");
     });
   });

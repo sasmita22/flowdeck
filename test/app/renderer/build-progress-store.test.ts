@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   createBuildProgressStore,
+  selectBuildingCards,
+  selectBuildingCount,
+  selectPipeline,
   type BuildProgressBridge,
 } from "../../../src/app/renderer/build-progress-store.js";
+import { buildPipelineOf } from "../../../src/core/run/build-pipeline.js";
 import {
   progressOf,
   type BuildEvent,
@@ -16,13 +20,14 @@ const pending = (
   flowId: string,
   version: number,
   outcome?: BuildOutcome,
+  startedAt = 1_000,
 ): PendingBuild => ({
   id,
   flowId,
   version,
   name: `v${version}`,
   origin: null,
-  startedAt: 1_000,
+  startedAt,
   ...(outcome === undefined ? {} : { outcome, endedAt: 9_000 }),
 });
 
@@ -40,7 +45,11 @@ const atStep = (step: 1 | 2 | 3 | 4 | 5): BuildEvent[] =>
 
 const entry = (build: PendingBuild, events: BuildEvent[] = atStep(1), buildId?: string) => ({
   pendingId: build.id,
-  flowId: build.flowId,
+  name: build.name,
+  startedAt: build.startedAt,
+  ...(build.endedAt === undefined ? {} : { endedAt: build.endedAt }),
+  ...(build.outcome === undefined ? {} : { outcome: build.outcome }),
+  events: stored(events),
   progress: progressOf(build, stored(events)),
   ...(buildId === undefined ? {} : { buildId }),
 });
@@ -112,7 +121,6 @@ describe("build progress store", () => {
     const { store, calls } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(2))]);
 
     expect(calls).toContain("list");
-    expect(store.getState().chipFor("flow-a")).toBe("Building · step 2 of 5");
     expect(store.getState().progressFor("pb-1")?.chip).toBe("Building · step 2 of 5");
   });
 
@@ -122,7 +130,7 @@ describe("build progress store", () => {
 
     push(entry(build, atStep(3)));
 
-    expect(store.getState().chipFor("flow-a")).toBe("Building · step 3 of 5");
+    expect(store.getState().progressFor("pb-1")?.chip).toBe("Building · step 3 of 5");
     expect(store.getState().progressFor("pb-1")?.steps[2]?.status).toBe("running");
   });
 
@@ -131,8 +139,7 @@ describe("build progress store", () => {
 
     push(entry(pending("pb-9", "flow-b", 2), atStep(4)));
 
-    expect(store.getState().chipFor("flow-b")).toBe("Building · step 4 of 5");
-    expect(store.getState().isBuilding("flow-b")).toBe(true);
+    expect(store.getState().progressFor("pb-9")?.chip).toBe("Building · step 4 of 5");
   });
 
   it("shows the final chip once the build ends", async () => {
@@ -140,69 +147,13 @@ describe("build progress store", () => {
 
     push(entry(pending("pb-1", "flow-a", 4, "built"), atStep(5), "b-1"));
 
-    expect(store.getState().chipFor("flow-a")).toBe("Built · v4");
-    expect(store.getState().isBuilding("flow-a")).toBe(false);
+    expect(store.getState().progressFor("pb-1")?.chip).toBe("Built · v4");
   });
 
-  it("knows nothing of a blueprint that was never built", async () => {
+  it("knows nothing of a build it was never told of", async () => {
     const { store } = await setup([entry(pending("pb-1", "flow-a", 1))]);
 
-    expect(store.getState().chipFor("flow-z")).toBeUndefined();
-    expect(store.getState().barFor("flow-z")).toBeUndefined();
     expect(store.getState().progressFor("pb-404")).toBeUndefined();
-    expect(store.getState().isBuilding("flow-z")).toBe(false);
-  });
-
-  it("has a bar while the build is open", async () => {
-    const { store } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(2))]);
-
-    expect(store.getState().barFor("flow-a")).toBeDefined();
-    expect(store.getState().isBuilding("flow-a")).toBe(true);
-  });
-
-  it.each<BuildOutcome>(["built", "needs-you", "failed", "stopped"])(
-    "keeps the bar after a build ends %s",
-    async (outcome) => {
-      const { store } = await setup([entry(pending("pb-1", "flow-a", 1, outcome), atStep(3))]);
-
-      expect(store.getState().barFor("flow-a")).toBeDefined();
-      expect(store.getState().isBuilding("flow-a")).toBe(false);
-    },
-  );
-
-  it("prefers the open build over an earlier finished one of the same blueprint", async () => {
-    const { store } = await setup([
-      entry(pending("pb-2", "flow-a", 2), atStep(2)),
-      entry(pending("pb-1", "flow-a", 1, "built"), atStep(5), "b-1"),
-    ]);
-
-    expect(store.getState().chipFor("flow-a")).toBe("Building · step 2 of 5");
-    expect(store.getState().isBuilding("flow-a")).toBe(true);
-    expect(store.getState().progressFor("pb-1")?.chip).toBe("Built · v1");
-  });
-
-  it("reads a node's audit status from the build's components", async () => {
-    const build = pending("pb-1", "flow-a", 1);
-    const { store, push } = await setup([]);
-
-    push(
-      entry(build, [
-        ...atStep(3),
-        { type: "component", path: "agents/a.md", kind: "agent", nodeIds: ["n1"], status: "done" },
-        {
-          type: "component",
-          path: "agents/b.md",
-          kind: "agent",
-          nodeIds: ["n2", "n3"],
-          status: "running",
-        },
-      ]),
-    );
-
-    expect(store.getState().nodeAuditStatus("flow-a", "n1")).toBe("done");
-    expect(store.getState().nodeAuditStatus("flow-a", "n3")).toBe("running");
-    expect(store.getState().nodeAuditStatus("flow-a", "n9")).toBeUndefined();
-    expect(store.getState().nodeAuditStatus("flow-z", "n1")).toBeUndefined();
   });
 
   it("keeps the questions a build ended with", async () => {
@@ -238,6 +189,142 @@ describe("build progress store", () => {
     await store.getState().stop("pb-1");
 
     expect(stopped).toEqual([{ pendingId: "pb-1" }]);
+  });
+
+  describe("building cards", () => {
+    it("gives one card per build not yet built, newest start first", async () => {
+      const { store } = await setup([
+        entry(pending("pb-old", "flow-a", 1, "failed", 1_000), atStep(3)),
+        entry(pending("pb-new", "flow-a", 1, undefined, 3_000), atStep(2)),
+        entry(pending("pb-mid", "flow-b", 2, "needs-you", 2_000), atStep(3)),
+        entry(pending("pb-done", "flow-c", 3, "built", 4_000), atStep(5), "b-1"),
+      ]);
+
+      const cards = selectBuildingCards(store.getState());
+
+      expect(cards.map((card) => [card.pendingId, card.badge, card.live])).toEqual([
+        ["pb-new", "Building · step 2 of 5", true],
+        ["pb-mid", "Needs you", false],
+        ["pb-old", "Failed", false],
+      ]);
+      expect(cards[0]).toMatchObject({ buildName: "v1", startedAt: 3_000 });
+    });
+
+    it("counts only the builds still open", async () => {
+      const { store } = await setup([
+        entry(pending("pb-1", "flow-a", 1), atStep(2)),
+        entry(pending("pb-2", "flow-a", 1), atStep(4)),
+        entry(pending("pb-3", "flow-a", 1, "needs-you"), atStep(3)),
+        entry(pending("pb-4", "flow-a", 1, "failed"), atStep(3)),
+        entry(pending("pb-5", "flow-a", 1, "stopped"), atStep(3)),
+        entry(pending("pb-6", "flow-a", 1, "built"), atStep(5), "b-6"),
+      ]);
+
+      expect(selectBuildingCount(store.getState())).toBe(2);
+    });
+
+    it("drops a build from the cards and the count once it is built", async () => {
+      const { store, push } = await setup([
+        entry(pending("pb-1", "flow-a", 1), atStep(5)),
+        entry(pending("pb-2", "flow-a", 1), atStep(2)),
+      ]);
+      expect(selectBuildingCount(store.getState())).toBe(2);
+
+      push(entry(pending("pb-1", "flow-a", 1, "built"), atStep(5), "b-1"));
+
+      expect(selectBuildingCards(store.getState()).map((card) => card.pendingId)).toEqual(["pb-2"]);
+      expect(selectBuildingCount(store.getState())).toBe(1);
+    });
+
+    it("drops a needs-you card once a later build of the same name is built", async () => {
+      const { store, push } = await setup([
+        entry({ ...pending("pb-a", "flow-a", 1, "needs-you"), endedAt: 2_000 }, atStep(3)),
+      ]);
+
+      push(entry({ ...pending("pb-b", "flow-a", 1, "built"), endedAt: 3_000 }, atStep(5), "b-1"));
+
+      expect(selectBuildingCards(store.getState())).toEqual([]);
+    });
+
+    it("shows only the newer of two failed builds of one name, and every open build", async () => {
+      const { store, push } = await setup([
+        entry({ ...pending("pb-older", "flow-a", 1, "failed", 1_000), endedAt: 2_000 }, atStep(3)),
+        entry(pending("pb-open-1", "flow-a", 1, undefined, 4_000), atStep(2)),
+        entry(pending("pb-open-2", "flow-a", 1, undefined, 5_000), atStep(1)),
+      ]);
+
+      push(
+        entry({ ...pending("pb-newer", "flow-a", 1, "failed", 1_500), endedAt: 3_000 }, atStep(3)),
+      );
+
+      expect(selectBuildingCards(store.getState()).map((card) => card.pendingId)).toEqual([
+        "pb-open-2",
+        "pb-open-1",
+        "pb-newer",
+      ]);
+    });
+
+    it("has no cards and a count of none before any build", async () => {
+      const { store } = await setup([]);
+
+      expect(selectBuildingCards(store.getState())).toEqual([]);
+      expect(selectBuildingCount(store.getState())).toBe(0);
+    });
+  });
+
+  describe("a build's pipeline", () => {
+    const events: BuildEvent[] = [
+      ...atStep(3),
+      { type: "component", path: "agents/c.md", kind: "agent", nodeIds: ["n1"], status: "running" },
+    ];
+    const inWrite = { ...subagent(1, "agents/c.md", "running"), at: 1_450 };
+
+    it("projects the build's own events and activity", async () => {
+      const build = pending("pb-1", "flow-a", 1);
+      const { store } = await setup([entry(build, events)], [inWrite]);
+      await store.getState().viewActivity("pb-1");
+
+      const pipeline = selectPipeline("pb-1")(store.getState());
+
+      expect(pipeline).toEqual(
+        buildPipelineOf({ id: "pb-1", name: "v1", startedAt: 1_000 }, stored(events), [inWrite]),
+      );
+      const write = pipeline?.lanes.find((lane) => lane.step === 3 && lane.round === 1);
+      expect(write?.rows.map((row) => [row.path, row.log])).toEqual([["agents/c.md", [inWrite]]]);
+    });
+
+    it("carries the build's end into the pipeline's header", async () => {
+      const build = pending("pb-1", "flow-a", 1, "built");
+      const { store } = await setup([entry(build, atStep(5), "b-1")]);
+
+      expect(selectPipeline("pb-1")(store.getState())?.header).toMatchObject({
+        name: "v1",
+        startedAt: 1_000,
+        endedAt: 9_000,
+        status: "built",
+      });
+    });
+
+    it("leaves out another build's activity", async () => {
+      const { store, pushActivity } = await setup([
+        entry(pending("pb-1", "flow-a", 1), events),
+        entry(pending("pb-2", "flow-a", 1), events),
+      ]);
+
+      pushActivity({ pendingId: "pb-2", entry: inWrite });
+
+      const write = selectPipeline("pb-1")(store.getState())?.lanes.find((lane) => lane.step === 3);
+      expect(write?.log).toEqual([]);
+      expect(
+        selectPipeline("pb-2")(store.getState())?.lanes.find((lane) => lane.step === 3)?.log,
+      ).toEqual([inWrite]);
+    });
+
+    it("has no pipeline for a build it was never told of", async () => {
+      const { store } = await setup([entry(pending("pb-1", "flow-a", 1), events)]);
+
+      expect(selectPipeline("pb-404")(store.getState())).toBeUndefined();
+    });
   });
 
   describe("answering a build's questions", () => {
@@ -380,31 +467,13 @@ describe("build progress store", () => {
     });
   });
 
-  it("gives every node of a merged component that component's status", async () => {
-    const { store } = await setup([
-      entry(pending("pb-1", "flow-a", 1), [
-        ...atStep(3),
-        {
-          type: "component",
-          path: "agents/merged.md",
-          kind: "agent",
-          nodeIds: ["n4", "n5"],
-          status: "failed",
-        },
-      ]),
-    ]);
-
-    expect(store.getState().nodeAuditStatus("flow-a", "n4")).toBe("failed");
-    expect(store.getState().nodeAuditStatus("flow-a", "n5")).toBe("failed");
-  });
-
   it("ignores a push or a list it cannot read", async () => {
     const { store, push } = await setup({ nope: true });
 
     push({ pendingId: "pb-1" });
 
-    expect(store.getState().chipFor("flow-a")).toBeUndefined();
+    expect(store.getState().progressFor("pb-1")).toBeUndefined();
     push(entry(pending("pb-1", "flow-a", 1), atStep(2)));
-    expect(store.getState().chipFor("flow-a")).toBe("Building · step 2 of 5");
+    expect(store.getState().progressFor("pb-1")?.chip).toBe("Building · step 2 of 5");
   });
 });

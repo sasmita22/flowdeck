@@ -3,7 +3,6 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
 import type { Actions } from "../actions.js";
-import type { BuildProgressState } from "../build-progress-store.js";
 import { folderText, formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
 import { pinnedFirst, type LibraryState } from "../library-store.js";
@@ -15,37 +14,15 @@ import { Empty, PageHead } from "./page-head.js";
 
 const versionsText = (count: number) => (count === 1 ? "1 version" : `${count} versions`);
 
-function BuildChip({
-  flowId,
-  buildProgress,
-}: {
-  flowId: string;
-  buildProgress: StoreApi<BuildProgressState>;
-}) {
-  const chip = useStore(buildProgress, (state) => state.chipFor(flowId));
-  const building = useStore(buildProgress, (state) => state.isBuilding(flowId));
-  if (chip === undefined) return null;
-  return (
-    <span
-      className={`fd-badge ${building ? "fd-badge-live" : "fd-badge-quiet"}`}
-      data-testid={pageTestIds.buildChip(flowId)}
-    >
-      {chip}
-    </span>
-  );
-}
-
 function BlueprintCard({
   flow,
   library,
   run,
-  buildProgress,
   actions,
 }: {
   flow: FlowSummary;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
-  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -106,7 +83,6 @@ function BlueprintCard({
           <Icon name="pencil" />
         </button>
         <PinButton flow={flow} library={library} testId={pageTestIds.blueprintPin(flow.flowId)} />
-        <BuildChip flowId={flow.flowId} buildProgress={buildProgress} />
       </div>
       <div className="fd-card-meta">
         <span>{flow.lastSavedAt === null ? "Never saved" : formatWhen(flow.lastSavedAt)}</span>
@@ -135,13 +111,11 @@ export function BlueprintsPage({
   nav,
   library,
   run,
-  buildProgress,
   actions,
 }: {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
-  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 }) {
   const flows = useStore(library, (state) => state.flows);
@@ -176,7 +150,6 @@ export function BlueprintsPage({
             flow={flow}
             library={library}
             run={run}
-            buildProgress={buildProgress}
             actions={actions}
           />
         ))}

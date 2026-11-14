@@ -5,6 +5,7 @@ export type Page =
   | { name: "editor" }
   | { name: "blueprints" }
   | { name: "builds"; buildId?: string }
+  | { name: "building"; pendingId: string }
   | { name: "runs" }
   | { name: "run"; runId: string }
   | { name: "doctor" };
@@ -37,6 +38,7 @@ export const selectMenuItem = (page: Page): MenuItemId => {
     case "blueprints":
       return "blueprints";
     case "builds":
+    case "building":
       return "builds";
     case "runs":
     case "run":

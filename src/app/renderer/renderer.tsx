@@ -67,6 +67,13 @@ function renderApp(root: HTMLElement) {
     );
     if (moved) void library.getState().refresh();
   });
+  buildProgress.subscribe((next, previous) => {
+    const locked = Object.values(next.entries).some(
+      (entry) =>
+        entry.buildId !== undefined && previous.entries[entry.pendingId]?.buildId === undefined,
+    );
+    if (locked) void library.getState().refresh();
+  });
   save.subscribe((next, previous) => {
     if (next.version !== previous.version || next.name !== previous.name) {
       void library.getState().refresh();

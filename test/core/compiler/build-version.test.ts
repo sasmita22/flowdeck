@@ -139,14 +139,22 @@ const endsOf = (store: FakeStore) => {
   return ends;
 };
 
-const expectFailedBeforeStep3 = (store: FakeStore, pendingId: string, message: string) => {
-  const steps = stepsOf(store, pendingId);
-  expect(steps.slice(0, 3)).toEqual([step(1, "running"), step(1, "done"), step(2, "running")]);
-  expect(steps.filter((event) => event.step >= 3)).toEqual([]);
-  expect(steps.at(-1)).toEqual({
-    type: "step",
-    step: expect.any(Number),
+const expectWorktreeFailed = (
+  store: FakeStore,
+  pendingId: string,
+  worktree: { path: string; branch: string; base: string },
+  message: string,
+) => {
+  expect(stepsOf(store, pendingId)).toEqual([
+    step(1, "running"),
+    step(1, "done"),
+    step(2, "running"),
+    step(2, "done"),
+  ]);
+  expect(eventsOf(store, pendingId).at(-1)).toEqual({
+    type: "worktree",
     status: "failed",
+    ...worktree,
     message,
   });
 };
@@ -464,8 +472,8 @@ describe("buildVersion", () => {
       expect(gitState.reads).toEqual([]);
     });
 
-    it("refuses while the blueprint is already building, and reserves nothing", async () => {
-      const { flows, store, fs, worktree, deps } = setup();
+    it("starts a blueprint already building under another name, and still refuses that name", async () => {
+      const { flows, store, deps } = setup();
       store.startPendingBuild({
         flowId: "flow-1",
         version: 1,
@@ -476,10 +484,14 @@ describe("buildVersion", () => {
       const { flow: saved, origin } = savedV1(flows);
 
       const result = await startBuild(saved, request, deps, origin);
+      const again = await startBuild(saved, { ...request, name: "other" }, deps, origin);
 
-      expect(result).toEqual({ ok: false, errors: [expect.anything()] });
-      expect(store.listPendingBuilds().map((pending) => pending.name)).toEqual(["other"]);
-      expectNothingDone(store, fs, worktree);
+      expect(result).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(errorMessages(again)).toEqual(["A build named other is already building."]);
+      expect(store.listPendingBuilds().map((pending) => pending.name)).toEqual([
+        "other",
+        "fix-login",
+      ]);
     });
 
     it("refuses a connector Claude Code lacks before reserving anything", async () => {
@@ -680,7 +692,78 @@ describe("buildVersion", () => {
       expect(base.store.builds()).toEqual([]);
     });
 
-    it("fails before step 3 when the worktree cannot be cut, opening no session, removing the workspace and keeping the report", async () => {
+    const cutAt = () => ({
+      path: `${home}/workspaces/${firstId}/carousell-web`,
+      branch: "flowdeck/fix-login-0f3a9c2e",
+      base: "main",
+    });
+
+    it("records the worktree it cut, after step 2 is done and before the session", async () => {
+      const base = setup();
+      const pending = await started(base);
+
+      await runBuild(pending, ticketFlow(), request, base.deps);
+
+      const events = eventsOf(base.store, pending.pendingId);
+      const worktree = events.findIndex((event) => event.type === "worktree");
+      expect(events[worktree]).toEqual({ type: "worktree", status: "done", ...cutAt() });
+      expect(events.filter((event) => event.type === "worktree")).toHaveLength(1);
+      expect(worktree).toBeGreaterThan(
+        events.findIndex(
+          (event) => event.type === "step" && event.step === 2 && event.status === "done",
+        ),
+      );
+      expect(worktree).toBeLessThan(events.findIndex((event) => event.type === "session"));
+    });
+
+    it("records the session with the blueprint's build model, and none when it names none", async () => {
+      const withModel = setup();
+      const modelled = await started(withModel);
+      await runBuild(
+        modelled,
+        ticketFlow({ ...ticketConfig, buildModel: "haiku" }),
+        request,
+        withModel.deps,
+      );
+      const plain = setup();
+      const unmodelled = await started(plain);
+      await runBuild(unmodelled, ticketFlow(), request, plain.deps);
+
+      const sessionOf = (store: FakeStore, pendingId: string) =>
+        eventsOf(store, pendingId).find((event) => event.type === "session");
+      expect(sessionOf(withModel.store, modelled.pendingId)).toEqual(
+        expect.objectContaining({ type: "session", model: "haiku" }),
+      );
+      expect(sessionOf(plain.store, unmodelled.pendingId)).toEqual(
+        expect.objectContaining({ type: "session" }),
+      );
+      expect(sessionOf(plain.store, unmodelled.pendingId)).not.toHaveProperty("model");
+    });
+
+    it.each([
+      { blueprintModel: undefined, requestModel: "haiku" },
+      { blueprintModel: "sonnet", requestModel: "haiku" },
+    ])(
+      "records and opens the session with the request's build model $requestModel over the blueprint's $blueprintModel",
+      async ({ blueprintModel, requestModel }) => {
+        const base = setup();
+        const pending = await started(base);
+        const blueprint = ticketFlow(
+          blueprintModel === undefined
+            ? ticketConfig
+            : { ...ticketConfig, buildModel: blueprintModel },
+        );
+
+        await runBuild(pending, blueprint, { ...request, buildModel: requestModel }, base.deps);
+
+        expect(
+          eventsOf(base.store, pending.pendingId).find((event) => event.type === "session"),
+        ).toEqual(expect.objectContaining({ model: requestModel }));
+        expect(base.agents.opened.map((spec) => spec.model)).toEqual([requestModel]);
+      },
+    );
+
+    it("fails the worktree sub-step with git's message when the worktree cannot be cut, keeping step 2 done, opening no session, removing the workspace and keeping the report", async () => {
       const base = setup({ worktree: new FakeWorktree({ failWith: "git said no" }) });
       const ends = endsOf(base.store);
       const pending = await started(base);
@@ -689,7 +772,7 @@ describe("buildVersion", () => {
         "git said no",
       );
 
-      expectFailedBeforeStep3(base.store, pending.pendingId, "git said no");
+      expectWorktreeFailed(base.store, pending.pendingId, cutAt(), "git said no");
       expect(base.agents.opened).toEqual([]);
       expect(base.store.listPendingBuilds()).toEqual([]);
       expect(ends).toEqual([
@@ -727,18 +810,21 @@ describe("buildVersion", () => {
       });
     });
 
-    it("records the thrown error's message on the failed step", async () => {
+    it("records git's message on the failed worktree sub-step, not on step 2", async () => {
       const base = setup({ worktree: new FakeWorktree({ failWith: "git said no" }) });
       const pending = await started(base);
 
       await runBuild(pending, ticketFlow(), request, base.deps).catch(() => undefined);
 
       expect(eventsOf(base.store, pending.pendingId).at(-1)).toEqual({
-        type: "step",
-        step: expect.any(Number),
+        type: "worktree",
         status: "failed",
+        ...cutAt(),
         message: "git said no",
       });
+      expect(
+        stepsOf(base.store, pending.pendingId).filter((event) => event.status === "failed"),
+      ).toEqual([]);
     });
 
     it("fails step 5 when the build cannot be recorded, removing the worktree it cut", async () => {
@@ -772,7 +858,7 @@ describe("buildVersion", () => {
       const again = await startBuild(ticketFlow(), request, base.deps);
 
       expect(again).toEqual({ kind: "started", pendingId: expect.any(String) });
-      expectFailedBeforeStep3(base.store, pending.pendingId, "git said no");
+      expectWorktreeFailed(base.store, pending.pendingId, cutAt(), "git said no");
     });
   });
 
@@ -1208,8 +1294,22 @@ describe("buildVersion", () => {
           event.type === "component" && event.path === pieceA && event.status !== "waiting",
       );
       expect(components.slice(0, 2)).toEqual([
-        { type: "component", path: pieceA, kind: "agent", nodeIds: ["a"], status: "running" },
-        { type: "component", path: pieceA, kind: "agent", nodeIds: ["a"], status: "done" },
+        {
+          type: "component",
+          path: pieceA,
+          kind: "agent",
+          nodeIds: ["a"],
+          labels: ["Review the fix"],
+          status: "running",
+        },
+        {
+          type: "component",
+          path: pieceA,
+          kind: "agent",
+          nodeIds: ["a"],
+          labels: ["Review the fix"],
+          status: "done",
+        },
       ]);
     });
 
@@ -1237,6 +1337,7 @@ describe("buildVersion", () => {
         path: pieces[1],
         kind: "agent",
         nodeIds: ["a"],
+        labels: ["Review the fix"],
         status: "waiting",
       });
       expect(waiting.every((event) => events.indexOf(event) > start)).toBe(true);
@@ -1262,7 +1363,14 @@ describe("buildVersion", () => {
         .slice(round2)
         .filter((event) => event.type === "component" && event.status === "waiting");
       expect(waitingAfter).toEqual([
-        { type: "component", path: pieceA, kind: "agent", nodeIds: ["a"], status: "waiting" },
+        {
+          type: "component",
+          path: pieceA,
+          kind: "agent",
+          nodeIds: ["a"],
+          labels: ["Review the fix"],
+          status: "waiting",
+        },
       ]);
     });
 
@@ -1318,6 +1426,29 @@ describe("buildVersion", () => {
       expect(await t.fs.exists(`${dir()}/${pieceB}`)).toBe(false);
       const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
       expect(manifest.nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
+    });
+
+    it("labels a merged piece's component events with each node's label, in node order", async () => {
+      const t = traced({
+        script: { merges: [{ nodeIds: ["a", "b"], reason: "Both review the same fix." }] },
+      });
+      const pieceA = await pieceOf("a");
+
+      const { pending } = await t.run();
+
+      const merged = eventsOf(t.store, pending.pendingId).filter(
+        (event) =>
+          event.type === "component" && event.path === pieceA && (event.nodeIds?.length ?? 0) > 1,
+      );
+      expect(merged).not.toEqual([]);
+      for (const event of merged) {
+        expect(event).toEqual(
+          expect.objectContaining({
+            nodeIds: ["a", "b"],
+            labels: ["Review the fix", "Review the fix again"],
+          }),
+        );
+      }
     });
 
     describe("a shared piece", () => {
@@ -1777,8 +1908,8 @@ describe("buildVersion", () => {
       expect(stepsOf(store, ends[0]?.pendingId ?? "")).toEqual(builtSteps);
     });
 
-    it("refuses while the blueprint is already building", async () => {
-      const { store, fs, worktree, deps } = setup();
+    it("builds a blueprint already building under another name", async () => {
+      const { store, deps } = setup();
       store.startPendingBuild({
         flowId: "flow-1",
         version: 1,
@@ -1793,8 +1924,8 @@ describe("buildVersion", () => {
         deps,
       );
 
-      expect(result.ok).toBe(false);
-      expectNothingDone(store, fs, worktree);
+      expect(result.ok).toBe(true);
+      expect(store.builds().map((built) => built.name)).toEqual(["fix-login"]);
     });
   });
 

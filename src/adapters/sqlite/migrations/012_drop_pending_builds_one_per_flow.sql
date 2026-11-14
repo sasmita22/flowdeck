@@ -1,0 +1,1 @@
+DROP INDEX pending_builds_one_per_flow;

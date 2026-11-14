@@ -4,9 +4,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { AssistantState } from "../assistant/assistant-store.js";
 import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
 import type { BranchState } from "../branch-store.js";
-import type { BuildProgressState } from "../build-progress-store.js";
 import { Canvas } from "../canvas/canvas.js";
-import { BuildAuditContext } from "../canvas/status.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
@@ -17,7 +15,7 @@ import type { SaveState } from "../save-store.js";
 import { SessionSettingsButton } from "../session-settings-button.js";
 import type { ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
-import { controlTestIds, pageTestIds } from "../test-ids.js";
+import { controlTestIds } from "../test-ids.js";
 
 const idle: StoreApi<RunView> = createStore<RunView>()(() => ({ snapshot: null }));
 
@@ -59,30 +57,6 @@ function FlowTitle({ save }: { save: StoreApi<SaveState> }) {
   );
 }
 
-function CanvasBuildBar({
-  flowId,
-  buildProgress,
-  nav,
-}: {
-  flowId: string;
-  buildProgress: StoreApi<BuildProgressState>;
-  nav: StoreApi<NavState>;
-}) {
-  const pendingId = useStore(buildProgress, (state) => state.barFor(flowId)?.pendingId);
-  const chip = useStore(buildProgress, (state) => state.barFor(flowId)?.chip);
-  if (pendingId === undefined) return null;
-  return (
-    <button
-      className="fd-build-bar"
-      data-testid={pageTestIds.canvasBuildBar}
-      title="See this build's progress"
-      onClick={() => nav.getState().go({ name: "builds", buildId: pendingId })}
-    >
-      {chip}
-    </button>
-  );
-}
-
 function AgentToggle({ assistant }: { assistant: StoreApi<AssistantState> }) {
   const visible = useStore(assistant, (state) => state.visible);
   return (
@@ -108,7 +82,6 @@ function EditorTitleRow({
   terminal,
   shell,
   nav,
-  buildProgress,
   assistant,
 }: {
   canvas: StoreApi<CanvasState>;
@@ -117,17 +90,12 @@ function EditorTitleRow({
   terminal: StoreApi<TerminalState>;
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
-  buildProgress: StoreApi<BuildProgressState>;
   assistant: StoreApi<AssistantState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
-  const flowId = useStore(save, (state) => state.flowId);
   const starting = useStore(run, (state) => state.starting);
-  const building = useStore(buildProgress, (state) => flowId !== null && state.isBuilding(flowId));
-  const lastBuild = useStore(run, (state) => state.lastBuild);
-  const built = lastBuild !== null && lastBuild.flowId === flowId ? lastBuild : null;
   return (
     <header className="fd-title-row">
       <nav className="fd-crumbs" aria-label="Breadcrumb">
@@ -148,16 +116,6 @@ function EditorTitleRow({
         </span>
       )}
       <div className="fd-title-actions">
-        {built !== null && (
-          <button
-            className="fd-link"
-            data-testid={controlTestIds.built}
-            title="See this build's files"
-            onClick={() => nav.getState().go({ name: "builds", buildId: built.id })}
-          >
-            Built v{built.version} · {built.name}
-          </button>
-        )}
         {ready && (
           <button
             className="fd-btn"
@@ -172,7 +130,7 @@ function EditorTitleRow({
           <button
             className="fd-btn"
             data-testid={controlTestIds.build}
-            disabled={saving || starting || building}
+            disabled={saving || starting}
             title="Save if needed, then build a locked copy of this version under a name"
             onClick={() => void run.getState().openBuild()}
           >
@@ -196,7 +154,6 @@ export function EditorPage({
   shell,
   nav,
   branches,
-  buildProgress,
   assistant,
   blueprintTerminal,
 }: {
@@ -208,13 +165,11 @@ export function EditorPage({
   shell: StoreApi<ShellState>;
   nav: StoreApi<NavState>;
   branches?: StoreApi<BranchState>;
-  buildProgress: StoreApi<BuildProgressState>;
   assistant: StoreApi<AssistantState>;
   blueprintTerminal: StoreApi<TerminalState>;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const agentVisible = useStore(assistant, (state) => state.visible);
-  const flowId = useStore(save, (state) => state.flowId);
   const onSave = useCallback(() => void save.getState().save(), [save]);
   return (
     <>
@@ -225,31 +180,25 @@ export function EditorPage({
         terminal={terminal}
         shell={shell}
         nav={nav}
-        buildProgress={buildProgress}
         assistant={assistant}
       />
-      {flowId !== null && (
-        <CanvasBuildBar flowId={flowId} buildProgress={buildProgress} nav={nav} />
-      )}
       <div className="fd-main">
         {ready && (
-          <BuildAuditContext.Provider value={flowId === null ? null : { flowId, buildProgress }}>
-            <Canvas
-              store={canvas}
-              shell={shell}
-              run={idle}
-              onSave={onSave}
-              below={
-                agentVisible ? (
-                  <BlueprintTerminalPane
-                    assistant={assistant}
-                    terminal={blueprintTerminal}
-                    save={save}
-                  />
-                ) : null
-              }
-            />
-          </BuildAuditContext.Provider>
+          <Canvas
+            store={canvas}
+            shell={shell}
+            run={idle}
+            onSave={onSave}
+            below={
+              agentVisible ? (
+                <BlueprintTerminalPane
+                  assistant={assistant}
+                  terminal={blueprintTerminal}
+                  save={save}
+                />
+              ) : null
+            }
+          />
         )}
         {ready && (
           <InspectorPanel

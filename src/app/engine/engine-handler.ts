@@ -253,7 +253,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     buildEvents: (pendingId) => store.buildEvents(pendingId),
     endPendingBuild: (pendingId, end) => store.endPendingBuild(pendingId, end),
     listPendingBuilds: () => store.listPendingBuilds(),
-    listLatestEndedPendingBuilds: () => store.listLatestEndedPendingBuilds(),
+    listLatestEndedPendingBuildsByName: () => store.listLatestEndedPendingBuildsByName(),
     findPendingBuildByName: (name) => store.findPendingBuildByName(name),
     pendingBuild: (id) => store.pendingBuild(id),
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
@@ -323,12 +323,23 @@ const progressEntry = (
   pending: PendingBuild,
   runs: Store,
   buildId?: string,
-): BuildProgressEntry => ({
-  pendingId: pending.id,
-  flowId: pending.flowId,
-  progress: progressOf(pending, runs.buildEvents(pending.id)),
-  ...(buildId === undefined ? {} : { buildId }),
-});
+): BuildProgressEntry => {
+  const events = runs.buildEvents(pending.id);
+  const snapshot = runs.buildSnapshot({ pendingId: pending.id });
+  return {
+    pendingId: pending.id,
+    name: pending.name,
+    startedAt: pending.startedAt,
+    ...(pending.endedAt === undefined ? {} : { endedAt: pending.endedAt }),
+    ...(pending.outcome === undefined ? {} : { outcome: pending.outcome }),
+    ...(snapshot === null
+      ? {}
+      : { blueprintName: snapshot.blueprintName, blueprintVersion: snapshot.version }),
+    events,
+    progress: progressOf(pending, events),
+    ...(buildId === undefined ? {} : { buildId }),
+  };
+};
 
 const isOld = (build: BuildRecord) => build.name === null;
 
@@ -487,9 +498,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     built?: string,
   ) => {
     buildStops.delete(pending.id);
+    const endedAt = runs.pendingBuild(pending.id)?.endedAt;
     options.publish({
       push: "build-progress",
-      ...progressEntry({ ...pending, outcome }, runs, built),
+      ...progressEntry(
+        { ...pending, ...(endedAt === undefined ? {} : { endedAt }), outcome },
+        runs,
+        built,
+      ),
     });
   };
 
@@ -549,7 +565,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     origin: BuildOrigin;
     deps: BuildFlowDeps;
     resume?: BuildResume;
-    buildModel?: string;
   };
 
   const runPendingBuild = ({
@@ -560,7 +575,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     origin,
     deps,
     resume,
-    buildModel,
   }: PendingBuildRun) => {
     const stopping = new AbortController();
     const stopped = () => stopping.signal.aborted;
@@ -611,9 +625,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const agents: BuildFlowDeps["agents"] = {
       async open(spec) {
         opened = spec;
-        await options.buildAgents.open(
-          buildModel === undefined ? spec : { ...spec, model: buildModel },
-        );
+        await options.buildAgents.open(spec);
         if (spec.attach === true) await turnStopped(spec, resume?.turnsSent ?? 0);
       },
       async turn(name, text, onCall): Promise<BuildTurnResult> {
@@ -676,6 +688,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       values: request.values as VariableValues,
       ...(request.repo === undefined ? {} : { repo: request.repo }),
       ...(request.base === undefined ? {} : { base: request.base }),
+      ...(buildModel === undefined ? {} : { buildModel }),
       ...(answers === undefined ? {} : { answers }),
     };
     const origin = {
@@ -705,7 +718,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       request: buildRequest,
       origin,
       deps,
-      ...(buildModel === undefined ? {} : { buildModel }),
     });
     return started;
   };
@@ -820,7 +832,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const buildProgressList = (runs: Store): BuildProgressEntry[] => [
     ...runs.listPendingBuilds().map((pending) => progressEntry(pending, runs)),
     ...runs
-      .listLatestEndedPendingBuilds()
+      .listLatestEndedPendingBuildsByName()
       .map((ended) => progressEntry(ended, runs, ended.buildId)),
   ];
 
