@@ -57,6 +57,8 @@ const unreadableFlows = (): FlowStore => ({
   list: unreadable,
   rename: unreadable,
   pin: unreadable,
+  delete: unreadable,
+  isDeleted: unreadable,
   save: unreadable,
   loadLatest: unreadable,
   load: unreadable,

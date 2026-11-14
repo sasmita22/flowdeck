@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import { createActions, type ActionStores } from "../../../src/app/renderer/actions.js";
+import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
 import { createNavStore } from "../../../src/app/renderer/nav-store.js";
+import { createSaveStore } from "../../../src/app/renderer/save-store.js";
 
 const setup = (
   options: {
@@ -9,12 +11,14 @@ const setup = (
     runId?: string | null;
     deleted?: boolean;
     leaveAnswer?: "proceed" | "cancel";
+    deleteRefused?: boolean;
   } = {},
 ) => {
   const nav = createNavStore();
   nav.getState().go({ name: "blueprints" });
   const save = createStore(() => ({
     flowId: options.flowId ?? null,
+    error: null,
     open: vi.fn(async () => undefined),
     startNew: vi.fn(),
     leave: vi.fn(async (next: () => Promise<void>) => {
@@ -34,6 +38,7 @@ const setup = (
   const library = createStore(() => ({
     refresh: vi.fn(async () => undefined),
     rename: vi.fn(async () => true),
+    delete: vi.fn(async () => !(options.deleteRefused ?? false)),
   }));
   const assistant = createStore(() => ({ end: vi.fn(async () => undefined) }));
   const stores = { nav, save, run, library, assistant } satisfies ActionStores;
@@ -169,5 +174,91 @@ describe("createActions", () => {
 
     expect(save.getState().rename).toHaveBeenCalledExactlyOnceWith("Weekly");
     expect(library.getState().rename).toHaveBeenCalledExactlyOnceWith("flow-b", "Daily");
+  });
+
+  it("deletes the blueprint the editor holds by deleting it, ending its pane, then starting a new one", async () => {
+    const { actions, assistant, library, save } = setup({ flowId: "flow-a" });
+
+    await actions.deleteBlueprint("flow-a");
+
+    const ended = assistant.getState().end.mock.invocationCallOrder[0] ?? 0;
+    const deleted = library.getState().delete.mock.invocationCallOrder[0] ?? 0;
+    const started = save.getState().startNew.mock.invocationCallOrder[0] ?? 0;
+    expect(library.getState().delete).toHaveBeenCalledExactlyOnceWith("flow-a");
+    expect(deleted).toBeGreaterThan(0);
+    expect(deleted).toBeLessThan(ended);
+    expect(ended).toBeLessThan(started);
+  });
+
+  it("keeps the editor and its pane when the delete of the held blueprint is refused", async () => {
+    const { actions, assistant, library, save } = setup({ flowId: "flow-a", deleteRefused: true });
+
+    await actions.deleteBlueprint("flow-a");
+
+    expect(library.getState().delete).toHaveBeenCalledExactlyOnceWith("flow-a");
+    expect(assistant.getState().end).not.toHaveBeenCalled();
+    expect(save.getState().startNew).not.toHaveBeenCalled();
+  });
+
+  it("deletes a blueprint the editor does not hold without touching the editor or its pane", async () => {
+    const { actions, assistant, library, save, nav } = setup({ flowId: "flow-a" });
+
+    await actions.deleteBlueprint("flow-b");
+
+    expect(library.getState().delete).toHaveBeenCalledExactlyOnceWith("flow-b");
+    expect(assistant.getState().end).not.toHaveBeenCalled();
+    expect(save.getState().startNew).not.toHaveBeenCalled();
+    expect(nav.getState().page).toEqual({ name: "blueprints" });
+  });
+});
+
+describe("opening a blueprint through the editor's save store", () => {
+  const withOpenFlow = (openFlow: (payload: { flowId?: string }) => Promise<unknown>) => {
+    const nav = createNavStore();
+    nav.getState().go({ name: "run", runId: "run-1" });
+    const bridge = {
+      saveFlow: vi.fn(async () => ({ kind: "saved", flowId: "flow-1", version: 1 })),
+      openFlow: vi.fn(openFlow),
+      renameFlow: vi.fn(async () => null),
+      setDirty: vi.fn(),
+      onCloseRequest: vi.fn(() => () => {}),
+      answerClose: vi.fn(),
+    };
+    const save = createSaveStore({ bridge, canvas: createCanvasStore({ ready: false }) });
+    const run = createStore(() => ({
+      runBuild: vi.fn(async () => null),
+      start: vi.fn(async () => null),
+      deleteBuild: vi.fn(async () => true),
+      stop: vi.fn(async () => undefined),
+    }));
+    const library = createStore(() => ({
+      refresh: vi.fn(async () => undefined),
+      rename: vi.fn(async () => true),
+      delete: vi.fn(async () => true),
+    }));
+    const assistant = createStore(() => ({ end: vi.fn(async () => undefined) }));
+    return { nav, actions: createActions({ nav, save, run, library, assistant }) };
+  };
+
+  it("stays on the page and rejects with the engine's answer when the blueprint was deleted", async () => {
+    const { actions, nav } = withOpenFlow(async () => {
+      throw new Error("Blueprint flow-a was deleted");
+    });
+
+    await expect(actions.openBlueprint("flow-a")).rejects.toThrow("Blueprint flow-a was deleted");
+    expect(nav.getState().page).toEqual({ name: "run", runId: "run-1" });
+  });
+
+  it("opens the editor when the blueprint opens", async () => {
+    const { actions, nav } = withOpenFlow(async () => ({
+      flowId: "flow-a",
+      name: "Report",
+      version: null,
+      flow: null,
+    }));
+
+    await actions.openBlueprint("flow-a");
+
+    expect(nav.getState().page).toEqual({ name: "editor" });
   });
 });

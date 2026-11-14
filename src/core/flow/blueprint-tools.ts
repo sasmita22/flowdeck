@@ -45,9 +45,11 @@ export const toolInputs = {
 export type ToolName = keyof typeof toolInputs;
 
 const descriptions: Record<ToolName, string> = {
-  list_blueprints: "List every saved blueprint.",
-  search_blueprints: "Find blueprints whose name or any node label contains the query.",
-  read_blueprint: "Read a blueprint's nodes, wires, session and current problems.",
+  list_blueprints: "List every saved blueprint. Deleted blueprints are left out.",
+  search_blueprints:
+    "Find blueprints whose name or any node label contains the query. Deleted blueprints are left out.",
+  read_blueprint:
+    "Read a blueprint's nodes, wires, session and current problems. Reading a deleted blueprint answers that it was deleted.",
   add_node:
     "Add a node to a blueprint. The settings given are merged over the node type's defaults.",
   change_node: "Change a node's label or some of its settings.",

@@ -9,17 +9,17 @@ import {
   type LibraryBridge,
 } from "../../../src/app/renderer/library-store.js";
 
-const flows = [
-  {
-    flowId: "flow-a",
-    name: "Report",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    versions: 2,
-    lastSavedAt: "2026-01-02T00:00:00.000Z",
-    buildConfig: { repo: "/code/shop", variables: [] },
-    pinned: false,
-  },
-];
+const report = {
+  flowId: "flow-a",
+  name: "Report",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  versions: 2,
+  lastSavedAt: "2026-01-02T00:00:00.000Z",
+  buildConfig: { repo: "/code/shop", variables: [] },
+  pinned: false,
+};
+
+const flows = [report];
 
 const builds = [
   {
@@ -126,6 +126,7 @@ const fakeBridge = () =>
     listRuns: vi.fn(async () => runs),
     renameFlow: vi.fn(async () => null),
     pinFlow: vi.fn(async () => null),
+    deleteFlow: vi.fn(async () => null),
     buildFiles: vi.fn(async () => [
       { path: "commands/p1.md", sha256: "c", content: "do the thing" },
       { path: "manifest.json", sha256: "m", content: "{}" },
@@ -206,6 +207,50 @@ describe("createLibraryStore", () => {
     expect(bridge.pinFlow.mock.invocationCallOrder[0]).toBeLessThan(
       bridge.listFlows.mock.invocationCallOrder[0] ?? 0,
     );
+  });
+
+  it("asks before deleting a blueprint, and forgets the question on cancel without calling the engine", () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    library.getState().askDelete(report);
+    expect(library.getState().confirmingDelete).toEqual({ flowId: "flow-a", name: "Report" });
+
+    library.getState().cancelDelete();
+    expect(library.getState().confirmingDelete).toBeNull();
+    expect(bridge.deleteFlow).not.toHaveBeenCalled();
+    expect(bridge.listFlows).not.toHaveBeenCalled();
+  });
+
+  it("deletes a blueprint, reloads the lists without it and closes the question", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().refresh();
+    library.getState().askDelete(report);
+    bridge.listFlows.mockResolvedValueOnce([]);
+
+    await expect(library.getState().delete("flow-a")).resolves.toBe(true);
+
+    expect(bridge.deleteFlow).toHaveBeenCalledWith({ flowId: "flow-a" });
+    expect(bridge.deleteFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      bridge.listFlows.mock.invocationCallOrder[1] ?? 0,
+    );
+    expect(library.getState().flows).toEqual([]);
+    expect(library.getState().confirmingDelete).toBeNull();
+  });
+
+  it("holds the error, closes the question and answers false when the delete is refused", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().refresh();
+    library.getState().askDelete(report);
+    bridge.deleteFlow.mockRejectedValueOnce(new Error("Blueprint flow-a was deleted"));
+
+    await expect(library.getState().delete("flow-a")).resolves.toBe(false);
+
+    expect(library.getState().error).toBe("Blueprint flow-a was deleted");
+    expect(library.getState().confirmingDelete).toBeNull();
+    expect(bridge.listFlows).toHaveBeenCalledTimes(1);
   });
 
   it("opens a build's files by its id with the manifest first and shows it", async () => {

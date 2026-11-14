@@ -26,6 +26,7 @@ export class FakeFlowStore implements FlowStore {
   private readonly newId: () => string;
   private readonly blueprints: Blueprint[] = [];
   private readonly versions: LoadedFlow[] = [];
+  private readonly deleted = new Set<string>();
   private nextFailure: Error | undefined;
   private nextFlow = 1;
   private clock = 0;
@@ -44,7 +45,7 @@ export class FakeFlowStore implements FlowStore {
   }
 
   list(): FlowSummary[] {
-    return [...this.blueprints]
+    return this.live()
       .sort((a, b) => b.touched - a.touched)
       .map((blueprint) => this.summary(blueprint));
   }
@@ -56,6 +57,14 @@ export class FakeFlowStore implements FlowStore {
 
   pin(flowId: string, pinned: boolean): void {
     this.find(flowId).pinned = pinned;
+  }
+
+  delete(flowId: string): void {
+    this.deleted.add(this.find(flowId).flowId);
+  }
+
+  isDeleted(flowId: string): boolean {
+    return this.deleted.has(flowId);
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {
@@ -80,10 +89,12 @@ export class FakeFlowStore implements FlowStore {
     const found = this.versions.find(
       (saved) => saved.flowId === ref.flowId && saved.version === ref.version,
     );
-    return found ? { ...copy(found), name: this.find(found.flowId).name } : null;
+    const owner = this.blueprints.find((blueprint) => blueprint.flowId === found?.flowId);
+    return found && owner ? { ...copy(found), name: owner.name } : null;
   }
 
-  loadLatest(flowId: string | undefined = this.versions.at(-1)?.flowId): LoadedFlow | null {
+  loadLatest(flowId: string | undefined = this.latestLiveVersion()?.flowId): LoadedFlow | null {
+    if (flowId !== undefined && this.deleted.has(flowId)) return null;
     const latest = this.versions.filter((saved) => saved.flowId === flowId).at(-1);
     return latest ? this.load(latest) : null;
   }
@@ -103,11 +114,19 @@ export class FakeFlowStore implements FlowStore {
   private blueprintFor(target: string | NewBlueprint | undefined): Blueprint {
     if (typeof target === "string") return this.find(target);
     if (target !== undefined) return this.add(cleanName(target.name));
-    return this.blueprintOf(this.versions.at(-1)?.flowId) ?? this.add("Untitled");
+    return this.blueprintOf(this.latestLiveVersion()?.flowId) ?? this.add("Untitled");
+  }
+
+  private live(): Blueprint[] {
+    return this.blueprints.filter((blueprint) => !this.deleted.has(blueprint.flowId));
+  }
+
+  private latestLiveVersion(): LoadedFlow | undefined {
+    return this.versions.filter((saved) => !this.deleted.has(saved.flowId)).at(-1);
   }
 
   private blueprintOf(flowId: string | undefined): Blueprint | undefined {
-    return this.blueprints.find((blueprint) => blueprint.flowId === flowId);
+    return this.live().find((blueprint) => blueprint.flowId === flowId);
   }
 
   private find(flowId: string): Blueprint {

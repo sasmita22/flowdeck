@@ -93,6 +93,8 @@ const unreadableFlows = (): FlowStore => ({
   list: unreadable,
   rename: unreadable,
   pin: unreadable,
+  delete: unreadable,
+  isDeleted: unreadable,
   save: unreadable,
   loadLatest: unreadable,
   load: unreadable,
@@ -454,6 +456,80 @@ describe("createEngineHandler", async () => {
       expect(
         await handler.handle({ id: 4, type: "open-flow", payload: { flowId: "nope" } }),
       ).toEqual({ id: 4, ok: false, error: "No blueprint nope" });
+    });
+
+    it("deletes a blueprint, so the list leaves it out", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      flows.create("A");
+      flows.create("B");
+
+      expect(
+        await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({ id: 1, ok: true, value: null });
+      expect(await handler.handle({ id: 2, type: "list-flows" })).toMatchObject({
+        ok: true,
+        value: [{ flowId: "flow-b", name: "B" }],
+      });
+    });
+
+    it("answers that a deleted blueprint was deleted, and an unknown one that it does not exist", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      flows.create("A");
+      await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } });
+
+      expect(
+        await handler.handle({ id: 2, type: "open-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({ id: 2, ok: false, error: "Blueprint flow-a was deleted" });
+      expect(
+        await handler.handle({ id: 3, type: "open-flow", payload: { flowId: "nope" } }),
+      ).toEqual({ id: 3, ok: false, error: "No blueprint nope" });
+    });
+
+    it("opens the newest live blueprint when the newest one was deleted", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      const second = onMainFlow([agent("other")], []);
+      await handler.handle({
+        id: 1,
+        type: "save-flow",
+        payload: { flowId: null, name: "A", flow: savedFlow() },
+      });
+      await handler.handle({
+        id: 2,
+        type: "save-flow",
+        payload: { flowId: null, name: "B", flow: second },
+      });
+      await handler.handle({ id: 3, type: "delete-flow", payload: { flowId: "flow-b" } });
+
+      expect(await handler.handle({ id: 4, type: "open-flow", payload: {} })).toEqual({
+        id: 4,
+        ok: true,
+        value: { flowId: "flow-a", name: "A", version: 1, flow: savedFlow() },
+      });
+    });
+
+    it("refuses to rename or pin a deleted blueprint", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a") });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      flows.create("A");
+      await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } });
+
+      expect(
+        await handler.handle({
+          id: 2,
+          type: "rename-flow",
+          payload: { flowId: "flow-a", name: "Weekly" },
+        }),
+      ).toMatchObject({ id: 2, ok: false });
+      expect(
+        await handler.handle({
+          id: 3,
+          type: "pin-flow",
+          payload: { flowId: "flow-a", pinned: true },
+        }),
+      ).toMatchObject({ id: 3, ok: false });
     });
   });
 
@@ -2725,6 +2801,39 @@ describe("createEngineHandler", async () => {
             },
           });
           expect(stepThreeTurnOf(1)).toContain(firstAnswer.answer);
+        });
+
+        it("keeps a built build's run, its list entry and a needs-you rebuild working after its blueprint is deleted", async () => {
+          const ended = await endPush(await startedPendingId("kept"));
+          const { buildId } = ended;
+          if (buildId === undefined) throw new Error("the build did not end built");
+          const runId = await startedOn(buildId);
+          await untilFinished(runId);
+          asking();
+          const asked = await askedBuild();
+
+          expect(
+            await handler.handle({
+              id: nextId++,
+              type: "delete-flow",
+              payload: { flowId: "flow-1" },
+            }),
+          ).toMatchObject({ ok: true });
+
+          expect(
+            await handler.handle({ id: nextId++, type: "load-run", payload: { runId } }),
+          ).toMatchObject({ ok: true, value: { run: { id: runId }, name: "kept" } });
+          const listed = await handler.handle({ id: nextId++, type: "list-builds" });
+          expect((listed as { value: unknown[] }).value).toContainEqual(
+            expect.objectContaining({
+              id: buildId,
+              blueprintName: "Untitled",
+              blueprintVersion: 1,
+            }),
+          );
+          const rebuilt = await rebuiltPendingId(asked, [firstAnswer]);
+          await endPush(rebuilt);
+          expect(runs.pendingBuild(rebuilt)).toMatchObject({ flowId: "flow-1", version: 1 });
         });
 
         it("refuses a needs-you build that has no snapshot, naming it, and starts nothing", async () => {

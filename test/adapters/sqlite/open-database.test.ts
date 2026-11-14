@@ -45,6 +45,7 @@ const allMigrations = [
   { name: "010_flow_pinned.sql" },
   { name: "011_build_snapshots.sql" },
   { name: "012_drop_pending_builds_one_per_flow.sql" },
+  { name: "013_flows_deleted_at.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -97,7 +98,7 @@ describe("openDatabase", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  it("applies every migration, 001 to 012, to a new database file", () => {
+  it("applies every migration, 001 to 013, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
   });
 
@@ -419,7 +420,7 @@ describe("openDatabase", () => {
 
       expect(migrations(db)).toEqual(allMigrations);
       expect(db.prepare("SELECT * FROM flows").all(), "flows").toEqual(
-        (before["flows"] ?? []).map((row) => ({ ...row, pinned: 0 })),
+        (before["flows"] ?? []).map((row) => ({ ...row, pinned: 0, deleted_at: null })),
       );
       for (const table of ["flow_versions", "run_sessions", "run_nodes", "events", "activity"]) {
         expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(before[table]);

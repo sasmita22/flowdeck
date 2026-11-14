@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Actions } from "../actions.js";
@@ -61,6 +61,7 @@ export function RunPage({
   const runs = useStore(library, (state) => state.runs);
   const card = selectBuildCards({ builds, runs }).find((build) => build.id === buildId);
   const starting = useStore(run, (state) => state.starting);
+  const [openFailed, setOpenFailed] = useState<{ runId: string; message: string } | null>(null);
 
   useEffect(() => {
     void library.getState().openRun(runId);
@@ -133,7 +134,14 @@ export function RunPage({
             <button
               className="fd-btn"
               data-testid={pageTestIds.runOpenBlueprint}
-              onClick={() => void actions.openBlueprint(flowId)}
+              onClick={() =>
+                void actions.openBlueprint(flowId).catch((error: unknown) =>
+                  setOpenFailed({
+                    runId,
+                    message: error instanceof Error ? error.message : String(error),
+                  }),
+                )
+              }
             >
               Open blueprint
             </button>
@@ -178,6 +186,11 @@ export function RunPage({
         {status === "interrupted" && loaded?.note !== undefined && (
           <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">
             {loaded.note}
+          </p>
+        )}
+        {openFailed?.runId === runId && (
+          <p className="fd-run-note" data-testid={pageTestIds.runBlueprintDeleted} role="status">
+            {openFailed.message}
           </p>
         )}
         {live !== null && waiting && !inspectorOpen && (

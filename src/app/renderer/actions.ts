@@ -7,9 +7,9 @@ import type { SaveState } from "./save-store.js";
 
 export type ActionStores = {
   nav: StoreApi<NavState>;
-  save: StoreApi<Pick<SaveState, "flowId" | "open" | "startNew" | "leave" | "rename">>;
+  save: StoreApi<Pick<SaveState, "flowId" | "error" | "open" | "startNew" | "leave" | "rename">>;
   run: StoreApi<Pick<RunState, "runBuild" | "start" | "deleteBuild" | "stop">>;
-  library: StoreApi<Pick<LibraryState, "refresh" | "rename">>;
+  library: StoreApi<Pick<LibraryState, "refresh" | "rename" | "delete">>;
   assistant: StoreApi<Pick<AssistantState, "end">>;
 };
 
@@ -17,6 +17,7 @@ export type Actions = {
   newBlueprint(): Promise<void>;
   openBlueprint(flowId: string): Promise<void>;
   renameBlueprint(flowId: string, name: string): Promise<void>;
+  deleteBlueprint(flowId: string): Promise<void>;
   runBuild(buildId: string): Promise<void>;
   startRun(choice: RunChoice): Promise<void>;
   deleteBuild(buildId: string): Promise<void>;
@@ -48,12 +49,20 @@ export const createActions = ({ nav, save, run, library, assistant }: ActionStor
       await save.getState().leave(async () => {
         await assistant.getState().end();
         await save.getState().open(flowId);
+        const { error } = save.getState();
+        if (error !== null) throw new Error(error);
         toEditor();
       });
     },
     renameBlueprint: async (flowId, name) => {
       if (save.getState().flowId === flowId) await save.getState().rename(name);
       else await library.getState().rename(flowId, name);
+    },
+    deleteBlueprint: async (flowId) => {
+      const held = save.getState().flowId === flowId;
+      if (!(await library.getState().delete(flowId)) || !held) return;
+      await assistant.getState().end();
+      save.getState().startNew();
     },
     runBuild: (buildId) => showRun(run.getState().runBuild(buildId)),
     startRun: (choice) => showRun(run.getState().start(choice)),

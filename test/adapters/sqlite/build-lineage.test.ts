@@ -592,7 +592,7 @@ describe("build lineage", () => {
   describe("migrating a database made before builds had lineage", () => {
     const seedOldDatabase = async () => {
       const db = connect(await stage("to-005", "006"));
-      new SqliteFlowStore({ db, newId: () => "flow-1" }).save(twoNodes());
+      new SqliteFlowStore({ db, newId: () => "flow-1" }).save(twoNodes(), { name: "Untitled" });
       db.exec(`
         INSERT INTO builds (hash, dir, created_at) VALUES ('old', '/fd/builds/old', 5);
         INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash)
@@ -646,7 +646,7 @@ describe("build lineage", () => {
             const { build_hash, ...rest } = row;
             return { ...rest, build_id: build_hash };
           }
-          if (table === "flows") return { ...row, pinned: 0 };
+          if (table === "flows") return { ...row, pinned: 0, deleted_at: null };
           return row;
         });
         expect(after, table).toEqual(expected);

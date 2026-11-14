@@ -40,6 +40,8 @@ export interface FlowStore {
   /** Throws when the blueprint does not exist or the name is blank. */
   rename(flowId: string, name: string): void;
   pin(flowId: string, pinned: boolean): void;
+  delete(flowId: string): void;
+  isDeleted(flowId: string): boolean;
   /**
    * Appends the next version to the blueprint `target` names, or creates a blueprint named
    * `target.name` with this as its version 1, all or nothing. Without a target, appends to the

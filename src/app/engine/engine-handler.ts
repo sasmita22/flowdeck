@@ -1355,7 +1355,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
     if (flowId === undefined) return null;
     const found = flows.list().find((summary) => summary.flowId === flowId);
-    if (found === undefined) throw new Error(`No blueprint ${flowId}`);
+    if (found === undefined) {
+      if (flows.isDeleted(flowId)) throw new Error(`Blueprint ${flowId} was deleted`);
+      throw new Error(`No blueprint ${flowId}`);
+    }
     return { flowId, name: found.name, version: null, flow: null };
   };
 
@@ -1584,6 +1587,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "pin-flow":
           return parsedAnswer(request, pinFlowPayload, ({ flowId, pinned }) => {
             storesOrThrow().flows.pin(flowId, pinned);
+          });
+        case "delete-flow":
+          return parsedAnswer(request, flowIdPayload, async ({ flowId }) => {
+            storesOrThrow().flows.delete(flowId);
+            if (options.blueprint !== undefined) {
+              await stopBlueprintSession(options.blueprint.sessions, flowId);
+            }
           });
         case "open-flow":
           return parsedAnswer(request, openFlowPayload, ({ flowId }) =>
