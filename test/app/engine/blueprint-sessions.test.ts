@@ -268,6 +268,40 @@ describe("engine blueprint sessions", () => {
     });
   });
 
+  describe("delete-flow", () => {
+    it("stops the deleted blueprint's session and removes its folder, leaving other flows alone", async () => {
+      const flows = new FakeFlowStore();
+      const deleted = flows.create("A").flowId;
+      const kept = flows.create("B").flowId;
+      const handler = handlerAt(home, {
+        openStores: () => ({ runs: new FakeStore(), flows }),
+      });
+      await call(handler, "blueprint-session-start", { flowId: deleted });
+      await call(handler, "blueprint-session-start", { flowId: kept });
+
+      await call(handler, "delete-flow", { flowId: deleted });
+
+      expect(flows.isDeleted(deleted)).toBe(true);
+      expect(sessions.stopped).toEqual([`fd-bp-${deleted}`]);
+      expect(await sessions.alive(`fd-bp-${deleted}`)).toBe(false);
+      expect(existsSync(blueprintSessionFolder(home, deleted))).toBe(false);
+      expect(await sessions.alive(`fd-bp-${kept}`)).toBe(true);
+      expect(isFolder(blueprintSessionFolder(home, kept))).toBe(true);
+    });
+
+    it("deletes a blueprint whose session was never started", async () => {
+      const flows = new FakeFlowStore();
+      const flowId = flows.create("A").flowId;
+      const handler = handlerAt(home, {
+        openStores: () => ({ runs: new FakeStore(), flows }),
+      });
+
+      expect(await call(handler, "delete-flow", { flowId })).toBeNull();
+      expect(flows.isDeleted(flowId)).toBe(true);
+      expect(flows.list()).toEqual([]);
+    });
+  });
+
   describe("blueprint-session-stop-all", () => {
     it("stops the session of every folder under bp-sessions and removes the folders", async () => {
       const handler = handlerAt(home);

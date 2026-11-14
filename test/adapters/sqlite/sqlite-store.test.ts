@@ -149,9 +149,10 @@ describe("SqliteStore", () => {
       { name: "010_flow_pinned.sql" },
       { name: "011_build_snapshots.sql" },
       { name: "012_drop_pending_builds_one_per_flow.sql" },
+      { name: "013_flows_deleted_at.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 12]);
+    expect(before).toEqual([1, 1, 3, 1, 13]);
   });
 
   it("writes one run, one session and one row per node", () => {

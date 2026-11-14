@@ -236,6 +236,16 @@ describe("test ids", () => {
     });
   });
 
+  it("names a blueprint card's Delete by the blueprint, its confirm and two answers, and the run page's deleted message", () => {
+    expect(pageTestIds.blueprintDelete("flow-a")).toBe("blueprint-delete-flow-a");
+    expect(pageTestIds).toMatchObject({
+      blueprintDeleteDialog: "blueprint-delete-dialog",
+      blueprintDeleteConfirm: "blueprint-delete-confirm",
+      blueprintDeleteCancel: "blueprint-delete-cancel",
+      runBlueprintDeleted: "run-blueprint-deleted",
+    });
+  });
+
   it("names the Branch variable picker and the Doctor's worktree list", () => {
     expect(branchVariableTestId).toBe("node-setting-variable");
     expect(branchDecidedByTestId).toBe("node-setting-decided-by");

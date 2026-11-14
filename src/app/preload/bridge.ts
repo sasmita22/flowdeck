@@ -14,6 +14,7 @@ export const engineCalls = {
   listFlows: { channel: "flowdeck:list-flows", request: "list-flows" },
   renameFlow: { channel: "flowdeck:rename-flow", request: "rename-flow" },
   pinFlow: { channel: "flowdeck:pin-flow", request: "pin-flow" },
+  deleteFlow: { channel: "flowdeck:delete-flow", request: "delete-flow" },
   buildVersion: { channel: "flowdeck:build-version", request: "build-version" },
   listBuilds: { channel: "flowdeck:list-builds", request: "list-builds" },
   buildFiles: { channel: "flowdeck:build-files", request: "build-files" },
@@ -50,6 +51,7 @@ export type EngineCalls = {
   listFlows(): Promise<unknown>;
   renameFlow(payload: { flowId: string; name: string }): Promise<unknown>;
   pinFlow(payload: { flowId: string; pinned: boolean }): Promise<unknown>;
+  deleteFlow(payload: { flowId: string }): Promise<unknown>;
   buildVersion(payload: {
     flowId: string;
     version: number;

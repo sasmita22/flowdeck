@@ -9,7 +9,9 @@ import { pinnedFirst, type LibraryState } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
 import { PinButton } from "../pin-button.js";
 import type { RunState } from "../run-store.js";
+import type { SaveState } from "../save-store.js";
 import { pageTestIds } from "../test-ids.js";
+import { DeleteBlueprintPrompt } from "./delete-blueprint-prompt.js";
 import { Empty, PageHead } from "./page-head.js";
 
 const versionsText = (count: number) => (count === 1 ? "1 version" : `${count} versions`);
@@ -102,6 +104,14 @@ function BlueprintCard({
         >
           Build v{Math.max(flow.versions, 1)}
         </button>
+        <button
+          className="fd-btn"
+          data-testid={pageTestIds.blueprintDelete(flow.flowId)}
+          title="Delete the blueprint; its builds and runs are kept"
+          onClick={() => library.getState().askDelete(flow)}
+        >
+          Delete
+        </button>
       </div>
     </article>
   );
@@ -111,11 +121,13 @@ export function BlueprintsPage({
   nav,
   library,
   run,
+  save,
   actions,
 }: {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
+  save: StoreApi<SaveState>;
   actions: Actions;
 }) {
   const flows = useStore(library, (state) => state.flows);
@@ -154,6 +166,7 @@ export function BlueprintsPage({
           />
         ))}
       </div>
+      <DeleteBlueprintPrompt library={library} save={save} actions={actions} />
     </>
   );
 }

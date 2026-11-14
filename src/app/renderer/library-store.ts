@@ -25,6 +25,7 @@ export type LibraryBridge = Pick<
   | "listRuns"
   | "renameFlow"
   | "pinFlow"
+  | "deleteFlow"
   | "buildFiles"
   | "buildPicture"
   | "openFlow"
@@ -35,6 +36,8 @@ export type LibraryBridge = Pick<
 
 type BuildRecord = z.infer<typeof buildRecordSchema>;
 type RunSummary = z.infer<typeof runSummarySchema>;
+
+export type DeleteQuestion = Pick<FlowSummary, "flowId" | "name">;
 
 export type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
 
@@ -49,10 +52,14 @@ export type LibraryState = {
   worktrees: string[] | null;
   viewedRun: LoadedRun | null;
   pictures: Record<string, string | null>;
+  confirmingDelete: DeleteQuestion | null;
   refresh(): Promise<void>;
   openRun(runId: string): Promise<void>;
   rename(flowId: string, name: string): Promise<boolean>;
   pin(flowId: string, pinned: boolean): Promise<void>;
+  askDelete(flow: DeleteQuestion): void;
+  cancelDelete(): void;
+  delete(flowId: string): Promise<boolean>;
   openFiles(buildId: string): Promise<void>;
   selectFile(path: string): void;
   loadPicture(key: SnapshotKey): Promise<void>;
@@ -128,6 +135,7 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
     worktrees: null,
     viewedRun: null,
     pictures: {},
+    confirmingDelete: null,
 
     openRun: async (runId) => {
       try {
@@ -175,6 +183,22 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
         return;
       }
       await get().refresh();
+    },
+
+    askDelete: ({ flowId, name }) => set({ confirmingDelete: { flowId, name } }),
+
+    cancelDelete: () => set({ confirmingDelete: null }),
+
+    delete: async (flowId) => {
+      try {
+        await bridge.deleteFlow({ flowId });
+      } catch (error) {
+        set({ confirmingDelete: null, error: messageOf(error) });
+        return false;
+      }
+      set({ confirmingDelete: null });
+      await get().refresh();
+      return true;
     },
 
     openFiles: async (buildId) => {

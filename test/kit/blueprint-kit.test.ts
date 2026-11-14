@@ -330,6 +330,14 @@ describe("the blueprint kit", () => {
     expect(skill()).toContain(`\`${id}\``);
   });
 
+  it("says list_blueprints lists only blueprints that have not been deleted", () => {
+    const row = tableRows(sectionOf(skill(), "## Tools")).find(
+      ([name = ""]) => backticked(name) === "list_blueprints",
+    );
+
+    expect(row?.[1]).toBe("Lists every saved blueprint that has not been deleted");
+  });
+
   it("says to call read_blueprint before any edit", () => {
     expect(skill()).toMatch(/`read_blueprint`[^.\n]*before[^.\n]*edit/i);
   });

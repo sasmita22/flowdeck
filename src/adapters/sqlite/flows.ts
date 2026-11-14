@@ -87,6 +87,7 @@ export class SqliteFlowStore implements FlowStore {
            FROM flows
            LEFT JOIN flow_versions AS latest ON latest.flow_id = flows.id
             AND latest.version = (SELECT MAX(version) FROM flow_versions WHERE flow_id = flows.id)
+          WHERE flows.deleted_at IS NULL
           ORDER BY COALESCE(latest.saved_at, flows.created_at) DESC, flows.rowid DESC`,
       )
       .all() as SummaryRow[];
@@ -95,16 +96,30 @@ export class SqliteFlowStore implements FlowStore {
 
   rename(flowId: string, name: string): void {
     const changed = this.db
-      .prepare("UPDATE flows SET name = ? WHERE id = ?")
+      .prepare("UPDATE flows SET name = ? WHERE id = ? AND deleted_at IS NULL")
       .run(cleanName(name), flowId).changes;
     if (changed === 0) throw new Error(`No blueprint ${flowId}`);
   }
 
   pin(flowId: string, pinned: boolean): void {
     const changed = this.db
-      .prepare("UPDATE flows SET pinned = ? WHERE id = ?")
+      .prepare("UPDATE flows SET pinned = ? WHERE id = ? AND deleted_at IS NULL")
       .run(pinned ? 1 : 0, flowId).changes;
     if (changed === 0) throw new Error(`No blueprint ${flowId}`);
+  }
+
+  delete(flowId: string): void {
+    const changed = this.db
+      .prepare("UPDATE flows SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+      .run(this.now().getTime(), flowId).changes;
+    if (changed === 0) throw new Error(`No blueprint ${flowId}`);
+  }
+
+  isDeleted(flowId: string): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM flows WHERE id = ? AND deleted_at IS NOT NULL").get(flowId) !==
+      undefined
+    );
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {
@@ -183,7 +198,10 @@ export class SqliteFlowStore implements FlowStore {
   loadLatest(flowId: string | undefined = this.currentFlowId()): LoadedFlow | null {
     if (flowId === undefined) return null;
     const { version } = this.db
-      .prepare("SELECT MAX(version) AS version FROM flow_versions WHERE flow_id = ?")
+      .prepare(
+        `SELECT MAX(version) AS version FROM flow_versions
+          WHERE flow_id = ? AND flow_id IN (SELECT id FROM flows WHERE deleted_at IS NULL)`,
+      )
       .get(flowId) as { version: number | null };
     return version === null ? null : this.load({ flowId, version });
   }
@@ -276,7 +294,11 @@ export class SqliteFlowStore implements FlowStore {
 
   private currentFlowId(): string | undefined {
     const row = this.db
-      .prepare("SELECT flow_id FROM flow_versions ORDER BY rowid DESC LIMIT 1")
+      .prepare(
+        `SELECT flow_id FROM flow_versions
+          WHERE flow_id IN (SELECT id FROM flows WHERE deleted_at IS NULL)
+          ORDER BY rowid DESC LIMIT 1`,
+      )
       .get() as { flow_id: string } | undefined;
     return row?.flow_id;
   }
@@ -291,7 +313,10 @@ export class SqliteFlowStore implements FlowStore {
   }
 
   private exists(flowId: string): boolean {
-    return this.db.prepare("SELECT 1 FROM flows WHERE id = ?").get(flowId) !== undefined;
+    return (
+      this.db.prepare("SELECT 1 FROM flows WHERE id = ? AND deleted_at IS NULL").get(flowId) !==
+      undefined
+    );
   }
 
   private summary(flowId: string): FlowSummary {

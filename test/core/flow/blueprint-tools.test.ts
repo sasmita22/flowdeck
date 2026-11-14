@@ -151,6 +151,17 @@ describe("blueprintToolDefinitions", () => {
     expect(description).toMatch(/then check/i);
   });
 
+  it.each(["list_blueprints", "search_blueprints"])(
+    "says %s leaves deleted blueprints out",
+    (name) => {
+      expect(definition(name).description).toMatch(/deleted blueprints are left out/i);
+    },
+  );
+
+  it("says read_blueprint of a deleted blueprint answers that it was deleted", () => {
+    expect(definition("read_blueprint").description).toMatch(/deleted.*answers.*was deleted/i);
+  });
+
   it("lets read_blueprint name a blueprint, optionally", () => {
     const [branch] = inputBranches("read_blueprint");
     expect(branch?.properties?.blueprint?.type).toBe("string");

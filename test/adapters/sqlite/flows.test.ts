@@ -624,6 +624,53 @@ describe("SqliteFlowStore", () => {
     });
   });
 
+  describe("deleted_at on a blueprint is set once", () => {
+    const deletedAt = (db: Database.Database) =>
+      db.prepare("SELECT deleted_at FROM flows WHERE id = 'flow-1'").get();
+
+    const saved = () => {
+      open().save(relabelled("a"));
+      return raw();
+    };
+
+    it("lets deleted_at be set once, and refuses clearing or changing it", () => {
+      const db = saved();
+
+      db.exec("UPDATE flows SET deleted_at = 100 WHERE id = 'flow-1'");
+
+      expect(deletedAt(db)).toEqual({ deleted_at: 100 });
+      expect(() => db.exec("UPDATE flows SET deleted_at = NULL WHERE id = 'flow-1'")).toThrow();
+      expect(() => db.exec("UPDATE flows SET deleted_at = 200 WHERE id = 'flow-1'")).toThrow();
+      expect(deletedAt(db)).toEqual({ deleted_at: 100 });
+    });
+
+    it("still lets name and pinned change, before and after deleted_at is set", () => {
+      const db = saved();
+      const row = () => db.prepare("SELECT name, pinned FROM flows WHERE id = 'flow-1'").get();
+
+      db.exec("UPDATE flows SET name = 'Live', pinned = 1 WHERE id = 'flow-1'");
+      expect(row()).toEqual({ name: "Live", pinned: 1 });
+
+      db.exec("UPDATE flows SET deleted_at = 100 WHERE id = 'flow-1'");
+      db.exec("UPDATE flows SET name = 'Gone', pinned = 0 WHERE id = 'flow-1'");
+      expect(row()).toEqual({ name: "Gone", pinned: 0 });
+    });
+
+    it("keeps a deleted blueprint's versions locked, and marks its row deleted", () => {
+      const store = open();
+      store.save(relabelled("a"));
+
+      store.delete("flow-1");
+
+      const db = raw();
+      expect(() => db.exec("DELETE FROM flow_versions WHERE flow_id = 'flow-1'")).toThrow(
+        "saved flow versions are locked",
+      );
+      expect(count(db, "flow_versions")).toBe(1);
+      expect(deletedAt(db)).toEqual({ deleted_at: expect.any(Number) as unknown });
+    });
+  });
+
   describe("a version saved with a File wire", () => {
     const agentSettings = {
       role: "implementer",
@@ -801,6 +848,7 @@ describe("SqliteFlowStore", () => {
       { name: "010_flow_pinned.sql" },
       { name: "011_build_snapshots.sql" },
       { name: "012_drop_pending_builds_one_per_flow.sql" },
+      { name: "013_flows_deleted_at.sql" },
     ]);
   });
 });

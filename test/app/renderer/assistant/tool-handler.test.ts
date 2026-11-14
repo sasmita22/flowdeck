@@ -322,6 +322,15 @@ describe("tool handler reads", () => {
     expect(save.getState().flowId).toBe("flow-1");
   });
 
+  it("read_blueprint of a deleted blueprint answers that it was deleted", async () => {
+    const { bridge, call } = await setup();
+    bridge.openFlow.mockRejectedValueOnce(new Error("Blueprint flow-9 was deleted"));
+
+    const result = await call("read_blueprint", { blueprint: "flow-9" });
+
+    expect(result).toEqual({ ok: false, reason: "Blueprint flow-9 was deleted" });
+  });
+
   it("read_blueprint raises no problem for a blank Agent added off the main flow", async () => {
     const { call } = await setup();
     const added = await call("add_node", {

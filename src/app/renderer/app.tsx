@@ -185,7 +185,7 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
   const { nav, library, run, save, canvas, buildProgress, terminal, actions } = stores;
   switch (page.name) {
     case "blueprints":
-      return <BlueprintsPage nav={nav} library={library} run={run} actions={actions} />;
+      return <BlueprintsPage nav={nav} library={library} run={run} save={save} actions={actions} />;
     case "builds":
       return (
         <BuildsPage
