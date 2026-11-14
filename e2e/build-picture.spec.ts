@@ -17,7 +17,13 @@ let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
-const oneAgent = () => onMainFlow([{ ...agent("s1"), label: "Old label" }], []);
+const oneAgent = () => {
+  const built = onMainFlow([{ ...agent("s1"), label: "Old label" }], []);
+  return {
+    ...built,
+    nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+  };
+};
 
 const openBlueprint = async (window: Page, flowId: string) => {
   await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
