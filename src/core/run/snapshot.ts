@@ -42,7 +42,7 @@ export function runSnapshot(input: {
 
 export const snapshotStatusSchema = z.enum(["running", "done", "failed", "stopped", "interrupted"]);
 
-const nodeStateSchema = z.enum([
+export const nodeStateSchema = z.enum([
   "waiting",
   "sent",
   "running",

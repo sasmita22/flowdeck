@@ -1,4 +1,3 @@
-import type { Flow } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
 import type { BuildEvent, BuildOutcome, PendingBuild, StoredBuildEvent } from "./build-progress.js";
@@ -33,6 +32,7 @@ export type NewBuild = {
   source?: BuildSource;
   files: BuildFileRecord[];
   nodes: BuildNodeRecord[];
+  manifest: string;
 };
 
 export type BuildRecord = {
@@ -76,7 +76,7 @@ export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string
 
 export type EventEntry = { nodeId: string; event: RunEvent };
 
-export type NewBuildSnapshot = { blueprintName: string; version: number; flow: Flow; svg: string };
+export type NewBuildSnapshot = { blueprintName: string; version: number; svg: string };
 
 export type BuildSnapshot = NewBuildSnapshot & { pendingId: string | null; buildId: string | null };
 
@@ -94,6 +94,8 @@ export type NewPendingBuild = Pick<
   PendingBuild,
   "flowId" | "version" | "name" | "origin" | "startedAt"
 > & { snapshot?: NewBuildSnapshot };
+
+export type ManifestGap = { buildId: string; manifestSha256: string };
 
 export type PendingBuildStart =
   { kind: "started"; pendingId: string } | { kind: "busy"; reason: "name" };
@@ -117,6 +119,7 @@ export interface Store {
   findRun(id: string): RunRecord | undefined;
   /** Every run, the running ones first, then the newest. */
   listRuns(): RunSummary[];
+  findRunSummary(id: string): RunSummary | undefined;
   append(runId: string, nodeId: string, event: RunEvent): void;
   appendAll(runId: string, entries: readonly EventEntry[]): void;
   events(runId: string): StoredEvent[];
@@ -149,4 +152,7 @@ export interface Store {
     gap: Pick<SnapshotGap, "pendingId" | "buildId">,
     snapshot: NewBuildSnapshot,
   ): boolean;
+  storeManifest(manifest: { buildId: string; manifest: string }): void;
+  buildManifest(buildId: string): string | undefined;
+  listManifestGaps(): ManifestGap[];
 }

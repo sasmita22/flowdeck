@@ -2,8 +2,8 @@ import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
-import { nodeLabel, type CanvasState } from "../canvas/store.js";
 import type { RunView } from "../run-store.js";
+import { runNodeLabel, type RunLabels } from "./inspector.js";
 import { selectActivity, selectFiles, type InspectorState } from "./store.js";
 
 const pathStyle: CSSProperties = {
@@ -18,20 +18,19 @@ const headingStyle: CSSProperties = { fontSize: "var(--fs-sm)", margin: "12px 0 
 export function FilesTab({
   inspector,
   run,
-  canvas,
+  labels,
   stored,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
-  canvas: StoreApi<CanvasState>;
+  labels: RunLabels;
   stored: readonly ActivityEntry[];
 }) {
   const runId = useStore(run, (state) => state.snapshot?.runId);
   const feed = useStore(inspector, (state) => state.feed);
-  const nodes = useStore(canvas, (state) => state.flow.nodes);
   const files = selectFiles(
     selectActivity({ feed }, runId, stored),
-    nodes.map((node) => node.id),
+    labels.nodes.map((node) => node.id),
   );
   if (files.nodes.length === 0 && files.pullRequests.length === 0) {
     return <p data-testid="files-empty">No node has written a file yet</p>;
@@ -43,14 +42,14 @@ export function FilesTab({
           <h3 style={headingStyle}>Pull requests</h3>
           {files.pullRequests.map(({ nodeId, url }) => (
             <p key={url} data-testid="files-pr" style={pathStyle}>
-              <strong>{nodeLabel(nodes, nodeId)}</strong> {url}
+              <strong>{runNodeLabel(labels, nodeId)}</strong> {url}
             </p>
           ))}
         </>
       )}
       {files.nodes.map(({ nodeId, paths }) => (
         <section key={nodeId} data-testid={`files-node-${nodeId}`}>
-          <h3 style={headingStyle}>{nodeLabel(nodes, nodeId)}</h3>
+          <h3 style={headingStyle}>{runNodeLabel(labels, nodeId)}</h3>
           {paths.map((path) => (
             <p key={path} style={pathStyle}>
               {path}

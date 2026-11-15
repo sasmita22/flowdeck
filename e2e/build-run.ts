@@ -29,6 +29,17 @@ export const buildIdNamed = (home: string, name: string): string => {
   return row.id;
 };
 
+export async function runIdOf(home: string, buildId: string): Promise<string> {
+  const latestSql =
+    "SELECT id FROM runs WHERE build_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1";
+  await expect
+    .poll(() => firstRow<{ id: string }>(home, latestSql, buildId)?.id, { timeout: 20_000 })
+    .toBeDefined();
+  const row = firstRow<{ id: string }>(home, latestSql, buildId);
+  if (row === undefined) throw new Error(`no run of build ${buildId} was recorded`);
+  return row.id;
+}
+
 const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export async function buildOnCanvas(

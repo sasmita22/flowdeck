@@ -14,6 +14,7 @@ import { costReportSchema, type CostReport } from "../../core/run/cost.js";
 import { deleteBuildResultSchema, type KeptAfterDelete } from "../../core/run/delete-build.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
 import { buildVersionResultSchema } from "../../core/run/listing.js";
+import { pipelineSchema, type PipelineItem } from "../../core/run/pipeline.js";
 import { runChoicesSchema } from "../../core/run/options.js";
 import {
   runSnapshotSchema,
@@ -36,6 +37,7 @@ export type RunBridge = Pick<
   | "retryNode"
   | "resumeRun"
   | "runCost"
+  | "runPipeline"
   | "deleteBuild"
   | "defaultBranch"
   | "listBranches"
@@ -89,6 +91,8 @@ export type BuildCardRun = {
 
 export type KeptBuild = { buildId: string } & KeptAfterDelete;
 
+export type StageSelection = { nodeId: string; round?: number };
+
 export type RunState = {
   snapshots: Record<string, RunSnapshot>;
   latestRunId: string | null;
@@ -99,6 +103,8 @@ export type RunState = {
   dialog: RunDialog | null;
   kept: KeptBuild | null;
   cost: { runId: string; report: CostReport } | null;
+  pipelines: Record<string, PipelineItem[] | null>;
+  selectedStage: Record<string, StageSelection>;
   connect(): Promise<void>;
   view(runId: string): Promise<void>;
   openBuild(source?: BuildSource): Promise<void>;
@@ -115,6 +121,8 @@ export type RunState = {
   retry(runId: string, nodeId: string): Promise<string | null>;
   resume(runId: string): Promise<string | null>;
   loadCost(runId: string): Promise<void>;
+  loadPipeline(runId: string): Promise<void>;
+  selectStage(runId: string, stage: StageSelection): void;
 };
 
 export type RunView = { snapshot: RunSnapshot | null };
@@ -360,6 +368,8 @@ export const createRunStore = ({
       dialog: null,
       kept: null,
       cost: null,
+      pipelines: {},
+      selectedStage: {},
 
       connect: async () => {
         bridge.onRunState((value) => {
@@ -544,5 +554,17 @@ export const createRunStore = ({
           set({ error: messageOf(thrown) });
         }
       },
+
+      loadPipeline: async (runId) => {
+        try {
+          const pipeline = pipelineSchema.nullable().parse(await bridge.runPipeline({ runId }));
+          set({ pipelines: { ...get().pipelines, [runId]: pipeline } });
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+        }
+      },
+
+      selectStage: (runId, stage) =>
+        set({ selectedStage: { ...get().selectedStage, [runId]: stage } }),
     };
   });

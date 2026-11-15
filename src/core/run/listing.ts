@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { Flow } from "../flow/schema.js";
 import { activityEntrySchema } from "./activity.js";
+import { stageSourcesSchema } from "./manifest.js";
 import { runSnapshotSchema, snapshotStatusSchema } from "./snapshot.js";
 
 const sourceSchema = z.object({ flowId: z.string(), version: z.number().int() });
@@ -24,7 +24,7 @@ export type ListedRun = z.infer<typeof runSummarySchema>;
 export const loadedRunSchema = z.object({
   run: runSummarySchema,
   name: z.string().nullable(),
-  flow: Flow.nullable(),
+  stages: stageSourcesSchema.nullable(),
   snapshot: runSnapshotSchema,
   activity: z.array(activityEntrySchema),
   note: z.string().optional(),

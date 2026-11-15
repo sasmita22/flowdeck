@@ -15,7 +15,13 @@ const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
   buildId,
 });
 
-const build = (id: string, name = `build-${id}`, hash = "h1"): NewBuild => ({
+const lockedManifest = '{\n  "version": 1,\n  "hash": "h1",\n  "nodes": []\n}\n';
+
+const lockedBeforeManifests = (
+  id: string,
+  name = `build-${id}`,
+  hash = "h1",
+): Omit<NewBuild, "manifest"> => ({
   id,
   hash,
   name,
@@ -32,6 +38,11 @@ const build = (id: string, name = `build-${id}`, hash = "h1"): NewBuild => ({
   nodes: [{ nodeId: "p1", type: "prompt", config: {}, file: "commands/p1.md" }],
 });
 
+const build = (id: string, name?: string, hash?: string): NewBuild => ({
+  ...lockedBeforeManifests(id, name, hash),
+  manifest: lockedManifest,
+});
+
 const pending = (flowId = "flow-1", name = "nightly"): NewPendingBuild => ({
   flowId,
   version: 3,
@@ -45,7 +56,6 @@ const savedFlow = flow([agent("a1")], []);
 const snapshot = (blueprintName: string): NewBuildSnapshot => ({
   blueprintName,
   version: 3,
-  flow: savedFlow,
   svg: flowSvg(savedFlow),
 });
 
@@ -356,6 +366,80 @@ describe("FakeStore", () => {
     });
   });
 
+  describe("build manifests", () => {
+    const beforeManifests = (id: string, files = lockedBeforeManifests(id).files) => ({
+      ...lockedBeforeManifests(id),
+      files,
+    });
+
+    const gaps = (store: FakeStore) =>
+      store.listManifestGaps().sort((a, b) => a.buildId.localeCompare(b.buildId));
+
+    it("keeps the manifest text a build is recorded with, unchanged, and none for an unknown build", () => {
+      const store = new FakeStore();
+
+      store.recordBuild(build("b1"));
+
+      expect(store.buildManifest("b1")).toBe(lockedManifest);
+      expect(store.buildManifest("nope")).toBeUndefined();
+    });
+
+    it("still reads a build's manifest once the build is deleted", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+
+      store.deleteBuild("b1");
+
+      expect(store.buildManifest("b1")).toBe(lockedManifest);
+    });
+
+    it("stores the manifest of a build that has none", () => {
+      const store = new FakeStore();
+      store.recordBuildWithoutManifest(beforeManifests("old1"));
+
+      store.storeManifest({ buildId: "old1", manifest: lockedManifest });
+
+      expect(store.buildManifest("old1")).toBe(lockedManifest);
+    });
+
+    it("leaves a stored manifest as it is, without an error", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+
+      store.storeManifest({ buildId: "b1", manifest: '{"version":1,"hash":"other"}' });
+
+      expect(store.buildManifest("b1")).toBe(lockedManifest);
+    });
+
+    it("lists builds with no stored manifest and a manifest file, deleted ones too, with that file's sha256", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+      store.recordBuildWithoutManifest(beforeManifests("old1"));
+      store.recordBuildWithoutManifest({
+        ...beforeManifests("gone1"),
+        files: [{ path: "manifest.json", sha256: "m2" }],
+      });
+      store.deleteBuild("gone1");
+
+      expect(gaps(store)).toEqual([
+        { buildId: "gone1", manifestSha256: "m2" },
+        { buildId: "old1", manifestSha256: "m" },
+      ]);
+    });
+
+    it("leaves out a build once its manifest is stored, and one with no manifest file", () => {
+      const store = new FakeStore();
+      store.recordBuildWithoutManifest(beforeManifests("old1"));
+      store.recordBuildWithoutManifest(
+        beforeManifests("bare1", [{ path: "commands/p1.md", sha256: "c" }]),
+      );
+
+      store.storeManifest({ buildId: "old1", manifest: lockedManifest });
+
+      expect(gaps(store)).toEqual([]);
+    });
+  });
+
   it("keeps the total cost written for a run", () => {
     const store = new FakeStore();
     const { id } = store.createRun(newRun());
@@ -400,6 +484,39 @@ describe("FakeStore", () => {
         source: { flowId: "flow-1", version: 2 },
       }),
     ]);
+  });
+
+  it("summarises one run as listRuns does, and nothing for an unknown id", () => {
+    const store = new FakeStore();
+    store.recordBuild({ ...build("b1"), source: { flowId: "flow-1", version: 2 } });
+    const done = store.createRun(newRun(["p1"]));
+    store.append(done.id, "p1", { kind: "done" });
+    store.recordCost(done.id, 0.5);
+    store.finishRun(done.id, "done");
+    store.createRun(newRun(["p1"]));
+
+    expect(store.findRunSummary(done.id)).toEqual(
+      store.listRuns().find((run) => run.id === done.id),
+    );
+    expect(store.findRunSummary("nope")).toBeUndefined();
+  });
+
+  it("finds a run of a deleted build that listRuns hides", () => {
+    const store = new FakeStore();
+    store.recordBuild(build("b1", "fix-login"));
+    const gone = store.createRun(newRun(["p1"]));
+    store.finishRun(gone.id, "failed");
+
+    store.deleteBuild("b1");
+
+    expect(store.listRuns()).toEqual([]);
+    expect(store.findRunSummary(gone.id)).toMatchObject({
+      id: gone.id,
+      status: "failed",
+      buildId: "b1",
+      buildName: "fix-login",
+      nodeCount: 1,
+    });
   });
 
   describe("pending builds", () => {

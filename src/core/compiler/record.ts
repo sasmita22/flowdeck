@@ -28,6 +28,7 @@ export function buildRecord(
     branchCreated,
     values,
     dir,
+    manifest: manifestContent,
     ...(manifest.source === undefined ? {} : { source: manifest.source }),
     files: [
       ...Object.entries(manifest.files).map(([path, sha256]) => ({ path, sha256 })),

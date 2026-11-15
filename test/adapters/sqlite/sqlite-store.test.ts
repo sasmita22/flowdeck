@@ -33,6 +33,7 @@ const build: NewBuild = {
   dir: "/fd/workspaces/b1",
   files: [],
   nodes: [],
+  manifest: "{}",
 };
 
 const another = (id: string, name: string): NewBuild => ({
@@ -153,9 +154,10 @@ describe("SqliteStore", () => {
       { name: "012_drop_pending_builds_one_per_flow.sql" },
       { name: "013_flows_deleted_at.sql" },
       { name: "014_build_branch.sql" },
+      { name: "015_build_manifests.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 14]);
+    expect(before).toEqual([1, 1, 3, 1, 15]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -732,6 +734,39 @@ describe("SqliteStore", () => {
       expect(store.listRuns()).toEqual([
         expect.objectContaining({ id: run.id, source: { flowId: "flow-1", version: 1 } }),
       ]);
+    });
+  });
+
+  describe("findRunSummary", () => {
+    it("summarises one run as listRuns does, and nothing for an unknown id", () => {
+      const store = open();
+      const first = store.createRun(newRun(["p1"]));
+      store.append(first.id, "p1", { kind: "done" });
+      store.recordCost(first.id, 0.25);
+      store.finishRun(first.id, "done");
+      store.createRun(newRun(["p1", "p2"]));
+
+      expect(store.findRunSummary(first.id)).toEqual(
+        store.listRuns().find((run) => run.id === first.id),
+      );
+      expect(store.findRunSummary("nope")).toBeUndefined();
+    });
+
+    it("finds a run of a deleted build that listRuns hides", () => {
+      const store = open();
+      const gone = store.createRun(newRun(["p1"]));
+      store.finishRun(gone.id, "failed");
+
+      store.deleteBuild("b1");
+
+      expect(store.listRuns()).toEqual([]);
+      expect(store.findRunSummary(gone.id)).toMatchObject({
+        id: gone.id,
+        status: "failed",
+        buildId: "b1",
+        buildName: "fix-login",
+        nodeCount: 1,
+      });
     });
   });
 

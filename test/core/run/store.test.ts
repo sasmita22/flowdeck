@@ -26,6 +26,7 @@ const build = (id: string, name: string): NewBuild => ({
   dir: `/fd/workspaces/${id}`,
   files: [],
   nodes: [],
+  manifest: `{"version":1,"hash":"hash-${id}"}`,
 });
 
 const deletedAtTime = Date.UTC(2026, 0, 2);
@@ -95,7 +96,6 @@ const savedFlow = flow([agent("a1"), agent("a2")], [thenWire("a1", "a2")]);
 const snapshot = (blueprintName = "Report", version = 2): NewBuildSnapshot => ({
   blueprintName,
   version,
-  flow: savedFlow,
   svg: flowSvg(savedFlow),
 });
 

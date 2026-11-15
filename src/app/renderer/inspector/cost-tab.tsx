@@ -1,9 +1,9 @@
 import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { nodeLabel, type CanvasState } from "../canvas/store.js";
 import { formatCost, formatDuration, formatTokens } from "../format.js";
 import { selectRunSnapshot, type RunState } from "../run-store.js";
+import { runNodeLabel, type RunLabels } from "./inspector.js";
 
 const cell: CSSProperties = { padding: "4px 4px", textAlign: "right", whiteSpace: "nowrap" };
 const nameCell: CSSProperties = {
@@ -19,15 +19,14 @@ const timeOf = (ms: number | null) => (ms === null ? "—" : formatDuration(ms))
 export function CostTab({
   runId,
   run,
-  canvas,
+  labels,
 }: {
   runId: string;
   run: StoreApi<RunState>;
-  canvas: StoreApi<CanvasState>;
+  labels: RunLabels;
 }) {
   const report = useStore(run, (state) => (state.cost?.runId === runId ? state.cost.report : null));
   const changed = useStore(run, (state) => JSON.stringify(selectRunSnapshot(state, runId)));
-  const nodes = useStore(canvas, (state) => state.flow.nodes);
 
   useEffect(() => {
     void run.getState().loadCost(runId);
@@ -48,8 +47,8 @@ export function CostTab({
       <tbody>
         {shown.map((line) => (
           <tr key={line.nodeId} data-testid={`cost-node-${line.nodeId}`}>
-            <td style={nameCell} title={nodeLabel(nodes, line.nodeId)}>
-              {nodeLabel(nodes, line.nodeId)}
+            <td style={nameCell} title={runNodeLabel(labels, line.nodeId)}>
+              {runNodeLabel(labels, line.nodeId)}
             </td>
             <td style={cell}>{formatTokens(line.tokens).replace(" tokens", "")}</td>
             <td style={cell}>{formatCost(line.cost)}</td>

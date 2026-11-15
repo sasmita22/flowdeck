@@ -16,10 +16,13 @@ import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildIdNamed, waitForBuilt } from "./build-run.js";
+import { buildAndRun, buildIdNamed, runIdOf, waitForBuilt } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
+import { emit } from "../src/core/compiler/emit.js";
+import { lower } from "../src/core/compiler/lower.js";
+import type { Flow } from "../src/core/flow/schema.js";
 
 const secret = "xoxb-fd59-never-shown";
 
@@ -108,6 +111,18 @@ const saveNow = async (window: Page) => {
 };
 
 const readout = (window: Page) => window.getByTestId(readoutTestIds.flow);
+
+const manifestOf = (input: Flow, hash: string): string => {
+  const files = emit(lower(input, { name: "stale", values: {} }), {
+    repo: "/nowhere",
+    base: "main",
+    branch: "flowdeck/stale",
+    branchCreated: true,
+  });
+  const manifest = files.find((file) => file.path === "manifest.json");
+  if (manifest === undefined) throw new Error("emit wrote no manifest.json");
+  return JSON.stringify({ ...(JSON.parse(manifest.content) as object), hash });
+};
 
 const byPrefix = (window: Page, prefix: string, text?: string): Locator => {
   const all = window.locator(`[data-testid^="${prefix}"]`);
@@ -284,13 +299,17 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(agentsCard).toContainText("run-agents Agents v1");
   await shot(target, testInfo, "builds");
   await window.getByTestId(pageTestIds.buildRun(agentsBuild)).click();
+  const agentsRun = await runIdOf(home, agentsBuild);
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
     "data-status",
     "done",
     { timeout: 20_000 },
   );
-  await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done");
+  await expect(window.getByTestId(pageTestIds.runStageStatus(agentsRun, "s2"))).toHaveAttribute(
+    "data-status",
+    "done",
+  );
   await expect(window.getByTestId(controlTestIds.search)).toHaveCount(0);
   await expect(window.getByTestId(controlTestIds.save)).toHaveCount(0);
   await expect(window.getByTestId(controlTestIds.undo)).toHaveCount(0);
@@ -317,8 +336,11 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
     "data-status",
     "done",
   );
-  await expect(window.getByTestId("node-s2")).toBeVisible();
-  await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done");
+  await expect(window.getByTestId(pageTestIds.runStage(runId, "s2"))).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(
+    "data-status",
+    "done",
+  );
   await expect(window.getByTestId("inspector-node-s2")).toHaveAttribute("data-status", "done");
   await expect(window.getByTestId(controlTestIds.save)).toHaveCount(0);
 
@@ -432,6 +454,7 @@ test("A run left running by an earlier session shows as interrupted, never live"
       source: alpha,
       files: [],
       nodes: [],
+      manifest: manifestOf(flow([agent("p1")], []), "stalehash"),
     });
     stale = runs.createRun({
       buildDir: "/nowhere",
@@ -479,7 +502,11 @@ test("The status bar takes you from the editor to the live run that needs you", 
   await window.getByTestId(pageTestIds.runBack).click();
   await expect(window.getByRole("button", { name: /^Runs\s?, 1 running$/ })).toBeVisible();
   await byPrefix(window, "run-open-").click();
-  await window.getByTestId(pageTestIds.runOpenBlueprint).click();
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("needs you");
+  await expect(window.getByRole("button", { name: "Open blueprint" })).toHaveCount(0);
+  await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-blueprints").click();
+  await byPrefix(window, "blueprint-open-").click();
   await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
   await expect(window.getByTestId("wait-panel")).toHaveCount(0);
 

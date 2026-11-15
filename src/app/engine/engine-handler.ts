@@ -79,7 +79,11 @@ import {
 import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
 import { turnFailure } from "../../core/run/turns.js";
 import { retryEntries } from "../../core/run/retry.js";
+import { sha256Hex } from "../../core/compiler/hash.js";
+import { backfillManifests } from "../../core/run/backfill-manifests.js";
 import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
+import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/run/manifest.js";
+import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
 import {
   buildEntriesSchema,
@@ -254,6 +258,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
     listRuns: () => store.listRuns(),
+    findRunSummary: (id) => store.findRunSummary(id),
     events: (id) => store.events(id),
     activity: (id) => store.activity(id),
     findBuild: (id) => store.findBuild(id),
@@ -274,8 +279,13 @@ function detachable(store: Store, detached: () => boolean): Store {
     buildSnapshot: (key) => store.buildSnapshot(key),
     listSnapshotGaps: () => store.listSnapshotGaps(),
     addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
+    buildManifest: (buildId) => store.buildManifest(buildId),
+    listManifestGaps: () => store.listManifestGaps(),
     recordBuild: (build) => store.recordBuild(build),
     deleteBuild: (id) => store.deleteBuild(id),
+    storeManifest(manifest) {
+      if (!detached()) store.storeManifest(manifest);
+    },
     append(id, nodeId, event) {
       if (!detached()) store.append(id, nodeId, event);
     },
@@ -777,10 +787,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         `Build ${asked.name} has no snapshot of its blueprint; build the blueprint again`,
       );
     }
+    const saved = stores.flows.load({ flowId: asked.flowId, version: asked.version });
+    if (saved === null) {
+      throw new Error(`${asked.flowId} has no saved version ${asked.version}`);
+    }
     const { answers: answeredBefore = [], ...inputs } = kept.data.request;
     return startFromSaved(
       stores,
-      { name: snapshot.blueprintName, version: snapshot.version, flow: snapshot.flow },
+      { name: snapshot.blueprintName, version: snapshot.version, flow: saved.flow },
       { flowId: asked.flowId, version: asked.version, name: asked.name, ...inputs },
       [...answeredBefore, ...answers],
     );
@@ -823,13 +837,22 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const snapshot = runs.buildSnapshot({ pendingId: pending.id });
     if (snapshot === null)
       return failLeftBuild(runs, pending, "it has no snapshot of its blueprint");
+    let saved: LoadedFlow | null;
+    try {
+      saved = stores.flows.load({ flowId: pending.flowId, version: pending.version });
+    } catch (error) {
+      return failLeftBuild(runs, pending, `its blueprint cannot be read: ${messageOf(error)}`);
+    }
+    if (saved === null) {
+      return failLeftBuild(runs, pending, `its blueprint has no version ${pending.version}`);
+    }
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failLeftBuild(runs, pending, hooks.message);
     options.publish({ push: "session", runId: pending.id, value: session.name });
     runPendingBuild({
       stores,
       pending,
-      flow: snapshot.flow,
+      flow: saved.flow,
       request: {
         ...resumeRequest(pending.name, session),
         ...keptAnswersOf(pending),
@@ -1218,6 +1241,25 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const holdsHome = async () => options.homeLock === undefined || options.homeLock.acquire();
 
+  const backfillStoredManifests = async (): Promise<void> => {
+    const result = openStoresOnce();
+    if (result.kind === "error") return;
+    const { runs } = result.stores;
+    const failures = await backfillManifests({
+      store: runs,
+      readManifest: async (buildId) => {
+        const build = runs.findBuild(buildId);
+        return build === undefined ? undefined : options.fs.readFile(`${build.dir}/manifest.json`);
+      },
+      sha256: sha256Hex,
+    });
+    for (const { gap, error } of failures) {
+      console.log(
+        `engine: manifest backfill skipped build ${gap.buildId} error ${messageOf(error)}`,
+      );
+    }
+  };
+
   const reattach = async (): Promise<void> => {
     if (!(await holdsHome())) {
       console.log(`engine: another Flowdeck holds ${options.home}; not reattaching`);
@@ -1329,11 +1371,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return runChoices(loaded.build);
   };
 
+  const storedManifest = (runs: Store, buildId: string): ParsedManifest | undefined => {
+    const text = runs.buildManifest(buildId);
+    const build = runs.findBuild(buildId);
+    return text === undefined || build === undefined ? undefined : parseManifest(text, build);
+  };
+
   const runCost = async ({ runs }: EngineStores, runId: string): Promise<CostReport> => {
     const record = runs.findRun(runId);
     if (record?.buildId === undefined) throw new Error(`No run ${runId}`);
-    const loaded = await loadBuild(record.buildId, { fs: options.fs, store: runs });
-    if (loaded.kind === "error") throw new Error(loaded.message);
+    const manifest = storedManifest(runs, record.buildId);
+    if (manifest === undefined) throw new Error("manifest.json: missing");
     const events = runs.events(runId);
     const live = isActive(runId);
     const usage = options.run.usage;
@@ -1342,13 +1390,33 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         ? chargeUsage({
             events,
             entries: await usage.entries(record.session.claudeSessionId),
-            turnNodes: turnNodeIds(loaded.build),
-            owners: usageOwners(loaded.build, events),
+            turnNodes: turnNodeIds(manifest),
+            owners: usageOwners(manifest, events),
           })
         : [];
     const last = events.at(-1);
     const now = live || last === undefined ? options.run.now() : Date.parse(last.time);
     return costReport({ nodeIds: record.nodeIds, events, pending, now });
+  };
+
+  const runPipeline = async (
+    stores: EngineStores,
+    runId: string,
+  ): Promise<PipelineItem[] | null> => {
+    const { runs } = stores;
+    const record = runs.findRun(runId);
+    if (record === undefined) throw new Error(`No run ${runId}`);
+    const manifest =
+      record.buildId === undefined ? undefined : storedManifest(runs, record.buildId);
+    if (manifest === undefined) return null;
+    const { nodes, wires } = stageSourcesOf(manifest);
+    return pipelineOf(
+      nodes,
+      wires,
+      runs.events(runId),
+      runs.activity(runId),
+      await runCost(stores, runId),
+    );
   };
 
   const buildFiles = async (stores: EngineStores, buildId: string): Promise<BuildFileContent[]> => {
@@ -1533,15 +1601,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const loadRun = ({ runs }: EngineStores, runId: string): LoadedRun => {
     const record = runs.findRun(runId);
-    const summary = runs.listRuns().find((candidate) => candidate.id === runId);
+    const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const run = listed(summary);
-    const built = run.buildId === undefined ? null : runs.buildSnapshot({ buildId: run.buildId });
+    const manifest = run.buildId === undefined ? undefined : storedManifest(runs, run.buildId);
     return {
       ...(run.status === "interrupted" ? { note: notes.get(runId) ?? closedNote } : {}),
       run,
       name: run.buildName,
-      flow: built?.flow ?? null,
+      stages: manifest === undefined ? null : stageSourcesOf(manifest),
       snapshot: runSnapshot({
         runId,
         status: run.status,
@@ -1638,6 +1706,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     async startUp() {
       await sweepBlueprintSessions().catch((error: unknown) => {
         console.log(`engine: blueprint sweep error ${messageOf(error)}`);
+      });
+      await backfillStoredManifests().catch((error: unknown) => {
+        console.log(`engine: manifest backfill error ${messageOf(error)}`);
       });
       await reattach();
     },
@@ -1762,6 +1833,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "run-cost":
           return parsedAnswer(request, runIdPayload, ({ runId }) =>
             runCost(storesOrThrow(), runId),
+          );
+        case "run-pipeline":
+          return parsedAnswer(request, runIdPayload, ({ runId }) =>
+            runPipeline(storesOrThrow(), runId),
           );
         case "list-branches":
           return parsedAnswer(request, repoPayload, ({ repo }) => options.gitState.branches(repo));

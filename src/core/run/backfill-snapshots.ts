@@ -23,7 +23,6 @@ const snapshotFor = (gap: SnapshotGap, flows: BackfillSnapshotsDeps["flows"]) =>
   return {
     blueprintName: gap.blueprintName ?? saved.name,
     version: saved.version,
-    flow: saved.flow,
     svg: flowSvg(saved.flow),
   };
 };

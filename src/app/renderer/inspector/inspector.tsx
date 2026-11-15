@@ -1,9 +1,9 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
 import type { BranchState } from "../branch-store.js";
-import { labelFor, selectSelectedNode, type CanvasState } from "../canvas/store.js";
+import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
 import {
   selectNodeDisplay,
@@ -23,6 +23,16 @@ import { SessionSettingsSection } from "./session-settings.js";
 import type { InspectorState } from "./store.js";
 import { TerminalTab } from "./terminal-tab.js";
 import type { WaitState } from "./wait-store.js";
+
+export type RunLabels = {
+  sessionName: string;
+  nodes: readonly { id: string; label: string }[];
+};
+
+export const runNodeLabel = (labels: RunLabels, nodeId?: string): string => {
+  if (nodeId === undefined) return "Build";
+  return labels.nodes.find((node) => node.id === nodeId)?.label ?? nodeId;
+};
 
 export type RunPageView = {
   runId: string;
@@ -101,18 +111,19 @@ function NodeRow({
 function RunView({
   inspector,
   run,
-  canvas,
+  labels,
+  onSelectNode,
   wait,
   page,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
-  canvas: StoreApi<CanvasState>;
+  labels: RunLabels;
+  onSelectNode: (nodeId: string) => void;
   wait: StoreApi<Pick<WaitState, "pending">>;
   page: RunPageView | undefined;
 }) {
-  const sessionName = useStore(canvas, (state) => state.flow.session.name);
-  const nodes = useStore(canvas, (state) => state.flow.nodes);
+  const { sessionName, nodes } = labels;
   const waiting = useStore(wait, (state) => state.pending !== null);
   const runStatus = useStore(run, (state) => selectSessionStatus(state, waiting));
   return (
@@ -129,12 +140,18 @@ function RunView({
       <h2 style={headingStyle}>Nodes</h2>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, minWidth: 0 }}>
         {nodes.map((node) => (
-          <NodeRow key={node.id} run={run} nodeId={node.id} label={labelFor(node)} page={page} />
+          <NodeRow key={node.id} run={run} nodeId={node.id} label={node.label} page={page} />
         ))}
       </ul>
       <h2 style={headingStyle}>Activity</h2>
       <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto" }}>
-        <ActivityFeed inspector={inspector} run={run} canvas={canvas} stored={page?.stored} />
+        <ActivityFeed
+          inspector={inspector}
+          run={run}
+          labels={labels}
+          onSelectNode={onSelectNode}
+          stored={page?.stored}
+        />
       </div>
     </>
   );
@@ -150,14 +167,16 @@ const tabs: { tab: RunTab; label: string }[] = [
 function RunTabs({
   inspector,
   run,
-  canvas,
+  labels,
+  onSelectNode,
   wait,
   shell,
   page,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
-  canvas: StoreApi<CanvasState>;
+  labels: RunLabels;
+  onSelectNode: (nodeId: string) => void;
   wait: StoreApi<Pick<WaitState, "pending">>;
   shell: StoreApi<ShellState>;
   page: RunPageView;
@@ -180,21 +199,55 @@ function RunTabs({
         ))}
       </div>
       {current === "activity" && (
-        <RunView inspector={inspector} run={run} canvas={canvas} wait={wait} page={page} />
+        <RunView
+          inspector={inspector}
+          run={run}
+          labels={labels}
+          onSelectNode={onSelectNode}
+          wait={wait}
+          page={page}
+        />
       )}
       {current === "files" && (
-        <FilesTab inspector={inspector} run={run} canvas={canvas} stored={page.stored} />
+        <FilesTab inspector={inspector} run={run} labels={labels} stored={page.stored} />
       )}
-      {current === "cost" && <CostTab runId={page.runId} run={page.run} canvas={canvas} />}
+      {current === "cost" && <CostTab runId={page.runId} run={page.run} labels={labels} />}
       {current === "terminal" && <TerminalTab terminal={page.terminal} />}
     </>
   );
+}
+
+function CanvasSettings({
+  canvas,
+  shell,
+  branches,
+  children,
+}: {
+  canvas: StoreApi<CanvasState>;
+  shell: StoreApi<ShellState>;
+  branches: StoreApi<BranchState> | undefined;
+  children: ReactNode;
+}) {
+  const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
+  const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
+  if (sessionSettingsOpen) {
+    return (
+      <>
+        <h2 style={headingStyle}>Session settings</h2>
+        <SessionSettingsSection canvas={canvas} branches={branches} />
+      </>
+    );
+  }
+  if (nodeSelected) return <NodeSettingsSection canvas={canvas} />;
+  return children;
 }
 
 export function Inspector({
   inspector,
   run,
   canvas,
+  labels,
+  onSelectNode,
   wait,
   shell,
   readOnly = false,
@@ -203,16 +256,37 @@ export function Inspector({
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
-  canvas: StoreApi<CanvasState>;
+  canvas?: StoreApi<CanvasState> | undefined;
+  labels: RunLabels;
+  onSelectNode: (nodeId: string) => void;
   wait?: StoreApi<WaitState> | undefined;
   shell: StoreApi<ShellState>;
   readOnly?: boolean;
   page?: RunPageView | undefined;
   branches?: StoreApi<BranchState> | undefined;
 }) {
-  const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen) && !readOnly;
-  const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null) && !readOnly;
   const width = useShownWidth(shell, run, "inspector");
+  const runBody =
+    page !== undefined ? (
+      <RunTabs
+        inspector={inspector}
+        run={run}
+        labels={labels}
+        onSelectNode={onSelectNode}
+        wait={wait ?? noWait}
+        shell={shell}
+        page={page}
+      />
+    ) : (
+      <RunView
+        inspector={inspector}
+        run={run}
+        labels={labels}
+        onSelectNode={onSelectNode}
+        wait={wait ?? noWait}
+        page={undefined}
+      />
+    );
   return (
     <aside
       data-testid="inspector"
@@ -228,30 +302,12 @@ export function Inspector({
       }}
     >
       {wait !== undefined && <Ask wait={wait} />}
-      {sessionSettingsOpen ? (
-        <>
-          <h2 style={headingStyle}>Session settings</h2>
-          <SessionSettingsSection canvas={canvas} branches={branches} />
-        </>
-      ) : nodeSelected ? (
-        <NodeSettingsSection canvas={canvas} />
-      ) : page !== undefined ? (
-        <RunTabs
-          inspector={inspector}
-          run={run}
-          canvas={canvas}
-          wait={wait ?? noWait}
-          shell={shell}
-          page={page}
-        />
+      {canvas === undefined || readOnly ? (
+        runBody
       ) : (
-        <RunView
-          inspector={inspector}
-          run={run}
-          canvas={canvas}
-          wait={wait ?? noWait}
-          page={undefined}
-        />
+        <CanvasSettings canvas={canvas} shell={shell} branches={branches}>
+          {runBody}
+        </CanvasSettings>
       )}
     </aside>
   );

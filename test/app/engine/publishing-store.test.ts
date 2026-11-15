@@ -26,6 +26,7 @@ const build: NewBuild = {
   dir: "/fd/workspaces/b1",
   files: [{ path: "manifest.json", sha256: "m" }],
   nodes: [],
+  manifest: "{}",
 };
 
 const setup = () => {

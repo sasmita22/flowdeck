@@ -34,6 +34,7 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     listBuilds: () => store.listBuilds(),
     listBuildsWithDeleted: () => store.listBuildsWithDeleted(),
     listRuns: () => store.listRuns(),
+    findRunSummary: (id) => store.findRunSummary(id),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),
@@ -48,6 +49,9 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     buildSnapshot: (key) => store.buildSnapshot(key),
     listSnapshotGaps: () => store.listSnapshotGaps(),
     addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
+    storeManifest: (manifest) => store.storeManifest(manifest),
+    buildManifest: (buildId) => store.buildManifest(buildId),
+    listManifestGaps: () => store.listManifestGaps(),
     recordActivity: (id, entry) => store.recordActivity(id, entry),
     activity: (id) => store.activity(id),
     append(id, nodeId, event) {

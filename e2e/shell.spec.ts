@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   buildConfigTestIds,
   controlTestIds,
+  pageTestIds,
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
@@ -26,7 +27,7 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
-import { buildAndRun } from "./build-run.js";
+import { buildAndRun, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
@@ -571,11 +572,13 @@ test("Review shots", async () => {
   seedFlow(home, twoAgents(), repo.path);
   target = await launch({ s1: "hold" });
   await showDark(target);
-  await buildAndRun(target.window, home, "running");
+  const runningRun = await runIdOf(home, await buildAndRun(target.window, home, "running"));
   await expect(target.window.getByTestId("run-status")).toHaveText(/^Running/, {
     timeout: 20_000,
   });
-  await expect(target.window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "sent");
+  await expect(
+    target.window.getByTestId(pageTestIds.runStageStatus(runningRun, "s1")),
+  ).toHaveAttribute("data-status", "sent");
   await target.window.mouse.move(1, 1);
   await reviewShot(target.window, testInfo, "running-flow");
 
@@ -593,10 +596,12 @@ test("Run status and inspector", async () => {
   await expect(window.getByTestId("run-status")).toHaveText("Idle");
   await expect(window.getByTestId("inspector")).toHaveCount(0);
 
-  await buildAndRun(window, home, "status");
-  await expect(window.getByTestId("node-status-s2")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
+  const runId = await runIdOf(home, await buildAndRun(window, home, "status"));
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s2"))).toHaveAttribute(
+    "data-status",
+    "done",
+    { timeout: 20_000 },
+  );
 
   await expect(window.getByTestId("run-status")).toHaveText("Done · 4 of 4 nodes done");
   await expect(window.getByTestId("inspector")).toBeVisible();

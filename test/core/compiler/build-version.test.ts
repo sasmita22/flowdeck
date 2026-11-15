@@ -28,7 +28,7 @@ import type { Manifest } from "../../../src/core/compiler/lower.js";
 import { verify } from "../../../src/core/compiler/verify.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
-import type { PendingBuildEnd } from "../../../src/core/run/store.js";
+import type { NewBuild, PendingBuildEnd } from "../../../src/core/run/store.js";
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
 import type { BuildAgents } from "../../../src/ports/build-agents.js";
 import type { FolderState } from "../../../src/ports/git-state.js";
@@ -2305,6 +2305,7 @@ describe("buildVersion", () => {
         dir: `${home}/workspaces/older`,
         files: [],
         nodes: [],
+        manifest: "{}",
       });
 
       const result = await buildVersion(
@@ -2505,7 +2506,6 @@ describe("buildVersion", () => {
         buildId: null,
         blueprintName: saved.name,
         version: 1,
-        flow: labelled("Planner"),
         svg: flowSvg(labelled("Planner")),
       });
     });
@@ -2516,14 +2516,32 @@ describe("buildVersion", () => {
       const result = await buildVersion(v1, request, deps);
 
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
-      expect(store.buildSnapshot({ buildId: result.record.id })).toEqual(
+      const snapshot = store.buildSnapshot({ buildId: result.record.id });
+      expect(snapshot).toEqual(
         expect.objectContaining({
           buildId: result.record.id,
           version: 1,
-          flow: labelled("Planner"),
           svg: flowSvg(labelled("Planner")),
         }),
       );
+      expect(snapshot).not.toHaveProperty("flow");
+    });
+
+    it("records the build with the manifest exactly as it was locked", async () => {
+      const { store, fs, deps } = setup({ flows: [labelled("Planner")] });
+      const recorded: NewBuild[] = [];
+      const recordBuild = store.recordBuild.bind(store);
+      store.recordBuild = (record) => {
+        recorded.push(record);
+        recordBuild(record);
+      };
+
+      const result = await buildVersion(v1, request, deps);
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      const locked = await fs.readFile(`${result.dir}/manifest.json`);
+      expect(recorded.map((record) => record.manifest)).toEqual([locked]);
+      expect(store.buildManifest(result.record.id)).toBe(locked);
     });
 
     it("keeps the old label after the blueprint is saved again with the Agent renamed", async () => {
@@ -2535,7 +2553,8 @@ describe("buildVersion", () => {
 
       expect(flows.loadLatest()?.version).toBe(2);
       const snapshot = store.buildSnapshot({ buildId: result.record.id });
-      expect(snapshot?.flow.nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
+      const manifest = JSON.parse(store.buildManifest(result.record.id) ?? "{}") as Manifest;
+      expect(manifest.nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
       expect(snapshot?.svg).toContain("Planner");
       expect(snapshot?.svg).not.toContain("Reviewer");
     });

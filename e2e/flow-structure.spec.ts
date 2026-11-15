@@ -180,7 +180,8 @@ const kindsOf = (runId: string | undefined, nodeId: string) =>
     nodeId,
   ).map((row) => row.kind);
 
-const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
+const status = (window: Page, nodeId: string, round?: number) =>
+  window.getByTestId(pageTestIds.runStageStatus(latestRunId() ?? "no-run", nodeId, round));
 
 const seed = (input: Flow) => seedFlow(home, input, repo.path);
 
@@ -365,12 +366,14 @@ test("A run holds the reader until the file it is given is written", async () =>
 
   const folder = workFolder(await buildAndRun(window, home, "handoff"));
 
-  await expect(window.getByTestId("node-reason-build")).toHaveText(
-    "plan.md wasn't written by Planner",
-    { timeout: 20_000 },
-  );
-  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed");
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed", {
+    timeout: 20_000,
+  });
   const failedRun = latestRunId();
+  await window.getByTestId(pageTestIds.runStage(failedRun ?? "no-run", "build")).click();
+  await expect(
+    window.getByTestId(pageTestIds.runStageReason(failedRun ?? "no-run", "build")),
+  ).toHaveText("plan.md wasn't written by Planner");
   expect(kindsOf(failedRun, "plan")).toEqual(["sent", "done"]);
   expect(kindsOf(failedRun, "build")).toEqual(["running", "failed"]);
 
@@ -430,8 +433,22 @@ for (const container of ["loop", "foreach"] as const) {
       timeout: 30_000,
     });
     await expect(status(window, id)).toHaveAttribute("data-status", "done");
-    await expect(status(window, "agent-1")).toHaveAttribute("data-status", "done");
     const rounds = kindsOf(latestRunId(), id).filter((kind) => kind === "round");
     expect(rounds).toHaveLength(container === "loop" ? 1 : 2);
+    const runId = latestRunId() ?? "no-run";
+    const shownPerRound: string[][] = [];
+    for (const round of rounds.keys()) {
+      await expect(status(window, "agent-1", round + 1)).toHaveAttribute("data-status", "done");
+      await window.getByTestId(pageTestIds.runStage(runId, "agent-1", round + 1)).click();
+      const entries = window
+        .getByTestId(pageTestIds.runStageDetail(runId, "agent-1", round + 1))
+        .locator('[data-testid^="activity-entry-"]');
+      await expect(entries.first()).toBeVisible();
+      shownPerRound.push(
+        await entries.evaluateAll((found) => found.map((entry) => entry.dataset.testid ?? "")),
+      );
+    }
+    const shown = shownPerRound.flat();
+    expect(new Set(shown).size).toBe(shown.length);
   });
 }

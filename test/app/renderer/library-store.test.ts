@@ -8,6 +8,7 @@ import {
   selectRunCards,
   type LibraryBridge,
 } from "../../../src/app/renderer/library-store.js";
+import { thenWire } from "../../fixtures/flow-builders.js";
 
 const report = {
   flowId: "flow-a",
@@ -117,7 +118,16 @@ const runs = [
   },
 ];
 
-const picture = '<svg xmlns="http://www.w3.org/2000/svg"><rect data-kind="background"/></svg>';
+const stages = {
+  session: { name: "main" },
+  nodes: [
+    { id: "s1", type: "agent", label: "Write" },
+    { id: "s2", type: "agent", label: "Review" },
+  ],
+  wires: [thenWire("s1", "s2")],
+};
+
+const picture = '<svgxmlns="http://www.w3.org/2000/svg"><rect data-kind="background"/></svg>';
 
 const project = {
   repoFolder: "shop",
@@ -178,7 +188,7 @@ const fakeBridge = () =>
     loadRun: vi.fn(async () => ({
       run: runs[1],
       name: "Report",
-      flow: null,
+      stages,
       snapshot: { runId: "run-1", status: "done", nodes: { s1: "done" } },
       activity: [],
     })),
@@ -318,6 +328,7 @@ describe("openRun", () => {
     expect(bridge.loadRun).toHaveBeenCalledWith({ runId: "run-1" });
     expect(library.getState().viewedRun).toMatchObject({
       name: "Report",
+      stages,
       snapshot: { runId: "run-1", status: "done" },
     });
 
@@ -334,7 +345,7 @@ describe("an interrupted run", () => {
     bridge.loadRun.mockResolvedValueOnce({
       run: { ...runs[1], status: "interrupted", endedAt: null },
       name: "Report",
-      flow: null,
+      stages: null,
       snapshot: { runId: "run-1", status: "interrupted", nodes: {} },
       activity: [],
       note,
@@ -344,6 +355,7 @@ describe("an interrupted run", () => {
     await library.getState().openRun("run-1");
 
     expect(library.getState().viewedRun?.note).toBe(note);
+    expect(library.getState().viewedRun).toHaveProperty("stages", null);
   });
 });
 

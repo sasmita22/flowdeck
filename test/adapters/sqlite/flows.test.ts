@@ -824,6 +824,7 @@ describe("SqliteFlowStore", () => {
       dir: "/fd/workspaces/b1",
       files: [],
       nodes: [],
+      manifest: "{}",
     });
     const { id } = runs.createRun({
       buildDir: "/fd/workspaces/b1",
@@ -852,6 +853,7 @@ describe("SqliteFlowStore", () => {
       { name: "012_drop_pending_builds_one_per_flow.sql" },
       { name: "013_flows_deleted_at.sql" },
       { name: "014_build_branch.sql" },
+      { name: "015_build_manifests.sql" },
     ]);
   });
 });

@@ -33,7 +33,7 @@ import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { fakeClaudeDispatched, launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
 const placed = (built: Flow): Flow => ({
@@ -132,7 +132,29 @@ const tmuxAlive = async (name: string) => {
 
 const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
 
-const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
+const shownRun = () => {
+  const runId = latestRun()?.id;
+  if (runId === undefined) throw new Error("no run was recorded");
+  return runId;
+};
+
+const status = (window: Page, nodeId: string) =>
+  window.getByTestId(pageTestIds.runStageStatus(shownRun(), nodeId));
+
+const manifestNodeIds = (buildId: string) =>
+  rows<{ manifest_json: string }>(
+    "SELECT manifest_json FROM build_manifests WHERE build_id = ?",
+    buildId,
+  )
+    .flatMap((row) => (JSON.parse(row.manifest_json) as { nodes: { id: string }[] }).nodes)
+    .map((node) => node.id);
+
+const replyOf = (runId: string, nodeId: string) =>
+  rows<{ payload: string | null }>(
+    "SELECT payload FROM events WHERE run_id = ? AND node_id = ? AND kind = 'done'",
+    runId,
+    nodeId,
+  ).map((row) => (JSON.parse(row.payload ?? "{}") as { stopMessage?: string }).stopMessage)[0];
 
 const darkShot = async (window: Page, name: string) => {
   await window.emulateMedia({ colorScheme: "dark" });
@@ -156,7 +178,64 @@ test.afterEach(async () => {
   }
 });
 
-test("An agent that fails says so on its node and in the inspector, and Retry goes on to done", async () => {
+test("The run page shows each stage with its status, and no canvas or Open blueprint", async () => {
+  seedFlow(
+    home,
+    laidOut([named("s1", "Plan"), named("s2", "Ship")], [thenWire("s1", "s2")]),
+    repo.path,
+  );
+  const window = await launch();
+
+  const buildId = await buildAndRun(window, home, "stages");
+  const runId = await runIdOf(home, buildId);
+
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+  const stageIds = manifestNodeIds(buildId);
+  expect(stageIds).toEqual(expect.arrayContaining(["s1", "s2"]));
+  for (const nodeId of stageIds) {
+    await expect(window.getByTestId(pageTestIds.runStageStatus(runId, nodeId))).toHaveAttribute(
+      "data-status",
+      "done",
+    );
+  }
+  await expect(window.getByRole("list", { name: "Stages" })).toBeVisible();
+  await expect(window.locator(".react-flow")).toHaveCount(0);
+  await expect(window.getByRole("button", { name: "Open blueprint" })).toHaveCount(0);
+  await darkShot(window, "stages.png");
+});
+
+test("The picture of the blueprint sits above the stages, collapsed until opened", async () => {
+  seedFlow(
+    home,
+    laidOut([named("s1", "Plan"), named("s2", "Ship")], [thenWire("s1", "s2")]),
+    repo.path,
+  );
+  const window = await launch();
+
+  const buildId = await buildAndRun(window, home, "pictured");
+  const runId = await runIdOf(home, buildId);
+
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s2"))).toHaveAttribute(
+    "data-status",
+    "done",
+    { timeout: 20_000 },
+  );
+  const toggle = window.getByTestId(pageTestIds.buildPictureToggle(buildId));
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(window.getByTestId(pageTestIds.buildPictureImage(buildId))).toHaveCount(0);
+  const picture = await toggle.boundingBox();
+  const stages = await window.getByRole("list", { name: "Stages" }).boundingBox();
+  if (picture === null || stages === null) throw new Error("the picture or the stages are hidden");
+  expect(picture.y + picture.height).toBeLessThanOrEqual(stages.y);
+
+  await toggle.click();
+
+  await expect(window.getByTestId(pageTestIds.buildPictureImage(buildId))).toBeVisible();
+});
+
+test("A failing Agent's stage shows it failed with its reason, and its Retry runs it to done", async () => {
   seedFlow(
     home,
     laidOut([named("s1", "Run tests"), named("s2", "Ship")], [thenWire("s1", "s2")]),
@@ -164,30 +243,132 @@ test("An agent that fails says so on its node and in the inspector, and Retry go
   );
   const window = await launch(undefined, { s1: "fail-once" });
 
-  await buildAndRun(window, home, "fails-once");
+  const buildId = await buildAndRun(window, home, "fails-once");
+  const runId = await runIdOf(home, buildId);
 
-  await expect(window.getByTestId("node-reason-s1")).toHaveText("No finished Agent call for s1", {
-    timeout: 20_000,
-  });
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(
+    "data-status",
+    "failed",
+    { timeout: 20_000 },
+  );
+  await window.getByTestId(pageTestIds.runStage(runId, "s1")).click();
+  await expect(window.getByTestId(pageTestIds.runStageReason(runId, "s1"))).toHaveText(
+    "No finished Agent call for s1",
+  );
   await expect(window.getByTestId("inspector-reason-s1")).toHaveText(
     "No finished Agent call for s1",
   );
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("failed");
   await darkShot(window, "failed.png");
 
-  await window.getByTestId("retry-s1").click();
+  await window.getByTestId(pageTestIds.runStageRetry(runId, "s1")).click();
 
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
+  await expect(status(window, "s1")).toHaveAttribute("data-status", "done");
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done");
-  await expect(window.getByTestId("node-reason-s1")).toHaveCount(0);
-  const runId = latestRun()?.id;
+  await expect(window.getByTestId(pageTestIds.runStageReason(runId, "s1"))).toHaveCount(0);
   expect(
     rows<{ kind: string }>(
       "SELECT kind FROM events WHERE run_id = ? AND node_id = 's1' ORDER BY seq",
       runId,
     ).map((row) => row.kind),
   ).toEqual(["sent", "failed", "retry", "sent", "done"]);
+  expect(
+    rows("SELECT node_id, finished_at FROM run_nodes WHERE run_id = ? AND node_id = 's1'", runId),
+  ).toEqual([{ node_id: "s1", finished_at: expect.any(String) }]);
   expect(latestRun()?.status).toBe("done");
+});
+
+test("Against the stages, the gate banner answers, Stop and Resume work, and the Cost tab shows each stage", async () => {
+  seedFlow(
+    home,
+    laidOut(
+      [named("s1", "Plan"), gate("g1"), named("s2", "Build"), named("s3", "Ship")],
+      [thenWire("s1", "g1"), thenWire("g1", "s2"), thenWire("s2", "s3")],
+    ),
+    repo.path,
+  );
+  const window = await launch(undefined, { s2: "hold-once" });
+
+  const buildId = await buildAndRun(window, home, "staged");
+  const runId = await runIdOf(home, buildId);
+  const stage = (nodeId: string) => window.getByTestId(pageTestIds.runStageStatus(runId, nodeId));
+
+  await expect(stage("g1")).toHaveAttribute("data-status", "needs you", { timeout: 20_000 });
+  await window.getByTestId(controlTestIds.inspectorHide).click();
+  const banner = window.getByTestId("wait-banner");
+  await expect(banner.getByTestId("wait-text")).toHaveText("Check the plan");
+  await banner.getByTestId("wait-approve").click();
+  await expect(stage("g1")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
+  await expect(stage("s2")).toHaveAttribute("data-status", "sent", { timeout: 20_000 });
+
+  await window.getByTestId(pageTestIds.runStop).click();
+
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("stopped", {
+    timeout: 20_000,
+  });
+  expect(latestRun()?.status).toBe("stopped");
+  await expect(stage("s1")).toHaveAttribute("data-status", "done");
+
+  await window.getByTestId(pageTestIds.runResume).click();
+
+  await expect(stage("s3")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done");
+  expect(latestRun()?.status).toBe("done");
+
+  await window.getByTestId(controlTestIds.inspectorShow).click();
+  await window.getByTestId("run-tab-cost").click();
+
+  for (const [nodeId, label] of [
+    ["s1", "Plan"],
+    ["s2", "Build"],
+    ["s3", "Ship"],
+  ] as const) {
+    await expect(window.getByTestId(`cost-node-${nodeId}`)).toContainText(label);
+  }
+});
+
+test("Selecting a stage shows only that stage's activity and its final reply", async () => {
+  seedFlow(
+    home,
+    laidOut([named("s1", "Plan"), named("s2", "Ship")], [thenWire("s1", "s2")]),
+    repo.path,
+  );
+  const window = await launch();
+
+  const buildId = await buildAndRun(window, home, "selected");
+  const runId = await runIdOf(home, buildId);
+
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+  expect(
+    rows<{ node_id: string }>(
+      "SELECT DISTINCT node_id FROM activity WHERE run_id = ? ORDER BY node_id",
+      runId,
+    ).map((row) => row.node_id),
+  ).toEqual(expect.arrayContaining(["s1", "s2"]));
+
+  for (const [chosen, other] of [
+    ["s2", "s1"],
+    ["s1", "s2"],
+  ] as const) {
+    const reply = replyOf(runId, chosen);
+    expect(reply).toEqual(expect.any(String));
+
+    await window.getByTestId(pageTestIds.runStage(runId, chosen)).click();
+
+    const detail = window.getByTestId(pageTestIds.runStageDetail(runId, chosen));
+    await expect(detail).toBeVisible();
+    await expect(window.getByTestId(pageTestIds.runStageDetail(runId, other))).toHaveCount(0);
+    await expect(detail.locator('[data-testid^="activity-entry-"]').first()).toBeVisible();
+    await expect(
+      detail.locator(`[data-testid^="activity-entry-"]:not([data-node-id="${chosen}"])`),
+    ).toHaveCount(0);
+    await expect(window.getByTestId(pageTestIds.runStageReply(runId, chosen))).toHaveText(
+      reply ?? "",
+    );
+  }
 });
 
 test("Stop ends a long agent turn and marks the run stopped, and Resume skips the finished nodes", async () => {
@@ -237,7 +418,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
   );
   const window = await launch();
 
-  await buildOnCanvas(window, home, "gated");
+  const buildId = await buildOnCanvas(window, home, "gated");
   await window.getByTestId(pageTestIds.buildDetailRun).click();
   const dialog = window.getByTestId("run-dialog");
   await expect(dialog).toBeVisible({ timeout: 20_000 });
@@ -247,6 +428,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
   await window.getByTestId("run-dialog-auto").check();
   await darkShot(window, "run-dialog.png");
   await window.getByTestId("run-dialog-start").click();
+  await runIdOf(home, buildId);
 
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(status(window, "g1")).toHaveAttribute("data-status", "skipped");

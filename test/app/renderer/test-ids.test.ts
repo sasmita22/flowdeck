@@ -256,14 +256,59 @@ describe("test ids", () => {
     });
   });
 
-  it("names a blueprint card's Delete by the blueprint, its confirm and two answers, and the run page's deleted message", () => {
+  it("names a blueprint card's Delete by the blueprint, its confirm and two answers", () => {
     expect(pageTestIds.blueprintDelete("flow-a")).toBe("blueprint-delete-flow-a");
     expect(pageTestIds).toMatchObject({
       blueprintDeleteDialog: "blueprint-delete-dialog",
       blueprintDeleteConfirm: "blueprint-delete-confirm",
       blueprintDeleteCancel: "blueprint-delete-cancel",
-      runBlueprintDeleted: "run-blueprint-deleted",
     });
+  });
+
+  it("names nothing on the run page that opens or mentions its blueprint", () => {
+    expect(pageTestIds).not.toHaveProperty("runOpenBlueprint");
+    expect(pageTestIds).not.toHaveProperty("runBlueprintDeleted");
+  });
+
+  it("names the stages a run did not record", () => {
+    expect(pageTestIds.runStagesNotRecorded).toEqual(expect.any(String));
+  });
+
+  it("gives each run stage's dot, status, detail, reason, Retry and reply its own id per run, node and round", () => {
+    const stageIds = [
+      pageTestIds.runStage,
+      pageTestIds.runStageStatus,
+      pageTestIds.runStageDetail,
+      pageTestIds.runStageReason,
+      pageTestIds.runStageRetry,
+      pageTestIds.runStageReply,
+    ];
+    const ids = stageIds.flatMap((id) => [
+      id("run-1", "s1"),
+      id("run-1", "s2"),
+      id("run-2", "s1"),
+      id("run-1", "s1", 1),
+      id("run-1", "s1", 2),
+    ]);
+
+    expect(ids.every((id) => typeof id === "string" && id !== "")).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain(pageTestIds.runStagesNotRecorded);
+  });
+
+  it("names a run stage apart from a build stage given the same arguments", () => {
+    const stageIds = [
+      pageTestIds.runStage,
+      pageTestIds.runStageStatus,
+      pageTestIds.runStageDetail,
+      pageTestIds.runStageReason,
+      pageTestIds.runStageRetry,
+      pageTestIds.runStageReply,
+    ];
+
+    for (const id of stageIds) {
+      expect(id("pb-1", "3", 2)).not.toBe(pageTestIds.buildStage("pb-1", 3, 2));
+    }
   });
 
   it("names the Branch variable picker and the Doctor's worktree list", () => {

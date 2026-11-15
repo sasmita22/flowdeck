@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { lower } from "../../../src/core/compiler/lower.js";
 import { FlowCycleError, order } from "../../../src/core/flow/order.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
+import { stageSourcesOf } from "../../../src/core/run/manifest.js";
 
 const at = { x: 0, y: 0 };
 const withParent = (parent?: string) => (parent === undefined ? {} : { parent });
@@ -155,5 +157,21 @@ describe("order", () => {
       [then("ghost", "X"), then("X", "Y"), then("Y", "X")],
     );
     expect(cycleError(input).nodeIds).toEqual(["X", "Y"]);
+  });
+
+  it("orders a build's stage sources the same as the flow they were built from", () => {
+    const input = flow(loopNodes, [
+      then("T", "L"),
+      then("L", "X"),
+      then("X", "Y"),
+      then("Y", "X"),
+      then("L", "O"),
+    ]);
+    const { nodes, wires } = stageSourcesOf({
+      ...lower(input, { name: "fix-login", values: {} }).manifest,
+      files: {},
+    });
+
+    expect(order({ nodes, wires })).toEqual(order(input));
   });
 });

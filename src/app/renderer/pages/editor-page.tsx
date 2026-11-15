@@ -1,11 +1,11 @@
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { AssistantState } from "../assistant/assistant-store.js";
 import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
 import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
-import { selectDirty, type CanvasState } from "../canvas/store.js";
+import { labelFor, selectDirty, type CanvasState } from "../canvas/store.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
 import { MoreMenu } from "../more-menu.js";
@@ -171,6 +171,16 @@ export function EditorPage({
   const ready = useStore(canvas, (state) => state.ready);
   const agentVisible = useStore(assistant, (state) => state.visible);
   const onSave = useCallback(() => void save.getState().save(), [save]);
+  const sessionName = useStore(canvas, (state) => state.flow.session.name);
+  const nodes = useStore(canvas, (state) => state.flow.nodes);
+  const labels = useMemo(
+    () => ({
+      sessionName,
+      nodes: nodes.map((node) => ({ id: node.id, label: labelFor(node) })),
+    }),
+    [sessionName, nodes],
+  );
+  const highlight = useCallback((nodeId: string) => canvas.getState().highlight(nodeId), [canvas]);
   return (
     <>
       <EditorTitleRow
@@ -205,6 +215,8 @@ export function EditorPage({
             shell={shell}
             run={idle}
             canvas={canvas}
+            labels={labels}
+            onSelectNode={highlight}
             inspector={inspector}
             branches={branches}
           />
