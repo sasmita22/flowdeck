@@ -35,6 +35,8 @@ const moves: Partial<Record<RunEvent["kind"], NodeState>> = {
   reset: "waiting",
 };
 
+export const stateMovingKinds = Object.keys(moves) as RunEvent["kind"][];
+
 export function nodeStatus(events: readonly RunEvent[]): NodeState {
   return events.reduce<NodeState>((status, event) => {
     const to = moves[event.kind];

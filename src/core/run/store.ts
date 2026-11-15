@@ -70,6 +70,9 @@ export type RunSummary = {
   buildName: string | null;
   blueprintName: string | null;
   blueprintVersion: number | null;
+  buildDeleted: boolean;
+  number: number;
+  doneCount: number;
 };
 
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };

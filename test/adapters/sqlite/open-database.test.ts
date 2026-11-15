@@ -51,6 +51,7 @@ const allMigrations = [
   { name: "013_flows_deleted_at.sql" },
   { name: "014_build_branch.sql" },
   { name: "015_build_manifests.sql" },
+  { name: "016_events_by_node.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -105,6 +106,12 @@ describe("openDatabase", () => {
 
   it("applies every migration, 001 to 013, to a new database file", () => {
     expect(migrations(open())).toEqual(allMigrations);
+  });
+
+  it("indexes events by run, node and order", () => {
+    expect(
+      open().prepare("SELECT name FROM pragma_index_info('events_by_node') ORDER BY seqno").all(),
+    ).toEqual([{ name: "run_id" }, { name: "node_id" }, { name: "seq" }]);
   });
 
   it("switches the file to WAL, and a read-only connection still opens and reads it", () => {

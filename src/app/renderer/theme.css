@@ -662,6 +662,10 @@ body,
   font-size: var(--fs-lg);
 }
 
+.fd-build-runs {
+  margin-top: var(--space-6);
+}
+
 .fd-doctor-list {
   display: flex;
   flex-direction: column;

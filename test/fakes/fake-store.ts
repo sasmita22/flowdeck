@@ -4,7 +4,7 @@ import type {
   PendingBuild,
   StoredBuildEvent,
 } from "../../src/core/run/build-progress.js";
-import type { RunEvent } from "../../src/core/run/run-events.js";
+import { stateMovingKinds, type RunEvent } from "../../src/core/run/run-events.js";
 import { BuildRunningError } from "../../src/core/run/store.js";
 import type {
   BuildFileRecord,
@@ -43,6 +43,8 @@ const blueprintNameIn = (origin: unknown): string | null => {
     ? blueprint.name
     : null;
 };
+
+const stateMoving = new Set(stateMovingKinds);
 
 export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
@@ -88,12 +90,8 @@ export class FakeStore implements Store {
   }
 
   listRuns(): RunSummary[] {
-    const summaries = this.runRecords.flatMap((run, index): RunSummary[] =>
-      run.buildId !== undefined && this.deletedAt.has(run.buildId)
-        ? []
-        : [this.summaryOf(run, index)],
-    );
-    return summaries
+    return this.runRecords
+      .map((run, index) => this.summaryOf(run, index))
       .reverse()
       .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"));
   }
@@ -108,7 +106,16 @@ export class FakeStore implements Store {
     const built = this.buildRecords.find((known) => known.id === run.buildId);
     const source = built?.source;
     const snapshot = run.buildId === undefined ? undefined : this.snapshotOf(run.buildId);
-    const last = this.events(run.id).at(-1);
+    const events = this.events(run.id);
+    const last = events.at(-1);
+    const earlierOfBuild = this.runRecords
+      .slice(0, index)
+      .filter((earlier) => earlier.buildId === run.buildId).length;
+    const doneCount = run.nodeIds.filter(
+      (nodeId) =>
+        events.findLast((event) => event.nodeId === nodeId && stateMoving.has(event.kind))?.kind ===
+        "done",
+    ).length;
     return {
       id: run.id,
       status: run.status,
@@ -121,6 +128,9 @@ export class FakeStore implements Store {
       buildName: built?.name ?? null,
       blueprintName: snapshot?.blueprintName ?? null,
       blueprintVersion: snapshot?.version ?? null,
+      buildDeleted: run.buildId !== undefined && this.deletedAt.has(run.buildId),
+      number: earlierOfBuild + 1,
+      doneCount,
     };
   }
 

@@ -41,7 +41,7 @@ import {
   type StoredBuildEvent,
 } from "../../core/run/build-progress.js";
 import type { VariableValues } from "../../core/flow/variables.js";
-import { costOf } from "../../core/run/budget.js";
+import { costOf, type UsageReader } from "../../core/run/budget.js";
 import {
   buildSessionGoneReason,
   defaultAlivePollMs,
@@ -1143,8 +1143,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   ): Promise<StartRunResult> => {
     const { runs } = stores;
     const record = runs.findRun(runId);
-    const summary = runs.listRuns().find((candidate) => candidate.id === runId);
+    const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) return failure(`No run ${runId}`);
+    const built = runs.findBuild(buildId);
+    if (built !== undefined && built.deletedAt !== null) {
+      return failure(`Build ${built.name ?? buildId} was deleted.`);
+    }
     const status = listed(summary).status;
     if (how.kind === "resume" && status !== "stopped" && status !== "interrupted") {
       return failure("Only a stopped or interrupted run can be resumed");
@@ -1377,22 +1381,32 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return text === undefined || build === undefined ? undefined : parseManifest(text, build);
   };
 
+  const pendingUsage = async (
+    runs: Store,
+    buildId: string,
+    claudeSessionId: string,
+    events: StoredEvent[],
+    usage: UsageReader,
+  ) => {
+    const manifest = storedManifest(runs, buildId);
+    if (manifest === undefined) throw new Error("manifest.json: missing");
+    return chargeUsage({
+      events,
+      entries: await usage.entries(claudeSessionId),
+      turnNodes: turnNodeIds(manifest),
+      owners: usageOwners(manifest, events),
+    });
+  };
+
   const runCost = async ({ runs }: EngineStores, runId: string): Promise<CostReport> => {
     const record = runs.findRun(runId);
     if (record?.buildId === undefined) throw new Error(`No run ${runId}`);
-    const manifest = storedManifest(runs, record.buildId);
-    if (manifest === undefined) throw new Error("manifest.json: missing");
     const events = runs.events(runId);
     const live = isActive(runId);
     const usage = options.run.usage;
     const pending =
       live && usage !== undefined
-        ? chargeUsage({
-            events,
-            entries: await usage.entries(record.session.claudeSessionId),
-            turnNodes: turnNodeIds(manifest),
-            owners: usageOwners(manifest, events),
-          })
+        ? await pendingUsage(runs, record.buildId, record.session.claudeSessionId, events, usage)
         : [];
     const last = events.at(-1);
     const now = live || last === undefined ? options.run.now() : Date.parse(last.time);

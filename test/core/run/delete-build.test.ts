@@ -187,11 +187,13 @@ describe("deleteBuild", () => {
     const expectMarkedDeleted = (runId: string) => {
       expect(store.findBuild(buildId)?.deletedAt).not.toBeNull();
       expect(store.listBuilds().map((known) => known.id)).not.toContain(buildId);
-      expect(store.listRuns().map((known) => known.id)).not.toContain(runId);
+      expect(store.listRuns()).toEqual([
+        expect.objectContaining({ id: runId, buildId, buildDeleted: true }),
+      ]);
       expect(store.findBuildByName("fix-login")).toBeUndefined();
     };
 
-    it("removes a clean build's workspace and branch, marks it deleted, hides its runs and frees its name", async () => {
+    it("removes a clean build's workspace and branch, marks it deleted, keeps its runs listed and frees its name", async () => {
       const { build, worktreePath, runId } = await makeBuild();
 
       const result = await deleteBuild({ store, worktree, fs, home }, buildId);

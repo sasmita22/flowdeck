@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
 import type { VariableValues } from "../../core/flow/variables.js";
-import type { RunEvent } from "../../core/run/run-events.js";
+import { stateMovingKinds, type RunEvent } from "../../core/run/run-events.js";
 import type {
   BuildEvent,
   BuildOutcome,
@@ -60,6 +60,9 @@ type RunSummaryRow = {
   build_name: string | null;
   blueprint_name: string | null;
   blueprint_version: number | null;
+  build_deleted: number;
+  number: number;
+  done_count: number;
 };
 
 const toRunSummary = (row: RunSummaryRow): RunSummary => ({
@@ -76,6 +79,9 @@ const toRunSummary = (row: RunSummaryRow): RunSummary => ({
   buildName: row.build_name,
   blueprintName: row.blueprint_name,
   blueprintVersion: row.blueprint_version,
+  buildDeleted: row.build_deleted === 1,
+  number: row.number,
+  doneCount: row.done_count,
 });
 
 type BuildRow = {
@@ -96,14 +102,28 @@ type BuildRow = {
   blueprint_version: number | null;
 };
 
-const runSummaries = `SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
-                CASE WHEN runs.status = 'running' THEN NULL
-                     ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
-                (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
-                builds.flow_id, builds.version, builds.name AS build_name,
-                build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
-           FROM runs LEFT JOIN builds ON builds.id = runs.build_id
-                LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id`;
+const stateMovingKindList = stateMovingKinds.map((kind) => `'${kind}'`).join(", ");
+
+const runNumbers = `SELECT id, ROW_NUMBER() OVER (PARTITION BY build_id ORDER BY rowid) AS number FROM runs`;
+
+const runSummaries = `
+  SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
+         CASE WHEN runs.status = 'running' THEN NULL
+              ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
+         (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
+         (SELECT count(*) FROM run_nodes
+           WHERE run_nodes.run_id = runs.id
+             AND (SELECT events.kind FROM events
+                   WHERE events.run_id = run_nodes.run_id AND events.node_id = run_nodes.node_id
+                     AND events.kind IN (${stateMovingKindList})
+                   ORDER BY events.seq DESC LIMIT 1) = 'done') AS done_count,
+         numbers.number,
+         builds.deleted_at IS NOT NULL AS build_deleted,
+         builds.flow_id, builds.version, builds.name AS build_name,
+         build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
+    FROM runs JOIN (${runNumbers}) AS numbers ON numbers.id = runs.id
+         LEFT JOIN builds ON builds.id = runs.build_id
+         LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id`;
 
 const buildsWithSnapshot = `SELECT builds.id, builds.hash, builds.name, builds.repo, builds.base,
        builds.branch, builds.branch_created, builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
@@ -273,7 +293,6 @@ export class SqliteStore implements Store {
     const rows = this.db
       .prepare(
         `${runSummaries}
-          WHERE builds.deleted_at IS NULL
           ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
       )
       .all() as RunSummaryRow[];

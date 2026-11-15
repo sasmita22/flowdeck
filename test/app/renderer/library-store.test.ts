@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import {
   createLibraryStore,
+  filterRunsByBuild,
   pinnedFirst,
   selectBuildCards,
   selectPicture,
+  selectRunBuildOptions,
   selectRunCards,
   type LibraryBridge,
 } from "../../../src/app/renderer/library-store.js";
+import type { RunSummary } from "../../../src/core/run/store.js";
 import { thenWire } from "../../fixtures/flow-builders.js";
 
 const report = {
@@ -81,6 +84,9 @@ const runs = [
     totalCost: null,
     nodeCount: 2,
     ...fromFixLogin,
+    buildDeleted: false,
+    number: 2,
+    doneCount: 1,
   },
   {
     id: "run-1",
@@ -90,6 +96,9 @@ const runs = [
     totalCost: 0.25,
     nodeCount: 2,
     ...fromFixLogin,
+    buildDeleted: false,
+    number: 1,
+    doneCount: 2,
   },
   {
     id: "run-idle",
@@ -103,6 +112,9 @@ const runs = [
     buildName: null,
     blueprintName: "Old report",
     blueprintVersion: 2,
+    buildDeleted: false,
+    number: 1,
+    doneCount: 1,
   },
   {
     id: "run-old",
@@ -115,6 +127,9 @@ const runs = [
     buildName: null,
     blueprintName: null,
     blueprintVersion: null,
+    buildDeleted: false,
+    number: 1,
+    doneCount: 1,
   },
 ];
 
@@ -434,11 +449,129 @@ describe("cards", () => {
     ]);
   });
 
+  it("numbers each run card within its build and names it from the build, apart from the number", async () => {
+    const cards = selectRunCards(await withBlueprints([]));
+
+    expect(
+      cards.map(({ id, number, name, buildDeleted, doneCount, nodeCount }) => ({
+        id,
+        number,
+        name,
+        buildDeleted,
+        doneCount,
+        nodeCount,
+      })),
+    ).toEqual([
+      {
+        id: "run-2",
+        number: 2,
+        name: "fix-login",
+        buildDeleted: false,
+        doneCount: 1,
+        nodeCount: 2,
+      },
+      {
+        id: "run-1",
+        number: 1,
+        name: "fix-login",
+        buildDeleted: false,
+        doneCount: 2,
+        nodeCount: 2,
+      },
+      {
+        id: "run-idle",
+        number: 1,
+        name: "Old report",
+        buildDeleted: false,
+        doneCount: 1,
+        nodeCount: 1,
+      },
+      {
+        id: "run-old",
+        number: 1,
+        name: "0123456789",
+        buildDeleted: false,
+        doneCount: 1,
+        nodeCount: 1,
+      },
+    ]);
+    expect(cards.filter((card) => card.name.includes("#"))).toEqual([]);
+  });
+
   it("never says a card is not from a blueprint", async () => {
     const state = await withBlueprints([]);
     const shown = JSON.stringify([selectBuildCards(state), selectRunCards(state)]);
 
     expect(shown).not.toContain("Not from a blueprint");
+  });
+});
+
+describe("build filter", () => {
+  const goneFixLogin = {
+    id: "run-gone",
+    status: "done",
+    createdAt: "2026-01-05T00:00:00.000Z",
+    endedAt: "2026-01-05T00:01:00.000Z",
+    totalCost: 0.1,
+    nodeCount: 2,
+    ...fromFixLogin,
+    buildId: "b-fix-gone",
+    buildDeleted: true,
+    number: 1,
+    doneCount: 0,
+  };
+
+  const withGoneBuild = async () => {
+    const bridge = fakeBridge();
+    bridge.listRuns.mockResolvedValue([...runs, goneFixLogin]);
+    const library = createLibraryStore({ bridge });
+    await library.getState().refresh();
+    return library.getState();
+  };
+
+  it("offers each build once, named from the build or its id, and marks a deleted build apart from a live one of the same name", async () => {
+    const { runs: listed } = await withGoneBuild();
+
+    expect(selectRunBuildOptions(listed)).toEqual([
+      { buildId: "b-fix", label: "fix-login" },
+      { buildId: "b-idle", label: "b-idle" },
+      { buildId: "0123456789", label: "0123456789" },
+      { buildId: "b-fix-gone", label: "fix-login (deleted)" },
+    ]);
+  });
+
+  it("keeps every run card with no build chosen, and only the chosen build's cards otherwise", async () => {
+    const cards = selectRunCards(await withGoneBuild());
+
+    expect(filterRunsByBuild(cards, undefined).map((card) => card.id)).toEqual([
+      "run-2",
+      "run-1",
+      "run-idle",
+      "run-old",
+      "run-gone",
+    ]);
+    expect(filterRunsByBuild(cards, "b-fix").map((card) => card.id)).toEqual(["run-2", "run-1"]);
+    expect(filterRunsByBuild(cards, "b-fix-gone").map((card) => card.id)).toEqual(["run-gone"]);
+  });
+
+  it("offers no build for a run that names none, and leaves it out once a build is chosen", () => {
+    const unbuilt: RunSummary = {
+      id: "run-old",
+      status: "done",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      endedAt: "2026-01-01T00:01:00.000Z",
+      totalCost: null,
+      nodeCount: 1,
+      buildName: null,
+      blueprintName: null,
+      blueprintVersion: null,
+      buildDeleted: false,
+      number: 1,
+      doneCount: 1,
+    };
+
+    expect(selectRunBuildOptions([unbuilt])).toEqual([]);
+    expect(filterRunsByBuild(selectRunCards({ runs: [unbuilt] }), "0123456789")).toEqual([]);
   });
 });
 

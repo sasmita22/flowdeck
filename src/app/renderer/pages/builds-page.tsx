@@ -7,13 +7,20 @@ import type { Actions } from "../actions.js";
 import { selectBuildingCards, type BuildProgressState } from "../build-progress-store.js";
 import { formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
-import { selectBuildCards, type BuildCard, type LibraryState } from "../library-store.js";
+import {
+  filterRunsByBuild,
+  selectBuildCards,
+  selectRunCards,
+  type BuildCard,
+  type LibraryState,
+} from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
 import { selectKeptNote, selectRunDisabled, selectRunHint, type RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
 import { BuildTree } from "./build-tree.js";
 import { Empty, PageHead } from "./page-head.js";
+import { RunRow } from "./runs-page.js";
 
 const versionText = (card: Pick<BuildCard, "version">) =>
   card.version === null ? "" : `v${card.version}`;
@@ -177,6 +184,10 @@ function BuildFiles({
   const deleted = tree?.deleted === true;
   const card = useCards(library).find((build) => build.id === buildId);
   const blocked = useRunDisabled(run, card, deleted);
+  const runs = useStore(library, (state) => state.runs);
+  const snapshots = useStore(run, (state) => state.snapshots);
+  const runCards = filterRunsByBuild(selectRunCards({ runs }), buildId);
+  const now = Date.now();
 
   useEffect(() => {
     void library.getState().openFiles(buildId);
@@ -203,7 +214,8 @@ function BuildFiles({
           </button>
           <span aria-hidden="true">/</span>
           <h1 className="fd-page-title fd-page-title-small" data-testid={pageTestIds.title}>
-            {card?.name ?? "Build"} {card === undefined ? "" : versionText(card)}
+            {card?.name ?? runCards[0]?.name ?? "Build"}{" "}
+            {card === undefined ? "" : versionText(card)}
           </h1>
         </nav>
         <div className="fd-page-bar">
@@ -235,6 +247,26 @@ function BuildFiles({
           </pre>
         )}
       </div>
+      <section className="fd-section fd-build-runs" aria-label="Runs">
+        <div className="fd-section-head">
+          <h2>Runs</h2>
+        </div>
+        <div className="fd-cards" data-testid={pageTestIds.buildRuns}>
+          {runCards.length === 0 ? (
+            <p className="fd-page-note">No runs yet.</p>
+          ) : (
+            runCards.map((card) => (
+              <RunRow
+                key={card.id}
+                card={card}
+                live={snapshots[card.id] ?? null}
+                now={now}
+                onOpen={() => nav.getState().go({ name: "run", runId: card.id })}
+              />
+            ))
+          )}
+        </div>
+      </section>
     </>
   );
 }
