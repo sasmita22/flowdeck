@@ -865,6 +865,19 @@ describe("newCanvasFlow", () => {
       expect.objectContaining({ rule: "repo-required", field: "buildConfig.repo" }),
     );
   });
+
+  it("never asks for permission by default", () => {
+    expect(newCanvasFlow().session.permissionMode).toBe("bypassPermissions");
+  });
+
+  it("leaves a saved blueprint's permission mode as it was saved", () => {
+    const store = createCanvasStore({ ready: false });
+    const start = newCanvasFlow();
+
+    store.getState().load({ ...start, session: { ...start.session, permissionMode: "default" } });
+
+    expect(store.getState().flow.session.permissionMode).toBe("default");
+  });
 });
 
 describe("the Build configuration", () => {

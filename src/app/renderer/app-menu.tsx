@@ -43,14 +43,6 @@ export function AppMenu({
       </span>
       <button
         className="fd-menu-row"
-        data-testid={pageTestIds.newBlueprint}
-        onClick={() => void actions.newBlueprint()}
-      >
-        <Icon name="plus" />
-        New blueprint
-      </button>
-      <button
-        className="fd-menu-row"
         data-testid={pageTestIds.search}
         onClick={() => nav.getState().focusSearch()}
       >

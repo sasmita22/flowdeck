@@ -48,7 +48,6 @@ const stageKey = (runId: string, nodeId: string, round?: number) =>
   round === undefined ? `${runId}-${nodeId}` : `${runId}-${nodeId}-${round}`;
 
 export const pageTestIds = {
-  newBlueprint: "menu-new",
   search: "menu-search",
   recent: (flowId: string) => `menu-recent-${flowId}`,
   recentPin: (flowId: string) => `recent-pin-${flowId}`,

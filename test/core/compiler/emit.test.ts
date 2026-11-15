@@ -9,10 +9,12 @@ import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-
 import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
+import { newCanvasFlow } from "../../../src/app/renderer/canvas/store.js";
+import type { Session } from "../../../src/core/flow/schema.js";
 import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
 import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
-const sample = () => {
+const sample = (permissionMode: Session["permissionMode"] = "acceptEdits") => {
   const base = flow(
     [
       agent("p", { settings: { writes: ["plan.md"] } }),
@@ -22,7 +24,7 @@ const sample = () => {
   );
   return {
     ...base,
-    session: { ...base.session, allowedTools: ["Read", "Edit"], permissionMode: "acceptEdits" },
+    session: { ...base.session, allowedTools: ["Read", "Edit"], permissionMode },
   };
 };
 
@@ -178,6 +180,43 @@ describe("emit", () => {
       env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
       permissions: { allow: ["Read", "Edit"], defaultMode: "acceptEdits" },
     });
+  });
+
+  describe("consent to never asking", () => {
+    const settingsFor = (permissionMode: Session["permissionMode"]) =>
+      JSON.parse(
+        fileAt(
+          emit(lower(sample(permissionMode), { name: "fix-login", values: {} }), {
+            repo: fixLogin.repo,
+            base: fixLogin.base,
+            branch: fixLogin.branch,
+            branchCreated: true,
+          }),
+          "settings.json",
+        ),
+      );
+
+    it("gives a new blueprint's session the never-ask mode and its consent, in the session's own settings", () => {
+      const settings = settingsFor(newCanvasFlow().session.permissionMode);
+
+      expect(settings.permissions.defaultMode).toBe("bypassPermissions");
+      expect(settings.skipDangerousModePermissionPrompt).toBe(true);
+    });
+
+    it("consents for a session set to never ask", () => {
+      expect(settingsFor("bypassPermissions")).toStrictEqual({
+        env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
+        permissions: { allow: ["Read", "Edit"], defaultMode: "bypassPermissions" },
+        skipDangerousModePermissionPrompt: true,
+      });
+    });
+
+    it.each(["default", "acceptEdits", "plan"] as const)(
+      "gives no consent to a session in %s mode",
+      (permissionMode) => {
+        expect(settingsFor(permissionMode)).not.toHaveProperty("skipDangerousModePermissionPrompt");
+      },
+    );
   });
 
   it("writes hook settings that run the hook the session's environment names", () => {

@@ -22,6 +22,31 @@ const dialog = (cursorOnYes: boolean) =>
   ].join("\n");
 const dialogPane = dialog(false);
 const dialogOnYes = dialog(true);
+const bypassDialogPane = [
+  rule,
+  "  WARNING: Claude Code running in Bypass Permissions mode",
+  "",
+  "  In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.",
+  "  This mode should only be used in a sandboxed container/VM that has restricted internet access and can easily be restored if damaged.",
+  "",
+  "  By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.",
+  "",
+  "  https://code.claude.com/docs/en/security",
+  "",
+  "  ❯ No, exit",
+  "    Yes, I accept",
+  "",
+  "  Enter to confirm · Esc to cancel",
+].join("\n");
+const bypassReadyPane = [
+  " ▐▛███▛█   Claude Code v2.1.325",
+  rule,
+  '❯ Try "fix lint errors"',
+  rule,
+  "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+].join("\n");
+const bypassReason =
+  "Claude Code showed its Bypass Permissions warning: consent is missing from the session settings";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("claudeCommand", () => {
@@ -290,6 +315,65 @@ describe("ClaudeCli", () => {
       'Claude in session "fd-a" did not move the trust dialog cursor to "Yes, I trust this folder" within 100 ms',
     );
     expect(sessions.inputs("fd-a")).toEqual([{ key: "Down" }]);
+  });
+
+  describe("the Bypass Permissions warning", () => {
+    const patient = () =>
+      new ClaudeCli({
+        sessions,
+        homeDir: home,
+        pollIntervalMs: 2,
+        readyTimeoutMs: 2000,
+        dialogSettleMs: 10,
+      });
+
+    it("fails fast with a clear reason and sends no keys", async () => {
+      sessions.setPane("fd-a", bypassDialogPane);
+      const started = Date.now();
+
+      await expect(patient().waitUntilReady("fd-a")).rejects.toThrow(bypassReason);
+
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(sessions.inputs("fd-a")).toEqual([]);
+    });
+
+    it("is not taken for the warning on a ready screen whose footer says bypass permissions on", async () => {
+      sessions.setPane("fd-a", bypassReadyPane);
+
+      await cli.waitUntilReady("fd-a");
+
+      expect(sessions.inputs("fd-a")).toEqual([]);
+    });
+
+    it("is not taken for the warning on a ready screen whose conversation quotes it", async () => {
+      sessions.setPane(
+        "fd-a",
+        [
+          "> Reply with: Yes, I accept",
+          "⏺ Yes, I accept",
+          '⏺ The title reads "WARNING: Claude Code running in Bypass Permissions mode" on that screen.',
+          bypassReadyPane,
+        ].join("\n"),
+      );
+
+      await cli.waitUntilReady("fd-a");
+
+      expect(sessions.inputs("fd-a")).toEqual([]);
+    });
+
+    it("answers the trust dialog first, then fails on the warning without another key", async () => {
+      sessions.setPane("fd-a", dialogPane);
+      sessions.onInput("fd-a", (input) => {
+        if ("key" in input && input.key === "Down") sessions.setPane("fd-a", dialogOnYes);
+        if ("key" in input && input.key === "Enter") sessions.setPane("fd-a", bypassDialogPane);
+      });
+      const started = Date.now();
+
+      await expect(patient().waitUntilReady("fd-a")).rejects.toThrow(bypassReason);
+
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(sessions.inputs("fd-a")).toEqual([{ key: "Down" }, { key: "Enter" }]);
+    });
   });
 
   it("gives up on a pane that never becomes ready, sending nothing", async () => {

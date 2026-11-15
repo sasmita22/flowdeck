@@ -24,3 +24,5 @@ export const permissionModes: readonly Choice[] = [
   { value: "plan", label: "Plan only, change nothing" },
   { value: "bypassPermissions", label: "Never ask (skip all checks)" },
 ];
+
+export const defaultPermissionMode = "bypassPermissions";

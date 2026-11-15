@@ -4,6 +4,7 @@ import { flowProblems } from "../../../core/compiler/flow-problems.js";
 import type { ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
+import { defaultPermissionMode } from "../../../core/flow/choices.js";
 import { bodyProblems } from "../../../core/flow/structure.js";
 import {
   NodeType,
@@ -150,7 +151,7 @@ export const newCanvasFlow = (): Flow => ({
     buildConfig: { variables: [] },
     model: "sonnet",
     allowedTools: [],
-    permissionMode: "default",
+    permissionMode: defaultPermissionMode,
     connectors: [],
   },
 });
