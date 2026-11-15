@@ -196,6 +196,17 @@ const blueprintTurns = () => {
   };
 };
 
+if (argv.includes("-p")) {
+  readFileSync(0, "utf8");
+  if (process.env.FAKE_CLAUDE_NARRATE_FAIL === "1") process.exit(1);
+  const lines = [
+    { type: "system", subtype: "init", tools: [] },
+    { type: "result", subtype: "success", is_error: false, result: "Fake story: the run ended.\\nNothing got in the way.", total_cost_usd: 0 },
+  ];
+  writeFileSync(1, lines.map((line) => JSON.stringify(line) + "\\n").join(""));
+  process.exit(0);
+}
+
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 if (process.env.FLOWDECK_BP_SOCK) {

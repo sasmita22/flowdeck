@@ -67,6 +67,10 @@ function renderApp(root: HTMLElement) {
     );
     if (moved) void library.getState().refresh();
   });
+  window.flowdeck.onStory((runId) => {
+    void library.getState().refresh();
+    if (library.getState().viewedRun?.run.id === runId) void library.getState().openRun(runId);
+  });
   buildProgress.subscribe((next, previous) => {
     const locked = Object.values(next.entries).some(
       (entry) =>

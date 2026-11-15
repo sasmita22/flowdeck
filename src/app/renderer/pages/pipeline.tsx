@@ -10,7 +10,7 @@ import type {
 } from "../../../core/run/pipeline.js";
 import type { NodeState } from "../../../core/run/state.js";
 import type { HumanDecision } from "../../../core/run/wait.js";
-import { labelFor } from "../canvas/store.js";
+import { labelFor } from "../../../core/nodes/defaults.js";
 import { statusBadge } from "../canvas/status-look.js";
 import { formatCost, formatDuration, formatTokens, formatWhen } from "../format.js";
 import { ActivityList } from "../inspector/activity-feed.js";

@@ -55,6 +55,45 @@ describe("createRunRelay", () => {
     expect(sent).toEqual([snapshotOf(runState("running"))]);
     expect(relay.latest("run-1")).toEqual(snapshotOf(runState("running")));
   });
+
+  it("hands each story push's run id on, without touching the run's snapshot", () => {
+    const sent: unknown[] = [];
+    const stories: string[] = [];
+    const relay = createRunRelay({
+      send: (snapshot) => sent.push(snapshot),
+      sendStory: (runId) => stories.push(runId),
+    });
+
+    relay.onPush(runState("done"));
+    relay.onPush({ push: "story", runId: "run-1" });
+    relay.onPush({ push: "story", runId: "run-2" });
+
+    expect(stories).toEqual(["run-1", "run-2"]);
+    expect(sent).toEqual([snapshotOf(runState("done"))]);
+    expect(relay.latest("run-1")).toEqual(snapshotOf(runState("done")));
+  });
+
+  it("drops a story push when nothing takes stories, still relaying snapshots", () => {
+    const sent: unknown[] = [];
+    const relay = createRunRelay({ send: (snapshot) => sent.push(snapshot) });
+
+    relay.onPush({ push: "story", runId: "run-1" });
+    relay.onPush(runState("done"));
+
+    expect(sent).toEqual([snapshotOf(runState("done"))]);
+  });
+
+  it("hands no story on for a run-state push", () => {
+    const stories: string[] = [];
+    const relay = createRunRelay({
+      send: () => undefined,
+      sendStory: (runId) => stories.push(runId),
+    });
+
+    relay.onPush(runState("done"));
+
+    expect(stories).toEqual([]);
+  });
 });
 
 describe("stopEngine", () => {

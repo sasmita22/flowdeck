@@ -149,7 +149,8 @@ test("A run with no Claude turn has no terminal: the menu's Open terminal stays 
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line) as string[])
-    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length !== 2);
+    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length !== 2)
+    .filter((argv) => !argv.includes("-p"));
   expect(runSessions).toEqual([]);
 });
 

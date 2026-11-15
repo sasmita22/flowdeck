@@ -73,6 +73,15 @@ export type RunSummary = {
   buildDeleted: boolean;
   number: number;
   doneCount: number;
+  storyLine?: string;
+};
+
+export type RunStory = {
+  runId: string;
+  at: string;
+  runStatus: Exclude<RunStatus, "running">;
+  text: string;
+  cost: number;
 };
 
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
@@ -131,6 +140,8 @@ export interface Store {
   recordActivity(runId: string, entry: ActivityEntry): void;
   activity(runId: string): ActivityEntry[];
   recordCost(runId: string, totalCost: number): void;
+  appendRunStory(story: RunStory): void;
+  latestRunStory(runId: string): RunStory | undefined;
   stopRun(runId: string): void;
   recordBuild(build: NewBuild): void;
   findBuild(id: string): BuildRecord | undefined;

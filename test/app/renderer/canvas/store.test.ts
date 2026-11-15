@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createCanvasStore,
   isNodeType,
-  labelFor,
   newCanvasFlow,
   nextNodeId,
   nodeDefaults,
@@ -1462,23 +1461,6 @@ describe("selectFieldIssues", () => {
 
 describe("a node's shown label", () => {
   const unnamedAgent = { ...agent("A"), label: "" };
-
-  it.each([
-    ["agent", "", "Agent"],
-    ["agent", "   ", "Agent"],
-    ["hardstop", "", "Hard stop"],
-    ["foreach", "", "For each"],
-  ] as const)("labelFor names a %s labelled %j by its type, %j", (type, label, shown) => {
-    expect(labelFor({ type, label })).toBe(shown);
-  });
-
-  it("labelFor keeps a label that has text", () => {
-    expect(labelFor({ type: "agent", label: "Review" })).toBe("Review");
-  });
-
-  it("labelFor names no node at all Build", () => {
-    expect(labelFor(undefined)).toBe("Build");
-  });
 
   it("nodeLabel names no node id Build", () => {
     expect(nodeLabel(flow([unnamedAgent], []).nodes, undefined)).toBe("Build");

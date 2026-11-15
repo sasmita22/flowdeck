@@ -26,3 +26,8 @@ export const nodeDefaults: { [T in NodeType]: { label: string; settings: Setting
   foreach: { label: foreachDefaults.defaultLabel, settings: foreachDefaults.defaultSettings },
   branch: { label: branchDefaults.defaultLabel, settings: branchDefaults.defaultSettings },
 };
+
+export const labelFor = (node: Pick<Node, "type" | "label"> | undefined): string => {
+  if (node === undefined) return "Build";
+  return node.label.trim() === "" ? nodeDefaults[node.type].label : node.label;
+};

@@ -16,7 +16,7 @@ import {
   type Variable,
   type Wire,
 } from "../../../core/flow/schema.js";
-import { nodeDefaults } from "../../../core/nodes/defaults.js";
+import { labelFor, nodeDefaults } from "../../../core/nodes/defaults.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
 import {
@@ -243,11 +243,6 @@ const reasonOf = (flow: Flow, error: ValidationError) =>
   reasonNaming(error.node, error.message, labelOf(flow, error.node ?? ""));
 
 const labelOf = (flow: Flow, id: string) => nodeLabel(flow.nodes, id);
-
-export const labelFor = (node: Pick<Node, "type" | "label"> | undefined): string => {
-  if (node === undefined) return "Build";
-  return node.label.trim() === "" ? nodeDefaults[node.type].label : node.label;
-};
 
 export const nodeLabel = (nodes: readonly Node[], nodeId?: string): string => {
   if (nodeId === undefined) return labelFor(undefined);

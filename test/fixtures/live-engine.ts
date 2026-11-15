@@ -29,6 +29,7 @@ import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { PendingBuildEnd, RunStatus } from "../../src/core/run/store.js";
 import type { HumanWaiter } from "../../src/core/run/wait.js";
 import type { BuildAgents, BuildAgentsOpenSpec } from "../../src/ports/build-agents.js";
+import type { RunNarrator } from "../../src/ports/run-narrator.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { fakeEngineBuildOptions } from "./fake-build-deps.js";
 import { killTmuxServer, removeClaudeSessions } from "./live-claude.js";
@@ -156,6 +157,7 @@ export type LiveEngineOptions = {
   startEvents?: (start: StartEvents) => StartEvents;
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildTimeoutMs?: number;
+  narrator?: RunNarrator;
 };
 
 export type BuildRequestOptions = {
@@ -263,6 +265,7 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
     },
     ...(waits === undefined ? {} : { waits }),
     ...(options.sessionAlive === undefined ? {} : { sessionAlive: options.sessionAlive }),
+    ...(options.narrator === undefined ? {} : { narrator: options.narrator }),
     ...(options.sessionName === undefined
       ? {}
       : { newSessionName: () => options.sessionName ?? "" }),

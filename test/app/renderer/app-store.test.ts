@@ -59,6 +59,7 @@ const bridge = (
   onTerminalData: vi.fn(() => () => {}),
   getActivity: vi.fn(),
   onActivity: vi.fn(() => () => {}),
+  onStory: vi.fn(() => () => {}),
   getWait: vi.fn(async () => null),
   onWait: vi.fn(() => () => {}),
   answerWait: vi.fn(async () => false),

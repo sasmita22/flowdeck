@@ -120,6 +120,7 @@ export type FlowdeckBridge = EngineCalls & {
   onTerminalData(listener: (data: unknown) => void): () => void;
   getActivity(runId: string): Promise<unknown>;
   onActivity(listener: (update: unknown) => void): () => void;
+  onStory(listener: (runId: string) => void): () => void;
   getWait(runId: string): Promise<unknown>;
   onWait(listener: (value: unknown) => void): () => void;
   answerWait(answer: unknown): Promise<boolean>;
@@ -151,6 +152,7 @@ export const bridgeChannels = {
   terminalData: "flowdeck:terminal-data",
   getActivity: "flowdeck:get-activity",
   activity: "flowdeck:activity",
+  story: "flowdeck:story",
   getWait: "flowdeck:get-wait",
   wait: "flowdeck:wait",
   answerWait: "flowdeck:answer-wait",

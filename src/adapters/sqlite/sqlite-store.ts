@@ -24,6 +24,7 @@ import type {
   PendingBuildStart,
   RunRecord,
   RunStatus,
+  RunStory,
   RunSummary,
   SnapshotGap,
   SnapshotKey,
@@ -63,6 +64,23 @@ type RunSummaryRow = {
   build_deleted: number;
   number: number;
   done_count: number;
+  story_text: string | null;
+};
+
+type RunStoryRow = {
+  run_id: string;
+  at: string;
+  run_status: RunStory["runStatus"];
+  text: string;
+  cost: number;
+};
+
+const storyLineOf = (text: string | null): { storyLine?: string } => {
+  const storyLine = text
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => line !== "");
+  return storyLine === undefined ? {} : { storyLine };
 };
 
 const toRunSummary = (row: RunSummaryRow): RunSummary => ({
@@ -82,6 +100,7 @@ const toRunSummary = (row: RunSummaryRow): RunSummary => ({
   buildDeleted: row.build_deleted === 1,
   number: row.number,
   doneCount: row.done_count,
+  ...storyLineOf(row.story_text),
 });
 
 type BuildRow = {
@@ -118,6 +137,8 @@ const runSummaries = `
                      AND events.kind IN (${stateMovingKindList})
                    ORDER BY events.seq DESC LIMIT 1) = 'done') AS done_count,
          numbers.number,
+         (SELECT text FROM run_stories WHERE run_stories.run_id = runs.id
+           ORDER BY run_stories.seq DESC LIMIT 1) AS story_text,
          builds.deleted_at IS NOT NULL AS build_deleted,
          builds.flow_id, builds.version, builds.name AS build_name,
          build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
@@ -387,6 +408,31 @@ export class SqliteStore implements Store {
     this.db
       .prepare("INSERT INTO activity (run_id, id, node_id, entry) VALUES (?, ?, ?, ?)")
       .run(runId, entry.id, entry.nodeId, JSON.stringify(entry));
+  }
+
+  appendRunStory(story: RunStory): void {
+    this.db
+      .prepare(
+        "INSERT INTO run_stories (run_id, at, run_status, text, cost) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(story.runId, story.at, story.runStatus, story.text, story.cost);
+  }
+
+  latestRunStory(runId: string): RunStory | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT run_id, at, run_status, text, cost FROM run_stories WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+      )
+      .get(runId) as RunStoryRow | undefined;
+    return row === undefined
+      ? undefined
+      : {
+          runId: row.run_id,
+          at: row.at,
+          runStatus: row.run_status,
+          text: row.text,
+          cost: row.cost,
+        };
   }
 
   activity(runId: string): ActivityEntry[] {

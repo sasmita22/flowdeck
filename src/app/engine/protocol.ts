@@ -61,6 +61,7 @@ export type EnginePush =
   | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
   | { push: "build-activity"; pendingId: string; entry: ActivityEntry }
   | { push: "wait"; runId: string; value: PendingWait | null }
+  | { push: "story"; runId: string }
   | ({ push: "build-progress" } & BuildProgressEntry);
 
 export type EngineMessage = EngineResponse | EnginePush;

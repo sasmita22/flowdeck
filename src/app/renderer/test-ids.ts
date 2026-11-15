@@ -124,6 +124,12 @@ export const pageTestIds = {
   runStageReply: (runId: string, nodeId: string, round?: number) =>
     `run-stage-reply-${stageKey(runId, nodeId, round)}`,
   runStagesNotRecorded: "run-stages-not-recorded",
+  runStory: "run-story",
+  runStoryHeader: "run-story-header",
+  runStoryAccount: "run-story-account",
+  runStoryDigest: "run-story-digest",
+  runStoryDigestToggle: "run-story-digest-toggle",
+  runRowStoryLine: "run-row-story-line",
   runPageStatus: "run-page-status",
   runPageNote: "run-page-note",
   runStop: "run-stop",

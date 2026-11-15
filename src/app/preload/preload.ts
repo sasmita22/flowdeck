@@ -64,6 +64,13 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.activity, handler);
     };
   },
+  onStory: (listener) => {
+    const handler = (_event: unknown, runId: string) => listener(runId);
+    ipcRenderer.on(bridgeChannels.story, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.story, handler);
+    };
+  },
   getWait: (runId) => ipcRenderer.invoke(bridgeChannels.getWait, runId),
   onWait: (listener) => {
     const handler = (_event: unknown, value: unknown) => listener(value);

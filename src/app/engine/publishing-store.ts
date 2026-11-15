@@ -54,6 +54,8 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     listManifestGaps: () => store.listManifestGaps(),
     recordActivity: (id, entry) => store.recordActivity(id, entry),
     activity: (id) => store.activity(id),
+    appendRunStory: (story) => store.appendRunStory(story),
+    latestRunStory: (id) => store.latestRunStory(id),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);
       publishFor(id);

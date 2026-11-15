@@ -23,7 +23,8 @@ import {
   type SnapshotStatus,
 } from "../../core/run/snapshot.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
-import { labelFor, selectDirty, type CanvasState } from "./canvas/store.js";
+import { selectDirty, type CanvasState } from "./canvas/store.js";
+import { labelFor } from "../../core/nodes/defaults.js";
 import type { SaveState } from "./save-store.js";
 
 export type RunBridge = Pick<

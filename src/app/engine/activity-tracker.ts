@@ -71,6 +71,8 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       recordActivity: (id, entry) => inner.recordActivity(id, entry),
       activity: (id) => inner.activity(id),
       recordCost: (id, totalCost) => inner.recordCost(id, totalCost),
+      appendRunStory: (story) => inner.appendRunStory(story),
+      latestRunStory: (id) => inner.latestRunStory(id),
       recordBuild: (build) => inner.recordBuild(build),
       findBuild: (id) => inner.findBuild(id),
       findBuildByName: (name) => inner.findBuildByName(name),

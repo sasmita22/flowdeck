@@ -69,6 +69,11 @@ export function RunRow({
           {badge}
         </span>
       </div>
+      {card.storyLine !== undefined && (
+        <p className="fd-ellipsis fd-run-story-line" data-testid={pageTestIds.runRowStoryLine}>
+          {card.storyLine}
+        </p>
+      )}
       <div className="fd-card-meta">
         <span>Started {formatWhen(card.createdAt)}</span>
         <span>{durationOf({ ...card, status }, now)}</span>

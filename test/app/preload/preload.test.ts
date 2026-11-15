@@ -337,6 +337,7 @@ describe("preload terminal wiring", () => {
     ],
     ["onTerminalData", "flowdeck:terminal-data", { runId: "run-1", data: "output" }],
     ["onActivity", "flowdeck:activity", { runId: "run-1", entry: { id: 1 } }],
+    ["onStory", "flowdeck:story", "run-1"],
     [
       "onWait",
       "flowdeck:wait",

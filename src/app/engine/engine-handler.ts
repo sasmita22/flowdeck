@@ -84,6 +84,9 @@ import { backfillManifests } from "../../core/run/backfill-manifests.js";
 import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/run/manifest.js";
 import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
+import { runDigest, type RunDigest } from "../../core/run/digest.js";
+import { settings as askSettings } from "../../core/nodes/ask/settings.js";
+import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
 import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
 import {
   buildEntriesSchema,
@@ -114,6 +117,7 @@ import type { ConnectorSource } from "../../ports/connector-source.js";
 import type { FileSystem } from "../../ports/file-system.js";
 import type { FlowStore, SaveFlowResult, SavedFlowRef } from "../../ports/flow-store.js";
 import type { GitState } from "../../ports/git-state.js";
+import type { RunNarrator } from "../../ports/run-narrator.js";
 import type { RunSummary, Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
 import { createActivityTracker, createBuildActivity } from "./activity-tracker.js";
@@ -156,6 +160,7 @@ export type EngineHandlerOptions = {
   buildSessionPollMs?: number;
   endSession?: (sessionName: string) => Promise<void>;
   homeLock?: { acquire(): Promise<boolean> };
+  narrator?: RunNarrator;
   blueprint?:
     | {
         sessions: BlueprintSessions;
@@ -307,6 +312,8 @@ function detachable(store: Store, detached: () => boolean): Store {
     recordCost(id, totalCost) {
       if (!detached()) store.recordCost(id, totalCost);
     },
+    appendRunStory: (story) => store.appendRunStory(story),
+    latestRunStory: (runId) => store.latestRunStory(runId),
   };
 }
 
@@ -1017,6 +1024,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         } catch (error) {
           console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
         }
+        void narrate(launch.stores.runs, runId);
       });
     active.set(run.buildId, run);
     console.log(`engine: run ${runId} started`);
@@ -1333,6 +1341,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const detach = async (): Promise<void> => {
+    closeNarrations();
     await startsSettled();
     await Promise.all(
       [...active.values()].map(async (run) => {
@@ -1360,6 +1369,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     if (record?.status !== "running") return { stopped: false };
     runs.stopRun(runId);
+    void narrate(runs, runId);
     const { tmuxName } = record.session;
     if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
       await options.endSession?.(tmuxName);
@@ -1379,6 +1389,81 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const text = runs.buildManifest(buildId);
     const build = runs.findBuild(buildId);
     return text === undefined || build === undefined ? undefined : parseManifest(text, build);
+  };
+
+  const questionOf = (node: ParsedManifest["nodes"][number]): string | undefined => {
+    if (node.type === "gate") return gateSettings.safeParse(node.settings).data?.shown;
+    if (node.type === "ask") return askSettings.safeParse(node.settings).data?.question;
+    return undefined;
+  };
+
+  const questionsOf = (manifest: ParsedManifest): Record<string, string> =>
+    Object.fromEntries(
+      manifest.nodes.flatMap((node) => {
+        const question = questionOf(node);
+        return question === undefined ? [] : [[node.id, question]];
+      }),
+    );
+
+  const digestOf = (runs: Store, runId: string): RunDigest | undefined => {
+    const record = runs.findRun(runId);
+    const summary = runs.findRunSummary(runId);
+    if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
+    const build = record.buildId === undefined ? undefined : runs.findBuild(record.buildId);
+    if (build === undefined) return undefined;
+    const manifest = storedManifest(runs, build.id);
+    const events = runs.events(runId);
+    const last = events.at(-1);
+    const now = isActive(runId) || last === undefined ? options.run.now() : Date.parse(last.time);
+    return runDigest({
+      build,
+      stages: manifest === undefined ? null : stageSourcesOf(manifest),
+      events,
+      activity: runs.activity(runId),
+      cost: costReport({ nodeIds: record.nodeIds, events, pending: [], now }),
+      createdAt: summary.createdAt,
+      endedAt: summary.endedAt,
+      status: record.status,
+      questions: manifest === undefined ? {} : questionsOf(manifest),
+    });
+  };
+
+  const narrations = new Set<AbortController>();
+  let narrationsClosed = false;
+
+  const closeNarrations = () => {
+    narrationsClosed = true;
+    for (const narration of narrations) narration.abort(new Error("Flowdeck is closing"));
+  };
+
+  const narrate = async (runs: Store, runId: string): Promise<void> => {
+    const { narrator } = options;
+    if (narrator === undefined || narrationsClosed) return;
+    const controller = new AbortController();
+    narrations.add(controller);
+    try {
+      const runStatus = runs.findRun(runId)?.status;
+      if (runStatus === undefined || runStatus === "running") return;
+      const digest = digestOf(runs, runId);
+      if (digest === undefined) throw new Error("its build is not stored");
+      const seen = runs.events(runId).length;
+      const told = await narrator.narrate(digest.text, controller.signal);
+      if (runs.findRun(runId)?.status !== runStatus || runs.events(runId).length !== seen) {
+        throw new Error("the run has moved on since it ended");
+      }
+      runs.appendRunStory({
+        runId,
+        at: new Date(options.run.now()).toISOString(),
+        runStatus,
+        text: told.text,
+        cost: told.cost,
+      });
+      options.publish({ push: "story", runId });
+    } catch (error) {
+      console.log(`engine: run ${runId} story not written (${messageOf(error)})`);
+    } finally {
+      narrations.delete(controller);
+    }
   };
 
   const pendingUsage = async (
@@ -1619,8 +1704,27 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const run = listed(summary);
     const manifest = run.buildId === undefined ? undefined : storedManifest(runs, run.buildId);
+    const digest = digestOf(runs, runId);
+    const written = runs.latestRunStory(runId);
     return {
       ...(run.status === "interrupted" ? { note: notes.get(runId) ?? closedNote } : {}),
+      ...(digest === undefined
+        ? {}
+        : {
+            story: {
+              header: digest.header,
+              digest: digest.text,
+              written:
+                written === undefined
+                  ? null
+                  : {
+                      text: written.text,
+                      at: written.at,
+                      runStatus: written.runStatus,
+                      cost: written.cost,
+                    },
+            },
+          }),
       run,
       name: run.buildName,
       stages: manifest === undefined ? null : stageSourcesOf(manifest),
@@ -1727,6 +1831,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       await reattach();
     },
     async stop() {
+      closeNarrations();
       await startsSettled();
       await Promise.all([...active.values()].map(stopActive));
     },
