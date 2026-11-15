@@ -1,4 +1,5 @@
-import type { FileSystem } from "../../src/ports/file-system.js";
+import { posix } from "node:path";
+import type { FileEntry, FileSystem } from "../../src/ports/file-system.js";
 
 export type FileSystemCall = {
   method:
@@ -8,6 +9,7 @@ export type FileSystemCall = {
     | "readFile"
     | "list"
     | "folders"
+    | "entries"
     | "remove"
     | "removeTree";
   path: string;
@@ -79,8 +81,12 @@ export class FakeFileSystem implements FileSystem {
         code: "ENOENT",
       });
     }
-    const skipped = skip === undefined ? "" : `${skip.slice(dir.length + 1)}/`;
-    return files.filter((file) => skipped === "" || !file.startsWith(skipped)).sort();
+    const skipped = (file: string): boolean =>
+      file
+        .split("/")
+        .slice(0, -1)
+        .some((_, index, folders) => posix.join(dir, ...folders.slice(0, index + 1)) === skip);
+    return files.filter((file) => !skipped(file)).sort();
   }
 
   async folders(dir: string): Promise<string[]> {
@@ -92,8 +98,28 @@ export class FakeFileSystem implements FileSystem {
     return [...new Set(names)].sort();
   }
 
+  async entries(dir: string, { inside }: { inside: string }): Promise<FileEntry[]> {
+    this.calls.push({ method: "entries", path: dir });
+    const folder = posix.normalize(dir);
+    const root = posix.normalize(inside);
+    if (folder !== root && !folder.startsWith(`${root}/`)) {
+      throw new Error(`${dir} is not inside ${inside}`);
+    }
+    const kinds = new Map<string, FileEntry["kind"]>();
+    for (const path of this.under(folder)) {
+      const slash = path.indexOf("/");
+      kinds.set(slash === -1 ? path : path.slice(0, slash), slash === -1 ? "file" : "folder");
+    }
+    const named = (kind: FileEntry["kind"]): FileEntry[] =>
+      [...kinds]
+        .filter(([, entryKind]) => entryKind === kind)
+        .map(([name]) => ({ name, kind }))
+        .sort((a, b) => (a.name < b.name ? -1 : 1));
+    return [...named("folder"), ...named("file")];
+  }
+
   private under(dir: string): string[] {
-    const prefix = `${dir}/`;
+    const prefix = `${posix.normalize(dir)}/`;
     return [...this.files.keys()]
       .filter((path) => path.startsWith(prefix))
       .map((path) => path.slice(prefix.length));

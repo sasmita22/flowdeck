@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   buildDialogTestIds,
   controlTestIds,
@@ -35,6 +35,17 @@ const twoAgents = () =>
 
 const withConnectors = (connectors: string[]) => {
   const base = onMainFlow([agent("p1")], []);
+  return { ...base, session: { ...base.session, connectors } };
+};
+
+const handingOff = (connectors: string[]) => {
+  const base = onMainFlow(
+    [
+      agent("p1", { settings: { writes: ["plan.md"] } }),
+      agent("p2", { settings: { given: ["plan.md"] } }),
+    ],
+    [thenWire("p1", "p2")],
+  );
   return { ...base, session: { ...base.session, connectors } };
 };
 
@@ -208,7 +219,7 @@ const confirmBuild = async (window: Page, name: string) => {
 
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
   const testInfo = test.info();
-  const planner = seedBlueprint(home, "Planner", withConnectors(["slack"]), repo.path);
+  const planner = seedBlueprint(home, "Planner", handingOff(["slack"]), repo.path);
   seedBlueprint(home, "Agents", twoAgents(), repo.path);
   const target = await launch();
   const { window } = target;
@@ -220,6 +231,26 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText('"slack"');
+  const agents = window.getByTestId(pageTestIds.buildFolder("plugin/agents"));
+  const templates = window.getByTestId(pageTestIds.buildFolder("plugin/templates"));
+  await expect(agents).toHaveText("Agents");
+  await expect(agents).toHaveAttribute("aria-expanded", "false");
+  await expect(templates).toHaveText("Hand-off templates");
+  await expect(templates).toHaveAttribute("aria-expanded", "false");
+  await expect(window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md"))).toHaveCount(0);
+  await expect(window.locator('[data-testid^="build-file-"][aria-expanded]')).toHaveCount(0);
+  const branch = dbRows<{ branch: string }>("SELECT branch FROM builds WHERE name = 'plan-it'")[0]
+    ?.branch;
+  expect(branch).toMatch(/^flowdeck\/plan-it/);
+  const project = window.getByTestId(pageTestIds.buildProject);
+  await expect(project).toContainText(basename(repo.path));
+  await expect(project).toContainText(branch ?? "");
+  await expect(project).toContainText(/\bclean\b/);
+  await templates.click();
+  await expect(templates).toHaveAttribute("aria-expanded", "true");
+  await expect(window.getByTestId(pageTestIds.buildFile("plugin/templates/plan.md"))).toBeVisible();
+  await agents.click();
+  await expect(agents).toHaveAttribute("aria-expanded", "true");
   await window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md")).click();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText(
     "Implement the plan.",
@@ -230,6 +261,8 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   );
   await expect(window.locator('[data-testid^="build-file-"][aria-current]')).toHaveCount(1);
   await shot(target, testInfo, "build-files");
+  const collapsed = window.locator('[data-testid^="build-folder-"][aria-expanded="false"]');
+  while ((await collapsed.count()) > 0) await collapsed.first().click();
   for (const row of await window.locator('[data-testid^="build-file-"]').all()) {
     if ((await row.getAttribute("data-testid")) === pageTestIds.buildFileContent) continue;
     await row.click();

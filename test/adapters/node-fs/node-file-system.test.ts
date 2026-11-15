@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -143,5 +143,69 @@ describe("NodeFileSystem", () => {
     expect(await fs.list(workspace)).toEqual(["repo/src/work.ts"]);
     expect(await fs.exists(join(workspace, "repo/empty"))).toBe(true);
     expect(await fs.exists(join(workspace, "plugin"))).toBe(false);
+  });
+
+  describe("entries", () => {
+    let build: string;
+    let outside: string;
+
+    beforeEach(async () => {
+      build = join(tmp, "build");
+      outside = join(tmp, "build-outside");
+      await fs.writeFile(join(build, "node_modules/a/b/c.js"), "c");
+      await fs.writeFile(join(build, "src/x.ts"), "x");
+      await fs.writeFile(join(build, "README.md"), "r");
+      await fs.writeFile(join(outside, "secret.md"), "s");
+    });
+
+    it("lists one level only, folders before files, each sorted", async () => {
+      expect(await fs.entries(build, { inside: build })).toEqual([
+        { name: "node_modules", kind: "folder" },
+        { name: "src", kind: "folder" },
+        { name: "README.md", kind: "file" },
+      ]);
+      expect(await fs.entries(join(build, "node_modules"), { inside: build })).toEqual([
+        { name: "a", kind: "folder" },
+      ]);
+    });
+
+    it("leaves out symlinked files and folders", async () => {
+      await symlink(join(outside, "secret.md"), join(build, "linked-file"));
+      await symlink(outside, join(build, "linked-folder"));
+
+      expect(await fs.entries(build, { inside: build })).toEqual([
+        { name: "node_modules", kind: "folder" },
+        { name: "src", kind: "folder" },
+        { name: "README.md", kind: "file" },
+      ]);
+    });
+
+    it("refuses a folder whose real path leaves the folder it must stay inside", async () => {
+      await symlink(outside, join(build, "link-to-outside"));
+
+      await expect(fs.entries(join(build, "link-to-outside"), { inside: build })).rejects.toThrow();
+    });
+
+    it.each([
+      ["the parent folder", () => join(build, "..")],
+      ["a sibling folder sharing its name as a prefix", () => outside],
+      ["an absolute path elsewhere", () => tmpdir()],
+    ])("refuses %s", async (_, dir) => {
+      await expect(fs.entries(dir(), { inside: build })).rejects.toThrow();
+    });
+
+    it("compares real paths, so a folder reached through another path still counts as inside", async () => {
+      const alias = join(tmp, "alias");
+      await symlink(build, alias);
+
+      expect(await fs.entries(await realpath(build), { inside: build })).toHaveLength(3);
+      expect(await fs.entries(build, { inside: await realpath(build) })).toHaveLength(3);
+      expect(await fs.entries(join(alias, "src"), { inside: build })).toEqual([
+        { name: "x.ts", kind: "file" },
+      ]);
+      expect(await fs.entries(join(build, "src"), { inside: alias })).toEqual([
+        { name: "x.ts", kind: "file" },
+      ]);
+    });
   });
 });

@@ -25,6 +25,7 @@ import { TerminalView } from "../terminal/terminal-pane.js";
 import { controlTestIds, pageTestIds } from "../test-ids.js";
 import { useNow } from "../use-now.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
+import { BuildTree } from "./build-tree.js";
 
 const stageNames: Record<BuildStepNumber, string> = {
   1: "Check",
@@ -416,6 +417,36 @@ function Header({
   );
 }
 
+function PipelineTree({
+  pendingId,
+  events,
+  library,
+}: {
+  pendingId: string;
+  events: readonly StoredBuildEvent[];
+  library: StoreApi<LibraryState>;
+}) {
+  const laidDown = events.some((event) => event.type === "worktree");
+  const steps = events.filter((event) => event.type === "step").length;
+  const paths = useStore(library, (state) => state.pendingTrees[pendingId] ?? null);
+
+  useEffect(() => {
+    if (laidDown) void library.getState().loadPendingTree(pendingId);
+  }, [library, pendingId, laidDown, steps]);
+
+  if (!laidDown || paths === null) return null;
+  return (
+    <section
+      className="fd-pipeline-tree"
+      data-testid={pageTestIds.pipelineTree}
+      aria-label="Workspace"
+    >
+      <h2 className="fd-page-note">Workspace</h2>
+      <BuildTree paths={paths} />
+    </section>
+  );
+}
+
 export function BuildPipelinePage({
   pendingId,
   nav,
@@ -540,6 +571,7 @@ export function BuildPipelinePage({
           )}
         </div>
       </div>
+      <PipelineTree pendingId={pendingId} events={entry.events} library={library} />
     </section>
   );
 }

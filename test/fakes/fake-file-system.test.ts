@@ -109,6 +109,53 @@ describe("FakeFileSystem", () => {
     ]);
   });
 
+  it("lists one level of a folder, folders before files, each sorted, and records the call", async () => {
+    const fs = new FakeFileSystem({
+      "build/repo/z.md": "z",
+      "build/repo/src/x.ts": "x",
+      "build/repo/node_modules/a/b/c.js": "c",
+      "build/repo/README.md": "r",
+      "build/repository/y.md": "y",
+    });
+
+    expect(await fs.entries("build/repo", { inside: "build" })).toEqual([
+      { name: "node_modules", kind: "folder" },
+      { name: "src", kind: "folder" },
+      { name: "README.md", kind: "file" },
+      { name: "z.md", kind: "file" },
+    ]);
+    expect(await fs.entries("build/repo/node_modules", { inside: "build" })).toEqual([
+      { name: "a", kind: "folder" },
+    ]);
+    expect(fs.calls.filter((call) => call.method === "entries")).toEqual([
+      expect.objectContaining({ method: "entries", path: "build/repo" }),
+      expect.objectContaining({ method: "entries", path: "build/repo/node_modules" }),
+    ]);
+  });
+
+  it("lists one level of the folder it must stay inside", async () => {
+    const fs = new FakeFileSystem({ "build/CLAUDE.md": "c", "build/repo/x.md": "x" });
+
+    expect(await fs.entries("build", { inside: "build" })).toEqual([
+      { name: "repo", kind: "folder" },
+      { name: "CLAUDE.md", kind: "file" },
+    ]);
+  });
+
+  it.each(["build/..", "build/repo/../../other", "other", "/other", "buildings"])(
+    "refuses to list %j outside the folder it must stay inside",
+    async (dir) => {
+      const fs = new FakeFileSystem({
+        "build/repo/x.md": "x",
+        "other/secret.md": "s",
+        "/other/secret.md": "s",
+        "buildings/y.md": "y",
+      });
+
+      await expect(fs.entries(dir, { inside: "build" })).rejects.toThrow();
+    },
+  );
+
   it("rejects listing a missing folder", async () => {
     const fs = new FakeFileSystem();
     await fs.writeFile("root/a.md", "a");

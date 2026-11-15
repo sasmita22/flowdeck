@@ -19,6 +19,10 @@ export const engineCalls = {
   listBuilds: { channel: "flowdeck:list-builds", request: "list-builds" },
   buildFiles: { channel: "flowdeck:build-files", request: "build-files" },
   buildPicture: { channel: "flowdeck:build-picture", request: "build-picture" },
+  buildTree: { channel: "flowdeck:build-tree", request: "build-tree" },
+  buildProject: { channel: "flowdeck:build-project", request: "build-project" },
+  buildEntries: { channel: "flowdeck:build-entries", request: "build-entries" },
+  pendingBuildTree: { channel: "flowdeck:pending-build-tree", request: "pending-build-tree" },
   runBuild: { channel: "flowdeck:run-build", request: "run-build" },
   listRuns: { channel: "flowdeck:list-runs", request: "list-runs" },
   loadRun: { channel: "flowdeck:load-run", request: "load-run" },
@@ -69,6 +73,10 @@ export type EngineCalls = {
   listBuilds(): Promise<unknown>;
   buildFiles(payload: { buildId: string }): Promise<unknown>;
   buildPicture(payload: { pendingId: string } | { buildId: string }): Promise<unknown>;
+  buildTree(payload: { buildId: string }): Promise<unknown>;
+  buildProject(payload: { buildId: string }): Promise<unknown>;
+  buildEntries(payload: { buildId: string; path: string }): Promise<unknown>;
+  pendingBuildTree(payload: { pendingId: string }): Promise<unknown>;
   runBuild(payload: { buildId: string; auto?: boolean }): Promise<unknown>;
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;

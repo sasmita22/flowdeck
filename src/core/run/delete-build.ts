@@ -40,7 +40,7 @@ const segments = (path: string): string[] =>
     return [...parts, part];
   }, []);
 
-const isInside = (folder: string, path: string): boolean => {
+export const isInside = (folder: string, path: string): boolean => {
   const outer = segments(folder);
   const inner = segments(path);
   return inner.length > outer.length && outer.every((part, index) => inner[index] === part);

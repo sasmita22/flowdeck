@@ -119,6 +119,22 @@ const runs = [
 
 const picture = '<svg xmlns="http://www.w3.org/2000/svg"><rect data-kind="background"/></svg>';
 
+const project = {
+  repoFolder: "shop",
+  path: "/fd/workspaces/b-fix/shop",
+  branch: "flowdeck/fix-login-b-fix",
+  branchCreated: true,
+  base: "main",
+  exists: true,
+  dirty: false,
+  unpushed: false,
+};
+
+const shopEntries = [
+  { name: "src", kind: "folder" },
+  { name: "README.md", kind: "file" },
+];
+
 const fakeBridge = () =>
   ({
     listFlows: vi.fn(async () => flows),
@@ -153,6 +169,12 @@ const fakeBridge = () =>
     buildPicture: vi.fn(async (key: { pendingId: string } | { buildId: string }) =>
       "buildId" in key ? { svg: picture } : { svg: null },
     ),
+    buildTree: vi.fn(async () => ({ deleted: false, paths: ["commands/p1.md", "manifest.json"] })),
+    buildProject: vi.fn(async () => project),
+    buildEntries: vi.fn(async ({ path }: { buildId: string; path: string }) =>
+      path === "shop" ? shopEntries : [{ name: "x.ts", kind: "file" }],
+    ),
+    pendingBuildTree: vi.fn(async () => ({ paths: ["CLAUDE.md", "plugin/agents/a.md"] })),
     loadRun: vi.fn(async () => ({
       run: runs[1],
       name: "Report",
@@ -465,5 +487,193 @@ describe("pinnedFirst", () => {
       "a",
       "b",
     ]);
+  });
+});
+
+describe("build tree and project", () => {
+  it("loads a live build's tree, files and project together", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().openFiles("b-fix");
+
+    expect(bridge.buildTree).toHaveBeenCalledWith({ buildId: "b-fix" });
+    expect(bridge.buildFiles).toHaveBeenCalledWith({ buildId: "b-fix" });
+    expect(bridge.buildProject).toHaveBeenCalledWith({ buildId: "b-fix" });
+    expect(library.getState().tree).toEqual({
+      buildId: "b-fix",
+      deleted: false,
+      paths: ["commands/p1.md", "manifest.json"],
+    });
+    expect(library.getState().project).toEqual({ buildId: "b-fix", ...project });
+    expect(library.getState().files?.selected).toBe("manifest.json");
+  });
+
+  it("shows a deleted build's paths without reading its files or its project", async () => {
+    const bridge = fakeBridge();
+    bridge.buildTree.mockResolvedValueOnce({ deleted: true, paths: ["manifest.json"] });
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().openFiles("b-fix");
+
+    expect(library.getState().tree).toEqual({
+      buildId: "b-fix",
+      deleted: true,
+      paths: ["manifest.json"],
+    });
+    expect(bridge.buildFiles).not.toHaveBeenCalled();
+    expect(bridge.buildProject).not.toHaveBeenCalled();
+    expect(library.getState().project).toBeNull();
+  });
+
+  it("reads each project folder once, one level at a time, for the open build", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().openFiles("b-fix");
+
+    await library.getState().expandProjectFolder("shop");
+    await library.getState().expandProjectFolder("shop");
+    await library.getState().expandProjectFolder("shop/src");
+
+    expect(bridge.buildEntries.mock.calls).toEqual([
+      [{ buildId: "b-fix", path: "shop" }],
+      [{ buildId: "b-fix", path: "shop/src" }],
+    ]);
+    expect(library.getState().projectEntries).toEqual({
+      shop: shopEntries,
+      "shop/src": [{ name: "x.ts", kind: "file" }],
+    });
+  });
+
+  it("keeps the open build's project when an earlier build's answers arrive late", async () => {
+    const bridge = fakeBridge();
+    let answerProject: (value: typeof project) => void = () => undefined;
+    bridge.buildProject.mockImplementationOnce(
+      () => new Promise<typeof project>((resolve) => (answerProject = resolve)),
+    );
+    const library = createLibraryStore({ bridge });
+    const first = library.getState().openFiles("b-fix");
+    await vi.waitFor(() => expect(bridge.buildProject).toHaveBeenCalledTimes(1));
+
+    await library.getState().openFiles("b-other");
+    answerProject({ ...project, repoFolder: "late" });
+    await first;
+
+    expect(library.getState().project).toEqual({ buildId: "b-other", ...project });
+    expect(library.getState().files?.buildId).toBe("b-other");
+  });
+
+  it("drops a project folder answer that arrives after another build opened", async () => {
+    const bridge = fakeBridge();
+    let answerEntries: (value: typeof shopEntries) => void = () => undefined;
+    bridge.buildEntries.mockImplementationOnce(
+      () => new Promise<typeof shopEntries>((resolve) => (answerEntries = resolve)),
+    );
+    const library = createLibraryStore({ bridge });
+    await library.getState().openFiles("b-fix");
+    const expanding = library.getState().expandProjectFolder("shop");
+
+    await library.getState().openFiles("b-other");
+    answerEntries(shopEntries);
+    await expanding;
+
+    expect(library.getState().projectEntries).toEqual({});
+  });
+
+  it("keeps a pending build's workspace paths, or null before its checkout is laid down", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().loadPendingTree("pending-1");
+
+    expect(bridge.pendingBuildTree).toHaveBeenCalledWith({ pendingId: "pending-1" });
+    expect(library.getState().pendingTrees).toEqual({
+      "pending-1": ["CLAUDE.md", "plugin/agents/a.md"],
+    });
+
+    bridge.pendingBuildTree.mockResolvedValueOnce(null as never);
+    await library.getState().loadPendingTree("pending-2");
+
+    expect(library.getState().pendingTrees).toEqual({
+      "pending-1": ["CLAUDE.md", "plugin/agents/a.md"],
+      "pending-2": null,
+    });
+  });
+
+  it("shows no project for a build without one", async () => {
+    const bridge = fakeBridge();
+    bridge.buildProject.mockResolvedValueOnce(null as never);
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().openFiles("b-fix");
+
+    expect(library.getState()).toMatchObject({ project: null, error: null });
+    expect(library.getState().files?.selected).toBe("manifest.json");
+  });
+
+  it("forgets the last build's project folders when another build opens", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().openFiles("b-fix");
+    await library.getState().expandProjectFolder("shop");
+
+    await library.getState().openFiles("b-other");
+    await library.getState().expandProjectFolder("shop");
+
+    expect(bridge.buildEntries.mock.calls).toEqual([
+      [{ buildId: "b-fix", path: "shop" }],
+      [{ buildId: "b-other", path: "shop" }],
+    ]);
+  });
+
+  it("reads no project folder while no build is open", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().expandProjectFolder("shop");
+
+    expect(bridge.buildEntries).not.toHaveBeenCalled();
+  });
+
+  it("holds the error and reads the folder again when a project folder cannot be read", async () => {
+    const bridge = fakeBridge();
+    const library = createLibraryStore({ bridge });
+    await library.getState().openFiles("b-fix");
+    bridge.buildEntries.mockRejectedValueOnce(new Error("shop is outside the build's project"));
+
+    await library.getState().expandProjectFolder("shop");
+
+    expect(library.getState()).toMatchObject({
+      projectEntries: {},
+      error: "shop is outside the build's project",
+    });
+
+    await library.getState().expandProjectFolder("shop");
+
+    expect(library.getState()).toMatchObject({
+      projectEntries: { shop: shopEntries },
+      error: null,
+    });
+  });
+
+  it("holds the error when a build's tree cannot be read", async () => {
+    const bridge = fakeBridge();
+    bridge.buildTree.mockRejectedValueOnce(new Error("No build b-fix"));
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().openFiles("b-fix");
+
+    expect(library.getState()).toMatchObject({ tree: null, error: "No build b-fix" });
+    expect(bridge.buildFiles).not.toHaveBeenCalled();
+  });
+
+  it("holds the error when a pending build's workspace cannot be read", async () => {
+    const bridge = fakeBridge();
+    bridge.pendingBuildTree.mockRejectedValueOnce(new Error("engine exited"));
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().loadPendingTree("pending-1");
+
+    expect(library.getState()).toMatchObject({ pendingTrees: {}, error: "engine exited" });
   });
 });

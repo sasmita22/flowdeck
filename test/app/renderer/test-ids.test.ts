@@ -134,6 +134,22 @@ describe("test ids", () => {
     ]);
   });
 
+  it("names the build tree's folders, the project row, its entries and the pipeline tree, none as a build-file- row", () => {
+    expect([
+      pageTestIds.buildFolder("plugin/agents"),
+      pageTestIds.buildProject,
+      pageTestIds.buildProjectToggle,
+      pageTestIds.buildProjectEntry("shop/src"),
+      pageTestIds.pipelineTree,
+    ]).toEqual([
+      "build-folder-plugin/agents",
+      "build-project",
+      "build-project-toggle",
+      "build-project-entry-shop/src",
+      "pipeline-tree",
+    ]);
+  });
+
   it("names a build in progress by its pending build", () => {
     expect([
       pageTestIds.buildingCard("pb-1"),

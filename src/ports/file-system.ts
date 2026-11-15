@@ -1,3 +1,5 @@
+export type FileEntry = { name: string; kind: "folder" | "file" };
+
 export interface FileSystem {
   exists(path: string): Promise<boolean>;
   writeFile(path: string, content: string): Promise<void>;
@@ -5,6 +7,7 @@ export interface FileSystem {
   readFile(path: string): Promise<string>;
   list(dir: string, options?: { skip?: string }): Promise<string[]>;
   folders(dir: string): Promise<string[]>;
+  entries(dir: string, options: { inside: string }): Promise<FileEntry[]>;
   remove(path: string): Promise<void>;
   removeTree(path: string, options?: { keep?: string }): Promise<void>;
 }
