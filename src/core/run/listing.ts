@@ -35,6 +35,8 @@ export type LoadedRun = z.infer<typeof loadedRunSchema>;
 export const buildRecordSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
+  branch: z.string().nullable().optional(),
+  branchCreated: z.boolean().nullable().optional(),
   old: z.boolean(),
   dir: z.string(),
   createdAt: z.number(),

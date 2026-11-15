@@ -11,6 +11,7 @@ import { NodeFileSystem } from "../../src/adapters/node-fs/node-file-system.js";
 import { layDown, workspaceDir } from "../../src/core/compiler/build.js";
 import { buildSessionSettings } from "../../src/core/compiler/build-session.js";
 import { buildHookCommand, shellQuote } from "../../src/core/compiler/hook-settings.js";
+import { legacyBranchName } from "../../src/core/run/branch-name.js";
 import { buildWorktree } from "../../src/core/run/workspace.js";
 import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -31,6 +32,7 @@ const committer = [
 ];
 
 const build = { id: "b-guard-0001-2222-3333", name: "guarded" };
+const branch = legacyBranchName(build.name, build.id);
 
 let home: string;
 let repo: TmpRepo;
@@ -102,14 +104,17 @@ beforeAll(async () => {
 
   const laidDown = await layDown(onMainFlow([agent("p"), agent("a")], [thenWire("p", "a")]), {
     home,
-    workspace: { ...build, repo: repo.path, base: "main", values: {} },
+    workspace: { ...build, repo: repo.path, base: "main", branch, branchCreated: true, values: {} },
   });
   if (!laidDown.ok) throw new Error(JSON.stringify(laidDown.errors));
   dir = workspaceDir(home, build.id);
   const fs = new NodeFileSystem();
   for (const file of laidDown.files) await fs.writeFile(`${dir}/${file.path}`, file.content);
 
-  const worktree = { ...buildWorktree({ ...build, repo: repo.path, dir }), repo: repo.path };
+  const worktree = {
+    ...buildWorktree({ repo: repo.path, dir, branch, create: true }),
+    repo: repo.path,
+  };
   await new GitWorktree().add({ ...worktree, base: "main" });
   worktreePath = worktree.path;
 

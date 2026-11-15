@@ -22,6 +22,8 @@ const newBuild = (overrides: Partial<NewBuild> = {}): NewBuild => ({
   name: "fix-login",
   repo: "/repo",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: { ticket: "FD-1", e2e: true },
   dir: "/fd/workspaces/b1",
   files: [
@@ -589,6 +591,58 @@ describe("build lineage", () => {
     });
   });
 
+  describe("migrating a database made before builds named their branch", () => {
+    const seedBeforeBranches = async () => {
+      const db = connect(await stage("to-013", "014"));
+      insertBuild(db, { id: "b1c2d3e4f5", name: "fix-login" });
+      insertBuild(db, { id: "old", name: null, nodes: [] });
+      db.close();
+      return connect();
+    };
+
+    const branchOf = (db: Database.Database, id: string) =>
+      db.prepare("SELECT branch, branch_created FROM builds WHERE id = ?").get(id);
+
+    it("gives a named build the branch Flowdeck derived and made for it", async () => {
+      const db = await seedBeforeBranches();
+
+      expect(branchOf(db, "b1c2d3e4f5")).toEqual({
+        branch: "flowdeck/fix-login-b1c2d3e4",
+        branch_created: 1,
+      });
+    });
+
+    it("gives an old build, with no name, no branch", async () => {
+      const db = await seedBeforeBranches();
+
+      expect(branchOf(db, "old")).toEqual({ branch: null, branch_created: null });
+    });
+
+    it.each([
+      "UPDATE builds SET branch = 'other'",
+      "UPDATE builds SET branch_created = 0",
+      "UPDATE builds SET deleted_at = 1, branch = 'other'",
+      "UPDATE builds SET deleted_at = 1, branch_created = 0",
+    ])("still locks the build: %s", async (sql) => {
+      const db = await seedBeforeBranches();
+
+      expect(() => db.exec(sql)).toThrow(/builds are locked/);
+    });
+
+    it("still lets a build be deleted once", async () => {
+      const db = await seedBeforeBranches();
+
+      db.exec("UPDATE builds SET deleted_at = 100 WHERE id = 'b1c2d3e4f5'");
+
+      expect(
+        db.prepare("SELECT branch, deleted_at FROM builds WHERE id = 'b1c2d3e4f5'").get(),
+      ).toEqual({ branch: "flowdeck/fix-login-b1c2d3e4", deleted_at: 100 });
+      expect(() => db.exec("UPDATE builds SET deleted_at = 200 WHERE id = 'b1c2d3e4f5'")).toThrow(
+        /builds are locked/,
+      );
+    });
+  });
+
   describe("migrating a database made before builds had lineage", () => {
     const seedOldDatabase = async () => {
       const db = connect(await stage("to-005", "006"));
@@ -640,6 +694,8 @@ describe("build lineage", () => {
               deleted_at: null,
               flow_id: null,
               version: null,
+              branch: null,
+              branch_created: null,
             };
           }
           if (table === "runs") {

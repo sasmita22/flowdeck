@@ -1,6 +1,12 @@
 import type { WorktreeRemoval } from "../core/run/workspace.js";
 
-export type WorktreeAddOptions = { repo: string; base: string; branch: string; path: string };
+export type WorktreeAddOptions = {
+  repo: string;
+  base: string;
+  branch: string;
+  path: string;
+  create: boolean;
+};
 
 export type WorktreeRemoveOptions = WorktreeAddOptions;
 

@@ -29,6 +29,10 @@ export const engineCalls = {
   resumeRun: { channel: "flowdeck:resume-run", request: "resume-run" },
   runCost: { channel: "flowdeck:run-cost", request: "run-cost" },
   listBranches: { channel: "flowdeck:list-branches", request: "list-branches" },
+  checkedOutBranches: {
+    channel: "flowdeck:checked-out-branches",
+    request: "checked-out-branches",
+  },
   deleteBuild: { channel: "flowdeck:delete-build", request: "delete-build" },
   doctorWorktrees: { channel: "flowdeck:doctor-worktrees", request: "doctor-worktrees" },
   defaultBranch: { channel: "flowdeck:default-branch", request: "default-branch" },
@@ -58,6 +62,7 @@ export type EngineCalls = {
     name: string;
     repo?: string;
     base?: string;
+    branch?: { mode: "new"; name: string; base: string } | { mode: "existing"; name: string };
     values: Record<string, string | boolean>;
     buildModel?: string;
   }): Promise<unknown>;
@@ -74,6 +79,7 @@ export type EngineCalls = {
   resumeRun(payload: { runId: string }): Promise<unknown>;
   runCost(payload: { runId: string }): Promise<unknown>;
   listBranches(payload: { repo: string }): Promise<unknown>;
+  checkedOutBranches(payload: { repo: string }): Promise<unknown>;
   deleteBuild(payload: { buildId: string }): Promise<unknown>;
   doctorWorktrees(): Promise<unknown>;
   defaultBranch(payload: { repo: string }): Promise<unknown>;

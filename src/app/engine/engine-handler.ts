@@ -33,6 +33,7 @@ import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
 import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
 import {
   progressOf,
+  sessionBranch,
   type BuildEvent,
   type BuildOutcome,
   type BuildSessionEvent,
@@ -70,6 +71,7 @@ import {
 } from "../../core/run/options.js";
 import {
   deleteBuild,
+  storedBranch,
   teardownWorkspace,
   type DeleteBuildResult,
 } from "../../core/run/delete-build.js";
@@ -688,6 +690,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       values: request.values as VariableValues,
       ...(request.repo === undefined ? {} : { repo: request.repo }),
       ...(request.base === undefined ? {} : { base: request.base }),
+      ...(request.branch === undefined ? {} : { branch: request.branch }),
       ...(buildModel === undefined ? {} : { buildModel }),
       ...(answers === undefined ? {} : { answers }),
     };
@@ -698,6 +701,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         values: request.values,
         ...(request.repo === undefined ? {} : { repo: request.repo }),
         ...(request.base === undefined ? {} : { base: request.base }),
+        ...(request.branch === undefined ? {} : { branch: request.branch }),
         ...(buildModel === undefined ? {} : { buildModel }),
         ...(answers === undefined ? {} : { answers: [...answers] }),
       },
@@ -776,10 +780,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         await options.buildAgents.close(session.name);
       await options.fs.removeTree(buildSessionFolder(session.name));
       const dir = workspaceDir(options.home, session.buildId);
+      const { branch, branchCreated } = sessionBranch(session, pending.name, session.buildId);
       const worktree = {
         repo: session.repo,
         base: session.base,
-        ...buildWorktree({ id: session.buildId, name: pending.name, repo: session.repo, dir }),
+        ...buildWorktree({ repo: session.repo, dir, branch, create: branchCreated }),
       };
       const added = await options.fs.exists(worktree.path);
       await teardownWorkspace(
@@ -1370,10 +1375,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const readWorktree = async (build: BuildRecord): Promise<AssistantReadBuild["worktree"]> => {
     if (build.name === null || build.repo === null || build.base === null) return null;
     const { path, branch } = buildWorktree({
-      id: build.id,
-      name: build.name,
       repo: build.repo,
       dir: build.dir,
+      ...storedBranch(build, build.name),
     });
     if (!(await options.fs.exists(path)))
       return { path, exists: false, dirty: null, unpushed: null };
@@ -1674,6 +1678,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           );
         case "list-branches":
           return parsedAnswer(request, repoPayload, ({ repo }) => options.gitState.branches(repo));
+        case "checked-out-branches":
+          return parsedAnswer(request, repoPayload, ({ repo }) =>
+            options.gitState.checkedOutBranches(repo),
+          );
         case "workspace-info":
           return parsedAnswer(request, workspaceInfoPayload, ({ buildConfig }) =>
             workspaceInfo(buildConfig),

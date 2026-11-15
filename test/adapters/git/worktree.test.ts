@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
+import { isValidBranchName } from "../../../src/core/run/branch-name.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const run = promisify(execFile);
@@ -52,7 +53,13 @@ describe("GitWorktree", () => {
   it("adds a worktree on a new branch cut from the base", async () => {
     const path = join(target, "abcd1234");
 
-    await worktree.add({ repo: repo.path, base: "main", branch: "flowdeck/abcd1234", path });
+    await worktree.add({
+      repo: repo.path,
+      base: "main",
+      branch: "flowdeck/abcd1234",
+      path,
+      create: true,
+    });
 
     expect(await worktreePaths(repo.path)).toContain(path);
     expect(await branches(repo.path)).toContain("flowdeck/abcd1234");
@@ -64,7 +71,13 @@ describe("GitWorktree", () => {
     const branchesBefore = await branches(repo.path);
 
     await expect(
-      worktree.add({ repo: repo.path, base: "nope", branch: "flowdeck/abcd1234", path }),
+      worktree.add({
+        repo: repo.path,
+        base: "nope",
+        branch: "flowdeck/abcd1234",
+        path,
+        create: true,
+      }),
     ).rejects.toThrow("nope");
 
     expect(await worktreePaths(repo.path)).toEqual([repo.path]);
@@ -81,6 +94,7 @@ describe("GitWorktree", () => {
           base: "main",
           branch: "flowdeck/abcd1234",
           path: join(target, "abcd1234"),
+          create: true,
         }),
       ).rejects.toThrow(plain);
     } finally {
@@ -91,10 +105,22 @@ describe("GitWorktree", () => {
   it("rejects a branch that already exists and leaves the first worktree alone", async () => {
     const first = join(target, "first");
     const second = join(target, "second");
-    await worktree.add({ repo: repo.path, base: "main", branch: "flowdeck/abcd1234", path: first });
+    await worktree.add({
+      repo: repo.path,
+      base: "main",
+      branch: "flowdeck/abcd1234",
+      path: first,
+      create: true,
+    });
 
     await expect(
-      worktree.add({ repo: repo.path, base: "main", branch: "flowdeck/abcd1234", path: second }),
+      worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch: "flowdeck/abcd1234",
+        path: second,
+        create: true,
+      }),
     ).rejects.toThrow();
 
     expect(await worktreePaths(repo.path)).toEqual([repo.path, first]);
@@ -109,6 +135,7 @@ describe("GitWorktree", () => {
       base: "main",
       branch: "flowdeck/abcd1234",
       path: join(target, "abcd1234"),
+      create: true,
     };
     await worktree.add(options);
     return options;
@@ -168,10 +195,75 @@ describe("GitWorktree", () => {
     await git(folder, ...committer, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", file);
   };
 
+  it("adds a worktree on a new branch named the way the branch rules accept", async () => {
+    const path = join(target, "x-2");
+    const branch = "flowdeck/x-2";
+    expect(isValidBranchName(branch)).toBe(true);
+
+    await worktree.add({ repo: repo.path, base: "main", branch, path, create: true });
+
+    expect((await git(path, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(branch);
+  });
+
+  describe("on a branch it did not create", () => {
+    const userBranch = "feat-y";
+
+    it("adds a worktree on the existing branch at its own commit, creating no branch", async () => {
+      await git(repo.path, "checkout", "--quiet", "-b", userBranch);
+      await commitIn(repo.path, "theirs.txt");
+      await git(repo.path, "checkout", "--quiet", "main");
+      const tip = (await git(repo.path, "rev-parse", userBranch)).trim();
+      const path = join(target, "feat-y");
+
+      await worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch: userBranch,
+        path,
+        create: false,
+      });
+
+      expect(await worktreePaths(repo.path)).toEqual([repo.path, path]);
+      expect((await git(path, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(userBranch);
+      expect((await git(path, "rev-parse", "HEAD")).trim()).toBe(tip);
+      expect(await branches(repo.path)).toBe("feat-y\nmain\n");
+    });
+
+    it("refuses the branch checked out in the main checkout, naming where, and adds nothing", async () => {
+      const path = join(target, "main");
+
+      await expect(
+        worktree.add({ repo: repo.path, base: "main", branch: "main", path, create: false }),
+      ).rejects.toThrow(repo.path);
+
+      expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+      expect(await exists(path)).toBe(false);
+    });
+
+    it("keeps the branch on removal even when the base already holds all its commits", async () => {
+      await git(repo.path, "branch", userBranch);
+      const path = join(target, "feat-y");
+      await git(repo.path, "worktree", "add", "--quiet", path, userBranch);
+
+      expect(
+        await worktree.remove({
+          repo: repo.path,
+          base: "main",
+          branch: userBranch,
+          path,
+          create: false,
+        }),
+      ).toEqual({ worktree: "removed", branch: "kept" });
+
+      expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+      expect(await branches(repo.path)).toBe("feat-y\nmain\n");
+    });
+  });
+
   const addBuildWorktree = async () => {
     const path = join(target, "1a2b3c4d", "repo");
     const branch = "flowdeck/fix-login-1a2b3c4d";
-    await worktree.add({ repo: repo.path, base: "main", branch, path });
+    await worktree.add({ repo: repo.path, base: "main", branch, path, create: true });
     return { path, branch };
   };
 

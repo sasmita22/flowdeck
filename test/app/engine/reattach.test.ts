@@ -511,6 +511,7 @@ describe("an app restart", () => {
     const leftMidTurn = async (
       overrides: Partial<EngineHandlerOptions> = {},
       repoPath = repo.path,
+      request: Record<string, unknown> = {},
     ) => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
@@ -525,6 +526,7 @@ describe("an app restart", () => {
         version,
         name,
         values: {},
+        ...request,
       })) as { kind: string; pendingId: string; message?: string };
       if (answered.kind !== "started") throw new Error(`did not build: ${answered.message}`);
       await vi.waitFor(() => expect(inFlight.fake.turns).toHaveLength(1));
@@ -532,6 +534,50 @@ describe("an app restart", () => {
       if (spec === undefined) throw new Error("the build session never opened");
       await first.detach();
       return { pendingId: answered.pendingId, name, spec };
+    };
+
+    const onExistingBranch = { branch: { mode: "existing", name: "feat-y" } };
+
+    const withFeatY = (repoPath: string) =>
+      new FakeGitState(
+        { [repoPath]: { kind: "branch", name: "main" } },
+        { branches: { [repoPath]: ["main", "feat-y"] } },
+      );
+
+    const sessionEventsWithoutBranch = () => {
+      const stored = runs.buildEvents.bind(runs);
+      vi.spyOn(runs, "buildEvents").mockImplementation((pendingId) =>
+        stored(pendingId).map((event) => {
+          if (event.type !== "session") return event;
+          const old = { ...event };
+          delete old.branch;
+          delete old.branchCreated;
+          return old;
+        }),
+      );
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+    };
+
+    const finishedAfterRestart = async (
+      spec: { sessionName: string; claudeSessionId: string },
+      name: string,
+      overrides: Partial<EngineHandlerOptions> = {},
+    ) => {
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      const second = newHandler({ buildAgents: after, ...overrides });
+      await second.reattach();
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+      await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
+      const built = runs.findBuildByName(name);
+      if (built === undefined) throw new Error(`did not build ${name}`);
+      return built;
     };
 
     const stepEvents = (pendingId: string) =>
@@ -620,6 +666,31 @@ describe("an app restart", () => {
         ]);
       },
     );
+
+    it("reattaches a build on an existing branch and finishes it on that branch", async () => {
+      const onFeatY = { gitState: withFeatY(repo.path) };
+      const { name, spec } = await leftMidTurn(onFeatY, repo.path, onExistingBranch);
+
+      const built = await finishedAfterRestart(spec, name, onFeatY);
+
+      expect(built).toMatchObject({ branch: "feat-y", branchCreated: false });
+      const claudeMd = await new NodeFileSystem().readFile(join(built.dir, "CLAUDE.md"));
+      expect(claudeMd.split("\n").filter((line) => line.startsWith("- Branch: "))).toEqual([
+        "- Branch: feat-y (existing)",
+      ]);
+    });
+
+    it("reattaches a build whose session event names no branch on the branch its name gives", async () => {
+      const { name, spec } = await leftMidTurn();
+      sessionEventsWithoutBranch();
+
+      const built = await finishedAfterRestart(spec, name);
+
+      expect(built).toMatchObject({
+        branch: `flowdeck/${name}-${built.id.slice(0, 8)}`,
+        branchCreated: true,
+      });
+    });
 
     it("ends a build left going with no snapshot failed, saying the snapshot is missing", async () => {
       const startPendingBuild = runs.startPendingBuild.bind(runs);
@@ -871,6 +942,54 @@ describe("an app restart", () => {
       await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
       expect(await worktreeCount(source.path)).toBe(1);
+      expect(await flowdeckBranches(source.path)).toEqual([]);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+    });
+
+    it("ends a build left in step 3 failed, removing the branch its name gives when its session event names none", async () => {
+      const source = await createTmpRepo({ commit: true });
+      onTestFinished(() => source.cleanup());
+      const onGit = {
+        worktree: new GitWorktree(),
+        gitState: new FakeGitState({ [source.path]: { kind: "branch", name: "main" } }),
+      };
+      const { pendingId } = await leftMidTurn(onGit, source.path);
+      expect(await flowdeckBranches(source.path)).toHaveLength(1);
+      sessionEventsWithoutBranch();
+
+      const second = newHandler({
+        buildAgents: new FakeBuildAgents({ fs: new NodeFileSystem() }),
+        ...onGit,
+      });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(await worktreeCount(source.path)).toBe(1);
+      expect(await flowdeckBranches(source.path)).toEqual([]);
+    });
+
+    it("ends a build left in step 3 on an existing branch failed, removing its worktree and keeping the branch", async () => {
+      const source = await createTmpRepo({ commit: true });
+      onTestFinished(() => source.cleanup());
+      await git(source.path, "branch", "feat-y");
+      const onGit = { worktree: new GitWorktree(), gitState: withFeatY(source.path) };
+      const { pendingId, spec } = await leftMidTurn(onGit, source.path, onExistingBranch);
+      expect(await git(source.path, "worktree", "list", "--porcelain")).toContain(
+        "branch refs/heads/feat-y",
+      );
+      pushes = [];
+
+      const second = newHandler({
+        buildAgents: new FakeBuildAgents({ fs: new NodeFileSystem() }),
+        ...onGit,
+      });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(await worktreeCount(source.path)).toBe(1);
+      expect(await git(source.path, "branch", "--list", "feat-y")).toContain("feat-y");
       expect(await flowdeckBranches(source.path)).toEqual([]);
       expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
     });

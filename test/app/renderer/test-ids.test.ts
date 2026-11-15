@@ -90,8 +90,12 @@ describe("test ids", () => {
       confirm: "build-dialog-confirm",
       cancel: "build-dialog-cancel",
       error: "build-dialog-error",
+      branchNew: "build-dialog-branch-new",
+      branchExisting: "build-dialog-branch-existing",
+      branchName: "build-dialog-branch-name",
     });
     expect(buildDialogTestIds.variable("ticket")).toBe("build-dialog-variable-ticket");
+    expect(buildDialogTestIds.existingBranch("feat-y")).toBe("build-dialog-existing-branch-feat-y");
   });
 
   it("names each build card's controls by the build's id", () => {

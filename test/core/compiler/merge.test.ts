@@ -45,6 +45,8 @@ const deps: LayDownDeps = {
     name: "alpha",
     repo: "/work/carousell-web",
     base: "main",
+    branch: "flowdeck/alpha",
+    branchCreated: true,
     values: {},
   },
 };

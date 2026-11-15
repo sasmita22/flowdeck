@@ -6,6 +6,7 @@ import {
   SessionGoneError,
 } from "../../../src/adapters/claude/claude-session.js";
 import { layDown, workspaceDir } from "../../../src/core/compiler/build.js";
+import { legacyBranchName } from "../../../src/core/run/branch-name.js";
 import { buildWorktree } from "../../../src/core/run/workspace.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
 import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
@@ -241,19 +242,22 @@ describe("openClaudeSession", () => {
     ];
 
     const launch = async (build: { id: string; name: string }) => {
+      const branch = legacyBranchName(build.name, build.id);
       const laidDown = await layDown(blueprint, {
         home,
         workspace: {
           ...build,
           repo,
           base: "main",
+          branch,
+          branchCreated: true,
           values: {},
           blueprint: { name: "shared", version: 1 },
         },
       });
       if (!laidDown.ok) throw new Error(JSON.stringify(laidDown.errors));
       const dir = workspaceDir(home, build.id);
-      const cwd = buildWorktree({ ...build, repo, dir }).path;
+      const cwd = buildWorktree({ repo, dir, branch, create: true }).path;
       const sessions = new SlowStartHost();
       const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
       const opened = await openClaudeSession(

@@ -560,7 +560,7 @@ const runInBuild = async (writes: Record<string, string> = {}) => {
     timeout: 20_000,
   });
   const path = join(home, "workspaces", buildId, basename(repo.path));
-  return { window, repo, path, branch: `flowdeck/wt-${buildId.slice(0, 8)}` };
+  return { window, repo, path, branch: "flowdeck/wt" };
 };
 
 const appLog = () => readFile(test.info().outputPath("app.log"), "utf8");

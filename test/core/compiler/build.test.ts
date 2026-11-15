@@ -37,6 +37,8 @@ const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
   name: "fix-login",
   repo: "/work/carousell-web",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: {},
   blueprint: { name: "Bugfix", version: 3 },
   ...overrides,

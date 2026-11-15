@@ -19,6 +19,8 @@ const newBuild: NewBuild = {
   name: "fix-login",
   repo: "/repo",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: {},
   dir: "/fd/workspaces/b1",
   files: [],

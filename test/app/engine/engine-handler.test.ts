@@ -547,6 +547,8 @@ describe("createEngineHandler", async () => {
         name: "report",
         repo: "/repo",
         base: "main",
+        branch: "flowdeck/report",
+        branchCreated: true,
         values: {},
         dir: "/fd-home/workspaces/b1",
         source: { flowId: "flow-a", version },
@@ -643,6 +645,8 @@ describe("createEngineHandler", async () => {
         name: "before-snapshots",
         repo: "/repo",
         base: "main",
+        branch: "flowdeck/before-snapshots",
+        branchCreated: true,
         values: {},
         dir: "/fd-home/workspaces/b2",
         source: { flowId: "flow-a", version: 1 },
@@ -714,6 +718,8 @@ describe("createEngineHandler", async () => {
         name: "pictured",
         repo: "/repo",
         base: "main",
+        branch: "flowdeck/pictured",
+        branchCreated: true,
         values: {},
         dir: "/fd-home/workspaces/b1",
         source: { flowId: "flow-a", version: 1 },
@@ -730,6 +736,8 @@ describe("createEngineHandler", async () => {
         name: "flow-less",
         repo: "/repo",
         base: "main",
+        branch: "flowdeck/flow-less",
+        branchCreated: true,
         values: {},
         dir: "/fd-home/workspaces/b2",
         files: [],
@@ -823,6 +831,8 @@ describe("createEngineHandler", async () => {
         name: "old-build",
         repo: "/repo",
         base: "main",
+        branch: "flowdeck/old-build",
+        branchCreated: true,
         values: {},
         dir: join(dir, "workspaces", "b-old"),
         source: { flowId: "flow-old", version },
@@ -1636,6 +1646,7 @@ describe("createEngineHandler", async () => {
             repo: repo.path,
             base: "main",
             branch: `flowdeck/fix-login-${id.slice(0, 8)}`,
+            create: true,
             path: join(dir, basename(repo.path)),
           },
         ]);
@@ -1677,6 +1688,41 @@ describe("createEngineHandler", async () => {
           buildId: id,
           nodeIds: ["start", "write", "check", "stop"],
           status: "done",
+        });
+      });
+
+      it.each([
+        { mode: "existing", branch: { mode: "existing", name: "feat-y" }, created: false },
+        {
+          mode: "new",
+          branch: { mode: "new", name: "flowdeck/login-fix", base: "main" },
+          created: true,
+        },
+      ])("builds on the $mode branch the request names", async ({ branch, created }) => {
+        const worktree = new FakeWorktree();
+        handler = handlerWith({
+          worktree,
+          gitState: new FakeGitState(
+            { [repo.path]: { kind: "branch", name: "main" } },
+            { branches: { [repo.path]: ["main", "feat-y"] } },
+          ),
+        });
+        flows.save(twoAgents());
+
+        const answered = await handler.handle({
+          id: 1,
+          type: "build-version",
+          payload: { flowId: "flow-1", version: 1, name: "fix-login", values: {}, branch },
+        });
+
+        const built = await builtFrom((answered as { value: BuildAnswer }).value);
+        if (built.kind !== "built") throw new Error(`did not build: ${JSON.stringify(built)}`);
+        expect(worktree.calls).toEqual([
+          expect.objectContaining({ branch: branch.name, create: created }),
+        ]);
+        expect(runs.findBuild(built.id)).toMatchObject({
+          branch: branch.name,
+          branchCreated: created,
         });
       });
 
@@ -3002,6 +3048,38 @@ describe("createEngineHandler", async () => {
           },
         );
 
+        it("keeps the request's branch in its origin and builds the rebuild on it", async () => {
+          asking();
+          const branch = { mode: "new", name: "flowdeck/notes", base: "main" };
+          const answered = await handler.handle({
+            id: nextId++,
+            type: "build-version",
+            payload: {
+              flowId: "flow-1",
+              version: 1,
+              name: "fix-login",
+              values: {},
+              ...firstRequest(),
+              branch,
+            },
+          });
+          const { pendingId: asked } = (answered as { value: { pendingId: string } }).value;
+          expect((await endPush(asked)).progress.chip).toBe("Needs you");
+          expect(runs.pendingBuild(asked)?.origin).toMatchObject({
+            request: { ...firstRequest(), branch },
+          });
+
+          const rebuilt = await rebuiltPendingId(asked, [firstAnswer]);
+          await endPush(rebuilt);
+
+          expect(runs.pendingBuild(rebuilt)?.origin).toMatchObject({
+            request: { values: {}, ...firstRequest(), branch, answers: [firstAnswer] },
+          });
+          expect(runs.buildEvents(rebuilt).find((event) => event.type === "session")).toMatchObject(
+            { branch: "flowdeck/notes", branchCreated: true },
+          );
+        });
+
         it("keeps a build-version request's inputs in its origin, and takes no answers from it", async () => {
           const answered = await handler.handle({
             id: nextId++,
@@ -3945,6 +4023,37 @@ describe("list-branches", () => {
       error: "/code/shop is not a git repository",
     });
     expect(await ask(new FakeGitState(), {})).toMatchObject({ id: 7, ok: false });
+  });
+});
+
+describe("checked-out-branches", () => {
+  const ask = (gitState: FakeGitState, payload: unknown) =>
+    createEngineHandler(options({ gitState })).handle({
+      id: 8,
+      type: "checked-out-branches" as never,
+      payload,
+    });
+
+  it("answers a repository with each checked-out branch and the folder it is checked out in", async () => {
+    const checkedOut = { main: "/code/shop", "feat-y": "/work/feat-y" };
+    const gitState = new FakeGitState({}, { checkedOut: { "/code/shop": checkedOut } });
+
+    expect(await ask(gitState, { repo: "/code/shop" })).toEqual({
+      id: 8,
+      ok: true,
+      value: checkedOut,
+    });
+  });
+
+  it("answers a git failure and a bad payload as errors", async () => {
+    const failing = new FakeGitState({}, { failWith: "/code/shop is not a git repository" });
+
+    expect(await ask(failing, { repo: "/code/shop" })).toEqual({
+      id: 8,
+      ok: false,
+      error: "/code/shop is not a git repository",
+    });
+    expect(await ask(new FakeGitState(), {})).toMatchObject({ id: 8, ok: false });
   });
 });
 

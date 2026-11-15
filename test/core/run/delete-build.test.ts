@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -12,9 +12,10 @@ import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import {
   deleteBuild,
   deleteBuildResultSchema,
+  storedBranch,
   teardownWorkspace,
 } from "../../../src/core/run/delete-build.js";
-import type { NewBuild, NewRun } from "../../../src/ports/store.js";
+import type { BuildRecord, NewBuild, NewRun } from "../../../src/ports/store.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -63,6 +64,8 @@ const namedBuild = (home: string, repo: string, id = buildId): NewBuild => ({
   name: "fix-login",
   repo,
   base: "main",
+  branch,
+  branchCreated: true,
   values: { ticket: "FD-1" },
   dir: `${home}/workspaces/${id}`,
   files: [],
@@ -101,6 +104,41 @@ describe("deleteBuild", () => {
     });
   });
 
+  describe("for a build recorded on a branch", () => {
+    it.each([
+      ["it did not create", "feat-y", false],
+      ["it created", "flowdeck/fix-login", true],
+    ])(
+      "tears down the worktree on the stored branch %s, with the stored base",
+      async (_label, storedBranch, branchCreated) => {
+        const home = "/fd-home";
+        const store = new FakeStore();
+        const fs = new FakeFileSystem({
+          [`${home}/workspaces/${buildId}/CLAUDE.md`]: "# fix-login",
+        });
+        const worktree = new FakeWorktree();
+        store.recordBuild({
+          ...namedBuild(home, "/work/carousell-web"),
+          base: "release",
+          branch: storedBranch,
+          branchCreated,
+        });
+
+        await deleteBuild({ store, worktree, fs, home }, buildId);
+
+        expect(worktree.removed).toEqual([
+          {
+            repo: "/work/carousell-web",
+            base: "release",
+            branch: storedBranch,
+            create: branchCreated,
+            path: `${home}/workspaces/${buildId}/carousell-web`,
+          },
+        ]);
+      },
+    );
+  });
+
   describe("on real git, SQLite and files", () => {
     let repo: TmpRepo;
     let home: string;
@@ -132,7 +170,13 @@ describe("deleteBuild", () => {
       await fs.writeFile(join(build.dir, "CLAUDE.md"), "# fix-login\n");
       await fs.writeFile(join(build.dir, "manifest.json"), "{}\n");
       await fs.writeFile(join(build.dir, "plugin", "commands", "p1.md"), "Fix FD-1\n");
-      await worktree.add({ repo: repo.path, base: "main", branch, path: worktreePath });
+      await worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch,
+        path: worktreePath,
+        create: true,
+      });
       store.recordBuild(build);
       const finished = store.createRun(runOf(build));
       store.finishRun(finished.id, "done");
@@ -206,6 +250,52 @@ describe("deleteBuild", () => {
       expect(result).toEqual({ ok: true, kept: { kind: "branch", branch } });
       expect(await branches(repo.path)).toContain(branch);
       expect(await exists(build.dir)).toBe(false);
+      expectMarkedDeleted(runId);
+    });
+
+    const makeBuildOnExistingBranch = async () => {
+      await git(repo.path, "branch", "feat-y");
+      const build: NewBuild = {
+        ...namedBuild(home, repo.path),
+        branch: "feat-y",
+        branchCreated: false,
+      };
+      const worktreePath = join(build.dir, basename(repo.path));
+      await fs.writeFile(join(build.dir, "CLAUDE.md"), "# fix-login\n");
+      await worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch: "feat-y",
+        path: worktreePath,
+        create: false,
+      });
+      store.recordBuild(build);
+      const finished = store.createRun(runOf(build));
+      store.finishRun(finished.id, "done");
+      return { build, worktreePath, runId: finished.id };
+    };
+
+    it("keeps a branch it did not create, though merged into the base with nothing unpushed, and says nothing kept", async () => {
+      const { build, worktreePath, runId } = await makeBuildOnExistingBranch();
+
+      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+
+      expect(result).toEqual({ ok: true });
+      expect(await branches(repo.path)).toContain("feat-y");
+      expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
+      expect(await exists(build.dir)).toBe(false);
+      expectMarkedDeleted(runId);
+    });
+
+    it("keeps a dirty worktree on a branch it did not create, with the branch", async () => {
+      const { worktreePath, runId } = await makeBuildOnExistingBranch();
+      await writeFile(join(worktreePath, "notes.txt"), "work in progress\n");
+
+      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+
+      expect(result).toEqual({ ok: true, kept: { kind: "worktree", path: worktreePath } });
+      expect(await readFile(join(worktreePath, "notes.txt"), "utf8")).toBe("work in progress\n");
+      expect(await branches(repo.path)).toContain("feat-y");
       expectMarkedDeleted(runId);
     });
 
@@ -290,18 +380,113 @@ describe("teardownWorkspace", () => {
     const dir = await layDownWorkspace();
     const worktreePath = join(dir, basename(repo.path));
     const worktree = new GitWorktree();
-    await worktree.add({ repo: repo.path, base: "main", branch, path: worktreePath });
+    await worktree.add({ repo: repo.path, base: "main", branch, path: worktreePath, create: true });
     const deps = { worktree, fs, home };
 
     await teardownWorkspace(deps, {
       dir,
-      worktree: { repo: repo.path, base: "main", branch, path: worktreePath },
+      worktree: { repo: repo.path, base: "main", branch, create: true, path: worktreePath },
     });
 
     expect(store.findBuild(buildId)).toBeUndefined();
     expect(await exists(dir)).toBe(false);
     expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
     expect(await branches(repo.path)).not.toContain(branch);
+  });
+});
+
+describe("teardownWorkspace on a branch it did not create", () => {
+  let home: string;
+  const fs = new NodeFileSystem();
+
+  beforeEach(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), "fd-teardown-existing-")));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const existingBranchWorkspace = async (worktree: FakeWorktree) => {
+    const dir = join(home, "workspaces", buildId);
+    await fs.writeFile(join(dir, "CLAUDE.md"), "# fix-login\n");
+    const runWorktree = {
+      repo: "/work/carousell-web",
+      base: "main",
+      branch: "feat-y",
+      create: false,
+      path: join(dir, "carousell-web"),
+    };
+    await worktree.add(runWorktree);
+    return { dir, runWorktree };
+  };
+
+  it("removes the worktree, never asks about unpushed work or deletes the branch, and says nothing kept", async () => {
+    const worktree = new FakeWorktree({ unpushed: ["feat-y"] });
+    const hasUnpushed = vi.spyOn(worktree, "hasUnpushed");
+    const { dir, runWorktree } = await existingBranchWorkspace(worktree);
+
+    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktree: runWorktree });
+
+    expect(kept).toBeUndefined();
+    expect(hasUnpushed).not.toHaveBeenCalled();
+    expect(worktree.removed).toEqual([runWorktree]);
+    expect(worktree.deletedBranches).toEqual([]);
+    expect(worktree.branches).toContain("feat-y");
+    expect(await exists(dir)).toBe(false);
+  });
+
+  it("says nothing kept when the worktree folder is already gone", async () => {
+    const worktree = new FakeWorktree();
+    const { dir, runWorktree } = await existingBranchWorkspace(worktree);
+    await rm(runWorktree.path, { recursive: true, force: true });
+
+    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktree: runWorktree });
+
+    expect(kept).toBeUndefined();
+    expect(worktree.deletedBranches).toEqual([]);
+  });
+
+  it("still keeps a dirty worktree", async () => {
+    const worktree = new FakeWorktree();
+    const { dir, runWorktree } = await existingBranchWorkspace(worktree);
+    const dirty = new FakeWorktree({ dirty: [runWorktree.path] });
+
+    const kept = await teardownWorkspace({ worktree: dirty, fs }, { dir, worktree: runWorktree });
+
+    expect(kept).toEqual({ kind: "worktree", path: runWorktree.path });
+    expect(dirty.removed).toEqual([]);
+    expect(dirty.deletedBranches).toEqual([]);
+    expect(await exists(runWorktree.path)).toBe(true);
+  });
+});
+
+describe("storedBranch", () => {
+  const record = (over: Partial<BuildRecord>): BuildRecord => ({
+    id: "0f3a9c2e5d",
+    hash: "h1",
+    name: "fix-login",
+    repo: "/work/shop",
+    base: "main",
+    branch: "feat-y",
+    branchCreated: false,
+    values: {},
+    deletedAt: null,
+    dir: "/fd-home/workspaces/0f3a9c2e5d",
+    createdAt: 1,
+    blueprintName: null,
+    blueprintVersion: null,
+    ...over,
+  });
+
+  it.each([
+    ["no branch", { branch: null, branchCreated: null }],
+    ["a branch but not who made it", { branchCreated: null }],
+  ])("gives a build recorded with %s the name Flowdeck derived and made", (_label, over) => {
+    expect(storedBranch(record(over), "fix-login")).toEqual({
+      branch: "flowdeck/fix-login-0f3a9c2e",
+      create: true,
+    });
   });
 });
 

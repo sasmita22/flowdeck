@@ -102,6 +102,8 @@ describe("createActivityTracker", () => {
       name: "b1",
       repo: "/repo",
       base: "main",
+      branch: "flowdeck/b1",
+      branchCreated: true,
       values: {},
       dir: "/fd-home/workspaces/h1",
       files: [],

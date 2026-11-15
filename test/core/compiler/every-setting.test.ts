@@ -121,7 +121,13 @@ const everyNode = () =>
   });
 
 const builtFiles = () => {
-  const target = { repo: "/M-build-repo", base: "M-build-base", workspace: "/M-build-workspace" };
+  const target = {
+    repo: "/M-build-repo",
+    base: "M-build-base",
+    branch: "flowdeck/M-build",
+    branchCreated: true,
+    workspace: "/M-build-workspace",
+  };
   const files = emit(
     lower(everyNode(), {
       name: "M-build",

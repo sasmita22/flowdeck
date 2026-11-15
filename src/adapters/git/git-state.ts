@@ -22,6 +22,10 @@ async function isFolder(path: string): Promise<boolean> {
   }
 }
 
+function valueAfter(lines: string[], prefix: string): string | undefined {
+  return lines.find((line) => line.startsWith(prefix))?.slice(prefix.length);
+}
+
 export class GitFolderState implements GitState {
   async read(folder: string): Promise<FolderState> {
     if (!(await isFolder(folder))) return { kind: "missing" };
@@ -56,5 +60,17 @@ export class GitFolderState implements GitState {
     } catch {
       return git(repo, "symbolic-ref", "--short", "HEAD");
     }
+  }
+
+  async checkedOutBranches(repo: string): Promise<Record<string, string>> {
+    const records = (await git(repo, "worktree", "list", "--porcelain")).split("\n\n");
+    return Object.fromEntries(
+      records.flatMap((record) => {
+        const lines = record.split("\n");
+        const folder = valueAfter(lines, "worktree ");
+        const branch = valueAfter(lines, "branch refs/heads/");
+        return folder !== undefined && branch !== undefined ? [[branch, folder]] : [];
+      }),
+    );
   }
 }

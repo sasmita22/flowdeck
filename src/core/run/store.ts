@@ -26,6 +26,8 @@ export type NewBuild = {
   name: string;
   repo: string;
   base: string;
+  branch: string;
+  branchCreated: boolean;
   values: VariableValues;
   dir: string;
   source?: BuildSource;
@@ -39,6 +41,8 @@ export type BuildRecord = {
   name: string | null;
   repo: string | null;
   base: string | null;
+  branch: string | null;
+  branchCreated: boolean | null;
   values: VariableValues | null;
   deletedAt: number | null;
   dir: string;

@@ -6,11 +6,19 @@ import type { BuildConfig, Flow } from "../flow/schema.js";
 import { unsetVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
 import type { AgentCall } from "../run/agent-calls.js";
-import type {
-  BuildEvent,
-  BuildSessionEvent,
-  BuildStepNumber,
-  ComponentStatus,
+import {
+  isValidBranchName,
+  legacyBranchName,
+  requestBranchSchema,
+  type RequestBranch,
+} from "../run/branch-name.js";
+import {
+  sessionBranch,
+  type BuildEvent,
+  type BuildSessionEvent,
+  type BuildStepNumber,
+  type ComponentStatus,
+  type SessionBranch,
 } from "../run/build-progress.js";
 import { teardownWorkspace, type TeardownDeps } from "../run/delete-build.js";
 import type { BuildSource, Store } from "../run/store.js";
@@ -41,6 +49,7 @@ export type BuildRequest = {
   name: string;
   repo?: string;
   base?: string;
+  branch?: RequestBranch;
   buildModel?: string;
   values: VariableValues;
   answers?: readonly BuildAnswer[];
@@ -60,6 +69,8 @@ export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
   gitState: {
     read(folder: string): Promise<FolderState>;
     defaultBranch(repo: string): Promise<string>;
+    branches(repo: string): Promise<string[]>;
+    checkedOutBranches(repo: string): Promise<Record<string, string>>;
   };
   worktree: TeardownDeps["worktree"] & { add(options: RunWorktree): Promise<void> };
   newId: () => string;
@@ -146,6 +157,27 @@ const busy: Record<"name", (name: string) => string> = {
   name: (name) => `A build named ${name} is already building.`,
 };
 
+async function branchProblem(
+  branch: RequestBranch,
+  repo: string,
+  deps: BuildFlowDeps,
+): Promise<string | undefined> {
+  if (!isValidBranchName(branch.name)) return `${branch.name} is not a valid branch name.`;
+  const local = await untilStopped(deps.signal, deps.gitState.branches(repo));
+  const exists = local.includes(branch.name);
+  if (branch.mode === "new") {
+    return exists
+      ? `Branch ${branch.name} already exists. Pick another name, or choose Existing branch.`
+      : undefined;
+  }
+  if (!exists) return `Branch ${branch.name} does not exist locally.`;
+  const checkedOut = await untilStopped(deps.signal, deps.gitState.checkedOutBranches(repo));
+  const where = checkedOut[branch.name];
+  return where === undefined
+    ? undefined
+    : `Branch ${branch.name} is checked out in ${where}. Switch that checkout to another branch, or pick a new branch.`;
+}
+
 async function requestProblems(
   request: BuildRequest,
   repo: string,
@@ -172,15 +204,19 @@ async function requestProblems(
     return [{ rule: "build-repo", message: `${repo} ${problem}.` }];
   }
   const unset = unsetVariables(buildConfig, request.values);
-  return unset.length === 0
-    ? []
-    : [{ rule: "build-values", message: `Give a value for ${unset.join(", ")}.` }];
+  if (unset.length > 0) {
+    return [{ rule: "build-values", message: `Give a value for ${unset.join(", ")}.` }];
+  }
+  const branch =
+    request.branch === undefined ? undefined : await branchProblem(request.branch, repo, deps);
+  return branch === undefined ? [] : [{ rule: "build-branch", message: branch }];
 }
 
 export const buildInputsSchema = z.object({
   values: z.record(z.string(), z.union([z.string(), z.boolean()])),
   repo: z.string().optional(),
   base: z.string().optional(),
+  branch: requestBranchSchema.optional(),
   buildModel: z.string().optional(),
   answers: z.array(buildAnswerSchema).optional(),
 });
@@ -193,18 +229,25 @@ export type BuildOrigin = {
   request?: BuildInputs;
 };
 
-const withRequestTarget = (flow: Flow, { repo, base, buildModel }: BuildRequest): Flow => ({
-  ...flow,
-  session: {
-    ...flow.session,
-    buildConfig: {
-      ...flow.session.buildConfig,
-      ...(repo === undefined ? {} : { repo }),
-      ...(base === undefined ? {} : { base }),
-      ...(buildModel === undefined ? {} : { buildModel }),
+const requestBase = ({ base, branch }: BuildRequest): string | undefined =>
+  branch?.mode === "new" ? branch.base : base;
+
+const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
+  const { repo, buildModel } = request;
+  const base = requestBase(request);
+  return {
+    ...flow,
+    session: {
+      ...flow.session,
+      buildConfig: {
+        ...flow.session.buildConfig,
+        ...(repo === undefined ? {} : { repo }),
+        ...(base === undefined ? {} : { base }),
+        ...(buildModel === undefined ? {} : { buildModel }),
+      },
     },
-  },
-});
+  };
+};
 
 export type StartedBuild = { kind: "started"; pendingId: string };
 
@@ -331,6 +374,11 @@ export const resumeRequest = (name: string, session: BuildSessionEvent): BuildRe
   values: session.values,
 });
 
+const requestedBranch = (request: BuildRequest, buildId: string): SessionBranch =>
+  request.branch === undefined
+    ? { branch: legacyBranchName(request.name, buildId), branchCreated: true }
+    : { branch: request.branch.name, branchCreated: request.branch.mode === "new" };
+
 export async function runBuild(
   { pendingId }: StartedBuild,
   saved: Flow,
@@ -419,15 +467,21 @@ export async function runBuild(
             base: buildConfig.base ?? (await waited(deps.gitState.defaultBranch(repo))),
           }))
         : { id: resume.session.buildId, base: resume.session.base };
+    const { branch, branchCreated } =
+      resume === undefined
+        ? requestedBranch(request, id)
+        : sessionBranch(resume.session, request.name, id);
     const identity = {
       id,
       name: request.name,
       values: withDefaults(buildConfig, request.values),
       repo,
       base,
+      branch,
+      branchCreated,
     };
     const dir = workspaceDir(deps.home, id);
-    const worktree = { repo, base, ...buildWorktree({ id, name: request.name, repo, dir }) };
+    const worktree = { repo, base, ...buildWorktree({ repo, dir, branch, create: branchCreated }) };
     if (resume === undefined) {
       current = 2;
       append({ type: "step", step: 2, status: "running" });
@@ -478,7 +532,7 @@ export async function runBuild(
     );
     report = latest;
     if (resume === undefined) {
-      const cut = { path: worktree.path, branch: worktree.branch, base };
+      const cut = { path: worktree.path, branch, base, branchCreated };
       try {
         await deps.worktree.add(worktree);
       } catch (error) {
@@ -502,6 +556,8 @@ export async function runBuild(
         repo,
         base,
         values: identity.values,
+        branch,
+        branchCreated,
         ...(buildConfig.buildModel === undefined ? {} : { model: buildConfig.buildModel }),
       });
       await settled(

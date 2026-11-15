@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { legacyBranchName } from "./branch-name.js";
 import { buildWorktree, type RunWorktree, type WorktreeRemoval } from "./workspace.js";
 import type { BuildRecord, Store } from "./store.js";
 
@@ -65,7 +66,8 @@ export type TeardownDeps = Pick<DeleteBuildDeps, "worktree" | "fs">;
 
 const holdsWork = async (deps: TeardownDeps, worktree: RunWorktree): Promise<boolean> =>
   (await deps.worktree.isDirty(worktree.path)) ||
-  (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base));
+  (worktree.create &&
+    (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base)));
 
 export async function teardownWorkspace(
   deps: TeardownDeps,
@@ -86,13 +88,19 @@ export async function teardownWorkspace(
     await deps.fs.removeTree(dir, { keep: worktree.path });
     return keptWorktree;
   }
-  if (present && removal.branch === "kept")
-    await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
+  const branchLeft = worktree.create && removal.branch === "kept";
+  if (present && branchLeft) await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
   await deps.fs.removeTree(dir);
-  return !present && removal.branch === "kept"
-    ? { kind: "branch", branch: worktree.branch }
-    : undefined;
+  return !present && branchLeft ? { kind: "branch", branch: worktree.branch } : undefined;
 }
+
+export const storedBranch = (
+  build: BuildRecord,
+  name: string,
+): { branch: string; create: boolean } =>
+  build.branch === null || build.branchCreated === null
+    ? { branch: legacyBranchName(name, build.id), create: true }
+    : { branch: build.branch, create: build.branchCreated };
 
 export async function deleteBuild(
   deps: DeleteBuildDeps,
@@ -115,7 +123,7 @@ export async function deleteBuild(
   const worktree: RunWorktree = {
     repo: build.repo,
     base: build.base,
-    ...buildWorktree({ id: build.id, name: build.name, repo: build.repo, dir: build.dir }),
+    ...buildWorktree({ repo: build.repo, dir: build.dir, ...storedBranch(build, build.name) }),
   };
   return deleted(deps, build.id, await teardownWorkspace(deps, { dir: build.dir, worktree }));
 }

@@ -21,6 +21,8 @@ const newBuild = (id: string, source?: BuildSource): NewBuild => ({
   name: `name-${id}`,
   repo: "/repo",
   base: "main",
+  branch: `flowdeck/name-${id}`,
+  branchCreated: true,
   values: {},
   dir: `/fd/workspaces/${id}`,
   ...(source === undefined ? {} : { source }),

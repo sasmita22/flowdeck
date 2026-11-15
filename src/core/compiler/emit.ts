@@ -15,6 +15,8 @@ export type EmitTarget = {
   blueprint?: { name: string; version: number };
   repo: string;
   base: string;
+  branch: string;
+  branchCreated: boolean;
   workspace?: string;
 };
 
@@ -25,6 +27,7 @@ export function workspaceClaudeMd(
   target: EmitTarget,
 ): string {
   const values = Object.entries(build.values).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const branchMode = target.branchCreated ? `new from ${target.base}` : "existing";
   const summary = [
     `# Build ${build.name}`,
     "",
@@ -35,7 +38,7 @@ export function workspaceClaudeMd(
     "- Plugin folder: plugin/ in the workspace; run sessions reach it as ${CLAUDE_PLUGIN_ROOT}",
     `- ${handoffFolderLine(repoFolder(target.repo))}`,
     `- Target repo (read only while building): ${target.repo}`,
-    `- Base branch: ${target.base}`,
+    `- Branch: ${target.branch} (${branchMode})`,
     ...values.map(([name, value]) => `- Variable ${name}: ${String(value)}`),
   ];
   return `${summary.join("\n")}\n\n${standardRules.text}`;

@@ -5,6 +5,7 @@ import {
   createRunStore,
   needsSessionSetup,
   selectCanBuild,
+  selectExistingBranches,
   selectKeptNote,
   selectLiveBadge,
   selectNodeDisplay,
@@ -16,6 +17,7 @@ import {
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
+import { recommendedBranch } from "../../../src/core/run/branch-name.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 import {
   agent,
@@ -39,6 +41,8 @@ type RunBridge = Pick<
   | "runCost"
   | "deleteBuild"
   | "defaultBranch"
+  | "listBranches"
+  | "checkedOutBranches"
   | "openFlow"
 >;
 
@@ -80,6 +84,8 @@ const setup = async (
     defaultBranch?: string;
     runState?: Promise<unknown>;
     built?: Flow;
+    branches?: string[];
+    checkedOut?: Record<string, string>;
   } = {},
 ) => {
   const calls: string[] = [];
@@ -141,6 +147,10 @@ const setup = async (
       calls.push("defaultBranch");
       return options.defaultBranch ?? "main";
     }),
+    listBranches: vi.fn<FlowdeckBridge["listBranches"]>(async () => options.branches ?? ["main"]),
+    checkedOutBranches: vi.fn<FlowdeckBridge["checkedOutBranches"]>(
+      async () => options.checkedOut ?? {},
+    ),
     openFlow: vi.fn<FlowdeckBridge["openFlow"]>(async ({ flowId }) => ({
       flowId,
       name: "Untitled",
@@ -271,6 +281,12 @@ describe("the Build dialog", () => {
       variables: declared.variables,
       values: { deep: true },
       buildModel: "",
+      branches: ["main"],
+      checkedOut: {},
+      branchMode: "new",
+      branchName: "flowdeck/",
+      branchNameEdited: false,
+      existingBranch: null,
       error: null,
       ignored: [],
       step: "form",
@@ -365,6 +381,7 @@ describe("the Build dialog", () => {
       name: "fix-login",
       repo: "/code/shop",
       base: "main",
+      branch: { mode: "new", name: "flowdeck/fix-login", base: "main" },
       values: { ticket: "FD-1", deep: true },
     });
     expect(run.getState()).toMatchObject({ buildDialog: null, error: null });
@@ -656,6 +673,214 @@ describe("the Build dialog's repository", () => {
 
     expect(dialogOf(run)).toMatchObject({ repo: "/b", base: "dev" });
     expect(canvas.getState().flow).toBe(flowBefore);
+  });
+});
+
+describe("the Build dialog's branch", () => {
+  const opened = async (
+    branches: string[] = ["main", "feat-y", "flowdeck/fix-login"],
+    checkedOut: Record<string, string> = { main: "/code/shop" },
+  ) => {
+    const ready = await setup({ branches, checkedOut });
+    await ready.run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    return ready;
+  };
+
+  const dialogOf = (run: Awaited<ReturnType<typeof opened>>["run"]) => run.getState().buildDialog;
+
+  it("opens on a new branch named by the recommendation for the build name and the repository's local branches", async () => {
+    const { run, bridge } = await opened();
+
+    expect(bridge.listBranches).toHaveBeenCalledWith({ repo: "/code/shop" });
+    expect(bridge.checkedOutBranches).toHaveBeenCalledWith({ repo: "/code/shop" });
+    expect(dialogOf(run)).toMatchObject({
+      branchMode: "new",
+      branchName: recommendedBranch("", ["main", "feat-y", "flowdeck/fix-login"]),
+      branchNameEdited: false,
+    });
+  });
+
+  it("follows the build name with the recommendation, past a branch that exists", async () => {
+    const { run } = await opened();
+
+    run.getState().editBuild({ name: "fix-login" });
+    expect(dialogOf(run)?.branchName).toBe("flowdeck/fix-login-2");
+    run.getState().editBuild({ name: "fix-signup" });
+    expect(dialogOf(run)?.branchName).toBe("flowdeck/fix-signup");
+  });
+
+  it.each([
+    ["an edited name", "mine"],
+    ["a cleared name", ""],
+  ])("stops following the build name after %s", async (_case, edited) => {
+    const { run } = await opened();
+    run.getState().editBuild({ name: "fix-signup" });
+
+    run.getState().editBuild({ branchName: edited });
+    run.getState().editBuild({ name: "fix-logout" });
+
+    expect(dialogOf(run)).toMatchObject({ branchName: edited, branchNameEdited: true });
+  });
+
+  it("cannot build on a new branch whose name is not a valid branch name", async () => {
+    const { run } = await opened();
+    run.getState().editBuild({ name: "fix-signup" });
+    run.getState().setValue("ticket", "FD-1");
+    expect(selectCanBuild(run.getState())).toBe(true);
+
+    run.getState().editBuild({ branchName: "fix..login" });
+    expect(selectCanBuild(run.getState())).toBe(false);
+    run.getState().editBuild({ branchName: "" });
+    expect(selectCanBuild(run.getState())).toBe(false);
+    run.getState().editBuild({ branchName: "flowdeck/fix-signup" });
+    expect(selectCanBuild(run.getState())).toBe(true);
+  });
+
+  it("lists the local branches to build on, each checked-out one disabled with where it is checked out", async () => {
+    const { run } = await opened(["main", "feat-y", "feat-z"], {
+      main: "/code/shop",
+      "feat-z": "/work/feat-z",
+    });
+
+    expect(selectExistingBranches(run.getState())).toEqual([
+      { name: "main", reason: "Checked out in /code/shop" },
+      { name: "feat-y", reason: null },
+      { name: "feat-z", reason: "Checked out in /work/feat-z" },
+    ]);
+  });
+
+  it("cannot build on an existing branch until one that is not checked out is chosen", async () => {
+    const { run } = await opened();
+    run.getState().editBuild({ name: "fix-signup" });
+    run.getState().setValue("ticket", "FD-1");
+    const canBuild = () => selectCanBuild(run.getState());
+
+    run.getState().editBuild({ branchMode: "existing" });
+    expect(canBuild()).toBe(false);
+    run.getState().editBuild({ existingBranch: "main" });
+    expect(canBuild()).toBe(false);
+    run.getState().editBuild({ existingBranch: "feat-y" });
+    expect(canBuild()).toBe(true);
+  });
+
+  it("cannot build on an existing branch when every local branch is checked out", async () => {
+    const { run } = await opened(["main", "feat-y"], {
+      main: "/code/shop",
+      "feat-y": "/work/feat-y",
+    });
+    run.getState().editBuild({ name: "fix-signup", branchMode: "existing" });
+    run.getState().setValue("ticket", "FD-1");
+
+    expect(selectExistingBranches(run.getState()).every(({ reason }) => reason !== null)).toBe(
+      true,
+    );
+    expect(selectCanBuild(run.getState())).toBe(false);
+  });
+
+  it("builds on the new branch it names, cut from the base", async () => {
+    const { run, bridge } = await opened();
+    run.getState().editBuild({ name: "fix-signup", base: "dev", branchName: "flowdeck/signup" });
+    run.getState().setValue("ticket", "FD-1");
+
+    await run.getState().confirmBuild();
+
+    expect(bridge.buildVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base: "dev",
+        branch: { mode: "new", name: "flowdeck/signup", base: "dev" },
+      }),
+    );
+  });
+
+  it("can build on a free existing branch before the base is known", async () => {
+    const { run, bridge } = await opened();
+    run.getState().editBuild({
+      name: "fix-signup",
+      base: "",
+      branchMode: "existing",
+      existingBranch: "feat-y",
+    });
+    run.getState().setValue("ticket", "FD-1");
+
+    expect(selectCanBuild(run.getState())).toBe(true);
+    await run.getState().confirmBuild();
+
+    expect(bridge.buildVersion).toHaveBeenCalledWith(
+      expect.not.objectContaining({ base: expect.anything() }),
+    );
+  });
+
+  it("builds on the existing branch chosen, still sending the base", async () => {
+    const { run, bridge } = await opened();
+    run
+      .getState()
+      .editBuild({ name: "fix-signup", branchMode: "existing", existingBranch: "feat-y" });
+    run.getState().setValue("ticket", "FD-1");
+
+    await run.getState().confirmBuild();
+
+    expect(bridge.buildVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ base: "main", branch: { mode: "existing", name: "feat-y" } }),
+    );
+  });
+
+  const settle = () => new Promise((done) => setTimeout(done, 0));
+
+  it("reads the branches of a new repository, dropping the chosen branch, and recommends against them", async () => {
+    const { run, bridge } = await opened();
+    run
+      .getState()
+      .editBuild({ name: "fix-login", branchMode: "existing", existingBranch: "feat-y" });
+    bridge.listBranches.mockResolvedValueOnce([
+      "trunk",
+      "flowdeck/fix-login",
+      "flowdeck/fix-login-2",
+    ]);
+    bridge.checkedOutBranches.mockResolvedValueOnce({ trunk: "/code/other" });
+
+    run.getState().editBuild({ repo: "/code/other" });
+    expect(dialogOf(run)).toMatchObject({ branches: [], checkedOut: {}, existingBranch: null });
+    await settle();
+
+    expect(bridge.listBranches).toHaveBeenLastCalledWith({ repo: "/code/other" });
+    expect(bridge.checkedOutBranches).toHaveBeenLastCalledWith({ repo: "/code/other" });
+    expect(selectExistingBranches(run.getState())).toEqual([
+      { name: "trunk", reason: "Checked out in /code/other" },
+      { name: "flowdeck/fix-login", reason: null },
+      { name: "flowdeck/fix-login-2", reason: null },
+    ]);
+    expect(dialogOf(run)?.branchName).toBe("flowdeck/fix-login-3");
+  });
+
+  it("ignores the branches of a repository that was replaced before they arrived", async () => {
+    const { run, bridge } = await opened();
+    const forB = deferred<unknown>();
+    bridge.listBranches.mockReturnValueOnce(forB.promise).mockResolvedValueOnce(["c-main"]);
+
+    run.getState().editBuild({ repo: "/b" });
+    run.getState().editBuild({ repo: "/c" });
+    await settle();
+    forB.resolve(["b-main"]);
+    await settle();
+
+    expect(dialogOf(run)).toMatchObject({ repo: "/c", branches: ["c-main"] });
+  });
+
+  it("opens offering no branches to pick, and the plain recommendation, when the repository's branches cannot be read", async () => {
+    const { run, bridge } = await setup({ branches: ["main", "flowdeck/fix-login"] });
+    bridge.checkedOutBranches.mockRejectedValueOnce(
+      new Error("/code/shop is not a git repository"),
+    );
+
+    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    run.getState().editBuild({ name: "fix-login" });
+
+    expect(dialogOf(run)).toMatchObject({
+      repo: "/code/shop",
+      branches: [],
+      checkedOut: {},
+      branchName: "flowdeck/fix-login",
+    });
   });
 });
 

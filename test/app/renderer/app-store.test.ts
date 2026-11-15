@@ -28,6 +28,7 @@ const bridge = (
   resumeRun: vi.fn(),
   runCost: vi.fn(),
   listBranches: vi.fn(),
+  checkedOutBranches: vi.fn(),
   deleteBuild: vi.fn(),
   doctorWorktrees: vi.fn(),
   defaultBranch: vi.fn(),

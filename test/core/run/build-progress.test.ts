@@ -4,9 +4,11 @@ import {
   buildingCardOf,
   buildProgressEntrySchema,
   progressOf,
+  sessionBranch,
   type BuildEvent,
   type BuildProgressEntry,
   type BuildOutcome,
+  type BuildSessionEvent,
   type PendingBuild,
   type StoredBuildEvent,
 } from "../../../src/core/run/build-progress.js";
@@ -110,6 +112,45 @@ describe("buildEventSchema", () => {
       },
     ],
     [
+      "a session on a new branch Flowdeck made",
+      {
+        type: "session",
+        name: "fd-build-p1",
+        claudeSessionId: "c1",
+        buildId: "b1",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        branch: "flowdeck/nightly",
+        branchCreated: true,
+      },
+    ],
+    [
+      "a session on an existing branch",
+      {
+        type: "session",
+        name: "fd-build-p1",
+        claudeSessionId: "c1",
+        buildId: "b1",
+        repo: "/repo",
+        base: "main",
+        values: {},
+        branch: "feat-y",
+        branchCreated: false,
+      },
+    ],
+    [
+      "a worktree cut on an existing branch",
+      {
+        type: "worktree",
+        status: "done",
+        path: "/home/workspaces/b1/repo",
+        branch: "feat-y",
+        base: "main",
+        branchCreated: false,
+      },
+    ],
+    [
       "a worktree that could not be cut, with git's message",
       {
         type: "worktree",
@@ -150,6 +191,46 @@ describe("buildEventSchema", () => {
     ["an unknown event type", { type: "teleport" }],
   ])("rejects %s", (_name, event) => {
     expect(buildEventSchema.safeParse(event).success).toBe(false);
+  });
+});
+
+describe("sessionBranch", () => {
+  const session = (over: Partial<BuildSessionEvent> = {}): BuildSessionEvent => ({
+    type: "session",
+    name: "fd-build-p1",
+    claudeSessionId: "c1",
+    buildId: "b1c2d3e4f5",
+    repo: "/repo",
+    base: "main",
+    values: {},
+    ...over,
+  });
+
+  it.each<[string, Partial<BuildSessionEvent>, { branch: string; branchCreated: boolean }]>([
+    [
+      "a new branch",
+      { branch: "flowdeck/nightly", branchCreated: true },
+      { branch: "flowdeck/nightly", branchCreated: true },
+    ],
+    [
+      "an existing branch",
+      { branch: "feat-y", branchCreated: false },
+      { branch: "feat-y", branchCreated: false },
+    ],
+    [
+      "a branch that does not say who made it",
+      { branch: "flowdeck/nightly" },
+      { branch: "flowdeck/nightly", branchCreated: true },
+    ],
+  ])("gives the branch the session names, on %s", (_name, over, expected) => {
+    expect(sessionBranch(session(over), "nightly", "b1c2d3e4f5")).toEqual(expected);
+  });
+
+  it("gives an old session, with no branch, the name Flowdeck derived and made", () => {
+    expect(sessionBranch(session(), "nightly", "b1c2d3e4f5")).toEqual({
+      branch: "flowdeck/nightly-b1c2d3e4",
+      branchCreated: true,
+    });
   });
 });
 

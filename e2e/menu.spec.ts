@@ -392,6 +392,8 @@ test("A run left running by an earlier session shows as interrupted, never live"
       name: "stale",
       repo: repo.path,
       base: "main",
+      branch: "flowdeck/stale",
+      branchCreated: true,
       values: {},
       dir: "/nowhere",
       source: alpha,

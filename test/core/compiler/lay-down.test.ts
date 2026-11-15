@@ -51,6 +51,8 @@ const depsOf = (named: Named): LayDownDeps => ({
     name: named.name,
     repo: named.repo,
     base: "main",
+    branch: `flowdeck/${named.name}`,
+    branchCreated: true,
     values: {},
     blueprint: { name: "Bugfix", version: 3 },
   },

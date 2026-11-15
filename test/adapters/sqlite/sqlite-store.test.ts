@@ -27,6 +27,8 @@ const build: NewBuild = {
   name: "fix-login",
   repo: "/repo",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: { ticket: "FD-1" },
   dir: "/fd/workspaces/b1",
   files: [],
@@ -150,9 +152,10 @@ describe("SqliteStore", () => {
       { name: "011_build_snapshots.sql" },
       { name: "012_drop_pending_builds_one_per_flow.sql" },
       { name: "013_flows_deleted_at.sql" },
+      { name: "014_build_branch.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 13]);
+    expect(before).toEqual([1, 1, 3, 1, 14]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -534,6 +537,17 @@ describe("SqliteStore", () => {
         createdAt: 7,
       });
       expect(store.findBuild("abc")).toBeUndefined();
+    });
+
+    it.each([
+      ["a new branch it made", "flowdeck/fix-signup", true],
+      ["an existing branch", "feat-y", false],
+    ])("reads back the branch of a build on %s", (_name, branch, branchCreated) => {
+      const store = open();
+
+      store.recordBuild({ ...another("b2", "fix-signup"), branch, branchCreated });
+
+      expect(store.findBuild("b2")).toMatchObject({ branch, branchCreated });
     });
 
     it("finds a build by its name", () => {

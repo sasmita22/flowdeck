@@ -26,6 +26,8 @@ const newBuild: NewBuild = {
   name: "fix-login",
   repo: "/repo",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: {},
   dir: "/fd/workspaces/b1",
   files: [],
@@ -46,6 +48,7 @@ const allMigrations = [
   { name: "011_build_snapshots.sql" },
   { name: "012_drop_pending_builds_one_per_flow.sql" },
   { name: "013_flows_deleted_at.sql" },
+  { name: "014_build_branch.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
