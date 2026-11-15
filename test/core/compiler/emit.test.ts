@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { emptyReport } from "../../../src/core/compiler/build-report.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
-import { emit } from "../../../src/core/compiler/emit.js";
+import { emit, workspaceClaudeMd } from "../../../src/core/compiler/emit.js";
 import { guardHookFiles } from "../../../src/core/compiler/guard-hooks.js";
 import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
 import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-settings.js";
@@ -32,6 +32,8 @@ const fixLogin = {
   blueprint: { name: "Bugfix", version: 3 },
   repo: "/Users/dev/code/carousell-web",
   base: "release/2026-11",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   workspace: "/fd-home/workspaces/b-login",
 };
 
@@ -41,6 +43,8 @@ const fixSignup = {
   blueprint: { name: "Review", version: 1 },
   repo: "/work/flowdeck",
   base: "main",
+  branch: "flowdeck/fix-signup",
+  branchCreated: true,
   workspace: "/fd-home/workspaces/b-signup",
 };
 
@@ -57,6 +61,8 @@ const emitted = (build = fixLogin) =>
     blueprint: build.blueprint,
     repo: build.repo,
     base: build.base,
+    branch: build.branch,
+    branchCreated: build.branchCreated,
     workspace: build.workspace,
   });
 
@@ -200,6 +206,22 @@ describe("emit", () => {
   });
 
   describe("CLAUDE.md", () => {
+    const branchLines = (branch: string, branchCreated: boolean) =>
+      workspaceClaudeMd(
+        { name: "x", values: {} },
+        { repo: "/work/flowdeck", base: "main", branch, branchCreated },
+      )
+        .split("\n")
+        .filter((line) => /branch/i.test(line) && line.startsWith("- "));
+
+    it("names a new branch and the base it was cut from", () => {
+      expect(branchLines("flowdeck/x", true)).toEqual(["- Branch: flowdeck/x (new from main)"]);
+    });
+
+    it("names an existing branch as existing", () => {
+      expect(branchLines("feat-y", false)).toEqual(["- Branch: feat-y (existing)"]);
+    });
+
     it("opens with a summary naming the build, its blueprint and version, the repo folder, the base and each value", () => {
       const { summary } = summaryOf(fileAt(emitted(), "CLAUDE.md"));
 

@@ -54,6 +54,8 @@ const oldRow = (hash: string, dir: string): BuildRecord => ({
   name: null,
   repo: null,
   base: null,
+  branch: null,
+  branchCreated: null,
   values: null,
   deletedAt: null,
   dir,
@@ -78,7 +80,15 @@ describe("the core run path", () => {
     const result = await build(gatesOnly(), {
       fs,
       home,
-      workspace: { id: buildId, name: "fix-login", repo: "/work/repo", base: "main", values: {} },
+      workspace: {
+        id: buildId,
+        name: "fix-login",
+        repo: "/work/repo",
+        base: "main",
+        branch: "flowdeck/fix-login",
+        branchCreated: true,
+        values: {},
+      },
     });
     if (!result.ok) throw new Error("build failed");
     dir = result.dir;
@@ -161,6 +171,8 @@ describe("the core run path", () => {
       const files = emit(lower(gatesOnly(), { name: "fix-login", values: {} }), {
         repo: "/work/repo",
         base: "main",
+        branch: "flowdeck/fix-login",
+        branchCreated: true,
       }).map((file) => {
         if (file.path !== "manifest.json") return file;
         const manifest = JSON.parse(file.content) as Manifest;
@@ -297,6 +309,8 @@ describe("the core run path", () => {
       const files = emit(lower(broken, { name: "fix-login", values: {} }), {
         repo: "/work/repo",
         base: "main",
+        branch: "flowdeck/fix-login",
+        branchCreated: true,
       });
       const hash = hashBuild(files.filter((file) => file.path !== reportPath));
       const brokenDir = join(home, "workspaces", "broken");
@@ -780,7 +794,15 @@ describe("AT-19: a build that named no pieces", () => {
 
   it("runs, resumes and reports cost through loadBuild, decideResume and chargeUsage", async () => {
     const store = new FakeStore();
-    const workspace = { id, name: "fix-login", repo: "/work/repo", base: "main", values: {} };
+    const workspace = {
+      id,
+      name: "fix-login",
+      repo: "/work/repo",
+      base: "main",
+      branch: "flowdeck/fix-login",
+      branchCreated: true,
+      values: {},
+    };
     const laid = await layDown(
       onMainFlow(
         [agent("p1"), agent("a1"), agent("p2")],

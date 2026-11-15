@@ -84,6 +84,8 @@ type BuildRow = {
   name: string | null;
   repo: string | null;
   base: string | null;
+  branch: string | null;
+  branch_created: number | null;
   values: string | null;
   deleted_at: number | null;
   dir: string;
@@ -95,7 +97,7 @@ type BuildRow = {
 };
 
 const buildsWithSnapshot = `SELECT builds.id, builds.hash, builds.name, builds.repo, builds.base,
-       builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
+       builds.branch, builds.branch_created, builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
        builds.version, build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
   FROM builds LEFT JOIN build_snapshots ON build_snapshots.build_id = builds.id`;
 
@@ -105,6 +107,8 @@ const toBuild = (row: BuildRow): BuildRecord => ({
   name: row.name,
   repo: row.repo,
   base: row.base,
+  branch: row.branch,
+  branchCreated: row.branch_created === null ? null : row.branch_created === 1,
   values: row.values === null ? null : (JSON.parse(row.values) as VariableValues),
   deletedAt: row.deleted_at,
   dir: row.dir,
@@ -400,7 +404,7 @@ export class SqliteStore implements Store {
       });
       this.db
         .prepare(
-          'INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO builds (id, hash, name, repo, base, branch, branch_created, "values", dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         )
         .run(
           build.id,
@@ -408,6 +412,8 @@ export class SqliteStore implements Store {
           build.name,
           build.repo,
           build.base,
+          build.branch,
+          build.branchCreated ? 1 : 0,
           JSON.stringify(build.values),
           build.dir,
           this.now().getTime(),

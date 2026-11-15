@@ -29,6 +29,8 @@ export const buildIdNamed = (home: string, name: string): string => {
   return row.id;
 };
 
+const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export async function buildOnCanvas(
   window: Page,
   home: string,
@@ -38,6 +40,10 @@ export async function buildOnCanvas(
   await window.getByTestId(controlTestIds.build).click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeVisible();
   await window.getByTestId(buildDialogTestIds.name).fill(name);
+  await window.getByTestId(buildDialogTestIds.branchNew).click();
+  await expect(window.getByTestId(buildDialogTestIds.branchName)).toHaveValue(
+    new RegExp(`^flowdeck/${escaped(name)}(-\\d+)?$`),
+  );
   for (const [variable, value] of Object.entries(values)) {
     const field = window.getByTestId(buildDialogTestIds.variable(variable));
     if (typeof value === "boolean") await field.selectOption(value ? "yes" : "no");

@@ -11,7 +11,7 @@ import { Runner, StructureError, structureProblems, type RunnerDeps } from "./ru
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
 import type { HumanWaiter } from "./wait.js";
-import { buildWorktree } from "./workspace.js";
+import { worktreePath } from "./workspace.js";
 
 export type OpenSessionOptions = {
   sessionName: string;
@@ -123,10 +123,7 @@ export async function loadBuild(
       prefix: manifest.prefix ?? row.hash,
       layout,
       ...(row.name !== null && row.repo !== null
-        ? {
-            worktree: buildWorktree({ id: row.id, name: row.name, repo: row.repo, dir: row.dir })
-              .path,
-          }
+        ? { worktree: worktreePath(row.dir, row.repo) }
         : {}),
     },
   };

@@ -9,7 +9,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 - Plugin folder: plugin/ in the workspace; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
 - Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
 - Target repo (read only while building): /work/carousell-web
-- Base branch: main
+- Branch: flowdeck/fix-login (new from main)
 
 ## Standard rules
 
@@ -36,7 +36,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 ",
   "manifest.json": "{
   "files": {
-    "CLAUDE.md": "4746a2efd86b8420fd06f5dc5efcfd6f8112b221b65cb67f292618b64ffce168",
+    "CLAUDE.md": "ff27b080caa7705f5445769c210266c27c7dcd280ac966aa86040f4dd048d1bb",
     "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
     "plugin/agents/a.md": "4934aa74780a4ea28f467a14b00836d6526f2595ffc1b90d013802c54abc633b",
     "plugin/agents/p.md": "be7dac079510a1c843ed0729687f58d71a748c462ddb110f65caa96bc7ea0b6b",
@@ -46,7 +46,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "f9d13c6d3a36e2e832709f13b1d73f6f17b37e2b37fb6e05ddd2003ccea2e1fd",
+  "hash": "0579e25c8207d4e3acc8df07031d0cc9fd501b491e17a226fbe00137b74bf763",
   "layout": "workspace",
   "nodes": [
     {

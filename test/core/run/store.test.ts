@@ -20,6 +20,8 @@ const build = (id: string, name: string): NewBuild => ({
   name,
   repo: "/repos/app",
   base: "main",
+  branch: `flowdeck/${name}`,
+  branchCreated: true,
   values: { ticket: "FD-1" },
   dir: `/fd/workspaces/${id}`,
   files: [],

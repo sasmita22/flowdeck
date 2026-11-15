@@ -385,3 +385,89 @@ test("The Build dialog picks repo, branch and build model with the settings' fie
     await other.cleanup();
   }
 });
+
+test("The Build dialog recommends a new branch that follows the build name until edited, and lists existing branches with the checked-out one disabled", async () => {
+  await run("git", ["-C", repo.path, "branch", "flowdeck/fix-a"]);
+  await run("git", ["-C", repo.path, "branch", "feat-y"]);
+  const longBranch = "feature/some-long-branch-name-that-is-wider-than-the-dialog-and-keeps-going";
+  await run("git", ["-C", repo.path, "branch", longBranch]);
+  const longPath = join(
+    home,
+    "worktrees",
+    "a-checkout-folder-whose-path-is-far-wider-than-the-dialog",
+  );
+  await run("git", ["-C", repo.path, "worktree", "add", "-b", "flowdeck/mt-custom", longPath]);
+  const { flowId } = seedBlueprint(home, "Fixer", blueprint(), repo.path);
+  const window = await launch();
+  await openBuildDialog(window, flowId);
+  const name = window.getByTestId(buildDialogTestIds.name);
+  const branchName = window.getByTestId(buildDialogTestIds.branchName);
+
+  await expect(window.getByTestId(buildDialogTestIds.branchNew)).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await name.fill("fix-a");
+  await expect(branchName).toHaveValue("flowdeck/fix-a-2");
+  await name.fill("fix-b");
+  await expect(branchName).toHaveValue("flowdeck/fix-b");
+  await branchName.fill("mine/fix");
+  await name.fill("fix-c");
+  await expect(branchName).toHaveValue("mine/fix");
+
+  await window.getByTestId(buildDialogTestIds.branchExisting).click();
+  await expect(branchName).toBeHidden();
+  const featY = window.getByTestId(buildDialogTestIds.existingBranch("feat-y"));
+  const main = window.getByTestId(buildDialogTestIds.existingBranch("main"));
+  await expect(featY).toBeEnabled();
+  await expect(
+    window.getByTestId(buildDialogTestIds.existingBranch("flowdeck/fix-a")),
+  ).toBeEnabled();
+  await expect(main).toBeDisabled();
+  await expect(main).toContainText(`Checked out in ${repo.path}`);
+
+  const custom = window.getByTestId(buildDialogTestIds.existingBranch("flowdeck/mt-custom"));
+  await expect(custom).toContainText(`Checked out in ${longPath}`);
+  await expect(window.getByTestId(buildDialogTestIds.existingBranch(longBranch))).toBeEnabled();
+  const list = window.getByRole("group", { name: "Existing branch" });
+  expect(await list.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+  const branchLabel = custom.getByText("flowdeck/mt-custom", { exact: true });
+  const branchLines = await branchLabel.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    return range.getClientRects().length;
+  });
+  expect(branchLines).toBe(1);
+});
+
+test("A build on an existing branch shows that branch and no base on its page, and keeps the branch as not created", async () => {
+  await run("git", ["-C", repo.path, "branch", "feat-y"]);
+  const { flowId } = seedBlueprint(home, "Fixer", blueprint(), repo.path);
+  const window = await launch();
+  await openBuildDialog(window, flowId);
+  await window.getByTestId(buildDialogTestIds.name).fill("fix-existing");
+  await window.getByTestId(buildDialogTestIds.variable("ticket")).fill("FD-1");
+  const existing = window.getByTestId(buildDialogTestIds.branchExisting);
+  await expect(existing).toHaveAttribute("aria-pressed", "false");
+  await existing.click();
+  await expect(existing).toHaveAttribute("aria-pressed", "true");
+  await window.getByTestId(buildDialogTestIds.existingBranch("feat-y")).click();
+  await window.getByTestId(buildDialogTestIds.confirm).click();
+  await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
+
+  const facts = window.locator(".fd-facts");
+  const fact = (label: string) =>
+    facts
+      .locator("div")
+      .filter({ has: window.getByRole("term").getByText(label, { exact: true }) });
+  await expect(fact("Branch").getByRole("definition")).toHaveText("feat-y", { timeout: 20_000 });
+  await expect(fact("Base")).toHaveCount(0);
+
+  await waitForBuilt(window, home, "fix-existing");
+  expect(
+    rows<{ branch: string; branch_created: number }>(
+      "SELECT branch, branch_created FROM builds WHERE name = ?",
+      "fix-existing",
+    ),
+  ).toEqual([{ branch: "feat-y", branch_created: 0 }]);
+});

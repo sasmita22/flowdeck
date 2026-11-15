@@ -1,21 +1,30 @@
-export type RunWorktree = { repo: string; base: string; branch: string; path: string };
+export type RunWorktree = {
+  repo: string;
+  base: string;
+  branch: string;
+  create: boolean;
+  path: string;
+};
 
 export type WorktreeRemoval = { worktree: "removed" | "kept"; branch: "removed" | "kept" };
 
 export const repoFolder = (repo: string): string =>
   repo.replace(/\/+$/, "").split("/").at(-1) ?? repo;
 
+export const worktreePath = (dir: string, repo: string): string => `${dir}/${repoFolder(repo)}`;
+
 export const buildWorktree = ({
-  id,
-  name,
   repo,
   dir,
+  branch,
+  create,
 }: {
-  id: string;
-  name: string;
   repo: string;
   dir: string;
-}): Pick<RunWorktree, "branch" | "path"> => ({
-  branch: `flowdeck/${name}-${id.slice(0, 8)}`,
-  path: `${dir}/${repoFolder(repo)}`,
+  branch: string;
+  create: boolean;
+}): Pick<RunWorktree, "branch" | "create" | "path"> => ({
+  branch,
+  create,
+  path: worktreePath(dir, repo),
 });

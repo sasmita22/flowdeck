@@ -9,6 +9,7 @@ export class FakeGitState implements GitState {
       failWith?: string;
       branches?: Record<string, string[]>;
       defaultBranches?: Record<string, string>;
+      checkedOut?: Record<string, Record<string, string>>;
     } = {},
   ) {}
 
@@ -26,5 +27,10 @@ export class FakeGitState implements GitState {
   async defaultBranch(repo: string): Promise<string> {
     if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
     return this.options.defaultBranches?.[repo] ?? "main";
+  }
+
+  async checkedOutBranches(repo: string): Promise<Record<string, string>> {
+    if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
+    return this.options.checkedOut?.[repo] ?? {};
   }
 }

@@ -44,6 +44,19 @@ describe("FakeGitState", () => {
     expect(await git.defaultBranch("/other")).toBe("main");
   });
 
+  it("answers each repository with its scripted checked-out branches, and none for any other", async () => {
+    const git = new FakeGitState(
+      {},
+      { checkedOut: { "/repo": { main: "/repo", "feat-y": "/worktrees/feat-y" } } },
+    );
+
+    expect(await git.checkedOutBranches("/repo")).toEqual({
+      main: "/repo",
+      "feat-y": "/worktrees/feat-y",
+    });
+    expect(await git.checkedOutBranches("/other")).toEqual({});
+  });
+
   it("rejects a default-branch lookup with the scripted failure", async () => {
     await expect(
       new FakeGitState({}, { failWith: "git not found" }).defaultBranch("/r"),

@@ -112,6 +112,30 @@ describe("GitFolderState", () => {
     expect(await state.defaultBranch(repo.path)).toBe("feature/x");
   });
 
+  it("maps each checked-out branch to its folder, leaving out a detached worktree", async () => {
+    const worktrees = await realpath(await mkdtemp(join(tmpdir(), "fd-worktrees-")));
+    try {
+      const featY = join(worktrees, "feat-y");
+      await git(repo.path, "worktree", "add", "--quiet", "-b", "feat-y", featY, "main");
+      await git(
+        repo.path,
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        join(worktrees, "loose"),
+        "main",
+      );
+
+      expect(await state.checkedOutBranches(repo.path)).toEqual({
+        main: repo.path,
+        "feat-y": featY,
+      });
+    } finally {
+      await rm(worktrees, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to list the branches of a folder that is not a repository, naming it", async () => {
     await expect(state.branches(plain)).rejects.toThrow(`${plain} is not a git repository`);
   });

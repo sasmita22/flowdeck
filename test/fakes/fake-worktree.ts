@@ -10,6 +10,7 @@ export class FakeWorktree implements Worktree {
   readonly calls: WorktreeAddOptions[] = [];
   readonly removed: WorktreeRemoveOptions[] = [];
   readonly deletedBranches: { repo: string; branch: string }[] = [];
+  readonly branches = new Set<string>();
 
   constructor(
     private readonly options: { failWith?: string; dirty?: string[]; unpushed?: string[] } = {},
@@ -19,11 +20,14 @@ export class FakeWorktree implements Worktree {
     this.calls.push(options);
     if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
     await mkdir(options.path, { recursive: true });
+    this.branches.add(options.branch);
   }
 
   async remove(options: WorktreeRemoveOptions): Promise<WorktreeRemoval> {
     this.removed.push(options);
     await rm(options.path, { recursive: true, force: true });
+    if (!options.create) return { worktree: "removed", branch: "kept" };
+    this.branches.delete(options.branch);
     return { worktree: "removed", branch: "removed" };
   }
 

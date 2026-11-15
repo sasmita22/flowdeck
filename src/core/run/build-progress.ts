@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { buildReportSchema, type BuildReport } from "../compiler/build-report.js";
+import { legacyBranchName } from "./branch-name.js";
 
 const stepNumberSchema = z.union([
   z.literal(1),
@@ -27,6 +28,8 @@ const sessionEventSchema = z.object({
   base: z.string(),
   values: z.record(z.string(), z.union([z.string(), z.boolean()])).readonly(),
   model: z.string().optional(),
+  branch: z.string().optional(),
+  branchCreated: z.boolean().optional(),
 });
 
 const buildCostSchema = z.object({
@@ -58,6 +61,7 @@ export const buildEventSchema = z.discriminatedUnion("type", [
     path: z.string(),
     branch: z.string(),
     base: z.string(),
+    branchCreated: z.boolean().optional(),
     message: z.string().optional(),
   }),
   z.object({
@@ -73,6 +77,17 @@ export type BuildEvent = z.infer<typeof buildEventSchema>;
 export type BuildSessionEvent = z.infer<typeof sessionEventSchema>;
 
 export type StoredBuildEvent = BuildEvent & { seq: number; at: number };
+
+export type SessionBranch = { branch: string; branchCreated: boolean };
+
+export const sessionBranch = (
+  event: BuildSessionEvent,
+  name: string,
+  buildId: string,
+): SessionBranch =>
+  event.branch === undefined
+    ? { branch: legacyBranchName(name, buildId), branchCreated: true }
+    : { branch: event.branch, branchCreated: event.branchCreated ?? true };
 
 export type PendingBuild = {
   id: string;

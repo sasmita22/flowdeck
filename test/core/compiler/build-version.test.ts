@@ -9,12 +9,14 @@ import {
   type BuildReport,
 } from "../../../src/core/compiler/build-report.js";
 import {
+  buildInputsSchema,
   buildResumeOf,
   buildVersion,
   resumeRequest,
   runBuild,
   startBuild,
   stoppedRule,
+  type BuildInputs,
   type BuildOrigin,
   type BuildRequest,
   type StartedBuild,
@@ -179,6 +181,8 @@ describe("buildVersion", () => {
       flows?: Flow[];
       states?: Record<string, FolderState>;
       defaultBranches?: Record<string, string>;
+      branches?: string[];
+      checkedOut?: Record<string, string>;
       worktree?: FakeWorktree;
       newId?: () => string;
       script?: FakeBuildScript;
@@ -192,6 +196,8 @@ describe("buildVersion", () => {
       options.states ?? { [repo]: { kind: "branch", name: "main" } },
       {
         defaultBranches: options.defaultBranches ?? {},
+        branches: { [repo]: options.branches ?? ["main"] },
+        checkedOut: { [repo]: options.checkedOut ?? {} },
       },
     );
     const worktree = options.worktree ?? new FakeWorktree();
@@ -250,7 +256,13 @@ describe("buildVersion", () => {
       expect(result.dir).toBe(dir);
       expect(await fs.exists(`${dir}/manifest.json`)).toBe(true);
       expect(worktree.calls).toEqual([
-        { repo, base: "main", branch: "flowdeck/fix-login-0f3a9c2e", path: `${dir}/carousell-web` },
+        {
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          create: true,
+          path: `${dir}/carousell-web`,
+        },
       ]);
       expect(store.builds()).toEqual([
         expect.objectContaining({
@@ -331,7 +343,13 @@ describe("buildVersion", () => {
       ).rejects.toThrow("disk full");
 
       expect(base.worktree.removed).toEqual([
-        { repo, base: "main", branch: "flowdeck/fix-login-0f3a9c2e", path: `${dir}/carousell-web` },
+        {
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          create: true,
+          path: `${dir}/carousell-web`,
+        },
       ]);
       expect(await base.fs.exists(`${dir}/manifest.json`)).toBe(false);
     });
@@ -557,6 +575,19 @@ describe("buildVersion", () => {
       },
     });
 
+    const requestOf = (
+      name: string,
+      { values, repo, base, branch, buildModel, answers: given }: BuildInputs,
+    ): BuildRequest => ({
+      name,
+      values,
+      ...(repo === undefined ? {} : { repo }),
+      ...(base === undefined ? {} : { base }),
+      ...(branch === undefined ? {} : { branch }),
+      ...(buildModel === undefined ? {} : { buildModel }),
+      ...(given === undefined ? {} : { answers: given }),
+    });
+
     it("keeps the build's inputs in the pending row's origin", async () => {
       const { flows, store, deps } = setup();
       const { flow: saved, origin } = savedV1(flows);
@@ -565,6 +596,35 @@ describe("buildVersion", () => {
       await startBuild(saved, { ...request, answers }, deps, kept);
 
       expect(store.listPendingBuilds()).toEqual([expect.objectContaining({ origin: kept })]);
+    });
+
+    it("checks the branch again when rebuilding from the kept inputs with answers", async () => {
+      const { flows, store, fs, worktree, deps } = setup({
+        branches: ["main", "flowdeck/fix-login"],
+      });
+      const { flow: saved, origin } = savedV1(flows);
+      const kept = buildInputsSchema.parse({
+        ...withRequest(origin).request,
+        branch: { mode: "new", name: "flowdeck/fix-login", base: "main" },
+      });
+
+      const result = await startBuild(saved, requestOf(request.name, kept), deps, {
+        ...origin,
+        request: kept,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          {
+            rule: "build-branch",
+            message:
+              "Branch flowdeck/fix-login already exists. Pick another name, or choose Existing branch.",
+          },
+        ],
+      });
+      expect(store.listPendingBuilds()).toEqual([]);
+      expectNothingDone(store, fs, worktree);
     });
 
     it("lays down the same manifest and hash whether or not the origin keeps the inputs", async () => {
@@ -696,6 +756,7 @@ describe("buildVersion", () => {
       path: `${home}/workspaces/${firstId}/carousell-web`,
       branch: "flowdeck/fix-login-0f3a9c2e",
       base: "main",
+      branchCreated: true,
     });
 
     it("records the worktree it cut, after step 2 is done and before the session", async () => {
@@ -845,7 +906,13 @@ describe("buildVersion", () => {
         { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "failed" }) },
       ]);
       expect(base.worktree.removed).toEqual([
-        { repo, base: "main", branch: "flowdeck/fix-login-0f3a9c2e", path: `${dir}/carousell-web` },
+        {
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          create: true,
+          path: `${dir}/carousell-web`,
+        },
       ]);
       expect(await base.fs.exists(`${dir}/manifest.json`)).toBe(false);
     });
@@ -890,7 +957,15 @@ describe("buildVersion", () => {
     const pieceOf = async (nodeId: string): Promise<string> => {
       const laid = await layDown(agentsFlow(), {
         home,
-        workspace: { id: firstId, name: request.name, repo, base: "main", values: request.values },
+        workspace: {
+          id: firstId,
+          name: request.name,
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          branchCreated: true,
+          values: request.values,
+        },
       });
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
@@ -1019,6 +1094,7 @@ describe("buildVersion", () => {
       repo,
       base: "main",
       branch: "flowdeck/fix-login-0f3a9c2e",
+      create: true,
       path: `${dir()}/carousell-web`,
     });
 
@@ -1112,11 +1188,24 @@ describe("buildVersion", () => {
       });
     });
 
-    const laidDownBeforeRestart = async (t: ReturnType<typeof traced>, worktreeLeft: boolean) => {
+    const laidDownBeforeRestart = async (
+      t: ReturnType<typeof traced>,
+      worktreeLeft: boolean,
+      sessionBranch?: { branch: string; branchCreated: boolean },
+    ) => {
       const laid = await layDown(agentsFlow(), {
         home,
         kitVersion: kit.version,
-        workspace: { id: firstId, name: request.name, repo, base: "main", values: request.values },
+        workspace: {
+          id: firstId,
+          name: request.name,
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          branchCreated: true,
+          ...sessionBranch,
+          values: request.values,
+        },
       });
       if (!laid.ok) throw new Error("the flow does not lay down");
       for (const file of laid.files) await t.fs.writeFile(`${dir()}/${file.path}`, file.content);
@@ -1142,6 +1231,7 @@ describe("buildVersion", () => {
           repo,
           base: "main",
           values: request.values,
+          ...sessionBranch,
         },
         { type: "step", step: 3, status: "running", round: 1 },
       ];
@@ -1208,6 +1298,50 @@ describe("buildVersion", () => {
       expect(t.worktree.calls).toEqual([]);
       expect(t.worktree.removed).toEqual([cut()]);
       expect(await t.fs.exists(`${dir()}/manifest.json`)).toBe(false);
+    });
+
+    it("resumes a build on the branch its session names, recording it with that branch", async () => {
+      const t = traced();
+      const { resumeRun } = await laidDownBeforeRestart(t, true, {
+        branch: "feat-y",
+        branchCreated: false,
+      });
+
+      const result = await resumeRun();
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(t.store.builds()).toEqual([
+        expect.objectContaining({ branch: "feat-y", branchCreated: false }),
+      ]);
+    });
+
+    it("keeps the branch it did not create when a resumed build is stopped", async () => {
+      const stopping = new AbortController();
+      const t = traced({ signal: stopping.signal });
+      const { resumeRun } = await laidDownBeforeRestart(t, true, {
+        branch: "feat-y",
+        branchCreated: false,
+      });
+      const turn = t.deps.agents.turn;
+      t.deps.agents.turn = async (name, text, onCall) => {
+        stopping.abort();
+        return turn(name, text, onCall);
+      };
+
+      await resumeRun();
+
+      expect(t.worktree.removed).toEqual([{ ...cut(), branch: "feat-y", create: false }]);
+    });
+
+    it("resumes a build whose session names no branch on the branch it was cut on before", async () => {
+      const t = traced();
+      const { resumeRun } = await laidDownBeforeRestart(t, true);
+
+      await resumeRun();
+
+      expect(t.store.builds()).toEqual([
+        expect.objectContaining({ branch: "flowdeck/fix-login-0f3a9c2e", branchCreated: true }),
+      ]);
     });
 
     const withLoose = (source: Flow): Flow => ({
@@ -1536,6 +1670,8 @@ describe("buildVersion", () => {
             name: request.name,
             repo,
             base: "main",
+            branch: "flowdeck/fix-login-0f3a9c2e",
+            branchCreated: true,
             values: request.values,
           },
         });
@@ -2000,6 +2136,147 @@ describe("buildVersion", () => {
     });
   });
 
+  describe("the build's branch", () => {
+    const releaseFlow = () => ticketFlow({ ...ticketConfig, base: "release" });
+
+    const built = async (branch: BuildRequest["branch"], script?: FakeBuildScript) => {
+      const t = setup({
+        flows: [releaseFlow()],
+        branches: ["main", "release", "feat-y"],
+        ...(script === undefined ? {} : { script }),
+      });
+      const given = {
+        name: "fix-login",
+        repo,
+        values: { ticket: "FD-1" },
+        ...(branch === undefined ? {} : { branch }),
+      };
+      const started = await startBuild(releaseFlow(), given, t.deps);
+      if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
+      const result = await runBuild(started, releaseFlow(), given, t.deps).catch(
+        (error: unknown) => error,
+      );
+      const events = eventsOf(t.store, started.pendingId);
+      return { ...t, result, events, path: `${home}/workspaces/${firstId}/carousell-web` };
+    };
+
+    it("cuts the worktree on an existing branch without creating it, with the base step 1 resolves", async () => {
+      const { worktree, result, path } = await built({ mode: "existing", name: "feat-y" });
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(worktree.calls).toEqual([
+        { repo, base: "release", branch: "feat-y", create: false, path },
+      ]);
+    });
+
+    it("names an existing branch, not created, on the worktree and session events and the recorded build", async () => {
+      const { store, events, path } = await built({ mode: "existing", name: "feat-y" });
+
+      expect(events.find((event) => event.type === "worktree")).toEqual({
+        type: "worktree",
+        status: "done",
+        path,
+        branch: "feat-y",
+        base: "release",
+        branchCreated: false,
+      });
+      expect(events.find((event) => event.type === "session")).toEqual(
+        expect.objectContaining({ branch: "feat-y", branchCreated: false, base: "release" }),
+      );
+      expect(store.builds()).toEqual([
+        expect.objectContaining({ branch: "feat-y", branchCreated: false, base: "release" }),
+      ]);
+    });
+
+    it("cuts a new branch with the name and base the request gives, over the blueprint's base", async () => {
+      const { worktree, store, events, path } = await built({
+        mode: "new",
+        name: "flowdeck/fix-login",
+        base: "main",
+      });
+
+      expect(worktree.calls).toEqual([
+        { repo, base: "main", branch: "flowdeck/fix-login", create: true, path },
+      ]);
+      expect(events.find((event) => event.type === "session")).toEqual(
+        expect.objectContaining({ branch: "flowdeck/fix-login", branchCreated: true }),
+      );
+      expect(store.builds()).toEqual([
+        expect.objectContaining({
+          branch: "flowdeck/fix-login",
+          branchCreated: true,
+          base: "main",
+        }),
+      ]);
+    });
+
+    it("keeps an existing branch when the build fails", async () => {
+      const { worktree, path } = await built(
+        { mode: "existing", name: "feat-y" },
+        { failTurn: "rate_limit" },
+      );
+
+      expect(worktree.removed).toEqual([
+        { repo, base: "release", branch: "feat-y", create: false, path },
+      ]);
+    });
+
+    it("cuts a request with no branch on the name builds had before, created", async () => {
+      const { worktree, store } = await built(undefined);
+
+      expect(worktree.calls).toEqual([
+        expect.objectContaining({ branch: "flowdeck/fix-login-0f3a9c2e", create: true }),
+      ]);
+      expect(store.builds()).toEqual([
+        expect.objectContaining({ branch: "flowdeck/fix-login-0f3a9c2e", branchCreated: true }),
+      ]);
+    });
+
+    describe("refuses, writing, adding and recording nothing", () => {
+      it.each<[string, NonNullable<BuildRequest["branch"]>, string]>([
+        [
+          "a new branch whose name git refuses",
+          { mode: "new", name: "fix..login", base: "main" },
+          "fix..login is not a valid branch name.",
+        ],
+        [
+          "an existing branch whose name git refuses",
+          { mode: "existing", name: "feat y" },
+          "feat y is not a valid branch name.",
+        ],
+        [
+          "a new branch that already exists locally",
+          { mode: "new", name: "feat-y", base: "main" },
+          "Branch feat-y already exists. Pick another name, or choose Existing branch.",
+        ],
+        [
+          "an existing branch that is not a local branch",
+          { mode: "existing", name: "feat-z" },
+          "Branch feat-z does not exist locally.",
+        ],
+        [
+          "an existing branch checked out in another folder",
+          { mode: "existing", name: "feat-y" },
+          "Branch feat-y is checked out in /work/feat-y-checkout. Switch that checkout to another branch, or pick a new branch.",
+        ],
+      ])("%s", async (_label, branch, message) => {
+        const { store, fs, worktree, deps } = setup({
+          branches: ["main", "feat-y"],
+          checkedOut: { main: repo, "feat-y": "/work/feat-y-checkout" },
+        });
+        const result = await buildVersion(
+          v1,
+          { name: "fix-login", repo, values: { ticket: "FD-1" }, branch },
+          deps,
+        );
+
+        expect(result).toEqual({ ok: false, errors: [{ rule: "build-branch", message }] });
+        expect(store.listPendingBuilds()).toEqual([]);
+        expectNothingDone(store, fs, worktree);
+      });
+    });
+  });
+
   describe("refuses, writing, adding and recording nothing", () => {
     it.each(["Fix-Login", "fix_login", "fix login", "-fix", "fix-", "fix--login", ""])(
       "the name %j, which is not kebab-case",
@@ -2022,6 +2299,8 @@ describe("buildVersion", () => {
         name: "fix-login",
         repo,
         base: "main",
+        branch: "flowdeck/fix-login",
+        branchCreated: true,
         values: {},
         dir: `${home}/workspaces/older`,
         files: [],
@@ -2290,7 +2569,15 @@ describe("buildVersion", () => {
     const piecesOf = async (source: Flow, nodeIds: readonly string[]) => {
       const laid = await layDown(source, {
         home,
-        workspace: { id: firstId, name: request.name, repo, base: "main", values: request.values },
+        workspace: {
+          id: firstId,
+          name: request.name,
+          repo,
+          base: "main",
+          branch: "flowdeck/fix-login-0f3a9c2e",
+          branchCreated: true,
+          values: request.values,
+        },
       });
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
@@ -2371,6 +2658,27 @@ describe("buildVersion", () => {
       });
       expect(store.listPendingBuilds()).toEqual([]);
     });
+  });
+});
+
+describe("buildInputsSchema", () => {
+  const values = { ticket: "FD-1" };
+
+  it.each([
+    ["no branch, as saved before builds chose one", { values, repo, base: "main" }],
+    [
+      "a new branch",
+      { values, repo, branch: { mode: "new", name: "flowdeck/fix-login", base: "main" } },
+    ],
+    ["an existing branch", { values, repo, branch: { mode: "existing", name: "feat-y" } }],
+  ])("reads inputs with %s", (_label, inputs) => {
+    expect(buildInputsSchema.parse(inputs)).toEqual(inputs);
+  });
+
+  it("refuses a branch of an unknown mode", () => {
+    expect(
+      buildInputsSchema.safeParse({ values, branch: { mode: "remote", name: "feat-y" } }).success,
+    ).toBe(false);
   });
 });
 

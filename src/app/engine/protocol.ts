@@ -35,6 +35,7 @@ export type EngineRequest = {
     | "answer-wait"
     | "workspace-info"
     | "list-branches"
+    | "checked-out-branches"
     | "delete-build"
     | "doctor-worktrees"
     | "default-branch"

@@ -25,6 +25,8 @@ const build = (id: string, name: string, version: number): NewBuild => ({
   name,
   repo: "/repos/app",
   base: "main",
+  branch: `flowdeck/${name}-${id.slice(0, 8)}`,
+  branchCreated: true,
   values: { ticket: "FD-1" },
   dir: `${home}/workspaces/${id}`,
   source: { flowId: "flow-1", version },
@@ -38,6 +40,8 @@ const oldBuild: BuildRecord = {
   name: null,
   repo: null,
   base: null,
+  branch: null,
+  branchCreated: null,
   values: null,
   deletedAt: null,
   dir: `${home}/builds/oldhash1`,
@@ -80,11 +84,18 @@ const setup = ({
   files = workspaceFiles,
   fs = new FakeFileSystem(files),
   worktree = new FakeWorktree({ dirty: [liveWorktree], unpushed: [liveBranch] }),
-}: { files?: Record<string, string>; fs?: FakeFileSystem; worktree?: FakeWorktree } = {}) => {
+  builds = [],
+}: {
+  files?: Record<string, string>;
+  fs?: FakeFileSystem;
+  worktree?: FakeWorktree;
+  builds?: NewBuild[];
+} = {}) => {
   const runs = new StoreWithOldBuild({ now: () => new Date(deletedAtTime) });
   runs.recordBuild(live);
   runs.recordBuild(gone);
   runs.deleteBuild(gone.id);
+  for (const added of builds) runs.recordBuild(added);
   const options: EngineHandlerOptions = {
     version: "1.2.3",
     openStores: () => ({ runs, flows: new FakeFlowStore() }),
@@ -203,6 +214,29 @@ describe("engine build tools", () => {
         repo: "/repos/app",
         workspace: { path: liveDir, exists: false, tree: [] },
         worktree: { path: liveWorktree, exists: false, dirty: null, unpushed: null },
+      });
+    });
+
+    it("asks git about the branch the build stored, not one made from its name", async () => {
+      const onFeatY = {
+        ...build("feat1234abcd", "feat", 1),
+        branch: "feat-y",
+        branchCreated: false,
+      };
+      const featWorktree = `${onFeatY.dir}/app`;
+      const handler = setup({
+        files: {
+          ...workspaceFiles,
+          [`${featWorktree}/.git`]: "gitdir: /repos/app/.git/worktrees/app",
+        },
+        worktree: new FakeWorktree({ unpushed: ["feat-y"] }),
+        builds: [onFeatY],
+      });
+
+      const read = await call(handler, "assistant-read-build", { id: onFeatY.id });
+
+      expect(read).toMatchObject({
+        worktree: { path: featWorktree, exists: true, dirty: false, unpushed: true },
       });
     });
 

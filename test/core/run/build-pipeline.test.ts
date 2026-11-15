@@ -416,6 +416,39 @@ describe("buildPipelineOf", () => {
       expect(pipeline.header.model).toBeUndefined();
       expect(pipeline.header.cost).toBeUndefined();
     });
+    const cutOn = (branchCreated: boolean | undefined) =>
+      buildPipelineOf(
+        pending(),
+        stored([
+          ...laidDown.filter(([, event]) => event.type !== "worktree"),
+          [
+            160,
+            {
+              type: "worktree",
+              status: "done",
+              ...worktree,
+              ...(branchCreated === undefined ? {} : { branchCreated }),
+            },
+          ],
+        ]),
+        [],
+      ).header;
+
+    it("shows the branch and no base for a worktree on a branch it did not create", () => {
+      const header = cutOn(false);
+
+      expect(header.branch).toBe(worktree.branch);
+      expect(header.base ?? null).toBeNull();
+    });
+
+    it.each([
+      ["recorded before builds said whether they made the branch", undefined],
+      ["on a branch it created", true],
+    ])("shows the branch and its base for a worktree %s", (_label, branchCreated) => {
+      expect(cutOn(branchCreated)).toEqual(
+        expect.objectContaining({ branch: worktree.branch, base: worktree.base }),
+      );
+    });
   });
 
   describe("needs you", () => {

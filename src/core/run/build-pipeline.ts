@@ -151,7 +151,7 @@ const headerOf = (
     (event): event is Stored<"worktree"> => event.type === "worktree",
   );
   const cost = events.findLast((event): event is Stored<"cost"> => event.type === "cost");
-  const base = worktree?.base ?? session?.base;
+  const base = worktree?.branchCreated === false ? undefined : (worktree?.base ?? session?.base);
   return {
     name: pending.name,
     startedAt: pending.startedAt,

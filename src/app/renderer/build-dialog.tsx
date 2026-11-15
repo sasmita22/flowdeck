@@ -9,7 +9,13 @@ import { ModelField } from "./fields/model-field.js";
 import { RepoField } from "./fields/repo-field.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
-import { selectCanBuild, type BuildDialog as Dialog, type RunState } from "./run-store.js";
+import {
+  selectCanBuild,
+  selectExistingBranches,
+  type BranchMode,
+  type BuildDialog as Dialog,
+  type RunState,
+} from "./run-store.js";
 import { buildDialogTestIds, controlTestIds } from "./test-ids.js";
 
 const fieldStyle: CSSProperties = {
@@ -60,6 +66,123 @@ function VariableField({
   );
 }
 
+const choiceRowStyle: CSSProperties = { display: "flex", gap: 8 };
+
+const existingListStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  maxHeight: 160,
+  overflowY: "auto",
+};
+
+const existingBranchStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 2,
+  textAlign: "left",
+};
+
+const branchNameStyle: CSSProperties = { minWidth: 0, overflowWrap: "anywhere" };
+
+const reasonStyle: CSSProperties = {
+  minWidth: 0,
+  color: "var(--muted)",
+  fontSize: "var(--fs-xs)",
+  overflowWrap: "anywhere",
+};
+
+const branchModes: readonly { mode: BranchMode; label: string; testId: string }[] = [
+  { mode: "new", label: "New branch", testId: buildDialogTestIds.branchNew },
+  { mode: "existing", label: "Existing branch", testId: buildDialogTestIds.branchExisting },
+];
+
+const choiceClass = (chosen: boolean) => (chosen ? "fd-btn fd-btn-primary" : "fd-btn");
+
+function ExistingBranchList({ dialog, run }: { dialog: Dialog; run: StoreApi<RunState> }) {
+  const existing = selectExistingBranches({ buildDialog: dialog });
+  return (
+    <div style={existingListStyle} role="group" aria-label="Existing branch">
+      {existing.map(({ name, reason }) => {
+        const chosen = dialog.existingBranch === name;
+        return (
+          <button
+            key={name}
+            type="button"
+            className={choiceClass(chosen)}
+            style={existingBranchStyle}
+            data-testid={buildDialogTestIds.existingBranch(name)}
+            aria-pressed={chosen}
+            disabled={reason !== null}
+            title={reason ?? undefined}
+            onClick={() => run.getState().editBuild({ existingBranch: name })}
+          >
+            <span style={branchNameStyle}>{name}</span>
+            {reason !== null && <span style={reasonStyle}>{reason}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BranchChoice({
+  dialog,
+  run,
+  branches,
+}: {
+  dialog: Dialog;
+  run: StoreApi<RunState>;
+  branches: StoreApi<BranchState>;
+}) {
+  const edit = run.getState().editBuild;
+  return (
+    <>
+      <div style={fieldStyle}>
+        Branch
+        <div style={choiceRowStyle} role="group" aria-label="Branch">
+          {branchModes.map(({ mode, label, testId }) => (
+            <button
+              key={mode}
+              type="button"
+              className={choiceClass(dialog.branchMode === mode)}
+              data-testid={testId}
+              aria-pressed={dialog.branchMode === mode}
+              onClick={() => edit({ branchMode: mode })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {dialog.branchMode === "new" ? (
+        <>
+          <BranchField
+            repo={dialog.repo}
+            value={dialog.base}
+            branches={branches}
+            testId={buildDialogTestIds.base}
+            infoTestId={buildDialogTestIds.baseInfo}
+            errorTestId={buildDialogTestIds.branchesError}
+            onChange={(base) => edit({ base })}
+          />
+          <label style={fieldStyle}>
+            Branch name
+            <input
+              data-testid={buildDialogTestIds.branchName}
+              value={dialog.branchName}
+              onChange={(event) => edit({ branchName: event.target.value })}
+            />
+          </label>
+        </>
+      ) : (
+        <ExistingBranchList dialog={dialog} run={run} />
+      )}
+    </>
+  );
+}
+
 function BuildForm({
   dialog,
   canBuild,
@@ -102,15 +225,7 @@ function BuildForm({
         onCommit={setRepo}
         onBrowse={() => void branches.getState().browse(setRepo)}
       />
-      <BranchField
-        repo={dialog.repo}
-        value={dialog.base}
-        branches={branches}
-        testId={buildDialogTestIds.base}
-        infoTestId={buildDialogTestIds.baseInfo}
-        errorTestId={buildDialogTestIds.branchesError}
-        onChange={(base) => edit({ base })}
-      />
+      <BranchChoice dialog={dialog} run={run} branches={branches} />
       <ModelField
         label="Build model"
         value={dialog.buildModel}

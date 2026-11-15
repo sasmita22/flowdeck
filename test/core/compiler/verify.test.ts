@@ -21,6 +21,8 @@ const workspace: BuildDeps["workspace"] = {
   name: "fix-login",
   repo: "/work/carousell-web",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: {},
 };
 const otherHash = "0".repeat(64);

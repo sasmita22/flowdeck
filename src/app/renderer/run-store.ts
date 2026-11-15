@@ -5,6 +5,11 @@ import { openedFlowSchema } from "../../core/flow/flow-store.js";
 import { mainFlow } from "../../core/flow/main-flow.js";
 import type { BuildConfig, Variable } from "../../core/flow/schema.js";
 import { unsetVariables } from "../../core/flow/variables.js";
+import {
+  isValidBranchName,
+  recommendedBranch,
+  type RequestBranch,
+} from "../../core/run/branch-name.js";
 import { costReportSchema, type CostReport } from "../../core/run/cost.js";
 import { deleteBuildResultSchema, type KeptAfterDelete } from "../../core/run/delete-build.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
@@ -33,6 +38,8 @@ export type RunBridge = Pick<
   | "runCost"
   | "deleteBuild"
   | "defaultBranch"
+  | "listBranches"
+  | "checkedOutBranches"
   | "openFlow"
 >;
 
@@ -41,6 +48,10 @@ export type RunChoice = { auto: boolean };
 export type RunDialog = { buildId: string };
 
 export type IgnoredNode = { id: string; label: string };
+
+export type BranchMode = "new" | "existing";
+
+export type ExistingBranch = { name: string; reason: string | null };
 
 export type BuildDialog = {
   flowId: string;
@@ -51,10 +62,23 @@ export type BuildDialog = {
   variables: Variable[];
   values: Record<string, string | boolean>;
   buildModel: string;
+  branches: string[];
+  checkedOut: Record<string, string>;
+  branchMode: BranchMode;
+  branchName: string;
+  branchNameEdited: boolean;
+  existingBranch: string | null;
   ignored: readonly IgnoredNode[];
   step: "form" | "confirm";
   error: string | null;
 };
+
+type BuildDialogEdit = Partial<
+  Pick<
+    BuildDialog,
+    "name" | "repo" | "base" | "buildModel" | "branchMode" | "branchName" | "existingBranch"
+  >
+>;
 
 export type BuildSource = { flowId: string; version: number; buildConfig: BuildConfig };
 
@@ -78,7 +102,7 @@ export type RunState = {
   connect(): Promise<void>;
   view(runId: string): Promise<void>;
   openBuild(source?: BuildSource): Promise<void>;
-  editBuild(patch: Partial<Pick<BuildDialog, "name" | "repo" | "base" | "buildModel">>): void;
+  editBuild(patch: BuildDialogEdit): void;
   setValue(name: string, value: string | boolean): void;
   confirmBuild(): Promise<string | null>;
   cancelBuild(): void;
@@ -127,13 +151,33 @@ export const selectRunHint = (card: { old: boolean; blueprint: string }): string
     : "Make a new build from this blueprint";
 };
 
+export const selectExistingBranches = (run: Pick<RunState, "buildDialog">): ExistingBranch[] => {
+  const dialog = run.buildDialog;
+  if (dialog === null) return [];
+  return dialog.branches.map((name) => {
+    const path = dialog.checkedOut[name];
+    return { name, reason: path === undefined ? null : `Checked out in ${path}` };
+  });
+};
+
+const chosenBranch = (dialog: BuildDialog): RequestBranch | null => {
+  if (dialog.branchMode === "new") {
+    const name = dialog.branchName;
+    return isValidBranchName(name) ? { mode: "new", name, base: dialog.base } : null;
+  }
+  const name = dialog.existingBranch;
+  const free = name !== null && dialog.branches.includes(name) && !(name in dialog.checkedOut);
+  return free ? { mode: "existing", name } : null;
+};
+
 export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
   const dialog = run.buildDialog;
   if (dialog === null) return false;
   return (
     dialog.name.trim() !== "" &&
     dialog.repo !== "" &&
-    dialog.base !== "" &&
+    (dialog.branchMode === "existing" || dialog.base !== "") &&
+    chosenBranch(dialog) !== null &&
     unsetVariables({ variables: dialog.variables }, dialog.values).length === 0
   );
 };
@@ -235,6 +279,25 @@ export const createRunStore = ({
       return answer.success ? answer.data : "";
     };
 
+    const branchesSchema = z.array(z.string());
+    const checkedOutSchema = z.record(z.string(), z.string());
+
+    const repoBranches = async (
+      repo: string,
+    ): Promise<Pick<BuildDialog, "branches" | "checkedOut">> => {
+      if (repo === "") return { branches: [], checkedOut: {} };
+      const [branches, checkedOut] = await Promise.all([
+        bridge.listBranches({ repo }).then((answer) => branchesSchema.parse(answer)),
+        bridge.checkedOutBranches({ repo }).then((answer) => checkedOutSchema.parse(answer)),
+      ]).catch(() => [[], {}] as const);
+      return { branches: [...branches], checkedOut: { ...checkedOut } };
+    };
+
+    const followName = (dialog: BuildDialog): BuildDialog =>
+      dialog.branchNameEdited
+        ? dialog
+        : { ...dialog, branchName: recommendedBranch(dialog.name, dialog.branches) };
+
     const ignoredIn = async (flowId: string): Promise<IgnoredNode[]> => {
       const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
       const main = flow ? mainFlow(flow) : undefined;
@@ -321,18 +384,29 @@ export const createRunStore = ({
         const opened = source ?? (await savedSource());
         if (opened === null) return;
         const { flowId, version, buildConfig } = opened;
-        const [base, ignored] = await Promise.all([startingBase(buildConfig), ignoredIn(flowId)]);
+        const repo = buildConfig.repo ?? "";
+        const [base, ignored, { branches, checkedOut }] = await Promise.all([
+          startingBase(buildConfig),
+          ignoredIn(flowId),
+          repoBranches(repo),
+        ]);
         set({
           error: null,
           buildDialog: {
             flowId,
             version,
             name: "",
-            repo: buildConfig.repo ?? "",
+            repo,
             base,
             variables: buildConfig.variables,
             values: defaults(buildConfig.variables),
             buildModel: buildConfig.buildModel ?? "",
+            branches,
+            checkedOut,
+            branchMode: "new",
+            branchName: recommendedBranch("", branches),
+            branchNameEdited: false,
+            existingBranch: null,
             ignored,
             step: "form",
             error: null,
@@ -343,8 +417,21 @@ export const createRunStore = ({
       editBuild: (patch) => {
         const { repo } = patch;
         const moved = repo !== undefined && repo !== get().buildDialog?.repo;
-        editDialog((dialog) => ({ ...dialog, ...(moved && { base: "" }), ...patch }));
-        if (!moved || get().buildDialog?.base !== "") return;
+        editDialog((dialog) =>
+          followName({
+            ...dialog,
+            ...(moved && { base: "", branches: [], checkedOut: {}, existingBranch: null }),
+            ...patch,
+            branchNameEdited: dialog.branchNameEdited || patch.branchName !== undefined,
+          }),
+        );
+        if (!moved) return;
+        void repoBranches(repo).then((loaded) => {
+          const dialog = get().buildDialog;
+          if (dialog?.repo !== repo) return;
+          set({ buildDialog: followName({ ...dialog, ...loaded }) });
+        });
+        if (get().buildDialog?.base !== "") return;
         void startingBase({ repo, variables: [] })
           .catch(() => "")
           .then((base) => {
@@ -360,6 +447,8 @@ export const createRunStore = ({
       confirmBuild: async () => {
         const dialog = get().buildDialog;
         if (dialog === null || !selectCanBuild(get()) || get().starting) return null;
+        const branch = chosenBranch(dialog);
+        if (branch === null) return null;
         if (dialog.step === "form" && dialog.ignored.length > 0) {
           set({ buildDialog: { ...dialog, step: "confirm", error: null } });
           return null;
@@ -378,7 +467,8 @@ export const createRunStore = ({
             version,
             name,
             repo,
-            base,
+            ...(base === "" ? {} : { base }),
+            branch,
             values,
             ...(buildModel === "" ? {} : { buildModel }),
           });

@@ -26,8 +26,20 @@ describe("FakeWorktree", () => {
 
   it("records each call's options in order", async () => {
     const worktree = new FakeWorktree();
-    const first = { repo: "/r", base: "main", branch: "flowdeck/a", path: join(root, "a") };
-    const second = { repo: "/r", base: "dev", branch: "flowdeck/b", path: join(root, "b") };
+    const first = {
+      repo: "/r",
+      base: "main",
+      branch: "flowdeck/a",
+      path: join(root, "a"),
+      create: true,
+    };
+    const second = {
+      repo: "/r",
+      base: "dev",
+      branch: "flowdeck/b",
+      path: join(root, "b"),
+      create: false,
+    };
 
     await worktree.add(first);
     await worktree.add(second);
@@ -38,14 +50,26 @@ describe("FakeWorktree", () => {
   it("creates the worktree folder", async () => {
     const path = join(root, "worktrees", "abcd1234");
 
-    await new FakeWorktree().add({ repo: "/r", base: "main", branch: "flowdeck/x", path });
+    await new FakeWorktree().add({
+      repo: "/r",
+      base: "main",
+      branch: "flowdeck/x",
+      path,
+      create: true,
+    });
 
     expect((await stat(path)).isDirectory()).toBe(true);
   });
 
   it("rejects with the scripted failure, records the call and creates nothing", async () => {
     const worktree = new FakeWorktree({ failWith: "Base branch nope not found in /r" });
-    const options = { repo: "/r", base: "nope", branch: "flowdeck/x", path: join(root, "x") };
+    const options = {
+      repo: "/r",
+      base: "nope",
+      branch: "flowdeck/x",
+      path: join(root, "x"),
+      create: true,
+    };
 
     await expect(worktree.add(options)).rejects.toThrow("Base branch nope not found in /r");
     expect(worktree.calls).toEqual([options]);
@@ -55,12 +79,42 @@ describe("FakeWorktree", () => {
   it("records each removal and deletes the worktree folder", async () => {
     const worktree = new FakeWorktree();
     const path = join(root, "worktrees", "abcd1234");
-    const options = { repo: "/r", base: "main", branch: "flowdeck/abcd1234", path };
+    const options = { repo: "/r", base: "main", branch: "flowdeck/abcd1234", path, create: true };
     await worktree.add(options);
 
     expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "removed" });
 
     expect(worktree.removed).toEqual([options]);
+    expect(await exists(path)).toBe(false);
+  });
+
+  it("holds a branch it creates until the worktree is removed", async () => {
+    const worktree = new FakeWorktree();
+    const options = {
+      repo: "/r",
+      base: "main",
+      branch: "flowdeck/a",
+      path: join(root, "a"),
+      create: true,
+    };
+
+    await worktree.add(options);
+    expect(worktree.branches).toEqual(new Set(["flowdeck/a"]));
+
+    await worktree.remove(options);
+    expect(worktree.branches).toEqual(new Set());
+  });
+
+  it("keeps a branch it did not create when removing the worktree", async () => {
+    const worktree = new FakeWorktree();
+    const path = join(root, "feat-y");
+    const options = { repo: "/r", base: "main", branch: "feat-y", path, create: false };
+    await worktree.add(options);
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "removed", branch: "kept" });
+
+    expect(worktree.removed).toEqual([options]);
+    expect(worktree.branches).toEqual(new Set(["feat-y"]));
     expect(await exists(path)).toBe(false);
   });
 

@@ -82,6 +82,7 @@ describe("preload run-state wiring", () => {
     ["deleteBuild", "flowdeck:delete-build", { buildId: "b1" }],
     ["doctorWorktrees", "flowdeck:doctor-worktrees", undefined],
     ["defaultBranch", "flowdeck:default-branch", { repo: "/code/shop" }],
+    ["checkedOutBranches", "flowdeck:checked-out-branches", { repo: "/code/shop" }],
     ["listRuns", "flowdeck:list-runs", undefined],
     ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
     ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
@@ -122,6 +123,7 @@ describe("preload run-state wiring", () => {
     ["delete-build", "deleteBuild"],
     ["doctor-worktrees", "doctorWorktrees"],
     ["default-branch", "defaultBranch"],
+    ["checked-out-branches", "checkedOutBranches"],
     ["build-progress-list", "listBuildProgress"],
     ["build-stop", "stopBuild"],
     ["build-activity", "getBuildActivity"],
@@ -158,6 +160,7 @@ describe("preload run-state wiring", () => {
       name: string;
       repo?: string;
       base?: string;
+      branch?: { mode: "new"; name: string; base: string } | { mode: "existing"; name: string };
       values: Record<string, string | boolean>;
       buildModel?: string;
     }>();

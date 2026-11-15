@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorktree, repoFolder } from "../../../src/core/run/workspace.js";
+import { buildWorktree, repoFolder, worktreePath } from "../../../src/core/run/workspace.js";
 
 describe("repoFolder", () => {
   it.each([
@@ -12,17 +12,29 @@ describe("repoFolder", () => {
   });
 });
 
+describe("worktreePath", () => {
+  it("puts the worktree in the build's workspace under the repo's folder", () => {
+    expect(worktreePath("/fd/workspaces/0f3a9c2e", "/work/carousell-web/")).toBe(
+      "/fd/workspaces/0f3a9c2e/carousell-web",
+    );
+  });
+});
+
 describe("buildWorktree", () => {
-  it("puts the branch under flowdeck/ with the build's name and short id, and the worktree in the workspace under the repo's folder", () => {
+  it.each([
+    ["feat-y", false],
+    ["flowdeck/fix-login", true],
+  ])("keeps the branch %s it is given, with create %s, at the derived path", (branch, create) => {
     expect(
       buildWorktree({
-        id: "0f3a9c2e-1111-2222-3333-444455556666",
-        name: "fix-login",
         repo: "/work/carousell-web/",
         dir: "/fd/workspaces/0f3a9c2e-1111-2222-3333-444455556666",
+        branch,
+        create,
       }),
     ).toEqual({
-      branch: "flowdeck/fix-login-0f3a9c2e",
+      branch,
+      create,
       path: "/fd/workspaces/0f3a9c2e-1111-2222-3333-444455556666/carousell-web",
     });
   });

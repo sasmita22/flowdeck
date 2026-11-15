@@ -10,6 +10,8 @@ const workspace = {
   name: "fix-login",
   repo: "/work/repo",
   base: "main",
+  branch: "flowdeck/fix-login",
+  branchCreated: true,
   values: {},
 };
 const jira = { type: "http", url: "https://mcp.example.com/jira" };

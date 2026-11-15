@@ -343,23 +343,30 @@ export class FakeStore implements Store {
 
   private allBuilds(): BuildRecord[] {
     return this.buildRecords
-      .map(({ id, hash, name, repo, base, values, dir, source }, index): BuildRecord => {
-        const snapshot = this.snapshotOf(id);
-        return {
-          id,
-          hash,
-          name,
-          repo,
-          base,
-          values: copy(values),
-          deletedAt: this.deletedAt.get(id) ?? null,
-          dir,
-          createdAt: index + 1,
-          ...(source === undefined ? {} : { source: copy(source) }),
-          blueprintName: snapshot?.blueprintName ?? null,
-          blueprintVersion: snapshot?.version ?? null,
-        };
-      })
+      .map(
+        (
+          { id, hash, name, repo, base, branch, branchCreated, values, dir, source },
+          index,
+        ): BuildRecord => {
+          const snapshot = this.snapshotOf(id);
+          return {
+            id,
+            hash,
+            name,
+            repo,
+            base,
+            branch,
+            branchCreated,
+            values: copy(values),
+            deletedAt: this.deletedAt.get(id) ?? null,
+            dir,
+            createdAt: index + 1,
+            ...(source === undefined ? {} : { source: copy(source) }),
+            blueprintName: snapshot?.blueprintName ?? null,
+            blueprintVersion: snapshot?.version ?? null,
+          };
+        },
+      )
       .reverse();
   }
 
