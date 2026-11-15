@@ -36,6 +36,7 @@ export type EngineRequest = {
     | "retry-node"
     | "resume-run"
     | "run-cost"
+    | "run-pipeline"
     | "answer-wait"
     | "workspace-info"
     | "list-branches"

@@ -39,6 +39,7 @@ const newBuild = (overrides: Partial<NewBuild> = {}): NewBuild => ({
     },
     { nodeId: "s1", type: "script", config: { command: "npm" } },
   ],
+  manifest: "{}",
   ...overrides,
 });
 

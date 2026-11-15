@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -10,6 +11,10 @@ import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import { backfillSnapshots } from "../../../src/core/run/backfill-snapshots.js";
 import type { NewBuild } from "../../../src/ports/store.js";
 import { agent, flow } from "../../fixtures/flow-builders.js";
+
+const migrationsDir = fileURLToPath(
+  new URL("../../../src/adapters/sqlite/migrations/", import.meta.url),
+);
 
 const savedFlow = flow([agent("a1")], []);
 
@@ -25,15 +30,16 @@ const newBuild: NewBuild = {
   dir: "/fd/workspaces/b1",
   files: [],
   nodes: [],
+  manifest: '{"version":1,"hash":"h1"}',
 };
 
 const copyRow = (db: Database.Database, pendingId: string | null, buildId: string | null) =>
   db
     .prepare(
-      `INSERT INTO build_snapshots (id, pending_id, build_id, blueprint_name, version, flow_json, svg, created_at)
+      `INSERT INTO build_snapshots (id, pending_id, build_id, blueprint_name, version, svg, created_at)
        SELECT CASE typeof(id) WHEN 'integer' THEN (SELECT max(id) + 1 FROM build_snapshots)
                               ELSE lower(hex(randomblob(16))) END,
-              ?, ?, blueprint_name, version, flow_json, svg, created_at
+              ?, ?, blueprint_name, version, svg, created_at
          FROM build_snapshots LIMIT 1`,
     )
     .run(pendingId, buildId);
@@ -70,7 +76,7 @@ describe("build snapshots", () => {
         blueprint: { name: "Report", version: 1 },
       },
       startedAt: 1_000,
-      snapshot: { blueprintName: "Report", version: 1, flow: savedFlow, svg: flowSvg(savedFlow) },
+      snapshot: { blueprintName: "Report", version: 1, svg: flowSvg(savedFlow) },
     });
     if (start.kind !== "started") throw new Error(`expected a start, got ${start.reason}`);
     return { db, runs, pendingId: start.pendingId };
@@ -79,9 +85,18 @@ describe("build snapshots", () => {
   const rows = (db: Database.Database) =>
     db
       .prepare(
-        "SELECT pending_id, build_id, blueprint_name, version, flow_json, svg, created_at FROM build_snapshots ORDER BY rowid",
+        "SELECT pending_id, build_id, blueprint_name, version, svg, created_at FROM build_snapshots ORDER BY rowid",
       )
       .all();
+
+  const stage = async (name: string, before: string) => {
+    const dir = join(folder, name);
+    await mkdir(dir);
+    for (const file of (await readdir(migrationsDir)).filter((each) => each < before)) {
+      await copyFile(join(migrationsDir, file), join(dir, file));
+    }
+    return dir;
+  };
 
   beforeEach(async () => {
     folder = await mkdtemp(join(tmpdir(), "fd-snapshots-"));
@@ -93,11 +108,11 @@ describe("build snapshots", () => {
   });
 
   describe("a snapshot is append-only", () => {
-    it("refuses a change to its flow and its deletion, keeping the row as written", () => {
+    it("refuses a change to its picture and its deletion, keeping the row as written", () => {
       const { db } = seeded();
       const before = rows(db);
 
-      refused(() => db.prepare("UPDATE build_snapshots SET flow_json = '{}'").run());
+      refused(() => db.prepare("UPDATE build_snapshots SET svg = '<svg/>'").run());
       refused(() => db.prepare("DELETE FROM build_snapshots").run());
 
       expect(before).toHaveLength(1);
@@ -119,7 +134,6 @@ describe("build snapshots", () => {
       ["pending_id", "'other'"],
       ["blueprint_name", "'Other'"],
       ["version", "9"],
-      ["flow_json", "'{}'"],
       ["svg", "'<svg/>'"],
       ["created_at", "9"],
     ])("refuses setting the build id together with %s", (column, value) => {
@@ -146,6 +160,110 @@ describe("build snapshots", () => {
         { pending_id: "other-pending", build_id: "b9" },
       ]);
     });
+
+    it("refuses replacing a row through INSERT OR REPLACE, keeping the row as written", () => {
+      const { db, pendingId } = seeded();
+      const before = rows(db);
+
+      refused(() =>
+        db
+          .prepare(
+            `INSERT OR REPLACE INTO build_snapshots (pending_id, blueprint_name, version, svg, created_at)
+             VALUES (?, 'Other', 9, '<svg/>', 9)`,
+          )
+          .run(pendingId),
+      );
+      expect(rows(db)).toEqual(before);
+    });
+  });
+
+  it("keeps no frozen flow", () => {
+    const { db } = stores();
+
+    const columns = db.prepare("PRAGMA table_info(build_snapshots)").all() as { name: string }[];
+
+    expect(columns.map(({ name }) => name).sort()).toEqual([
+      "blueprint_name",
+      "build_id",
+      "created_at",
+      "id",
+      "pending_id",
+      "svg",
+      "version",
+    ]);
+  });
+
+  describe("migrating a database whose snapshots froze the flow", () => {
+    const seedBeforeManifests = async () => {
+      const path = join(folder, "flowdeck.db");
+      const old = openDatabase({ path, migrationsDir: await stage("to-014", "015") });
+      old
+        .prepare(
+          `INSERT INTO build_snapshots (id, pending_id, build_id, blueprint_name, version, flow_json, svg, created_at)
+           VALUES (7, 'pending-7', NULL, 'Report', 2, '{"nodes":[]}', '<svg>report</svg>', 500),
+                  (9, 'pending-9', 'b9', 'Weekly', 4, '{"nodes":[]}', '<svg>weekly</svg>', 600)`,
+        )
+        .run();
+      old.close();
+      const db = openDatabase({ path });
+      opened.push(db);
+      return db;
+    };
+
+    const all = (db: Database.Database) =>
+      db.prepare("SELECT * FROM build_snapshots ORDER BY id").all();
+
+    it("keeps every row, its id included, without the flow", async () => {
+      const db = await seedBeforeManifests();
+
+      expect(all(db)).toEqual([
+        {
+          id: 7,
+          pending_id: "pending-7",
+          build_id: null,
+          blueprint_name: "Report",
+          version: 2,
+          svg: "<svg>report</svg>",
+          created_at: 500,
+        },
+        {
+          id: 9,
+          pending_id: "pending-9",
+          build_id: "b9",
+          blueprint_name: "Weekly",
+          version: 4,
+          svg: "<svg>weekly</svg>",
+          created_at: 600,
+        },
+      ]);
+    });
+
+    it("still lets a build id be set once, and refuses any other change", async () => {
+      const db = await seedBeforeManifests();
+
+      db.exec("UPDATE build_snapshots SET build_id = 'b7' WHERE id = 7");
+
+      refused(() => db.exec("UPDATE build_snapshots SET build_id = 'b8' WHERE id = 7"));
+      refused(() => db.exec("UPDATE build_snapshots SET svg = '<svg/>' WHERE id = 9"));
+      expect(all(db)).toMatchObject([
+        { id: 7, build_id: "b7", svg: "<svg>report</svg>" },
+        { id: 9, build_id: "b9", svg: "<svg>weekly</svg>" },
+      ]);
+    });
+
+    it("still refuses deleting or replacing a row", async () => {
+      const db = await seedBeforeManifests();
+      const before = all(db);
+
+      refused(() => db.exec("DELETE FROM build_snapshots WHERE id = 7"));
+      refused(() =>
+        db.exec(
+          `INSERT OR REPLACE INTO build_snapshots (pending_id, blueprint_name, version, svg, created_at)
+           VALUES ('pending-7', 'Other', 1, '<svg/>', 1)`,
+        ),
+      );
+      expect(all(db)).toEqual(before);
+    });
   });
 
   it("keeps a build's snapshot readable once the build is deleted", () => {
@@ -165,12 +283,7 @@ describe("build snapshots", () => {
     const { flowId, version } = new SqliteFlowStore({ db: first.db }).save(savedFlow, {
       name: "Report",
     });
-    const pendingSnapshot = {
-      blueprintName: "Report",
-      version,
-      flow: savedFlow,
-      svg: flowSvg(savedFlow),
-    };
+    const pendingSnapshot = { blueprintName: "Report", version, svg: flowSvg(savedFlow) };
     const start = first.runs.startPendingBuild({
       flowId,
       version,

@@ -31,6 +31,7 @@ const bridge = (
   retryNode: vi.fn(),
   resumeRun: vi.fn(),
   runCost: vi.fn(),
+  runPipeline: vi.fn(),
   listBranches: vi.fn(),
   checkedOutBranches: vi.fn(),
   deleteBuild: vi.fn(),

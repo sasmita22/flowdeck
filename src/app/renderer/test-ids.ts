@@ -44,6 +44,9 @@ export const readoutTestIds = {
   wires: "canvas-selected-wires",
 } as const;
 
+const stageKey = (runId: string, nodeId: string, round?: number) =>
+  round === undefined ? `${runId}-${nodeId}` : `${runId}-${nodeId}-${round}`;
+
 export const pageTestIds = {
   newBlueprint: "menu-new",
   search: "menu-search",
@@ -104,8 +107,19 @@ export const pageTestIds = {
   runResult: (runId: string) => `run-result-${runId}`,
   runBack: "run-back",
   runAgain: "run-again",
-  runOpenBlueprint: "run-open-blueprint",
-  runBlueprintDeleted: "run-blueprint-deleted",
+  runStage: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-${stageKey(runId, nodeId, round)}`,
+  runStageStatus: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-status-${stageKey(runId, nodeId, round)}`,
+  runStageDetail: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-detail-${stageKey(runId, nodeId, round)}`,
+  runStageReason: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-reason-${stageKey(runId, nodeId, round)}`,
+  runStageRetry: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-retry-${stageKey(runId, nodeId, round)}`,
+  runStageReply: (runId: string, nodeId: string, round?: number) =>
+    `run-stage-reply-${stageKey(runId, nodeId, round)}`,
+  runStagesNotRecorded: "run-stages-not-recorded",
   runPageStatus: "run-page-status",
   runPageNote: "run-page-note",
   runStop: "run-stop",

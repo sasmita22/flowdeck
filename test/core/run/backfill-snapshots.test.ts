@@ -28,6 +28,7 @@ const newBuild = (id: string, source?: BuildSource): NewBuild => ({
   ...(source === undefined ? {} : { source }),
   files: [],
   nodes: [],
+  manifest: "{}",
 });
 
 const startPending = (store: Store, flowId: string, version: number, name: string) => {
@@ -65,7 +66,6 @@ describe("backfillSnapshots", () => {
       buildId: "b1",
       blueprintName: "Report renamed",
       version,
-      flow: savedFlow,
       svg: flowSvg(savedFlow),
     });
   });
@@ -83,7 +83,6 @@ describe("backfillSnapshots", () => {
       buildId: null,
       blueprintName: "Report",
       version,
-      flow: savedFlow,
       svg: flowSvg(savedFlow),
     });
   });
@@ -187,7 +186,6 @@ describe("backfillSnapshots on SQLite", () => {
       buildId: "old",
       blueprintName: "Report",
       version,
-      flow: savedFlow,
       svg: flowSvg(savedFlow),
     });
     expect(store.buildSnapshot({ buildId: "locked" })).toMatchObject({ pendingId });

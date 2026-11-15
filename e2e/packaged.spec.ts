@@ -27,7 +27,7 @@ import {
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
-import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
 import { killRunSessions } from "./run-sessions.js";
 
@@ -258,11 +258,11 @@ test("a copy launched with the minimal PATH runs a one-agent flow to done", asyn
 
   const { window, quit: quitCopy } = await launchCopy(home);
   await expect(window.getByTestId("canvas-build")).toBeVisible();
-  await buildAndRun(window, home, "packaged");
+  const runId = await runIdOf(home, await buildAndRun(window, home, "packaged"));
   expect(existsSync(fakeClaudeRan(home))).toBe(true);
 
   const runError = window.getByTestId("run-error");
-  const agentStatus = window.getByTestId("node-status-s");
+  const agentStatus = window.getByTestId(pageTestIds.runStageStatus(runId, "s"));
   await expect
     .poll(
       async () =>

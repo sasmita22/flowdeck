@@ -1,6 +1,5 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { parseFlow } from "../../core/flow/schema.js";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
 import type { VariableValues } from "../../core/flow/variables.js";
 import type { RunEvent } from "../../core/run/run-events.js";
@@ -16,6 +15,7 @@ import type {
   BuildRecord,
   BuildSnapshot,
   EventEntry,
+  ManifestGap,
   NewBuild,
   NewBuildSnapshot,
   NewPendingBuild,
@@ -96,6 +96,15 @@ type BuildRow = {
   blueprint_version: number | null;
 };
 
+const runSummaries = `SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
+                CASE WHEN runs.status = 'running' THEN NULL
+                     ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
+                (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
+                builds.flow_id, builds.version, builds.name AS build_name,
+                build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
+           FROM runs LEFT JOIN builds ON builds.id = runs.build_id
+                LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id`;
+
 const buildsWithSnapshot = `SELECT builds.id, builds.hash, builds.name, builds.repo, builds.base,
        builds.branch, builds.branch_created, builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
        builds.version, build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
@@ -166,14 +175,12 @@ type SnapshotRow = {
   build_id: string | null;
   blueprint_name: string;
   version: number;
-  flow_json: string;
   svg: string;
 };
 
 const toSnapshot = (row: SnapshotRow): BuildSnapshot => ({
   blueprintName: row.blueprint_name,
   version: row.version,
-  flow: parseFlow(JSON.parse(row.flow_json)),
   svg: row.svg,
   pendingId: row.pending_id,
   buildId: row.build_id,
@@ -265,19 +272,18 @@ export class SqliteStore implements Store {
   listRuns(): RunSummary[] {
     const rows = this.db
       .prepare(
-        `SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
-                CASE WHEN runs.status = 'running' THEN NULL
-                     ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
-                (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
-                builds.flow_id, builds.version, builds.name AS build_name,
-                build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
-           FROM runs LEFT JOIN builds ON builds.id = runs.build_id
-                LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id
+        `${runSummaries}
           WHERE builds.deleted_at IS NULL
           ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
       )
       .all() as RunSummaryRow[];
     return rows.map(toRunSummary);
+  }
+
+  findRunSummary(id: string): RunSummary | undefined {
+    const row = this.db.prepare(`${runSummaries} WHERE runs.id = ?`).get(id) as
+      RunSummaryRow | undefined;
+    return row === undefined ? undefined : toRunSummary(row);
   }
 
   append(runId: string, nodeId: string, event: RunEvent): void {
@@ -420,6 +426,9 @@ export class SqliteStore implements Store {
           build.source?.flowId ?? null,
           build.source?.version ?? null,
         );
+      this.db
+        .prepare("INSERT INTO build_manifests (build_id, manifest_json) VALUES (?, ?)")
+        .run(build.id, build.manifest);
     })();
   }
 
@@ -575,7 +584,7 @@ export class SqliteStore implements Store {
       "pendingId" in key ? ["pending_id", key.pendingId] : ["build_id", key.buildId];
     const row = this.db
       .prepare(
-        `SELECT pending_id, build_id, blueprint_name, version, flow_json, svg FROM build_snapshots WHERE ${column} = ?`,
+        `SELECT pending_id, build_id, blueprint_name, version, svg FROM build_snapshots WHERE ${column} = ?`,
       )
       .get(id) as SnapshotRow | undefined;
     return row === undefined ? null : toSnapshot(row);
@@ -614,6 +623,35 @@ export class SqliteStore implements Store {
     return this.insertSnapshot(gap, snapshot, this.now().getTime());
   }
 
+  storeManifest({ buildId, manifest }: { buildId: string; manifest: string }): void {
+    this.db
+      .prepare(
+        `INSERT INTO build_manifests (build_id, manifest_json)
+         SELECT @buildId, @manifest
+          WHERE NOT EXISTS (SELECT 1 FROM build_manifests WHERE build_id = @buildId)`,
+      )
+      .run({ buildId, manifest });
+  }
+
+  buildManifest(buildId: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT manifest_json FROM build_manifests WHERE build_id = ?")
+      .get(buildId) as { manifest_json: string } | undefined;
+    return row?.manifest_json;
+  }
+
+  listManifestGaps(): ManifestGap[] {
+    return this.db
+      .prepare(
+        `SELECT builds.id AS buildId, build_files.sha256 AS manifestSha256
+           FROM builds
+           JOIN build_files ON build_files.build_id = builds.id AND build_files.path = 'manifest.json'
+          WHERE NOT EXISTS (SELECT 1 FROM build_manifests WHERE build_id = builds.id)
+          ORDER BY builds.rowid`,
+      )
+      .all() as ManifestGap[];
+  }
+
   buildFiles(id: string): BuildFileRecord[] {
     return this.db
       .prepare("SELECT path, sha256 FROM build_files WHERE build_id = ? ORDER BY path")
@@ -639,8 +677,8 @@ export class SqliteStore implements Store {
   ): boolean {
     const inserted = this.db
       .prepare(
-        `INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, flow_json, svg, created_at)
-         SELECT @pendingId, @buildId, @blueprintName, @version, @flowJson, @svg, @createdAt
+        `INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
+         SELECT @pendingId, @buildId, @blueprintName, @version, @svg, @createdAt
           WHERE NOT EXISTS (
             SELECT 1 FROM build_snapshots WHERE pending_id = @pendingId OR build_id = @buildId)`,
       )
@@ -649,7 +687,6 @@ export class SqliteStore implements Store {
         buildId: keys.buildId,
         blueprintName: snapshot.blueprintName,
         version: snapshot.version,
-        flowJson: JSON.stringify(snapshot.flow),
         svg: snapshot.svg,
         createdAt,
       });

@@ -11,7 +11,7 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
 let home: string;
@@ -52,11 +52,14 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
 
   const buildId = await buildAndRun(window, home, "edited");
+  const runId = await runIdOf(home, buildId);
 
-  await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
-  await expect(window.getByTestId("node-status-s2")).toHaveCount(0);
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(
+    "data-status",
+    "done",
+    { timeout: 20_000 },
+  );
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s2"))).toHaveCount(0);
 
   const app = launched;
   launched = undefined;
@@ -122,14 +125,17 @@ test("A run with no Claude turn has no terminal: the menu's Open terminal stays 
   await expect(window.getByTestId("terminal-open")).toBeDisabled();
   await window.keyboard.press("Escape");
 
-  await buildOnCanvas(window, home, "gate-only");
+  const buildId = await buildOnCanvas(window, home, "gate-only");
   await window.getByTestId(pageTestIds.buildDetailRun).click();
   await window.getByTestId(dialogTestIds.auto).check();
   await window.getByTestId(dialogTestIds.start).click();
+  const runId = await runIdOf(home, buildId);
 
-  await expect(window.getByTestId("node-status-g1")).toHaveAttribute("data-status", "skipped", {
-    timeout: 20_000,
-  });
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "g1"))).toHaveAttribute(
+    "data-status",
+    "skipped",
+    { timeout: 20_000 },
+  );
   await window.getByTestId("run-tab-terminal").click();
   await expect(window.getByTestId("terminal-unavailable")).toBeVisible();
   await expect(window.getByTestId("terminal-view")).toHaveCount(0);

@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Actions } from "../actions.js";
-import { Canvas } from "../canvas/canvas.js";
-import { RunStoreContext } from "../canvas/status.js";
-import { createCanvasStore } from "../canvas/store.js";
+import { labelFor } from "../canvas/store.js";
 import { InspectorPanel } from "../inspector-panel.js";
+import type { RunLabels } from "../inspector/inspector.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
 import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
+import { PanelToggle } from "../panel-toggle.js";
 import {
   selectLiveBadge,
   selectRunDisabled,
@@ -20,8 +20,9 @@ import {
 } from "../run-store.js";
 import { selectInspectorOpen, type ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
-import { pageTestIds } from "../test-ids.js";
+import { controlTestIds, pageTestIds } from "../test-ids.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
+import { RunPipeline } from "./pipeline.js";
 
 const tone = {
   running: "live",
@@ -61,7 +62,6 @@ export function RunPage({
   const runs = useStore(library, (state) => state.runs);
   const card = selectBuildCards({ builds, runs }).find((build) => build.id === buildId);
   const starting = useStore(run, (state) => state.starting);
-  const [openFailed, setOpenFailed] = useState<{ runId: string; message: string } | null>(null);
 
   useEffect(() => {
     void library.getState().openRun(runId);
@@ -71,11 +71,14 @@ export function RunPage({
     void wait.getState().view(runId);
   }, [library, run, terminal, inspector, wait, runId]);
 
-  const runCanvas = useMemo(() => {
-    const store = createCanvasStore();
-    if (loaded?.flow) store.getState().load(loaded.flow);
-    return store;
-  }, [loaded]);
+  const stages = loaded?.stages ?? null;
+  const labels = useMemo<RunLabels>(
+    () => ({
+      sessionName: stages?.session.name ?? "",
+      nodes: (stages?.nodes ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
+    }),
+    [stages],
+  );
 
   const snapshot = live ?? loaded?.snapshot ?? null;
   const view = useMemo(() => createStore<RunView>()(() => ({ snapshot: null })), []);
@@ -87,10 +90,11 @@ export function RunPage({
     selectRunDisabled(state, card ?? { old: false, run: { id: runId, status } }),
   );
   const badge = (live === null ? null : selectLiveBadge(live)) ?? status;
-  const flowId = loaded?.run.source?.flowId;
   const waiting = useStore(wait, (state) => state.pending !== null);
   const inspectorOpen = useStore(shell, (state) => selectInspectorOpen(state, { snapshot }));
   const canGoOn = !starting && (status === "stopped" || status === "interrupted");
+  const canRetry = !starting && status !== "running";
+  const selectNode = (nodeId: string) => run.getState().selectStage(runId, { nodeId });
   const page =
     loaded === null
       ? undefined
@@ -99,7 +103,7 @@ export function RunPage({
           run,
           terminal,
           stored: loaded.activity,
-          canRetry: !starting && status !== "running",
+          canRetry,
         };
 
   return (
@@ -130,22 +134,6 @@ export function RunPage({
           {badge}
         </span>
         <div className="fd-title-actions">
-          {flowId !== undefined && (
-            <button
-              className="fd-btn"
-              data-testid={pageTestIds.runOpenBlueprint}
-              onClick={() =>
-                void actions.openBlueprint(flowId).catch((error: unknown) =>
-                  setOpenFailed({
-                    runId,
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
-                )
-              }
-            >
-              Open blueprint
-            </button>
-          )}
           {live?.status === "running" && (
             <button
               className="fd-btn"
@@ -177,6 +165,15 @@ export function RunPage({
               Run again
             </button>
           )}
+          {loaded !== null && !inspectorOpen && (
+            <PanelToggle
+              side="right"
+              label="Show inspector"
+              testId={controlTestIds.inspectorShow}
+              shell={shell}
+              onClick={() => shell.getState().toggleInspector(view.getState())}
+            />
+          )}
         </div>
       </header>
       {buildId !== undefined && (
@@ -188,32 +185,30 @@ export function RunPage({
             {loaded.note}
           </p>
         )}
-        {openFailed?.runId === runId && (
-          <p className="fd-run-note" data-testid={pageTestIds.runBlueprintDeleted} role="status">
-            {openFailed.message}
-          </p>
-        )}
         {live !== null && waiting && !inspectorOpen && (
           <div className="fd-wait-banner" data-testid="wait-banner">
             <Ask wait={wait} />
           </div>
         )}
-        {loaded !== null && loaded.flow !== null ? (
-          <RunStoreContext.Provider value={view}>
-            <Canvas store={runCanvas} shell={shell} run={view} readOnly />
-          </RunStoreContext.Provider>
-        ) : (
-          <div className="fd-canvas fd-canvas-empty" data-testid="canvas">
-            {loaded !== null && (
-              <p className="fd-empty">This run's build was not made from a saved blueprint.</p>
-            )}
-          </div>
-        )}
+        <div className="fd-run-stages">
+          {loaded !== null && (
+            <RunPipeline
+              runId={runId}
+              recorded={stages !== null}
+              run={run}
+              view={view}
+              inspector={inspector}
+              labels={labels}
+              canRetry={canRetry}
+            />
+          )}
+        </div>
         {loaded !== null && (
           <InspectorPanel
             shell={shell}
             run={view}
-            canvas={runCanvas}
+            labels={labels}
+            onSelectNode={selectNode}
             inspector={inspector}
             wait={live === null ? undefined : wait}
             readOnly

@@ -108,6 +108,7 @@ describe("createActivityTracker", () => {
       dir: "/fd-home/workspaces/h1",
       files: [],
       nodes: [],
+      manifest: "{}",
     };
     store.recordBuild(build);
     store.recordCost(runId, 0.25);
@@ -121,6 +122,8 @@ describe("createActivityTracker", () => {
     expect(store.findBuildByName("b1")).toEqual(inner.findBuildByName("b1"));
     expect(store.buildFiles("h1")).toEqual(inner.buildFiles("h1"));
     expect(store.listRuns()).toEqual(inner.listRuns());
+    expect(store.findRunSummary(runId)).toEqual(inner.findRunSummary(runId));
+    expect(store.buildManifest("h1")).toBe("{}");
     expect(store.events(runId)).toEqual(inner.events(runId));
   });
 

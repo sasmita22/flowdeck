@@ -32,6 +32,7 @@ const newBuild: NewBuild = {
   dir: "/fd/workspaces/b1",
   files: [],
   nodes: [],
+  manifest: "{}",
 };
 
 const allMigrations = [
@@ -49,6 +50,7 @@ const allMigrations = [
   { name: "012_drop_pending_builds_one_per_flow.sql" },
   { name: "013_flows_deleted_at.sql" },
   { name: "014_build_branch.sql" },
+  { name: "015_build_manifests.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";

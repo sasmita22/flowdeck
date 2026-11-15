@@ -286,7 +286,6 @@ export async function startBuild(
           snapshot: {
             blueprintName: origin.blueprint.name,
             version: origin.blueprint.version,
-            flow: saved,
             svg: flowSvg(saved),
           },
         }),

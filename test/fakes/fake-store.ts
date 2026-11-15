@@ -11,6 +11,7 @@ import type {
   BuildRecord,
   BuildSnapshot,
   EventEntry,
+  ManifestGap,
   NewBuild,
   NewBuildSnapshot,
   NewPendingBuild,
@@ -25,6 +26,8 @@ import type {
   Store,
   StoredEvent,
 } from "../../src/ports/store.js";
+
+type RecordedBuild = Omit<NewBuild, "manifest"> & { manifest?: string };
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -45,7 +48,8 @@ export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
-  private readonly buildRecords: NewBuild[] = [];
+  private readonly buildRecords: RecordedBuild[] = [];
+  private readonly manifests = new Map<string, string>();
   private readonly deletedAt = new Map<string, number>();
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
@@ -84,30 +88,40 @@ export class FakeStore implements Store {
   }
 
   listRuns(): RunSummary[] {
-    const summaries = this.runRecords.flatMap((run, index): RunSummary[] => {
-      if (run.buildId !== undefined && this.deletedAt.has(run.buildId)) return [];
-      const built = this.buildRecords.find((known) => known.id === run.buildId);
-      const source = built?.source;
-      const snapshot = run.buildId === undefined ? undefined : this.snapshotOf(run.buildId);
-      const last = this.events(run.id).at(-1);
-      const summary: RunSummary = {
-        id: run.id,
-        status: run.status,
-        ...(run.buildId === undefined ? {} : { buildId: run.buildId }),
-        createdAt: new Date(index).toISOString(),
-        endedAt: run.status === "running" ? null : (last?.time ?? null),
-        totalCost: this.costs.get(run.id) ?? null,
-        nodeCount: run.nodeIds.length,
-        ...(source === undefined ? {} : { source: copy(source) }),
-        buildName: built?.name ?? null,
-        blueprintName: snapshot?.blueprintName ?? null,
-        blueprintVersion: snapshot?.version ?? null,
-      };
-      return [summary];
-    });
+    const summaries = this.runRecords.flatMap((run, index): RunSummary[] =>
+      run.buildId !== undefined && this.deletedAt.has(run.buildId)
+        ? []
+        : [this.summaryOf(run, index)],
+    );
     return summaries
       .reverse()
       .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"));
+  }
+
+  findRunSummary(id: string): RunSummary | undefined {
+    const index = this.runRecords.findIndex((run) => run.id === id);
+    const run = this.runRecords[index];
+    return run && this.summaryOf(run, index);
+  }
+
+  private summaryOf(run: RunRecord, index: number): RunSummary {
+    const built = this.buildRecords.find((known) => known.id === run.buildId);
+    const source = built?.source;
+    const snapshot = run.buildId === undefined ? undefined : this.snapshotOf(run.buildId);
+    const last = this.events(run.id).at(-1);
+    return {
+      id: run.id,
+      status: run.status,
+      ...(run.buildId === undefined ? {} : { buildId: run.buildId }),
+      createdAt: new Date(index).toISOString(),
+      endedAt: run.status === "running" ? null : (last?.time ?? null),
+      totalCost: this.costs.get(run.id) ?? null,
+      nodeCount: run.nodeIds.length,
+      ...(source === undefined ? {} : { source: copy(source) }),
+      buildName: built?.name ?? null,
+      blueprintName: snapshot?.blueprintName ?? null,
+      blueprintVersion: snapshot?.version ?? null,
+    };
   }
 
   append(runId: string, nodeId: string, event: RunEvent): void {
@@ -132,11 +146,16 @@ export class FakeStore implements Store {
     return this.stored.filter((entry) => entry.runId === runId).map(({ event }) => copy(event));
   }
 
-  builds(): NewBuild[] {
+  builds(): RecordedBuild[] {
     return copy(this.buildRecords);
   }
 
   recordBuild(build: NewBuild): void {
+    this.recordBuildWithoutManifest(build);
+    this.manifests.set(build.id, build.manifest);
+  }
+
+  recordBuildWithoutManifest(build: RecordedBuild): void {
     if (this.buildRecords.some((known) => known.id === build.id)) {
       throw new Error(`FakeStore: builds are locked (${build.id} is recorded)`);
     }
@@ -296,6 +315,23 @@ export class FakeStore implements Store {
     if (taken) return false;
     this.snapshots.push({ ...copy(snapshot), pendingId: gap.pendingId, buildId: gap.buildId });
     return true;
+  }
+
+  storeManifest({ buildId, manifest }: { buildId: string; manifest: string }): void {
+    if (!this.manifests.has(buildId)) this.manifests.set(buildId, manifest);
+  }
+
+  buildManifest(buildId: string): string | undefined {
+    return this.manifests.get(buildId);
+  }
+
+  listManifestGaps(): ManifestGap[] {
+    return this.buildRecords.flatMap((build): ManifestGap[] => {
+      const file = build.files.find((known) => known.path === "manifest.json");
+      return file === undefined || this.manifests.has(build.id)
+        ? []
+        : [{ buildId: build.id, manifestSha256: file.sha256 }];
+    });
   }
 
   buildFiles(id: string): BuildFileRecord[] {

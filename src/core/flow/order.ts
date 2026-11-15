@@ -1,4 +1,4 @@
-import type { Flow } from "./schema.js";
+import type { Wire } from "./schema.js";
 
 export class FlowCycleError extends Error {
   readonly nodeIds: string[];
@@ -13,7 +13,12 @@ export class FlowCycleError extends Error {
 type Scope = string | undefined;
 type Edge = { from: string; to: string };
 
-export function order(flow: Flow): string[] {
+export type OrderSources = {
+  nodes: readonly { id: string; parent?: string | undefined }[];
+  wires: readonly Wire[];
+};
+
+export function order(flow: OrderSources): string[] {
   const index = new Map(flow.nodes.map((node, i) => [node.id, i]));
   const parentOf = new Map<string, Scope>(
     flow.nodes.map((node) => [

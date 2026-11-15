@@ -78,6 +78,7 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       listBuilds: () => inner.listBuilds(),
       listBuildsWithDeleted: () => inner.listBuildsWithDeleted(),
       listRuns: () => inner.listRuns(),
+      findRunSummary: (id) => inner.findRunSummary(id),
       buildFiles: (id) => inner.buildFiles(id),
       startPendingBuild: (build) => inner.startPendingBuild(build),
       appendBuildEvent: (pendingId, event) => inner.appendBuildEvent(pendingId, event),
@@ -92,6 +93,9 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       buildSnapshot: (key) => inner.buildSnapshot(key),
       listSnapshotGaps: () => inner.listSnapshotGaps(),
       addSnapshotIfMissing: (gap, snapshot) => inner.addSnapshotIfMissing(gap, snapshot),
+      storeManifest: (manifest) => inner.storeManifest(manifest),
+      buildManifest: (buildId) => inner.buildManifest(buildId),
+      listManifestGaps: () => inner.listManifestGaps(),
       append(id, nodeId, event) {
         inner.append(id, nodeId, event);
         track(id, [{ nodeId, event }]);

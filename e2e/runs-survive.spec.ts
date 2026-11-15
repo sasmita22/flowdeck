@@ -103,7 +103,8 @@ const tmuxAlive = async (name: string) => {
   }
 };
 
-const status = (window: Page, nodeId: string) => window.getByTestId(`node-status-${nodeId}`);
+const status = (window: Page, runId: string, nodeId: string) =>
+  window.getByTestId(pageTestIds.runStageStatus(runId, nodeId));
 
 const openRun = async (window: Page, runId: string) => {
   await window.getByTestId(controlTestIds.back).click();
@@ -122,9 +123,9 @@ const startAtGate = async (input: Flow) => {
   const window = await launch();
   await buildAndRun(window, home, "survive");
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 30_000 });
-  await expect(status(window, "p1")).toHaveAttribute("data-status", "done");
   const started = latestRun();
   if (started === undefined) throw new Error("no run was recorded");
+  await expect(status(window, started.id, "p1")).toHaveAttribute("data-status", "done");
   return started;
 };
 
@@ -174,6 +175,7 @@ test("Quitting leaves the run and its session going, and a relaunch asks the ope
     timeout: 20_000,
   });
   await expect(window.getByTestId("wait-text").first()).toHaveText("Check the plan");
+  await expect(status(window, runId, "p1")).toHaveAttribute("data-status", "done");
   await window.getByTestId("run-tab-activity").click();
   await expect(window.getByTestId(`activity-entry-${before.id}`)).toHaveAttribute(
     "data-node-id",

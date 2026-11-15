@@ -1,12 +1,12 @@
 import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
-import { fileWiresToSettings } from "../flow/file-wires.js";
 import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
 import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
+import { parseManifest, type ParsedManifest } from "./manifest.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
@@ -51,12 +51,7 @@ export type ExecuteDeps = {
 
 export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onInterrupt">;
 
-export type LoadedBuild = Omit<Manifest, "prefix" | "layout"> & {
-  hash: string;
-  prefix: string;
-  layout: VerifyLayout;
-  worktree?: string;
-};
+export type LoadedBuild = ParsedManifest & { worktree?: string };
 
 export type LoadBuildResult =
   { kind: "loaded"; build: LoadedBuild } | { kind: "error"; message: string };
@@ -111,17 +106,13 @@ export async function loadBuild(
       message: verified.problems.map(({ path, problem }) => `${path}: ${problem}`).join("\n"),
     };
   }
-  const manifest = fileWiresToSettings(
-    JSON.parse(await deps.fs.readFile(`${row.dir}/manifest.json`)),
-  ) as Manifest & { hash: string };
+  const manifest = parseManifest(await deps.fs.readFile(`${row.dir}/manifest.json`), row);
   const problems = structureProblems(manifest.nodes, manifest.wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
   return {
     kind: "loaded",
     build: {
       ...manifest,
-      prefix: manifest.prefix ?? row.hash,
-      layout,
       ...(row.name !== null && row.repo !== null
         ? { worktree: worktreePath(row.dir, row.repo) }
         : {}),
@@ -213,6 +204,7 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
     listRuns: () => store.listRuns(),
+    findRunSummary: (id) => store.findRunSummary(id),
     events: (id) => store.events(id),
     finishRun: (id, status) => store.finishRun(id, status),
     reopenRun: (id) => store.reopenRun(id),
@@ -240,6 +232,11 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     buildSnapshot: (key) => store.buildSnapshot(key),
     listSnapshotGaps: () => store.listSnapshotGaps(),
     addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
+    buildManifest: (buildId) => store.buildManifest(buildId),
+    listManifestGaps: () => store.listManifestGaps(),
+    storeManifest(manifest) {
+      if (!stopped()) store.storeManifest(manifest);
+    },
     append(id, nodeId, event) {
       if (!stopped()) store.append(id, nodeId, event);
     },

@@ -18,7 +18,9 @@ import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { workspaceDir } from "../../../src/core/compiler/build.js";
-import { hashBuild } from "../../../src/core/compiler/hash.js";
+import { emit } from "../../../src/core/compiler/emit.js";
+import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
+import { lower } from "../../../src/core/compiler/lower.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
@@ -99,6 +101,18 @@ const unreadableFlows = (): FlowStore => ({
   loadLatest: unreadable,
   load: unreadable,
 });
+
+const manifestText = (input: Flow, hash: string): string => {
+  const files = emit(lower(input, { name: "report", values: {} }), {
+    repo: "/repo",
+    base: "main",
+    branch: "flowdeck/report",
+    branchCreated: true,
+  });
+  const manifest = files.find((file) => file.path === "manifest.json");
+  if (manifest === undefined) throw new Error("emit wrote no manifest.json");
+  return canonicalJson({ ...(JSON.parse(manifest.content) as object), hash });
+};
 
 const failingOpen = () => {
   throw new Error("boom");
@@ -534,7 +548,25 @@ describe("createEngineHandler", async () => {
   });
 
   describe("runs", () => {
-    const builtFlow = () => onMainFlow([agent("s1"), agent("s2")], []);
+    const builtFlow = () =>
+      onMainFlow(
+        [
+          { ...agent("s1"), label: "Plan" },
+          { ...agent("s2"), label: "Ship" },
+        ],
+        [thenWire("s1", "s2")],
+      );
+
+    const builtStages = {
+      session: { name: "main" },
+      nodes: [
+        { id: "start", type: "trigger", label: "start" },
+        { id: "s1", type: "agent", label: "Plan" },
+        { id: "s2", type: "agent", label: "Ship" },
+        { id: "stop", type: "output", label: "stop" },
+      ],
+      wires: [thenWire("start", "s1"), thenWire("s1", "s2"), thenWire("s2", "stop")],
+    };
 
     const seededRun = () => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
@@ -554,10 +586,11 @@ describe("createEngineHandler", async () => {
         source: { flowId: "flow-a", version },
         files: [],
         nodes: [],
+        manifest: manifestText(builtFlow(), "h1"),
       });
       runs.addSnapshotIfMissing(
         { pendingId: null, buildId: "b1" },
-        { blueprintName: "Report", version, flow: builtFlow(), svg: flowSvg(builtFlow()) },
+        { blueprintName: "Report", version, svg: flowSvg(builtFlow()) },
       );
       const { id } = runs.createRun({
         buildDir: "/fd-home/workspaces/b1",
@@ -615,37 +648,14 @@ describe("createEngineHandler", async () => {
       });
     });
 
-    it("loads one run with its build's name, its snapshot's canvas and each node's status, reading no blueprint", async () => {
-      const { runs, runId } = seededRun();
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
-        id: 1,
-        ok: true,
-        value: {
-          run: expect.objectContaining({ id: runId, status: "failed" }),
-          name: "report",
-          flow: builtFlow(),
-          snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
-          activity: [],
-        },
-      });
-      expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
-        { id: 2, ok: false, error: "No run nope" },
-      );
-    });
-
-    it("loads a run of a build with no snapshot with the build's name and no canvas, reading no blueprint", async () => {
-      const { runs } = seededRun();
-      runs.recordBuild({
+    const withoutManifest = (runs: FakeStore) => {
+      runs.recordBuildWithoutManifest({
         id: "b2",
         hash: "h2",
-        name: "before-snapshots",
+        name: "before-manifests",
         repo: "/repo",
         base: "main",
-        branch: "flowdeck/before-snapshots",
+        branch: "flowdeck/before-manifests",
         branchCreated: true,
         values: {},
         dir: "/fd-home/workspaces/b2",
@@ -665,6 +675,11 @@ describe("createEngineHandler", async () => {
         buildId: "b2",
       });
       runs.finishRun(runId, "failed");
+      return runId;
+    };
+
+    it("loads one run with its build's name, its stages from the stored manifest and each node's status, reading no blueprint", async () => {
+      const { runs, runId } = seededRun();
       const handler = createEngineHandler(
         options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
       );
@@ -672,7 +687,99 @@ describe("createEngineHandler", async () => {
       expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
         id: 1,
         ok: true,
-        value: expect.objectContaining({ name: "before-snapshots", flow: null }),
+        value: {
+          run: expect.objectContaining({ id: runId, status: "failed" }),
+          name: "report",
+          stages: builtStages,
+          snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
+          activity: [],
+        },
+      });
+      expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
+        { id: 2, ok: false, error: "No run nope" },
+      );
+    });
+
+    it("loads a run's stages from the stored manifest after its build is deleted and its folder is gone", async () => {
+      const { runs, runId } = seededRun();
+      runs.deleteBuild("b1");
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
+        id: 1,
+        ok: true,
+        value: expect.objectContaining({ name: "report", stages: builtStages }),
+      });
+    });
+
+    it("loads a run of a build with no stored manifest with the build's name and no stages, reading no blueprint", async () => {
+      const { runs } = seededRun();
+      const runId = withoutManifest(runs);
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
+
+      expect(loaded).toEqual({
+        id: 1,
+        ok: true,
+        value: expect.objectContaining({ name: "before-manifests", stages: null }),
+      });
+      expect((loaded as { value: object }).value).not.toHaveProperty("flow");
+    });
+
+    it("answers a run's pipeline in run order from the stored manifest and its events, reading no blueprint", async () => {
+      const { runs, runId } = seededRun();
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const answered = await handler.handle({
+        id: 1,
+        type: "run-pipeline" as never,
+        payload: { runId },
+      });
+
+      expect(answered).toMatchObject({ id: 1, ok: true });
+      const stages = (answered as { value: { nodeId: string; label: string; status: string }[] })
+        .value;
+      expect(stages.map(({ nodeId, label, status }) => ({ nodeId, label, status }))).toEqual([
+        { nodeId: "start", label: "start", status: "waiting" },
+        { nodeId: "s1", label: "Plan", status: "done" },
+        { nodeId: "s2", label: "Ship", status: "waiting" },
+        { nodeId: "stop", label: "stop", status: "waiting" },
+      ]);
+    });
+
+    it("answers no pipeline for a run of a build with no stored manifest", async () => {
+      const { runs } = seededRun();
+      const runId = withoutManifest(runs);
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(
+        await handler.handle({ id: 1, type: "run-pipeline" as never, payload: { runId } }),
+      ).toEqual({ id: 1, ok: true, value: null });
+    });
+
+    it("refuses the pipeline of an unknown run, and the cost of a run whose build has no stored manifest", async () => {
+      const { runs } = seededRun();
+      const runId = withoutManifest(runs);
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(
+        await handler.handle({ id: 1, type: "run-pipeline" as never, payload: { runId: "nope" } }),
+      ).toEqual({ id: 1, ok: false, error: "No run nope" });
+      expect(await handler.handle({ id: 2, type: "run-cost", payload: { runId } })).toEqual({
+        id: 2,
+        ok: false,
+        error: "manifest.json: missing",
       });
     });
 
@@ -725,10 +832,11 @@ describe("createEngineHandler", async () => {
         source: { flowId: "flow-a", version: 1 },
         files: [],
         nodes: [],
+        manifest: "{}",
       });
       runs.addSnapshotIfMissing(
         { pendingId: null, buildId: "b1" },
-        { blueprintName: "Report", version: 1, flow: pictured(), svg: flowSvg(pictured()) },
+        { blueprintName: "Report", version: 1, svg: flowSvg(pictured()) },
       );
       runs.recordBuild({
         id: "b2",
@@ -742,6 +850,7 @@ describe("createEngineHandler", async () => {
         dir: "/fd-home/workspaces/b2",
         files: [],
         nodes: [],
+        manifest: "{}",
       });
       const going = runs.startPendingBuild({
         flowId: "flow-a",
@@ -755,7 +864,6 @@ describe("createEngineHandler", async () => {
         snapshot: {
           blueprintName: "Report",
           version: 2,
-          flow: pictured(),
           svg: "<svg>going</svg>",
         },
       });
@@ -838,6 +946,7 @@ describe("createEngineHandler", async () => {
         source: { flowId: "flow-old", version },
         files: [],
         nodes: [],
+        manifest: "{}",
       });
     });
 
@@ -860,10 +969,11 @@ describe("createEngineHandler", async () => {
           }),
         ],
       });
-      expect(store.buildSnapshot({ buildId: "b-old" })).toMatchObject({
+      expect(store.buildSnapshot({ buildId: "b-old" })).toEqual({
+        pendingId: null,
+        buildId: "b-old",
         blueprintName: "Old report",
         version: 1,
-        flow: saved(),
         svg: flowSvg(saved()),
       });
     });
@@ -885,6 +995,53 @@ describe("createEngineHandler", async () => {
       });
       expect(logged).toHaveBeenCalledWith(expect.stringContaining("flow_versions is locked"));
       expect(store.buildSnapshot({ buildId: "b-old" })).toBeNull();
+    });
+  });
+
+  describe("manifests of builds locked before they were kept", () => {
+    let home: string;
+
+    const lockedEarlier = async (runs: FakeStore, id: string, onDisk: string, locked: string) => {
+      const dir = join(home, "workspaces", id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "manifest.json"), onDisk);
+      runs.recordBuildWithoutManifest({
+        id,
+        hash: `h-${id}`,
+        name: id,
+        repo: "/repo",
+        base: "main",
+        branch: `flowdeck/${id}`,
+        branchCreated: true,
+        values: {},
+        dir,
+        files: [{ path: "manifest.json", sha256: sha256Hex(locked) }],
+        nodes: [],
+      });
+    };
+
+    beforeEach(async () => {
+      home = await mkdtemp(join(tmpdir(), "fd-manifests-"));
+    });
+
+    afterEach(async () => {
+      await rm(home, { recursive: true, force: true });
+    });
+
+    it("copies the manifest.json of a build whose folder still holds it as locked at engine start, and leaves one that changed", async () => {
+      const runs = new FakeStore();
+      const kept = manifestText(onMainFlow([agent("old")], []), "h-kept");
+      const edited = manifestText(onMainFlow([agent("old")], []), "h-edited");
+      await lockedEarlier(runs, "kept", kept, kept);
+      await lockedEarlier(runs, "edited", `${edited}\n`, edited);
+      const handler = createEngineHandler(
+        options({ home, openStores: () => ({ runs, flows: new FakeFlowStore() }) }),
+      );
+
+      await handler.startUp();
+
+      expect(runs.buildManifest("kept")).toBe(kept);
+      expect(runs.buildManifest("edited")).toBeUndefined();
     });
   });
 
@@ -2808,26 +2965,24 @@ describe("createEngineHandler", async () => {
           expect(stepThreeTurnOf(2)).toContain(secondAnswer.answer);
         });
 
-        it("starts the rebuild from the asked build's snapshot when no blueprint can be read, and gives it the same snapshot", async () => {
+        it("starts the rebuild from the blueprint version the asked build names, under its snapshot's name, and gives it the same snapshot", async () => {
           asking();
           const asked = await askedBuild();
           const askedSnapshot = runs.buildSnapshot({ pendingId: asked });
           expect(askedSnapshot).not.toBeNull();
-          for (const method of [
-            "create",
-            "list",
-            "rename",
-            "pin",
-            "save",
-            "loadLatest",
-            "load",
-          ] as const) {
-            vi.spyOn(flows, method).mockImplementation(unreadable);
-          }
+          flows.rename("flow-1", "Renamed since");
+          const saved = flows.load({ flowId: "flow-1", version: 1 });
+          if (saved === null) throw new Error("version 1 is not saved");
+          flows.save(
+            { ...saved.flow, nodes: saved.flow.nodes.filter((node) => node.id !== "check") },
+            "flow-1",
+          );
+          const loaded = vi.spyOn(flows, "load");
 
           const first = await rebuiltPendingId(asked, [firstAnswer]);
           await endPush(first);
 
+          expect(loaded).toHaveBeenCalledWith({ flowId: "flow-1", version: 1 });
           expect(runs.buildSnapshot({ pendingId: first })).toEqual({
             ...askedSnapshot,
             pendingId: first,
@@ -2848,6 +3003,28 @@ describe("createEngineHandler", async () => {
           });
           expect(stepThreeTurnOf(1)).toContain(firstAnswer.answer);
         });
+
+        it.each([
+          { blueprints: "has no such version", load: () => null },
+          { blueprints: "cannot be read", load: unreadable },
+        ])(
+          "refuses the rebuild and starts nothing when the blueprint store $blueprints",
+          async ({ load }) => {
+            asking();
+            const asked = await askedBuild();
+            vi.spyOn(flows, "load").mockImplementation(load);
+
+            const refused = await rebuild({ pendingId: asked, answers: [firstAnswer] });
+
+            expect(refusal(refused)).toBe(true);
+            await settle();
+            expect(runs.listPendingBuilds()).toEqual([]);
+            expect(runs.listLatestEndedPendingBuildsByName().map((ended) => ended.id)).toEqual([
+              asked,
+            ]);
+            expect(agents.fake.opened).toHaveLength(1);
+          },
+        );
 
         it("keeps a built build's run, its list entry and a needs-you rebuild working after its blueprint is deleted", async () => {
           const ended = await endPush(await startedPendingId("kept"));
@@ -3163,6 +3340,31 @@ describe("createEngineHandler", async () => {
         expect(refused).toEqual({ kind: "error", message: expect.any(String) });
         expect(await deleting).toEqual({ ok: true });
         expect(runs.runs).toHaveLength(0);
+      });
+
+      it("still answers a finished run's cost per stage from the stored manifest once the build is deleted and its folder is gone", async () => {
+        flows.save(twoAgents());
+        const buildId = await builtId();
+        const dir = buildDirOf(buildId);
+        const runId = await startedOn(buildId);
+        await untilFinished(runId);
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+        await rm(dir, { recursive: true, force: true });
+
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "run-cost",
+          payload: { runId },
+        });
+
+        expect(answered).toEqual(expect.objectContaining({ ok: true }));
+        const report = (answered as { value: { nodes: { nodeId: string }[] } }).value;
+        expect(report.nodes.map((line) => line.nodeId)).toEqual([
+          "start",
+          "write",
+          "check",
+          "stop",
+        ]);
       });
 
       it("refuses a run of a deleted build and creates no run for it", async () => {

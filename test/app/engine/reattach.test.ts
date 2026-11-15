@@ -635,15 +635,48 @@ describe("an app restart", () => {
       expect(worktree.calls).toEqual([]);
     });
 
+    it("resumes a build mid step 3 from the blueprint version it started from, under its snapshot's name", async () => {
+      const { pendingId, name, spec } = await leftMidTurn();
+      const pending = runs.pendingBuild(pendingId);
+      const snapshot = runs.buildSnapshot({ pendingId });
+      if (pending === null || snapshot === null) throw new Error("the build kept no snapshot");
+      flows.rename(pending.flowId, "Renamed since");
+      flows.save(onMainFlow([agent("p1"), agent("s2")], [thenWire("p1", "s2")]), pending.flowId);
+      const loaded = vi.spyOn(flows, "load");
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      alive.add(spec.sessionName);
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      pushes = [];
+
+      const second = newHandler({ buildAgents: after });
+      await second.reattach();
+      await vi.waitFor(() => expect(after.opened).toHaveLength(1));
+      events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
+
+      await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
+      expect(loaded).toHaveBeenCalledWith({ flowId: pending.flowId, version: pending.version });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
+      const built = runs.findBuildByName(name);
+      const recorded = runs.builds().find((build) => build.id === built?.id);
+      expect(recorded?.nodes.map((node) => node.nodeId)).toEqual(["start", "p1", "stop"]);
+      const claudeMd = await new NodeFileSystem().readFile(join(built?.dir ?? "", "CLAUDE.md"));
+      expect(claudeMd.split("\n").filter((line) => line.startsWith("- Blueprint: "))).toEqual([
+        `- Blueprint: ${snapshot.blueprintName}, version ${snapshot.version}`,
+      ]);
+    });
+
     it.each([
       { blueprints: "returns no version", broken: () => new FakeFlowStore() },
       { blueprints: "throws on every call", broken: unreadableFlows },
     ])(
-      "resumes a build mid step 3 from its snapshot when the blueprint store $blueprints",
+      "ends a build left mid step 3 failed, tearing down, when the blueprint store $blueprints",
       async ({ broken }) => {
-        const { pendingId, name, spec } = await leftMidTurn();
-        const snapshot = runs.buildSnapshot({ pendingId });
-        if (snapshot === null) throw new Error("the build kept no snapshot");
+        const { pendingId, spec } = await leftMidTurn();
         alive.add(spec.sessionName);
         const after = new FakeBuildAgents({
           fs: new NodeFileSystem(),
@@ -654,15 +687,15 @@ describe("an app restart", () => {
 
         const second = newHandler({ buildAgents: after });
         await second.reattach();
-        await vi.waitFor(() => expect(after.opened).toHaveLength(1));
-        events.publish({ kind: "Stop", sessionId: spec.claudeSessionId, payload: {} });
 
-        await vi.waitFor(() => expect(runs.findBuildByName(name)).toBeDefined(), { timeout: 3000 });
-        expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
-        const built = runs.findBuildByName(name);
-        const claudeMd = await new NodeFileSystem().readFile(join(built?.dir ?? "", "CLAUDE.md"));
-        expect(claudeMd.split("\n").filter((line) => line.startsWith("- Blueprint: "))).toEqual([
-          `- Blueprint: ${snapshot.blueprintName}, version ${snapshot.version}`,
+        await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+        expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+        expect(after.opened).toEqual([]);
+        expect(after.turns).toEqual([]);
+        expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+        expect(runs.listBuilds()).toEqual([]);
+        expect(await call(second, "build-progress-list")).toEqual([
+          expect.objectContaining({ pendingId, outcome: "failed" }),
         ]);
       },
     );

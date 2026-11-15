@@ -70,6 +70,7 @@ const namedBuild = (home: string, repo: string, id = buildId): NewBuild => ({
   dir: `${home}/workspaces/${id}`,
   files: [],
   nodes: [{ nodeId: "s1", type: "script", config: {} }],
+  manifest: "{}",
 });
 
 const runOf = (build: { id: string; dir: string }): NewRun => ({

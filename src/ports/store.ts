@@ -5,6 +5,7 @@ export type {
   BuildSnapshot,
   BuildSource,
   EventEntry,
+  ManifestGap,
   NewBuild,
   NewBuildSnapshot,
   NewPendingBuild,

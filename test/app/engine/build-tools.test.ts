@@ -32,6 +32,7 @@ const build = (id: string, name: string, version: number): NewBuild => ({
   source: { flowId: "flow-1", version },
   files: [],
   nodes: [],
+  manifest: "{}",
 });
 
 const oldBuild: BuildRecord = {

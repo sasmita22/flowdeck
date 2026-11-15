@@ -15,7 +15,6 @@ import type {
   StoredBuildEvent,
 } from "../../../core/run/build-progress.js";
 import { selectPipeline, type BuildProgressState } from "../build-progress-store.js";
-import { statusBadge } from "../canvas/status-look.js";
 import { formatDuration, formatWhen } from "../format.js";
 import { entryText } from "../inspector/store.js";
 import type { LibraryState } from "../library-store.js";
@@ -23,9 +22,9 @@ import type { NavState } from "../nav-store.js";
 import type { TerminalState } from "../terminal/store.js";
 import { TerminalView } from "../terminal/terminal-pane.js";
 import { controlTestIds, pageTestIds } from "../test-ids.js";
-import { useNow } from "../use-now.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
 import { BuildTree } from "./build-tree.js";
+import { LaneTook, LiveElapsed, StatusIcon } from "./pipeline-parts.js";
 
 const stageNames: Record<BuildStepNumber, string> = {
   1: "Check",
@@ -49,16 +48,6 @@ const statusTones: Record<PipelineHeader["status"], string> = {
   "needs-you": "warn",
   failed: "fail",
   stopped: "quiet",
-};
-
-type Status = PipelineLane["status"] | PipelineRow["status"];
-
-const statusGlyphs: Record<Status, string> = {
-  waiting: "○",
-  running: "●",
-  done: "✓",
-  failed: "✕",
-  skipped: "–",
 };
 
 type Selection = { step: BuildStepNumber; round: number; path?: string };
@@ -89,32 +78,9 @@ const runningSince = (
       event.status === "running",
   )?.at;
 
-function StatusIcon({ status }: { status: Status }) {
-  const { label, color } = statusBadge(status);
-  return (
-    <>
-      <span className="fd-status-icon" style={{ color }} aria-hidden="true">
-        {statusGlyphs[status]}
-      </span>
-      <span className="fd-visually-hidden">{label}</span>
-    </>
-  );
-}
-
-function LiveElapsed({ since, testId }: { since: number; testId?: string }) {
-  const now = useNow(1000);
-  return <span data-testid={testId}>{formatDuration(Math.max(0, now - since))}</span>;
-}
-
 function Elapsed({ header, testId }: { header: PipelineHeader; testId: string }) {
   if (header.endedAt === undefined) return <LiveElapsed since={header.startedAt} testId={testId} />;
   return <span data-testid={testId}>{formatDuration(header.endedAt - header.startedAt)}</span>;
-}
-
-function LaneTook({ lane, since }: { lane: PipelineLane; since: number | undefined }) {
-  if (lane.durationMs !== undefined) return <span>{formatDuration(lane.durationMs)}</span>;
-  if (lane.status === "running" && since !== undefined) return <LiveElapsed since={since} />;
-  return null;
 }
 
 function Fact({

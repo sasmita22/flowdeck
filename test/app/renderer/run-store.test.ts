@@ -39,6 +39,7 @@ type RunBridge = Pick<
   | "retryNode"
   | "resumeRun"
   | "runCost"
+  | "runPipeline"
   | "deleteBuild"
   | "defaultBranch"
   | "listBranches"
@@ -74,6 +75,20 @@ const declared: BuildConfig = {
     { name: "deep", kind: "yesno", default: true },
   ],
 };
+
+const stage = (nodeId: string) => ({
+  nodeId,
+  type: "agent",
+  label: "Write",
+  status: "done",
+  retries: 0,
+  tokens: 10,
+  cost: 0.5,
+  decisions: [],
+  budgetPauses: [],
+  timeline: [],
+  activity: [],
+});
 
 const built = { kind: "built", id: "b-0f3a9c2e", hash: "h1", dir: "/fd/workspaces/b-0f3a9c2e" };
 
@@ -142,6 +157,7 @@ const setup = async (
       nodes: [{ nodeId: "p1", tokens: 10, cost: 0.5, ms: 1000 }],
       total: { tokens: 10, cost: 0.5, ms: 1000 },
     })),
+    runPipeline: vi.fn<FlowdeckBridge["runPipeline"]>(async () => [stage("a1")]),
     deleteBuild: vi.fn<FlowdeckBridge["deleteBuild"]>(async () => ({ ok: true })),
     defaultBranch: vi.fn<FlowdeckBridge["defaultBranch"]>(async () => {
       calls.push("defaultBranch");
@@ -1142,6 +1158,80 @@ describe("controls", () => {
         total: { tokens: 10, cost: 0.5, ms: 1000 },
       },
     });
+  });
+});
+
+describe("the run pipeline", () => {
+  it("keeps the pipeline the engine answers under each run it was asked for", async () => {
+    const { bridge, run } = await setup();
+    bridge.runPipeline.mockResolvedValueOnce([stage("a1")]);
+    bridge.runPipeline.mockResolvedValueOnce([stage("b1")]);
+
+    await run.getState().loadPipeline("run-7");
+    await run.getState().loadPipeline("run-8");
+
+    expect(bridge.runPipeline).toHaveBeenNthCalledWith(1, { runId: "run-7" });
+    expect(bridge.runPipeline).toHaveBeenNthCalledWith(2, { runId: "run-8" });
+    expect(run.getState().pipelines).toEqual({
+      "run-7": [stage("a1")],
+      "run-8": [stage("b1")],
+    });
+  });
+
+  it("keeps a run whose stages were not recorded as no pipeline", async () => {
+    const { bridge, run } = await setup();
+    bridge.runPipeline.mockResolvedValueOnce(null);
+
+    await run.getState().loadPipeline("run-7");
+
+    expect(run.getState().pipelines).toHaveProperty("run-7", null);
+  });
+
+  it("replaces a run's pipeline with the newer answer", async () => {
+    const { bridge, run } = await setup();
+    bridge.runPipeline.mockResolvedValueOnce([stage("a1")]);
+    bridge.runPipeline.mockResolvedValueOnce([stage("a1"), stage("a2")]);
+
+    await run.getState().loadPipeline("run-7");
+    await run.getState().loadPipeline("run-7");
+
+    expect(run.getState().pipelines["run-7"]).toEqual([stage("a1"), stage("a2")]);
+  });
+
+  it("holds the message and keeps the pipeline it had when the engine refuses", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().loadPipeline("run-7");
+    bridge.runPipeline.mockRejectedValueOnce(new Error("No run run-7"));
+
+    await run.getState().loadPipeline("run-7");
+
+    expect(run.getState().error).toBe("No run run-7");
+    expect(run.getState().pipelines["run-7"]).toEqual([stage("a1")]);
+  });
+});
+
+describe("selectStage", () => {
+  it("selects nothing on a fresh run", async () => {
+    const { run } = await setup();
+
+    expect(run.getState().selectedStage["run-7"]).toBeUndefined();
+  });
+
+  it("keeps the selected stage, and its round, per run", async () => {
+    const { run } = await setup();
+
+    run.getState().selectStage("run-7", { nodeId: "a1" });
+    run.getState().selectStage("run-8", { nodeId: "l1", round: 2 });
+
+    expect(run.getState().selectedStage).toEqual({
+      "run-7": { nodeId: "a1" },
+      "run-8": { nodeId: "l1", round: 2 },
+    });
+
+    run.getState().selectStage("run-7", { nodeId: "a2" });
+
+    expect(run.getState().selectedStage["run-7"]).toEqual({ nodeId: "a2" });
+    expect(run.getState().selectedStage["run-8"]).toEqual({ nodeId: "l1", round: 2 });
   });
 });
 

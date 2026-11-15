@@ -10,6 +10,7 @@ import {
   buildConfigTestIds,
   buildDialogTestIds,
   controlTestIds,
+  pageTestIds,
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
@@ -30,7 +31,7 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun } from "./build-run.js";
+import { buildAndRun, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
 const git = async (repo: string, ...args: string[]) =>
@@ -491,10 +492,13 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
   await window.getByTestId(buildConfigTestIds.repo).press("Enter");
 
   const buildId = await buildAndRun(window, home, "pwd");
+  const runId = await runIdOf(home, buildId);
 
-  await expect(window.getByTestId("node-status-agent-1")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "agent-1"))).toHaveAttribute(
+    "data-status",
+    "done",
+    { timeout: 20_000 },
+  );
   const app = launched;
   launched = undefined;
   await app?.close();
@@ -556,9 +560,12 @@ const runInBuild = async (writes: Record<string, string> = {}) => {
   seedFlow(home, onMainFlow([at(agent("s1"), 80, 120)], []), repo.path);
   const window = await launch(undefined, { s1: writes });
   const buildId = await buildAndRun(window, home, "wt");
-  await expect(window.getByTestId("node-status-s1")).toHaveAttribute("data-status", "done", {
-    timeout: 20_000,
-  });
+  const runId = await runIdOf(home, buildId);
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(
+    "data-status",
+    "done",
+    { timeout: 20_000 },
+  );
   const path = join(home, "workspaces", buildId, basename(repo.path));
   return { window, repo, path, branch: "flowdeck/wt" };
 };
