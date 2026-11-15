@@ -124,6 +124,7 @@ Files the detection rule matches that hold no text a model reads.
 | `src/core/run/display.ts`                       | Node display status for the app                                                                                                                                                                                                    |
 | `src/core/run/execute.ts`                       | Opens the run and passes prompts to `sendPrompt`; its strings are errors for the app                                                                                                                                               |
 | `src/core/run/failure.ts`                       | Failure reasons for the app screen                                                                                                                                                                                                 |
+| `src/core/run/file-tree.ts`                     | Folder tree and folder labels for the app's build pages; no text a model reads                                                                                                                                                     |
 | `src/core/run/listing.ts`                       | Run listing schemas for the app                                                                                                                                                                                                    |
 | `src/core/run/options.ts`                       | Run option checks; messages go to the app                                                                                                                                                                                          |
 | `src/core/run/resume.ts`                        | Reads transcripts to resume; no text                                                                                                                                                                                               |
@@ -403,6 +404,10 @@ The planned tidy-rule row is gone: its text is in rows 1, 1c, 22 and 23. The inv
 | `src/core/compiler/emit.ts`   | Changed          | Row 7: the summary's `- Branch:` line replaces `- Base branch:`                            |
 
 The inventory gained one `## Not model-facing` row, `src/core/run/branch-name.ts`.
+
+### Build file tree
+
+No model-facing text changed. The new engine requests (`build-tree`, `build-project`, `build-entries`, `pending-build-tree`) answer the app's build pages through the preload bridge, not the agent pane, so their refusals reach the app screen only; row 23 is unchanged. The inventory gained one `## Not model-facing` row, `src/core/run/file-tree.ts`.
 
 ### Raised, not changed here
 

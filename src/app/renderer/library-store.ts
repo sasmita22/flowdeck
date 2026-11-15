@@ -7,12 +7,19 @@ import {
   type FlowSummary,
 } from "../../core/flow/flow-store.js";
 import {
+  buildEntriesSchema,
   buildFileContentSchema,
   buildPictureSchema,
+  buildProjectSchema,
   buildRecordSchema,
+  buildTreeSchema,
   loadedRunSchema,
+  pendingBuildTreeSchema,
   runSummarySchema,
+  type BuildEntry,
   type BuildFileContent,
+  type BuildProject,
+  type BuildTree,
   type LoadedRun,
 } from "../../core/run/listing.js";
 import type { SnapshotKey } from "../../core/run/store.js";
@@ -28,6 +35,10 @@ export type LibraryBridge = Pick<
   | "deleteFlow"
   | "buildFiles"
   | "buildPicture"
+  | "buildTree"
+  | "buildProject"
+  | "buildEntries"
+  | "pendingBuildTree"
   | "openFlow"
   | "doctor"
   | "loadRun"
@@ -41,6 +52,10 @@ export type DeleteQuestion = Pick<FlowSummary, "flowId" | "name">;
 
 export type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
 
+export type OpenTree = BuildTree & { buildId: string };
+
+export type OpenProject = BuildProject & { buildId: string };
+
 export type LibraryState = {
   flows: FlowSummary[];
   builds: BuildRecord[];
@@ -48,6 +63,10 @@ export type LibraryState = {
   loaded: boolean;
   error: string | null;
   files: BuildFiles | null;
+  tree: OpenTree | null;
+  project: OpenProject | null;
+  projectEntries: Record<string, BuildEntry[]>;
+  pendingTrees: Record<string, string[] | null>;
   doctor: DoctorReport | null;
   worktrees: string[] | null;
   viewedRun: LoadedRun | null;
@@ -62,6 +81,8 @@ export type LibraryState = {
   delete(flowId: string): Promise<boolean>;
   openFiles(buildId: string): Promise<void>;
   selectFile(path: string): void;
+  expandProjectFolder(path: string): Promise<void>;
+  loadPendingTree(pendingId: string): Promise<void>;
   loadPicture(key: SnapshotKey): Promise<void>;
   diagnose(flowId: string | null, openConnectors: readonly string[]): Promise<void>;
   listWorktrees(): Promise<void>;
@@ -131,6 +152,10 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
     loaded: false,
     error: null,
     files: null,
+    tree: null,
+    project: null,
+    projectEntries: {},
+    pendingTrees: {},
     doctor: null,
     worktrees: null,
     viewedRun: null,
@@ -202,13 +227,60 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
     },
 
     openFiles: async (buildId) => {
-      set({ files: { buildId, list: [], selected: null } });
+      set({
+        files: { buildId, list: [], selected: null },
+        tree: null,
+        project: null,
+        projectEntries: {},
+      });
+      const stillOpen = () => get().files?.buildId === buildId;
       try {
-        const list = z
-          .array(buildFileContentSchema)
-          .parse(await bridge.buildFiles({ buildId }))
-          .sort(manifestFirst);
-        set({ files: { buildId, list, selected: list[0]?.path ?? null }, error: null });
+        const tree = buildTreeSchema.parse(await bridge.buildTree({ buildId }));
+        if (!stillOpen()) return;
+        set({ tree: { buildId, ...tree }, error: null });
+        if (tree.deleted) return;
+        const [files, answer] = await Promise.all([
+          bridge.buildFiles({ buildId }),
+          bridge.buildProject({ buildId }),
+        ]);
+        if (!stillOpen()) return;
+        const list = z.array(buildFileContentSchema).parse(files).sort(manifestFirst);
+        const project = buildProjectSchema.nullable().parse(answer);
+        set({
+          files: { buildId, list, selected: list[0]?.path ?? null },
+          project: project === null ? null : { buildId, ...project },
+          error: null,
+        });
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
+    expandProjectFolder: async (path) => {
+      const { files, projectEntries } = get();
+      if (files === null || path in projectEntries) return;
+      const { buildId } = files;
+      try {
+        const entries = buildEntriesSchema.parse(await bridge.buildEntries({ buildId, path }));
+        if (get().files?.buildId !== buildId) return;
+        set((state) => ({
+          projectEntries: { ...state.projectEntries, [path]: entries },
+          error: null,
+        }));
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    },
+
+    loadPendingTree: async (pendingId) => {
+      try {
+        const tree = pendingBuildTreeSchema
+          .nullable()
+          .parse(await bridge.pendingBuildTree({ pendingId }));
+        set((state) => ({
+          pendingTrees: { ...state.pendingTrees, [pendingId]: tree?.paths ?? null },
+          error: null,
+        }));
       } catch (error) {
         set({ error: messageOf(error) });
       }

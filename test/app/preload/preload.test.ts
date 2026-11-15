@@ -76,6 +76,10 @@ describe("preload run-state wiring", () => {
     ["buildFiles", "flowdeck:build-files", { buildId: "b1" }],
     ["buildPicture", "flowdeck:build-picture", { buildId: "b1" }],
     ["buildPicture", "flowdeck:build-picture", { pendingId: "pending-1" }],
+    ["buildTree", "flowdeck:build-tree", { buildId: "b1" }],
+    ["buildProject", "flowdeck:build-project", { buildId: "b1" }],
+    ["buildEntries", "flowdeck:build-entries", { buildId: "b1", path: "shop/src" }],
+    ["pendingBuildTree", "flowdeck:pending-build-tree", { pendingId: "pending-1" }],
     ["runBuild", "flowdeck:run-build", { buildId: "b1", auto: true }],
     ["runOptions", "flowdeck:run-options", { buildId: "b1" }],
     ["stopRun", "flowdeck:stop-run", { runId: "run-1" }],
@@ -129,6 +133,10 @@ describe("preload run-state wiring", () => {
     ["build-activity", "getBuildActivity"],
     ["build-rebuild", "buildRebuild"],
     ["build-picture", "buildPicture"],
+    ["build-tree", "buildTree"],
+    ["build-project", "buildProject"],
+    ["build-entries", "buildEntries"],
+    ["pending-build-tree", "pendingBuildTree"],
     ["blueprint-session-start", "startBlueprintSession"],
     ["blueprint-session-stop", "stopBlueprintSession"],
   ] as const)(
@@ -166,6 +174,15 @@ describe("preload run-state wiring", () => {
     }>();
     expectTypeOf<Parameters<EngineCalls["buildFiles"]>[0]>().toEqualTypeOf<{ buildId: string }>();
     expectTypeOf<Parameters<EngineCalls["buildPicture"]>[0]>().toEqualTypeOf<SnapshotKey>();
+    expectTypeOf<Parameters<EngineCalls["buildTree"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["buildProject"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["buildEntries"]>[0]>().toEqualTypeOf<{
+      buildId: string;
+      path: string;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["pendingBuildTree"]>[0]>().toEqualTypeOf<{
+      pendingId: string;
+    }>();
     expectTypeOf<Parameters<EngineCalls["runBuild"]>[0]>().toEqualTypeOf<{
       buildId: string;
       auto?: boolean;

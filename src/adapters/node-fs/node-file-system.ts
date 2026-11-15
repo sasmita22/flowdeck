@@ -1,6 +1,6 @@
-import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
-import type { FileSystem } from "../../ports/file-system.js";
+import type { FileEntry, FileSystem } from "../../ports/file-system.js";
 
 const hasCode = (error: unknown, ...codes: string[]): boolean =>
   error instanceof Error && "code" in error && codes.includes(String(error.code));
@@ -72,5 +72,23 @@ export class NodeFileSystem implements FileSystem {
       if (hasCode(error, "ENOENT")) return [];
       throw error;
     }
+  }
+
+  async entries(dir: string, { inside }: { inside: string }): Promise<FileEntry[]> {
+    const [folder, root] = await Promise.all([realpath(dir), realpath(inside)]);
+    if (folder !== root && !folder.startsWith(root + sep)) {
+      throw new Error(`${dir} is not inside ${inside}`);
+    }
+    const entries = (await readdir(folder, { withFileTypes: true })).sort((a, b) =>
+      a.name < b.name ? -1 : 1,
+    );
+    return [
+      ...entries
+        .filter((entry) => entry.isDirectory())
+        .map(({ name }) => ({ name, kind: "folder" as const })),
+      ...entries
+        .filter((entry) => entry.isFile())
+        .map(({ name }) => ({ name, kind: "file" as const })),
+    ];
   }
 }

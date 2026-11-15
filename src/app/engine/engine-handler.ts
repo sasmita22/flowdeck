@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { z } from "zod";
 import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.js";
 import { workspaceDir, type BuildResult } from "../../core/compiler/build.js";
@@ -71,6 +71,7 @@ import {
 } from "../../core/run/options.js";
 import {
   deleteBuild,
+  isInside,
   storedBranch,
   teardownWorkspace,
   type DeleteBuildResult,
@@ -81,8 +82,16 @@ import { retryEntries } from "../../core/run/retry.js";
 import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
 import {
+  buildEntriesSchema,
+  buildProjectSchema,
+  buildTreeSchema,
+  pendingBuildTreeSchema,
   snapshotKeySchema,
+  type BuildEntry,
   type BuildFileContent,
+  type BuildProject,
+  type BuildTree,
+  type PendingBuildTree,
   type BuildVersionResult,
   type ListedRun,
   type LoadedRun,
@@ -194,6 +203,8 @@ const rebuildPayload = z.object({
 const keptInputs = z.object({ request: buildInputsSchema });
 
 const buildIdPayload = z.object({ buildId: z.string() });
+
+const buildEntriesPayload = z.object({ buildId: z.string(), path: z.string() });
 
 const assistantReadBuildPayload = z.object({ id: z.string() });
 
@@ -344,6 +355,11 @@ const progressEntry = (
 };
 
 const isOld = (build: BuildRecord) => build.name === null;
+
+type ProjectBuild = BuildRecord & { name: string; repo: string; base: string };
+
+const hasProject = (build: BuildRecord): build is ProjectBuild =>
+  build.name !== null && build.repo !== null && build.base !== null;
 
 const assistantBuildState = (build: BuildRecord): AssistantBuildState => {
   if (build.deletedAt !== null) return "deleted";
@@ -1389,6 +1405,61 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     };
   };
 
+  const buildTree = (runs: Store, buildId: string): BuildTree => {
+    const build = runs.findBuild(buildId);
+    if (build === undefined) throw new Error(`No build ${buildId}`);
+    return buildTreeSchema.parse({
+      deleted: build.deletedAt !== null,
+      paths: runs.buildFiles(buildId).map(({ path }) => path),
+    });
+  };
+
+  const buildProject = async (runs: Store, buildId: string): Promise<BuildProject | null> => {
+    const build = runs.findBuild(buildId);
+    if (build === undefined) throw new Error(`No build ${buildId}`);
+    if (build.deletedAt !== null || !hasProject(build)) return null;
+    const worktree = await readWorktree(build);
+    if (worktree === null) return null;
+    const { branch, create } = storedBranch(build, build.name);
+    return buildProjectSchema.parse({
+      repoFolder: repoFolder(build.repo),
+      branch,
+      branchCreated: create,
+      base: build.base,
+      ...worktree,
+    });
+  };
+
+  const buildEntries = async (
+    runs: Store,
+    { buildId, path }: { buildId: string; path: string },
+  ): Promise<BuildEntry[]> => {
+    const build = runs.findBuild(buildId);
+    if (build === undefined) throw new Error(`No build ${buildId}`);
+    if (build.deletedAt !== null) throw new Error(`Build ${buildId} was deleted`);
+    if (!hasProject(build)) throw new Error(`Build ${buildId} has no project`);
+    const checkout = join(build.dir, repoFolder(build.repo));
+    const target = join(build.dir, path);
+    const underCheckout = target === checkout || isInside(checkout, target);
+    if (!isInside(build.dir, target) || !underCheckout)
+      throw new Error(`${path} is outside the build's project`);
+    return buildEntriesSchema.parse(await options.fs.entries(target, { inside: build.dir }));
+  };
+
+  const pendingBuildTree = async (
+    runs: Store,
+    pendingId: string,
+  ): Promise<PendingBuildTree | null> => {
+    const laidDown = runs.buildEvents(pendingId).findLast((event) => event.type === "worktree");
+    if (laidDown === undefined) return null;
+    const checkout = normalize(laidDown.path);
+    const dir = dirname(checkout);
+    if (!(await options.fs.exists(dir))) return null;
+    return pendingBuildTreeSchema.parse({
+      paths: await options.fs.list(dir, { skip: checkout }),
+    });
+  };
+
   const readBuild = async (runs: Store, id: string): Promise<AssistantReadBuild> => {
     const build = runs.findBuild(id);
     if (build === undefined) throw new Error(`No build ${id}`);
@@ -1642,6 +1713,22 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "build-files":
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             buildFiles(storesOrThrow(), buildId),
+          );
+        case "build-tree":
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            buildTree(storesOrThrow().runs, buildId),
+          );
+        case "build-project":
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            buildProject(storesOrThrow().runs, buildId),
+          );
+        case "build-entries":
+          return parsedAnswer(request, buildEntriesPayload, (payload) =>
+            buildEntries(storesOrThrow().runs, payload),
+          );
+        case "pending-build-tree":
+          return parsedAnswer(request, pendingIdPayload, ({ pendingId }) =>
+            pendingBuildTree(storesOrThrow().runs, pendingId),
           );
         case "build-picture":
           return parsedAnswer(request, snapshotKeySchema, (key) => ({

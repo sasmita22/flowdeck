@@ -60,6 +60,36 @@ export const buildFileContentSchema = z.object({
 
 export type BuildFileContent = z.infer<typeof buildFileContentSchema>;
 
+export const buildTreeSchema = z.object({ deleted: z.boolean(), paths: z.array(z.string()) });
+
+export type BuildTree = z.infer<typeof buildTreeSchema>;
+
+export const buildProjectSchema = z.object({
+  repoFolder: z.string(),
+  path: z.string(),
+  branch: z.string(),
+  branchCreated: z.boolean(),
+  base: z.string(),
+  exists: z.boolean(),
+  dirty: z.boolean().nullable(),
+  unpushed: z.boolean().nullable(),
+});
+
+export type BuildProject = z.infer<typeof buildProjectSchema>;
+
+export const buildEntrySchema = z.object({
+  name: z.string(),
+  kind: z.enum(["folder", "file"]),
+});
+
+export const buildEntriesSchema = z.array(buildEntrySchema);
+
+export type BuildEntry = z.infer<typeof buildEntrySchema>;
+
+export const pendingBuildTreeSchema = z.object({ paths: z.array(z.string()) });
+
+export type PendingBuildTree = z.infer<typeof pendingBuildTreeSchema>;
+
 export const buildVersionResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("built"), id: z.string(), hash: z.string(), dir: z.string() }),
   z.object({ kind: z.literal("started"), pendingId: z.string() }),
