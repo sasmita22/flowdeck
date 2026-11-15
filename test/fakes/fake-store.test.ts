@@ -307,7 +307,7 @@ describe("FakeStore", () => {
       expect(store.findBuild("b1")).toMatchObject({ name: "fix-login", dir: "/fd/workspaces/b1" });
     });
 
-    it("hides a deleted build and its runs from every list", () => {
+    it("hides a deleted build from every list, keeping its runs listed, marked deleted", () => {
       const store = new FakeStore();
       store.recordBuild(build("b1", "fix-login"));
       store.recordBuild(build("b2", "fix-signup"));
@@ -319,7 +319,10 @@ describe("FakeStore", () => {
 
       expect(store.listBuilds().map((each) => each.id)).toEqual(["b2"]);
       expect(store.findBuildByName("fix-login")).toBeUndefined();
-      expect(store.listRuns().map((run) => run.id)).toEqual([kept.id]);
+      expect(store.listRuns().map(({ id, buildDeleted }) => ({ id, buildDeleted }))).toEqual([
+        { id: kept.id, buildDeleted: false },
+        { id: gone.id, buildDeleted: true },
+      ]);
       expect(store.runs).toHaveLength(2);
     });
 
@@ -473,7 +476,14 @@ describe("FakeStore", () => {
     const running = store.createRun(newRun(["p1"]));
 
     expect(store.listRuns()).toEqual([
-      expect.objectContaining({ id: running.id, status: "running", endedAt: null }),
+      expect.objectContaining({
+        id: running.id,
+        status: "running",
+        endedAt: null,
+        buildDeleted: false,
+        number: 2,
+        doneCount: 0,
+      }),
       expect.objectContaining({
         id: done.id,
         status: "done",
@@ -482,8 +492,67 @@ describe("FakeStore", () => {
         endedAt: new Date(0).toISOString(),
         nodeCount: 1,
         source: { flowId: "flow-1", version: 2 },
+        buildDeleted: false,
+        number: 1,
+        doneCount: 1,
       }),
     ]);
+  });
+
+  it("numbers each build's runs from 1 in the order they were made", () => {
+    const store = new FakeStore();
+    store.recordBuild(build("b1", "fix-login"));
+    store.recordBuild(build("b2", "fix-signup"));
+    const made: { id: string; buildId: string }[] = [];
+    for (const buildId of ["b1", "b2", "b1", "b2", "b1"]) {
+      const run = store.createRun(newRun(["p1"], buildId));
+      store.finishRun(run.id, "done");
+      made.push({ id: run.id, buildId });
+    }
+
+    const numberOf = new Map(store.listRuns().map((run) => [run.id, run.number]));
+
+    expect(made.map(({ id, buildId }) => [buildId, numberOf.get(id)])).toEqual([
+      ["b1", 1],
+      ["b2", 1],
+      ["b1", 2],
+      ["b2", 2],
+      ["b1", 3],
+    ]);
+  });
+
+  it("gives one run its number among all its build's runs", () => {
+    const store = new FakeStore();
+    store.recordBuild(build("b1", "fix-login"));
+    store.recordBuild(build("b2", "fix-signup"));
+    for (const buildId of ["b1", "b2", "b1"]) {
+      store.finishRun(store.createRun(newRun(["p1"], buildId)).id, "done");
+    }
+    const third = store.createRun(newRun(["p1"]));
+
+    expect(store.findRunSummary(third.id)).toMatchObject({ number: 3 });
+  });
+
+  it("counts only the nodes whose latest state is done", () => {
+    const store = new FakeStore();
+    const { id } = store.createRun(newRun(["done", "failed", "skipped", "reset", "untouched"]));
+    store.append(id, "done", { kind: "running" });
+    store.append(id, "done", { kind: "done" });
+    store.append(id, "done", { kind: "usage", payload: { messages: [] }, tokens: 1, cost: 0.01 });
+    store.append(id, "failed", { kind: "running" });
+    store.append(id, "failed", { kind: "failed", payload: { message: "exit code 1" } });
+    store.append(id, "skipped", { kind: "skipped" });
+    store.append(id, "reset", { kind: "done" });
+    store.append(id, "reset", { kind: "reset" });
+
+    expect(store.listRuns()).toEqual([expect.objectContaining({ id, doneCount: 1, nodeCount: 5 })]);
+  });
+
+  it("counts no done nodes for a run with no events", () => {
+    const store = new FakeStore();
+    const { id } = store.createRun(newRun(["p1", "p2"]));
+
+    expect(store.findRunSummary(id)).toMatchObject({ doneCount: 0, nodeCount: 2 });
   });
 
   it("summarises one run as listRuns does, and nothing for an unknown id", () => {
@@ -501,7 +570,7 @@ describe("FakeStore", () => {
     expect(store.findRunSummary("nope")).toBeUndefined();
   });
 
-  it("finds a run of a deleted build that listRuns hides", () => {
+  it("finds a run of a deleted build, marked deleted, as listRuns lists it", () => {
     const store = new FakeStore();
     store.recordBuild(build("b1", "fix-login"));
     const gone = store.createRun(newRun(["p1"]));
@@ -509,14 +578,15 @@ describe("FakeStore", () => {
 
     store.deleteBuild("b1");
 
-    expect(store.listRuns()).toEqual([]);
     expect(store.findRunSummary(gone.id)).toMatchObject({
       id: gone.id,
       status: "failed",
       buildId: "b1",
       buildName: "fix-login",
       nodeCount: 1,
+      buildDeleted: true,
     });
+    expect(store.listRuns()).toEqual([store.findRunSummary(gone.id)]);
   });
 
   describe("pending builds", () => {

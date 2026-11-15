@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
-import { nodeStatus } from "../../../src/core/run/run-events.js";
+import { nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import { BuildRunningError } from "../../../src/core/run/store.js";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
@@ -12,6 +12,7 @@ import type { NewBuild, NewPendingBuild, NewRun } from "../../../src/ports/store
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { agent, flow } from "../../fixtures/flow-builders.js";
+import { FakeStore } from "../../fakes/fake-store.js";
 
 const newRun = (nodeIds = ["p1", "p2", "p3"], buildId = "b1"): NewRun => ({
   buildDir: `/fd/workspaces/${buildId}`,
@@ -155,9 +156,10 @@ describe("SqliteStore", () => {
       { name: "013_flows_deleted_at.sql" },
       { name: "014_build_branch.sql" },
       { name: "015_build_manifests.sql" },
+      { name: "016_events_by_node.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 15]);
+    expect(before).toEqual([1, 1, 3, 1, 16]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -579,7 +581,7 @@ describe("SqliteStore", () => {
       expect(rows[1]?.deleted_at).toBeNull();
     });
 
-    it("hides the deleted build's runs from the list, keeping their rows", () => {
+    it("keeps listing the deleted build's runs, marked deleted", () => {
       const store = open();
       store.recordBuild(another("b2", "fix-signup"));
       const gone = store.createRun(newRun(["p1"]));
@@ -588,7 +590,10 @@ describe("SqliteStore", () => {
 
       store.deleteBuild("b1");
 
-      expect(store.listRuns().map((run) => run.id)).toEqual([kept.id]);
+      expect(store.listRuns().map(({ id, buildDeleted }) => ({ id, buildDeleted }))).toEqual([
+        { id: kept.id, buildDeleted: false },
+        { id: gone.id, buildDeleted: true },
+      ]);
       expect(count(raw(), "runs")).toBe(2);
     });
 
@@ -694,6 +699,9 @@ describe("SqliteStore", () => {
           endedAt: null,
           totalCost: null,
           nodeCount: 2,
+          buildDeleted: false,
+          number: 3,
+          doneCount: 0,
         },
         {
           id: third.id,
@@ -706,6 +714,9 @@ describe("SqliteStore", () => {
           endedAt: null,
           totalCost: null,
           nodeCount: 1,
+          buildDeleted: false,
+          number: 2,
+          doneCount: 0,
         },
         {
           id: first.id,
@@ -718,8 +729,96 @@ describe("SqliteStore", () => {
           endedAt: "2026-01-01T00:00:09.000Z",
           totalCost: 0.25,
           nodeCount: 1,
+          buildDeleted: false,
+          number: 1,
+          doneCount: 1,
         },
       ]);
+    });
+
+    it("numbers each build's runs from 1 in the order they were made", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+      const made: { id: string; buildId: string }[] = [];
+      for (const buildId of ["b1", "b2", "b1", "b2", "b1"]) {
+        const run = store.createRun(newRun(["p1"], buildId));
+        store.finishRun(run.id, "done");
+        made.push({ id: run.id, buildId });
+      }
+
+      const numberOf = new Map(store.listRuns().map((run) => [run.id, run.number]));
+
+      expect(made.map(({ id, buildId }) => [buildId, numberOf.get(id)])).toEqual([
+        ["b1", 1],
+        ["b2", 1],
+        ["b1", 2],
+        ["b2", 2],
+        ["b1", 3],
+      ]);
+    });
+
+    it("counts only the nodes whose latest state is done", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["done", "failed", "skipped", "reset", "untouched"]));
+      store.append(id, "done", { kind: "running" });
+      store.append(id, "done", { kind: "done" });
+      store.append(id, "done", {
+        kind: "usage",
+        payload: { messages: [] },
+        tokens: 1,
+        cost: 0.01,
+      });
+      store.append(id, "failed", { kind: "running" });
+      store.append(id, "failed", { kind: "failed", payload: { message: "exit code 1" } });
+      store.append(id, "skipped", { kind: "skipped" });
+      store.append(id, "reset", { kind: "done" });
+      store.append(id, "reset", { kind: "reset" });
+
+      expect(store.listRuns()).toEqual([
+        expect.objectContaining({ id, doneCount: 1, nodeCount: 5 }),
+      ]);
+    });
+
+    it("counts done nodes as the fake does after every kind of event", () => {
+      const oneOfEach: { [K in RunEvent["kind"]]: RunEvent & { kind: K } } = {
+        sent: { kind: "sent" },
+        running: { kind: "running" },
+        retry: { kind: "retry" },
+        "needs-you": { kind: "needs-you" },
+        skipped: { kind: "skipped" },
+        reset: { kind: "reset" },
+        done: { kind: "done" },
+        failed: { kind: "failed", payload: { message: "exit code 1" } },
+        decided: { kind: "decided", payload: { nodeId: "decided", decision: "approved" } },
+        answered: {
+          kind: "answered",
+          payload: { nodeId: "answered", decision: "answered", answer: "yes" },
+        },
+        round: { kind: "round", payload: { round: 1 } },
+        usage: { kind: "usage", payload: { messages: [] }, tokens: 1, cost: 0.01 },
+        compacted: { kind: "compacted", payload: { tokens: 1 } },
+        budget: { kind: "budget", payload: { step: "raised", budget: 1 } },
+      };
+      const nodeIds = Object.keys(oneOfEach);
+      const sqlite = open();
+      const fake = new FakeStore();
+      const doneCounts = [sqlite, fake].map((store) => {
+        const { id } = store.createRun(newRun(nodeIds));
+        for (const [nodeId, event] of Object.entries(oneOfEach)) {
+          store.append(id, nodeId, { kind: "done" });
+          store.append(id, nodeId, event);
+        }
+        return store.findRunSummary(id)?.doneCount;
+      });
+
+      expect(doneCounts).toEqual([7, 7]);
+    });
+
+    it("counts no done nodes for a run with no events", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1", "p2"]));
+
+      expect(store.findRunSummary(id)).toMatchObject({ doneCount: 0, nodeCount: 2 });
     });
 
     it("names the blueprint version a run's build was made from", () => {
@@ -752,21 +851,33 @@ describe("SqliteStore", () => {
       expect(store.findRunSummary("nope")).toBeUndefined();
     });
 
-    it("finds a run of a deleted build that listRuns hides", () => {
+    it("finds a run of a deleted build, marked deleted, as listRuns lists it", () => {
       const store = open();
       const gone = store.createRun(newRun(["p1"]));
       store.finishRun(gone.id, "failed");
 
       store.deleteBuild("b1");
 
-      expect(store.listRuns()).toEqual([]);
       expect(store.findRunSummary(gone.id)).toMatchObject({
         id: gone.id,
         status: "failed",
         buildId: "b1",
         buildName: "fix-login",
         nodeCount: 1,
+        buildDeleted: true,
       });
+      expect(store.listRuns()).toEqual([store.findRunSummary(gone.id)]);
+    });
+
+    it("gives one run its number among all its build's runs", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+      for (const buildId of ["b1", "b2", "b1"]) {
+        store.finishRun(store.createRun(newRun(["p1"], buildId)).id, "done");
+      }
+      const third = store.createRun(newRun(["p1"]));
+
+      expect(store.findRunSummary(third.id)).toMatchObject({ number: 3 });
     });
   });
 

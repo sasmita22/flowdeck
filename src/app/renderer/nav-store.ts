@@ -18,10 +18,12 @@ export type NavState = {
   page: Page;
   query: string;
   sort: Sort;
+  runsBuild: string | undefined;
   searchFocus: number;
   go(page: Page): void;
   setQuery(query: string): void;
   setSort(sort: Sort): void;
+  setRunsBuild(buildId: string | undefined): void;
   focusSearch(): void;
 };
 
@@ -72,10 +74,11 @@ export const createNavStore = ({
     page: { name: "blueprints" },
     query: "",
     sort: "recent",
+    runsBuild: undefined,
     searchFocus: 0,
     go: (page) => {
       if (JSON.stringify(page) === JSON.stringify(get().page)) return;
-      const show = () => set({ page, query: "", sort: "recent" });
+      const show = () => set({ page, query: "", sort: "recent", runsBuild: undefined });
       if (get().page.name === "editor" && leave !== undefined) {
         void leave(async () => show());
         return;
@@ -84,6 +87,7 @@ export const createNavStore = ({
     },
     setQuery: (query) => set({ query }),
     setSort: (sort) => set({ sort }),
+    setRunsBuild: (runsBuild) => set({ runsBuild }),
     focusSearch: () => {
       if (!isListPage(get().page)) get().go({ name: "blueprints" });
       set({ searchFocus: get().searchFocus + 1 });

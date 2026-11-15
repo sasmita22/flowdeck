@@ -625,6 +625,30 @@ describe("createEngineHandler", async () => {
             buildName: "report",
             blueprintName: "Report",
             blueprintVersion: 1,
+            buildDeleted: false,
+            number: 1,
+            doneCount: 1,
+          }),
+        ],
+      });
+    });
+
+    it("still lists a deleted build's run, marked deleted, with its number and stages done", async () => {
+      const { flows, runs, runId } = seededRun();
+      runs.deleteBuild("b1");
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+
+      expect(await handler.handle({ id: 1, type: "list-runs" })).toEqual({
+        id: 1,
+        ok: true,
+        value: [
+          expect.objectContaining({
+            id: runId,
+            buildId: "b1",
+            buildName: "report",
+            buildDeleted: true,
+            number: 1,
+            doneCount: 1,
           }),
         ],
       });
@@ -710,7 +734,11 @@ describe("createEngineHandler", async () => {
       expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
         id: 1,
         ok: true,
-        value: expect.objectContaining({ name: "report", stages: builtStages }),
+        value: expect.objectContaining({
+          run: expect.objectContaining({ id: runId, buildDeleted: true, number: 1 }),
+          name: "report",
+          stages: builtStages,
+        }),
       });
     });
 
@@ -766,9 +794,8 @@ describe("createEngineHandler", async () => {
       ).toEqual({ id: 1, ok: true, value: null });
     });
 
-    it("refuses the pipeline of an unknown run, and the cost of a run whose build has no stored manifest", async () => {
+    it("refuses the pipeline of an unknown run", async () => {
       const { runs } = seededRun();
-      const runId = withoutManifest(runs);
       const handler = createEngineHandler(
         options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
       );
@@ -776,10 +803,32 @@ describe("createEngineHandler", async () => {
       expect(
         await handler.handle({ id: 1, type: "run-pipeline" as never, payload: { runId: "nope" } }),
       ).toEqual({ id: 1, ok: false, error: "No run nope" });
-      expect(await handler.handle({ id: 2, type: "run-cost", payload: { runId } })).toEqual({
-        id: 2,
-        ok: false,
-        error: "manifest.json: missing",
+    });
+
+    it("answers the cost of a deleted build's run that has no stored manifest", async () => {
+      const { runs } = seededRun();
+      const runId = withoutManifest(runs);
+      runs.append(runId, "s1", {
+        kind: "usage",
+        payload: { messages: [] },
+        tokens: 40,
+        cost: 0.12,
+      });
+      runs.deleteBuild("b2");
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      expect(await handler.handle({ id: 1, type: "run-cost", payload: { runId } })).toEqual({
+        id: 1,
+        ok: true,
+        value: expect.objectContaining({
+          nodes: [
+            expect.objectContaining({ nodeId: "s1", tokens: 40, cost: 0.12 }),
+            expect.objectContaining({ nodeId: "s2", tokens: 0, cost: 0 }),
+          ],
+          total: expect.objectContaining({ tokens: 40, cost: 0.12 }),
+        }),
       });
     });
 
@@ -3367,6 +3416,54 @@ describe("createEngineHandler", async () => {
         ]);
       });
 
+      const deletedBuildRefusal = (buildId: string) => ({
+        kind: "error",
+        message: `Build ${runs.findBuild(buildId)?.name ?? buildId} was deleted.`,
+      });
+
+      it("refuses to resume a stopped run of a deleted build, opening no session and writing nothing", async () => {
+        flows.save(sleeper());
+        const buildId = await builtId();
+        const runId = await startedOn(buildId);
+        await vi.waitFor(() => {
+          expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
+        });
+        await handler.handle({ id: nextId++, type: "stop-run", payload: { runId } });
+        await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("stopped"));
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+        const sessionsBefore = sessionPushes(runId).length;
+        const eventsBefore = runs.events(runId).length;
+
+        expect(
+          await handler.handle({ id: nextId++, type: "resume-run", payload: { runId } }),
+        ).toMatchObject({ ok: true, value: deletedBuildRefusal(buildId) });
+        expect(sessionPushes(runId)).toHaveLength(sessionsBefore);
+        expect(runs.events(runId)).toHaveLength(eventsBefore);
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+      });
+
+      it("refuses to retry a stage of a deleted build's run, opening no session and writing nothing", async () => {
+        flows.save(twoAgents());
+        const buildId = await builtId();
+        const runId = await startedOn(buildId);
+        await untilFinished(runId);
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+        const sessionsBefore = sessionPushes(runId).length;
+        const eventsBefore = runs.events(runId).length;
+        const statusBefore = runs.findRun(runId)?.status;
+
+        expect(
+          await handler.handle({
+            id: nextId++,
+            type: "retry-node",
+            payload: { runId, nodeId: "write" },
+          }),
+        ).toMatchObject({ ok: true, value: deletedBuildRefusal(buildId) });
+        expect(sessionPushes(runId)).toHaveLength(sessionsBefore);
+        expect(runs.events(runId)).toHaveLength(eventsBefore);
+        expect(runs.findRun(runId)?.status).toBe(statusBefore);
+      });
+
       it("refuses a run of a deleted build and creates no run for it", async () => {
         flows.save(twoAgents());
         const buildId = await builtId();
@@ -3483,6 +3580,27 @@ describe("createEngineHandler", async () => {
 
         await vi.waitFor(() => expect(store.findRun(runId)?.status).toBe("done"));
         expect(waiter.calls.map(({ nodeId }) => nodeId)).toEqual(["s1"]);
+      });
+
+      it("refuses to resume a stopped run of it once deleted, naming the build by its id", async () => {
+        const { id: runId } = store.createRun({
+          buildDir: join(home, "builds", hash),
+          inputs: {},
+          nodeIds: ["s1"],
+          session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "c-old" },
+          buildId: hash,
+        });
+        store.finishRun(runId, "stopped");
+        store.deleteBuild(hash);
+
+        expect(
+          await handler.handle({ id: 1, type: "resume-run", payload: { runId } }),
+        ).toMatchObject({
+          ok: true,
+          value: { kind: "error", message: `Build ${hash} was deleted.` },
+        });
+        expect(store.findRun(runId)?.status).toBe("stopped");
+        expect(waiter.calls).toEqual([]);
       });
     });
 

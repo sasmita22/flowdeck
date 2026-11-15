@@ -257,3 +257,71 @@ test("After a relaunch the run's terminal opens on its session", async () => {
     timeout: 20_000,
   });
 });
+
+const runsOfBuild = (buildId: string) =>
+  rows<{ id: string }>("SELECT id FROM runs WHERE build_id = ? ORDER BY rowid", buildId).map(
+    (row) => row.id,
+  );
+
+const finished = async (window: Page) =>
+  expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute("data-status", "done", {
+    timeout: 20_000,
+  });
+
+const toRuns = async (window: Page) => {
+  const back = window.getByTestId(controlTestIds.back).or(window.getByTestId(pageTestIds.runBack));
+  if (await back.isVisible()) await back.click();
+  await window.getByTestId("menu-runs").click();
+};
+
+test("Runs lists every run numbered within its build, filters by build, and keeps a deleted build's run open to read only", async () => {
+  const { flowId } = seedFlow(home, laidOut([agent("p1")], []), repo.path);
+  const window = await launch();
+  const alpha = await buildAndRun(window, home, "alpha");
+  await finished(window);
+  await window.getByTestId(pageTestIds.runAgain).click();
+  await expect.poll(() => runsOfBuild(alpha).length, { timeout: 20_000 }).toBe(2);
+  await finished(window);
+  await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-blueprints").click();
+  await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+  const beta = await buildAndRun(window, home, "beta");
+  await finished(window);
+  const [alphaFirst, alphaSecond] = runsOfBuild(alpha);
+  const [betaFirst] = runsOfBuild(beta);
+  if (alphaFirst === undefined || alphaSecond === undefined || betaFirst === undefined) {
+    throw new Error("the three runs were not recorded");
+  }
+
+  await toRuns(window);
+  await expect(window.getByTestId(pageTestIds.runCard(alphaFirst))).toContainText("#1 alpha");
+  await expect(window.getByTestId(pageTestIds.runCard(alphaSecond))).toContainText("#2 alpha");
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("#1 beta");
+  await expect(window.getByTestId(pageTestIds.runCardStages(betaFirst))).toHaveText(
+    "stages 3 of 3",
+  );
+
+  const filter = window.getByTestId(pageTestIds.runsBuildFilter);
+  await filter.selectOption({ label: "alpha" });
+  await expect(window.getByTestId(pageTestIds.runCard(alphaFirst))).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.runCard(alphaSecond))).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toHaveCount(0);
+  await filter.selectOption({ label: "All builds" });
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toBeVisible();
+
+  await window.getByTestId("menu-builds").click();
+  await window.getByTestId(pageTestIds.buildDelete(beta)).click();
+  await expect(window.getByTestId(pageTestIds.buildCard(beta))).toHaveCount(0);
+  await window.getByTestId("menu-runs").click();
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("#1 beta");
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("(deleted)");
+  await expect(filter.locator("option", { hasText: "beta (deleted)" })).toHaveCount(1);
+
+  await window.getByTestId(pageTestIds.runOpen(betaFirst)).click();
+  await finished(window);
+  await expect(window.getByTestId(pageTestIds.runDeletedNote)).toHaveText(
+    "This run's build was deleted. It can't be run again.",
+  );
+  await expect(window.getByTestId(pageTestIds.runAgain)).toHaveCount(0);
+  await expect(window.getByTestId(pageTestIds.runResume)).toHaveCount(0);
+});

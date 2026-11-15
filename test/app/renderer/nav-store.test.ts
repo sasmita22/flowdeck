@@ -24,6 +24,18 @@ describe("createNavStore", () => {
     expect(nav.getState()).toMatchObject({ page: { name: "runs" }, query: "", sort: "recent" });
   });
 
+  it("has no build filter at first, keeps the build chosen, and clears it on going to another page", () => {
+    const nav = createNavStore();
+    nav.getState().go({ name: "runs" });
+    expect(nav.getState().runsBuild).toBeUndefined();
+
+    nav.getState().setRunsBuild("b-fix");
+    expect(nav.getState().runsBuild).toBe("b-fix");
+
+    nav.getState().go({ name: "run", runId: "run-1" });
+    expect(nav.getState().runsBuild).toBeUndefined();
+  });
+
   it("clears the search for a build's page, and keeps it when going to the same page again", () => {
     const nav = createNavStore();
     nav.getState().go({ name: "builds" });

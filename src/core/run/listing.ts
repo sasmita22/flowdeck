@@ -17,6 +17,9 @@ export const runSummarySchema = z.object({
   buildName: z.string().nullable(),
   blueprintName: z.string().nullable(),
   blueprintVersion: z.number().int().nullable(),
+  buildDeleted: z.boolean(),
+  number: z.number().int(),
+  doneCount: z.number().int(),
 });
 
 export type ListedRun = z.infer<typeof runSummarySchema>;

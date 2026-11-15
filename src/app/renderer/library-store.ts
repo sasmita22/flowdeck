@@ -133,6 +133,26 @@ export const selectRunCards = (state: Pick<LibraryState, "runs">): RunCard[] =>
     version: run.blueprintVersion,
   }));
 
+export type RunBuildOption = { buildId: string; label: string };
+
+export const selectRunBuildOptions = (runs: readonly RunSummary[]): RunBuildOption[] => {
+  const options = new Map<string, RunBuildOption>();
+  for (const run of runs) {
+    if (run.buildId === undefined || options.has(run.buildId)) continue;
+    const name = run.buildName ?? run.buildId;
+    options.set(run.buildId, {
+      buildId: run.buildId,
+      label: run.buildDeleted ? `${name} (deleted)` : name,
+    });
+  }
+  return [...options.values()];
+};
+
+export const filterRunsByBuild = <T extends Pick<RunSummary, "buildId">>(
+  cards: readonly T[],
+  buildId: string | undefined,
+): T[] => (buildId === undefined ? [...cards] : cards.filter((card) => card.buildId === buildId));
+
 export const pinnedFirst = <T extends Pick<FlowSummary, "pinned">>(flows: readonly T[]): T[] => [
   ...flows.filter((flow) => flow.pinned),
   ...flows.filter((flow) => !flow.pinned),
