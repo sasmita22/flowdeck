@@ -4,7 +4,16 @@ import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -39,12 +48,14 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
+import { FakeRunNarrator } from "../../fakes/fake-run-narrator.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
+  ask,
   flow,
   gate,
   loop,
@@ -568,11 +579,11 @@ describe("createEngineHandler", async () => {
       wires: [thenWire("start", "s1"), thenWire("s1", "s2"), thenWire("s2", "stop")],
     };
 
-    const seededRun = () => {
+    const seededRun = (built: Flow = builtFlow()) => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
       const runs = new FakeStore();
       flows.create("Report");
-      const { version } = flows.save(builtFlow(), "flow-a");
+      const { version } = flows.save(built, "flow-a");
       runs.recordBuild({
         id: "b1",
         hash: "h1",
@@ -586,11 +597,11 @@ describe("createEngineHandler", async () => {
         source: { flowId: "flow-a", version },
         files: [],
         nodes: [],
-        manifest: manifestText(builtFlow(), "h1"),
+        manifest: manifestText(built, "h1"),
       });
       runs.addSnapshotIfMissing(
         { pendingId: null, buildId: "b1" },
-        { blueprintName: "Report", version, svg: flowSvg(builtFlow()) },
+        { blueprintName: "Report", version, svg: flowSvg(built) },
       );
       const { id } = runs.createRun({
         buildDir: "/fd-home/workspaces/b1",
@@ -717,11 +728,44 @@ describe("createEngineHandler", async () => {
           stages: builtStages,
           snapshot: { runId, status: "failed", nodes: { s1: "done", s2: "waiting" } },
           activity: [],
+          story: {
+            header: {
+              name: "report",
+              blueprintName: "Report",
+              blueprintVersion: 1,
+              repo: "/repo",
+              values: {},
+            },
+            digest: expect.stringMatching(/\S/),
+            written: null,
+          },
         },
       });
       expect(await handler.handle({ id: 2, type: "load-run", payload: { runId: "nope" } })).toEqual(
         { id: 2, ok: false, error: "No run nope" },
       );
+    });
+
+    it("lists what each gate and ask asked in a loaded run's digest, from their settings in the stored manifest", async () => {
+      const { runs, runId } = seededRun(
+        onMainFlow(
+          [
+            gate("s1", { settings: { shown: "Approve the release notes", skippable: false } }),
+            ask("s2", { settings: { question: "Which channel ships it?", options: ["a", "b"] } }),
+          ],
+          [thenWire("s1", "s2")],
+        ),
+      );
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
+
+      expect((loaded as { error?: string }).error).toBeUndefined();
+      const digest = (loaded as { value: { story: { digest: string } } }).value.story.digest;
+      expect(digest).toContain("   Asked: Approve the release notes");
+      expect(digest).toContain("   Asked: Which channel ships it?");
     });
 
     it("loads a run's stages from the stored manifest after its build is deleted and its folder is gone", async () => {
@@ -757,6 +801,51 @@ describe("createEngineHandler", async () => {
         value: expect.objectContaining({ name: "before-manifests", stages: null }),
       });
       expect((loaded as { value: object }).value).not.toHaveProperty("flow");
+    });
+
+    it("gives a deleted build's run its story header and digest", async () => {
+      const { runs, runId } = seededRun();
+      runs.deleteBuild("b1");
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
+
+      expect(loaded).toMatchObject({
+        ok: true,
+        value: {
+          story: {
+            header: { name: "report", blueprintName: "Report", blueprintVersion: 1 },
+            digest: expect.stringContaining("Build: report"),
+            written: null,
+          },
+        },
+      });
+    });
+
+    it("gives a run of a build with no stored manifest a story digest with no session line", async () => {
+      const { runs } = seededRun();
+      const runId = withoutManifest(runs);
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
+
+      expect(loaded).toMatchObject({
+        ok: true,
+        value: {
+          story: {
+            header: { name: "before-manifests" },
+            digest: expect.stringContaining("Build: before-manifests"),
+            written: null,
+          },
+        },
+      });
+      const { digest } = (loaded as { value: { story: { digest: string } } }).value.story;
+      expect(digest).toContain("Run status: failed");
+      expect(digest).not.toContain("Session:");
     });
 
     it("answers a run's pipeline in run order from the stored manifest and its events, reading no blueprint", async () => {
@@ -3601,6 +3690,296 @@ describe("createEngineHandler", async () => {
         });
         expect(store.findRun(runId)?.status).toBe("stopped");
         expect(waiter.calls).toEqual([]);
+      });
+    });
+    describe("run story", () => {
+      const narration = { text: "The run wrote and checked.\nNothing got in the way.", cost: 0.25 };
+      let narrator: FakeRunNarrator;
+      let logged: string[];
+      let appends: MockInstance<FakeStore["appendRunStory"]>;
+      let toldAtPush: (string | undefined)[];
+
+      const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const settlesWhileHeld = (pending: Promise<unknown>) =>
+        Promise.race([pending.then(() => "settled"), settle(2000).then(() => "still waiting")]);
+
+      const appended = () => appends.mock.calls.map(([story]) => story);
+
+      const storyNotWritten = (runId: string) =>
+        logged.filter((line) => line.startsWith(`engine: run ${runId} story not written (`));
+
+      const storyHandler = (turn: FakeTurnHandler = napsForever) =>
+        handlerWith({
+          narrator,
+          publish: (push) => {
+            pushes.push(push);
+            if (push.push === "story") {
+              toldAtPush.push(runs.latestRunStory(push.runId)?.runStatus);
+            }
+          },
+          run: runEnvironment(new NodeFileSystem(), Date.now, turn),
+        });
+
+      const napSent = (runId: string) =>
+        vi.waitFor(() => {
+          expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
+        });
+
+      const stopRunRequest = (runId: string) =>
+        handler.handle({ id: nextId++, type: "stop-run", payload: { runId } });
+
+      const loadedStory = async (runId: string) => {
+        const loaded = await handler.handle({ id: nextId++, type: "load-run", payload: { runId } });
+        return (loaded as { value: { story?: unknown } }).value.story;
+      };
+
+      const listedTotal = async (runId: string) => {
+        const listed = await handler.handle({ id: nextId++, type: "list-runs" });
+        return (listed as { value: { id: string; totalCost: unknown }[] }).value.find(
+          (run) => run.id === runId,
+        )?.totalCost;
+      };
+
+      const leftRunning = (buildId: string) =>
+        runs.createRun({
+          buildDir: buildDirOf(buildId),
+          inputs: {},
+          nodeIds: ["start"],
+          session: { tmuxName: "fd-run-left", cwd: repo.path, claudeSessionId: "c-left" },
+          buildId,
+        }).id;
+
+      const endRun = async (ending: "done" | "failed" | "stopped") => {
+        if (ending === "stopped") {
+          handler = storyHandler();
+          flows.save(sleeper());
+          const runId = await startedRunId();
+          await napSent(runId);
+          expect(narrator.calls).toEqual([]);
+          await stopRunRequest(runId);
+          return runId;
+        }
+        handler = storyHandler((nodeId, opening) =>
+          ending === "failed" && nodeId === "check" ? "fail" : napsForever(nodeId, opening),
+        );
+        flows.save(twoAgents());
+        const runId = await startedRunId();
+        await untilFinished(runId);
+        return runId;
+      };
+
+      const buildOf = (runId: string) => {
+        const buildId = runs.findRun(runId)?.buildId;
+        if (buildId === undefined) throw new Error(`no build for run ${runId}`);
+        return buildId;
+      };
+
+      const headerAndDigest = (runId: string) => ({
+        header: expect.objectContaining({ name: runs.findBuild(buildOf(runId))?.name }),
+        digest: expect.stringMatching(/\S/),
+      });
+
+      beforeEach(() => {
+        narrator = new FakeRunNarrator(narration);
+        logged = [];
+        toldAtPush = [];
+        appends = vi.spyOn(runs, "appendRunStory");
+        vi.spyOn(console, "log").mockImplementation((line: unknown) => {
+          logged.push(String(line));
+        });
+      });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it.each(["done", "failed", "stopped"] as const)(
+        "tells a %s run's story once from the digest the page shows, and announces it after storing it",
+        async (ending) => {
+          const runId = await endRun(ending);
+
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+          await settle();
+          expect(runs.findRun(runId)?.status).toBe(ending);
+          expect(appended()).toEqual([
+            {
+              runId,
+              at: expect.any(String),
+              runStatus: ending,
+              text: narration.text,
+              cost: narration.cost,
+            },
+          ]);
+          const shown = (await loadedStory(runId)) as { digest?: string } | undefined;
+          expect(narrator.calls).toEqual([shown?.digest]);
+          expect(pushes.filter((push) => push.push === "story")).toEqual([
+            { push: "story", runId },
+          ]);
+          expect(toldAtPush).toEqual([ending]);
+          expect(await loadedStory(runId)).toEqual({
+            ...headerAndDigest(runId),
+            written: {
+              text: narration.text,
+              at: expect.any(String),
+              runStatus: ending,
+              cost: narration.cost,
+            },
+          });
+        },
+      );
+
+      it("keeps the narrator's cost on the story alone, out of the run's total", async () => {
+        const release = narrator.hold();
+        const runId = await endRun("done");
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+        const costBefore = runs.costOf(runId);
+        const listedBefore = await listedTotal(runId);
+
+        release();
+        await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+        expect(appended()[0]?.cost).toBe(narration.cost);
+        expect(runs.costOf(runId)).toEqual(costBefore);
+        expect(await listedTotal(runId)).toEqual(listedBefore);
+      });
+
+      it("tells the story of an interrupted run stopped while no run of it is going", async () => {
+        handler = storyHandler();
+        flows.save(sleeper());
+        const runId = leftRunning(await builtId());
+
+        expect(await stopRunRequest(runId)).toMatchObject({ ok: true, value: { stopped: true } });
+
+        await vi.waitFor(() => expect(appended()).toHaveLength(1));
+        expect(appended()[0]).toMatchObject({ runId, runStatus: "stopped", text: narration.text });
+        expect(pushes).toContainEqual({ push: "story", runId });
+      });
+
+      it("tells no story of a run whose build is not stored, logs why, and its page has no story", async () => {
+        handler = storyHandler();
+        const runId = runs.createRun({
+          buildDir: "/fd-home/workspaces/gone",
+          inputs: {},
+          nodeIds: ["start"],
+          session: { tmuxName: "left-gone", cwd: repo.path, claudeSessionId: "c-gone" },
+          buildId: "gone",
+        }).id;
+
+        expect(await stopRunRequest(runId)).toMatchObject({ ok: true, value: { stopped: true } });
+
+        await vi.waitFor(() => expect(storyNotWritten(runId)).toHaveLength(1));
+        expect(storyNotWritten(runId)[0]).toMatch(/build is not stored/);
+        expect(narrator.calls).toEqual([]);
+        expect(appended()).toEqual([]);
+        expect(await loadedStory(runId)).toBeUndefined();
+      });
+
+      it("writes no story when the narrator fails, logs why, and the run still ends and its page has the header and digest", async () => {
+        narrator.failWith(new Error("narrator down"));
+        const runId = await endRun("failed");
+
+        await vi.waitFor(() => expect(storyNotWritten(runId)).toHaveLength(1));
+        expect(storyNotWritten(runId)[0]).toMatch(/\(.*narrator down.*\)$/);
+        expect(narrator.calls).toHaveLength(1);
+        expect(appended()).toEqual([]);
+        expect(pushes).not.toContainEqual({ push: "story", runId });
+        expect(runs.findRun(runId)?.status).toBe("failed");
+        expect(await loadedStory(runId)).toEqual({ ...headerAndDigest(runId), written: null });
+        await expect(startedOn(buildOf(runId))).resolves.toEqual(expect.any(String));
+      });
+
+      it("lets Stop, the build's next run and closing go ahead while a story is still being written", async () => {
+        narrator.hold();
+        handler = storyHandler();
+        flows.save(sleeper());
+        const buildId = await builtId();
+        const first = await startedOn(buildId);
+        await napSent(first);
+
+        expect(await settlesWhileHeld(stopRunRequest(first))).toBe("settled");
+        expect(runs.findRun(first)?.status).toBe("stopped");
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+        const second = await startedOn(buildId);
+        await napSent(second);
+        expect(await settlesWhileHeld(handler.stop())).toBe("settled");
+        expect(runs.findRun(second)?.status).toBe("stopped");
+        expect(appended()).toEqual([]);
+      });
+
+      it("drops the story of a stopped ending that a resume overtook, and tells the resumed run's own ending", async () => {
+        const release = narrator.hold();
+        let naps = 0;
+        handler = storyHandler((nodeId) => (nodeId === "nap" && ++naps === 1 ? "hold" : "done"));
+        flows.save(sleeper());
+        const runId = await startedRunId();
+        await napSent(runId);
+        await stopRunRequest(runId);
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+        expect(
+          await handler.handle({ id: nextId++, type: "resume-run", payload: { runId } }),
+        ).toMatchObject({ ok: true, value: { kind: "started", runId } });
+        await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(2));
+        release();
+
+        await vi.waitFor(() => expect(storyNotWritten(runId)).toHaveLength(1));
+        await vi.waitFor(() => expect(appended()).toHaveLength(1));
+        await settle();
+        expect(appended()).toEqual([expect.objectContaining({ runId, runStatus: "done" })]);
+        expect(await loadedStory(runId)).toMatchObject({
+          written: { runStatus: "done", text: narration.text },
+        });
+      });
+
+      it("aborts a story still being written when Flowdeck detaches, and starts none after", async () => {
+        const release = narrator.hold();
+        const runId = await endRun("done");
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+        await handler.detach();
+
+        await vi.waitFor(() => expect(storyNotWritten(runId)).toHaveLength(1));
+        release();
+        const left = leftRunning(buildOf(runId));
+        expect(await stopRunRequest(left)).toMatchObject({ ok: true, value: { stopped: true } });
+        await settle();
+        expect(narrator.calls).toHaveLength(1);
+        expect(appended()).toEqual([]);
+      });
+
+      it("aborts a story still being written when the engine stops, and tells none for the runs it stops", async () => {
+        const release = narrator.hold();
+        const finished = await endRun("done");
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+        flows.save(sleeper());
+        const napping = await startedOn(await builtId());
+        await napSent(napping);
+
+        await handler.stop();
+
+        await vi.waitFor(() => expect(storyNotWritten(finished)).toHaveLength(1));
+        release();
+        await settle();
+        expect(runs.findRun(napping)?.status).toBe("stopped");
+        expect(narrator.calls).toHaveLength(1);
+        expect(appended()).toEqual([]);
+      });
+
+      it("tells no story without a narrator, logging nothing about one, and the page still has the header and digest", async () => {
+        handler = handlerWith({
+          run: runEnvironment(new NodeFileSystem(), Date.now, () => "done"),
+        });
+        flows.save(twoAgents());
+        const runId = await startedRunId();
+        await untilFinished(runId);
+        await settle();
+
+        expect(appended()).toEqual([]);
+        expect(logged.filter((line) => line.includes("story"))).toEqual([]);
+        expect(await loadedStory(runId)).toEqual({ ...headerAndDigest(runId), written: null });
       });
     });
 

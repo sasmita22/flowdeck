@@ -504,6 +504,21 @@ describe("cards", () => {
 
     expect(shown).not.toContain("Not from a blueprint");
   });
+
+  it("carries a run's story line onto its card, and gives a run without one none", async () => {
+    const bridge = fakeBridge();
+    bridge.listRuns.mockResolvedValue([
+      { ...runs[1], storyLine: "Fix-login ended done after both stages." },
+      runs[2],
+    ] as never);
+    const library = createLibraryStore({ bridge });
+    await library.getState().refresh();
+
+    const [told, untold] = selectRunCards(library.getState());
+
+    expect(told?.storyLine).toBe("Fix-login ended done after both stages.");
+    expect(untold).not.toHaveProperty("storyLine");
+  });
 });
 
 describe("build filter", () => {

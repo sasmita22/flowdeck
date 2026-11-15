@@ -14,6 +14,7 @@ export type {
   PendingBuildStart,
   RunRecord,
   RunStatus,
+  RunStory,
   RunSummary,
   SnapshotGap,
   SnapshotKey,

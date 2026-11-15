@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
-import { BuildRunningError } from "../../../src/core/run/store.js";
+import { BuildRunningError, type RunStory } from "../../../src/core/run/store.js";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../../src/ports/store.js";
@@ -157,9 +157,10 @@ describe("SqliteStore", () => {
       { name: "014_build_branch.sql" },
       { name: "015_build_manifests.sql" },
       { name: "016_events_by_node.sql" },
+      { name: "017_run_stories.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 16]);
+    expect(before).toEqual([1, 1, 3, 1, 17]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -499,6 +500,73 @@ describe("SqliteStore", () => {
         .run(seq, id),
     ).toThrow("activity is append-only");
     expect(rows()).toEqual(before);
+  });
+
+  describe("run stories", () => {
+    const story = (runId: string, text: string, runStatus: RunStory["runStatus"] = "failed") => ({
+      runId,
+      at: "2026-11-15T10:00:00.000Z",
+      runStatus,
+      text,
+      cost: 0.0007,
+    });
+
+    it("reads back the latest story of a run, the second append for it being the latest", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.finishRun(id, "failed");
+      const other = store.createRun(newRun(["p1"]));
+      const first = story(id, "The run failed at Test.");
+      const second = { ...story(id, "Resumed, the run finished.", "done"), cost: 0.0009 };
+
+      store.appendRunStory(first);
+      expect(store.latestRunStory(id)).toEqual(first);
+
+      store.appendRunStory(second);
+      expect(store.latestRunStory(id)).toEqual(second);
+      expect(store.latestRunStory(other.id)).toBeUndefined();
+    });
+
+    it("rejects a raw UPDATE, DELETE or INSERT OR REPLACE on run_stories in the database itself", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.finishRun(id, "failed");
+      store.appendRunStory(story(id, "The run failed at Test."));
+      const db = raw();
+      const rows = () => db.prepare("SELECT * FROM run_stories ORDER BY seq").all();
+      const before = rows();
+      const { seq } = db.prepare("SELECT MIN(seq) AS seq FROM run_stories").get() as {
+        seq: number;
+      };
+
+      expect(() => db.exec("UPDATE run_stories SET text = 'edited'")).toThrow(/append-only/);
+      expect(() => db.exec("DELETE FROM run_stories")).toThrow(/append-only/);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO run_stories (seq, run_id, at, run_status, text, cost) VALUES (?, ?, 'now', 'done', 'replaced', 0)",
+          )
+          .run(seq, id),
+      ).toThrow(/append-only/);
+      expect(rows()).toEqual(before);
+    });
+
+    it("lists a run with the first non-empty line of its latest story, and one without a story with none", () => {
+      const store = open();
+      const told = store.createRun(newRun(["p1"]));
+      store.finishRun(told.id, "failed");
+      const untold = store.createRun(newRun(["p1"]));
+      store.finishRun(untold.id, "done");
+      store.appendRunStory(story(told.id, "Old account.\nStill old."));
+      store.appendRunStory(story(told.id, "\nThe run failed at Test.\nThe suite did not pass."));
+
+      const listed = new Map(store.listRuns().map((run) => [run.id, run]));
+
+      expect(listed.get(told.id)?.storyLine).toBe("The run failed at Test.");
+      expect(store.findRunSummary(told.id)?.storyLine).toBe("The run failed at Test.");
+      expect(listed.get(untold.id)).not.toHaveProperty("storyLine");
+      expect(store.findRunSummary(untold.id)).not.toHaveProperty("storyLine");
+    });
   });
 
   it("stamps a build from now", () => {

@@ -11,7 +11,7 @@ import * as hardstop from "../../../src/core/nodes/hardstop/defaults.js";
 import * as join from "../../../src/core/nodes/join/defaults.js";
 import * as loop from "../../../src/core/nodes/loop/defaults.js";
 import * as output from "../../../src/core/nodes/output/defaults.js";
-import { nodeDefaults } from "../../../src/core/nodes/defaults.js";
+import { labelFor, nodeDefaults } from "../../../src/core/nodes/defaults.js";
 import * as trigger from "../../../src/core/nodes/trigger/defaults.js";
 import {
   flow,
@@ -70,5 +70,24 @@ describe("node defaults", () => {
     expect(Object.keys(nodeDefaults).sort()).toEqual([...NodeType.options].sort());
     expect(Object.keys(nodeDefaults)).not.toContain("prompt");
     expect(Object.keys(nodeDefaults)).not.toContain("script");
+  });
+});
+
+describe("a node's shown label", () => {
+  it.each([
+    ["agent", "", "Agent"],
+    ["agent", "   ", "Agent"],
+    ["hardstop", "", "Hard stop"],
+    ["foreach", "", "For each"],
+  ] as const)("labelFor names a %s labelled %j by its type, %j", (type, label, shown) => {
+    expect(labelFor({ type, label })).toBe(shown);
+  });
+
+  it("labelFor keeps a label that has text", () => {
+    expect(labelFor({ type: "agent", label: "Review" })).toBe("Review");
+  });
+
+  it("labelFor names no node at all Build", () => {
+    expect(labelFor(undefined)).toBe("Build");
   });
 });

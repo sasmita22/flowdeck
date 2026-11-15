@@ -6,10 +6,14 @@ export type RunRelay = {
   latest(runId: string): RunSnapshot | null;
 };
 
-export function createRunRelay(options: { send: (snapshot: RunSnapshot) => void }): RunRelay {
+export function createRunRelay(options: {
+  send: (snapshot: RunSnapshot) => void;
+  sendStory?: (runId: string) => void;
+}): RunRelay {
   const latest = new Map<string, RunSnapshot>();
   return {
     onPush(push) {
+      if (push.push === "story") options.sendStory?.(push.runId);
       if (push.push !== "run-state") return;
       latest.set(push.value.runId, push.value);
       options.send(push.value);

@@ -11,7 +11,7 @@ import {
   withPositions,
   type Bounds,
 } from "./frames.js";
-import { labelFor } from "./store.js";
+import { labelFor } from "../../../core/nodes/defaults.js";
 
 export { FRAME_PADDING } from "./frames.js";
 

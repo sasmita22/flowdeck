@@ -3,7 +3,8 @@ import { useRef, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { widthOf } from "./frames.js";
-import { labelFor, type CanvasState } from "./store.js";
+import { labelFor } from "../../../core/nodes/defaults.js";
+import type { CanvasState } from "./store.js";
 
 export function RenameField({ store }: { store: StoreApi<CanvasState> }) {
   const node = useStore(store, (state) =>

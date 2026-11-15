@@ -20,9 +20,31 @@ export const runSummarySchema = z.object({
   buildDeleted: z.boolean(),
   number: z.number().int(),
   doneCount: z.number().int(),
+  storyLine: z.string().optional(),
 });
 
 export type ListedRun = z.infer<typeof runSummarySchema>;
+
+const runHeaderSchema = z.object({
+  name: z.string().nullable(),
+  blueprintName: z.string().nullable(),
+  blueprintVersion: z.number().int().nullable(),
+  repo: z.string().nullable(),
+  values: z.record(z.string(), z.union([z.string(), z.boolean()])).nullable(),
+});
+
+const runStorySchema = z.object({
+  header: runHeaderSchema,
+  digest: z.string(),
+  written: z
+    .object({
+      text: z.string(),
+      at: z.string(),
+      runStatus: z.enum(["done", "failed", "stopped"]),
+      cost: z.number(),
+    })
+    .nullable(),
+});
 
 export const loadedRunSchema = z.object({
   run: runSummarySchema,
@@ -31,6 +53,7 @@ export const loadedRunSchema = z.object({
   snapshot: runSnapshotSchema,
   activity: z.array(activityEntrySchema),
   note: z.string().optional(),
+  story: runStorySchema.optional(),
 });
 
 export type LoadedRun = z.infer<typeof loadedRunSchema>;

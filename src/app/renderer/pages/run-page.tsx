@@ -1,13 +1,15 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Actions } from "../actions.js";
-import { labelFor } from "../canvas/store.js";
+import { labelFor } from "../../../core/nodes/defaults.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { RunLabels } from "../inspector/inspector.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
 import { selectBuildCards, type LibraryState } from "../library-store.js";
+import { variablesText } from "../../../core/run/digest.js";
+import type { LoadedRun } from "../../../core/run/listing.js";
 import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
 import { PanelToggle } from "../panel-toggle.js";
@@ -31,6 +33,47 @@ const tone = {
   stopped: "quiet",
   interrupted: "quiet",
 } as const;
+
+type Story = NonNullable<LoadedRun["story"]>;
+
+function StoryPanel({ story }: { story: Story }) {
+  const { header } = story;
+  const variables = variablesText(header.values);
+  const [digestOpen, setDigestOpen] = useState(false);
+  return (
+    <section className="fd-card fd-run-story" data-testid={pageTestIds.runStory}>
+      <div className="fd-card-meta" data-testid={pageTestIds.runStoryHeader}>
+        {header.name !== null && <strong>{header.name}</strong>}
+        {header.blueprintName !== null && (
+          <span>
+            {header.blueprintName}
+            {header.blueprintVersion === null ? "" : ` v${header.blueprintVersion}`}
+          </span>
+        )}
+        {header.repo !== null && <code className="fd-hash">{header.repo}</code>}
+        {variables !== "" && <span>{variables}</span>}
+      </div>
+      {story.written !== null && (
+        <p className="fd-run-reply fd-run-story-account" data-testid={pageTestIds.runStoryAccount}>
+          {story.written.text}
+        </p>
+      )}
+      <button
+        className="fd-btn fd-run-story-toggle"
+        data-testid={pageTestIds.runStoryDigestToggle}
+        aria-expanded={digestOpen}
+        onClick={() => setDigestOpen(!digestOpen)}
+      >
+        Digest
+      </button>
+      {digestOpen && (
+        <pre className="fd-file-content" data-testid={pageTestIds.runStoryDigest} tabIndex={0}>
+          {story.digest}
+        </pre>
+      )}
+    </section>
+  );
+}
 
 export function RunPage({
   runId,
@@ -70,6 +113,16 @@ export function RunPage({
     void inspector.getState().view(runId);
     void wait.getState().view(runId);
   }, [library, run, terminal, inspector, wait, runId]);
+
+  const liveStatus = live?.status;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (liveStatus === "running") wasRunning.current = true;
+    else if (liveStatus !== undefined && wasRunning.current) {
+      wasRunning.current = false;
+      void library.getState().openRun(runId);
+    }
+  }, [library, runId, liveStatus]);
 
   const stages = loaded?.stages ?? null;
   const labels = useMemo<RunLabels>(
@@ -192,6 +245,7 @@ export function RunPage({
           </div>
         )}
         <div className="fd-run-stages">
+          {loaded?.story !== undefined && <StoryPanel story={loaded.story} />}
           {deleted && (
             <p className="fd-page-note" data-testid={pageTestIds.runDeletedNote} role="status">
               This run&apos;s build was deleted. It can&apos;t be run again.

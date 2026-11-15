@@ -7,6 +7,7 @@ import { ClaudeBlueprintSessions } from "../../adapters/claude/claude-blueprint-
 import { ClaudeBuildAgents } from "../../adapters/claude/claude-build-agents.js";
 import { ClaudeCli } from "../../adapters/claude/claude-cli.js";
 import { ClaudeUserConnectors } from "../../adapters/claude/claude-connectors.js";
+import { ClaudeNarrator } from "../../adapters/claude/claude-narrator.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
 import { parseTranscriptTurns } from "../../adapters/claude/transcript-turns.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
@@ -158,6 +159,7 @@ const createHandler = async () =>
     endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
     homeLock: { acquire: lockHome },
     blueprint: await prepareBlueprint(),
+    narrator: new ClaudeNarrator({ home }),
     transcriptTurns: async (claudeSessionId) => {
       const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
         claudeSessionId,

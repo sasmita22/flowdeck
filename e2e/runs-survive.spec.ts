@@ -226,7 +226,8 @@ test("A run whose session ended while the app was closed shows interrupted, and 
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as string[])
-    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length < 2);
+    .filter((argv) => argv.filter((arg) => arg === "--plugin-dir").length < 2)
+    .filter((argv) => !argv.includes("-p"));
   expect(launches).toHaveLength(2);
   const [firstLaunch, resumed] = launches;
   expect(firstLaunch).toEqual(expect.arrayContaining(["--session-id", claudeSessionId]));

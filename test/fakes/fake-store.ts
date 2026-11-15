@@ -20,6 +20,7 @@ import type {
   PendingBuildStart,
   RunRecord,
   RunStatus,
+  RunStory,
   RunSummary,
   SnapshotGap,
   SnapshotKey,
@@ -46,6 +47,14 @@ const blueprintNameIn = (origin: unknown): string | null => {
 
 const stateMoving = new Set(stateMovingKinds);
 
+const storyLineOf = (story: RunStory | undefined): { storyLine?: string } => {
+  const storyLine = story?.text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line !== "");
+  return storyLine === undefined ? {} : { storyLine };
+};
+
 export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
@@ -55,6 +64,7 @@ export class FakeStore implements Store {
   private readonly deletedAt = new Map<string, number>();
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
+  private readonly stories: RunStory[] = [];
   private readonly now: () => Date;
   private readonly pendingBuilds: PendingBuild[] = [];
   private readonly buildEventLog: { pendingId: string; event: StoredBuildEvent }[] = [];
@@ -131,6 +141,7 @@ export class FakeStore implements Store {
       buildDeleted: run.buildId !== undefined && this.deletedAt.has(run.buildId),
       number: earlierOfBuild + 1,
       doneCount,
+      ...storyLineOf(this.latestRunStory(run.id)),
     };
   }
 
@@ -373,6 +384,15 @@ export class FakeStore implements Store {
     const entries = this.activityByRun.get(runId) ?? new Map<number, ActivityEntry>();
     entries.set(entry.id, copy(entry));
     this.activityByRun.set(runId, entries);
+  }
+
+  appendRunStory(story: RunStory): void {
+    this.stories.push(copy(story));
+  }
+
+  latestRunStory(runId: string): RunStory | undefined {
+    const story = this.stories.findLast((told) => told.runId === runId);
+    return story && copy(story);
   }
 
   activity(runId: string): ActivityEntry[] {

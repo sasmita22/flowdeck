@@ -276,6 +276,9 @@ void app.whenReady().then(async () => {
     send: (snapshot) => {
       if (!window.isDestroyed()) window.webContents.send(bridgeChannels.runState, snapshot);
     },
+    sendStory: (runId) => {
+      if (!window.isDestroyed()) window.webContents.send(bridgeChannels.story, runId);
+    },
   });
   client.onPush(relay.onPush);
   const activity = createActivityRelay({

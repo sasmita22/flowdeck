@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { flowSvg } from "../../src/core/flow/flow-svg.js";
-import { BuildRunningError, type NewBuildSnapshot } from "../../src/core/run/store.js";
+import {
+  BuildRunningError,
+  type NewBuildSnapshot,
+  type RunStory,
+} from "../../src/core/run/store.js";
 import type { ActivityEntry } from "../../src/core/run/activity.js";
 import type { BuildEvent } from "../../src/core/run/build-progress.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../src/ports/store.js";
@@ -568,6 +572,49 @@ describe("FakeStore", () => {
       store.listRuns().find((run) => run.id === done.id),
     );
     expect(store.findRunSummary("nope")).toBeUndefined();
+  });
+
+  describe("run stories", () => {
+    const story = (runId: string, text: string, runStatus: RunStory["runStatus"] = "failed") => ({
+      runId,
+      at: "2026-11-15T10:00:00.000Z",
+      runStatus,
+      text,
+      cost: 0.0007,
+    });
+
+    it("reads back the latest story of a run, the second append for it being the latest", () => {
+      const store = new FakeStore();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.finishRun(id, "failed");
+      const other = store.createRun(newRun(["p1"]));
+      const first = story(id, "The run failed at Test.");
+      const second = { ...story(id, "Resumed, the run finished.", "done"), cost: 0.0009 };
+
+      store.appendRunStory(first);
+      expect(store.latestRunStory(id)).toEqual(first);
+
+      store.appendRunStory(second);
+      expect(store.latestRunStory(id)).toEqual(second);
+      expect(store.latestRunStory(other.id)).toBeUndefined();
+    });
+
+    it("lists a run with the first non-empty line of its latest story, and one without a story with none", () => {
+      const store = new FakeStore();
+      const told = store.createRun(newRun(["p1"]));
+      store.finishRun(told.id, "failed");
+      const untold = store.createRun(newRun(["p1"]));
+      store.finishRun(untold.id, "done");
+      store.appendRunStory(story(told.id, "Old account.\nStill old."));
+      store.appendRunStory(story(told.id, "\nThe run failed at Test.\nThe suite did not pass."));
+
+      const listed = new Map(store.listRuns().map((run) => [run.id, run]));
+
+      expect(listed.get(told.id)?.storyLine).toBe("The run failed at Test.");
+      expect(store.findRunSummary(told.id)?.storyLine).toBe("The run failed at Test.");
+      expect(listed.get(untold.id)).not.toHaveProperty("storyLine");
+      expect(store.findRunSummary(untold.id)).not.toHaveProperty("storyLine");
+    });
   });
 
   it("finds a run of a deleted build, marked deleted, as listRuns lists it", () => {

@@ -866,6 +866,23 @@ body,
   padding: 0 var(--space-4) var(--space-4);
 }
 
+.fd-run-story {
+  margin: var(--space-4) 0;
+}
+
+.fd-run-story-account {
+  max-width: 72ch;
+}
+
+.fd-run-story-toggle {
+  align-self: flex-start;
+}
+
+.fd-run-story-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
 .fd-run-rail {
   margin: 0;
   padding: 0;
