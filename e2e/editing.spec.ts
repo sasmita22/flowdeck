@@ -555,6 +555,21 @@ test("The gear picks the model, permission mode and the repository's base branch
   await expect(window.getByTestId("session-chip")).toContainText("Haiku (latest)");
 });
 
+test("A blueprint made with New blueprint never asks for permission, and the gear says so", async () => {
+  const window = await launch();
+  await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Untitled");
+
+  await window.getByTestId(controlTestIds.sessionChip).click();
+  await expect(window.getByTestId("session-settings")).toBeVisible();
+
+  await expect(window.getByTestId("session-permission-mode").locator("option:checked")).toHaveText(
+    "Never ask (skip all checks)",
+  );
+  await expect
+    .poll(async () => (await readout(window)).session)
+    .toMatchObject({ permissionMode: "bypassPermissions" });
+});
+
 const runInBuild = async (writes: Record<string, string> = {}) => {
   const repo = await tempRepo();
   seedFlow(home, onMainFlow([at(agent("s1"), 80, 120)], []), repo.path);

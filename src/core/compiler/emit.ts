@@ -52,6 +52,9 @@ export function emit(lowered: ReturnType<typeof lower>, target: EmitTarget): Bui
   const settings = {
     env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
     permissions: { allow: session.allowedTools, defaultMode: session.permissionMode },
+    ...(session.permissionMode === "bypassPermissions"
+      ? { skipDangerousModePermissionPrompt: true }
+      : {}),
   };
   const files: BuildFile[] = [
     ...lowered.nodeFiles,

@@ -18,6 +18,7 @@ export const PARENT_SESSION_VARS = [
 ] as const;
 
 const trustDialog = /Quick safety check|Yes, I trust this folder/;
+const bypassDialog = /^\s*WARNING: Claude Code running in Bypass Permissions mode\s*$/m;
 const cursorOnYes = /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m;
 const rule = "────";
 const busy = "esc to interrupt";
@@ -133,6 +134,11 @@ export class ClaudeCli {
     let answeredDialog = false;
     for (;;) {
       const pane = await this.sessions.capture(name);
+      if (bypassDialog.test(pane)) {
+        throw new Error(
+          "Claude Code showed its Bypass Permissions warning: consent is missing from the session settings",
+        );
+      }
       if (!trustDialog.test(pane)) {
         dialogSince = undefined;
         if (showsInputBox(pane)) break;

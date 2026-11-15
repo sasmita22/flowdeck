@@ -171,6 +171,10 @@ test("Two blueprints each keep their own canvas, after a reload too", async () =
 
   await window.getByTestId(controlTestIds.back).click();
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("Blueprints");
+  const appMenu = window.getByRole("navigation", { name: "App" });
+  await expect(appMenu.getByTestId("menu-blueprints")).toBeVisible();
+  await expect(window.getByTestId("menu-new")).toHaveCount(0);
+  await expect(appMenu.getByText("New blueprint")).toHaveCount(0);
   await window.getByTestId(pageTestIds.create).click();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Untitled");
   await expect(readout(window)).not.toContainText('"agent-1"');

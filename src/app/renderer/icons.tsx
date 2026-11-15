@@ -1,5 +1,4 @@
 export type IconName =
-  | "plus"
   | "search"
   | "blueprints"
   | "builds"
@@ -15,7 +14,6 @@ export type IconName =
   | "close";
 
 const paths: Record<IconName, string> = {
-  plus: "M8 3v10M3 8h10",
   search: "M7 12.5a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11ZM11 11l3.5 3.5",
   blueprints: "M2.5 2.5h4.5v4.5H2.5ZM9 2.5h4.5v4.5H9ZM2.5 9h4.5v4.5H2.5ZM9 9h4.5v4.5H9Z",
   builds: "M8 1.5 14 4.5v7L8 14.5 2 11.5v-7ZM2 4.5 8 7.5l6-3M8 7.5v7",
