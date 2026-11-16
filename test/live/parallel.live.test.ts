@@ -18,6 +18,7 @@ import {
 } from "../fixtures/flow-builders.js";
 import { liveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const buildName = "live-parallel";
 const runTimeoutMs = 420_000;
@@ -156,6 +157,7 @@ const timeOf = (events: readonly StoredEvent[], nodeId: string, kind: string) =>
   Date.parse(events.find((event) => event.nodeId === nodeId && event.kind === kind)?.time ?? "");
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("parallel sections with real claude", () => {
+  useTempClaudeConfig();
   let live: LiveRun | undefined;
   let recorded: HookEvent[] = [];
   let events: StoredEvent[] = [];
@@ -210,6 +212,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("parallel sections with real 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
   "a join that waits for first with real claude",
   () => {
+    useTempClaudeConfig();
     let live: LiveRun | undefined;
     let events: StoredEvent[] = [];
 

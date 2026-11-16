@@ -11,6 +11,7 @@ import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { registry } from "../../src/core/nodes/registry.js";
 import { killTmuxServer, readLines, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import { paneText, transcriptTail } from "../fixtures/live-evidence.js";
+import { findClaudeTranscript, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -65,6 +66,7 @@ async function plantRelayRow(copy: string): Promise<void> {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the audit-ai-guidelines skill", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-audit-${process.pid}`;
   const sessions = new TmuxSessionHost({ socketName: sessionName });
   const claude = new ClaudeCli({ sessions });
@@ -112,7 +114,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the audit-ai-guidelines skil
       await claude.waitUntilReady(sessionName);
       await claude.sendPrompt(sessionName, prompt);
 
-      const transcript = async () => claude.findTranscript(sessionId);
+      const transcript = async () => findClaudeTranscript(sessionId);
       const deadline = Date.now() + turnTimeoutMs;
       while ((await assistantMessages(await transcript())).at(-1)?.stop_reason !== "end_turn") {
         if (Date.now() >= deadline) break;

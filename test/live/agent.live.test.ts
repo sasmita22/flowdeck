@@ -13,6 +13,7 @@ import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const runTimeoutMs = 300_000;
@@ -141,6 +142,7 @@ const describeEvent = ({ kind, payload }: HookEvent) =>
     .join(" ");
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("agent nodes with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-agent-${process.pid}`;
   let home: string;
   let repo: TmpRepo;

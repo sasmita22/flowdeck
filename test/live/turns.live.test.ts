@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -13,6 +13,11 @@ import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { hookCommand, hookSettings } from "../../src/core/compiler/hook-settings.js";
 import { waitForTurnEnd, type TurnEndEvent } from "../../src/core/run/turns.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import {
+  claudeConfigDir,
+  findClaudeTranscript,
+  useTempClaudeConfig,
+} from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -86,6 +91,7 @@ async function lastAssistantTextWithin(path: string, expected: string, ms: numbe
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("turn end with real claude", () => {
+  useTempClaudeConfig();
   const socketName = `fd-live-turns-${process.pid}`;
   const sessions = new TmuxSessionHost({ socketName });
   const cli = new ClaudeCli({ sessions });
@@ -142,14 +148,14 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("turn end with real claude", 
     }
     for (const { sessionId } of started) {
       await waitForClaudeToExit(sessionId);
-      const transcript = await cli.findTranscript(sessionId);
+      const transcript = await findClaudeTranscript(sessionId);
       if (transcript) {
         await rm(transcript);
         await rm(join(dirname(transcript), sessionId), { recursive: true, force: true });
         await removeIfEmpty(join(dirname(transcript), "memory"));
         await removeIfEmpty(dirname(transcript));
       }
-      await rm(join(homedir(), ".claude", "session-env", sessionId), {
+      await rm(join(claudeConfigDir(), "session-env", sessionId), {
         recursive: true,
         force: true,
       });
@@ -174,7 +180,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("turn end with real claude", 
       expect(String(stop.payload["last_assistant_message"]).trim()).toBe("OK");
       const transcriptPath = String(stop.payload["transcript_path"]);
       expect(await lastAssistantTextWithin(transcriptPath, "OK", 5000)).toBe("OK");
-      expect(await cli.findTranscript(sessionId)).toBeDefined();
+      expect(await findClaudeTranscript(sessionId)).toBeDefined();
     },
   );
 

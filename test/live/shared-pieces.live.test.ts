@@ -16,6 +16,7 @@ import {
   type Workspace,
 } from "../fixtures/recorded-build.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 const buildTimeoutMs = 900_000;
@@ -73,6 +74,7 @@ async function build(flow: Flow, name: string): Promise<Built> {
 const timeout = { timeout: buildTimeoutMs + 120_000 };
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a build's shared pieces", () => {
+  useTempClaudeConfig();
   it("are one piece run by all three agents that each run the tests", timeout, async () => {
     const name = "shared-a";
     const built = await build(

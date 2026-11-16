@@ -8,6 +8,7 @@ import { FakeWaiter } from "../fakes/fake-waiter.js";
 import * as builders from "../fixtures/flow-builders.js";
 import { liveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const digest = [
   "Run of blueprint Fix and verify, version 3.",
@@ -19,6 +20,7 @@ const runDeadlineMs = 120_000;
 const storyDeadlineMs = 150_000;
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude on haiku", () => {
+  useTempClaudeConfig();
   let home: string;
 
   beforeEach(async () => {

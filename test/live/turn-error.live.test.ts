@@ -8,6 +8,7 @@ import { nodeStatus } from "../../src/core/run/run-events.js";
 import * as builders from "../fixtures/flow-builders.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const buildName = "live-turn-error";
@@ -33,6 +34,7 @@ function logOut(): () => void {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-turn-error-${process.pid}`;
   let home: string;
   let repo: TmpRepo;

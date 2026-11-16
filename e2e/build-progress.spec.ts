@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -341,6 +341,63 @@ test("the pipeline page shows the build's tokens and cost read from its session'
       inputTokens: 1_000_000,
       outputTokens: 200_000,
     },
+    env: { CLAUDE_CONFIG_DIR: "" },
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  const pendingId = await startBuild(window, "fix-a");
+
+  await expect(window.getByTestId(pageTestIds.buildCost(pendingId))).toHaveText(
+    "1000000 in · 200000 out · $2.00",
+    { timeout: watchMs },
+  );
+});
+
+const usage = () => ({
+  userHome: join(home, "user-home"),
+  model: "claude-haiku-4-5",
+  inputTokens: 1_000_000,
+  outputTokens: 200_000,
+});
+
+const tempClaudeConfig = () => ({
+  CLAUDE_CONFIG_DIR: join(home, ".claude"),
+  CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+});
+
+test("Claude in a run receives an empty CLAUDE_SECURESTORAGE_CONFIG_DIR", async () => {
+  test.setTimeout(90_000);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    usage: usage(),
+    env: tempClaudeConfig(),
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  await startBuild(window, "fix-a");
+
+  const received = async () => {
+    const text = await readFile(join(home, ".claude", "fake-claude-env.json"), "utf8").catch(
+      () => undefined,
+    );
+    return text === undefined ? undefined : (JSON.parse(text) as Record<string, unknown>);
+  };
+  await expect.poll(received, { timeout: watchMs }).toBeDefined();
+  expect(await received()).toEqual({ CLAUDE_SECURESTORAGE_CONFIG_DIR: "" });
+});
+
+test("a run on a temp Claude config shows its cost", async () => {
+  test.setTimeout(90_000);
+  const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    usage: usage(),
+    env: tempClaudeConfig(),
   });
   const { window } = launched;
   await openBlueprint(window, flowId);

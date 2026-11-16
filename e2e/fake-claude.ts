@@ -7,6 +7,14 @@ const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = r
 const { connect } = require("node:net");
 const { resolve } = require("node:path");
 const argv = process.argv.slice(2);
+const configDir = process.env.CLAUDE_CONFIG_DIR || resolve(process.env.HOME ?? "", ".claude");
+if (process.env.CLAUDE_CONFIG_DIR) {
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    resolve(configDir, "fake-claude-env.json"),
+    JSON.stringify({ CLAUDE_SECURESTORAGE_CONFIG_DIR: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null }),
+  );
+}
 appendFileSync(resolve(__dirname, "ran"), JSON.stringify(argv) + "\\n");
 if (process.env.FAKE_CLAUDE_LOG) appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(argv) + "\\n");
 const flag = (name) => { const at = argv.indexOf(name); return at === -1 ? undefined : argv[at + 1]; };
@@ -92,7 +100,8 @@ const askAfterAudit = (agentType) => {
 const usageFile = resolve(__dirname, "usage");
 const writeUsage = () => {
   if (!existsSync(usageFile)) return;
-  const { projectsDir, model, inputTokens, outputTokens } = JSON.parse(readFileSync(usageFile, "utf8"));
+  const { model, inputTokens, outputTokens } = JSON.parse(readFileSync(usageFile, "utf8"));
+  const projectsDir = resolve(configDir, "projects", "fd-fake");
   mkdirSync(projectsDir, { recursive: true });
   const line = {
     type: "assistant",
@@ -322,10 +331,8 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
   if (turns !== undefined) await writeFile(join(bin, "turns.json"), JSON.stringify(turns));
   if (writes !== undefined) await writeFile(join(bin, "writes.json"), JSON.stringify(writes));
   if (usage !== undefined) {
-    const { userHome, ...counts } = usage;
-    const projectsDir = join(userHome, ".claude", "projects", "fd-fake");
-    await mkdir(projectsDir, { recursive: true });
-    await writeFile(join(bin, "usage"), JSON.stringify({ projectsDir, ...counts }));
+    const { model, inputTokens, outputTokens } = usage;
+    await writeFile(join(bin, "usage"), JSON.stringify({ model, inputTokens, outputTokens }));
   }
   const fake = `exec "${process.execPath}" "${join(bin, "fake-claude.cjs")}" "$@"`;
   const ownClaude =
@@ -342,5 +349,9 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     .filter((dir) => dir !== undefined && dir !== "")
     .join(":");
   const home = usage === undefined ? {} : { HOME: usage.userHome };
-  return launchOnCanvas({ ...launchOptions, env: { ...options.env, ...home, PATH: path } });
+  const configDir = join(usage?.userHome ?? options.home, ".claude");
+  return launchOnCanvas({
+    ...launchOptions,
+    env: { CLAUDE_CONFIG_DIR: configDir, ...options.env, ...home, PATH: path },
+  });
 }

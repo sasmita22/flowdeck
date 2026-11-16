@@ -95,6 +95,16 @@ const settingsOf = (argv: string[]) => {
 const bpLaunches = async () =>
   (await launches()).filter((argv) => settingsOf(argv).includes("/bp-sessions/"));
 
+const sizeTo = async (window: Page, size: { width: number; height: number }) => {
+  await launched?.app.evaluate(({ BrowserWindow }, next) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(next.width, next.height);
+  }, size);
+  await window.waitForFunction(
+    (next) => globalThis.innerWidth === next.width && globalThis.innerHeight === next.height,
+    size,
+  );
+};
+
 const launch = async () => {
   launched = await launchWithFakeClaude({
     home,
@@ -371,6 +381,7 @@ test("tidy_layout lays the blueprint out as the Tidy button does, and one Undo r
 test("an ask that adds nodes without tidy_layout ends tidied, and one Undo reverts the nodes and the tidy", async () => {
   const flowId = seedBlueprint(home, "a", piled([agent("p1")], [], { x: 900, y: 600 })).flowId;
   const window = await launch();
+  await sizeTo(window, { width: 1440, height: 900 });
   await openOn(window, flowId);
   await showPane(window, flowId);
   const before = await readout(window);

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", import.meta.url));
@@ -111,6 +112,7 @@ async function transcriptsIn(folder: string): Promise<string[]> {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-run-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
@@ -166,8 +168,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run with real claude", () 
         values: { ticket: "FD-1" },
       });
       const projectFolder = join(
-        homedir(),
-        ".claude",
+        claudeConfigDir(),
         "projects",
         workFolder.replace(/[^a-zA-Z0-9]/g, "-"),
       );

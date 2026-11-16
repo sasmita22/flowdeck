@@ -434,6 +434,14 @@ No model-facing text changed. The new engine requests (`build-tree`, `build-proj
 
 The inventory gained rows 28 and 29. `src/adapters/claude/claude-narrator.ts` is outside the detection rule's folders and was found by the concept search (text passed to a Claude session); `src/core/run/digest.ts` is matched by the rule. Nothing else the ticket adds is model-facing: the narrator's account is shown to the user and read by no model.
 
+### Test hygiene
+
+| Skill or file                  | Added or changed | Why                                                                                                                                         |
+| ------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.claude/rules/manual-test.md` | Changed          | Rule 10: drives that run real Claude Code use the temporary Claude config `npm run drive` makes; rule 11: one job per Agent node in a check |
+
+`.claude/rules/manual-test.md` is read by the agents that work on this repo, not by a Flowdeck session, and sits outside the detection rule's folders, so the inventory needs no row. Standard, judged on the file as a whole: rule 1 pass (manual testing only); rule 2 n/a (a rules file, no frontmatter); rule 3 pass (42 lines); rule 4 pass (rule 9 still pins the result row); rule 5 pass (rule 2 makes a check pass only on read-back evidence); rule 6 n/a (no blueprint); rule 7 pass ("piece" as `audit-duplicates` names it, "Agent node", "`FLOWDECK_HOME`" as rule 1). Staleness: `scripts/drive.ts` `drive` makes the config with `makeTempClaudeConfig({ root: options.home })`, the app's `FLOWDECK_HOME`, and `src/core/compiler/merge.ts` merges only `agent` nodes, so both claims match the code. No product model-facing text changed: `src/adapters/claude/claude-cli.ts` (`## Not model-facing`) gained only where it reads transcripts.
+
 ### Raised, not changed here
 
 - Resolved by the GitHub-links pass: the blueprint session fetches github.com and raw.githubusercontent.com only, and `copy-flow` reads GitHub links. Still open: a fetch hands the session a summary of the page, not the file, so `copy-flow` prefers the GitHub tools and raw files; and a repo's text can carry instructions that add steps, which the user sees on the canvas before anything runs.

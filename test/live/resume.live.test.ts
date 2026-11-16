@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
@@ -9,6 +9,7 @@ import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const buildName = "live-resume";
 const watchdogMs = 180_000;
@@ -67,6 +68,7 @@ const userIndexes = (entries: Entry[], marker: string) =>
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
   "a run resumed by the engine with real claude",
   () => {
+    useTempClaudeConfig();
     const sessionName = `fd-live-resume-${process.pid}`;
     let home: string;
     let repo: TmpRepo;
@@ -107,7 +109,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
         const built = await first.saveAndBuild(prompts, { name: buildName });
         const slug = (await realpath(built.workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
         claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
-        const projectFolder = join(homedir(), ".claude", "projects", slug);
+        const projectFolder = join(claudeConfigDir(), "projects", slug);
         let transcriptPath = "";
         let lastPane = "";
         const evidence = async () => {

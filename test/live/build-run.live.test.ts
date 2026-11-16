@@ -24,6 +24,7 @@ import {
   type LiveEngine,
 } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
@@ -137,6 +138,7 @@ function nodeRows(home: string, runId: string) {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("built flows run with real claude", () => {
+  useTempClaudeConfig();
   let home: string;
   let repo: TmpRepo;
   let engine: LiveEngine | undefined;

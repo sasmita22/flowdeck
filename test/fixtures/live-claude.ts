@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { homedir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { claudeConfigDir } from "./claude-config.js";
 
 const run = promisify(execFile);
 
@@ -77,13 +78,13 @@ async function removeIfEmpty(folder: string): Promise<void> {
 export async function removeClaudeSessions(repoPath: string, sessionIds: string[]): Promise<void> {
   const resolved = await realpath(repoPath).catch(() => repoPath);
   const slug = resolved.replace(/[^a-zA-Z0-9]/g, "-");
-  const projectFolder = join(homedir(), ".claude", "projects", slug);
+  const projectFolder = join(claudeConfigDir(), "projects", slug);
   for (const sessionId of sessionIds) {
     await waitForClaudeToExit(sessionId);
     await rm(join(projectFolder, `${sessionId}.jsonl`), { force: true });
     await rm(join(projectFolder, sessionId), { recursive: true, force: true });
     for (const folder of ["session-env", "file-history"]) {
-      await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
+      await rm(join(claudeConfigDir(), folder, sessionId), { recursive: true, force: true });
     }
   }
   await removeIfEmpty(join(projectFolder, "memory"));

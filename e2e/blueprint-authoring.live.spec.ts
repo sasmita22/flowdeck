@@ -10,6 +10,7 @@ import { order } from "../src/core/flow/order.js";
 import { parseFlow, type Flow } from "../src/core/flow/schema.js";
 import { flow, output, trigger } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
+import { makeTempClaudeConfig, type TempClaudeConfig } from "../scripts/claude-config.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import {
   bpName,
@@ -47,6 +48,7 @@ const agentDeadlineMs = 240_000;
 const perAskMs = 360_000;
 
 let home: string;
+let claudeEnv: TempClaudeConfig["env"];
 let flowIds: string[];
 let launched: LaunchedApp | undefined;
 
@@ -115,7 +117,11 @@ const askOnFreshBlueprint = async (
   launched = await launchOnCanvas({
     home,
     logPath: test.info().outputPath(`${tag}-app.log`),
-    env: { FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"), ANTHROPIC_MODEL: "haiku" },
+    env: {
+      FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"),
+      ANTHROPIC_MODEL: "haiku",
+      ...claudeEnv,
+    },
   });
   const window = launched.window;
   const back = window.getByTestId(controlTestIds.back).or(window.getByTestId(pageTestIds.runBack));
@@ -170,6 +176,7 @@ test.beforeEach(async () => {
   flowIds = [];
   home = await realpath(await mkdtemp(join(tmpdir(), "fd-mt-authoring-live-")));
   await writeFile(join(home, "claude.json"), JSON.stringify({ mcpServers: {} }));
+  claudeEnv = (await makeTempClaudeConfig({ root: home })).env;
 });
 
 test.afterEach(async () => {

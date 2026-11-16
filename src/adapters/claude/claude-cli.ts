@@ -91,6 +91,7 @@ export function hasCode(error: unknown, ...codes: (string | number)[]): boolean 
 export class ClaudeCli {
   private readonly sessions: SessionHost;
   private readonly homeDir: string;
+  private readonly configDir: string | undefined;
   private readonly pollIntervalMs: number;
   private readonly readyTimeoutMs: number;
   private readonly dialogSettleMs: number;
@@ -100,6 +101,7 @@ export class ClaudeCli {
   constructor(options: {
     sessions: SessionHost;
     homeDir?: string;
+    configDir?: string;
     pollIntervalMs?: number;
     readyTimeoutMs?: number;
     dialogSettleMs?: number;
@@ -107,6 +109,7 @@ export class ClaudeCli {
   }) {
     this.sessions = options.sessions;
     this.homeDir = options.homeDir ?? homedir();
+    this.configDir = options.configDir;
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30_000;
     this.dialogSettleMs = options.dialogSettleMs ?? 1000;
@@ -205,7 +208,7 @@ export class ClaudeCli {
   }
 
   async findTranscript(sessionId: string): Promise<string | undefined> {
-    const projects = join(this.homeDir, ".claude", "projects");
+    const projects = join(this.configDir ?? join(this.homeDir, ".claude"), "projects");
     let folders: string[];
     try {
       folders = await readdir(projects);

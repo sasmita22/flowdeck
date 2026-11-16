@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const buildName = "live-plugin";
@@ -61,6 +62,7 @@ const sessionInit = async (pluginDir: string, cwd: string): Promise<Init> => {
 };
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude", () => {
+  useTempClaudeConfig();
   let home: string;
   let repo: TmpRepo;
   let engine: LiveEngine | undefined;

@@ -3,8 +3,6 @@ import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
-import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { transcriptTail } from "../fixtures/live-evidence.js";
@@ -17,6 +15,7 @@ import {
 } from "../fixtures/live-claude.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { findClaudeTranscript, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const buildName = "live-permission";
 const questionWithinMs = 120_000;
@@ -89,8 +88,8 @@ function hookDecisions(entries: TranscriptEntry[]): string[] {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-perm-${process.pid}`;
-  const claude = new ClaudeCli({ sessions: new TmuxSessionHost() });
   let home: string;
   let repo: TmpRepo;
   let engine: LiveEngine | undefined;
@@ -115,7 +114,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("permission requests with rea
 
       const transcript = async () => {
         const sessionId = engine?.sessionIds[0];
-        return sessionId === undefined ? undefined : claude.findTranscript(sessionId);
+        return sessionId === undefined ? undefined : findClaudeTranscript(sessionId);
       };
       const results = async () => tokenResults(await transcriptEntries(await transcript()), token);
 

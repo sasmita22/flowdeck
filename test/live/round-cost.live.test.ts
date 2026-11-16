@@ -1,5 +1,5 @@
-import { copyFile, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CostReport } from "../../src/core/run/cost.js";
@@ -7,6 +7,7 @@ import { parseFlow } from "../../src/core/flow/schema.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const runDeadlineMs = 300_000;
 
@@ -56,31 +57,18 @@ function twoRoundLoop() {
   });
 }
 
-async function loggedInConfig(root: string): Promise<string> {
-  const dir = join(root, ".claude");
-  await mkdir(dir, { recursive: true });
-  await copyFile(join(homedir(), ".claude", "settings.json"), join(dir, "settings.json"));
-  await copyFile(join(homedir(), ".claude.json"), join(dir, ".claude.json"));
-  return dir;
-}
-
 const listing = (dir: string) => readdir(dir, { recursive: true }).catch(() => [] as string[]);
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("cost per round with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-rcost-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
   let engine: LiveEngine | undefined;
-  let configRoot: string;
   let claudeTmp: string | undefined;
-  const savedEnv = {
-    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
-    CLAUDE_SECURESTORAGE_CONFIG_DIR: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
-  };
 
   beforeEach(async () => {
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-home-")));
-    configRoot = await realpath(await mkdtemp(join(tmpdir(), "fd-cfg-")));
     repo = await createTmpRepo({ commit: true });
     engine = undefined;
     claudeTmp = undefined;
@@ -88,25 +76,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("cost per round with real cla
 
   afterEach(async () => {
     await engine?.cleanup();
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) Reflect.deleteProperty(process.env, key);
-      else process.env[key] = value;
-    }
     if (claudeTmp !== undefined) await rm(claudeTmp, { recursive: true, force: true });
     await repo.cleanup();
     await rm(home, { recursive: true, force: true });
-    await rm(configRoot, { recursive: true, force: true });
   }, 60_000);
 
   it(
     "charges a Loop forced to two rounds once per round, the rounds adding up to the node",
     { timeout: runDeadlineMs + 120_000 },
     async () => {
-      const configDir = await loggedInConfig(configRoot);
-      Object.assign(process.env, {
-        CLAUDE_CONFIG_DIR: configDir,
-        CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
-      });
       const questions: WaitRequest[] = [];
       const waiter: HumanWaiter = {
         wait: async (request) => {
@@ -125,7 +103,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("cost per round with real cla
         repo: repo.path,
         sessionName,
         waiter,
-        transcriptsHome: configRoot,
+        configDir: claudeConfigDir(),
       });
 
       const built = await engine.saveAndBuild(twoRoundLoop(), { name: "live-round-cost" });
@@ -154,7 +132,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("cost per round with real cla
           `events:\n${events.map((e) => `${e.seq} ${e.nodeId} ${e.kind} ${JSON.stringify("payload" in e ? e.payload : "")}`).join("\n")}`,
           `usage of a: ${JSON.stringify(usage)}`,
           `cost line of a: ${JSON.stringify(line)}`,
-          `transcripts in temp config: ${JSON.stringify(await listing(join(configDir, "projects")))}`,
+          `transcripts in temp config: ${JSON.stringify(await listing(join(claudeConfigDir(), "projects")))}`,
         ].join("\n"),
       );
 

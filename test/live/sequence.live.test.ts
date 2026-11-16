@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, rmdir } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runTwoTurns } from "../../scripts/two-turns.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 
@@ -166,6 +167,7 @@ async function readHandOff(repo: TmpRepo, token: string) {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("two turns with real claude", () => {
+  useTempClaudeConfig();
   let home: string;
   let repo: TmpRepo;
   let ran: { sessionId: string; socketName: string; transcriptPath: string }[];
@@ -192,7 +194,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("two turns with real claude",
       await removeIfEmpty(join(dirname(transcriptPath), "memory"));
       await removeIfEmpty(dirname(transcriptPath));
       for (const folder of ["session-env", "file-history"]) {
-        await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
+        await rm(join(claudeConfigDir(), folder, sessionId), { recursive: true, force: true });
       }
       const socketFolder = join(process.env.TMUX_TMPDIR ?? "/tmp", `tmux-${userInfo().uid}`);
       await rm(join(socketFolder, socketName), { force: true });

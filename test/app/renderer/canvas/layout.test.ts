@@ -3,9 +3,10 @@ import { moveNodes, type Move } from "../../../../src/app/renderer/canvas/comman
 import {
   bodyFrameBounds,
   boundsOf,
+  sideLabelSpan,
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
-import { tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
+import { LAYER_GAP, tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
 import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Node } from "../../../../src/core/flow/schema.js";
 import {
@@ -99,6 +100,31 @@ const nodeOf = (current: Flow, id: string): Node => {
 
 const positionOf = (current: Flow, id: string) => nodeOf(current, id).position;
 
+const hasSideLabel = (node: Node): boolean => node.type === "trigger" || node.type === "output";
+
+const gapsAlong = (current: Flow, ids: readonly string[]) => {
+  const boxes = drawnBoxes(current);
+  const rightOf = (id: string): number => {
+    const node = nodeOf(current, id);
+    const { right } = box(boxes, id);
+    return hasSideLabel(node) ? right + sideLabelSpan(node.label) : right;
+  };
+  return ids.slice(1).map((id, index) => {
+    const previous = ids[index] ?? "";
+    return { between: `${previous} -> ${id}`, gap: box(boxes, id).left - rightOf(previous) };
+  });
+};
+
+const expectSpaced = (current: Flow, ids: readonly string[]) => {
+  for (const { between, gap } of gapsAlong(current, ids))
+    expect(gap, between).toBeGreaterThanOrEqual(LAYER_GAP);
+};
+
+const withStartLabel = (source: Flow, label: string): Flow => ({
+  ...source,
+  nodes: source.nodes.map((node) => (node.id === "start" ? { ...node, label } : node)),
+});
+
 const parallelAndLoop = () =>
   onMainFlow(
     [
@@ -191,12 +217,92 @@ describe("tidyMoves", () => {
     }
   });
 
+  it("spaces Start, each agent and Stop at least LAYER_GAP apart, counting Start's and Stop's side labels in their width", async () => {
+    const after = await tidied(onMainFlow([agent("a"), agent("b")], [thenWire("a", "b")]));
+
+    expectSpaced(after, ["start", "a", "b", "stop"]);
+  });
+
+  it("spaces the nodes of a Parallel section at least LAYER_GAP apart", async () => {
+    const after = await tidied(
+      onMainFlow(
+        [agent("a"), fork("F"), agent("b1"), agent("b2"), join("J"), agent("c")],
+        [
+          thenWire("a", "F"),
+          thenWire("F", "b1"),
+          thenWire("F", "b2"),
+          thenWire("b1", "J"),
+          thenWire("b2", "J"),
+          thenWire("J", "c"),
+        ],
+      ),
+      { width: 4000, height: 1000 },
+    );
+
+    expectSpaced(after, ["start", "a", "F", "b1", "J", "c", "stop"]);
+    expectSpaced(after, ["F", "b2", "J"]);
+  });
+
+  it.each([
+    { frame: "Loop", container: loop("L") },
+    { frame: "For each", container: forEach("L") },
+  ])("spaces the body of a $frame frame at least LAYER_GAP apart", async ({ container }) => {
+    const after = await tidied(
+      onMainFlow(
+        [agent("a"), container, agent("x", { parent: "L" }), agent("y", { parent: "L" })],
+        [thenWire("a", "x"), thenWire("x", "y")],
+      ),
+    );
+
+    expectSpaced(after, ["x", "y"]);
+  });
+
+  it("pushes the node after Start further right when Start's label is longer", async () => {
+    const source = onMainFlow([agent("a")], []);
+
+    const short = await tidied(withStartLabel(source, "go"));
+    const long = await tidied(withStartLabel(source, "When the nightly report is due"));
+
+    expect(positionOf(long, "a").x - positionOf(long, "start").x).toBeGreaterThan(
+      positionOf(short, "a").x - positionOf(short, "start").x,
+    );
+  });
+
+  it("keeps the four-agent chain an assistant ask adds on one row in a 1180 px canvas", async () => {
+    const ids = ["p1", "agent-1", "agent-2", "agent-3"];
+    const labels: Record<string, string> = {
+      "agent-1": "Lint",
+      "agent-2": "Tests",
+      "agent-3": "Docs",
+    };
+    const source = flow(
+      ids.map((id) => ({ ...agent(id), label: labels[id] ?? id })),
+      ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
+    );
+
+    const after = await tidied(source, { width: 1180, height: 840 });
+
+    expect(rowsOf(after, ids)).toBe(1);
+  });
+
   it("wraps a 30-step chain into several rows that fit a 1600 x 1000 canvas", async () => {
     const ids = steps(30);
 
     const after = await tidied(chain(ids));
 
     expect(span(after)).toBeLessThanOrEqual(canvas.width);
+    expect(rowsOf(after, ids)).toBeGreaterThan(1);
+  });
+
+  it("wraps a chain made only of empty Loop frames into several rows", async () => {
+    const ids = steps(6);
+    const source = flow(
+      ids.map((id) => loop(id)),
+      ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
+    );
+
+    const after = await tidied(source, { width: 600, height: 1000 });
+
     expect(rowsOf(after, ids)).toBeGreaterThan(1);
   });
 

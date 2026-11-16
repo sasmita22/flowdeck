@@ -1,16 +1,19 @@
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { parseTranscriptTurns } from "../../src/adapters/claude/transcript-turns.js";
-import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { TurnEndEvent, TurnEvents } from "../../src/core/run/turns.js";
 import { agent, flow, forEach, output, thenWire, trigger } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import {
+  claudeConfigDir,
+  findClaudeTranscript,
+  useTempClaudeConfig,
+} from "../fixtures/claude-config.js";
 
 const watchdogMs = 240_000;
 const runTimeoutMs = 300_000;
@@ -39,11 +42,12 @@ const describeHook = ({ sessionId, payload }: TurnEndEvent) =>
   `${String(payload["flowdeck_hook_at"])} Stop ${sessionId} ${String(payload["last_assistant_message"])}`;
 
 async function transcriptTurns(sessionId: string): Promise<TranscriptTurn[]> {
-  const path = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(sessionId);
+  const path = await findClaudeTranscript(sessionId);
   return path === undefined ? [] : parseTranscriptTurns(await readFile(path, "utf8"));
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-foreach-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
@@ -88,7 +92,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
       const built = await live.saveAndBuild(forEachFlow(), { name: buildName });
       await writeFile(join(built.workFolder, "plan.md"), planText);
       const slug = (await realpath(built.workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
-      const projectFolder = join(homedir(), ".claude", "projects", slug);
+      const projectFolder = join(claudeConfigDir(), "projects", slug);
       const runId = await live.runBuild(built.buildId);
       const status = await withWatchdog(
         live.waitForRunEnd(runId, watchdogMs + 30_000),

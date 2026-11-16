@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, realpath, rm, rmdir } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -27,6 +27,7 @@ import { agent, ask, flow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -105,6 +106,7 @@ function liveEnvironment(
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the app", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-la-${process.pid}`;
   const savedTmux = { TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
   let home: string;
@@ -118,7 +120,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
     delete process.env.TMUX_PANE;
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
     repo = await createTmpRepo({ commit: true });
-    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
+    projectFolder = join(claudeConfigDir(), "projects", slugOf(repo.path));
   });
 
   afterEach(async () => {
@@ -143,7 +145,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         await rm(join(projectFolder, transcript));
         await rm(join(projectFolder, sessionId), { recursive: true, force: true });
         for (const folder of ["session-env", "file-history"]) {
-          await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
+          await rm(join(claudeConfigDir(), folder, sessionId), { recursive: true, force: true });
         }
       }
       await removeIfEmpty(join(projectFolder, "memory"));
@@ -251,12 +253,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
       const record = stores.runs.findBuildByName("live-answer");
       if (record === undefined) throw new Error("the build did not finish built");
       const { id: buildId, dir } = record;
-      projectFolder = join(
-        homedir(),
-        ".claude",
-        "projects",
-        slugOf(join(dir, basename(repo.path))),
-      );
+      projectFolder = join(claudeConfigDir(), "projects", slugOf(join(dir, basename(repo.path))));
       const response = await handler.handle({ id: 11, type: "run-build", payload: { buildId } });
       expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
 

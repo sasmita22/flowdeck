@@ -7,6 +7,7 @@ import { parseFlow } from "../../src/core/flow/schema.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const buildName = "live-ask";
 const runTimeoutMs = 300_000;
@@ -78,6 +79,7 @@ async function readOrMissing(path: string): Promise<string | undefined> {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-ask-${process.pid}`;
   let home: string;
   let repo: TmpRepo;

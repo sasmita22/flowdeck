@@ -3,7 +3,7 @@ import type * as Electron from "electron";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -879,18 +879,23 @@ describe("resolveHome", () => {
 describe("drive cleanup", () => {
   let outDir: string;
   let home: string;
+  let userHome: string;
   let app: FakeApp;
   const launch = () => Promise.resolve(app);
 
   beforeEach(async () => {
     outDir = await mkdtemp(join(tmpdir(), "fd-drive-"));
     home = await mkdtemp(join(tmpdir(), "fd-drive-home-"));
+    userHome = await mkdtemp(join(tmpdir(), "fd-drive-user-"));
+    vi.stubEnv("HOME", userHome);
     app = new FakeApp();
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(outDir, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
+    await rm(userHome, { recursive: true, force: true });
   });
 
   it("closes the app and removes its home when the first window never opens", async () => {
@@ -1033,6 +1038,71 @@ describe("drive cleanup", () => {
       expect(Date.now() - started).toBeLessThan(1000);
       expect(first.proc.exitCode).toBe(0);
     });
+  });
+});
+
+describe("drive on a temp Claude config", () => {
+  let outDir: string;
+  let home: string;
+  let userHome: string;
+
+  beforeEach(async () => {
+    outDir = await mkdtemp(join(tmpdir(), "fd-drive-"));
+    home = await mkdtemp(join(tmpdir(), "fd-drive-home-"));
+    userHome = await mkdtemp(join(tmpdir(), "fd-drive-user-"));
+    await mkdir(join(userHome, ".claude"), { recursive: true });
+    await writeFile(join(userHome, ".claude", "settings.json"), '{"model":"haiku"}');
+    vi.stubEnv("HOME", userHome);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(outDir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+    await rm(userHome, { recursive: true, force: true });
+  });
+
+  it("launches with CLAUDE_CONFIG_DIR on a .claude folder under its home that holds the copied settings", async () => {
+    const launches: { env: Readonly<Record<string, string>> | undefined; settings: string }[] = [];
+    const launch = async (_: string, __?: unknown, env?: Readonly<Record<string, string>>) => {
+      const configDir = env?.["CLAUDE_CONFIG_DIR"];
+      launches.push({
+        env,
+        settings:
+          configDir === undefined
+            ? ""
+            : await readFile(join(configDir, "settings.json"), "utf8").catch(() => ""),
+      });
+      return new FakeApp();
+    };
+
+    await drive([], { outDir, home, launch });
+
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: join(home, ".claude"),
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
+    });
+    expect(JSON.parse(launches[0]?.settings || "null")).toEqual({ model: "haiku" });
+  });
+
+  it("leaves the Claude config out of a launchApp on its own, the e2e path", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
+    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", undefined);
+    const electronLaunch = vi
+      .spyOn(_electron, "launch")
+      .mockImplementation(() => Promise.resolve(new FakeApp() as never));
+    try {
+      const launched = await launchApp({ home, logPath: join(outDir, "app.log") });
+      await launched.close();
+
+      const env = electronLaunch.mock.calls[0]?.[0]?.env;
+      expect(env).toBeDefined();
+      expect(env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+      expect(env).not.toHaveProperty("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+    } finally {
+      electronLaunch.mockRestore();
+    }
   });
 });
 

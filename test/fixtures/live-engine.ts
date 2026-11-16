@@ -1,6 +1,5 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vi } from "vitest";
@@ -33,6 +32,7 @@ import type { BuildAgents, BuildAgentsOpenSpec } from "../../src/ports/build-age
 import type { RunNarrator } from "../../src/ports/run-narrator.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { fakeEngineBuildOptions } from "./fake-build-deps.js";
+import { claudeConfigDir } from "./claude-config.js";
 import { killTmuxServer, removeClaudeSessions } from "./live-claude.js";
 
 export const draftsOnly = process.env.FLOWDECK_LIVE_DRAFTS === "1";
@@ -94,7 +94,7 @@ export const liveBuildAgents = (home: string): BuildAgents =>
 export async function sessionIdsIn(folder: string): Promise<string[]> {
   const slug = folder.replace(/[^a-zA-Z0-9]/g, "-");
   try {
-    return (await readdir(join(homedir(), ".claude", "projects", slug)))
+    return (await readdir(join(claudeConfigDir(), "projects", slug)))
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => name.replace(/\.jsonl$/, ""));
   } catch (error) {
@@ -144,10 +144,10 @@ export function openLiveStores(home: string): LiveStores {
   return { runs, flows: new SqliteFlowStore({ db }), ends, close: () => db.close() };
 }
 
-const transcriptUsageIn = (homeDir: string) =>
-  new TranscriptUsage({
-    findTranscript: (id) =>
-      new ClaudeCli({ sessions: new TmuxSessionHost(), homeDir }).findTranscript(id),
+const transcriptReaderIn = (configDir: string | undefined) =>
+  new ClaudeCli({
+    sessions: new TmuxSessionHost(),
+    ...(configDir === undefined ? {} : { configDir }),
   });
 
 export type LiveEngineOptions = {
@@ -165,7 +165,7 @@ export type LiveEngineOptions = {
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildTimeoutMs?: number;
   narrator?: RunNarrator;
-  transcriptsHome?: string;
+  configDir?: string;
 };
 
 export type BuildRequestOptions = {
@@ -232,8 +232,8 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
     sessionIds.push(session.sessionId);
     return session;
   };
-  const transcriptOf = (id: string) =>
-    new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id);
+  const configDir = options.configDir ?? (process.env.CLAUDE_CONFIG_DIR || undefined);
+  const transcriptOf = (id: string) => transcriptReaderIn(configDir).findTranscript(id);
   const handler = createEngineHandler({
     version: "live",
     openStores: () => stores,
@@ -270,9 +270,9 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
       startEvents: (options.startEvents ?? ((inner: StartEvents) => inner))(base.startEvents),
       openSession: recordedOpen,
       ...(options.waiter === undefined ? {} : { waiter: options.waiter }),
-      ...(options.transcriptsHome === undefined
+      ...(options.configDir === undefined
         ? {}
-        : { usage: transcriptUsageIn(options.transcriptsHome) }),
+        : { usage: new TranscriptUsage({ findTranscript: transcriptOf }) }),
     },
     ...(waits === undefined ? {} : { waits }),
     ...(options.sessionAlive === undefined ? {} : { sessionAlive: options.sessionAlive }),

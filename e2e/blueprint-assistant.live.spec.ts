@@ -6,6 +6,7 @@ import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { agent, flow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
+import { makeTempClaudeConfig, type TempClaudeConfig } from "../scripts/claude-config.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import {
   bpName,
@@ -25,6 +26,7 @@ const ask = "add an Agent node that runs npm test after the planner";
 const agentDeadlineMs = 240_000;
 
 let home: string;
+let claudeEnv: TempClaudeConfig["env"];
 let flowId: string | undefined;
 let launched: LaunchedApp | undefined;
 
@@ -49,6 +51,7 @@ test.beforeEach(async () => {
   flowId = undefined;
   home = await realpath(await mkdtemp(join(tmpdir(), "fd-mt-ba-live-")));
   await writeFile(join(home, "claude.json"), JSON.stringify({ mcpServers: {} }));
+  claudeEnv = (await makeTempClaudeConfig({ root: home })).env;
 });
 
 test.afterEach(async () => {
@@ -73,7 +76,11 @@ test("a real agent adds an Agent node running npm test, wired after the planner"
   launched = await launchOnCanvas({
     home,
     logPath: test.info().outputPath("app.log"),
-    env: { FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"), ANTHROPIC_MODEL: "haiku" },
+    env: {
+      FLOWDECK_CLAUDE_CONFIG: join(home, "claude.json"),
+      ANTHROPIC_MODEL: "haiku",
+      ...claudeEnv,
+    },
   });
   const window = launched.window;
   const back = window.getByTestId(controlTestIds.back).or(window.getByTestId(pageTestIds.runBack));

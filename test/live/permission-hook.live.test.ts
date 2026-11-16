@@ -15,6 +15,7 @@ import {
   type TranscriptEntry,
 } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { findClaudeTranscript, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const tmuxSocket = "fd-probe";
 
@@ -35,6 +36,7 @@ process.stdin.on("end", () => {
 type HolderLine = { at: number; payload?: { tool_name?: string }; released?: string };
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("plugin-dir PermissionRequest hook", () => {
+  useTempClaudeConfig();
   const sessions = new TmuxSessionHost({ socketName: tmuxSocket });
   const cli = new ClaudeCli({ sessions });
   let started: string[] = [];
@@ -82,7 +84,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("plugin-dir PermissionRequest
 
     const holderLines = () => readLines<HolderLine>(log);
     const results = async () => {
-      const transcript = await cli.findTranscript(sessionId);
+      const transcript = await findClaudeTranscript(sessionId);
       if (!transcript) return [];
       return tokenResults(await readLines<TranscriptEntry>(transcript), token);
     };
