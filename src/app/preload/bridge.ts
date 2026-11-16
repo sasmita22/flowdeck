@@ -39,6 +39,10 @@ export const engineCalls = {
     request: "checked-out-branches",
   },
   deleteBuild: { channel: "flowdeck:delete-build", request: "delete-build" },
+  deleteRun: { channel: "flowdeck:delete-run", request: "delete-run" },
+  deletePendingBuild: { channel: "flowdeck:delete-pending-build", request: "delete-pending-build" },
+  deletePreview: { channel: "flowdeck:delete-preview", request: "delete-preview" },
+  writeStory: { channel: "flowdeck:write-story", request: "write-story" },
   doctorWorktrees: { channel: "flowdeck:doctor-worktrees", request: "doctor-worktrees" },
   defaultBranch: { channel: "flowdeck:default-branch", request: "default-branch" },
   listBuildProgress: { channel: "flowdeck:build-progress-list", request: "build-progress-list" },
@@ -91,6 +95,10 @@ export type EngineCalls = {
   listBranches(payload: { repo: string }): Promise<unknown>;
   checkedOutBranches(payload: { repo: string }): Promise<unknown>;
   deleteBuild(payload: { buildId: string }): Promise<unknown>;
+  deleteRun(payload: { runId: string }): Promise<unknown>;
+  deletePendingBuild(payload: { id: string }): Promise<unknown>;
+  deletePreview(payload: { buildId: string }): Promise<unknown>;
+  writeStory(payload: { runId: string }): Promise<unknown>;
   doctorWorktrees(): Promise<unknown>;
   defaultBranch(payload: { repo: string }): Promise<unknown>;
   listBuildProgress(): Promise<unknown>;

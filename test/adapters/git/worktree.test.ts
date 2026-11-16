@@ -162,6 +162,33 @@ describe("GitWorktree", () => {
     expect(await readFile(join(options.path, "made.txt"), "utf8")).toBe("the run's work\n");
   });
 
+  it("force-removes a worktree holding an untracked file, together with its branch", async () => {
+    const options = await addRunWorktree();
+    await writeFile(join(options.path, "made.txt"), "the run's work\n");
+
+    expect(await worktree.remove({ ...options, force: true })).toEqual({
+      worktree: "removed",
+      branch: "removed",
+    });
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+    expect(await branches(repo.path)).toBe("main\n");
+    expect(await exists(options.path)).toBe(false);
+  });
+
+  it("force-removes a worktree together with a branch that holds a commit of its own", async () => {
+    const options = await addRunWorktree();
+    await commitIn(options.path, "made.txt");
+
+    expect(await worktree.remove({ ...options, force: true })).toEqual({
+      worktree: "removed",
+      branch: "removed",
+    });
+
+    expect(await worktreePaths(repo.path)).toEqual([repo.path]);
+    expect(await branches(repo.path)).toBe("main\n");
+  });
+
   it("removes a clean worktree but keeps a branch that holds a commit of its own", async () => {
     const options = await addRunWorktree();
     await writeFile(join(options.path, "made.txt"), "committed\n");

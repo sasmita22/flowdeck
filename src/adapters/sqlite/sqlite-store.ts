@@ -314,6 +314,7 @@ export class SqliteStore implements Store {
     const rows = this.db
       .prepare(
         `${runSummaries}
+          WHERE runs.deleted_at IS NULL
           ORDER BY runs.status = 'running' DESC, runs.created_at DESC, runs.rowid DESC`,
       )
       .all() as RunSummaryRow[];
@@ -391,6 +392,12 @@ export class SqliteStore implements Store {
       this.db.prepare("UPDATE runs SET status = 'running' WHERE id = ?").run(runId);
       this.db.prepare("UPDATE run_sessions SET status = 'open' WHERE run_id = ?").run(runId);
     });
+  }
+
+  deleteRun(runId: string): void {
+    this.db
+      .prepare("UPDATE runs SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+      .run(this.now().getTime(), runId);
   }
 
   stopRun(runId: string): void {
@@ -597,7 +604,7 @@ export class SqliteStore implements Store {
   listPendingBuilds(): PendingBuild[] {
     const rows = this.db
       .prepare(
-        `SELECT ${pendingColumns} FROM pending_builds WHERE ended_at IS NULL ORDER BY started_at, rowid`,
+        `SELECT ${pendingColumns} FROM pending_builds WHERE ended_at IS NULL AND deleted_at IS NULL ORDER BY started_at, rowid`,
       )
       .all() as PendingBuildRow[];
     return rows.map(toPendingBuild);
@@ -607,7 +614,7 @@ export class SqliteStore implements Store {
     const rows = this.db
       .prepare(
         `SELECT ${pendingColumns} FROM pending_builds AS ended
-         WHERE ended_at IS NOT NULL AND outcome IS NOT 'built' AND NOT EXISTS (
+         WHERE ended_at IS NOT NULL AND outcome IS NOT 'built' AND deleted_at IS NULL AND NOT EXISTS (
            SELECT 1 FROM pending_builds AS later
            WHERE later.name = ended.name AND later.ended_at IS NOT NULL
              AND (later.ended_at > ended.ended_at
@@ -631,6 +638,12 @@ export class SqliteStore implements Store {
       .prepare(`SELECT ${pendingColumns} FROM pending_builds WHERE id = ?`)
       .get(id) as PendingBuildRow | undefined;
     return row === undefined ? null : toPendingBuild(row);
+  }
+
+  deletePendingBuild(id: string): void {
+    this.db
+      .prepare("UPDATE pending_builds SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+      .run(this.now().getTime(), id);
   }
 
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {

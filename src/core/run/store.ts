@@ -143,6 +143,7 @@ export interface Store {
   appendRunStory(story: RunStory): void;
   latestRunStory(runId: string): RunStory | undefined;
   stopRun(runId: string): void;
+  deleteRun(runId: string): void;
   recordBuild(build: NewBuild): void;
   findBuild(id: string): BuildRecord | undefined;
   findBuildByName(name: string): BuildRecord | undefined;
@@ -158,6 +159,7 @@ export interface Store {
   listLatestEndedPendingBuildsByName(): PendingBuild[];
   findPendingBuildByName(name: string): PendingBuild | undefined;
   pendingBuild(id: string): PendingBuild | null;
+  deletePendingBuild(id: string): void;
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void;
   buildActivity(pendingId: string): ActivityEntry[];
   buildSnapshot(key: SnapshotKey): BuildSnapshot | null;

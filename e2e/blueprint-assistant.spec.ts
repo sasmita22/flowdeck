@@ -576,7 +576,9 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
   await openOn(window, flowId);
   const goneId = await buildOnCanvas(window, home, "gone");
   await window.getByTestId("menu-builds").click();
+  await window.getByTestId(pageTestIds.buildMenu(goneId)).click();
   await window.getByTestId(pageTestIds.buildDelete(goneId)).click();
+  await window.getByTestId(pageTestIds.deletePromptConfirm).click();
   await expect(window.getByTestId(pageTestIds.buildCard(goneId))).toHaveCount(0);
   expect(
     rows<{ deleted_at: number | null }>("SELECT deleted_at FROM builds WHERE id = ?", goneId)[0]

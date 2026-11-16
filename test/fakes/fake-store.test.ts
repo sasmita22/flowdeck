@@ -636,6 +636,118 @@ describe("FakeStore", () => {
     expect(store.listRuns()).toEqual([store.findRunSummary(gone.id)]);
   });
 
+  describe("deleting a run", () => {
+    const threeFinishedRuns = (store: FakeStore): [string, string, string] => {
+      const finished = () => {
+        const run = store.createRun(newRun(["p1"]));
+        store.finishRun(run.id, "done");
+        return run.id;
+      };
+      return [finished(), finished(), finished()];
+    };
+
+    it("hides the run from listRuns, keeping its record", () => {
+      const store = new FakeStore();
+      const [first, second] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      expect(store.listRuns().map((run) => run.id)).not.toContain(second);
+      expect(store.listRuns().map((run) => run.id)).toContain(first);
+      expect(store.runs).toHaveLength(3);
+    });
+
+    it("keeps the numbers of the build's other runs", () => {
+      const store = new FakeStore();
+      const [first, second, third] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      const numberOf = new Map(store.listRuns().map((run) => [run.id, run.number]));
+      expect([numberOf.get(first), numberOf.get(third)]).toEqual([1, 3]);
+    });
+
+    it("still finds the deleted run by id, with its number", () => {
+      const store = new FakeStore();
+      const [, second] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      expect(store.findRun(second)).toMatchObject({ id: second, status: "done" });
+      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+    });
+
+    it("summarises a run that is not deleted as listRuns does", () => {
+      const store = new FakeStore();
+      const [first, second, third] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      for (const id of [first, third]) {
+        expect(store.findRunSummary(id)).toEqual(store.listRuns().find((run) => run.id === id));
+      }
+    });
+
+    it("leaves a deleted run as it is when it is deleted again", () => {
+      const store = new FakeStore();
+      const [, second] = threeFinishedRuns(store);
+      store.deleteRun(second);
+
+      store.deleteRun(second);
+
+      expect(store.listRuns().map((run) => run.id)).not.toContain(second);
+      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+    });
+  });
+
+  describe("deleting a pending build", () => {
+    it("hides an open build from listPendingBuilds", () => {
+      const store = new FakeStore();
+      const gone = startedId(store, pending("flow-1", "nightly"));
+      const kept = startedId(store, pending("flow-2", "weekly"));
+
+      store.deletePendingBuild(gone);
+
+      expect(store.listPendingBuilds().map((each) => each.id)).toEqual([kept]);
+    });
+
+    it("hides an ended build from listLatestEndedPendingBuildsByName", () => {
+      const store = new FakeStore();
+      const gone = startedId(store, pending("flow-1", "first"));
+      store.endPendingBuild(gone, { outcome: "failed", endedAt: 2_000 });
+      const kept = startedId(store, pending("flow-1", "second"));
+      store.endPendingBuild(kept, { outcome: "failed", endedAt: 3_000 });
+
+      store.deletePendingBuild(gone);
+
+      expect(store.listLatestEndedPendingBuildsByName().map((each) => each.id)).toEqual([kept]);
+    });
+
+    it("does not bring back an older ended build of the name once the latest is hidden", () => {
+      const store = new FakeStore();
+      const older = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 2_000 });
+      const latest = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000 });
+
+      store.deletePendingBuild(latest);
+
+      expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
+    });
+
+    it("leaves a deleted pending build as it is when it is deleted again", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+      store.endPendingBuild(id, { outcome: "failed", endedAt: 2_000 });
+      store.deletePendingBuild(id);
+
+      store.deletePendingBuild(id);
+
+      expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
+      expect(store.pendingBuild(id)).toMatchObject({ id, outcome: "failed" });
+    });
+  });
+
   describe("pending builds", () => {
     it("starts a second build of the same blueprint under another name while one is open", () => {
       const store = new FakeStore();

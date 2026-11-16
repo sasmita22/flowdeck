@@ -311,7 +311,9 @@ test("Runs lists every run numbered within its build, filters by build, and keep
   await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toBeVisible();
 
   await window.getByTestId("menu-builds").click();
+  await window.getByTestId(pageTestIds.buildMenu(beta)).click();
   await window.getByTestId(pageTestIds.buildDelete(beta)).click();
+  await window.getByTestId(pageTestIds.deletePromptConfirm).click();
   await expect(window.getByTestId(pageTestIds.buildCard(beta))).toHaveCount(0);
   await window.getByTestId("menu-runs").click();
   await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("#1 beta");
@@ -325,4 +327,13 @@ test("Runs lists every run numbered within its build, filters by build, and keep
   );
   await expect(window.getByTestId(pageTestIds.runAgain)).toHaveCount(0);
   await expect(window.getByTestId(pageTestIds.runResume)).toHaveCount(0);
+
+  const tag = window.getByTestId(pageTestIds.runBuildTag);
+  await expect(tag).toHaveText("beta");
+  await tag.click();
+  await expect(window.getByTestId(pageTestIds.title)).toContainText("beta");
+  await expect(
+    window.getByText("Deleted. These are the files it had; its workspace is gone."),
+  ).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toBeVisible();
 });

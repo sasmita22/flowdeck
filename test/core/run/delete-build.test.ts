@@ -12,6 +12,7 @@ import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import {
   deleteBuild,
   deleteBuildResultSchema,
+  deletePreview,
   storedBranch,
   teardownWorkspace,
 } from "../../../src/core/run/delete-build.js";
@@ -73,6 +74,8 @@ const namedBuild = (home: string, repo: string, id = buildId): NewBuild => ({
   manifest: "{}",
 });
 
+const noStop = async (): Promise<void> => {};
+
 const runOf = (build: { id: string; dir: string }): NewRun => ({
   buildDir: build.dir,
   inputs: {},
@@ -83,25 +86,41 @@ const runOf = (build: { id: string; dir: string }): NewRun => ({
 
 describe("deleteBuild", () => {
   describe("while the build has a running run", () => {
-    it("refuses, removing and marking nothing", async () => {
+    it("stops each running run and waits for it before tearing down, then marks the build deleted", async () => {
       const home = "/fd-home";
       const store = new FakeStore();
       const fs = new FakeFileSystem({ [`${home}/workspaces/${buildId}/CLAUDE.md`]: "# fix-login" });
       const worktree = new FakeWorktree();
       const build = namedBuild(home, "/work/carousell-web");
       store.recordBuild(build);
-      store.createRun(runOf(build));
+      const ended = store.createRun(runOf(build));
+      store.finishRun(ended.id, "done");
+      const running = store.createRun(runOf(build));
+      const order: string[] = [];
+      const stopRun = async (runId: string): Promise<void> => {
+        order.push(`stop ${runId}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        store.finishRun(runId, "stopped");
+        order.push(`stopped ${runId}`);
+      };
+      const remove = worktree.remove.bind(worktree);
+      vi.spyOn(worktree, "remove").mockImplementation(async (options) => {
+        order.push("remove worktree");
+        return remove(options);
+      });
+      vi.spyOn(store, "deleteBuild").mockImplementation((id) => {
+        order.push(`mark ${id} deleted`);
+      });
 
-      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun }, buildId);
 
-      expect(result.ok).toBe(false);
-      expect(store.findBuild(buildId)?.deletedAt).toBeNull();
-      expect(store.listBuilds().map((known) => known.id)).toEqual([buildId]);
-      expect(
-        fs.calls.filter((call) => call.method === "remove" || call.method === "removeTree"),
-      ).toEqual([]);
-      expect(worktree.removed).toEqual([]);
-      expect(worktree.deletedBranches).toEqual([]);
+      expect(result).toEqual({ ok: true });
+      expect(order).toEqual([
+        `stop ${running.id}`,
+        `stopped ${running.id}`,
+        "remove worktree",
+        `mark ${buildId} deleted`,
+      ]);
     });
   });
 
@@ -125,7 +144,7 @@ describe("deleteBuild", () => {
           branchCreated,
         });
 
-        await deleteBuild({ store, worktree, fs, home }, buildId);
+        await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
         expect(worktree.removed).toEqual([
           {
@@ -134,6 +153,7 @@ describe("deleteBuild", () => {
             branch: storedBranch,
             create: branchCreated,
             path: `${home}/workspaces/${buildId}/carousell-web`,
+            force: true,
           },
         ]);
       },
@@ -196,7 +216,7 @@ describe("deleteBuild", () => {
     it("removes a clean build's workspace and branch, marks it deleted, keeps its runs listed and frees its name", async () => {
       const { build, worktreePath, runId } = await makeBuild();
 
-      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await exists(build.dir)).toBe(false);
@@ -224,34 +244,33 @@ describe("deleteBuild", () => {
         },
       ],
     ])(
-      "keeps a worktree holding %s work with its branch, removes the rest and returns the kept path",
+      "removes a worktree holding %s work with its branch, and keeps nothing",
       async (_label, work) => {
         const { build, worktreePath, runId } = await makeBuild();
         await work(worktreePath);
 
-        const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+        const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
-        expect(result).toEqual({ ok: true, kept: { kind: "worktree", path: worktreePath } });
-        expect(await readFile(join(worktreePath, "notes.txt"), "utf8")).toBe("work in progress\n");
-        expect(await branches(repo.path)).toContain(branch);
-        expect(await exists(join(build.dir, "CLAUDE.md"))).toBe(false);
-        expect(await exists(join(build.dir, "manifest.json"))).toBe(false);
-        expect(await exists(join(build.dir, "plugin"))).toBe(false);
+        expect(result).toEqual({ ok: true });
+        expect(await exists(worktreePath)).toBe(false);
+        expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
+        expect(await branches(repo.path)).not.toContain(branch);
+        expect(await exists(build.dir)).toBe(false);
         expectMarkedDeleted(runId);
       },
     );
 
-    it("keeps a branch holding commits whose worktree folder is gone, and says the branch was kept", async () => {
+    it("deletes a branch holding commits whose worktree folder is gone, and keeps nothing", async () => {
       const { build, worktreePath, runId } = await makeBuild();
       await writeFile(join(worktreePath, "notes.txt"), "work in progress\n");
       await git(worktreePath, "add", "notes.txt");
       await git(worktreePath, ...committer, "commit", "--quiet", "-m", "wip");
       await rm(worktreePath, { recursive: true, force: true });
 
-      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
-      expect(result).toEqual({ ok: true, kept: { kind: "branch", branch } });
-      expect(await branches(repo.path)).toContain(branch);
+      expect(result).toEqual({ ok: true });
+      expect(await branches(repo.path)).not.toContain(branch);
       expect(await exists(build.dir)).toBe(false);
       expectMarkedDeleted(runId);
     });
@@ -281,7 +300,7 @@ describe("deleteBuild", () => {
     it("keeps a branch it did not create, though merged into the base with nothing unpushed, and says nothing kept", async () => {
       const { build, worktreePath, runId } = await makeBuildOnExistingBranch();
 
-      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await branches(repo.path)).toContain("feat-y");
@@ -290,14 +309,15 @@ describe("deleteBuild", () => {
       expectMarkedDeleted(runId);
     });
 
-    it("keeps a dirty worktree on a branch it did not create, with the branch", async () => {
-      const { worktreePath, runId } = await makeBuildOnExistingBranch();
+    it("removes a dirty worktree on a branch it did not create, keeping the branch", async () => {
+      const { build, worktreePath, runId } = await makeBuildOnExistingBranch();
       await writeFile(join(worktreePath, "notes.txt"), "work in progress\n");
 
-      const result = await deleteBuild({ store, worktree, fs, home }, buildId);
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
 
-      expect(result).toEqual({ ok: true, kept: { kind: "worktree", path: worktreePath } });
-      expect(await readFile(join(worktreePath, "notes.txt"), "utf8")).toBe("work in progress\n");
+      expect(result).toEqual({ ok: true });
+      expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
+      expect(await exists(build.dir)).toBe(false);
       expect(await branches(repo.path)).toContain("feat-y");
       expectMarkedDeleted(runId);
     });
@@ -317,7 +337,7 @@ describe("deleteBuild", () => {
       await writeFile(join(dir, "manifest.json"), "{}\n");
       recordOldBuild("oldhash1", dir);
 
-      const result = await deleteBuild({ store, worktree, fs, home }, "oldhash1");
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, "oldhash1");
 
       expect(result).toEqual({ ok: true });
       expect(await exists(dir)).toBe(false);
@@ -331,7 +351,7 @@ describe("deleteBuild", () => {
       await writeFile(join(dir, "manifest.json"), "{}\n");
       recordOldBuild("oldhash2", dir);
 
-      const result = await deleteBuild({ store, worktree, fs, home }, "oldhash2");
+      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, "oldhash2");
 
       expect(result).toEqual({ ok: true, kept: { kind: "folder", path: dir } });
       expect(await readFile(join(dir, "manifest.json"), "utf8")).toBe("{}\n");
@@ -395,6 +415,64 @@ describe("teardownWorkspace", () => {
     expect(await exists(dir)).toBe(false);
     expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
     expect(await branches(repo.path)).not.toContain(branch);
+  });
+
+  const commitIn = async (path: string) => {
+    await writeFile(join(path, "notes.txt"), "work in progress\n");
+    await git(path, "add", "notes.txt");
+    await git(path, ...committer, "commit", "--quiet", "-m", "wip");
+  };
+
+  const layDownWorktree = async () => {
+    const dir = await layDownWorkspace();
+    const path = join(dir, basename(repo.path));
+    const runWorktree = { repo: repo.path, base: "main", branch, create: true, path };
+    await new GitWorktree().add(runWorktree);
+    return { dir, runWorktree };
+  };
+
+  it.each([
+    [
+      "uncommitted",
+      async (path: string) => {
+        await writeFile(join(path, "notes.txt"), "work in progress\n");
+      },
+    ],
+    ["committed but unpushed", commitIn],
+  ])(
+    "keeps a worktree holding %s work with its branch, removes the rest and returns the kept path",
+    async (_label, work) => {
+      const { dir, runWorktree } = await layDownWorktree();
+      await work(runWorktree.path);
+
+      const kept = await teardownWorkspace(
+        { worktree: new GitWorktree(), fs },
+        { dir, worktree: runWorktree },
+      );
+
+      expect(kept).toEqual({ kind: "worktree", path: runWorktree.path });
+      expect(await readFile(join(runWorktree.path, "notes.txt"), "utf8")).toBe(
+        "work in progress\n",
+      );
+      expect(await branches(repo.path)).toContain(branch);
+      expect(await exists(join(dir, "CLAUDE.md"))).toBe(false);
+      expect(await exists(join(dir, "plugin"))).toBe(false);
+    },
+  );
+
+  it("keeps a branch holding commits whose worktree folder is gone, and says the branch was kept", async () => {
+    const { dir, runWorktree } = await layDownWorktree();
+    await commitIn(runWorktree.path);
+    await rm(runWorktree.path, { recursive: true, force: true });
+
+    const kept = await teardownWorkspace(
+      { worktree: new GitWorktree(), fs },
+      { dir, worktree: runWorktree },
+    );
+
+    expect(kept).toEqual({ kind: "branch", branch });
+    expect(await branches(repo.path)).toContain(branch);
+    expect(await exists(dir)).toBe(false);
   });
 });
 
@@ -461,6 +539,78 @@ describe("teardownWorkspace on a branch it did not create", () => {
     expect(dirty.removed).toEqual([]);
     expect(dirty.deletedBranches).toEqual([]);
     expect(await exists(runWorktree.path)).toBe(true);
+  });
+});
+
+describe("deletePreview", () => {
+  const home = "/fd-home";
+  const build = (over: Partial<BuildRecord> = {}): BuildRecord => ({
+    id: buildId,
+    hash: "abc",
+    name: "fix-login",
+    repo: "/work/carousell-web",
+    base: "main",
+    branch,
+    branchCreated: true,
+    values: {},
+    deletedAt: null,
+    dir: `${home}/workspaces/${buildId}`,
+    createdAt: 1,
+    blueprintName: null,
+    blueprintVersion: null,
+    ...over,
+  });
+  const worktreePath = `${home}/workspaces/${buildId}/carousell-web`;
+  const presentWorktree = () =>
+    new FakeFileSystem({ [`${worktreePath}/README.md`]: "# carousell-web" });
+
+  it("reports a dirty present worktree", async () => {
+    const worktree = new FakeWorktree({ dirty: [worktreePath] });
+
+    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
+      dirtyWorktree: true,
+      unpushedBranch: false,
+    });
+  });
+
+  it("reports a clean present worktree on a branch with nothing unpushed as losing nothing", async () => {
+    const worktree = new FakeWorktree();
+
+    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
+      dirtyWorktree: false,
+      unpushedBranch: false,
+    });
+  });
+
+  it("reports unpushed commits on a branch Flowdeck made", async () => {
+    const worktree = new FakeWorktree({ unpushed: [branch] });
+
+    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
+      dirtyWorktree: false,
+      unpushedBranch: true,
+    });
+  });
+
+  it("never reports unpushed commits on a branch Flowdeck did not make", async () => {
+    const worktree = new FakeWorktree({ unpushed: ["feat-y"] });
+
+    expect(
+      await deletePreview(
+        { worktree, fs: presentWorktree() },
+        build({ branch: "feat-y", branchCreated: false }),
+      ),
+    ).toEqual({ dirtyWorktree: false, unpushedBranch: false });
+  });
+
+  it("reports nothing for a build with no worktree", async () => {
+    const worktree = new FakeWorktree({ dirty: [worktreePath], unpushed: [branch] });
+
+    expect(
+      await deletePreview(
+        { worktree, fs: new FakeFileSystem() },
+        build({ name: null, repo: null, base: null, branch: null, branchCreated: null }),
+      ),
+    ).toEqual({ dirtyWorktree: false, unpushedBranch: false });
   });
 });
 

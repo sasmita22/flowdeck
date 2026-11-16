@@ -11,9 +11,14 @@ import {
   type RequestBranch,
 } from "../../core/run/branch-name.js";
 import { costReportSchema, type CostReport } from "../../core/run/cost.js";
-import { deleteBuildResultSchema, type KeptAfterDelete } from "../../core/run/delete-build.js";
+import {
+  deleteBuildResultSchema,
+  deletePreviewSchema,
+  type DeletePreview,
+  type KeptAfterDelete,
+} from "../../core/run/delete-build.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
-import { buildVersionResultSchema } from "../../core/run/listing.js";
+import { buildVersionResultSchema, writeStoryResultSchema } from "../../core/run/listing.js";
 import { pipelineSchema, type PipelineItem } from "../../core/run/pipeline.js";
 import { runChoicesSchema } from "../../core/run/options.js";
 import {
@@ -40,6 +45,10 @@ export type RunBridge = Pick<
   | "runCost"
   | "runPipeline"
   | "deleteBuild"
+  | "deleteRun"
+  | "deletePendingBuild"
+  | "deletePreview"
+  | "writeStory"
   | "defaultBranch"
   | "listBranches"
   | "checkedOutBranches"
@@ -94,6 +103,15 @@ export type KeptBuild = { buildId: string } & KeptAfterDelete;
 
 export type StageSelection = { nodeId: string; round?: number };
 
+export type DeleteQuestion =
+  | { kind: "build"; id: string }
+  | { kind: "pending"; id: string }
+  | { kind: "run"; id: string; from: "runs" | "run-page" };
+
+export type ConfirmingDelete =
+  | { kind: "build"; id: string; preview: DeletePreview }
+  | Exclude<DeleteQuestion, { kind: "build" }>;
+
 export type RunState = {
   snapshots: Record<string, RunSnapshot>;
   latestRunId: string | null;
@@ -106,6 +124,10 @@ export type RunState = {
   cost: { runId: string; report: CostReport } | null;
   pipelines: Record<string, PipelineItem[] | null>;
   selectedStage: Record<string, StageSelection>;
+  menuOpen: string | null;
+  confirmingDelete: ConfirmingDelete | null;
+  writingStory: Record<string, true>;
+  storyErrors: Record<string, string>;
   connect(): Promise<void>;
   view(runId: string): Promise<void>;
   openBuild(source?: BuildSource): Promise<void>;
@@ -124,6 +146,15 @@ export type RunState = {
   loadCost(runId: string): Promise<void>;
   loadPipeline(runId: string): Promise<void>;
   selectStage(runId: string, stage: StageSelection): void;
+  openMenu(key: string): void;
+  closeMenu(): void;
+  askDelete(question: DeleteQuestion): Promise<void>;
+  cancelDelete(): void;
+  deleteRun(runId: string): Promise<boolean>;
+  deletePendingBuild(id: string): Promise<boolean>;
+  writeStory(runId: string): Promise<void>;
+  isWritingStory(runId: string): boolean;
+  storyErrorFor(runId: string): string | undefined;
 };
 
 export type RunView = { snapshot: RunSnapshot | null };
@@ -201,7 +232,7 @@ const summaryLabel = (
   shown: readonly DisplayStatus[],
   waiting: boolean,
 ) => {
-  if ((waiting && status === "running") || shown.includes("needs you")) return "Needs you";
+  if (status === "running" && (waiting || shown.includes("needs you"))) return "Needs you";
   if (shown.includes("failed")) return "Failed";
   if (status === "stopped") return "Stopped";
   return status === "running" ? "Running" : "Done";
@@ -250,6 +281,9 @@ const defaults = (variables: readonly Variable[]): Record<string, string | boole
   );
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
+  Object.fromEntries(Object.entries(record).filter(([kept]) => kept !== key));
 
 export const createRunStore = ({
   bridge,
@@ -371,6 +405,10 @@ export const createRunStore = ({
       cost: null,
       pipelines: {},
       selectedStage: {},
+      menuOpen: null,
+      confirmingDelete: null,
+      writingStory: {},
+      storyErrors: {},
 
       connect: async () => {
         bridge.onRunState((value) => {
@@ -567,5 +605,69 @@ export const createRunStore = ({
 
       selectStage: (runId, stage) =>
         set({ selectedStage: { ...get().selectedStage, [runId]: stage } }),
+
+      openMenu: (key) => set({ menuOpen: key }),
+
+      closeMenu: () => set({ menuOpen: null }),
+
+      askDelete: async (question) => {
+        if (question.kind !== "build") {
+          set({ confirmingDelete: question });
+          return;
+        }
+        try {
+          const preview = deletePreviewSchema.parse(
+            await bridge.deletePreview({ buildId: question.id }),
+          );
+          set({ confirmingDelete: { ...question, preview } });
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+        }
+      },
+
+      cancelDelete: () => set({ confirmingDelete: null }),
+
+      deleteRun: async (runId) => {
+        try {
+          await bridge.deleteRun({ runId });
+          if (get().latestRunId === runId) set({ latestRunId: null });
+          return true;
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+          return false;
+        }
+      },
+
+      deletePendingBuild: async (id) => {
+        try {
+          await bridge.deletePendingBuild({ id });
+          return true;
+        } catch (thrown) {
+          set({ error: messageOf(thrown) });
+          return false;
+        }
+      },
+
+      writeStory: async (runId) => {
+        if (get().isWritingStory(runId)) return;
+        set({ writingStory: { ...get().writingStory, [runId]: true } });
+        let error: string | undefined;
+        try {
+          const result = writeStoryResultSchema.parse(await bridge.writeStory({ runId }));
+          if (!result.ok) error = result.error;
+        } catch (thrown) {
+          error = messageOf(thrown);
+        }
+        const { writingStory, storyErrors } = get();
+        set({
+          writingStory: without(writingStory, runId),
+          storyErrors:
+            error === undefined ? without(storyErrors, runId) : { ...storyErrors, [runId]: error },
+        });
+      },
+
+      isWritingStory: (runId) => get().writingStory[runId] === true,
+
+      storyErrorFor: (runId) => get().storyErrors[runId],
     };
   });

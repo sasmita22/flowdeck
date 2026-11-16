@@ -35,6 +35,10 @@ const looks: Record<NodeType, { tag: string; width: number; height: number }> = 
 
 const fixedWidth = new Set<NodeType>(["trigger", "output", "fork", "join"]);
 
+const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";
+
+const LABEL_GAP = 6;
+
 const tagWidth = (tag: string): number => tag.length * CHAR_WIDTH + 10;
 
 const escape = (text: string): string =>
@@ -91,6 +95,26 @@ const rect = (box: Bounds, attributes: string): string =>
 
 const textAt = (x: number, y: number, fill: string, text: string): string =>
   `<text x="${round(x)}" y="${round(y)}" fill="${fill}" font-family="sans-serif" font-size="12">${escape(text)}</text>`;
+
+const barTexts = (box: Bounds, tag: string, label: string): string[] => {
+  const cx = round((box.left + box.right) / 2);
+  const cy = round((box.top + box.bottom) / 2);
+  return [
+    `<text x="${cx}" y="${cy}" fill="${palette.tag}" font-family="sans-serif" font-size="12" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 ${cx} ${cy})">${escape(tag)}</text>`,
+    ...(label === ""
+      ? []
+      : [
+          `<text x="${cx}" y="${round(box.top - LABEL_GAP)}" fill="${palette.text}" font-family="sans-serif" font-size="12" text-anchor="middle">${escape(label)}</text>`,
+        ]),
+  ];
+};
+
+const nodeTexts = (node: Node, box: Bounds): string[] => {
+  const { tag } = looks[node.type];
+  if (isBar(node)) return barTexts(box, tag, node.label);
+  const title = [tag, node.label].filter((part) => part !== "").join(" ");
+  return [textAt(box.left + 10, (box.top + box.bottom) / 2 + 4, palette.text, title)];
+};
 
 export function flowSvg(flow: Flow): string {
   const notes = flow.notes ?? [];
@@ -166,15 +190,13 @@ export function flowSvg(flow: Flow): string {
 
   for (const node of flow.nodes) {
     const box = boundsOf(node);
-    const { tag } = looks[node.type];
-    const title = [tag, node.label].filter((part) => part !== "").join(" ");
     parts.push(
       `<g data-kind="node" data-id="${escape(node.id)}">`,
       rect(
         box,
         `fill="${isContainer(node) ? "none" : palette.node}" stroke="${palette.stroke}" rx="8"`,
       ),
-      textAt(box.left + 10, (box.top + box.bottom) / 2 + 4, palette.text, title),
+      ...nodeTexts(node, box),
       "</g>",
     );
   }

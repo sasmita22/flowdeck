@@ -141,6 +141,26 @@ describe("createPublishingStore", () => {
     expect(pushes).toEqual([]);
   });
 
+  it("deletes another run and a pending build through the inner store, publishing nothing", () => {
+    const { inner, runId, pushes, store } = setup();
+    const other = inner.createRun(newRun("b1"));
+    const start = inner.startPendingBuild({
+      flowId: "flow-1",
+      version: 1,
+      name: "nightly",
+      origin: { kind: "canvas" },
+      startedAt: 1_000,
+    });
+    if (start.kind !== "started") throw new Error("expected a started pending build");
+
+    store.deleteRun(other.id);
+    store.deletePendingBuild(start.pendingId);
+
+    expect(inner.listRuns().map((run) => run.id)).toEqual([runId]);
+    expect(inner.listPendingBuilds()).toEqual([]);
+    expect(pushes).toEqual([]);
+  });
+
   it("stops an interrupted run of another build through the inner store, publishing nothing for it", () => {
     const { inner, pushes, store } = setup();
     const other = inner.createRun(newRun("b1"));

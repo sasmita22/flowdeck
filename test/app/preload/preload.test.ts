@@ -84,6 +84,10 @@ describe("preload run-state wiring", () => {
     ["runOptions", "flowdeck:run-options", { buildId: "b1" }],
     ["stopRun", "flowdeck:stop-run", { runId: "run-1" }],
     ["deleteBuild", "flowdeck:delete-build", { buildId: "b1" }],
+    ["deleteRun", "flowdeck:delete-run", { runId: "run-1" }],
+    ["deletePendingBuild", "flowdeck:delete-pending-build", { id: "pending-1" }],
+    ["deletePreview", "flowdeck:delete-preview", { buildId: "b1" }],
+    ["writeStory", "flowdeck:write-story", { runId: "run-1" }],
     ["doctorWorktrees", "flowdeck:doctor-worktrees", undefined],
     ["defaultBranch", "flowdeck:default-branch", { repo: "/code/shop" }],
     ["checkedOutBranches", "flowdeck:checked-out-branches", { repo: "/code/shop" }],
@@ -126,6 +130,10 @@ describe("preload run-state wiring", () => {
     ["pin-flow", "pinFlow"],
     ["delete-flow", "deleteFlow"],
     ["delete-build", "deleteBuild"],
+    ["delete-run", "deleteRun"],
+    ["delete-pending-build", "deletePendingBuild"],
+    ["delete-preview", "deletePreview"],
+    ["write-story", "writeStory"],
     ["doctor-worktrees", "doctorWorktrees"],
     ["default-branch", "defaultBranch"],
     ["checked-out-branches", "checkedOutBranches"],
@@ -191,6 +199,14 @@ describe("preload run-state wiring", () => {
     }>();
     expectTypeOf<Parameters<EngineCalls["runOptions"]>[0]>().toEqualTypeOf<{ buildId: string }>();
     expectTypeOf<Parameters<EngineCalls["deleteBuild"]>[0]>().toEqualTypeOf<{ buildId: string }>();
+    expectTypeOf<Parameters<EngineCalls["deleteRun"]>[0]>().toEqualTypeOf<{ runId: string }>();
+    expectTypeOf<Parameters<EngineCalls["deletePendingBuild"]>[0]>().toEqualTypeOf<{
+      id: string;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["deletePreview"]>[0]>().toEqualTypeOf<{
+      buildId: string;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["writeStory"]>[0]>().toEqualTypeOf<{ runId: string }>();
     expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
     expectTypeOf<Parameters<EngineCalls["listBuildProgress"]>>().toEqualTypeOf<[]>();

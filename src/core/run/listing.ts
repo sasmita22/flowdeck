@@ -58,6 +58,13 @@ export const loadedRunSchema = z.object({
 
 export type LoadedRun = z.infer<typeof loadedRunSchema>;
 
+export const writeStoryResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+
+export type WriteStoryResult = z.infer<typeof writeStoryResultSchema>;
+
 export const buildRecordSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),

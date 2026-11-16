@@ -10,6 +10,7 @@ import {
   type RunCard,
 } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
+import { ItemMenu } from "../item-menu.js";
 import { selectLiveBadge, type RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { Empty, PageHead } from "./page-head.js";
@@ -37,11 +38,13 @@ export function RunRow({
   card,
   live,
   now,
+  run,
   onOpen,
 }: {
   card: RunCard;
   live: RunSnapshot | null;
   now: number;
+  run: StoreApi<RunState>;
   onOpen(): void;
 }) {
   const status = live?.status ?? card.status;
@@ -68,6 +71,20 @@ export function RunRow({
         >
           {badge}
         </span>
+        <ItemMenu
+          run={run}
+          menuKey={`run:${card.id}`}
+          triggerTestId={pageTestIds.runMenu(card.id)}
+          label="Run actions"
+          items={[
+            {
+              testId: pageTestIds.runDelete(card.id),
+              label: "Delete",
+              onSelect: () =>
+                void run.getState().askDelete({ kind: "run", id: card.id, from: "runs" }),
+            },
+          ]}
+        />
       </div>
       {card.storyLine !== undefined && (
         <p className="fd-ellipsis fd-run-story-line" data-testid={pageTestIds.runRowStoryLine}>
@@ -142,6 +159,7 @@ export function RunsPage({
             card={card}
             live={snapshots[card.id] ?? null}
             now={now}
+            run={run}
             onOpen={() => nav.getState().go({ name: "run", runId: card.id })}
           />
         ))}

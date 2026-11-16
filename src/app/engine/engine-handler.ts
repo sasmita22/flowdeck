@@ -71,6 +71,7 @@ import {
 } from "../../core/run/options.js";
 import {
   deleteBuild,
+  deletePreview,
   isInside,
   storedBranch,
   teardownWorkspace,
@@ -87,7 +88,7 @@ import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
 import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
-import type { BuildRecord, EventEntry, StoredEvent } from "../../core/run/store.js";
+import type { BuildRecord, EventEntry, RunStatus, StoredEvent } from "../../core/run/store.js";
 import {
   buildEntriesSchema,
   buildProjectSchema,
@@ -102,6 +103,7 @@ import {
   type BuildVersionResult,
   type ListedRun,
   type LoadedRun,
+  type WriteStoryResult,
 } from "../../core/run/listing.js";
 import { buildWorktree, repoFolder } from "../../core/run/workspace.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
@@ -187,6 +189,7 @@ type ActiveRun = {
   interrupt?: (code: number) => void;
   stopRequested?: number;
   detached?: boolean;
+  untold?: boolean;
   stopEvents?: () => Promise<void>;
   claudeCalls: Set<Promise<unknown>>;
 };
@@ -218,6 +221,8 @@ const buildEntriesPayload = z.object({ buildId: z.string(), path: z.string() });
 const assistantReadBuildPayload = z.object({ id: z.string() });
 
 const pendingIdPayload = z.object({ pendingId: z.string() });
+
+const pendingRowPayload = z.object({ id: z.string() });
 
 const repoPayload = z.object({ repo: z.string() });
 
@@ -288,6 +293,8 @@ function detachable(store: Store, detached: () => boolean): Store {
     listManifestGaps: () => store.listManifestGaps(),
     recordBuild: (build) => store.recordBuild(build),
     deleteBuild: (id) => store.deleteBuild(id),
+    deleteRun: (runId) => store.deleteRun(runId),
+    deletePendingBuild: (id) => store.deletePendingBuild(id),
     storeManifest(manifest) {
       if (!detached()) store.storeManifest(manifest);
     },
@@ -1024,7 +1031,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         } catch (error) {
           console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
         }
-        void narrate(launch.stores.runs, runId);
+        if (run.untold !== true) void narrate(launch.stores.runs, runId);
       });
     active.set(run.buildId, run);
     console.log(`engine: run ${runId} started`);
@@ -1358,10 +1365,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     await run.done;
   };
 
-  const stopRun = async (runId: string): Promise<{ stopped: boolean }> => {
+  const halt = async (
+    runId: string,
+    { tell }: { tell: boolean },
+  ): Promise<{ stopped: boolean }> => {
     await startsSettled();
     const run = activeRun(runId);
     if (run !== undefined) {
+      if (!tell) run.untold = true;
       await stopActive(run);
       return { stopped: true };
     }
@@ -1369,12 +1380,23 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     if (record?.status !== "running") return { stopped: false };
     runs.stopRun(runId);
-    void narrate(runs, runId);
+    if (tell) void narrate(runs, runId);
     const { tmuxName } = record.session;
     if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
       await options.endSession?.(tmuxName);
     }
     return { stopped: true };
+  };
+
+  const stopRun = (runId: string) => halt(runId, { tell: true });
+
+  const stopForDelete = async (runId: string): Promise<void> => {
+    await halt(runId, { tell: false });
+  };
+
+  const removeRun = async (runId: string): Promise<void> => {
+    await stopForDelete(runId);
+    storesOrThrow().runs.deleteRun(runId);
   };
 
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
@@ -1436,14 +1458,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     for (const narration of narrations) narration.abort(new Error("Flowdeck is closing"));
   };
 
-  const narrate = async (runs: Store, runId: string): Promise<void> => {
-    const { narrator } = options;
-    if (narrator === undefined || narrationsClosed) return;
+  const narrating = new Map<string, number>();
+
+  const tell = async (
+    runs: Store,
+    runId: string,
+    narrator: RunNarrator,
+    runStatus: Exclude<RunStatus, "running">,
+  ): Promise<void> => {
     const controller = new AbortController();
     narrations.add(controller);
+    narrating.set(runId, (narrating.get(runId) ?? 0) + 1);
     try {
-      const runStatus = runs.findRun(runId)?.status;
-      if (runStatus === undefined || runStatus === "running") return;
       const digest = digestOf(runs, runId);
       if (digest === undefined) throw new Error("its build is not stored");
       const seen = runs.events(runId).length;
@@ -1459,10 +1485,40 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         cost: told.cost,
       });
       options.publish({ push: "story", runId });
-    } catch (error) {
-      console.log(`engine: run ${runId} story not written (${messageOf(error)})`);
     } finally {
       narrations.delete(controller);
+      const left = (narrating.get(runId) ?? 1) - 1;
+      if (left === 0) narrating.delete(runId);
+      else narrating.set(runId, left);
+    }
+  };
+
+  const narrate = async (runs: Store, runId: string): Promise<void> => {
+    const { narrator } = options;
+    if (narrator === undefined || narrationsClosed) return;
+    try {
+      const runStatus = runs.findRun(runId)?.status;
+      if (runStatus === undefined || runStatus === "running") return;
+      await tell(runs, runId, narrator, runStatus);
+    } catch (error) {
+      console.log(`engine: run ${runId} story not written (${messageOf(error)})`);
+    }
+  };
+
+  const writeStory = async (runs: Store, runId: string): Promise<WriteStoryResult> => {
+    const refused = (error: string): WriteStoryResult => ({ ok: false, error });
+    const { narrator } = options;
+    const runStatus = runs.findRun(runId)?.status;
+    if (narrator === undefined || narrationsClosed) return refused("Stories cannot be written now");
+    if (runStatus === undefined) return refused(`No run ${runId}`);
+    if (runStatus === "running") return refused("The run has not ended");
+    if (narrating.has(runId)) return refused("The run's story is being written");
+    if (runs.latestRunStory(runId) !== undefined) return refused("The run already has a story");
+    try {
+      await tell(runs, runId, narrator, runStatus);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: messageOf(error) };
     }
   };
 
@@ -1654,21 +1710,41 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     { runs }: EngineStores,
     buildId: string,
   ): Promise<DeleteBuildResult> => {
-    if (active.has(buildId) || starting.has(buildId)) {
-      return {
-        ok: false,
-        message: "A run of this build is in progress. Stop it before deleting the build.",
-      };
-    }
     deleting.add(buildId);
     try {
+      await startsSettled();
       return await deleteBuild(
-        { store: runs, worktree: options.worktree, fs: options.fs, home: options.home },
+        {
+          store: runs,
+          worktree: options.worktree,
+          fs: options.fs,
+          home: options.home,
+          stopRun: stopForDelete,
+        },
         buildId,
       );
     } finally {
       deleting.delete(buildId);
     }
+  };
+
+  const previewDelete = async (runs: Store, buildId: string) => {
+    const build = runs.findBuild(buildId);
+    if (build === undefined) throw new Error(`No build ${buildId}`);
+    return deletePreview({ worktree: options.worktree, fs: options.fs }, build);
+  };
+
+  const removePendingBuild = async (runs: Store, id: string): Promise<void> => {
+    if (buildStops.has(id)) {
+      await stopBuild(id);
+      const session = runs
+        .buildEvents(id)
+        .findLast(
+          (event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session",
+        );
+      if (session !== undefined) await options.fs.removeTree(buildSessionFolder(session.name));
+    }
+    runs.deletePendingBuild(id);
   };
 
   const leftWorktrees = async (): Promise<string[]> => {
@@ -1927,6 +2003,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "delete-build":
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             removeBuild(storesOrThrow(), buildId),
+          );
+        case "delete-run":
+          return parsedAnswer(request, runIdPayload, ({ runId }) => removeRun(runId));
+        case "delete-pending-build":
+          return parsedAnswer(request, pendingRowPayload, ({ id }) =>
+            removePendingBuild(storesOrThrow().runs, id),
+          );
+        case "delete-preview":
+          return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
+            previewDelete(storesOrThrow().runs, buildId),
+          );
+        case "write-story":
+          return parsedAnswer(request, runIdPayload, ({ runId }) =>
+            writeStory(storesOrThrow().runs, runId),
           );
         case "run-build": {
           const parsed = runBuildPayload.safeParse(request.payload);

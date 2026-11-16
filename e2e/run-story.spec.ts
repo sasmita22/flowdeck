@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
-import { dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
+import { controlTestIds, dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -117,6 +117,7 @@ test("A run that ends shows its Story while the page stays open: header, the wri
     pageTestIds.runStoryAccount,
     pageTestIds.runStoryDigest,
   ]);
+  await expect(window.getByTestId(pageTestIds.runStoryWrite)).toHaveCount(0);
 
   await window.getByTestId(pageTestIds.runBack).click();
   await expect(
@@ -160,4 +161,38 @@ test("A run approved at its gate while its page stays open: the digest says runn
     .poll(() => readFileSync(logPath, "utf8"), { timeout: 20_000 })
     .toContain(`run ${runId} story not written (`);
   await expect(window.getByTestId(pageTestIds.runStoryAccount)).toHaveCount(0);
+});
+
+test("An ended run with no story offers Write story: it shows the narrator's error, and after a relaunch with a working narrator it writes the story and the button goes", async () => {
+  const { window, runId, logPath } = await runToTheEnd({ FAKE_CLAUDE_NARRATE_FAIL: "1" });
+  await expect
+    .poll(() => readFileSync(logPath, "utf8"), { timeout: 20_000 })
+    .toContain(`run ${runId} story not written (`);
+
+  const write = window.getByTestId(pageTestIds.runStoryWrite);
+  await expect(write).toBeVisible();
+  await write.click();
+  await expect(window.getByTestId(pageTestIds.runStoryWriteError)).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toHaveCount(0);
+
+  const first = launched;
+  launched = undefined;
+  await first?.close();
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app-2.log") });
+  const reopened = launched.window;
+  await expect(reopened.getByTestId("canvas-build")).toBeVisible();
+  await reopened.getByTestId(controlTestIds.back).click();
+  await reopened.getByTestId("menu-runs").click();
+  await reopened.getByTestId(pageTestIds.runOpen(runId)).click();
+  await expect(reopened.getByTestId(pageTestIds.runPageStatus)).toHaveText("done");
+
+  await reopened.getByTestId(pageTestIds.runStoryWrite).click();
+
+  await expect(reopened.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeStory, {
+    timeout: 20_000,
+  });
+  await expect(reopened.getByTestId(pageTestIds.runStoryWrite)).toHaveCount(0);
+  await expect(reopened.getByTestId(pageTestIds.runStoryWriteError)).toHaveCount(0);
 });

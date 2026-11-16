@@ -2,7 +2,7 @@ import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "vitest";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, forEach, loop, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, forEach, fork, join, loop, thenWire } from "../../fixtures/flow-builders.js";
 
 type Box = { left: number; top: number; right: number; bottom: number };
 
@@ -167,5 +167,98 @@ describe("flowSvg", () => {
   it("draws no wire for a flow with no wires", () => {
     const svg = flowSvg(flow([at(agent("a"), 0, 0), at(agent("b"), 300, 0)], []));
     expect(drawn(svg, "wire")).toHaveLength(0);
+  });
+
+  describe("a Fork and a Join", () => {
+    const BAR_PADDING = 8;
+    const CHAR_RATIO = 0.6;
+
+    const parallel = (): Flow =>
+      flow(
+        [
+          at(agent("plan"), 0, 32),
+          at({ ...fork("split"), label: "Split the work" }, 230, 0),
+          at(agent("left"), 330, -40),
+          at(agent("right"), 330, 104),
+          at({ ...join("merge"), label: "Merge the results" }, 560, 0),
+          at(agent("ship"), 660, 32),
+        ],
+        [
+          thenWire("plan", "split"),
+          thenWire("split", "left"),
+          thenWire("split", "right"),
+          thenWire("left", "merge"),
+          thenWire("right", "merge"),
+          thenWire("merge", "ship"),
+        ],
+      );
+
+    const textsOf = (group: Element): Element[] => Array.from(group.getElementsByTagName("text"));
+
+    const textReading = (group: Element, content: string): Element => {
+      const found = textsOf(group).find((text) => text.textContent === content);
+      if (found === undefined)
+        throw new Error(
+          `no <text> reading "${content}" in ${group.getAttribute("data-id")}: ${textsOf(group)
+            .map((text) => JSON.stringify(text.textContent))
+            .join(", ")}`,
+        );
+      return found;
+    };
+
+    const fontSizeOf = (text: Element): number => Number(text.getAttribute("font-size") ?? "16");
+
+    const lengthOf = (text: Element): number =>
+      (text.textContent ?? "").length * fontSizeOf(text) * CHAR_RATIO;
+
+    const labelBox = (text: Element): Box => {
+      const x = Number(text.getAttribute("x"));
+      const y = Number(text.getAttribute("y"));
+      const length = lengthOf(text);
+      const anchor = text.getAttribute("text-anchor") ?? "start";
+      const left = anchor === "middle" ? x - length / 2 : anchor === "end" ? x - length : x;
+      return { left, top: y - fontSizeOf(text), right: left + length, bottom: y };
+    };
+
+    const overlaps = (a: Box, b: Box): boolean =>
+      a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+    it.each([
+      ["split", "PARALLEL START"],
+      ["merge", "PARALLEL END"],
+    ])(
+      "draws %s's tag rotated a quarter turn about the bar's centre, inside the bar",
+      (id, tag) => {
+        const group = byId(drawn(flowSvg(parallel()), "node"), id);
+        const bar = boxOf(group);
+        const text = textReading(group, tag);
+        const cx = (bar.left + bar.right) / 2;
+        const cy = (bar.top + bar.bottom) / 2;
+
+        expect(bar.right - bar.left).toBe(28);
+        expect(bar.bottom - bar.top).toBe(112);
+        expect(text.getAttribute("transform")).toBe(`rotate(-90 ${cx} ${cy})`);
+        expect(text.getAttribute("text-anchor")).toBe("middle");
+        expect(lengthOf(text)).toBeLessThanOrEqual(bar.bottom - bar.top - BAR_PADDING);
+        expect(fontSizeOf(text)).toBeLessThanOrEqual(bar.right - bar.left);
+      },
+    );
+
+    it.each([
+      ["split", "Split the work"],
+      ["merge", "Merge the results"],
+    ])("draws %s's label above the bar, clear of every other node", (id, label) => {
+      const nodes = drawn(flowSvg(parallel()), "node");
+      const group = byId(nodes, id);
+      const bar = boxOf(group);
+      const box = labelBox(textReading(group, label));
+
+      expect(box.bottom).toBeLessThan(bar.top);
+      for (const other of nodes.filter((node) => node.getAttribute("data-id") !== id))
+        expect(
+          overlaps(box, boxOf(other)),
+          `label of ${id} over ${other.getAttribute("data-id")}`,
+        ).toBe(false);
+    });
   });
 });
