@@ -158,9 +158,10 @@ describe("SqliteStore", () => {
       { name: "015_build_manifests.sql" },
       { name: "016_events_by_node.sql" },
       { name: "017_run_stories.sql" },
+      { name: "018_runs_deleted_at.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 17]);
+    expect(before).toEqual([1, 1, 3, 1, 18]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -679,6 +680,121 @@ describe("SqliteStore", () => {
 
       expect(() => store.recordBuild(another("b2", "fix-login"))).toThrow();
       expect(count(raw(), "builds")).toBe(1);
+    });
+  });
+
+  describe("deleting a run", () => {
+    const threeFinishedRuns = (store: SqliteStore): [string, string, string] => {
+      const finished = () => {
+        const run = store.createRun(newRun(["p1"]));
+        store.finishRun(run.id, "done");
+        return run.id;
+      };
+      return [finished(), finished(), finished()];
+    };
+
+    it("marks the run deleted and hides it from listRuns, keeping its row", () => {
+      const store = open();
+      const [first, second] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      expect(store.listRuns().map((run) => run.id)).not.toContain(second);
+      expect(store.listRuns().map((run) => run.id)).toContain(first);
+      const row = raw().prepare("SELECT deleted_at FROM runs WHERE id = ?").get(second) as {
+        deleted_at: unknown;
+      };
+      expect(row.deleted_at).not.toBeNull();
+      expect(count(raw(), "runs")).toBe(3);
+    });
+
+    it("keeps the numbers of the build's other runs", () => {
+      const store = open();
+      const [first, second, third] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      const numberOf = new Map(store.listRuns().map((run) => [run.id, run.number]));
+      expect([numberOf.get(first), numberOf.get(third)]).toEqual([1, 3]);
+    });
+
+    it("still finds the deleted run by id, with its number", () => {
+      const store = open();
+      const [, second] = threeFinishedRuns(store);
+
+      store.deleteRun(second);
+
+      expect(store.findRun(second)).toMatchObject({ id: second, status: "done" });
+      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+    });
+
+    it("leaves a deleted run's deletion time as it is when it is deleted again", () => {
+      let now = 1_000;
+      const store = open(() => new Date(now));
+      const [, second] = threeFinishedRuns(store);
+      store.deleteRun(second);
+      now = 2_000;
+
+      store.deleteRun(second);
+
+      expect(raw().prepare("SELECT deleted_at FROM runs WHERE id = ?").get(second)).toEqual({
+        deleted_at: 1_000,
+      });
+    });
+  });
+
+  describe("deleting a pending build", () => {
+    it("marks an open build deleted and hides it from listPendingBuilds", () => {
+      const store = open();
+      const gone = startedId(store, pending("flow-1", "nightly"));
+      const kept = startedId(store, pending("flow-2", "weekly"));
+
+      store.deletePendingBuild(gone);
+
+      expect(store.listPendingBuilds().map((each) => each.id)).toEqual([kept]);
+      const row = raw().prepare("SELECT deleted_at FROM pending_builds WHERE id = ?").get(gone) as {
+        deleted_at: unknown;
+      };
+      expect(row.deleted_at).not.toBeNull();
+    });
+
+    it("hides an ended build from listLatestEndedPendingBuildsByName", () => {
+      const store = open();
+      const gone = startedId(store, pending("flow-1", "first"));
+      store.endPendingBuild(gone, { outcome: "failed", endedAt: 2_000 });
+      const kept = startedId(store, pending("flow-1", "second"));
+      store.endPendingBuild(kept, { outcome: "failed", endedAt: 3_000 });
+
+      store.deletePendingBuild(gone);
+
+      expect(store.listLatestEndedPendingBuildsByName().map((each) => each.id)).toEqual([kept]);
+    });
+
+    it("does not bring back an older ended build of the name once the latest is hidden", () => {
+      const store = open();
+      const older = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 2_000 });
+      const latest = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000 });
+
+      store.deletePendingBuild(latest);
+
+      expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
+    });
+
+    it("leaves a deleted build's deletion time as it is when it is deleted again", () => {
+      let now = 1_000;
+      const store = open(() => new Date(now));
+      const id = startedId(store, pending());
+      store.endPendingBuild(id, { outcome: "failed", endedAt: 2_000 });
+      store.deletePendingBuild(id);
+      now = 2_000;
+
+      store.deletePendingBuild(id);
+
+      expect(raw().prepare("SELECT deleted_at FROM pending_builds WHERE id = ?").get(id)).toEqual({
+        deleted_at: 1_000,
+      });
     });
   });
 

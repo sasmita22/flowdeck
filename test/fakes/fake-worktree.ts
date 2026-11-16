@@ -25,6 +25,9 @@ export class FakeWorktree implements Worktree {
 
   async remove(options: WorktreeRemoveOptions): Promise<WorktreeRemoval> {
     this.removed.push(options);
+    if (!options.force && (await this.isDirty(options.path))) {
+      return { worktree: "kept", branch: "kept" };
+    }
     await rm(options.path, { recursive: true, force: true });
     if (!options.create) return { worktree: "removed", branch: "kept" };
     this.branches.delete(options.branch);

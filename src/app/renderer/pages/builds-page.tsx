@@ -7,6 +7,7 @@ import type { Actions } from "../actions.js";
 import { selectBuildingCards, type BuildProgressState } from "../build-progress-store.js";
 import { formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
+import { ItemMenu } from "../item-menu.js";
 import {
   filterRunsByBuild,
   selectBuildCards,
@@ -261,6 +262,7 @@ function BuildFiles({
                 card={card}
                 live={snapshots[card.id] ?? null}
                 now={now}
+                run={run}
                 onOpen={() => nav.getState().go({ name: "run", runId: card.id })}
               />
             ))
@@ -283,35 +285,52 @@ function BuildingCardView({
   card,
   outcome,
   nav,
+  run,
 }: {
   card: BuildingCard;
   outcome: BuildOutcome | undefined;
   nav: StoreApi<NavState>;
+  run: StoreApi<RunState>;
 }) {
   return (
-    <button
-      className="fd-card fd-card-link"
-      data-testid={pageTestIds.buildingCard(card.pendingId)}
-      title="See this build's pipeline"
-      onClick={() => nav.getState().go({ name: "building", pendingId: card.pendingId })}
-    >
-      <span className="fd-card-top">
-        <span className="fd-card-name">
-          {card.buildName}{" "}
-          <span className="fd-muted">
-            {card.blueprintName ?? ""}
-            {card.blueprintVersion === undefined ? "" : ` v${card.blueprintVersion}`}
+    <article className="fd-card fd-card-corner">
+      <button
+        className="fd-card-link fd-card-open"
+        data-testid={pageTestIds.buildingCard(card.pendingId)}
+        title="See this build's pipeline"
+        onClick={() => nav.getState().go({ name: "building", pendingId: card.pendingId })}
+      >
+        <span className="fd-card-top">
+          <span className="fd-card-name">
+            {card.buildName}{" "}
+            <span className="fd-muted">
+              {card.blueprintName ?? ""}
+              {card.blueprintVersion === undefined ? "" : ` v${card.blueprintVersion}`}
+            </span>
           </span>
+          <span className={`fd-badge fd-badge-${buildingTones[outcome ?? "building"]}`}>
+            {card.badge}
+          </span>
+          {card.live && <span className="fd-live-dot" aria-hidden="true" />}
         </span>
-        <span className={`fd-badge fd-badge-${buildingTones[outcome ?? "building"]}`}>
-          {card.badge}
+        <span className="fd-card-meta">
+          <span>Started {formatWhen(card.startedAt)}</span>
         </span>
-        {card.live && <span className="fd-live-dot" aria-hidden="true" />}
-      </span>
-      <span className="fd-card-meta">
-        <span>Started {formatWhen(card.startedAt)}</span>
-      </span>
-    </button>
+      </button>
+      <ItemMenu
+        run={run}
+        menuKey={`building:${card.pendingId}`}
+        triggerTestId={pageTestIds.buildingMenu(card.pendingId)}
+        label="Build actions"
+        items={[
+          {
+            testId: pageTestIds.buildingDelete(card.pendingId),
+            label: "Delete",
+            onSelect: () => void run.getState().askDelete({ kind: "pending", id: card.pendingId }),
+          },
+        ]}
+      />
+    </article>
   );
 }
 
@@ -360,6 +379,19 @@ function BuildCardView({
             old
           </span>
         )}
+        <ItemMenu
+          run={run}
+          menuKey={`build:${card.id}`}
+          triggerTestId={pageTestIds.buildMenu(card.id)}
+          label="Build actions"
+          items={[
+            {
+              testId: pageTestIds.buildDelete(card.id),
+              label: "Delete",
+              onSelect: () => void run.getState().askDelete({ kind: "build", id: card.id }),
+            },
+          ]}
+        />
       </div>
       <div className="fd-card-meta">
         <span>Built {formatWhen(card.createdAt)}</span>
@@ -395,14 +427,6 @@ function BuildCardView({
             </button>
           </>
         )}
-        <button
-          className="fd-btn"
-          data-testid={pageTestIds.buildDelete(card.id)}
-          title="Delete the build, its workspace and its branch"
-          onClick={() => void actions.deleteBuild(card.id)}
-        >
-          Delete
-        </button>
       </div>
     </article>
   );
@@ -425,7 +449,11 @@ export function BuildsPage({
 }) {
   const cards = useCards(library);
   const entries = useStore(buildProgress, (state) => state.entries);
-  const buildingCards = useMemo(() => selectBuildingCards({ entries }), [entries]);
+  const removed = useStore(buildProgress, (state) => state.removed);
+  const buildingCards = useMemo(
+    () => selectBuildingCards({ entries, removed }),
+    [entries, removed],
+  );
   const loaded = useStore(library, (state) => state.loaded);
   const query = useStore(nav, (state) => state.query);
   const sort = useStore(nav, (state) => state.sort);
@@ -453,6 +481,7 @@ export function BuildsPage({
             card={card}
             outcome={entries[card.pendingId]?.outcome}
             nav={nav}
+            run={run}
           />
         ))}
         {shown.map((card) => (

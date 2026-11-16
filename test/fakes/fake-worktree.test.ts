@@ -118,6 +118,24 @@ describe("FakeWorktree", () => {
     expect(await exists(path)).toBe(false);
   });
 
+  it("keeps a dirty worktree and its branch unless forced, then removes both", async () => {
+    const path = join(root, "worktrees", "abcd1234");
+    const worktree = new FakeWorktree({ dirty: [path] });
+    const options = { repo: "/r", base: "main", branch: "flowdeck/abcd1234", path, create: true };
+    await worktree.add(options);
+
+    expect(await worktree.remove(options)).toEqual({ worktree: "kept", branch: "kept" });
+    expect(await exists(path)).toBe(true);
+    expect(worktree.branches).toEqual(new Set(["flowdeck/abcd1234"]));
+
+    expect(await worktree.remove({ ...options, force: true })).toEqual({
+      worktree: "removed",
+      branch: "removed",
+    });
+    expect(await exists(path)).toBe(false);
+    expect(worktree.branches).toEqual(new Set());
+  });
+
   it("reads a scripted folder as dirty and any other as clean", async () => {
     const worktree = new FakeWorktree({ dirty: ["/w/a"] });
 

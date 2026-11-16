@@ -8,7 +8,7 @@ export type WorktreeAddOptions = {
   create: boolean;
 };
 
-export type WorktreeRemoveOptions = WorktreeAddOptions;
+export type WorktreeRemoveOptions = WorktreeAddOptions & { force?: boolean };
 
 export interface Worktree {
   add(options: WorktreeAddOptions): Promise<void>;

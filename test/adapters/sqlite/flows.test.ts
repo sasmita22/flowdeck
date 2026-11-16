@@ -856,6 +856,7 @@ describe("SqliteFlowStore", () => {
       { name: "015_build_manifests.sql" },
       { name: "016_events_by_node.sql" },
       { name: "017_run_stories.sql" },
+      { name: "018_runs_deleted_at.sql" },
     ]);
   });
 });

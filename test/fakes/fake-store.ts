@@ -62,6 +62,8 @@ export class FakeStore implements Store {
   private readonly buildRecords: RecordedBuild[] = [];
   private readonly manifests = new Map<string, string>();
   private readonly deletedAt = new Map<string, number>();
+  private readonly deletedRuns = new Set<string>();
+  private readonly deletedPendingBuilds = new Set<string>();
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
   private readonly stories: RunStory[] = [];
@@ -102,6 +104,7 @@ export class FakeStore implements Store {
   listRuns(): RunSummary[] {
     return this.runRecords
       .map((run, index) => this.summaryOf(run, index))
+      .filter((run) => !this.deletedRuns.has(run.id))
       .reverse()
       .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"));
   }
@@ -110,6 +113,10 @@ export class FakeStore implements Store {
     const index = this.runRecords.findIndex((run) => run.id === id);
     const run = this.runRecords[index];
     return run && this.summaryOf(run, index);
+  }
+
+  deleteRun(runId: string): void {
+    if (this.runRecords.some((run) => run.id === runId)) this.deletedRuns.add(runId);
   }
 
   private summaryOf(run: RunRecord, index: number): RunSummary {
@@ -210,7 +217,7 @@ export class FakeStore implements Store {
   }
 
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {
-    const open = this.listPendingBuilds();
+    const open = this.openPendingBuilds();
     if (open.some((known) => known.name === build.name)) return { kind: "busy", reason: "name" };
     const pendingId = `pending-${this.nextPending++}`;
     const { snapshot, ...pendingBuild } = build;
@@ -253,6 +260,10 @@ export class FakeStore implements Store {
   }
 
   listPendingBuilds(): PendingBuild[] {
+    return this.openPendingBuilds().filter((known) => !this.deletedPendingBuilds.has(known.id));
+  }
+
+  private openPendingBuilds(): PendingBuild[] {
     return this.pendingBuilds.filter((known) => known.endedAt === undefined).map(copy);
   }
 
@@ -266,18 +277,22 @@ export class FakeStore implements Store {
       }
     }
     return [...latest.values()]
-      .filter((known) => known.outcome !== "built")
+      .filter((known) => known.outcome !== "built" && !this.deletedPendingBuilds.has(known.id))
       .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
       .map(copy);
   }
 
   findPendingBuildByName(name: string): PendingBuild | undefined {
-    return this.listPendingBuilds().find((known) => known.name === name);
+    return this.openPendingBuilds().find((known) => known.name === name);
   }
 
   pendingBuild(id: string): PendingBuild | null {
     const known = this.pendingBuilds.find((record) => record.id === id);
     return known === undefined ? null : copy(known);
+  }
+
+  deletePendingBuild(id: string): void {
+    if (this.pendingBuilds.some((known) => known.id === id)) this.deletedPendingBuilds.add(id);
   }
 
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
@@ -308,7 +323,7 @@ export class FakeStore implements Store {
         version: known.version,
         blueprintName: blueprintNameIn(known.origin),
       }));
-    const building = new Set(this.listPendingBuilds().map((known) => known.name));
+    const building = new Set(this.openPendingBuilds().map((known) => known.name));
     const built = this.buildRecords
       .filter((known) => this.snapshotOf(known.id) === undefined && !building.has(known.name))
       .map((known): SnapshotGap => ({

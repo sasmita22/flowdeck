@@ -41,6 +41,10 @@ type RunBridge = Pick<
   | "runCost"
   | "runPipeline"
   | "deleteBuild"
+  | "deleteRun"
+  | "deletePendingBuild"
+  | "deletePreview"
+  | "writeStory"
   | "defaultBranch"
   | "listBranches"
   | "checkedOutBranches"
@@ -159,6 +163,13 @@ const setup = async (
     })),
     runPipeline: vi.fn<FlowdeckBridge["runPipeline"]>(async () => [stage("a1")]),
     deleteBuild: vi.fn<FlowdeckBridge["deleteBuild"]>(async () => ({ ok: true })),
+    deleteRun: vi.fn<FlowdeckBridge["deleteRun"]>(async () => undefined),
+    deletePendingBuild: vi.fn<FlowdeckBridge["deletePendingBuild"]>(async () => undefined),
+    deletePreview: vi.fn<FlowdeckBridge["deletePreview"]>(async () => ({
+      dirtyWorktree: false,
+      unpushedBranch: false,
+    })),
+    writeStory: vi.fn<FlowdeckBridge["writeStory"]>(async () => ({ ok: true })),
     defaultBranch: vi.fn<FlowdeckBridge["defaultBranch"]>(async () => {
       calls.push("defaultBranch");
       return options.defaultBranch ?? "main";
@@ -1115,6 +1126,174 @@ describe("deleteBuild", () => {
   });
 });
 
+describe("the ⋯ menu", () => {
+  it("keeps one menu open at a time, the last one opened, until it is closed", async () => {
+    const { run } = await setup();
+    expect(run.getState().menuOpen).toBeNull();
+
+    run.getState().openMenu("build:b-1");
+    expect(run.getState().menuOpen).toBe("build:b-1");
+
+    run.getState().openMenu("run:run-2");
+    expect(run.getState().menuOpen).toBe("run:run-2");
+
+    run.getState().closeMenu();
+    expect(run.getState().menuOpen).toBeNull();
+  });
+});
+
+describe("confirming a delete", () => {
+  it("loads what deleting a build would lose into its confirm", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePreview.mockResolvedValueOnce({ dirtyWorktree: true, unpushedBranch: false });
+
+    await run.getState().askDelete({ kind: "build", id: "b-1" });
+
+    expect(bridge.deletePreview).toHaveBeenCalledExactlyOnceWith({ buildId: "b-1" });
+    expect(run.getState().confirmingDelete).toEqual({
+      kind: "build",
+      id: "b-1",
+      preview: { dirtyWorktree: true, unpushedBranch: false },
+    });
+  });
+
+  it("opens no confirm for a build whose loss cannot be read, holding the error instead", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePreview.mockRejectedValueOnce(new Error("No build b-1"));
+
+    await run.getState().askDelete({ kind: "build", id: "b-1" });
+
+    expect(run.getState().confirmingDelete).toBeNull();
+    expect(run.getState().error).toBe("No build b-1");
+  });
+
+  it.each([
+    [{ kind: "pending", id: "pb-1" }],
+    [{ kind: "run", id: "run-2", from: "runs" }],
+    [{ kind: "run", id: "run-2", from: "run-page" }],
+  ] as const)("asks to confirm %j without a preview", async (question) => {
+    const { bridge, run } = await setup();
+
+    await run.getState().askDelete(question);
+
+    expect(run.getState().confirmingDelete).toEqual(question);
+    expect(bridge.deletePreview).not.toHaveBeenCalled();
+  });
+
+  it("cancel clears the confirm and deletes nothing", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().askDelete({ kind: "build", id: "b-1" });
+
+    run.getState().cancelDelete();
+
+    expect(run.getState().confirmingDelete).toBeNull();
+    expect(bridge.deleteBuild).not.toHaveBeenCalled();
+    expect(bridge.deleteRun).not.toHaveBeenCalled();
+    expect(bridge.deletePendingBuild).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteRun", () => {
+  it("deletes the run by its id and stops pointing the status bar at it", async () => {
+    const { bridge, run, push } = await setup();
+    await run.getState().connect();
+    push(snapshot("running", { a: "running" }, "run-1"));
+
+    await expect(run.getState().deleteRun("run-1")).resolves.toBe(true);
+
+    expect(bridge.deleteRun).toHaveBeenCalledExactlyOnceWith({ runId: "run-1" });
+    expect(run.getState().latestRunId).toBeNull();
+    expect(run.getState().error).toBeNull();
+  });
+
+  it("answers that nothing was deleted and holds the engine's refusal as the error", async () => {
+    const { bridge, run, push } = await setup();
+    await run.getState().connect();
+    push(snapshot("running", { a: "running" }, "run-1"));
+    bridge.deleteRun.mockRejectedValueOnce(new Error("Unknown run run-1"));
+
+    await expect(run.getState().deleteRun("run-1")).resolves.toBe(false);
+
+    expect(run.getState().error).toBe("Unknown run run-1");
+    expect(run.getState().latestRunId).toBe("run-1");
+  });
+
+  it("keeps the latest run when another run is deleted", async () => {
+    const { run, push } = await setup();
+    await run.getState().connect();
+    push(snapshot("running", { a: "running" }, "run-1"));
+
+    await run.getState().deleteRun("run-2");
+
+    expect(run.getState().latestRunId).toBe("run-1");
+  });
+});
+
+describe("deletePendingBuild", () => {
+  it("deletes the build that never finished by its id and answers that it did", async () => {
+    const { bridge, run } = await setup();
+
+    await expect(run.getState().deletePendingBuild("pb-1")).resolves.toBe(true);
+
+    expect(bridge.deletePendingBuild).toHaveBeenCalledExactlyOnceWith({ id: "pb-1" });
+    expect(run.getState().error).toBeNull();
+  });
+
+  it("answers that nothing was deleted and holds the engine's refusal as the error", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePendingBuild.mockRejectedValueOnce(new Error("Unknown pending build pb-1"));
+
+    await expect(run.getState().deletePendingBuild("pb-1")).resolves.toBe(false);
+
+    expect(run.getState().error).toBe("Unknown pending build pb-1");
+  });
+});
+
+describe("writeStory", () => {
+  it("marks the run writing while its story is written, sending one request while one is in flight", async () => {
+    const { bridge, run } = await setup();
+    const answer = deferred<unknown>();
+    bridge.writeStory.mockReturnValueOnce(answer.promise);
+
+    const first = run.getState().writeStory("run-1");
+    expect(run.getState().isWritingStory("run-1")).toBe(true);
+    expect(run.getState().isWritingStory("run-2")).toBe(false);
+    await run.getState().writeStory("run-1");
+
+    answer.resolve({ ok: true });
+    await first;
+
+    expect(bridge.writeStory).toHaveBeenCalledExactlyOnceWith({ runId: "run-1" });
+    expect(run.getState().isWritingStory("run-1")).toBe(false);
+    expect(run.getState().storyErrorFor("run-1")).toBeUndefined();
+  });
+
+  it("holds the error the engine answers as the run's write error, and clears it once a story is written", async () => {
+    const { bridge, run } = await setup();
+    bridge.writeStory.mockResolvedValueOnce({ ok: false, error: "narrator down" });
+
+    await run.getState().writeStory("run-1");
+
+    expect(run.getState().isWritingStory("run-1")).toBe(false);
+    expect(run.getState().storyErrorFor("run-1")).toBe("narrator down");
+    expect(run.getState().storyErrorFor("run-2")).toBeUndefined();
+
+    await run.getState().writeStory("run-1");
+
+    expect(run.getState().storyErrorFor("run-1")).toBeUndefined();
+  });
+
+  it("holds a failed request as the run's write error and stops writing", async () => {
+    const { bridge, run } = await setup();
+    bridge.writeStory.mockRejectedValueOnce(new Error("engine gone"));
+
+    await run.getState().writeStory("run-1");
+
+    expect(run.getState().isWritingStory("run-1")).toBe(false);
+    expect(run.getState().storyErrorFor("run-1")).toBe("engine gone");
+  });
+});
+
 describe("controls", () => {
   it("stops, retries and resumes a run through the bridge", async () => {
     const { bridge, run } = await setup();
@@ -1294,6 +1473,13 @@ describe("selectRunSummary", () => {
     expect(summaryOf(snapshot("stopped", { a: "done", b: "running" }))).toBe(
       "Stopped · 1 of 2 nodes done",
     );
+  });
+
+  it("reads a stopped run as stopped, though its Gate still waits on the user", () => {
+    const nodes = { a: "done", gate: "needs-you" } as const;
+
+    expect(summaryOf(snapshot("stopped", nodes))).toBe("Stopped · 1 of 2 nodes done");
+    expect(summaryOf(snapshot("running", nodes))).toBe("Needs you · 1 of 2 nodes done");
   });
 
   it("says Done once every node is done and the run stopped running", () => {

@@ -7,6 +7,7 @@ import { InspectorPanel } from "../inspector-panel.js";
 import type { RunLabels } from "../inspector/inspector.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
+import { ItemMenu } from "../item-menu.js";
 import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { variablesText } from "../../../core/run/digest.js";
 import type { LoadedRun } from "../../../core/run/listing.js";
@@ -36,8 +37,22 @@ const tone = {
 
 type Story = NonNullable<LoadedRun["story"]>;
 
-function StoryPanel({ story }: { story: Story }) {
+function StoryPanel({
+  story,
+  runId,
+  ended,
+  run,
+  actions,
+}: {
+  story: Story;
+  runId: string;
+  ended: boolean;
+  run: StoreApi<RunState>;
+  actions: Actions;
+}) {
   const { header } = story;
+  const writing = useStore(run, (state) => state.writingStory[runId] === true);
+  const writeError = useStore(run, (state) => state.storyErrors[runId]);
   const variables = variablesText(header.values);
   const [digestOpen, setDigestOpen] = useState(false);
   return (
@@ -56,6 +71,21 @@ function StoryPanel({ story }: { story: Story }) {
       {story.written !== null && (
         <p className="fd-run-reply fd-run-story-account" data-testid={pageTestIds.runStoryAccount}>
           {story.written.text}
+        </p>
+      )}
+      {ended && story.written === null && (
+        <button
+          className="fd-btn fd-btn-primary fd-run-story-toggle"
+          data-testid={pageTestIds.runStoryWrite}
+          disabled={writing}
+          onClick={() => void actions.writeStory(runId)}
+        >
+          {writing ? "Writing story…" : "Write story"}
+        </button>
+      )}
+      {story.written === null && writeError !== undefined && (
+        <p className="fd-page-note" data-testid={pageTestIds.runStoryWriteError} role="alert">
+          {writeError}
         </p>
       )}
       <button
@@ -178,7 +208,16 @@ export function RunPage({
               ? ""
               : ` v${loaded.run.blueprintVersion}`}
           </span>
-          {card !== undefined && <code className="fd-hash">{card.name}</code>}
+          {buildId !== undefined && loaded !== null && loaded.run.buildName !== null && (
+            <button
+              className="fd-crumb fd-hash"
+              data-testid={pageTestIds.runBuildTag}
+              title="Open this run's build"
+              onClick={() => nav.getState().go({ name: "builds", buildId })}
+            >
+              {loaded.run.buildName}
+            </button>
+          )}
         </nav>
         <span
           className={`fd-badge fd-badge-${badge === "needs you" ? "warn" : tone[status]}`}
@@ -228,24 +267,46 @@ export function RunPage({
               onClick={() => shell.getState().toggleInspector(view.getState())}
             />
           )}
+          <ItemMenu
+            run={run}
+            menuKey={`run-page:${runId}`}
+            triggerTestId={pageTestIds.runPageMenu}
+            label="Run actions"
+            items={[
+              {
+                testId: pageTestIds.runPageDelete,
+                label: "Delete",
+                onSelect: () =>
+                  void run.getState().askDelete({ kind: "run", id: runId, from: "run-page" }),
+              },
+            ]}
+          />
         </div>
       </header>
       {buildId !== undefined && (
         <BlueprintPicture library={library} pictureKey={{ buildId }} testId={buildId} />
       )}
       <div className="fd-main" style={{ position: "relative" }}>
-        {status === "interrupted" && loaded?.note !== undefined && (
-          <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">
-            {loaded.note}
-          </p>
-        )}
         {live !== null && waiting && !inspectorOpen && (
           <div className="fd-wait-banner" data-testid="wait-banner">
             <Ask wait={wait} />
           </div>
         )}
         <div className="fd-run-stages">
-          {loaded?.story !== undefined && <StoryPanel story={loaded.story} />}
+          {status === "interrupted" && loaded?.note !== undefined && (
+            <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">
+              {loaded.note}
+            </p>
+          )}
+          {loaded?.story !== undefined && (
+            <StoryPanel
+              story={loaded.story}
+              runId={runId}
+              ended={status === "done" || status === "failed" || status === "stopped"}
+              run={run}
+              actions={actions}
+            />
+          )}
           {deleted && (
             <p className="fd-page-note" data-testid={pageTestIds.runDeletedNote} role="status">
               This run&apos;s build was deleted. It can&apos;t be run again.

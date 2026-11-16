@@ -10,6 +10,8 @@ const setup = (
     flowId?: string | null;
     runId?: string | null;
     deleted?: boolean;
+    pendingDeleted?: boolean;
+    runDeleted?: boolean;
     leaveAnswer?: "proceed" | "cancel";
     deleteRefused?: boolean;
   } = {},
@@ -34,6 +36,11 @@ const setup = (
     ),
     deleteBuild: vi.fn<(buildId: string) => Promise<boolean>>(async () => options.deleted ?? true),
     stop: vi.fn<(runId: string) => Promise<void>>(async () => undefined),
+    deleteRun: vi.fn<(runId: string) => Promise<boolean>>(async () => options.runDeleted ?? true),
+    deletePendingBuild: vi.fn<(id: string) => Promise<boolean>>(
+      async () => options.pendingDeleted ?? true,
+    ),
+    writeStory: vi.fn<(runId: string) => Promise<void>>(async () => undefined),
   }));
   const library = createStore(() => ({
     refresh: vi.fn(async () => undefined),
@@ -41,7 +48,8 @@ const setup = (
     delete: vi.fn(async () => !(options.deleteRefused ?? false)),
   }));
   const assistant = createStore(() => ({ end: vi.fn(async () => undefined) }));
-  const stores = { nav, save, run, library, assistant } satisfies ActionStores;
+  const buildProgress = createStore(() => ({ remove: vi.fn<(id: string) => void>() }));
+  const stores = { nav, save, run, library, assistant, buildProgress } satisfies ActionStores;
   return { ...stores, actions: createActions(stores) };
 };
 
@@ -155,6 +163,54 @@ describe("createActions", () => {
     expect(library.getState().refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("deletes a run by its id and refreshes the lists, staying on the page", async () => {
+    const { actions, nav, library, run } = setup();
+    nav.getState().go({ name: "runs" });
+
+    await expect(actions.deleteRun("run-7")).resolves.toBe(true);
+
+    expect(run.getState().deleteRun).toHaveBeenCalledExactlyOnceWith("run-7");
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "runs" });
+  });
+
+  it("answers that the run was not deleted when the engine refuses, still refreshing the lists", async () => {
+    const { actions, library, run } = setup({ runDeleted: false });
+
+    await expect(actions.deleteRun("run-7")).resolves.toBe(false);
+
+    expect(run.getState().deleteRun).toHaveBeenCalledExactlyOnceWith("run-7");
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes a build that never finished, drops its card and refreshes the lists", async () => {
+    const { actions, library, run, buildProgress } = setup();
+
+    await actions.deletePendingBuild("pb-1");
+
+    expect(run.getState().deletePendingBuild).toHaveBeenCalledExactlyOnceWith("pb-1");
+    expect(buildProgress.getState().remove).toHaveBeenCalledExactlyOnceWith("pb-1");
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the card of a build that never finished when the engine refuses its delete", async () => {
+    const { actions, library, run, buildProgress } = setup({ pendingDeleted: false });
+
+    await actions.deletePendingBuild("pb-1");
+
+    expect(run.getState().deletePendingBuild).toHaveBeenCalledExactlyOnceWith("pb-1");
+    expect(buildProgress.getState().remove).not.toHaveBeenCalled();
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes a run's story through the run store", async () => {
+    const { actions, run } = setup();
+
+    await actions.writeStory("run-7");
+
+    expect(run.getState().writeStory).toHaveBeenCalledExactlyOnceWith("run-7");
+  });
+
   it("stops a run by its id and refreshes the lists, staying on the page", async () => {
     const { actions, nav, library, run } = setup();
     nav.getState().go({ name: "builds" });
@@ -230,6 +286,9 @@ describe("opening a blueprint through the editor's save store", () => {
       start: vi.fn(async () => null),
       deleteBuild: vi.fn(async () => true),
       stop: vi.fn(async () => undefined),
+      deleteRun: vi.fn(async () => true),
+      deletePendingBuild: vi.fn(async () => true),
+      writeStory: vi.fn(async () => undefined),
     }));
     const library = createStore(() => ({
       refresh: vi.fn(async () => undefined),
@@ -237,7 +296,8 @@ describe("opening a blueprint through the editor's save store", () => {
       delete: vi.fn(async () => true),
     }));
     const assistant = createStore(() => ({ end: vi.fn(async () => undefined) }));
-    return { nav, actions: createActions({ nav, save, run, library, assistant }) };
+    const buildProgress = createStore(() => ({ remove: vi.fn() }));
+    return { nav, actions: createActions({ nav, save, run, library, assistant, buildProgress }) };
   };
 
   it("stays on the page and rejects with the engine's answer when the blueprint was deleted", async () => {

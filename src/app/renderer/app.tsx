@@ -18,6 +18,7 @@ import type { NavState, Page } from "./nav-store.js";
 import { BlueprintsPage } from "./pages/blueprints-page.js";
 import { BuildPipelinePage } from "./pages/build-pipeline-page.js";
 import { BuildsPage } from "./pages/builds-page.js";
+import { DeletePrompt } from "./pages/delete-prompt.js";
 import { DoctorPage } from "./pages/doctor-page.js";
 import { EditorPage } from "./pages/editor-page.js";
 import { RunPage } from "./pages/run-page.js";
@@ -294,6 +295,13 @@ export function App(stores: AppStores) {
         branches={stores.buildBranches}
       />
       <RunDialog run={stores.run} actions={stores.actions} />
+      <DeletePrompt
+        run={stores.run}
+        library={stores.library}
+        buildProgress={stores.buildProgress}
+        nav={stores.nav}
+        actions={stores.actions}
+      />
       <ClosePrompt store={stores.save} />
       <LeavePrompt store={stores.save} />
     </main>

@@ -545,6 +545,54 @@ describe("build lineage", () => {
     });
   });
 
+  describe("a run is deleted once", () => {
+    it("lets deleted_at be set once, and refuses a second change or clearing it", () => {
+      const { db } = stores();
+      insertBuild(db, { id: "b1" });
+      insertRun(db, "r1", "b1", "done");
+
+      db.exec("UPDATE runs SET deleted_at = 100 WHERE id = 'r1'");
+
+      expect(db.prepare("SELECT deleted_at FROM runs").get()).toEqual({ deleted_at: 100 });
+      expect(() => db.exec("UPDATE runs SET deleted_at = 200 WHERE id = 'r1'")).toThrow(
+        /deleted once/,
+      );
+      expect(() => db.exec("UPDATE runs SET deleted_at = NULL WHERE id = 'r1'")).toThrow(
+        /deleted once/,
+      );
+      expect(db.prepare("SELECT deleted_at FROM runs").get()).toEqual({ deleted_at: 100 });
+    });
+  });
+
+  describe("a pending build is deleted once", () => {
+    const insertPendingBuild = (db: Database.Database, id: string) => {
+      db.prepare(
+        `INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome)
+         VALUES (?, 'flow-1', 1, 'fix-login', '{}', 1, 2, 'failed')`,
+      ).run(id);
+    };
+
+    it("lets deleted_at be set once, and refuses a second change or clearing it", () => {
+      const { db } = stores();
+      insertPendingBuild(db, "p1");
+
+      db.exec("UPDATE pending_builds SET deleted_at = 100 WHERE id = 'p1'");
+
+      expect(db.prepare("SELECT deleted_at FROM pending_builds").get()).toEqual({
+        deleted_at: 100,
+      });
+      expect(() => db.exec("UPDATE pending_builds SET deleted_at = 200 WHERE id = 'p1'")).toThrow(
+        /deleted once/,
+      );
+      expect(() => db.exec("UPDATE pending_builds SET deleted_at = NULL WHERE id = 'p1'")).toThrow(
+        /deleted once/,
+      );
+      expect(db.prepare("SELECT deleted_at FROM pending_builds").get()).toEqual({
+        deleted_at: 100,
+      });
+    });
+  });
+
   describe("reading builds", () => {
     it("lists builds newest first, each with its name, flow version, time, hash and id", () => {
       const db = connect();
@@ -701,7 +749,7 @@ describe("build lineage", () => {
           }
           if (table === "runs") {
             const { build_hash, ...rest } = row;
-            return { ...rest, build_id: build_hash };
+            return { ...rest, build_id: build_hash, deleted_at: null };
           }
           if (table === "flows") return { ...row, pinned: 0, deleted_at: null };
           return row;

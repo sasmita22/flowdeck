@@ -866,6 +866,10 @@ body,
   padding: 0 var(--space-4) var(--space-4);
 }
 
+.fd-run-stages > .fd-page-note {
+  margin-top: var(--space-4);
+}
+
 .fd-run-story {
   margin: var(--space-4) 0;
 }
@@ -1548,6 +1552,42 @@ body,
   border-radius: 6px;
 }
 
+.fd-menu-floating {
+  position: fixed;
+}
+
+.fd-item-menu-trigger {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  line-height: 1.4;
+}
+
+.fd-card-corner {
+  position: relative;
+}
+
+.fd-card-corner > .fd-item-menu-trigger {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+}
+
+.fd-card-open {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+  padding: 0 calc(var(--space-4) + 24px) 0 0;
+  border: 0;
+  background: none;
+}
+
+.fd-dialog-warning {
+  color: var(--warn);
+}
+
 .fd-menu-item {
   padding: var(--space-2) var(--space-3);
   border: 0;
@@ -1634,18 +1674,12 @@ body,
 }
 
 .fd-run-note {
-  position: absolute;
-  top: var(--space-3);
-  left: 50%;
-  z-index: 5;
-  width: min(480px, calc(100% - 2 * var(--space-4)));
-  margin: 0;
-  transform: translateX(-50%);
+  margin: var(--space-4) 0 0;
   padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
   color: var(--muted);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 
 .fd-wait-banner {

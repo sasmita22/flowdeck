@@ -34,6 +34,7 @@ export type BuildProgressState = {
   drafts: Record<string, Record<number, string>>;
   rebuilding: Record<string, boolean>;
   rebuildErrors: Record<string, string>;
+  removed: Record<string, true>;
   connect(): Promise<void>;
   viewActivity(pendingId: string): Promise<void>;
   activityFor(pendingId: string): ActivityEntry[];
@@ -45,6 +46,7 @@ export type BuildProgressState = {
   isRebuilding(pendingId: string): boolean;
   rebuildErrorFor(pendingId: string): string | undefined;
   rebuild(pendingId: string): Promise<void>;
+  remove(pendingId: string): void;
 };
 
 const noActivity: ActivityEntry[] = [];
@@ -67,17 +69,24 @@ const latestEndedByName = (entries: readonly BuildProgressEntry[]): BuildProgres
   return [...latest.values()];
 };
 
-export const selectBuildingCards = (state: Pick<BuildProgressState, "entries">): BuildingCard[] => {
+type Shown = Pick<BuildProgressState, "entries" | "removed">;
+
+const isShown = (state: Shown) => (entry: BuildProgressEntry) => !state.removed[entry.pendingId];
+
+export const selectBuildingCards = (state: Shown): BuildingCard[] => {
   const entries = Object.values(state.entries);
   const open = entries.filter((entry) => entry.outcome === undefined);
   const ended = latestEndedByName(entries.filter((entry) => entry.outcome !== undefined));
   return [...open, ...ended]
+    .filter(isShown(state))
     .flatMap((entry) => buildingCardOf(entry) ?? [])
     .sort((a, b) => b.startedAt - a.startedAt);
 };
 
-export const selectBuildingCount = (state: Pick<BuildProgressState, "entries">): number =>
-  Object.values(state.entries).filter((entry) => entry.outcome === undefined).length;
+export const selectBuildingCount = (state: Shown): number =>
+  Object.values(state.entries)
+    .filter(isShown(state))
+    .filter((entry) => entry.outcome === undefined).length;
 
 export const selectPipeline =
   (pendingId: string) =>
@@ -138,6 +147,7 @@ export const createBuildProgressStore = (
       drafts: {},
       rebuilding: {},
       rebuildErrors: {},
+      removed: {},
 
       connect: async () => {
         bridge.onBuildProgress((value) => {
@@ -197,5 +207,7 @@ export const createBuildProgressStore = (
         else if (result.data.kind === "error") endRebuild(pendingId, result.data.message);
         else endRebuild(pendingId);
       },
+
+      remove: (pendingId) => set({ removed: { ...get().removed, [pendingId]: true } }),
     };
   });

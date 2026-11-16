@@ -41,7 +41,7 @@ import type {
   BuildTurnResult,
 } from "../../../src/ports/build-agents.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
-import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
+import type { WorktreeAddOptions, WorktreeRemoveOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -3002,6 +3002,100 @@ describe("createEngineHandler", async () => {
         expect(runs.buildEvents(pendingId)).toEqual(eventsAtStop);
       });
 
+      describe("delete-pending-build", () => {
+        const deletePendingBuild = async (id: string) => {
+          const response = await handler.handle({
+            id: nextId++,
+            type: "delete-pending-build",
+            payload: { id },
+          });
+          expect(response).toMatchObject({ ok: true });
+        };
+
+        const progressIds = async () => {
+          const listed = await handler.handle({ id: nextId++, type: "build-progress-list" });
+          return (listed as { value: { pendingId: string }[] }).value.map(
+            (entry) => entry.pendingId,
+          );
+        };
+
+        const heldBuild = async () => {
+          agents.holdTurns();
+          const pendingId = await startedPendingId();
+          await vi.waitFor(() => {
+            expect(agents.turnsStarted).toBe(1);
+          });
+          const [opened] = agents.fake.opened;
+          if (opened === undefined) throw new Error("the build session never opened");
+          return { pendingId, opened };
+        };
+
+        it("stops a building row's build first, then hides the row and leaves no session or workspace folder", async () => {
+          const { pendingId, opened } = await heldBuild();
+
+          await deletePendingBuild(pendingId);
+
+          expect(agents.fake.closed).toEqual([opened.sessionName]);
+          expect(runs.pendingBuild(pendingId)?.outcome).toBe("stopped");
+          expect(await progressIds()).not.toContain(pendingId);
+          expect(runs.listLatestEndedPendingBuildsByName().map((ended) => ended.id)).toEqual([]);
+          expect(await new NodeFileSystem().exists(dirname(opened.settingsPath))).toBe(false);
+          expect(await new NodeFileSystem().exists(opened.workspaceDir)).toBe(false);
+        });
+
+        it("removes the build-sessions folder a building row's stop left behind", async () => {
+          class KeepsFirstSessionFolder extends NodeFileSystem {
+            private kept = false;
+
+            override async removeTree(path: string, keep?: { keep?: string }): Promise<void> {
+              if (!this.kept && path.startsWith(join(home, "build-sessions"))) {
+                this.kept = true;
+                return;
+              }
+              return super.removeTree(path, keep);
+            }
+          }
+          const fs = new KeepsFirstSessionFolder();
+          handler = handlerWith({
+            buildAgents: agents,
+            fs,
+            run: { ...runEnvironment(fs), usage },
+          });
+          const { pendingId, opened } = await heldBuild();
+
+          await deletePendingBuild(pendingId);
+
+          expect(await progressIds()).not.toContain(pendingId);
+          expect(await new NodeFileSystem().exists(dirname(opened.settingsPath))).toBe(false);
+        });
+
+        it.each(["needs-you", "failed", "stopped"] as const)(
+          "hides a row that ended %s, stopping nothing",
+          async (outcome) => {
+            const start = runs.startPendingBuild({
+              flowId: "flow-1",
+              version: 1,
+              name: `ended-${outcome}`,
+              origin: {
+                source: { flowId: "flow-1", version: 1 },
+                blueprint: { name: "Untitled", version: 1 },
+              },
+              startedAt: 1_000,
+            });
+            if (start.kind !== "started") throw new Error("the ended build did not start");
+            runs.endPendingBuild(start.pendingId, { outcome, endedAt: 2_000 });
+            expect(await progressIds()).toContain(start.pendingId);
+
+            await deletePendingBuild(start.pendingId);
+
+            expect(await progressIds()).not.toContain(start.pendingId);
+            expect(runs.listLatestEndedPendingBuildsByName()).toEqual([]);
+            expect(runs.pendingBuild(start.pendingId)?.outcome).toBe(outcome);
+            expect(agents.fake.closed).toEqual([]);
+          },
+        );
+      });
+
       describe("build-rebuild", () => {
         const question = { nodeId: "write", text: "Who writes notes.md?", otherNodeId: "check" };
         const questions = [question];
@@ -3431,28 +3525,128 @@ describe("createEngineHandler", async () => {
         return (response as { value: unknown }).value;
       };
 
-      it("is refused while the build's run is going, and keeps the build", async () => {
-        flows.save(sleeper());
-        const buildId = await builtId();
-        await startedOn(buildId);
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
-        expect(await deleteBuild(buildId)).toMatchObject({
-          ok: false,
-          message: expect.any(String),
+      const silentNarrator = () => new FakeRunNarrator({ text: "Told.", cost: 0.25 });
+
+      const statusesWhenBuildMarked = (runId: () => string) => {
+        const seen: (string | undefined)[] = [];
+        const mark = runs.deleteBuild.bind(runs);
+        vi.spyOn(runs, "deleteBuild").mockImplementation((id) => {
+          seen.push(runs.findRun(runId())?.status);
+          mark(id);
         });
-        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+        onTestFinished(() => {
+          vi.restoreAllMocks();
+        });
+        return seen;
+      };
+
+      const expectNoStory = async (narrator: FakeRunNarrator, runId: string) => {
+        await settle();
+        expect(narrator.calls).toEqual([]);
+        expect(pushes).not.toContainEqual({ push: "story", runId });
+      };
+
+      it("stops the build's going run and waits for its end before removing its worktree, then deletes the build, telling no story", async () => {
+        const narrator = silentNarrator();
+        let runId = "";
+        const removedWhile: (string | undefined)[] = [];
+        class WatchedWorktree extends FakeWorktree {
+          override async remove(removal: WorktreeRemoveOptions) {
+            removedWhile.push(runs.findRun(runId)?.status);
+            return super.remove(removal);
+          }
+        }
+        const worktree = new WatchedWorktree();
+        handler = handlerWith({ narrator, worktree });
+        flows.save(inFolder(sleeper(), { repo: repo.path, base: "main", variables: [] }));
+        const buildId = await builtId();
+        expect(worktree.calls).toHaveLength(1);
+        runId = await startedOn(buildId);
+        await vi.waitFor(() => {
+          expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
+        });
+        const markedWhile = statusesWhenBuildMarked(() => runId);
+
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+
+        expect(removedWhile).toEqual(["stopped"]);
+        expect(markedWhile).toEqual(["stopped"]);
+        expect(runs.listBuilds()).toEqual([]);
+        await expectNoStory(narrator, runId);
       });
 
-      it("is refused while the build's run is starting, and keeps the build", async () => {
+      it("lets a starting run start, stops it, then deletes the build, telling no story", async () => {
+        const narrator = silentNarrator();
+        handler = handlerWith({ narrator });
         flows.save(sleeper());
         const buildId = await builtId();
+        const markedWhile = statusesWhenBuildMarked(() => runs.runs[0]?.id ?? "");
 
         const starting = handler.handle({ id: nextId++, type: "run-build", payload: { buildId } });
         const deleting = deleteBuild(buildId);
 
-        expect(await deleting).toMatchObject({ ok: false, message: expect.any(String) });
+        expect(await deleting).toEqual({ ok: true });
         expect(await starting).toMatchObject({ value: { kind: "started" } });
-        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+        const runId = runs.runs[0]?.id ?? "";
+        expect(runs.findRun(runId)?.status).toBe("stopped");
+        expect(markedWhile).toEqual(["stopped"]);
+        expect(runs.listBuilds()).toEqual([]);
+        await expectNoStory(narrator, runId);
+      });
+
+      it("stops an interrupted run of the build and ends its session, telling no story, then deletes the build", async () => {
+        const narrator = silentNarrator();
+        const ended: string[] = [];
+        handler = handlerWith({
+          narrator,
+          sessionAlive: async (name) => name === "fd-run-left",
+          endSession: async (name) => {
+            ended.push(name);
+          },
+        });
+        flows.save(sleeper());
+        const buildId = await builtId();
+        const runId = runs.createRun({
+          buildDir: buildDirOf(buildId),
+          inputs: {},
+          nodeIds: ["start"],
+          session: { tmuxName: "fd-run-left", cwd: repo.path, claudeSessionId: "c-left" },
+          buildId,
+        }).id;
+        const markedWhile = statusesWhenBuildMarked(() => runId);
+
+        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+
+        expect(markedWhile).toEqual(["stopped"]);
+        expect(ended).toEqual(["fd-run-left"]);
+        expect(runs.listBuilds()).toEqual([]);
+        await expectNoStory(narrator, runId);
+      });
+
+      it("previews whether deleting the build loses work in its worktree", async () => {
+        const source = await createTmpRepo({ commit: true });
+        try {
+          handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
+          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }));
+          const buildId = await builtId();
+          const preview = () =>
+            handler.handle({ id: nextId++, type: "delete-preview", payload: { buildId } });
+
+          expect(await preview()).toMatchObject({
+            ok: true,
+            value: { dirtyWorktree: false, unpushedBranch: false },
+          });
+          await writeFile(join(worktreeOf(buildId, source.path), "work.txt"), "kept\n");
+          expect(await preview()).toMatchObject({
+            ok: true,
+            value: { dirtyWorktree: true, unpushedBranch: false },
+          });
+          expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+        } finally {
+          await source.cleanup();
+        }
       });
 
       it("refuses a run of the build while its delete is going, and creates no run", async () => {
@@ -3565,7 +3759,7 @@ describe("createEngineHandler", async () => {
         expect(runs.runs).toHaveLength(0);
       });
 
-      it("hides the build and answers the path of a worktree that holds work", async () => {
+      it("hides the build and removes a worktree that holds work", async () => {
         const source = await createTmpRepo({ commit: true });
         try {
           handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
@@ -3574,16 +3768,153 @@ describe("createEngineHandler", async () => {
           const worktree = worktreeOf(buildId, source.path);
           await writeFile(join(worktree, "work.txt"), "kept\n");
 
-          expect(await deleteBuild(buildId)).toEqual({
-            ok: true,
-            kept: { kind: "worktree", path: worktree },
-          });
+          expect(await deleteBuild(buildId)).toEqual({ ok: true });
+          await expect(stat(worktree)).rejects.toThrow();
           expect(await handler.handle({ id: nextId++, type: "list-builds" })).toMatchObject({
             value: [],
           });
         } finally {
           await source.cleanup();
         }
+      });
+    });
+
+    describe("delete-run", () => {
+      let db: ReturnType<typeof openDatabase>;
+      let store: SqliteStore;
+      let blueprints: SqliteFlowStore;
+      let narrator: FakeRunNarrator;
+      let ended: string[];
+
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+      const deleteRun = async (runId: string) => {
+        const response = await handler.handle({
+          id: nextId++,
+          type: "delete-run",
+          payload: { runId },
+        });
+        expect(response).toMatchObject({ ok: true });
+      };
+
+      const listedIds = () => store.listRuns().map((run) => run.id);
+
+      const deletedAt = (runId: string) =>
+        (
+          db.prepare("SELECT deleted_at FROM runs WHERE id = ?").get(runId) as {
+            deleted_at: number | null;
+          }
+        ).deleted_at;
+
+      const statusesWhenRunMarked = () => {
+        const seen: (string | undefined)[] = [];
+        const mark = store.deleteRun.bind(store);
+        vi.spyOn(store, "deleteRun").mockImplementation((id) => {
+          seen.push(store.findRun(id)?.status);
+          mark(id);
+        });
+        onTestFinished(() => {
+          vi.restoreAllMocks();
+        });
+        return seen;
+      };
+
+      const interrupted = (buildId: string) => {
+        const build = store.findBuild(buildId);
+        if (build === undefined) throw new Error(`no build ${buildId}`);
+        return store.createRun({
+          buildDir: build.dir,
+          inputs: {},
+          nodeIds: ["start"],
+          session: { tmuxName: "fd-run-left", cwd: repo.path, claudeSessionId: "c-left" },
+          buildId,
+        }).id;
+      };
+
+      beforeEach(() => {
+        db = openDatabase({ path: join(home, "flowdeck.db") });
+        store = new SqliteStore({ db });
+        blueprints = new SqliteFlowStore({ db });
+        narrator = new FakeRunNarrator({ text: "Told.", cost: 0.25 });
+        ended = [];
+        handler = handlerWith({
+          openStores: () => ({ runs: store, flows: blueprints }),
+          narrator,
+          sessionAlive: async (name) => name === "fd-run-left",
+          endSession: async (name) => {
+            ended.push(name);
+          },
+        });
+      });
+
+      afterEach(async () => {
+        await handler.stop();
+        db.close();
+      });
+
+      it("hides an ended run from the list, keeps its row and status, and tells no further story", async () => {
+        blueprints.save(twoAgents());
+        const runId = await startedOn(await builtId());
+        await untilFinished(runId);
+        await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+        await deleteRun(runId);
+
+        expect(listedIds()).not.toContain(runId);
+        expect(deletedAt(runId)).toEqual(expect.any(Number));
+        expect(store.findRun(runId)?.status).toBe("done");
+        await settle();
+        expect(narrator.calls).toHaveLength(1);
+      });
+
+      it("stops a going run and waits for its end before hiding it, tells no story, and its build starts a new run", async () => {
+        blueprints.save(sleeper());
+        const buildId = await builtId();
+        const runId = await startedOn(buildId);
+        await vi.waitFor(() => {
+          expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
+        });
+        const markedWhile = statusesWhenRunMarked();
+
+        await deleteRun(runId);
+
+        expect(markedWhile).toEqual(["stopped"]);
+        expect(listedIds()).not.toContain(runId);
+        await settle();
+        expect(narrator.calls).toEqual([]);
+        expect(pushes).not.toContainEqual({ push: "story", runId });
+        expect(await runBuild(buildId)).toMatchObject({ kind: "started" });
+      });
+
+      it("stops an interrupted run and ends its session before hiding it, tells no story, and its build starts a new run", async () => {
+        blueprints.save(sleeper());
+        const buildId = await builtId();
+        const runId = interrupted(buildId);
+        const markedWhile = statusesWhenRunMarked();
+
+        await deleteRun(runId);
+
+        expect(markedWhile).toEqual(["stopped"]);
+        expect(ended).toEqual(["fd-run-left"]);
+        expect(listedIds()).not.toContain(runId);
+        await settle();
+        expect(narrator.calls).toEqual([]);
+        expect(pushes).not.toContainEqual({ push: "story", runId });
+        expect(await runBuild(buildId)).toMatchObject({ kind: "started" });
+      });
+
+      it("does not pick a deleted run up again when the engine reattaches", async () => {
+        blueprints.save(sleeper());
+        const runId = interrupted(await builtId());
+        store.deleteRun(runId);
+        const eventsBefore = store.events(runId);
+
+        await handler.reattach();
+        await settle();
+
+        expect(store.events(runId)).toEqual(eventsBefore);
+        expect(sessionPushes(runId)).toEqual([]);
+        expect(snapshotsOf(runId)).toEqual([]);
       });
     });
 
@@ -3980,6 +4311,116 @@ describe("createEngineHandler", async () => {
         expect(appended()).toEqual([]);
         expect(logged.filter((line) => line.includes("story"))).toEqual([]);
         expect(await loadedStory(runId)).toEqual({ ...headerAndDigest(runId), written: null });
+      });
+
+      describe("write-story", () => {
+        const writeStory = async (runId: string) => {
+          const response = await handler.handle({
+            id: nextId++,
+            type: "write-story",
+            payload: { runId },
+          });
+          expect(response).toMatchObject({ ok: true });
+          return (response as { value: unknown }).value;
+        };
+
+        const refused = { ok: false, error: expect.stringMatching(/\S/) };
+
+        const endedWithoutStory = async () => {
+          handler = storyHandler();
+          flows.save(sleeper());
+          const runId = leftRunning(await builtId());
+          runs.finishRun(runId, "stopped");
+          return runId;
+        };
+
+        it("writes one story for an ended run that has none, announces it, and answers ok", async () => {
+          const runId = await endedWithoutStory();
+
+          expect(await writeStory(runId)).toEqual({ ok: true });
+
+          const shown = (await loadedStory(runId)) as { digest?: string } | undefined;
+          expect(narrator.calls).toEqual([shown?.digest]);
+          expect(appended()).toEqual([
+            {
+              runId,
+              at: expect.any(String),
+              runStatus: "stopped",
+              text: narration.text,
+              cost: narration.cost,
+            },
+          ]);
+          expect(pushes.filter((push) => push.push === "story")).toEqual([
+            { push: "story", runId },
+          ]);
+        });
+
+        it("refuses a second request while the first is still writing, and writes one story", async () => {
+          const release = narrator.hold();
+          const runId = await endedWithoutStory();
+
+          const first = writeStory(runId);
+          await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+          expect(await writeStory(runId)).toEqual(refused);
+          release();
+
+          expect(await first).toEqual({ ok: true });
+          await settle();
+          expect(narrator.calls).toHaveLength(1);
+          expect(appended()).toHaveLength(1);
+        });
+
+        it("refuses while the run's own end-of-run story is still being written, and writes one story", async () => {
+          const release = narrator.hold();
+          const runId = await endRun("done");
+          await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+          expect(await writeStory(runId)).toEqual(refused);
+          release();
+
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+          await settle();
+          expect(narrator.calls).toHaveLength(1);
+          expect(appended()).toHaveLength(1);
+        });
+
+        it("refuses a run that already has a story, writing none", async () => {
+          const runId = await endRun("done");
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+          expect(await writeStory(runId)).toEqual(refused);
+
+          await settle();
+          expect(narrator.calls).toHaveLength(1);
+          expect(appended()).toHaveLength(1);
+        });
+
+        it("refuses a run that is still running, writing none", async () => {
+          handler = storyHandler();
+          flows.save(sleeper());
+          const runId = leftRunning(await builtId());
+
+          expect(await writeStory(runId)).toEqual(refused);
+
+          await settle();
+          expect(narrator.calls).toEqual([]);
+          expect(appended()).toEqual([]);
+          expect(runs.findRun(runId)?.status).toBe("running");
+        });
+
+        it("answers the narrator's error, writing no story", async () => {
+          const runId = await endedWithoutStory();
+          narrator.failWith(new Error("narrator down"));
+
+          expect(await writeStory(runId)).toEqual({
+            ok: false,
+            error: expect.stringContaining("narrator down"),
+          });
+
+          expect(narrator.calls).toHaveLength(1);
+          expect(appended()).toEqual([]);
+          expect(pushes).not.toContainEqual({ push: "story", runId });
+        });
       });
     });
 

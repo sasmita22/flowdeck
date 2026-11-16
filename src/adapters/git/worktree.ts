@@ -50,8 +50,9 @@ export class GitWorktree implements Worktree {
     branch,
     path,
     create,
+    force = false,
   }: WorktreeRemoveOptions): Promise<WorktreeRemoval> {
-    const removeArgs = (await exists(path)) ? [path] : ["--force", path];
+    const removeArgs = force || !(await exists(path)) ? ["--force", path] : [path];
     await succeeds(["-C", repo, "worktree", "remove", ...removeArgs]);
     if (await exists(path)) return { worktree: "kept", branch: "kept" };
     if (!create) return { worktree: "removed", branch: "kept" };
@@ -59,7 +60,7 @@ export class GitWorktree implements Worktree {
     if (!(await succeeds(["-C", repo, "rev-parse", "--verify", "--quiet", ref]))) {
       return { worktree: "removed", branch: "removed" };
     }
-    if (!(await succeeds(["-C", repo, "merge-base", "--is-ancestor", ref, base]))) {
+    if (!force && !(await succeeds(["-C", repo, "merge-base", "--is-ancestor", ref, base]))) {
       return { worktree: "removed", branch: "kept" };
     }
     try {

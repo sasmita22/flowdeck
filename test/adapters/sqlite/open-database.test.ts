@@ -53,6 +53,7 @@ const allMigrations = [
   { name: "015_build_manifests.sql" },
   { name: "016_events_by_node.sql" },
   { name: "017_run_stories.sql" },
+  { name: "018_runs_deleted_at.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -438,7 +439,10 @@ describe("openDatabase", () => {
       for (const table of ["flow_versions", "run_sessions", "run_nodes", "events", "activity"]) {
         expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(before[table]);
       }
-      for (const table of ["runs", "build_files", "build_nodes"]) {
+      expect(db.prepare("SELECT * FROM runs").all(), "runs").toEqual(
+        withBuildId(before["runs"] ?? []).map((row) => ({ ...row, deleted_at: null })),
+      );
+      for (const table of ["build_files", "build_nodes"]) {
         expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(
           withBuildId(before[table] ?? []),
         );

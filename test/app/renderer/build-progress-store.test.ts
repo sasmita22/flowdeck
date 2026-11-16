@@ -264,6 +264,35 @@ describe("build progress store", () => {
       ]);
     });
 
+    it("drops a removed build's card and count", async () => {
+      const { store } = await setup([
+        entry(pending("pb-1", "flow-a", 1, undefined, 1_000), atStep(2)),
+        entry(pending("pb-2", "flow-b", 2, undefined, 2_000), atStep(2)),
+      ]);
+
+      store.getState().remove("pb-1");
+
+      expect(selectBuildingCards(store.getState()).map((card) => card.pendingId)).toEqual(["pb-2"]);
+      expect(selectBuildingCount(store.getState())).toBe(1);
+    });
+
+    it("shows no older ended build of a name once its latest ended build is removed", async () => {
+      const { store } = await setup([
+        entry({ ...pending("pb-older", "flow-a", 1, "failed", 1_000), endedAt: 2_000 }, atStep(3)),
+        entry(
+          { ...pending("pb-newer", "flow-a", 1, "needs-you", 1_500), endedAt: 3_000 },
+          atStep(3),
+        ),
+      ]);
+      expect(selectBuildingCards(store.getState()).map((card) => card.pendingId)).toEqual([
+        "pb-newer",
+      ]);
+
+      store.getState().remove("pb-newer");
+
+      expect(selectBuildingCards(store.getState())).toEqual([]);
+    });
+
     it("has no cards and a count of none before any build", async () => {
       const { store } = await setup([]);
 
