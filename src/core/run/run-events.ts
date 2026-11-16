@@ -14,7 +14,7 @@ export type RunEvent =
   | { kind: "failed"; payload: { message: string } }
   | { kind: "decided" | "answered"; payload: HumanDecision }
   | { kind: "round"; payload: { round: number; items?: string[] } }
-  | { kind: "usage"; payload: { messages: string[] }; tokens: number; cost: number }
+  | { kind: "usage"; payload: { messages: string[]; round?: number }; tokens: number; cost: number }
   | { kind: "compacted"; payload: { tokens: number } }
   | {
       kind: "budget";

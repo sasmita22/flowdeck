@@ -1338,9 +1338,51 @@ describe("controls", () => {
       },
     });
   });
+
+  it("keeps the round lines of a cost report", async () => {
+    const { bridge, run } = await setup();
+    const report = {
+      nodes: [
+        {
+          nodeId: "body",
+          tokens: 30,
+          cost: 0.9,
+          ms: 2000,
+          rounds: [
+            { round: 1, tokens: 10, cost: 0.2 },
+            { round: 2, tokens: 20, cost: 0.7 },
+          ],
+        },
+      ],
+      total: { tokens: 30, cost: 0.9, ms: 2000 },
+    };
+    bridge.runCost.mockResolvedValueOnce(report);
+
+    await run.getState().loadCost("run-7");
+
+    expect(run.getState().cost).toEqual({ runId: "run-7", report });
+  });
 });
 
 describe("the run pipeline", () => {
+  it("keeps the cost of each round of a loop", async () => {
+    const { bridge, run } = await setup();
+    const loop = {
+      ...stage("rounds"),
+      type: "loop",
+      label: "Until done",
+      rounds: [
+        { round: 1, tokens: 10, cost: 0.2, items: [{ ...stage("body"), cost: 0.2 }] },
+        { round: 2, tokens: 20, cost: 0.7, items: [{ ...stage("body"), tokens: 20, cost: 0.7 }] },
+      ],
+    };
+    bridge.runPipeline.mockResolvedValueOnce([loop]);
+
+    await run.getState().loadPipeline("run-7");
+
+    expect(run.getState().pipelines["run-7"]).toEqual([loop]);
+  });
+
   it("keeps the pipeline the engine answers under each run it was asked for", async () => {
     const { bridge, run } = await setup();
     bridge.runPipeline.mockResolvedValueOnce([stage("a1")]);

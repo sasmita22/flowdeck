@@ -54,6 +54,7 @@ import {
   loadBuild,
   needsClaude,
   noClaude,
+  parentsOf,
   runMcpConfigPath,
   runSocketPath,
   turnNodeIds,
@@ -1536,6 +1537,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       entries: await usage.entries(claudeSessionId),
       turnNodes: turnNodeIds(manifest),
       owners: usageOwners(manifest, events),
+      parents: parentsOf(manifest),
     });
   };
 

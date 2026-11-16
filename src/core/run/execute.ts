@@ -174,6 +174,11 @@ const turnTypes = new Set(["agent", "fork", "hardstop"]);
 export const turnNodeIds = (manifest: Pick<LoadedBuild, "nodes">): Set<string> =>
   new Set(manifest.nodes.filter((node) => turnTypes.has(node.type)).map((node) => node.id));
 
+export const parentsOf = (manifest: Pick<LoadedBuild, "nodes">): Record<string, string> =>
+  Object.fromEntries(
+    manifest.nodes.flatMap((node) => (node.parent === undefined ? [] : [[node.id, node.parent]])),
+  );
+
 async function recordSpend(
   store: Store,
   runId: string,
@@ -191,6 +196,7 @@ async function recordSpend(
       entries,
       turnNodes: turnNodeIds(manifest),
       owners: usageOwners(manifest, events),
+      parents: parentsOf(manifest),
     });
     if (charges.length > 0) store.appendAll(runId, charges);
     store.recordCost(runId, costOf(entries));

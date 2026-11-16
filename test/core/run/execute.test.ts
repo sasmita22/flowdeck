@@ -14,6 +14,7 @@ import { buildRecord } from "../../../src/core/compiler/record.js";
 import { handoffPairs } from "../../../src/core/flow/handoff.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
+import { costOf } from "../../../src/core/run/budget.js";
 import { decideResume } from "../../../src/core/run/resume.js";
 import {
   execute,
@@ -757,6 +758,117 @@ describe("execute wiring", () => {
         cost: 2,
       }),
     ]);
+    expect(usage.calls).toEqual([claudeSessionId]);
+  });
+
+  it("charges a Loop body node's usage per round, keeping the run's total cost", async () => {
+    const fence = "```";
+    const verdict = (done: boolean) => `ok\n${fence}json\n{"done": ${done}}\n${fence}`;
+    const manifest = {
+      hash: "abc123",
+      prefix: "fix-login",
+      session: {},
+      nodes: [
+        {
+          id: "l1",
+          type: "loop",
+          label: "l1",
+          settings: { condition: "no issues left", cap: 3, onCap: "fail" },
+        },
+        {
+          id: "b",
+          type: "agent",
+          label: "b",
+          parent: "l1",
+          settings: { role: "", instructions: "Do it.", model: "haiku", tools: [] },
+        },
+      ],
+    } as unknown as LoadedBuild;
+    let clock = Date.parse("2026-11-16T10:00:00Z");
+    const store = new FakeStore({ now: () => new Date(clock) });
+    const events = new FakeEventSource();
+    const usage = new FakeUsageSource();
+    const spent: UsageEntry[] = [];
+    const { id: runId } = store.createRun({
+      buildDir: "/fd/builds/abc",
+      inputs: {},
+      nodeIds: manifest.nodes.map((node) => node.id),
+      session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
+      buildId: manifest.hash,
+    });
+
+    const code = await execute(
+      {
+        fs,
+        waiter: new FakeWaiter([]),
+        usage,
+        startEvents: async () => ({ events, stop: async () => undefined }),
+        openSession: async () => {
+          throw new Error("execute opens the session through the execution");
+        },
+        store,
+        onChange: () => undefined,
+      },
+      {
+        store,
+        runId,
+        manifest,
+        cwd: "/repo",
+        auto: false,
+        socketPath: "/fd/sockets/fd-run-abcd1234.sock",
+        open: async () => ({
+          sessionId: claudeSessionId,
+          session: { ensureStarted: async () => undefined },
+          prompts: {
+            interrupt: async () => undefined,
+            sendPrompt: async () => {
+              const round = spent.length + 1;
+              spent.push({
+                messageId: `m${round}`,
+                model: "claude-haiku-5-5",
+                inputTokens: 100,
+                outputTokens: round * 1000,
+                cacheWrite5mTokens: 0,
+                cacheWrite1hTokens: 0,
+                cacheReadTokens: 0,
+                at: clock + 1,
+              });
+              usage.setEntries(claudeSessionId, [...spent]);
+              clock += 10_000;
+              events.publish({
+                kind: "PostToolUse",
+                sessionId: claudeSessionId,
+                payload: {
+                  ...n1Done,
+                  tool_input: { subagent_type: "fix-login:b", prompt: "NODE b\nGo" },
+                  tool_use_id: `toolu-b-${round}`,
+                  tool_response: { ...n1Done.tool_response, agentType: "fix-login:b" },
+                },
+              });
+              events.publish({
+                kind: "Stop",
+                sessionId: claudeSessionId,
+                payload: { last_assistant_message: verdict(round === 2) },
+              });
+            },
+          },
+          stop: async () => undefined,
+        }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spent).toHaveLength(2);
+    expect(
+      store
+        .events(runId)
+        .filter((event) => event.kind === "usage")
+        .map((event) => [event.nodeId, event.kind === "usage" ? event.payload : undefined]),
+    ).toEqual([
+      ["b", { messages: ["m1"], round: 1 }],
+      ["b", { messages: ["m2"], round: 2 }],
+    ]);
+    expect(store.costOf(runId)).toBe(costOf(spent));
     expect(usage.calls).toEqual([claudeSessionId]);
   });
 
