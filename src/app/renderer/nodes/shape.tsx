@@ -1,7 +1,7 @@
 import { Handle, Position, type Node } from "@xyflow/react";
 import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
-import { labelFonts, labelX } from "../canvas/frames.js";
+import { labelFonts, labelX, SIDE_LABEL_GAP } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
 import { nodeLook, tagWidth } from "./look.js";
@@ -24,14 +24,17 @@ export const BODY_HEIGHT = 48;
 
 const REASON_OVERHANG = 30;
 
-export const ports = (id: string, type: NodeType) => {
+export const ports = (id: string, type: NodeType, sourceLeft?: number) => {
   return nodeLook(type).ports.map(({ name, direction }) => (
     <Handle
       key={name}
       id={name}
       type={direction === "in" ? "target" : "source"}
       position={direction === "in" ? Position.Left : Position.Right}
-      style={{ top: BODY_HEIGHT / 2 }}
+      style={{
+        top: BODY_HEIGHT / 2,
+        ...(direction === "out" && sourceLeft !== undefined ? { left: sourceLeft } : {}),
+      }}
       data-testid={`port-${id}-${name}`}
     />
   ));
@@ -49,6 +52,7 @@ export function NodeShape({
   highlighted,
   ignored,
   width,
+  trailing = 0,
   handles = ports(id, type),
   overlay,
   children,
@@ -59,6 +63,7 @@ export function NodeShape({
   highlighted: boolean | undefined;
   ignored?: boolean | undefined;
   width?: number;
+  trailing?: number;
   handles?: ReactNode;
   overlay?: ReactNode;
   children: ReactNode;
@@ -73,7 +78,7 @@ export function NodeShape({
       data-testid={`node-${id}`}
       data-highlighted={highlighted === true ? "true" : undefined}
       title={nodeTitle(type)}
-      style={{ position: "relative", ...box }}
+      style={{ position: "relative", ...box, marginRight: trailing }}
     >
       <svg
         width={box.width}
@@ -140,8 +145,6 @@ export function Label({ type, text }: { type: OutlinedType; text: string | undef
     </text>
   );
 }
-
-const SIDE_LABEL_GAP = 8;
 
 export function SideLabel({ type, text }: { type: OutlinedType; text: string | undefined }) {
   const { box } = nodeLook(type);

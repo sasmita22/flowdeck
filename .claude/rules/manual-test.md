@@ -33,3 +33,10 @@ host and run each check twice. Use these rules instead.
 9. **Where results go.** One row per check in the run's `implementation.md` (check id, what was
    driven, result, evidence file, one-line note), and a summary in the PR body. There is no Jira
    ticket to post to.
+10. **Real Claude Code runs on a temporary Claude config.** `npm run drive` makes one inside
+    `FLOWDECK_HOME` and starts the app on it, so a drive never writes to `~/.claude` or
+    `~/.claude.json`. Start drives that run real Claude Code through `npm run drive`, and never
+    point one at `~/.claude`.
+11. **One job per Agent node.** When a check needs several Agent nodes, give each a different job.
+    The build merges Agent nodes that do the same job into one piece, which hides what each node
+    does on its own.

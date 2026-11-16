@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { spawn } from "node-pty";
 import { ToolSocketServer } from "../../adapters/tool-socket/tool-socket-server.js";
 import { blueprintSocketPath } from "../../core/compiler/blueprint-session.js";
+import { carryEmptyEnv } from "../../core/env/empty-env.js";
 import type { EngineMessage, StoreOpenResult } from "../engine/protocol.js";
 import {
   bridgeChannels,
@@ -60,7 +61,7 @@ async function useLoginPath() {
 
 function startEngine(home: string) {
   const engine = utilityProcess.fork(join(__dirname, "engine.cjs"), [], {
-    env: { ...process.env, FLOWDECK_HOME: home },
+    env: carryEmptyEnv({ ...process.env, FLOWDECK_HOME: home }),
   });
   engine.once("spawn", () => console.log("main: engine started"));
   const exited = new Promise<void>((resolve) => engine.once("exit", () => resolve()));

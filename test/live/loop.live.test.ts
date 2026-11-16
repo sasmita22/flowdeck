@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import type { TurnEvents } from "../../src/core/run/turns.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const watchdogMs = 240_000;
@@ -126,6 +127,7 @@ const roundsOf = (events: StoredEvent[]) => {
 };
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-loop-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
@@ -176,7 +178,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
       const { workFolder } = built;
       const slug = (await realpath(workFolder)).replace(/[^a-zA-Z0-9]/g, "-");
       claudeTmp = join("/private/tmp", `claude-${userInfo().uid}`, slug);
-      const projectFolder = join(homedir(), ".claude", "projects", slug);
+      const projectFolder = join(claudeConfigDir(), "projects", slug);
       await mkdir(join(workFolder, "src"));
       for (const [path, content] of Object.entries(files)) {
         await writeFile(join(workFolder, path), content);

@@ -2,7 +2,7 @@ import { test, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
 import { copyFile, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { homedir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Flow } from "../src/core/flow/schema.js";
@@ -15,7 +15,7 @@ export const paneId = "blueprint-terminal";
 export const bpName = (id: string) => `fd-bp-${id}`;
 const slugOf = (folder: string) => folder.replace(/[^a-zA-Z0-9]/g, "-");
 const projectFolder = (home: string, id: string) =>
-  join(homedir(), ".claude", "projects", slugOf(join(home, "bp-sessions", id)));
+  join(home, ".claude", "projects", slugOf(join(home, "bp-sessions", id)));
 
 export const capture = async (name: string) =>
   (await run("tmux", ["-L", name, "capture-pane", "-p", "-t", `=${name}:`])).stdout;
@@ -169,7 +169,7 @@ export const removeTranscripts = async (home: string, id: string) => {
     await rm(join(folder, transcript), { force: true });
     await rm(join(folder, sessionId), { recursive: true, force: true });
     for (const kept of ["session-env", "file-history"]) {
-      await rm(join(homedir(), ".claude", kept, sessionId), { recursive: true, force: true });
+      await rm(join(home, ".claude", kept, sessionId), { recursive: true, force: true });
     }
   }
   for (const empty of [join(folder, "memory"), folder]) await rmdir(empty).catch(() => undefined);

@@ -10,6 +10,7 @@ import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import { liveEngine, realBuildAgents } from "../fixtures/live-engine.js";
 import { checkRecorded, recording, type Workspace } from "../fixtures/recorded-build.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 const examplePath = fileURLToPath(new URL("../../examples/three-agents.json", import.meta.url));
@@ -74,6 +75,7 @@ async function buildOnce(flow: Flow, index: number): Promise<Outcome> {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("builds of one blueprint", () => {
+  useTempClaudeConfig();
   it(
     "give the same pieces and merges three times, every piece passing the build check",
     { timeout: builds * (buildTimeoutMs + 120_000) },

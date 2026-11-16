@@ -675,4 +675,41 @@ describe("ClaudeCli", () => {
       await chmod(folder, 0o700);
     }
   });
+
+  describe("with a config folder", () => {
+    let configDir: string;
+    let configured: ClaudeCli;
+
+    const transcriptIn = async (projects: string) => {
+      const folder = join(projects, "-private-var-fd-repo-abc");
+      await mkdir(folder, { recursive: true });
+      await writeFile(join(folder, `${sessionId}.jsonl`), "");
+      return join(folder, `${sessionId}.jsonl`);
+    };
+
+    beforeEach(() => {
+      configDir = join(home, "temp-config", ".claude");
+      configured = new ClaudeCli({ sessions, homeDir: home, configDir });
+    });
+
+    it("finds the transcript in the config folder's projects", async () => {
+      await mkdir(configDir, { recursive: true });
+      const transcript = await transcriptIn(join(configDir, "projects"));
+
+      expect(await configured.findTranscript(sessionId)).toBe(transcript);
+    });
+
+    it("does not look in the home folder's projects", async () => {
+      await mkdir(join(configDir, "projects"), { recursive: true });
+      await transcriptIn(join(home, ".claude", "projects"));
+
+      expect(await configured.findTranscript(sessionId)).toBeUndefined();
+    });
+
+    it("finds no transcript when the config folder is missing", async () => {
+      await transcriptIn(join(home, ".claude", "projects"));
+
+      expect(await configured.findTranscript(sessionId)).toBeUndefined();
+    });
+  });
 });

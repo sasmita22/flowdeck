@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -40,6 +40,11 @@ import { expectPaneToShow } from "../fixtures/pane-text.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
+import {
+  claudeConfigDir,
+  findClaudeTranscript,
+  useTempClaudeConfig,
+} from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -131,6 +136,7 @@ const withoutRepeats = (values: readonly DisplayStatus[]) =>
   values.filter((value, index) => index === 0 || values[index - 1] !== value);
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a saved flow", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-app-${process.pid}`;
   const savedTmux = { TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
   let home: string;
@@ -145,7 +151,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     delete process.env.TMUX_PANE;
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
     repo = await createTmpRepo({ commit: true });
-    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
+    projectFolder = join(claudeConfigDir(), "projects", slugOf(repo.path));
   });
 
   afterEach(async () => {
@@ -171,7 +177,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
         await rm(join(projectFolder, transcript));
         await rm(join(projectFolder, sessionId), { recursive: true, force: true });
         for (const folder of ["session-env", "file-history"]) {
-          await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
+          await rm(join(claudeConfigDir(), folder, sessionId), { recursive: true, force: true });
         }
       }
       await removeIfEmpty(join(projectFolder, "memory"));
@@ -278,7 +284,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     if (record === undefined) throw new Error("the build did not finish built");
     const { id: buildId, dir } = record;
     const workFolder = join(dir, basename(repo.path));
-    projectFolder = join(homedir(), ".claude", "projects", slugOf(workFolder));
+    projectFolder = join(claudeConfigDir(), "projects", slugOf(workFolder));
     await beforeRun?.(workFolder);
     const response = await handler.handle({ id: 2, type: "run-build", payload: { buildId } });
     expect(response).toMatchObject({ ok: true, value: { kind: "started" } });
@@ -478,9 +484,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     expect(snapshots.at(-1)?.status).toBe("done");
 
     const claudeSessionId = runs.findRun(runId)?.session.claudeSessionId ?? "";
-    const transcript = await new ClaudeCli({
-      sessions: new TmuxSessionHost({ socketName: sessionName }),
-    }).findTranscript(claudeSessionId);
+    const transcript = await findClaudeTranscript(claudeSessionId);
     expect(transcript, `transcript of ${claudeSessionId}`).toBeDefined();
     const models = (await readFile(transcript ?? "", "utf8"))
       .split("\n")

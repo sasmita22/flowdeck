@@ -9,6 +9,7 @@ import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { blueprintSessionSettings } from "../../src/core/compiler/blueprint-session.js";
 import { shellQuote } from "../../src/core/compiler/hook-settings.js";
 import { killTmuxServer, readLines, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
+import { findClaudeTranscript, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const tmuxSocket = "fd-mt-web-guard";
 const session = "fd-mt-web-guard";
@@ -43,7 +44,7 @@ async function transcriptFiles(main: string, sessionId: string): Promise<string[
 }
 
 async function webFetches(cli: ClaudeCli, sessionId: string): Promise<Fetch[]> {
-  const main = await cli.findTranscript(sessionId);
+  const main = await findClaudeTranscript(sessionId);
   if (main === undefined) return [];
   const blocks: Block[] = [];
   for (const file of await transcriptFiles(main, sessionId)) {
@@ -69,6 +70,7 @@ async function webFetches(cli: ClaudeCli, sessionId: string): Promise<Fetch[]> {
 }
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("pane web guard", () => {
+  useTempClaudeConfig();
   const sessions = new TmuxSessionHost({ socketName: tmuxSocket });
   const cli = new ClaudeCli({ sessions });
   let folder: string | undefined;

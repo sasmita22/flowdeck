@@ -2,7 +2,15 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flow, fork, gate } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  fork,
+  gate,
+  output,
+  thenWire,
+  trigger,
+} from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import {
   launchOnCanvas,
@@ -32,6 +40,21 @@ const at = <N extends object>(node: N, x: number, y: number, label: string) => (
   position: { x, y },
   label,
 });
+
+const sizeTo = async (target: LaunchedApp, size: { width: number; height: number }) => {
+  await target.app.evaluate(({ BrowserWindow }, next) => {
+    BrowserWindow.getAllWindows()[0]?.setContentSize(next.width, next.height);
+  }, size);
+  await target.window.waitForFunction(
+    (next) => window.innerWidth === next.width && window.innerHeight === next.height,
+    size,
+  );
+};
+
+const laptop = { width: 1280, height: 800 };
+
+const nodeBox = (window: Page, id: string) =>
+  boxOf(window.locator(`.react-flow__node[data-id="${id}"]`));
 
 const tidyButton = (window: Page) => window.getByTestId("canvas-tidy");
 
@@ -134,6 +157,7 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`The Tidy button sits bottom-right, named Tidy layout, clear of the zoom controls and the toast in the ${colorScheme} theme`, async () => {
     seedFlow(home, flow([at(fork("f1"), 80, 120, "Split"), at(gate("p1"), 300, 120, "Draft")], []));
     const window = await launch(colorScheme);
+    if (launched !== undefined) await sizeTo(launched, laptop);
     const button = tidyButton(window);
 
     await expect(button).toBeVisible();
@@ -169,6 +193,85 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     });
   });
 }
+
+test("after Tidy, Start's and Stop's labels clear every wire and node", async () => {
+  const labels = { start: "When the report is due", stop: "Report summary" };
+  seedFlow(
+    home,
+    flow(
+      [
+        at(trigger("start"), 40, 40, labels.start),
+        at(agent("a"), 60, 60, "Write"),
+        at(output("stop"), 80, 80, labels.stop),
+      ],
+      [thenWire("start", "a"), thenWire("a", "stop")],
+    ),
+  );
+  const window = await launch();
+  if (launched !== undefined) await sizeTo(launched, laptop);
+  const before = await positions(window);
+
+  await tidyButton(window).click();
+
+  await expect.poll(() => positions(window)).not.toEqual(before);
+  const wires = await Promise.all(
+    (await window.locator(".react-flow__edge path").all()).map((path) => boxOf(path)),
+  );
+  expect(wires.length).toBeGreaterThan(0);
+  for (const [id, label] of Object.entries(labels)) {
+    const text = await boxOf(
+      window.locator(`.react-flow__node[data-id="${id}"]`).getByText(label, { exact: true }),
+    );
+    const others = await Promise.all(
+      ["start", "a", "stop"].filter((other) => other !== id).map((other) => nodeBox(window, other)),
+    );
+    expect(
+      wires.filter((wire) => intersects(text, wire)),
+      `wires over ${id}'s label`,
+    ).toEqual([]);
+    expect(
+      others.filter((other) => intersects(text, other)),
+      `nodes over ${id}'s label`,
+    ).toEqual([]);
+  }
+});
+
+test("after Tidy fits a one-row chain, Start's and Stop's labels lie inside the canvas", async () => {
+  const labels = { start: "When the report is due", stop: "Report summary" };
+  seedFlow(
+    home,
+    flow(
+      [
+        at(trigger("start"), 40, 40, labels.start),
+        at(agent("a"), 60, 60, "Write the draft"),
+        at(agent("b"), 80, 80, "Review the draft"),
+        at(output("stop"), 100, 100, labels.stop),
+      ],
+      [thenWire("start", "a"), thenWire("a", "b"), thenWire("b", "stop")],
+    ),
+  );
+  const window = await launch();
+  if (launched !== undefined) await sizeTo(launched, { width: 1600, height: 1000 });
+  const before = await positions(window);
+
+  await tidyButton(window).click();
+
+  await expect.poll(() => positions(window)).not.toEqual(before);
+  const rows = new Set(
+    await Promise.all(["start", "a", "b", "stop"].map(async (id) => (await nodeBox(window, id)).y)),
+  );
+  expect(rows.size, "nodes on one row").toBe(1);
+  const canvas = await boxOf(window.getByTestId("canvas"));
+  for (const [id, label] of Object.entries(labels)) {
+    const text = await boxOf(
+      window.locator(`.react-flow__node[data-id="${id}"]`).getByText(label, { exact: true }),
+    );
+    expect(text.x, `${id}'s label left edge`).toBeGreaterThanOrEqual(canvas.x);
+    expect(text.x + text.width, `${id}'s label right edge`).toBeLessThanOrEqual(
+      canvas.x + canvas.width,
+    );
+  }
+});
 
 test("On the narrowest canvas the toast stays readable and clear of the Tidy button and the zoom controls", async () => {
   seedFlow(home, flow([at(fork("f1"), 80, 120, "Split"), at(gate("p1"), 300, 120, "Draft")], []));

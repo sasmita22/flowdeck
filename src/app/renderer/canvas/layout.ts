@@ -3,7 +3,7 @@ import type { Flow, Node } from "../../../core/flow/schema.js";
 import { parallelSections } from "../../../core/nodes/fork/execute.js";
 import { nodeLook } from "../nodes/look.js";
 import type { Move } from "./commands.js";
-import { FRAME_PADDING, isContainer, widthOf } from "./frames.js";
+import { FRAME_PADDING, isContainer, sideLabelSpan, widthOf } from "./frames.js";
 
 type Position = { x: number; y: number };
 
@@ -27,7 +27,14 @@ const loadEngine = (): Promise<ELK> => {
   return engine;
 };
 
+export const LAYER_GAP = 150;
+
+const layerGap: LayoutOptions = {
+  "elk.layered.spacing.nodeNodeBetweenLayers": String(LAYER_GAP),
+};
+
 const rootOptions: LayoutOptions = {
+  ...layerGap,
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
   "elk.edgeRouting": "ORTHOGONAL",
@@ -40,13 +47,22 @@ const frameOptions = (container: Node): LayoutOptions => {
   const chipHeight = nodeLook(container.type).box.height;
   const top = FRAME_PADDING + chipHeight + chipGap;
   return {
+    ...layerGap,
     "elk.padding": `[top=${top},left=${FRAME_PADDING},bottom=${FRAME_PADDING},right=${FRAME_PADDING}]`,
     "elk.nodeSize.constraints": "MINIMUM_SIZE",
     "elk.nodeSize.minimum": `(${widthOf(container) + 2 * FRAME_PADDING}, ${top})`,
   };
 };
 
-const sectionOptions: LayoutOptions = { "elk.padding": "[top=0,left=0,bottom=0,right=0]" };
+const sectionOptions: LayoutOptions = {
+  ...layerGap,
+  "elk.padding": "[top=0,left=0,bottom=0,right=0]",
+};
+
+const hasSideLabel = (node: Node): boolean => node.type === "trigger" || node.type === "output";
+
+const layoutWidthOf = (node: Node): number =>
+  hasSideLabel(node) ? widthOf(node) + sideLabelSpan(node.label) : widthOf(node);
 
 const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions): ElkNode => {
   const childrenOf = new Map<string | undefined, Node[]>();
@@ -57,7 +73,7 @@ const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions
   const elkNode = (node: Node): ElkNode => {
     const id = elkIds.get(node.id) ?? node.id;
     if (!isContainer(node))
-      return { id, width: widthOf(node), height: nodeLook(node.type).box.height };
+      return { id, width: layoutWidthOf(node), height: nodeLook(node.type).box.height };
     return {
       id,
       layoutOptions: frameOptions(node),
@@ -116,10 +132,22 @@ const layOut = async (flow: Flow, options: LayoutOptions = {}): Promise<Laid> =>
   return { width: laid.width ?? 0, boxes };
 };
 
+const ELK_DEFAULT_LAYER_GAP = 20;
+
+const meanWidth = (flow: Flow): number => {
+  const widths = flow.nodes.filter((node) => !isContainer(node)).map(layoutWidthOf);
+  return widths.reduce((sum, width) => sum + width, 0) / Math.max(widths.length, 1);
+};
+
+const wrapRatio = (flow: Flow, canvas: Size): number => {
+  const width = meanWidth(flow);
+  return ((canvas.width / canvas.height) * (width + ELK_DEFAULT_LAYER_GAP)) / (width + LAYER_GAP);
+};
+
 const wrapped = (flow: Flow, canvas: Size): Promise<Laid> =>
   layOut(flow, {
     "elk.layered.wrapping.strategy": "MULTI_EDGE",
-    "elk.aspectRatio": String(canvas.width / canvas.height),
+    "elk.aspectRatio": String(wrapRatio(flow, canvas)),
   });
 
 const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";

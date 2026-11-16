@@ -22,6 +22,7 @@ import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
 import { openDatabase } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
+import { emptyEnvOf } from "../../core/env/empty-env.js";
 import { createAppWaiter } from "./app-waiter.js";
 import {
   createEngineHandler,
@@ -32,6 +33,8 @@ import { prepareHooks } from "./hooks.js";
 import { prepareMcpScript } from "./mcp-script.js";
 import type { EngineMessage, EngineRequest } from "./protocol.js";
 
+Object.assign(process.env, emptyEnvOf(process.env));
+
 const home = process.env["FLOWDECK_HOME"];
 if (home === undefined) throw new Error("engine needs FLOWDECK_HOME");
 mkdirSync(home, { recursive: true });
@@ -39,6 +42,13 @@ mkdirSync(home, { recursive: true });
 const dbPath = join(home, "flowdeck.db");
 
 const claudeConfig = process.env["FLOWDECK_CLAUDE_CONFIG"] || undefined;
+const claudeConfigDir = process.env["CLAUDE_CONFIG_DIR"] || undefined;
+
+const transcriptReader = () =>
+  new ClaudeCli({
+    sessions: new TmuxSessionHost(),
+    ...(claudeConfigDir === undefined ? {} : { configDir: claudeConfigDir }),
+  });
 
 const openStores = (): EngineStores => {
   try {
@@ -59,7 +69,7 @@ const fs = new NodeFileSystem();
 const waits = createAppWaiter({ push: post });
 
 const usage = new TranscriptUsage({
-  findTranscript: (id) => new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id),
+  findTranscript: (id) => transcriptReader().findTranscript(id),
 });
 
 const run: EngineHandlerOptions["run"] = {
@@ -161,9 +171,7 @@ const createHandler = async () =>
     blueprint: await prepareBlueprint(),
     narrator: new ClaudeNarrator({ home }),
     transcriptTurns: async (claudeSessionId) => {
-      const transcript = await new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(
-        claudeSessionId,
-      );
+      const transcript = await transcriptReader().findTranscript(claudeSessionId);
       return transcript === undefined
         ? []
         : parseTranscriptTurns(await readFile(transcript, "utf8"));

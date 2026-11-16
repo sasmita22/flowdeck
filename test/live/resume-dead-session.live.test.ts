@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -30,6 +30,11 @@ import { gate, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { readLines, tokenResults, type TranscriptEntry } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
+import {
+  claudeConfigDir,
+  findClaudeTranscript,
+  useTempClaudeConfig,
+} from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
@@ -80,6 +85,7 @@ const reply = (id: string, word: string) => ({
 });
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session ended", () => {
+  useTempClaudeConfig();
   const sessionName = `fd-live-revive-${process.pid}`;
   const savedTmux = { TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
   let home: string;
@@ -93,7 +99,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
     delete process.env.TMUX_PANE;
     home = await realpath(await mkdtemp(join(tmpdir(), "fd-l-")));
     repo = await createTmpRepo({ commit: true });
-    projectFolder = join(homedir(), ".claude", "projects", slugOf(repo.path));
+    projectFolder = join(claudeConfigDir(), "projects", slugOf(repo.path));
     handlers = [];
   });
 
@@ -116,7 +122,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         await rm(join(projectFolder, transcript));
         await rm(join(projectFolder, sessionId), { recursive: true, force: true });
         for (const folder of ["session-env", "file-history"]) {
-          await rm(join(homedir(), ".claude", folder, sessionId), { recursive: true, force: true });
+          await rm(join(claudeConfigDir(), folder, sessionId), { recursive: true, force: true });
         }
       }
       await removeIfEmpty(join(projectFolder, "memory"));
@@ -151,8 +157,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
       const stores = { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };
       const pushes: EnginePush[] = [];
       const fs = new NodeFileSystem();
-      const transcriptOf = (id: string) =>
-        new ClaudeCli({ sessions: new TmuxSessionHost() }).findTranscript(id);
+      const transcriptOf = (id: string) => findClaudeTranscript(id);
 
       const engine = () => {
         const waiter = createAppWaiter({ push: (push) => pushes.push(push) });
@@ -238,12 +243,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
       const record = stores.runs.findBuildByName(buildName);
       if (record === undefined) throw new Error("the build did not finish built");
       const { id: buildId, dir } = record;
-      projectFolder = join(
-        homedir(),
-        ".claude",
-        "projects",
-        slugOf(join(dir, basename(repo.path))),
-      );
+      projectFolder = join(claudeConfigDir(), "projects", slugOf(join(dir, basename(repo.path))));
       const { runId } = (await ask(first.handler, "run-build", { buildId })) as { runId: string };
       await vi.waitFor(() => expect(statusOf(runId, "g1")).toBe("needs-you"), {
         timeout: deadlineMs,

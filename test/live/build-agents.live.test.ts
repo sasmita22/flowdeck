@@ -34,6 +34,7 @@ import {
   type LiveEngine,
 } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
+import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const run = promisify(execFile);
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
@@ -227,6 +228,7 @@ const detailsOf = (node: ManifestNode): string => {
 const endReport = (built: EndedBuild) => buildReportSchema.parse(built.outcome.report);
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claude", () => {
+  useTempClaudeConfig();
   let home: string;
   let repo: TmpRepo;
   let builds: LiveEngine;
@@ -431,6 +433,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
 });
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)", () => {
+  useTempClaudeConfig();
   const sessionName = newBuildSessionName(randomUUID);
   const claudeSessionId = randomUUID();
   let home: string;

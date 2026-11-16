@@ -60,6 +60,11 @@ export const containerLabelWidth = (type: "loop" | "foreach", text: string): num
 export const labelTextWidth = (text: string, font: LabelFont): number =>
   renderedWidth(text, labelFonts[font]) ?? text.length * charWidths[font];
 
+export const SIDE_LABEL_GAP = 8;
+
+export const sideLabelSpan = (label: string): number =>
+  SIDE_LABEL_GAP + labelTextWidth(label, "body");
+
 export const labelX = (type: OutlinedType): number =>
   nodeOutline(type).padL + tagWidth(nodeLook(type).tag) + 6;
 

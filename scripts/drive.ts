@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
+import { makeTempClaudeConfig } from "./claude-config.js";
 import { testDisplayFlags, withWindowMode } from "./window-mode.js";
 
 const stepSchemas = {
@@ -411,6 +412,7 @@ export async function drive(
   },
 ): Promise<void> {
   let launched: LaunchedApp | undefined;
+  let claudeEnv: Readonly<Record<string, string>> = {};
   let closeRequested = false;
   const shutDown = async (app: LaunchedApp | undefined) => {
     if (app === undefined) return;
@@ -425,6 +427,7 @@ export async function drive(
     launched = await (options.onCanvas === true ? launchOnCanvas : launchApp)({
       home: options.home,
       logPath: join(options.outDir, "app.log"),
+      env: claudeEnv,
       ...(options.launch && { launch: options.launch }),
     });
     process.stdout.write(`app pid: ${launched.app.process().pid}\n`);
@@ -471,6 +474,7 @@ export async function drive(
     }
   };
   try {
+    claudeEnv = (await makeTempClaudeConfig({ root: options.home })).env;
     const first = await launch();
     await runSteps(steps, playwrightPage(first.window), { outDir: options.outDir, app: session });
   } catch (error) {
