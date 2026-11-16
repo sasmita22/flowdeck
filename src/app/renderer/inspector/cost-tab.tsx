@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties } from "react";
+import { Fragment, useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { formatCost, formatDuration, formatTokens } from "../format.js";
@@ -46,14 +46,28 @@ export function CostTab({
       </thead>
       <tbody>
         {shown.map((line) => (
-          <tr key={line.nodeId} data-testid={`cost-node-${line.nodeId}`}>
-            <td style={nameCell} title={runNodeLabel(labels, line.nodeId)}>
-              {runNodeLabel(labels, line.nodeId)}
-            </td>
-            <td style={cell}>{formatTokens(line.tokens).replace(" tokens", "")}</td>
-            <td style={cell}>{formatCost(line.cost)}</td>
-            <td style={cell}>{timeOf(line.ms)}</td>
-          </tr>
+          <Fragment key={line.nodeId}>
+            <tr data-testid={`cost-node-${line.nodeId}`}>
+              <td style={nameCell} title={runNodeLabel(labels, line.nodeId)}>
+                {runNodeLabel(labels, line.nodeId)}
+              </td>
+              <td style={cell}>{formatTokens(line.tokens).replace(" tokens", "")}</td>
+              <td style={cell}>{formatCost(line.cost)}</td>
+              <td style={cell}>{timeOf(line.ms)}</td>
+            </tr>
+            {(line.rounds ?? []).map((round) => (
+              <tr
+                key={round.round}
+                data-testid={`cost-round-${line.nodeId}-${round.round}`}
+                style={{ color: "var(--muted)" }}
+              >
+                <td style={{ ...nameCell, paddingLeft: 16 }}>Round {round.round}</td>
+                <td style={cell}>{formatTokens(round.tokens).replace(" tokens", "")}</td>
+                <td style={cell}>{formatCost(round.cost)}</td>
+                <td style={cell} />
+              </tr>
+            ))}
+          </Fragment>
         ))}
         <tr
           data-testid="cost-total"

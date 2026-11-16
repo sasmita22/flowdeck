@@ -151,6 +151,11 @@ function StageRow({ placed, ...rail }: RailProps & { placed: Placed }) {
               <span className="fd-run-round-name fd-ellipsis">
                 Round {each.round}
                 {each.item === undefined ? "" : ` · ${each.item}`}
+                {each.cost !== undefined && each.cost > 0 && (
+                  <span data-testid={pageTestIds.runRoundCost(runId, stage.nodeId, each.round)}>
+                    {` · ${formatCost(each.cost)}`}
+                  </span>
+                )}
               </span>
               <Rail {...rail} items={each.items} round={each.round} label={`Round ${each.round}`} />
             </li>

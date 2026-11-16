@@ -8,6 +8,7 @@ import { ClaudeBuildAgents } from "../../src/adapters/claude/claude-build-agents
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { openClaudeSession } from "../../src/adapters/claude/claude-session.js";
 import { parseTranscriptTurns } from "../../src/adapters/claude/transcript-turns.js";
+import { TranscriptUsage } from "../../src/adapters/claude/transcript-usage.js";
 import { GitFolderState } from "../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../src/adapters/git/worktree.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
@@ -143,6 +144,12 @@ export function openLiveStores(home: string): LiveStores {
   return { runs, flows: new SqliteFlowStore({ db }), ends, close: () => db.close() };
 }
 
+const transcriptUsageIn = (homeDir: string) =>
+  new TranscriptUsage({
+    findTranscript: (id) =>
+      new ClaudeCli({ sessions: new TmuxSessionHost(), homeDir }).findTranscript(id),
+  });
+
 export type LiveEngineOptions = {
   home: string;
   repo: string;
@@ -158,6 +165,7 @@ export type LiveEngineOptions = {
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildTimeoutMs?: number;
   narrator?: RunNarrator;
+  transcriptsHome?: string;
 };
 
 export type BuildRequestOptions = {
@@ -262,6 +270,9 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
       startEvents: (options.startEvents ?? ((inner: StartEvents) => inner))(base.startEvents),
       openSession: recordedOpen,
       ...(options.waiter === undefined ? {} : { waiter: options.waiter }),
+      ...(options.transcriptsHome === undefined
+        ? {}
+        : { usage: transcriptUsageIn(options.transcriptsHome) }),
     },
     ...(waits === undefined ? {} : { waits }),
     ...(options.sessionAlive === undefined ? {} : { sessionAlive: options.sessionAlive }),

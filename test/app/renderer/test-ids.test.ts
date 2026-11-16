@@ -296,6 +296,18 @@ describe("test ids", () => {
     expect(ids).not.toContain(pageTestIds.runStagesNotRecorded);
   });
 
+  it("gives each round header's cost its own id per run, container and round, apart from the round's stages", () => {
+    const ids = [
+      pageTestIds.runRoundCost("run-1", "loop", 1),
+      pageTestIds.runRoundCost("run-1", "loop", 2),
+      pageTestIds.runRoundCost("run-1", "each", 1),
+      pageTestIds.runRoundCost("run-2", "loop", 1),
+    ];
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain(pageTestIds.runStage("run-1", "loop", 1));
+  });
+
   it("names a run stage apart from a build stage given the same arguments", () => {
     const stageIds = [
       pageTestIds.runStage,

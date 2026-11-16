@@ -127,6 +127,8 @@ export const pageTestIds = {
     `run-stage-retry-${stageKey(runId, nodeId, round)}`,
   runStageReply: (runId: string, nodeId: string, round?: number) =>
     `run-stage-reply-${stageKey(runId, nodeId, round)}`,
+  runRoundCost: (runId: string, containerId: string, round: number) =>
+    `run-round-cost-${runId}-${containerId}-${round}`,
   runStagesNotRecorded: "run-stages-not-recorded",
   runStory: "run-story",
   runPageMenu: "run-page-menu",

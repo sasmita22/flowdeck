@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import { costReport } from "../../../src/core/run/cost.js";
 import { plainReason } from "../../../src/core/run/failure.js";
-import { pipelineOf } from "../../../src/core/run/pipeline.js";
+import { pipelineOf, pipelineSchema } from "../../../src/core/run/pipeline.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
@@ -456,7 +456,7 @@ describe("pipelineOf", () => {
       expect(approve.activity).toEqual([tool(2, "approve")]);
     });
 
-    it("gives no round of a Loop child tokens or cost, its usage being charged once after the rounds", () => {
+    it("gives no round of a Loop child tokens or cost in a run whose usage was charged with no round", () => {
       const looped = [
         node("start", "trigger"),
         node("review", "loop"),
@@ -493,6 +493,187 @@ describe("pipelineOf", () => {
         expect(fix.timeline.map((event) => event.kind)).not.toContain("usage");
       }
       expect(stageIn(items, "review")).toMatchObject({ tokens: 0, cost: 0 });
+      for (const round of roundsOf(items, "review")) {
+        expect((round as { tokens?: number }).tokens).toBeUndefined();
+        expect((round as { cost?: number }).cost).toBeUndefined();
+      }
+    });
+
+    describe("a run charged per round", () => {
+      const line = (nodeId: string, rounds: [number, number, number][] = []) => ({
+        nodeId,
+        tokens: rounds.reduce((sum, [, tokens]) => sum + tokens, 0),
+        cost: rounds.reduce((sum, [, , cost]) => sum + cost, 0),
+        ms: null,
+        ...(rounds.length === 0
+          ? {}
+          : { rounds: rounds.map(([round, tokens, cost]) => ({ round, tokens, cost })) }),
+      });
+      const report = (lines: ReturnType<typeof line>[]) =>
+        ({
+          nodes: lines,
+          total: {
+            tokens: lines.reduce((sum, each) => sum + each.tokens, 0),
+            cost: lines.reduce((sum, each) => sum + each.cost, 0),
+            ms: 0,
+          },
+        }) as Parameters<typeof pipelineOf>[4];
+
+      const loopNodes = [
+        node("start", "trigger"),
+        node("review", "loop"),
+        node("fix", "agent", "review"),
+        node("check", "agent", "review"),
+      ];
+      const loopEvents = stored([
+        ["start", 0, { kind: "running" }],
+        ["start", 0, { kind: "done" }],
+        ["review", 0, { kind: "running" }],
+        ["review", 0, { kind: "round", payload: { round: 1 } }],
+        ["fix", 1, { kind: "sent" }],
+        ["fix", 2, { kind: "done" }],
+        ["check", 2, { kind: "sent" }],
+        ["check", 3, { kind: "done" }],
+        ["review", 4, { kind: "round", payload: { round: 2 } }],
+        ["fix", 4, { kind: "reset" }],
+        ["check", 4, { kind: "reset" }],
+        ["fix", 5, { kind: "sent" }],
+        ["fix", 6, { kind: "done" }],
+        ["check", 6, { kind: "sent" }],
+        ["check", 7, { kind: "done" }],
+        ["review", 8, { kind: "done" }],
+        [
+          "fix",
+          9,
+          { kind: "usage", payload: { messages: ["f1"], round: 1 }, tokens: 100, cost: 0.02 },
+        ],
+        [
+          "fix",
+          9,
+          { kind: "usage", payload: { messages: ["f2"], round: 2 }, tokens: 200, cost: 0.03 },
+        ],
+        [
+          "check",
+          9,
+          { kind: "usage", payload: { messages: ["c1"], round: 1 }, tokens: 50, cost: 0.01 },
+        ],
+      ]);
+      const loopItems = () =>
+        pipelineOf(
+          loopNodes as Parameters<typeof pipelineOf>[0],
+          [then("start", "review"), then("fix", "check")] as Parameters<typeof pipelineOf>[1],
+          loopEvents,
+          [],
+          report([
+            line("start"),
+            line("review"),
+            line("fix", [
+              [1, 100, 0.02],
+              [2, 200, 0.03],
+            ]),
+            line("check", [[1, 50, 0.01]]),
+          ]),
+        );
+
+      it("gives each Loop round its total and each stage in it that node's cost for the round", () => {
+        const items = loopItems();
+
+        const [first, second] = roundsOf(items, "review") as (Round & {
+          tokens?: number;
+          cost?: number;
+        })[];
+        expect(first?.tokens).toBe(150);
+        expect(first?.cost).toBeCloseTo(0.03, 12);
+        expect(second?.tokens).toBe(200);
+        expect(second?.cost).toBeCloseTo(0.03, 12);
+        expect(stageIn(first?.items ?? [], "fix")).toMatchObject({ tokens: 100, cost: 0.02 });
+        expect(stageIn(first?.items ?? [], "check")).toMatchObject({ tokens: 50, cost: 0.01 });
+        expect(stageIn(second?.items ?? [], "fix")).toMatchObject({ tokens: 200, cost: 0.03 });
+        const idle = stageIn(second?.items ?? [], "check");
+        expect(idle.tokens).toBeUndefined();
+        expect(idle.cost).toBeUndefined();
+        expect(stageIn(items, "review")).toMatchObject({ tokens: 0, cost: 0 });
+      });
+
+      it("gives each For each round its total and its stage's cost for the round", () => {
+        const items = pipelineOf(
+          [
+            node("start", "trigger"),
+            node("each", "foreach"),
+            node("work", "agent", "each"),
+          ] as Parameters<typeof pipelineOf>[0],
+          [then("start", "each")] as Parameters<typeof pipelineOf>[1],
+          stored([
+            ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two"] } }],
+            ["work", 1, { kind: "sent" }],
+            ["work", 2, { kind: "done" }],
+            ["each", 3, { kind: "round", payload: { round: 2 } }],
+            ["work", 3, { kind: "reset" }],
+            ["work", 4, { kind: "sent" }],
+            ["work", 5, { kind: "done" }],
+          ]),
+          [],
+          report([
+            line("start"),
+            line("each"),
+            line("work", [
+              [1, 10, 0.001],
+              [2, 20, 0.002],
+            ]),
+          ]),
+        );
+
+        const rounds = roundsOf(items, "each") as (Round & { tokens?: number; cost?: number })[];
+        expect(rounds.map(({ round, tokens, cost }) => ({ round, tokens, cost }))).toEqual([
+          { round: 1, tokens: 10, cost: 0.001 },
+          { round: 2, tokens: 20, cost: 0.002 },
+        ]);
+        expect(rounds.map((round) => stageIn(round.items, "work").cost)).toEqual([0.001, 0.002]);
+      });
+
+      it("adds the stages of a round's parallel lanes into the round total", () => {
+        const items = pipelineOf(
+          [
+            node("start", "trigger"),
+            node("review", "loop"),
+            node("split", "fork", "review"),
+            node("a", "agent", "review"),
+            node("b", "agent", "review"),
+            node("meet", "join", "review"),
+          ] as Parameters<typeof pipelineOf>[0],
+          [
+            then("start", "review"),
+            then("split", "a"),
+            then("split", "b"),
+            then("a", "meet"),
+            then("b", "meet"),
+          ] as Parameters<typeof pipelineOf>[1],
+          stored([["review", 0, { kind: "round", payload: { round: 1 } }]]),
+          [],
+          report([
+            line("start"),
+            line("review"),
+            line("split"),
+            line("a", [[1, 30, 0.003]]),
+            line("b", [[1, 40, 0.004]]),
+            line("meet"),
+          ]),
+        );
+
+        const [first] = roundsOf(items, "review") as (Round & { tokens?: number; cost?: number })[];
+        expect(first?.tokens).toBe(70);
+        expect(first?.cost).toBeCloseTo(0.007, 12);
+      });
+
+      it("keeps round tokens and cost through the pipeline schema", () => {
+        const [first] = roundsOf(pipelineSchema.parse(loopItems()), "review") as (Round & {
+          tokens?: number;
+          cost?: number;
+        })[];
+
+        expect(first?.tokens).toBe(150);
+        expect(first?.cost).toBeCloseTo(0.03, 12);
+      });
     });
 
     it("gives each round only its own activity, an entry stamped as the next round starts closing the round before", () => {

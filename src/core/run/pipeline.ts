@@ -48,7 +48,13 @@ export type PipelineStage = {
   rounds?: PipelineRound[] | undefined;
 };
 
-export type PipelineRound = { round: number; item?: string | undefined; items: PipelineItem[] };
+export type PipelineRound = {
+  round: number;
+  item?: string | undefined;
+  tokens?: number | undefined;
+  cost?: number | undefined;
+  items: PipelineItem[];
+};
 
 export type ParallelGroup = { lanes: PipelineItem[][] };
 
@@ -119,6 +125,8 @@ const stageSchema = z.object({
 const roundSchema = z.object({
   round: z.number().int(),
   item: z.string().optional(),
+  tokens: z.number().optional(),
+  cost: z.number().optional(),
   get items() {
     return z.array(pipelineItemSchema);
   },
@@ -136,7 +144,14 @@ export const pipelineItemSchema: z.ZodType<PipelineItem> = z.lazy(() =>
 
 export const pipelineSchema = z.array(pipelineItemSchema);
 
-type Window = { fromSeq: number; toSeq: number; fromAt: number; toAt: number; whole: boolean };
+type Window = {
+  fromSeq: number;
+  toSeq: number;
+  fromAt: number;
+  toAt: number;
+  whole: boolean;
+  round?: number;
+};
 
 const wholeRun: Window = {
   fromSeq: -Infinity,
@@ -151,6 +166,9 @@ const endKinds = new Set<RunEvent["kind"]>(["done", "failed", "skipped"]);
 const finishedStates = new Set<NodeState>(["done", "failed", "skipped"]);
 
 const timeOf = (event: StoredEvent) => Date.parse(event.time);
+
+const stagesIn = (items: readonly PipelineItem[]): PipelineStage[] =>
+  items.flatMap((item) => ("lanes" in item ? item.lanes.flatMap(stagesIn) : [item]));
 
 const grouped = <T extends { nodeId: string }>(entries: readonly T[]): Map<string, T[]> => {
   const byNode = new Map<string, T[]>();
@@ -192,6 +210,9 @@ export function pipelineOf(
     const finishedAt = finished === undefined ? undefined : timeOf(finished);
     const usage = own.flatMap((event) => (event.kind === "usage" ? [event] : []));
     const line = window.whole ? costOf.get(node.id) : undefined;
+    const roundLine = window.whole
+      ? undefined
+      : costOf.get(node.id)?.rounds?.find((each) => each.round === window.round);
     const failed =
       status === "failed" ? own.findLast((event) => event.kind === "failed") : undefined;
     const done = own.findLast((event) => event.kind === "done");
@@ -217,7 +238,9 @@ export function pipelineOf(
             tokens: line?.tokens ?? usage.reduce((sum, event) => sum + event.tokens, 0),
             cost: line?.cost ?? usage.reduce((sum, event) => sum + event.cost, 0),
           }
-        : {}),
+        : roundLine === undefined
+          ? {}
+          : { tokens: roundLine.tokens, cost: roundLine.cost }),
       ...(failed?.kind === "failed"
         ? { reason: plainReason(node.id, failed.payload.message) }
         : {}),
@@ -250,16 +273,25 @@ export function pipelineOf(
       const next = marks[index + 1];
       const first = index === 0;
       const item = labels?.[mark.round - 1];
+      const items = itemsOf(children, {
+        fromSeq: first ? window.fromSeq : mark.seq,
+        toSeq: next?.seq ?? window.toSeq,
+        fromAt: first ? window.fromAt : mark.at,
+        toAt: next?.at ?? window.toAt,
+        whole: false,
+        round: mark.round,
+      });
+      const priced = stagesIn(items).filter((stage) => stage.cost !== undefined);
       return {
         round: mark.round,
         ...(item === undefined ? {} : { item }),
-        items: itemsOf(children, {
-          fromSeq: first ? window.fromSeq : mark.seq,
-          toSeq: next?.seq ?? window.toSeq,
-          fromAt: first ? window.fromAt : mark.at,
-          toAt: next?.at ?? window.toAt,
-          whole: false,
-        }),
+        ...(priced.length === 0
+          ? {}
+          : {
+              tokens: priced.reduce((sum, stage) => sum + (stage.tokens ?? 0), 0),
+              cost: priced.reduce((sum, stage) => sum + (stage.cost ?? 0), 0),
+            }),
+        items,
       };
     });
   };

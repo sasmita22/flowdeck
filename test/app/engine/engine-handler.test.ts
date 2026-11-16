@@ -1442,6 +1442,72 @@ describe("createEngineHandler", async () => {
       ]);
     });
 
+    it("answers a live run's cost with a Loop body node's unrecorded usage split by round, the total unchanged", async () => {
+      runs = new FakeStore({ now: () => new Date() });
+      const usage = new FakeUsageSource();
+      const spent: UsageEntry[] = [];
+      const turn: FakeTurnHandler = async (nodeId, opened) => {
+        if (nodeId !== "body") return "done";
+        const round = spent.length + 1;
+        spent.push({
+          messageId: `m${round}`,
+          model: "claude-haiku-5-5",
+          inputTokens: 100,
+          outputTokens: round * 1000,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
+          cacheReadTokens: 0,
+          at: Date.now(),
+        });
+        usage.setEntries(opened.claudeSessionId, [...spent]);
+        if (round > 1) return "hold";
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return "done";
+      };
+      handler = handlerWith({
+        run: {
+          ...runEnvironment(new NodeFileSystem(), Date.now, turn),
+          waiter: new FakeWaiter([{ decision: "answer", answer: "again" }]),
+          usage,
+        },
+      });
+      flows.save(
+        atRepo(
+          onMainFlow(
+            [
+              loop("rounds", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
+              agent("body", { parent: "rounds" }),
+            ],
+            [],
+          ),
+        ),
+      );
+      const runId = await startedOn(await builtId());
+      await vi.waitFor(() => {
+        expect(snapshotsOf(runId).at(-1)?.nodes["body"]).toBe("sent");
+        expect(spent).toHaveLength(2);
+      });
+
+      const answered = await handler.handle({ id: nextId++, type: "run-cost", payload: { runId } });
+
+      expect(runs.events(runId).filter((event) => event.kind === "usage")).toEqual([]);
+      const report = (
+        answered as {
+          value: {
+            nodes: { nodeId: string; tokens: number; cost: number; rounds?: unknown[] }[];
+            total: { tokens: number; cost: number };
+          };
+        }
+      ).value;
+      const body = report.nodes.find((line) => line.nodeId === "body");
+      expect(body?.tokens).toBe(3200);
+      expect(body?.rounds).toEqual([
+        { round: 1, tokens: 1100, cost: costOf(spent.slice(0, 1)) },
+        { round: 2, tokens: 2100, cost: costOf(spent.slice(1)) },
+      ]);
+      expect(report.total.cost).toBeCloseTo(costOf(spent), 12);
+    });
+
     it("builds from the latest saved version", async () => {
       flows.save(twoAgents());
       const first = await startedRunId();
