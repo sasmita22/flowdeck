@@ -18,7 +18,7 @@ const parseJson = (text: string): { ok: true; value: unknown } | { ok: false; wh
 };
 
 export class ClaudeUserConnectors implements ConnectorSource {
-  private readonly configPath: string;
+  readonly configPath: string;
 
   constructor(options: { configPath?: string } = {}) {
     this.configPath = options.configPath ?? join(homedir(), ".claude.json");

@@ -144,6 +144,7 @@ export const pageTestIds = {
   runPageNote: "run-page-note",
   runStop: "run-stop",
   runResume: "run-resume",
+  doctorScopeBanner: "doctor-scope-banner",
   doctorBlueprint: "doctor-blueprint",
   doctorRecheck: "doctor-recheck",
   doctorNeeded: (name: string) => `doctor-needed-${name}`,

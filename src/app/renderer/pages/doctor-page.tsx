@@ -65,6 +65,9 @@ export function DoctorPage({
   return (
     <>
       <PageHead title="Doctor" nav={nav} />
+      <p className="fd-page-note" data-testid={pageTestIds.doctorScopeBanner}>
+        <WithCode text="This lists only your user-level connectors, the ones in Claude Code's user config. Project-level connectors, from a repo's `.mcp.json` or its local settings, aren't listed here." />
+      </p>
       <p className="fd-page-note">
         Checks the connectors (MCP servers) Claude Code has for your user on this Mac, the same list
         builds use. Setting values are never shown.

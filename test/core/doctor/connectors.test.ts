@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { diagnoseConnectors, doctorReportSchema } from "../../../src/core/doctor/connectors.js";
 
 const secret = "xoxb-very-secret-value";
+const configPath = "/cfg/.claude.json";
 
 const installed = {
   slack: { command: "npx", args: ["slack-mcp"], env: { SLACK_TOKEN: secret, SLACK_TEAM: "T1" } },
@@ -12,7 +13,7 @@ const installed = {
 
 describe("diagnoseConnectors", () => {
   it("lists every installed connector by name with each setting only as set or empty", () => {
-    const report = diagnoseConnectors(installed, []);
+    const report = diagnoseConnectors(installed, [], configPath);
 
     expect(report.installed).toEqual([
       {
@@ -43,7 +44,7 @@ describe("diagnoseConnectors", () => {
   });
 
   it("marks each needed connector installed, missing with how to add it, or missing a setting", () => {
-    const { needed } = diagnoseConnectors(installed, ["slack", "linear", "jira"]);
+    const { needed } = diagnoseConnectors(installed, ["slack", "linear", "jira"], configPath);
 
     expect(needed).toEqual([
       {
@@ -65,13 +66,13 @@ describe("diagnoseConnectors", () => {
         name: "jira",
         status: "missing-setting",
         settings: [{ name: "Authorization", set: false }],
-        fix: 'Fill in Authorization for "jira" under "mcpServers" in ~/.claude.json, then build again.',
+        fix: 'Fill in Authorization for "jira" under "mcpServers" in /cfg/.claude.json, then build again.',
       },
     ]);
   });
 
   it("never carries a setting's value", () => {
-    const report = diagnoseConnectors(installed, ["slack"]);
+    const report = diagnoseConnectors(installed, ["slack"], configPath);
 
     expect(JSON.stringify(report)).not.toContain(secret);
     expect(JSON.stringify(report)).not.toContain("T1");
