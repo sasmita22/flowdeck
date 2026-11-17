@@ -54,6 +54,7 @@ const allMigrations = [
   { name: "016_events_by_node.sql" },
   { name: "017_run_stories.sql" },
   { name: "018_runs_deleted_at.sql" },
+  { name: "019_runs_own_their_build.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -92,6 +93,15 @@ describe("openDatabase", () => {
     const dir = join(folder, name);
     await mkdir(dir);
     for (const [file, sql] of Object.entries(files)) await writeFile(join(dir, file), sql);
+    return dir;
+  };
+
+  const stage = async (name: string, before: string) => {
+    const dir = join(folder, name);
+    await mkdir(dir);
+    for (const file of (await readdir(migrationsDir)).filter((each) => each < before)) {
+      await copyFile(join(migrationsDir, file), join(dir, file));
+    }
     return dir;
   };
 
@@ -242,19 +252,25 @@ describe("openDatabase", () => {
     const end = (db: Database.Database, id: string) =>
       db.prepare("UPDATE pending_builds SET ended_at = 2, outcome = 'failed' WHERE id = ?").run(id);
 
-    it.each(["build_events", "build_activity"])("keeps %s append-only", (table) => {
-      const db = open();
-      startPending(db, "pb-1");
-      db.prepare(
-        `INSERT INTO ${table} (pending_id, seq, at, body_json) VALUES ('pb-1', 1, 1, '{}')`,
-      ).run();
+    it.each(["build_events", "build_activity"])(
+      "refuses a change to %s and lets its rows be deleted",
+      (table) => {
+        const db = open();
+        startPending(db, "pb-1");
+        db.prepare(
+          `INSERT INTO ${table} (pending_id, seq, at, body_json) VALUES ('pb-1', 1, 1, '{}')`,
+        ).run();
 
-      expect(() => db.prepare(`UPDATE ${table} SET body_json = '{"x":1}'`).run()).toThrow(
-        /append-only/,
-      );
-      expect(() => db.prepare(`DELETE FROM ${table}`).run()).toThrow(/append-only/);
-      expect(db.prepare(`SELECT body_json FROM ${table}`).all()).toEqual([{ body_json: "{}" }]);
-    });
+        expect(() => db.prepare(`UPDATE ${table} SET body_json = '{"x":1}'`).run()).toThrow(
+          /append-only/,
+        );
+        expect(db.prepare(`SELECT body_json FROM ${table}`).all()).toEqual([{ body_json: "{}" }]);
+
+        db.prepare(`DELETE FROM ${table}`).run();
+
+        expect(db.prepare(`SELECT body_json FROM ${table}`).all()).toEqual([]);
+      },
+    );
 
     it("a second open build of the same blueprint under another name inserts", () => {
       const db = open();
@@ -359,15 +375,6 @@ describe("openDatabase", () => {
   });
 
   describe("migrating a database made by 001 to 007 to 008", () => {
-    const stage = async (name: string, before: string) => {
-      const dir = join(folder, name);
-      await mkdir(dir);
-      for (const file of (await readdir(migrationsDir)).filter((each) => each < before)) {
-        await copyFile(join(migrationsDir, file), join(dir, file));
-      }
-      return dir;
-    };
-
     const tables = [
       "flows",
       "flow_versions",
@@ -439,9 +446,14 @@ describe("openDatabase", () => {
       for (const table of ["flow_versions", "run_sessions", "run_nodes", "events", "activity"]) {
         expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(before[table]);
       }
-      expect(db.prepare("SELECT * FROM runs").all(), "runs").toEqual(
-        withBuildId(before["runs"] ?? []).map((row) => ({ ...row, deleted_at: null })),
-      );
+      expect(
+        db
+          .prepare(
+            "SELECT id, build_dir, inputs, status, total_cost, created_at, build_id, deleted_at FROM runs",
+          )
+          .all(),
+        "runs",
+      ).toEqual(withBuildId(before["runs"] ?? []).map((row) => ({ ...row, deleted_at: null })));
       for (const table of ["build_files", "build_nodes"]) {
         expect(db.prepare(`SELECT * FROM ${table}`).all(), table).toEqual(
           withBuildId(before[table] ?? []),
@@ -519,7 +531,7 @@ describe("openDatabase", () => {
 
       expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(references("runs")).toEqual(["build_id -> builds.id"]);
+      expect(references("runs")).toEqual([]);
       expect(references("build_files")).toEqual(["build_id -> builds.id"]);
       expect(references("build_nodes")).toEqual(
         expect.arrayContaining(["build_id -> builds.id", "build_id -> build_files.build_id"]),
@@ -533,7 +545,162 @@ describe("openDatabase", () => {
             "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id) VALUES ('r-x', '/b', '{}', 'done', 't', 'ghost')",
           )
           .run(),
-      ).toThrow(/FOREIGN KEY/);
+      ).toThrow(/a run names a recorded build/);
+    });
+  });
+
+  describe("migrating a database made by 001 to 018 to 019", () => {
+    const seedBefore019 = async () => {
+      const before = openDatabase({ path, migrationsDir: await stage("to-018", "019") });
+      before.exec(`
+        BEGIN;
+        INSERT INTO build_files (build_id, path, sha256)
+          VALUES ('b-live', 'commands/p1.md', 'a1'), ('b-gone', 'commands/p1.md', 'a2');
+        INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file)
+          VALUES ('b-live', 0, 'p1', 'prompt', '{}', 'commands/p1.md'),
+                 ('b-gone', 0, 'p1', 'prompt', '{}', 'commands/p1.md');
+        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version, branch, branch_created)
+          VALUES ('b-live', 'h-live', 'fix-login', '/repo', 'main', '{"ticket":"FD-1"}', '/fd/workspaces/b-live', 1, 'flow-1', 3, 'flowdeck/fix-login', 1),
+                 ('b-gone', 'h-gone', 'old-try', '/repo2', 'dev', '{}', '/fd/workspaces/b-gone', 2, 'flow-2', 1, 'flowdeck/old-try', 0);
+        COMMIT;
+        INSERT INTO build_manifests (build_id, manifest_json) VALUES ('b-live', '{"nodes":[]}');
+        INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome, build_id)
+          VALUES ('pb-live', 'flow-1', 3, 'fix-login', '{}', 1, 2, 'built', 'b-live'),
+                 ('pb-gone', 'flow-2', 1, 'old-try', '{}', 1, 2, 'built', 'b-gone');
+        INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
+          VALUES ('pb-live', 'b-live', 'Fix login', 3, '<svg/>', 1),
+                 ('pb-gone', 'b-gone', 'Old try', 1, '<svg/>', 2);
+        INSERT INTO build_events (pending_id, seq, at, body_json)
+          VALUES ('pb-live', 1, 1, '{}'), ('pb-gone', 1, 1, '{}');
+        INSERT INTO build_activity (pending_id, seq, at, body_json)
+          VALUES ('pb-live', 1, 1, '{}'), ('pb-gone', 1, 1, '{}');
+        INSERT INTO runs (id, build_dir, inputs, status, total_cost, created_at, build_id)
+          VALUES ('r-live', '/fd/workspaces/b-live', '{}', 'done', 0.5, 't1', 'b-live'),
+                 ('r-gone', '/fd/workspaces/b-gone', '{}', 'failed', 0.2, 't2', 'b-gone');
+        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status)
+          VALUES (1, 'r-live', 'fd-a', '/repo', 'c1', 'closed'), (2, 'r-gone', 'fd-b', '/repo2', 'c2', 'closed');
+        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r-live', 'p1', 1), ('r-gone', 'p1', 2);
+        INSERT INTO events (run_id, node_id, kind, time)
+          VALUES ('r-live', 'p1', 'sent', 't'), ('r-gone', 'p1', 'failed', 't');
+        INSERT INTO activity (run_id, id, node_id, entry)
+          VALUES ('r-live', 1, 'p1', '{}'), ('r-gone', 1, 'p1', '{}');
+        INSERT INTO run_stories (run_id, at, run_status, text, cost)
+          VALUES ('r-live', 't', 'done', 'It worked.', 0.01), ('r-gone', 't', 'failed', 'It broke.', 0.01);
+        UPDATE builds SET deleted_at = 9 WHERE id = 'b-gone';
+      `);
+      before.close();
+    };
+
+    const ids = (db: Database.Database, sql: string) =>
+      (db.prepare(sql).pluck().all() as string[]).sort();
+
+    it("keeps both runs and every row under them, each run with its copy of its build", async () => {
+      await seedBefore019();
+
+      const db = open();
+
+      expect(
+        db
+          .prepare(
+            `SELECT id, build_id, build_name, build_hash, blueprint_name, flow_id, flow_version,
+                    repo, branch, build_values, manifest_json
+               FROM runs ORDER BY id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "r-gone",
+          build_id: "b-gone",
+          build_name: "old-try",
+          build_hash: "h-gone",
+          blueprint_name: "Old try",
+          flow_id: "flow-2",
+          flow_version: 1,
+          repo: "/repo2",
+          branch: "flowdeck/old-try",
+          build_values: "{}",
+          manifest_json: null,
+        },
+        {
+          id: "r-live",
+          build_id: "b-live",
+          build_name: "fix-login",
+          build_hash: "h-live",
+          blueprint_name: "Fix login",
+          flow_id: "flow-1",
+          flow_version: 3,
+          repo: "/repo",
+          branch: "flowdeck/fix-login",
+          build_values: '{"ticket":"FD-1"}',
+          manifest_json: '{"nodes":[]}',
+        },
+      ]);
+      for (const table of ["run_sessions", "run_nodes", "events", "activity", "run_stories"]) {
+        expect(ids(db, `SELECT run_id FROM ${table}`), table).toEqual(["r-gone", "r-live"]);
+      }
+    });
+
+    it("purges the deleted build and every row it owns, keeping its run, with no broken foreign key", async () => {
+      await seedBefore019();
+
+      const db = open();
+
+      for (const table of [
+        "build_files",
+        "build_nodes",
+        "build_manifests",
+        "build_snapshots",
+        "pending_builds",
+      ]) {
+        expect(ids(db, `SELECT build_id FROM ${table}`), table).toEqual(["b-live"]);
+      }
+      expect(ids(db, "SELECT id FROM builds")).toEqual(["b-live"]);
+      for (const table of ["build_events", "build_activity"]) {
+        expect(ids(db, `SELECT pending_id FROM ${table}`), table).toEqual(["pb-live"]);
+      }
+      expect(ids(db, "SELECT id FROM runs")).toEqual(["r-gone", "r-live"]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    });
+
+    it.each([
+      { table: "build_nodes", first: [] },
+      { table: "build_files", first: ["build_nodes"] },
+      { table: "build_manifests", first: [] },
+      { table: "build_snapshots", first: [] },
+      { table: "builds", first: ["build_nodes", "build_files"] },
+    ])("lets $table rows be deleted", async ({ table, first }) => {
+      await seedBefore019();
+      const db = open();
+      for (const each of first) db.exec(`DELETE FROM ${each}`);
+
+      db.exec(`DELETE FROM ${table}`);
+
+      expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
+    });
+
+    it("keeps the run triggers firing after the rebuild", async () => {
+      await seedBefore019();
+      const db = open();
+      const insertRun = (id: string, status: string) =>
+        db
+          .prepare(
+            "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id) VALUES (?, '/b', '{}', ?, 't', 'b-live')",
+          )
+          .run(id, status);
+
+      expect(() => insertRun("r-live", "done")).toThrow(/a run is never replaced/);
+      expect(() => db.exec("UPDATE runs SET build_id = 'b-other' WHERE id = 'r-live'")).toThrow(
+        /the build a run names is locked/,
+      );
+      insertRun("r-running", "running");
+      expect(() => insertRun("r-second", "running")).toThrow(/build is running/);
+      expect(() => db.exec("UPDATE runs SET status = 'running' WHERE id = 'r-live'")).toThrow(
+        /build is running/,
+      );
+      db.exec("UPDATE runs SET deleted_at = 1 WHERE id = 'r-live'");
+      expect(() => db.exec("UPDATE runs SET deleted_at = 2 WHERE id = 'r-live'")).toThrow(
+        /a run is deleted once/,
+      );
     });
   });
 });

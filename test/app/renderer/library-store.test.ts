@@ -84,7 +84,7 @@ const runs = [
     totalCost: null,
     nodeCount: 2,
     ...fromFixLogin,
-    buildDeleted: false,
+    buildGone: false,
     number: 2,
     doneCount: 1,
   },
@@ -96,7 +96,7 @@ const runs = [
     totalCost: 0.25,
     nodeCount: 2,
     ...fromFixLogin,
-    buildDeleted: false,
+    buildGone: false,
     number: 1,
     doneCount: 2,
   },
@@ -112,7 +112,7 @@ const runs = [
     buildName: null,
     blueprintName: "Old report",
     blueprintVersion: 2,
-    buildDeleted: false,
+    buildGone: false,
     number: 1,
     doneCount: 1,
   },
@@ -127,7 +127,7 @@ const runs = [
     buildName: null,
     blueprintName: null,
     blueprintVersion: null,
-    buildDeleted: false,
+    buildGone: false,
     number: 1,
     doneCount: 1,
   },
@@ -194,7 +194,7 @@ const fakeBridge = () =>
     buildPicture: vi.fn(async (key: { pendingId: string } | { buildId: string }) =>
       "buildId" in key ? { svg: picture } : { svg: null },
     ),
-    buildTree: vi.fn(async () => ({ deleted: false, paths: ["commands/p1.md", "manifest.json"] })),
+    buildTree: vi.fn(async () => ({ paths: ["commands/p1.md", "manifest.json"] })),
     buildProject: vi.fn(async () => project),
     buildEntries: vi.fn(async ({ path }: { buildId: string; path: string }) =>
       path === "shop" ? shopEntries : [{ name: "x.ts", kind: "file" }],
@@ -453,11 +453,11 @@ describe("cards", () => {
     const cards = selectRunCards(await withBlueprints([]));
 
     expect(
-      cards.map(({ id, number, name, buildDeleted, doneCount, nodeCount }) => ({
+      cards.map(({ id, number, name, buildGone, doneCount, nodeCount }) => ({
         id,
         number,
         name,
-        buildDeleted,
+        buildGone,
         doneCount,
         nodeCount,
       })),
@@ -466,7 +466,7 @@ describe("cards", () => {
         id: "run-2",
         number: 2,
         name: "fix-login",
-        buildDeleted: false,
+        buildGone: false,
         doneCount: 1,
         nodeCount: 2,
       },
@@ -474,7 +474,7 @@ describe("cards", () => {
         id: "run-1",
         number: 1,
         name: "fix-login",
-        buildDeleted: false,
+        buildGone: false,
         doneCount: 2,
         nodeCount: 2,
       },
@@ -482,7 +482,7 @@ describe("cards", () => {
         id: "run-idle",
         number: 1,
         name: "Old report",
-        buildDeleted: false,
+        buildGone: false,
         doneCount: 1,
         nodeCount: 1,
       },
@@ -490,7 +490,7 @@ describe("cards", () => {
         id: "run-old",
         number: 1,
         name: "0123456789",
-        buildDeleted: false,
+        buildGone: false,
         doneCount: 1,
         nodeCount: 1,
       },
@@ -531,7 +531,7 @@ describe("build filter", () => {
     nodeCount: 2,
     ...fromFixLogin,
     buildId: "b-fix-gone",
-    buildDeleted: true,
+    buildGone: true,
     number: 1,
     doneCount: 0,
   };
@@ -544,15 +544,26 @@ describe("build filter", () => {
     return library.getState();
   };
 
-  it("offers each build once, named from the build or its id, and marks a deleted build apart from a live one of the same name", async () => {
+  it("offers each build once, named from the build or its id, and a gone build by its own name alone", async () => {
     const { runs: listed } = await withGoneBuild();
 
     expect(selectRunBuildOptions(listed)).toEqual([
       { buildId: "b-fix", label: "fix-login" },
       { buildId: "b-idle", label: "b-idle" },
       { buildId: "0123456789", label: "0123456789" },
-      { buildId: "b-fix-gone", label: "fix-login (deleted)" },
+      { buildId: "b-fix-gone", label: "fix-login" },
     ]);
+  });
+
+  it("shows no card for a deleted build, and keeps its runs' cards", async () => {
+    const state = await withGoneBuild();
+
+    expect(selectBuildCards(state).map((card) => card.id)).not.toContain("b-fix-gone");
+    expect(
+      selectRunCards(state)
+        .filter((card) => card.buildId === "b-fix-gone")
+        .map(({ id, name }) => ({ id, name })),
+    ).toEqual([{ id: "run-gone", name: "fix-login" }]);
   });
 
   it("keeps every run card with no build chosen, and only the chosen build's cards otherwise", async () => {
@@ -580,7 +591,7 @@ describe("build filter", () => {
       buildName: null,
       blueprintName: null,
       blueprintVersion: null,
-      buildDeleted: false,
+      buildGone: false,
       number: 1,
       doneCount: 1,
     };
@@ -662,28 +673,10 @@ describe("build tree and project", () => {
     expect(bridge.buildProject).toHaveBeenCalledWith({ buildId: "b-fix" });
     expect(library.getState().tree).toEqual({
       buildId: "b-fix",
-      deleted: false,
       paths: ["commands/p1.md", "manifest.json"],
     });
     expect(library.getState().project).toEqual({ buildId: "b-fix", ...project });
     expect(library.getState().files?.selected).toBe("manifest.json");
-  });
-
-  it("shows a deleted build's paths without reading its files or its project", async () => {
-    const bridge = fakeBridge();
-    bridge.buildTree.mockResolvedValueOnce({ deleted: true, paths: ["manifest.json"] });
-    const library = createLibraryStore({ bridge });
-
-    await library.getState().openFiles("b-fix");
-
-    expect(library.getState().tree).toEqual({
-      buildId: "b-fix",
-      deleted: true,
-      paths: ["manifest.json"],
-    });
-    expect(bridge.buildFiles).not.toHaveBeenCalled();
-    expect(bridge.buildProject).not.toHaveBeenCalled();
-    expect(library.getState().project).toBeNull();
   });
 
   it("reads each project folder once, one level at a time, for the open build", async () => {

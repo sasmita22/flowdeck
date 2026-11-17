@@ -214,19 +214,16 @@ describe("build lineage", () => {
       ["builds", "UPDATE builds SET repo = '/elsewhere', base = 'dev'"],
       ["builds", "UPDATE builds SET id = 'b9'"],
       ["builds", "UPDATE builds SET deleted_at = 1, name = 'other'"],
-      ["builds", "DELETE FROM builds"],
       [
         "builds",
         `INSERT INTO builds (id, hash, name, dir, created_at) VALUES ('b1', 'h2', 'again', '/y', 0)`,
       ],
       ["build_files", "UPDATE build_files SET sha256 = 'x'"],
-      ["build_files", "DELETE FROM build_files"],
       [
         "build_files",
         "INSERT INTO build_files (build_id, path, sha256) VALUES ('b1', 'extra', 'x')",
       ],
       ["build_nodes", "UPDATE build_nodes SET config = '{}'"],
-      ["build_nodes", "DELETE FROM build_nodes"],
       [
         "build_nodes",
         "INSERT INTO build_nodes (build_id, ordinal, node_id, type, config) VALUES ('b1', 9, 'x', 'prompt', '{}')",
@@ -241,6 +238,25 @@ describe("build lineage", () => {
       })();
 
       expect(() => db.exec(sql)).toThrow(/builds are locked/);
+    });
+
+    it.each([
+      { table: "build_nodes", first: [] },
+      { table: "build_files", first: [] },
+      { table: "builds", first: ["build_nodes", "build_files"] },
+    ])("lets $table rows be deleted", ({ table, first }) => {
+      const { db } = stores();
+      db.transaction(() => {
+        db.prepare(
+          "INSERT INTO build_files (build_id, path, sha256) VALUES ('b1', 'f', 's')",
+        ).run();
+        insertBuild(db, { id: "b1" });
+      })();
+      for (const each of first) db.exec(`DELETE FROM ${each}`);
+
+      db.exec(`DELETE FROM ${table}`);
+
+      expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
     });
 
     it("lets deleted_at be set once, and refuses a second change to it", () => {
@@ -341,7 +357,7 @@ describe("build lineage", () => {
     it("refuses a new run that names a build never recorded", () => {
       const { db } = stores();
 
-      expect(() => insertRun(db, "r1", "ghost", "done")).toThrow(/FOREIGN KEY/);
+      expect(() => insertRun(db, "r1", "ghost", "done")).toThrow(/a run names a recorded build/);
     });
 
     it("refuses a run node that is not a node of its build", () => {
@@ -730,7 +746,14 @@ describe("build lineage", () => {
       const db = connect();
 
       for (const table of tables) {
-        const after = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
+        const columns =
+          table === "runs"
+            ? "id, build_dir, inputs, status, total_cost, created_at, build_id, deleted_at"
+            : "*";
+        const after = db.prepare(`SELECT ${columns} FROM ${table}`).all() as Record<
+          string,
+          unknown
+        >[];
         const expected = (before[table] ?? []).map((row) => {
           if (table === "builds") {
             return {
@@ -758,7 +781,7 @@ describe("build lineage", () => {
       }
     });
 
-    it("still reads the old run, and locks the old build", async () => {
+    it("still reads the old run, and lets the old build be deleted", async () => {
       await seedOldDatabase();
       const db = connect();
       const runs = new SqliteStore({ db });
@@ -772,7 +795,10 @@ describe("build lineage", () => {
         dir: "/fd/builds/old",
         createdAt: 5,
       });
-      expect(() => db.exec("DELETE FROM builds")).toThrow(/builds are locked/);
+
+      db.exec("DELETE FROM builds");
+
+      expect(runs.findBuild("old")).toBeUndefined();
     });
 
     it("runs a new run of the old build, which has no node rows", async () => {

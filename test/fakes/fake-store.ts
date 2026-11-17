@@ -5,7 +5,7 @@ import type {
   StoredBuildEvent,
 } from "../../src/core/run/build-progress.js";
 import { stateMovingKinds, type RunEvent } from "../../src/core/run/run-events.js";
-import { BuildRunningError } from "../../src/core/run/store.js";
+import { BuildRunningError, type RunBuildCopy } from "../../src/core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -61,7 +61,7 @@ export class FakeStore implements Store {
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: RecordedBuild[] = [];
   private readonly manifests = new Map<string, string>();
-  private readonly deletedAt = new Map<string, number>();
+  private readonly buildCreatedAt = new Map<string, number>();
   private readonly deletedRuns = new Set<string>();
   private readonly deletedPendingBuilds = new Set<string>();
   private readonly costs = new Map<string, number>();
@@ -90,7 +90,12 @@ export class FakeStore implements Store {
 
   createRun(run: NewRun): RunRecord {
     this.refuseWhileRunning(run.buildId);
-    const record: RunRecord = { ...copy(run), id: `run-${this.nextRun++}`, status: "running" };
+    const record: RunRecord = {
+      ...copy(run),
+      ...this.buildCopyOf(run.buildId),
+      id: `run-${this.nextRun++}`,
+      status: "running",
+    };
     this.runRecords.push(record);
     for (const nodeId of run.nodeIds) this.nodeEntries.push({ runId: record.id, nodeId });
     return copy(record);
@@ -119,10 +124,21 @@ export class FakeStore implements Store {
     if (this.runRecords.some((run) => run.id === runId)) this.deletedRuns.add(runId);
   }
 
+  private buildCopyOf(buildId: string): RunBuildCopy {
+    const built = this.buildRecords.find((known) => known.id === buildId);
+    return {
+      buildName: built?.name ?? null,
+      buildHash: built?.hash ?? null,
+      blueprintName: this.snapshotOf(buildId)?.blueprintName ?? null,
+      ...(built?.source === undefined ? {} : { source: copy(built.source) }),
+      repo: built?.repo ?? null,
+      branch: built?.branch ?? null,
+      buildValues: built === undefined ? null : copy(built.values),
+      manifestJson: this.manifests.get(buildId) ?? null,
+    };
+  }
+
   private summaryOf(run: RunRecord, index: number): RunSummary {
-    const built = this.buildRecords.find((known) => known.id === run.buildId);
-    const source = built?.source;
-    const snapshot = run.buildId === undefined ? undefined : this.snapshotOf(run.buildId);
     const events = this.events(run.id);
     const last = events.at(-1);
     const earlierOfBuild = this.runRecords
@@ -141,11 +157,11 @@ export class FakeStore implements Store {
       endedAt: run.status === "running" ? null : (last?.time ?? null),
       totalCost: this.costs.get(run.id) ?? null,
       nodeCount: run.nodeIds.length,
-      ...(source === undefined ? {} : { source: copy(source) }),
-      buildName: built?.name ?? null,
-      blueprintName: snapshot?.blueprintName ?? null,
-      blueprintVersion: snapshot?.version ?? null,
-      buildDeleted: run.buildId !== undefined && this.deletedAt.has(run.buildId),
+      ...(run.source === undefined ? {} : { source: copy(run.source) }),
+      buildName: run.buildName,
+      blueprintName: run.blueprintName,
+      blueprintVersion: run.source?.version ?? null,
+      buildGone: !this.buildRecords.some((known) => known.id === run.buildId),
       number: earlierOfBuild + 1,
       doneCount,
       ...storyLineOf(this.latestRunStory(run.id)),
@@ -191,6 +207,7 @@ export class FakeStore implements Store {
       throw new Error(`FakeStore: UNIQUE name ${build.name}`);
     }
     this.buildRecords.push(copy(build));
+    this.buildCreatedAt.set(build.id, this.buildCreatedAt.size + 1);
   }
 
   findBuild(id: string): BuildRecord | undefined {
@@ -202,14 +219,23 @@ export class FakeStore implements Store {
   }
 
   deleteBuild(id: string): void {
-    if (this.deletedAt.has(id)) throw new Error(`FakeStore: builds are locked (${id} is deleted)`);
-    if (this.buildRecords.some((build) => build.id === id)) {
-      this.deletedAt.set(id, this.now().getTime());
-    }
+    const pendingIds = new Set(
+      this.pendingBuilds.filter((known) => known.buildId === id).map((known) => known.id),
+    );
+    const keep = <T>(list: T[], kept: (item: T) => boolean) => {
+      const remaining = list.filter(kept);
+      list.splice(0, list.length, ...remaining);
+    };
+    keep(this.buildActivityLog, (known) => !pendingIds.has(known.pendingId));
+    keep(this.buildEventLog, (known) => !pendingIds.has(known.pendingId));
+    keep(this.pendingBuilds, (known) => !pendingIds.has(known.id));
+    keep(this.snapshots, (known) => known.buildId !== id);
+    keep(this.buildRecords, (known) => known.id !== id);
+    this.manifests.delete(id);
   }
 
   listBuilds(): BuildRecord[] {
-    return this.allBuilds().filter((build) => build.deletedAt === null);
+    return this.allBuilds();
   }
 
   listBuildsWithDeleted(): BuildRecord[] {
@@ -425,10 +451,18 @@ export class FakeStore implements Store {
   private allBuilds(): BuildRecord[] {
     return this.buildRecords
       .map(
-        (
-          { id, hash, name, repo, base, branch, branchCreated, values, dir, source },
-          index,
-        ): BuildRecord => {
+        ({
+          id,
+          hash,
+          name,
+          repo,
+          base,
+          branch,
+          branchCreated,
+          values,
+          dir,
+          source,
+        }): BuildRecord => {
           const snapshot = this.snapshotOf(id);
           return {
             id,
@@ -439,9 +473,9 @@ export class FakeStore implements Store {
             branch,
             branchCreated,
             values: copy(values),
-            deletedAt: this.deletedAt.get(id) ?? null,
+            deletedAt: null,
             dir,
-            createdAt: index + 1,
+            createdAt: this.buildCreatedAt.get(id) ?? 0,
             ...(source === undefined ? {} : { source: copy(source) }),
             blueprintName: snapshot?.blueprintName ?? null,
             blueprintVersion: snapshot?.version ?? null,

@@ -16,4 +16,6 @@ export interface Worktree {
   isDirty(path: string): Promise<boolean>;
   hasUnpushed(repo: string, branch: string, base: string): Promise<boolean>;
   deleteBranch(repo: string, branch: string): Promise<void>;
+  branchTip(repo: string, branch: string): Promise<string | undefined>;
+  deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]>;
 }

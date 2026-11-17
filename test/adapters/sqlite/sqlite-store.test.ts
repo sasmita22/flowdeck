@@ -159,9 +159,10 @@ describe("SqliteStore", () => {
       { name: "016_events_by_node.sql" },
       { name: "017_run_stories.sql" },
       { name: "018_runs_deleted_at.sql" },
+      { name: "019_runs_own_their_build.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 18]);
+    expect(before).toEqual([1, 1, 3, 1, 19]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -329,7 +330,18 @@ describe("SqliteStore", () => {
     const store = open();
     const { id } = store.createRun(newRun());
 
-    expect(store.findRun(id)).toEqual({ ...newRun(), id, status: "running" });
+    expect(store.findRun(id)).toEqual({
+      ...newRun(),
+      id,
+      status: "running",
+      buildName: "fix-login",
+      buildHash: "abc",
+      blueprintName: null,
+      repo: "/repo",
+      branch: "flowdeck/fix-login",
+      buildValues: { ticket: "FD-1" },
+      manifestJson: "{}",
+    });
     expect(store.findRun("nope")).toBeUndefined();
 
     store.finishRun(id, "done");
@@ -633,7 +645,7 @@ describe("SqliteStore", () => {
   });
 
   describe("deleting a build", () => {
-    it("hides the build from the list and from its name, keeping its row marked deleted", () => {
+    it("hides the build from the list and from its name, and removes its row", () => {
       const store = open();
       store.recordBuild(another("b2", "fix-signup"));
 
@@ -641,13 +653,7 @@ describe("SqliteStore", () => {
 
       expect(store.listBuilds().map((each) => each.id)).toEqual(["b2"]);
       expect(store.findBuildByName("fix-login")).toBeUndefined();
-      const rows = raw().prepare("SELECT id, deleted_at FROM builds ORDER BY id").all() as {
-        id: string;
-        deleted_at: unknown;
-      }[];
-      expect(rows.map((row) => row.id)).toEqual(["b1", "b2"]);
-      expect(rows[0]?.deleted_at).not.toBeNull();
-      expect(rows[1]?.deleted_at).toBeNull();
+      expect(raw().prepare("SELECT id FROM builds ORDER BY id").all()).toEqual([{ id: "b2" }]);
     });
 
     it("keeps listing the deleted build's runs, marked deleted", () => {
@@ -659,9 +665,9 @@ describe("SqliteStore", () => {
 
       store.deleteBuild("b1");
 
-      expect(store.listRuns().map(({ id, buildDeleted }) => ({ id, buildDeleted }))).toEqual([
-        { id: kept.id, buildDeleted: false },
-        { id: gone.id, buildDeleted: true },
+      expect(store.listRuns().map(({ id, buildGone }) => ({ id, buildGone }))).toEqual([
+        { id: kept.id, buildGone: false },
+        { id: gone.id, buildGone: true },
       ]);
       expect(count(raw(), "runs")).toBe(2);
     });
@@ -883,7 +889,7 @@ describe("SqliteStore", () => {
           endedAt: null,
           totalCost: null,
           nodeCount: 2,
-          buildDeleted: false,
+          buildGone: false,
           number: 3,
           doneCount: 0,
         },
@@ -898,7 +904,7 @@ describe("SqliteStore", () => {
           endedAt: null,
           totalCost: null,
           nodeCount: 1,
-          buildDeleted: false,
+          buildGone: false,
           number: 2,
           doneCount: 0,
         },
@@ -913,7 +919,7 @@ describe("SqliteStore", () => {
           endedAt: "2026-01-01T00:00:09.000Z",
           totalCost: 0.25,
           nodeCount: 1,
-          buildDeleted: false,
+          buildGone: false,
           number: 1,
           doneCount: 1,
         },
@@ -1048,7 +1054,7 @@ describe("SqliteStore", () => {
         buildId: "b1",
         buildName: "fix-login",
         nodeCount: 1,
-        buildDeleted: true,
+        buildGone: true,
       });
       expect(store.listRuns()).toEqual([store.findRunSummary(gone.id)]);
     });

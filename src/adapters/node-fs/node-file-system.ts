@@ -1,5 +1,16 @@
-import { chmod, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
 import type { FileEntry, FileSystem } from "../../ports/file-system.js";
 
 const hasCode = (error: unknown, ...codes: string[]): boolean =>
@@ -25,6 +36,19 @@ export class NodeFileSystem implements FileSystem {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content, { encoding: "utf8", mode: 0o600 });
     await chmod(path, 0o600);
+  }
+
+  async replaceFile(path: string, content: string): Promise<void> {
+    const { mode } = await stat(path);
+    const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+    try {
+      await writeFile(temp, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      await chmod(temp, mode & 0o7777);
+      await rename(temp, path);
+    } catch (error) {
+      await rm(temp, { force: true });
+      throw error;
+    }
   }
 
   async readFile(path: string): Promise<string> {

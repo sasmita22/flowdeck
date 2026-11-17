@@ -27,8 +27,14 @@ describe("format", () => {
 
   it("writes a cost in dollars, or says it is not known", () => {
     expect(formatCost(0.2468)).toBe("$0.25");
+    expect(formatCost(1.234)).toBe("$1.23");
+    expect(formatCost(0.01)).toBe("$0.01");
     expect(formatCost(0)).toBe("$0.00");
     expect(formatCost(null)).toBe("No cost recorded");
+  });
+
+  it("writes a cost under a cent to four decimals instead of rounding it to zero", () => {
+    expect(formatCost(0.004)).toBe("$0.0040");
   });
 
   it("names the repository by its last part, built into a new worktree", () => {

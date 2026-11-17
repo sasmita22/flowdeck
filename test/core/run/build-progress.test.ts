@@ -481,10 +481,10 @@ describe("buildProgressEntrySchema", () => {
     expect(buildProgressEntrySchema.safeParse(entry())).toEqual({ success: true, data: entry() });
   });
 
-  it("strips a blueprint id the entry still carries", () => {
+  it("keeps the blueprint id the entry carries", () => {
     const parsed = buildProgressEntrySchema.parse({ ...entry(), flowId: "f1" });
 
-    expect(parsed).not.toHaveProperty("flowId");
+    expect(parsed.flowId).toBe("f1");
   });
 
   it("keeps each event with its seq and time", () => {

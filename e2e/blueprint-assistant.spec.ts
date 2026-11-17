@@ -568,7 +568,7 @@ test("an edit aimed at another blueprint is refused", async () => {
   expect(await tmuxAlive(bpName(a))).toBe(true);
 });
 
-test("the agent lists live, deleted and old builds and reads one", async () => {
+test("the agent lists live and old builds, leaves a deleted one out, and reads one", async () => {
   test.setTimeout(120_000);
   repo = await createTmpRepo({ commit: true });
   const repoName = repo.path.split("/").at(-1) ?? "";
@@ -591,10 +591,7 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
   await window.getByTestId(pageTestIds.buildDelete(goneId)).click();
   await window.getByTestId(pageTestIds.deletePromptConfirm).click();
   await expect(window.getByTestId(pageTestIds.buildCard(goneId))).toHaveCount(0);
-  expect(
-    rows<{ deleted_at: number | null }>("SELECT deleted_at FROM builds WHERE id = ?", goneId)[0]
-      ?.deleted_at,
-  ).not.toBeNull();
+  expect(rows("SELECT id FROM builds WHERE id = ?", goneId)).toEqual([]);
   const [kept] = rows<{ dir: string }>("SELECT dir FROM builds WHERE id = ?", keepId);
   if (kept === undefined) throw new Error("the kept build has no row");
   const worktreePath = join(kept.dir, repoName);
@@ -616,7 +613,7 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
   expect(first.map(({ name }) => name)).toEqual(["list_builds", "read_build"]);
   const listed = first[0]?.result as { ok: boolean; builds: unknown[] };
   expect(listed).toMatchObject({ ok: true });
-  expect(listed.builds).toHaveLength(3);
+  expect(listed.builds).toHaveLength(2);
   expect(listed.builds).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -625,13 +622,6 @@ test("the agent lists live, deleted and old builds and reads one", async () => {
         blueprint: flowId,
         version: expect.any(Number),
         state: "live",
-      }),
-      expect.objectContaining({
-        id: goneId,
-        name: "gone",
-        blueprint: flowId,
-        version: expect.any(Number),
-        state: "deleted",
       }),
       expect.objectContaining({ id: "oldhash1", name: null, state: "old" }),
     ]),

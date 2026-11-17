@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createEngineHandler,
   type EngineHandler,
@@ -11,6 +11,7 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
+import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -135,6 +136,11 @@ const setup = ({
     } as EngineHandlerOptions["run"],
     worktree,
     gitState: new FakeGitState(),
+    pullRequests: new FakePullRequests(),
+    claudeConfig: {
+      projectsDir: `${home}/claude/projects`,
+      claudeJson: `${home}/claude/.claude.json`,
+    },
     transcriptTurns: async () => [],
   };
   return createEngineHandler(options);
@@ -157,17 +163,33 @@ const call = async (handler: EngineHandler, type: string, payload?: unknown) => 
 
 describe("engine build tools", () => {
   describe("assistant-list-builds", () => {
-    it("lists live, deleted and old builds, each with its state", async () => {
+    it("lists live and old builds, each with its state, and leaves a deleted build out", async () => {
       const listed = (await call(setup(), "assistant-list-builds")) as unknown[];
 
-      expect(listed).toHaveLength(3);
+      expect(listed).toHaveLength(2);
       expect(listed).toEqual(
         expect.arrayContaining([
           { id: live.id, name: "keep", blueprint: "flow-1", version: 2, state: "live" },
-          { id: gone.id, name: "gone", blueprint: "flow-1", version: 1, state: "deleted" },
           { id: oldBuild.id, name: null, blueprint: null, version: null, state: "old" },
         ]),
       );
+    });
+
+    it("never lists a build as deleted, even one whose record carries a delete time", async () => {
+      const handler = setup({
+        prepare: (runs) => {
+          const records = runs.listBuildsWithDeleted();
+          vi.spyOn(runs, "listBuildsWithDeleted").mockReturnValue(
+            records.map((record) =>
+              record.id === live.id ? { ...record, deletedAt: deletedAtTime } : record,
+            ),
+          );
+        },
+      });
+
+      const listed = (await call(handler, "assistant-list-builds")) as { state: string }[];
+
+      expect(listed.map(({ state }) => state).sort()).toEqual(["live", "old"]);
     });
 
     it("leaves the list-builds answer without deleted builds, in its own shape", async () => {
@@ -262,33 +284,25 @@ describe("engine build tools", () => {
   describe("build-tree", () => {
     it("answers a live build's locked paths from the database", async () => {
       const tree = (await call(setup(), "build-tree", { buildId: live.id })) as {
-        deleted: boolean;
         paths: string[];
       };
 
-      expect(tree.deleted).toBe(false);
+      expect(tree).toEqual({ paths: expect.any(Array) });
       expect([...tree.paths].sort()).toEqual(lockedPaths);
     });
 
-    it("answers a deleted build's paths as deleted without touching the file system", async () => {
+    it.each([
+      ["an unknown build", "nope"],
+      ["a deleted build", gone.id],
+    ])("refuses %s without touching the file system", async (_, buildId) => {
       const fs = new FakeFileSystem(workspaceFiles);
       const handler = setup({ fs });
       const before = fs.calls.length;
 
-      const tree = (await call(handler, "build-tree", { buildId: gone.id })) as {
-        deleted: boolean;
-        paths: string[];
-      };
+      const response = await send(handler, "build-tree", { buildId });
 
-      expect(tree.deleted).toBe(true);
-      expect([...tree.paths].sort()).toEqual(lockedPaths);
+      expect(response).toMatchObject({ ok: false, error: expect.stringContaining(buildId) });
       expect(fs.calls.slice(before)).toEqual([]);
-    });
-
-    it("refuses an unknown build", async () => {
-      const response = await send(setup(), "build-tree", { buildId: "nope" });
-
-      expect(response).toMatchObject({ ok: false, error: expect.stringContaining("nope") });
     });
   });
 
@@ -354,11 +368,8 @@ describe("engine build tools", () => {
       });
     });
 
-    it.each([
-      ["an old build", oldBuild.id],
-      ["a deleted build", gone.id],
-    ])("answers null for %s", async (_, buildId) => {
-      const response = await send(setup(), "build-project", { buildId });
+    it("answers null for an old build", async () => {
+      const response = await send(setup(), "build-project", { buildId: oldBuild.id });
 
       expect(response).toMatchObject({ ok: true, value: null });
     });
@@ -369,10 +380,13 @@ describe("engine build tools", () => {
       expect(project).toMatchObject({ exists: false, dirty: null, unpushed: null });
     });
 
-    it("refuses an unknown build", async () => {
-      const response = await send(setup(), "build-project", { buildId: "nope" });
+    it.each([
+      ["an unknown build", "nope"],
+      ["a deleted build", gone.id],
+    ])("refuses %s", async (_, buildId) => {
+      const response = await send(setup(), "build-project", { buildId });
 
-      expect(response).toMatchObject({ ok: false, error: expect.stringContaining("nope") });
+      expect(response).toMatchObject({ ok: false, error: expect.stringContaining(buildId) });
     });
   });
 

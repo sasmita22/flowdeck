@@ -52,6 +52,43 @@ describe("NodeFileSystem", () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
+  it("replaces a file's content in place of the old one, keeping its mode and leaving no temp file", async () => {
+    const path = join(tmp, "claude/.claude.json");
+    await fs.writeFile(path, "old");
+    await chmod(path, 0o644);
+
+    await fs.replaceFile(path, "new");
+
+    expect(await fs.readFile(path)).toBe("new");
+    expect((await stat(path)).mode & 0o777).toBe(0o644);
+    expect(await fs.list(tmp)).toEqual(["claude/.claude.json"]);
+  });
+
+  it("keeps a private file private when replacing it", async () => {
+    const path = join(tmp, "secret.json");
+    await fs.writePrivateFile(path, "old");
+
+    await fs.replaceFile(path, "new");
+
+    expect(await fs.readFile(path)).toBe("new");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it("leaves no temp file behind when the replace fails", async () => {
+    const path = join(tmp, "taken");
+    await fs.writeFile(join(path, "inside.md"), "kept");
+
+    await expect(fs.replaceFile(path, "new")).rejects.toThrow();
+
+    expect(await fs.list(tmp)).toEqual(["taken/inside.md"]);
+  });
+
+  it("rejects replacing a missing file and creates nothing", async () => {
+    await expect(fs.replaceFile(join(tmp, "missing.json"), "x")).rejects.toThrow();
+
+    expect(await fs.list(tmp)).toEqual([]);
+  });
+
   it("rejects reading a missing file", async () => {
     await expect(fs.readFile(join(tmp, "missing.md"))).rejects.toThrow();
   });

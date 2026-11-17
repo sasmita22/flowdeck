@@ -5,6 +5,7 @@ const colors: Record<DisplayStatus, string> = {
   sent: "#06b6d4",
   running: "#3b82f6",
   "needs you": "#ec4899",
+  stopped: "#f97316",
   failed: "#ef4444",
   done: "#22c55e",
   skipped: "var(--muted)",

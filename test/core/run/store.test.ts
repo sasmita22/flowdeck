@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,19 +51,23 @@ const withStores = (kind: (typeof kinds)[number][1]) => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  return (): Store => {
+  const path = () => join(folder, "flowdeck.db");
+
+  const open = (): Store => {
     const now = () => new Date(deletedAtTime);
     if (kind === "fake") return new FakeStore({ now });
-    const store = new SqliteStore({ path: join(folder, "flowdeck.db"), now });
+    const store = new SqliteStore({ path: path(), now });
     opened.push(store);
     return store;
   };
+
+  return Object.assign(open, { path });
 };
 
 describe.each(kinds)("%s listBuildsWithDeleted", (_name, kind) => {
   const open = withStores(kind);
 
-  it("returns live and deleted builds, with deletedAt set only on the deleted ones", () => {
+  it("returns the live builds only, a deleted build being gone", () => {
     const store = open();
     store.recordBuild(build("live1234", "keep"));
     store.recordBuild(build("gone1234", "gone"));
@@ -70,15 +75,8 @@ describe.each(kinds)("%s listBuildsWithDeleted", (_name, kind) => {
 
     const listed = store.listBuildsWithDeleted();
 
-    expect(listed.map(({ id }) => id).sort()).toEqual(["gone1234", "live1234"]);
-    expect(listed.find(({ id }) => id === "live1234")).toMatchObject({
-      name: "keep",
-      deletedAt: null,
-    });
-    expect(listed.find(({ id }) => id === "gone1234")).toMatchObject({
-      name: "gone",
-      deletedAt: deletedAtTime,
-    });
+    expect(listed.map(({ id }) => id)).toEqual(["live1234"]);
+    expect(listed[0]).toMatchObject({ name: "keep", deletedAt: null });
   });
 
   it("leaves listBuilds without the deleted builds", () => {
@@ -163,7 +161,7 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
     });
   });
 
-  it("still reads a build's snapshot once the build is deleted", () => {
+  it("reads no snapshot of a build once the build is deleted", () => {
     const store = open();
     store.recordBuild(build("b1", "fix-login"));
     const locked = started(store, pending("fix-login", "flow-1", { snapshot: snapshot() }));
@@ -171,11 +169,8 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
 
     store.deleteBuild("b1");
 
-    expect(store.buildSnapshot({ buildId: "b1" })).toEqual({
-      ...snapshot(),
-      pendingId: locked,
-      buildId: "b1",
-    });
+    expect(store.buildSnapshot({ buildId: "b1" })).toBeNull();
+    expect(store.buildSnapshot({ pendingId: locked })).toBeNull();
   });
 
   describe("listSnapshotGaps", () => {
@@ -211,14 +206,12 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
       expect(store.listSnapshotGaps()).toEqual([]);
     });
 
-    it("lists a deleted build", () => {
+    it("does not list a deleted build", () => {
       const store = open();
       store.recordBuild({ ...build("gone1", "gone"), source: { flowId: "flow-9", version: 4 } });
       store.deleteBuild("gone1");
 
-      expect(store.listSnapshotGaps()).toEqual([
-        { pendingId: null, buildId: "gone1", flowId: "flow-9", version: 4, blueprintName: null },
-      ]);
+      expect(store.listSnapshotGaps()).toEqual([]);
     });
 
     it("leaves out a recorded build while its pending build of the same name is open, and lists it once that ends without a snapshot", () => {
@@ -328,7 +321,7 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
   });
 
   describe("listings", () => {
-    it("lists builds with their snapshot's blueprint name and version, and nulls without one, deleted builds included", () => {
+    it("lists builds with their snapshot's blueprint name and version, and nulls without one", () => {
       const store = open();
       store.recordBuild(build("b1", "fix-login"));
       store.recordBuild(build("b2", "fix-signup"));
@@ -340,19 +333,11 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
           expect.objectContaining({ id: "b2", blueprintName: null, blueprintVersion: null }),
         ]),
       );
-
-      store.deleteBuild("b1");
-
-      expect(store.listBuildsWithDeleted()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "b1", blueprintName: "Report", blueprintVersion: 3 }),
-        ]),
-      );
     });
 
     it("lists runs with their build's name and its snapshot's blueprint name and version", () => {
       const store = open();
-      store.recordBuild(build("b1", "fix-login"));
+      store.recordBuild({ ...build("b1", "fix-login"), source: { flowId: "flow-1", version: 3 } });
       store.recordBuild(build("b2", "fix-signup"));
       store.addSnapshotIfMissing({ pendingId: null, buildId: "b1" }, snapshot("Report", 3));
       const snapped = store.createRun(run("b1"));
@@ -456,5 +441,170 @@ describe.each(kinds)("%s latest ended pending build per build name", (_name, kin
     started(store, pending("fix-b", "flow-2"));
 
     expect(store.listLatestEndedPendingBuildsByName().map(({ id }) => id)).toEqual([failed]);
+  });
+});
+
+describe.each(kinds)("%s deleting a build keeps its runs", (_name, kind) => {
+  const open = withStores(kind);
+
+  const recorded = (store: Store, id: string, name: string, flowId: string) => {
+    store.recordBuild({
+      ...build(id, name),
+      source: { flowId, version: 3 },
+      files: [{ path: "flow.json", sha256: `sha-${id}` }],
+      nodes: [{ nodeId: "a1", type: "agent", config: {} }],
+    });
+    const pendingId = started(store, {
+      ...pending(name, flowId, { snapshot: snapshot("Report", 3) }),
+      version: 3,
+    });
+    store.appendBuildEvent(pendingId, { type: "step", step: 1, status: "done" });
+    store.appendBuildActivity(pendingId, {
+      id: 1,
+      nodeId: "a1",
+      at: 1_500,
+      summary: "Read flow.json",
+      kind: "tool",
+      tool: "Read",
+    });
+    store.endPendingBuild(pendingId, { outcome: "built", endedAt: 2_000, buildId: id });
+    return pendingId;
+  };
+
+  const finished = (store: Store, buildId: string) => {
+    const created = store.createRun(run(buildId));
+    store.finishRun(created.id, "done");
+    return created.id;
+  };
+
+  const rowsNaming = (buildId: string, pendingId: string) => {
+    const db = new Database(open.path(), { readonly: true });
+    try {
+      const count = (sql: string, id: string) => (db.prepare(sql).get(id) as { n: number }).n;
+      return {
+        builds: count("SELECT count(*) AS n FROM builds WHERE id = ?", buildId),
+        ...Object.fromEntries(
+          [
+            "build_files",
+            "build_nodes",
+            "build_manifests",
+            "build_snapshots",
+            "pending_builds",
+          ].map((table) => [
+            table,
+            count(`SELECT count(*) AS n FROM ${table} WHERE build_id = ?`, buildId),
+          ]),
+        ),
+        ...Object.fromEntries(
+          ["build_events", "build_activity"].map((table) => [
+            table,
+            count(`SELECT count(*) AS n FROM ${table} WHERE pending_id = ?`, pendingId),
+          ]),
+        ),
+      };
+    } finally {
+      db.close();
+    }
+  };
+
+  const noRows = {
+    builds: 0,
+    build_files: 0,
+    build_nodes: 0,
+    build_manifests: 0,
+    build_snapshots: 0,
+    pending_builds: 0,
+    build_events: 0,
+    build_activity: 0,
+  };
+
+  it("still returns each run of the deleted build with its name, blueprint, version and number, and buildGone", () => {
+    const store = open();
+    recorded(store, "b1", "fix-login", "flow-1");
+    const first = finished(store, "b1");
+    const second = finished(store, "b1");
+    const before = [first, second].map((id) => ({
+      id,
+      record: store.findRun(id),
+      summary: store.findRunSummary(id),
+    }));
+    expect(before.map(({ summary }) => summary)).toEqual([
+      expect.objectContaining({
+        buildName: "fix-login",
+        blueprintName: "Report",
+        blueprintVersion: 3,
+        source: { flowId: "flow-1", version: 3 },
+        number: 1,
+        buildGone: false,
+      }),
+      expect.objectContaining({ number: 2, buildGone: false }),
+    ]);
+
+    store.deleteBuild("b1");
+
+    for (const { id, record, summary } of before) {
+      const gone = { ...summary, buildGone: true };
+      expect(store.findRun(id)).toEqual(record);
+      expect(store.findRunSummary(id)).toEqual(gone);
+      expect(store.listRuns().find((listed) => listed.id === id)).toEqual(gone);
+    }
+  });
+
+  it("keeps the build's name, blueprint and source on the run's record once the build is deleted", () => {
+    const store = open();
+    recorded(store, "b1", "fix-login", "flow-1");
+    const runId = finished(store, "b1");
+
+    store.deleteBuild("b1");
+
+    expect(store.findRun(runId)).toMatchObject({
+      buildName: "fix-login",
+      blueprintName: "Report",
+      source: { flowId: "flow-1", version: 3 },
+    });
+  });
+
+  it("leaves nothing of the deleted build, its events and activity included", () => {
+    const store = open();
+    const pendingId = recorded(store, "b1", "fix-login", "flow-1");
+    finished(store, "b1");
+
+    store.deleteBuild("b1");
+
+    expect(store.findBuild("b1")).toBeUndefined();
+    expect(store.listBuildsWithDeleted().map(({ id }) => id)).not.toContain("b1");
+    expect(store.buildFiles("b1")).toEqual([]);
+    expect(store.buildManifest("b1")).toBeUndefined();
+    expect(store.buildSnapshot({ buildId: "b1" })).toBeNull();
+    expect(store.buildSnapshot({ pendingId })).toBeNull();
+    expect(store.pendingBuild(pendingId)).toBeNull();
+    expect(store.buildEvents(pendingId)).toEqual([]);
+    expect(store.buildActivity(pendingId)).toEqual([]);
+    if (kind === "sqlite") expect(rowsNaming("b1", pendingId)).toEqual(noRows);
+  });
+
+  it("leaves a second build and its runs untouched", () => {
+    const store = open();
+    recorded(store, "b1", "fix-login", "flow-1");
+    finished(store, "b1");
+    const keptPending = recorded(store, "b2", "fix-signup", "flow-2");
+    const kept = finished(store, "b2");
+    const keptBuild = store.findBuild("b2");
+    const keptSummary = store.findRunSummary(kept);
+    const keptEvents = store.buildEvents(keptPending);
+    const keptActivity = store.buildActivity(keptPending);
+
+    store.deleteBuild("b1");
+
+    expect(store.findBuild("b2")).toEqual(keptBuild);
+    expect(store.findRunSummary(kept)).toEqual({ ...keptSummary, buildGone: false });
+    expect(store.buildFiles("b2")).toEqual([{ path: "flow.json", sha256: "sha-b2" }]);
+    expect(store.buildManifest("b2")).toBe(build("b2", "fix-signup").manifest);
+    expect(store.buildSnapshot({ buildId: "b2" })).toMatchObject({ blueprintName: "Report" });
+    expect(store.pendingBuild(keptPending)).not.toBeNull();
+    expect(store.buildEvents(keptPending)).toEqual(keptEvents);
+    expect(store.buildActivity(keptPending)).toEqual(keptActivity);
+    expect(keptEvents).toHaveLength(1);
+    expect(keptActivity).toHaveLength(1);
   });
 });

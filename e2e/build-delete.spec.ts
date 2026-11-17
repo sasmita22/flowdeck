@@ -113,6 +113,9 @@ const deletedAt = (buildId: string) =>
   rows<{ deleted_at: number | null }>("SELECT deleted_at FROM builds WHERE id = ?", buildId)[0]
     ?.deleted_at;
 
+const buildRows = (buildId: string) =>
+  rows<{ n: number }>("SELECT count(*) AS n FROM builds WHERE id = ?", buildId)[0]?.n;
+
 const toBuilds = async (window: Page) => {
   await window.getByTestId("menu-builds").click();
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("Builds");
@@ -197,7 +200,7 @@ test("A built card has a ⋯ at its top right and no Delete button; the menu clo
   expect(await flowdeckBranches()).toHaveLength(1);
 });
 
-test("Deleting a built card whose run is going warns about the dirty worktree, then stops the run and removes the card, its worktree and its Flowdeck-made branch", async () => {
+test("While a build's run is going its ⋯ Delete is disabled; after Stop, Delete removes the card and its worktree and keeps the branch whose pull request it could not check", async () => {
   seedBlueprint(home, "Alpha", oneAgent(), repo.path);
   const window = await launch({ turns: { p1: "hold" } });
   const buildId = await buildAndRun(window, home, "busy");
@@ -218,19 +221,46 @@ test("Deleting a built card whose run is going warns about the dirty worktree, t
 
   await window.getByTestId(pageTestIds.runBack).click();
   await toBuilds(window);
+  const card = window.getByTestId(pageTestIds.buildCard(buildId));
+  const del = window.getByTestId(pageTestIds.buildDelete(buildId));
   await window.getByTestId(pageTestIds.buildMenu(buildId)).click();
-  await window.getByTestId(pageTestIds.buildDelete(buildId)).click();
+  await expect(del).toBeVisible();
+  await expect(del).toBeDisabled();
+  await expect(del).toHaveAttribute("aria-disabled", "true");
+  await expect(del).toHaveAttribute("title", "Stop or resume its run first");
+  await del.click({ force: true });
+  await expect(window.getByTestId(pageTestIds.deletePrompt)).toHaveCount(0);
+  await expect(card).toBeVisible();
+  expect(await tmuxAlive(tmuxName)).toBe(true);
+  expect(buildRows(buildId)).toBe(1);
+
+  await window.keyboard.press("Escape");
+  await window.getByTestId("menu-runs").click();
+  await window.getByTestId(pageTestIds.runOpen(runId)).click();
+  await window.getByTestId(pageTestIds.runStop).click();
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
+    "data-status",
+    "stopped",
+    { timeout: watchMs },
+  );
+  await expect.poll(() => tmuxAlive(tmuxName), { timeout: watchMs }).toBe(false);
+
+  await window.getByTestId(pageTestIds.runBack).click();
+  await toBuilds(window);
+  await window.getByTestId(pageTestIds.buildMenu(buildId)).click();
+  await expect(del).toBeEnabled();
+  await del.click();
   await expect(window.getByTestId(pageTestIds.deletePromptWarning)).toBeVisible();
   await window.getByTestId(pageTestIds.deletePromptConfirm).click();
 
-  await expect(window.getByTestId(pageTestIds.buildCard(buildId))).toHaveCount(0, {
-    timeout: watchMs,
-  });
-  await expect.poll(() => tmuxAlive(tmuxName), { timeout: watchMs }).toBe(false);
-  expect(deletedAt(buildId)).not.toBeNull();
+  await expect(card).toHaveCount(0, { timeout: watchMs });
+  await expect(window.getByTestId(pageTestIds.buildKept(buildId))).toContainText(
+    "its pull request status could not be checked",
+  );
+  expect(buildRows(buildId)).toBe(0);
   expect(existsSync(worktree)).toBe(false);
   expect((await worktreePaths()).filter((path) => path.includes(buildId))).toEqual([]);
-  expect(await flowdeckBranches()).toEqual([]);
+  expect(await flowdeckBranches()).toHaveLength(1);
 });
 
 test("Deleting a building card stops the build, removes its card and workspace, and no older card of that name comes back", async () => {

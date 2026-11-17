@@ -59,10 +59,7 @@ export function RunRow({
           onClick={onOpen}
         >
           #{card.number} {card.name}{" "}
-          <span className="fd-muted">
-            {card.version === null ? "" : `v${card.version}`}
-            {card.buildDeleted ? " (deleted)" : ""}
-          </span>
+          <span className="fd-muted">{card.version === null ? "" : `v${card.version}`}</span>
         </button>
         <span
           className={`fd-badge fd-badge-${badge === "needs you" ? "warn" : tone[status]}`}

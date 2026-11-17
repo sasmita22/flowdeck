@@ -299,6 +299,16 @@ describe("runDigest", () => {
       expect(text).toContain("2. Pick the approach (ask): needs you\n   Asked: Which fix?");
     });
 
+    it("reads a gate left waiting as stopped once the run is stopped", () => {
+      const waiting = stored([["g", 1, { kind: "needs-you" }]]);
+      const text = (status: RunStatus) =>
+        runDigest(digestInput(waiting, { sources, activity: [], status })).text;
+
+      expect(text("stopped")).toContain("1. Gate (gate): stopped");
+      expect(text("stopped")).not.toContain("needs you");
+      expect(text("running")).toContain("1. Gate (gate): needs you");
+    });
+
     it("prints no Asked line for a stage with no question or an empty one", () => {
       expect(digestOf({ g: "" })).not.toContain("Asked:");
     });

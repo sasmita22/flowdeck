@@ -139,11 +139,7 @@ export const selectRunBuildOptions = (runs: readonly RunSummary[]): RunBuildOpti
   const options = new Map<string, RunBuildOption>();
   for (const run of runs) {
     if (run.buildId === undefined || options.has(run.buildId)) continue;
-    const name = run.buildName ?? run.buildId;
-    options.set(run.buildId, {
-      buildId: run.buildId,
-      label: run.buildDeleted ? `${name} (deleted)` : name,
-    });
+    options.set(run.buildId, { buildId: run.buildId, label: run.buildName ?? run.buildId });
   }
   return [...options.values()];
 };
@@ -258,7 +254,6 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
         const tree = buildTreeSchema.parse(await bridge.buildTree({ buildId }));
         if (!stillOpen()) return;
         set({ tree: { buildId, ...tree }, error: null });
-        if (tree.deleted) return;
         const [files, answer] = await Promise.all([
           bridge.buildFiles({ buildId }),
           bridge.buildProject({ buildId }),

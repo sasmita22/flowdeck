@@ -26,6 +26,7 @@ import type { PendingWait } from "../../src/core/run/wait.js";
 import { agent, ask, flow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { FakePullRequests } from "../fakes/fake-pull-requests.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.js";
 
@@ -232,6 +233,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         gitState: new GitFolderState(),
         waits: appWaiter,
         newSessionName: () => sessionName,
+        pullRequests: new FakePullRequests(),
+        claudeConfig: {
+          projectsDir: join(claudeConfigDir(), "projects"),
+          claudeJson: join(claudeConfigDir(), ".claude.json"),
+        },
         transcriptTurns: async () => [],
       });
 

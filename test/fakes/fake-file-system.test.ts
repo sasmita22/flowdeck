@@ -31,6 +31,28 @@ describe("FakeFileSystem", () => {
     expect(fs.isPrivate("a/open.md")).toBe(false);
   });
 
+  it("replaces a file's content and keeps whether it was private", async () => {
+    const fs = new FakeFileSystem({ "a/open.json": "o" });
+    await fs.writePrivateFile("a/secret.json", "s");
+
+    await fs.replaceFile("a/open.json", "o2");
+    await fs.replaceFile("a/secret.json", "s2");
+
+    expect(await fs.readFile("a/open.json")).toBe("o2");
+    expect(await fs.readFile("a/secret.json")).toBe("s2");
+    expect(fs.isPrivate("a/open.json")).toBe(false);
+    expect(fs.isPrivate("a/secret.json")).toBe(true);
+    expect(fs.calls).toContainEqual({ method: "replaceFile", path: "a/open.json" });
+  });
+
+  it("rejects replacing a missing file and creates nothing", async () => {
+    const fs = new FakeFileSystem();
+
+    await expect(fs.replaceFile("a/missing.json", "x")).rejects.toMatchObject({ code: "ENOENT" });
+
+    expect(await fs.exists("a/missing.json")).toBe(false);
+  });
+
   it("removes every file under a folder tree and records the call", async () => {
     const fs = new FakeFileSystem({
       "ws/b1/CLAUDE.md": "c",

@@ -161,4 +161,40 @@ describe("FakeWorktree", () => {
       { repo: "/s", branch: "flowdeck/b" },
     ]);
   });
+
+  it("records each remote branch delete in order", async () => {
+    const worktree = new FakeWorktree();
+
+    expect(await worktree.deleteRemoteBranch("/r", "flowdeck/a", "a1")).toEqual([]);
+    await worktree.deleteRemoteBranch("/s", "flowdeck/b", "b1");
+
+    expect(worktree.deletedRemoteBranches).toEqual([
+      { repo: "/r", branch: "flowdeck/a", tip: "a1" },
+      { repo: "/s", branch: "flowdeck/b", tip: "b1" },
+    ]);
+  });
+
+  it("reads a tip for a branch until it is deleted or removed with its worktree", async () => {
+    const worktree = new FakeWorktree();
+    const made = { repo: "/r", base: "main", path: "/w", create: true };
+
+    expect(await worktree.branchTip("/r", "flowdeck/a")).toBe("tip-of-flowdeck/a");
+    await worktree.deleteBranch("/r", "flowdeck/a");
+    await worktree.remove({ ...made, branch: "flowdeck/b", force: true });
+    await worktree.remove({ ...made, branch: "flowdeck/c", create: false, force: true });
+
+    expect(await worktree.branchTip("/r", "flowdeck/a")).toBeUndefined();
+    expect(await worktree.branchTip("/r", "flowdeck/b")).toBeUndefined();
+    expect(await worktree.branchTip("/r", "flowdeck/c")).toBe("tip-of-flowdeck/c");
+  });
+
+  it("no longer finds a branch pushed once its remote branch is deleted", async () => {
+    const worktree = new FakeWorktree();
+    expect(await worktree.hasUnpushed("/r", "flowdeck/a", "main")).toBe(false);
+
+    await worktree.deleteRemoteBranch("/r", "flowdeck/a", "a1");
+
+    expect(await worktree.hasUnpushed("/r", "flowdeck/a", "main")).toBe(true);
+    expect(await worktree.hasUnpushed("/r", "flowdeck/b", "main")).toBe(false);
+  });
 });

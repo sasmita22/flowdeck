@@ -73,11 +73,23 @@ describe("FakeStore", () => {
   it("creates a running run with a fresh id and finds it by id", () => {
     const store = new FakeStore();
 
+    store.recordBuild(build("b1", "fix-login"));
     const first = store.createRun(newRun());
     const second = store.createRun(newRun(["p1"], "b2"));
 
     expect(first.id).not.toBe(second.id);
-    expect(first).toEqual({ ...newRun(), id: first.id, status: "running" });
+    expect(first).toEqual({
+      ...newRun(),
+      id: first.id,
+      status: "running",
+      buildName: "fix-login",
+      buildHash: "h1",
+      blueprintName: null,
+      repo: "/repo",
+      branch: "flowdeck/fix-login",
+      buildValues: {},
+      manifestJson: lockedManifest,
+    });
     expect(store.findRun(first.id)).toEqual(first);
     expect(store.findRun("nope")).toBeUndefined();
   });
@@ -293,12 +305,12 @@ describe("FakeStore", () => {
       expect(store.builds()).toEqual([build("b1", "fix-login")]);
     });
 
-    it("refuses to delete a build twice", () => {
+    it("deletes a build twice without an error", () => {
       const store = new FakeStore();
       store.recordBuild(build("b1"));
       store.deleteBuild("b1");
 
-      expect(() => store.deleteBuild("b1")).toThrow();
+      expect(() => store.deleteBuild("b1")).not.toThrow();
     });
 
     it("gives no way to change a build through what it returns", () => {
@@ -323,9 +335,9 @@ describe("FakeStore", () => {
 
       expect(store.listBuilds().map((each) => each.id)).toEqual(["b2"]);
       expect(store.findBuildByName("fix-login")).toBeUndefined();
-      expect(store.listRuns().map(({ id, buildDeleted }) => ({ id, buildDeleted }))).toEqual([
-        { id: kept.id, buildDeleted: false },
-        { id: gone.id, buildDeleted: true },
+      expect(store.listRuns().map(({ id, buildGone }) => ({ id, buildGone }))).toEqual([
+        { id: kept.id, buildGone: false },
+        { id: gone.id, buildGone: true },
       ]);
       expect(store.runs).toHaveLength(2);
     });
@@ -391,13 +403,13 @@ describe("FakeStore", () => {
       expect(store.buildManifest("nope")).toBeUndefined();
     });
 
-    it("still reads a build's manifest once the build is deleted", () => {
+    it("reads no manifest once the build is deleted", () => {
       const store = new FakeStore();
       store.recordBuild(build("b1"));
 
       store.deleteBuild("b1");
 
-      expect(store.buildManifest("b1")).toBe(lockedManifest);
+      expect(store.buildManifest("b1")).toBeUndefined();
     });
 
     it("stores the manifest of a build that has none", () => {
@@ -418,7 +430,7 @@ describe("FakeStore", () => {
       expect(store.buildManifest("b1")).toBe(lockedManifest);
     });
 
-    it("lists builds with no stored manifest and a manifest file, deleted ones too, with that file's sha256", () => {
+    it("lists builds with no stored manifest and a manifest file, with that file's sha256, leaving out a deleted one", () => {
       const store = new FakeStore();
       store.recordBuild(build("b1"));
       store.recordBuildWithoutManifest(beforeManifests("old1"));
@@ -428,10 +440,7 @@ describe("FakeStore", () => {
       });
       store.deleteBuild("gone1");
 
-      expect(gaps(store)).toEqual([
-        { buildId: "gone1", manifestSha256: "m2" },
-        { buildId: "old1", manifestSha256: "m" },
-      ]);
+      expect(gaps(store)).toEqual([{ buildId: "old1", manifestSha256: "m" }]);
     });
 
     it("leaves out a build once its manifest is stored, and one with no manifest file", () => {
@@ -484,7 +493,7 @@ describe("FakeStore", () => {
         id: running.id,
         status: "running",
         endedAt: null,
-        buildDeleted: false,
+        buildGone: false,
         number: 2,
         doneCount: 0,
       }),
@@ -496,7 +505,7 @@ describe("FakeStore", () => {
         endedAt: new Date(0).toISOString(),
         nodeCount: 1,
         source: { flowId: "flow-1", version: 2 },
-        buildDeleted: false,
+        buildGone: false,
         number: 1,
         doneCount: 1,
       }),
@@ -631,7 +640,7 @@ describe("FakeStore", () => {
       buildId: "b1",
       buildName: "fix-login",
       nodeCount: 1,
-      buildDeleted: true,
+      buildGone: true,
     });
     expect(store.listRuns()).toEqual([store.findRunSummary(gone.id)]);
   });

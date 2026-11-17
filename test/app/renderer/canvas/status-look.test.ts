@@ -12,6 +12,8 @@ const statuses: DisplayStatus[] = [
   "skipped",
 ];
 
+const everyStatus: DisplayStatus[] = [...statuses, "stopped"];
+
 describe("statusBadge", () => {
   it.each(statuses)("labels %s with its status text and a colour", (status) => {
     const badge = statusBadge(status);
@@ -20,10 +22,16 @@ describe("statusBadge", () => {
     expect(badge.color).toMatch(/\S/);
   });
 
-  it("gives each of the seven statuses its own colour", () => {
-    const colors = statuses.map((status) => statusBadge(status).color);
+  it("gives each of the eight statuses its own colour", () => {
+    const colors = everyStatus.map((status) => statusBadge(status).color);
 
-    expect(new Set(colors).size).toBe(7);
+    expect(new Set(colors.filter(Boolean)).size).toBe(8);
+  });
+
+  it("labels stopped as stopped, in a colour apart from needs you", () => {
+    expect(statusBadge("stopped").label).toBe("stopped");
+    expect(statusBadge("stopped").color).toMatch(/\S/);
+    expect(statusBadge("stopped").color).not.toBe(statusBadge("needs you").color);
   });
 });
 

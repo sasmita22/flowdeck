@@ -26,6 +26,7 @@ import type { PendingWait } from "../../src/core/run/wait.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { agentType } from "../../src/core/nodes/agent/execute.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { FakePullRequests } from "../fakes/fake-pull-requests.js";
 import { gate, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { readLines, tokenResults, type TranscriptEntry } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -200,6 +201,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
           worktree: new GitWorktree(),
           gitState: new GitFolderState(),
           newSessionName: () => sessionName,
+          pullRequests: new FakePullRequests(),
+          claudeConfig: {
+            projectsDir: join(claudeConfigDir(), "projects"),
+            claudeJson: join(claudeConfigDir(), ".claude.json"),
+          },
           transcriptTurns: async (id) => {
             const path = await transcriptOf(id);
             return path === undefined ? [] : parseTranscriptTurns(await readFile(path, "utf8"));

@@ -10,18 +10,30 @@ export type DeleteBuildDeps = {
     isDirty(path: string): Promise<boolean>;
     hasUnpushed(repo: string, branch: string, base: string): Promise<boolean>;
     deleteBranch(repo: string, branch: string): Promise<void>;
+    branchTip(repo: string, branch: string): Promise<string | undefined>;
+    deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]>;
   };
   fs: {
     exists(path: string): Promise<boolean>;
     removeTree(path: string, options?: { keep?: string }): Promise<void>;
+    folders(dir: string): Promise<string[]>;
+    readFile(path: string): Promise<string>;
+    replaceFile(path: string, content: string): Promise<void>;
   };
   home: string;
-  stopRun: (runId: string) => Promise<void>;
+  pullRequests: { openOn(repo: string, branch: string): Promise<"open" | "none" | "unknown"> };
+  claudeConfig: { projectsDir: string; claudeJson: string };
+  sessionFolder?: string;
 };
 
 const keptAfterDeleteSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("worktree"), path: z.string() }),
-  z.object({ kind: z.literal("branch"), branch: z.string() }),
+  z.object({
+    kind: z.literal("branch"),
+    branch: z.string(),
+    reason: z.enum(["open-pr", "pr-unknown", "remote-moved", "remote-delete-failed"]).optional(),
+    remotes: z.array(z.string()).optional(),
+  }),
   z.object({ kind: z.literal("folder"), path: z.string() }),
 ]);
 
@@ -51,17 +63,6 @@ const deleted = (deps: DeleteBuildDeps, id: string, kept?: KeptAfterDelete): Del
   deps.store.deleteBuild(id);
   return kept === undefined ? { ok: true } : { ok: true, kept };
 };
-
-async function deleteOldBuild(
-  deps: DeleteBuildDeps,
-  build: BuildRecord,
-): Promise<DeleteBuildResult> {
-  if (!isInside(deps.home, build.dir)) {
-    return deleted(deps, build.id, { kind: "folder", path: build.dir });
-  }
-  await deps.fs.removeTree(build.dir);
-  return deleted(deps, build.id);
-}
 
 export type TeardownDeps = Pick<DeleteBuildDeps, "worktree" | "fs">;
 
@@ -151,23 +152,111 @@ export async function deletePreview(
   return { dirtyWorktree, unpushedBranch };
 }
 
+const runningMessage = "This build has a run left going. Stop or resume it first.";
+
+export const claudeProjectFolder = (path: string): string => path.replace(/[^a-zA-Z0-9]/g, "-");
+
+async function removeClaudeProjects(deps: DeleteBuildDeps, workspace: string): Promise<void> {
+  const name = claudeProjectFolder(workspace);
+  const { projectsDir } = deps.claudeConfig;
+  for (const folder of await deps.fs.folders(projectsDir)) {
+    if (folder === name || folder.startsWith(`${name}-`)) {
+      await deps.fs.removeTree(`${projectsDir}/${folder}`);
+    }
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+async function readJson(deps: DeleteBuildDeps, path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await deps.fs.readFile(path));
+  } catch {
+    return undefined;
+  }
+}
+
+async function forgetClaudeProjects(deps: DeleteBuildDeps, workspace: string): Promise<void> {
+  const { claudeJson } = deps.claudeConfig;
+  if (!(await deps.fs.exists(claudeJson))) return;
+  const config = await readJson(deps, claudeJson);
+  if (!isRecord(config) || !isRecord(config.projects)) return;
+  const projects = Object.entries(config.projects);
+  const kept = projects.filter(([path]) => path !== workspace && !isInside(workspace, path));
+  if (kept.length === projects.length) return;
+  const updated = { ...config, projects: Object.fromEntries(kept) };
+  await deps.fs.replaceFile(claudeJson, `${JSON.stringify(updated, null, 2)}\n`);
+}
+
+async function removeLeftovers(deps: DeleteBuildDeps, workspace?: string): Promise<void> {
+  if (deps.sessionFolder !== undefined) await deps.fs.removeTree(deps.sessionFolder);
+  if (workspace === undefined) return;
+  await removeClaudeProjects(deps, workspace);
+  await forgetClaudeProjects(deps, workspace);
+}
+
+const keptReason = { open: "open-pr", unknown: "pr-unknown" } as const;
+
+async function teardownBuild(
+  deps: DeleteBuildDeps,
+  dir: string,
+  worktree: RunWorktree,
+): Promise<KeptAfterDelete | undefined> {
+  if (!worktree.create) return forceTeardown(deps, dir, worktree);
+  const state = await deps.pullRequests.openOn(worktree.repo, worktree.branch);
+  if (state !== "none") {
+    const kept = await forceTeardown(deps, dir, { ...worktree, create: false });
+    return kept ?? { kind: "branch", branch: worktree.branch, reason: keptReason[state] };
+  }
+  const tip = await deps.worktree.branchTip(worktree.repo, worktree.branch);
+  const kept = await forceTeardown(deps, dir, worktree);
+  if (kept !== undefined || tip === undefined) return kept;
+  return deleteRemoteBranch(deps, worktree, tip);
+}
+
+async function deleteRemoteBranch(
+  deps: DeleteBuildDeps,
+  { repo, branch }: RunWorktree,
+  tip: string,
+): Promise<KeptAfterDelete | undefined> {
+  try {
+    const remotes = await deps.worktree.deleteRemoteBranch(repo, branch, tip);
+    return remotes.length === 0
+      ? undefined
+      : { kind: "branch", branch, reason: "remote-moved", remotes };
+  } catch {
+    return { kind: "branch", branch, reason: "remote-delete-failed" };
+  }
+}
+
+async function deleteOldBuild(
+  deps: DeleteBuildDeps,
+  build: BuildRecord,
+): Promise<DeleteBuildResult> {
+  if (!isInside(deps.home, build.dir)) {
+    await removeLeftovers(deps);
+    return deleted(deps, build.id, { kind: "folder", path: build.dir });
+  }
+  await deps.fs.removeTree(build.dir);
+  await removeLeftovers(deps, build.dir);
+  return deleted(deps, build.id);
+}
+
 export async function deleteBuild(
   deps: DeleteBuildDeps,
   buildId: string,
 ): Promise<DeleteBuildResult> {
   const build = deps.store.findBuild(buildId);
-  if (build === undefined || build.deletedAt !== null) {
+  if (build === undefined) {
     return { ok: false, message: `There is no build ${buildId} to delete.` };
   }
-  const running = deps.store
-    .listRuns()
-    .filter((run) => run.buildId === buildId && run.status === "running");
-  for (const run of running) await deps.stopRun(run.id);
+  if (deps.store.listRuns().some((run) => run.buildId === buildId && run.status === "running")) {
+    return { ok: false, message: runningMessage };
+  }
   const worktree = storedWorktree(build);
   if (worktree === undefined) return deleteOldBuild(deps, build);
-  return deleted(
-    deps,
-    build.id,
-    await teardownWorkspace(deps, { dir: build.dir, worktree, force: true }),
-  );
+  const kept = await teardownBuild(deps, build.dir, worktree);
+  await removeLeftovers(deps, build.dir);
+  return deleted(deps, build.id, kept);
 }

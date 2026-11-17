@@ -15,7 +15,7 @@ import type {
   StoredBuildEvent,
 } from "../../../core/run/build-progress.js";
 import { selectPipeline, type BuildProgressState } from "../build-progress-store.js";
-import { formatDuration, formatWhen } from "../format.js";
+import { formatCost, formatDuration, formatWhen } from "../format.js";
 import { entryText } from "../inspector/store.js";
 import type { LibraryState } from "../library-store.js";
 import type { NavState } from "../nav-store.js";
@@ -53,7 +53,7 @@ const statusTones: Record<PipelineHeader["status"], string> = {
 type Selection = { step: BuildStepNumber; round: number; path?: string };
 
 const costText = (cost: BuildCost) =>
-  `${cost.inputTokens} in · ${cost.outputTokens} out · $${cost.usd.toFixed(2)}`;
+  `${cost.inputTokens} in · ${cost.outputTokens} out · ${formatCost(cost.usd)}`;
 
 const laneText = (lane: Pick<PipelineLane, "step" | "round">) =>
   `${lane.step} ${stageNames[lane.step]}${lane.round > 1 ? ` · round ${lane.round}` : ""}`;

@@ -3,7 +3,13 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { RunState } from "./run-store.js";
 
-export type ItemMenuEntry = { testId: string; label: string; onSelect(): void };
+export type ItemMenuEntry = {
+  testId: string;
+  label: string;
+  onSelect(): void;
+  disabled?: boolean;
+  title?: string;
+};
 
 export function ItemMenu({
   run,
@@ -82,7 +88,11 @@ export function ItemMenu({
               className="fd-menu-item"
               role="menuitem"
               data-testid={item.testId}
+              disabled={item.disabled}
+              aria-disabled={item.disabled}
+              title={item.title}
               onClick={() => {
+                if (item.disabled === true) return;
                 run.getState().closeMenu();
                 item.onSelect();
               }}

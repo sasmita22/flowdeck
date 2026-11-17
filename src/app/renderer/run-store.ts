@@ -223,8 +223,9 @@ export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
 };
 
 export const selectNodeDisplay = (run: RunView, nodeId: string): DisplayStatus | null => {
-  const state = run.snapshot?.nodes[nodeId];
-  return state === undefined ? null : displayStatus(state);
+  const { snapshot } = run;
+  const state = snapshot?.nodes[nodeId];
+  return snapshot === null || state === undefined ? null : displayStatus(state, snapshot.status);
 };
 
 const summaryLabel = (
@@ -239,10 +240,11 @@ const summaryLabel = (
 };
 
 export const selectRunSummary = (run: RunView, waiting = false): string => {
-  if (run.snapshot === null) return "Idle";
-  const shown = Object.values(run.snapshot.nodes).map(displayStatus);
+  const { snapshot } = run;
+  if (snapshot === null) return "Idle";
+  const shown = Object.values(snapshot.nodes).map((state) => displayStatus(state, snapshot.status));
   const done = shown.filter((status) => status === "done").length;
-  return `${summaryLabel(run.snapshot.status, shown, waiting)} · ${done} of ${shown.length} nodes done`;
+  return `${summaryLabel(snapshot.status, shown, waiting)} · ${done} of ${shown.length} nodes done`;
 };
 
 export const selectSessionStatus = (run: RunView, waiting = false): string => {
@@ -254,7 +256,7 @@ export const selectSessionStatus = (run: RunView, waiting = false): string => {
 
 export const selectLiveBadge = (snapshot: RunSnapshot | null): string | null => {
   if (snapshot?.status !== "running") return null;
-  const shown = Object.values(snapshot.nodes).map(displayStatus);
+  const shown = Object.values(snapshot.nodes).map((state) => displayStatus(state, snapshot.status));
   if (shown.includes("needs you")) return "needs you";
   return `running · ${shown.filter((status) => status === "done").length} of ${shown.length}`;
 };
@@ -262,12 +264,24 @@ export const selectLiveBadge = (snapshot: RunSnapshot | null): string | null => 
 export const needsSessionSetup = (problems: readonly Problem[] | null): boolean =>
   problems?.some(({ node, field }) => node === undefined && field !== undefined) ?? false;
 
+const branchKeptBecause = {
+  commits: "holds commits, so it was kept.",
+  "open-pr": "was kept: an open pull request uses it.",
+  "pr-unknown": "was kept: its pull request status could not be checked.",
+  "remote-delete-failed": "on GitHub could not be deleted.",
+} as const;
+
+const branchNote = ({ branch, reason, remotes }: Extract<KeptBuild, { kind: "branch" }>) =>
+  reason === "remote-moved"
+    ? `${branch} on ${(remotes ?? []).join(", ")} has work this build didn't make, so it was kept.`
+    : `${branch} ${branchKeptBecause[reason ?? "commits"]}`;
+
 export const selectKeptNote = (kept: KeptBuild): string => {
   switch (kept.kind) {
     case "worktree":
       return `The build is deleted. Its worktree held work, so it was kept at ${kept.path}`;
     case "branch":
-      return `The build is deleted. Its branch ${kept.branch} holds commits, so it was kept.`;
+      return `The build is deleted. Its branch ${branchNote(kept)}`;
     case "folder":
       return `The build is deleted. Its folder ${kept.path} is outside FLOWDECK_HOME, so it was left in place.`;
   }

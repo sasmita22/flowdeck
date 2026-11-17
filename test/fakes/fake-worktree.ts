@@ -10,7 +10,9 @@ export class FakeWorktree implements Worktree {
   readonly calls: WorktreeAddOptions[] = [];
   readonly removed: WorktreeRemoveOptions[] = [];
   readonly deletedBranches: { repo: string; branch: string }[] = [];
+  readonly deletedRemoteBranches: { repo: string; branch: string; tip: string }[] = [];
   readonly branches = new Set<string>();
+  private readonly goneBranches = new Set<string>();
 
   constructor(
     private readonly options: { failWith?: string; dirty?: string[]; unpushed?: string[] } = {},
@@ -31,6 +33,7 @@ export class FakeWorktree implements Worktree {
     await rm(options.path, { recursive: true, force: true });
     if (!options.create) return { worktree: "removed", branch: "kept" };
     this.branches.delete(options.branch);
+    this.goneBranches.add(options.branch);
     return { worktree: "removed", branch: "removed" };
   }
 
@@ -38,11 +41,24 @@ export class FakeWorktree implements Worktree {
     return this.options.dirty?.includes(path) ?? false;
   }
 
-  async hasUnpushed(...[, branch]: Parameters<Worktree["hasUnpushed"]>): Promise<boolean> {
-    return this.options.unpushed?.includes(branch) ?? false;
+  async hasUnpushed(...[repo, branch]: Parameters<Worktree["hasUnpushed"]>): Promise<boolean> {
+    const remoteGone = this.deletedRemoteBranches.some(
+      (deleted) => deleted.repo === repo && deleted.branch === branch,
+    );
+    return remoteGone || (this.options.unpushed?.includes(branch) ?? false);
   }
 
   async deleteBranch(repo: string, branch: string): Promise<void> {
     this.deletedBranches.push({ repo, branch });
+    this.goneBranches.add(branch);
+  }
+
+  async branchTip(_repo: string, branch: string): Promise<string | undefined> {
+    return this.goneBranches.has(branch) ? undefined : `tip-of-${branch}`;
+  }
+
+  async deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]> {
+    this.deletedRemoteBranches.push({ repo, branch, tip });
+    return [];
   }
 }

@@ -10,14 +10,17 @@ import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.j
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import {
+  claudeProjectFolder,
   deleteBuild,
   deleteBuildResultSchema,
   deletePreview,
   storedBranch,
   teardownWorkspace,
 } from "../../../src/core/run/delete-build.js";
+import type { PullRequestState } from "../../../src/ports/pull-requests.js";
 import type { BuildRecord, NewBuild, NewRun } from "../../../src/ports/store.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
+import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
@@ -74,8 +77,6 @@ const namedBuild = (home: string, repo: string, id = buildId): NewBuild => ({
   manifest: "{}",
 });
 
-const noStop = async (): Promise<void> => {};
-
 const runOf = (build: { id: string; dir: string }): NewRun => ({
   buildDir: build.dir,
   inputs: {},
@@ -85,79 +86,337 @@ const runOf = (build: { id: string; dir: string }): NewRun => ({
 });
 
 describe("deleteBuild", () => {
+  const home = "/fd-home";
+  const workspace = `${home}/workspaces/${buildId}`;
+  const worktreePath = `${workspace}/carousell-web`;
+  const sessionFolder = `${home}/build-sessions/fd-build-fix-login`;
+  const claudeConfig = {
+    projectsDir: "/claude-config/projects",
+    claudeJson: "/claude-config/.claude.json",
+  };
+  const slug = "-fd-home-workspaces-0f3a9c2e-1111-2222-3333-444455556666";
+  const runningMessage = "This build has a run left going. Stop or resume it first.";
+
+  const seededFiles = (runId: string): Record<string, string> => ({
+    [`${workspace}/CLAUDE.md`]: "# fix-login",
+    [`${worktreePath}/README.md`]: "# carousell-web",
+    [`${sessionFolder}/notes.md`]: "plan",
+    [`${home}/build-sessions/fd-build-other/notes.md`]: "other",
+    [`${home}/runs/${runId}/output.log`]: "ran",
+    [`${claudeConfig.projectsDir}/${slug}/s1.jsonl`]: "{}",
+    [`${claudeConfig.projectsDir}/${slug}-carousell-web/s2.jsonl`]: "{}",
+    [`${claudeConfig.projectsDir}/${slug}7/s3.jsonl`]: "{}",
+    [`${claudeConfig.projectsDir}/-fd-home-workspaces/s4.jsonl`]: "{}",
+    [`${claudeConfig.projectsDir}/-work-carousell-web/s5.jsonl`]: "{}",
+    [claudeConfig.claudeJson]: JSON.stringify({
+      numStartups: 3,
+      projects: {
+        [workspace]: { trusted: true },
+        [worktreePath]: { trusted: true },
+        [`${workspace}7`]: { trusted: true },
+        "/work/carousell-web": { trusted: true },
+      },
+    }),
+  });
+
+  const setUp = (
+    over: Partial<NewBuild> = {},
+    prStates: Record<string, PullRequestState> = {},
+    runStatus: "running" | "done" = "done",
+  ) => {
+    const store = new FakeStore();
+    const build = { ...namedBuild(home, "/work/carousell-web"), ...over };
+    store.recordBuild(build);
+    const run = store.createRun(runOf(build));
+    if (runStatus === "done") store.finishRun(run.id, "done");
+    const fs = new FakeFileSystem(seededFiles(run.id));
+    const worktree = new FakeWorktree();
+    const pullRequests = new FakePullRequests(prStates);
+    const deps = { store, worktree, fs, home, pullRequests, claudeConfig, sessionFolder };
+    return { deps, store, fs, worktree, pullRequests, runId: run.id };
+  };
+
   describe("while the build has a running run", () => {
-    it("stops each running run and waits for it before tearing down, then marks the build deleted", async () => {
-      const home = "/fd-home";
-      const store = new FakeStore();
-      const fs = new FakeFileSystem({ [`${home}/workspaces/${buildId}/CLAUDE.md`]: "# fix-login" });
-      const worktree = new FakeWorktree();
-      const build = namedBuild(home, "/work/carousell-web");
-      store.recordBuild(build);
-      const ended = store.createRun(runOf(build));
-      store.finishRun(ended.id, "done");
-      const running = store.createRun(runOf(build));
-      const order: string[] = [];
-      const stopRun = async (runId: string): Promise<void> => {
-        order.push(`stop ${runId}`);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        store.finishRun(runId, "stopped");
-        order.push(`stopped ${runId}`);
-      };
-      const remove = worktree.remove.bind(worktree);
-      vi.spyOn(worktree, "remove").mockImplementation(async (options) => {
-        order.push("remove worktree");
-        return remove(options);
-      });
-      vi.spyOn(store, "deleteBuild").mockImplementation((id) => {
-        order.push(`mark ${id} deleted`);
-      });
+    it("refuses, stops nothing and removes nothing", async () => {
+      const { deps, store, fs, worktree, pullRequests, runId } = setUp({}, {}, "running");
+      const before = seededFiles(runId);
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun }, buildId);
+      const result = await deleteBuild(deps, buildId);
 
-      expect(result).toEqual({ ok: true });
-      expect(order).toEqual([
-        `stop ${running.id}`,
-        `stopped ${running.id}`,
-        "remove worktree",
-        `mark ${buildId} deleted`,
-      ]);
+      expect(result).toEqual({ ok: false, message: runningMessage });
+      expect(store.findBuild(buildId)).toBeDefined();
+      expect(store.findRun(runId)?.status).toBe("running");
+      expect(worktree.removed).toEqual([]);
+      expect(worktree.deletedBranches).toEqual([]);
+      expect(worktree.deletedRemoteBranches).toEqual([]);
+      expect(pullRequests.calls).toEqual([]);
+      for (const [path, content] of Object.entries(before)) {
+        expect(await fs.readFile(path)).toBe(content);
+      }
     });
   });
 
-  describe("for a build recorded on a branch", () => {
+  describe("removing its folders", () => {
+    it("removes the workspace, the build-session folder and the workspace's Claude projects", async () => {
+      const { deps, fs, worktree } = setUp();
+
+      await deleteBuild(deps, buildId);
+
+      expect(worktree.removed.map((removed) => removed.path)).toEqual([worktreePath]);
+      expect(await fs.exists(workspace)).toBe(false);
+      expect(await fs.exists(sessionFolder)).toBe(false);
+      expect(await fs.folders(claudeConfig.projectsDir)).toEqual(
+        ["-fd-home-workspaces", `${slug}7`, "-work-carousell-web"].sort(),
+      );
+    });
+
     it.each([
-      ["it did not create", "feat-y", false],
-      ["it created", "flowdeck/fix-login", true],
+      [
+        "readable",
+        (fs: FakeFileSystem, content: string) => fs.writeFile(claudeConfig.claudeJson, content),
+      ],
+      [
+        "private",
+        (fs: FakeFileSystem, content: string) =>
+          fs.writePrivateFile(claudeConfig.claudeJson, content),
+      ],
     ])(
-      "tears down the worktree on the stored branch %s, with the stored base",
-      async (_label, storedBranch, branchCreated) => {
-        const home = "/fd-home";
-        const store = new FakeStore();
-        const fs = new FakeFileSystem({
-          [`${home}/workspaces/${buildId}/CLAUDE.md`]: "# fix-login",
+      "drops only the .claude.json projects at or inside the workspace, replacing the file and keeping it %s",
+      async (mode, arrange) => {
+        const { deps, fs } = setUp();
+        await arrange(fs, await fs.readFile(claudeConfig.claudeJson));
+        const callsBefore = fs.calls.length;
+
+        await deleteBuild(deps, buildId);
+
+        expect(JSON.parse(await fs.readFile(claudeConfig.claudeJson))).toEqual({
+          numStartups: 3,
+          projects: {
+            [`${workspace}7`]: { trusted: true },
+            "/work/carousell-web": { trusted: true },
+          },
         });
-        const worktree = new FakeWorktree();
-        store.recordBuild({
-          ...namedBuild(home, "/work/carousell-web"),
+        expect(
+          fs.calls
+            .slice(callsBefore)
+            .filter(
+              (call) =>
+                call.path === claudeConfig.claudeJson &&
+                call.method !== "exists" &&
+                call.method !== "readFile",
+            ),
+        ).toEqual([{ method: "replaceFile", path: claudeConfig.claudeJson }]);
+        expect(fs.isPrivate(claudeConfig.claudeJson)).toBe(mode === "private");
+      },
+    );
+
+    it.each([
+      ["is missing", (fs: FakeFileSystem) => fs.remove(claudeConfig.claudeJson)],
+      [
+        "has no projects",
+        (fs: FakeFileSystem) => fs.writeFile(claudeConfig.claudeJson, '{"numStartups":3}'),
+      ],
+      [
+        "is not valid JSON",
+        (fs: FakeFileSystem) => fs.writeFile(claudeConfig.claudeJson, '{"projects":'),
+      ],
+      [
+        "has no project at or inside the workspace",
+        (fs: FakeFileSystem) =>
+          fs.writeFile(claudeConfig.claudeJson, '{"projects":{"/work/carousell-web":{}}}'),
+      ],
+    ])("leaves .claude.json unwritten when it %s", async (_label, arrange) => {
+      const { deps, fs } = setUp();
+      await arrange(fs);
+      const before = (await fs.exists(claudeConfig.claudeJson))
+        ? await fs.readFile(claudeConfig.claudeJson)
+        : undefined;
+
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({ ok: true });
+      expect(fs.calls).not.toContainEqual({
+        method: "replaceFile",
+        path: claudeConfig.claudeJson,
+      });
+      expect(
+        (await fs.exists(claudeConfig.claudeJson))
+          ? await fs.readFile(claudeConfig.claudeJson)
+          : undefined,
+      ).toBe(before);
+    });
+
+    it("keeps the run's folder and other build sessions", async () => {
+      const { deps, fs, runId } = setUp();
+
+      await deleteBuild(deps, buildId);
+
+      expect(await fs.readFile(`${home}/runs/${runId}/output.log`)).toBe("ran");
+      expect(await fs.readFile(`${home}/build-sessions/fd-build-other/notes.md`)).toBe("other");
+    });
+  });
+
+  describe("for a branch it did not create", () => {
+    it("never asks about a PR and leaves the branch locally and on the remote", async () => {
+      const { deps, worktree, pullRequests } = setUp({ branch: "feat-y", branchCreated: false });
+
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({ ok: true });
+      expect(pullRequests.calls).toEqual([]);
+      expect(worktree.removed).toEqual([
+        {
+          repo: "/work/carousell-web",
+          base: "main",
+          branch: "feat-y",
+          create: false,
+          path: worktreePath,
+          force: true,
+        },
+      ]);
+      expect(worktree.deletedBranches).toEqual([]);
+      expect(worktree.deletedRemoteBranches).toEqual([]);
+    });
+  });
+
+  describe("for a branch it created", () => {
+    it("with no PR, deletes the branch locally and on the remote", async () => {
+      const { deps, worktree, pullRequests } = setUp({ base: "release" });
+
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({ ok: true });
+      expect(pullRequests.calls).toEqual([{ repo: "/work/carousell-web", branch }]);
+      expect(worktree.removed).toEqual([
+        {
+          repo: "/work/carousell-web",
           base: "release",
-          branch: storedBranch,
-          branchCreated,
-        });
+          branch,
+          create: true,
+          path: worktreePath,
+          force: true,
+        },
+      ]);
+      expect(worktree.deletedRemoteBranches).toEqual([
+        { repo: "/work/carousell-web", branch, tip: `tip-of-${branch}` },
+      ]);
+    });
 
-        await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+    it("keeps the branch on a remote where it points at work this build didn't make, and says where", async () => {
+      const { deps, store, worktree } = setUp();
+      vi.spyOn(worktree, "deleteRemoteBranch").mockResolvedValue(["origin"]);
 
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({
+        ok: true,
+        kept: { kind: "branch", branch, reason: "remote-moved", remotes: ["origin"] },
+      });
+      expect(store.findBuild(buildId)).toBeUndefined();
+    });
+
+    it("finishes the delete and says the branch was kept when the remote delete fails", async () => {
+      const { deps, store, fs, worktree } = setUp();
+      vi.spyOn(worktree, "deleteRemoteBranch").mockRejectedValue(new Error("network down"));
+
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({
+        ok: true,
+        kept: { kind: "branch", branch, reason: "remote-delete-failed" },
+      });
+      expect(store.findBuild(buildId)).toBeUndefined();
+      expect(await fs.exists(sessionFolder)).toBe(false);
+      expect(await fs.exists(`${claudeConfig.projectsDir}/${slug}`)).toBe(false);
+      expect(fs.calls).toContainEqual({ method: "replaceFile", path: claudeConfig.claudeJson });
+    });
+
+    it("leaves every remote alone when the branch has no local tip to match", async () => {
+      const { deps, store, worktree } = setUp();
+      vi.spyOn(worktree, "branchTip").mockResolvedValue(undefined);
+
+      const result = await deleteBuild(deps, buildId);
+
+      expect(result).toEqual({ ok: true });
+      expect(worktree.deletedRemoteBranches).toEqual([]);
+      expect(store.findBuild(buildId)).toBeUndefined();
+    });
+
+    it.each([
+      ["open", "open-pr"],
+      ["unknown", "pr-unknown"],
+    ] as const)(
+      "with PR state %s, keeps the branch locally and on the remote and says why",
+      async (state, reason) => {
+        const { deps, worktree } = setUp({}, { [branch]: state });
+
+        const result = await deleteBuild(deps, buildId);
+
+        expect(result).toEqual({ ok: true, kept: { kind: "branch", branch, reason } });
         expect(worktree.removed).toEqual([
           {
             repo: "/work/carousell-web",
-            base: "release",
-            branch: storedBranch,
-            create: branchCreated,
-            path: `${home}/workspaces/${buildId}/carousell-web`,
+            base: "main",
+            branch,
+            create: false,
+            path: worktreePath,
             force: true,
           },
         ]);
+        expect(worktree.deletedBranches).toEqual([]);
+        expect(worktree.deletedRemoteBranches).toEqual([]);
       },
     );
+
+    it.each(["none", "open"] as const)(
+      "with PR state %s, says the worktree was kept when its removal leaves it, and touches no remote",
+      async (state) => {
+        const { deps, store, worktree } = setUp({}, { [branch]: state });
+        vi.spyOn(worktree, "remove").mockResolvedValue({ worktree: "kept", branch: "kept" });
+
+        const result = await deleteBuild(deps, buildId);
+
+        expect(result).toEqual({ ok: true, kept: { kind: "worktree", path: worktreePath } });
+        expect(worktree.deletedRemoteBranches).toEqual([]);
+        expect(store.findBuild(buildId)).toBeUndefined();
+      },
+    );
+  });
+
+  it("deletes the build from the store once, after the cleanup", async () => {
+    const { deps, store, fs, worktree } = setUp();
+    const removed = (path: string) =>
+      fs.calls.some(
+        (call) => call.path === path && (call.method === "removeTree" || call.method === "remove"),
+      );
+    const seen: unknown[] = [];
+    const deleteFromStore = vi.spyOn(store, "deleteBuild").mockImplementation(() => {
+      seen.push({
+        worktrees: worktree.removed.length,
+        remoteDeletes: worktree.deletedRemoteBranches.length,
+        workspace: removed(workspace),
+        sessionFolder: removed(sessionFolder),
+        claudeJsonWritten: fs.calls.some(
+          (call) => call.method === "replaceFile" && call.path === claudeConfig.claudeJson,
+        ),
+        claudeProject: removed(`${claudeConfig.projectsDir}/${slug}`),
+      });
+    });
+
+    await deleteBuild(deps, buildId);
+
+    expect(deleteFromStore).toHaveBeenCalledTimes(1);
+    expect(deleteFromStore).toHaveBeenCalledWith(buildId);
+    expect(seen).toEqual([
+      {
+        worktrees: 1,
+        remoteDeletes: 1,
+        workspace: true,
+        sessionFolder: true,
+        claudeJsonWritten: true,
+        claudeProject: true,
+      },
+    ]);
   });
 
   describe("on real git, SQLite and files", () => {
@@ -176,6 +435,7 @@ describe("deleteBuild", () => {
       await mkdir(elsewhere);
       db = openDatabase({ path: join(home, "flowdeck.db") });
       store = new SqliteStore({ db });
+      await fs.writePrivateFile(join(home, "claude", ".claude.json"), '{"projects":{}}\n');
     });
 
     afterEach(async () => {
@@ -183,6 +443,18 @@ describe("deleteBuild", () => {
       await repo.cleanup();
       await rm(home, { recursive: true, force: true });
       await rm(elsewhere, { recursive: true, force: true });
+    });
+
+    const deps = () => ({
+      store,
+      worktree,
+      fs,
+      home,
+      pullRequests: new FakePullRequests(),
+      claudeConfig: {
+        projectsDir: join(home, "claude", "projects"),
+        claudeJson: join(home, "claude", ".claude.json"),
+      },
     });
 
     const makeBuild = async () => {
@@ -204,25 +476,25 @@ describe("deleteBuild", () => {
       return { build, worktreePath, runId: finished.id };
     };
 
-    const expectMarkedDeleted = (runId: string) => {
-      expect(store.findBuild(buildId)?.deletedAt).not.toBeNull();
+    const expectGone = (runId: string) => {
+      expect(store.findBuild(buildId)).toBeUndefined();
       expect(store.listBuilds().map((known) => known.id)).not.toContain(buildId);
       expect(store.listRuns()).toEqual([
-        expect.objectContaining({ id: runId, buildId, buildDeleted: true }),
+        expect.objectContaining({ id: runId, buildId, buildGone: true }),
       ]);
       expect(store.findBuildByName("fix-login")).toBeUndefined();
     };
 
-    it("removes a clean build's workspace and branch, marks it deleted, keeps its runs listed and frees its name", async () => {
+    it("removes a clean build's workspace, branch and row, keeps its runs listed and frees its name", async () => {
       const { build, worktreePath, runId } = await makeBuild();
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+      const result = await deleteBuild(deps(), buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await exists(build.dir)).toBe(false);
       expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
       expect(await branches(repo.path)).not.toContain(branch);
-      expectMarkedDeleted(runId);
+      expectGone(runId);
       expect(() =>
         store.recordBuild({ ...namedBuild(home, repo.path, "second-id"), name: "fix-login" }),
       ).not.toThrow();
@@ -249,14 +521,14 @@ describe("deleteBuild", () => {
         const { build, worktreePath, runId } = await makeBuild();
         await work(worktreePath);
 
-        const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+        const result = await deleteBuild(deps(), buildId);
 
         expect(result).toEqual({ ok: true });
         expect(await exists(worktreePath)).toBe(false);
         expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
         expect(await branches(repo.path)).not.toContain(branch);
         expect(await exists(build.dir)).toBe(false);
-        expectMarkedDeleted(runId);
+        expectGone(runId);
       },
     );
 
@@ -267,12 +539,12 @@ describe("deleteBuild", () => {
       await git(worktreePath, ...committer, "commit", "--quiet", "-m", "wip");
       await rm(worktreePath, { recursive: true, force: true });
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+      const result = await deleteBuild(deps(), buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await branches(repo.path)).not.toContain(branch);
       expect(await exists(build.dir)).toBe(false);
-      expectMarkedDeleted(runId);
+      expectGone(runId);
     });
 
     const makeBuildOnExistingBranch = async () => {
@@ -300,26 +572,26 @@ describe("deleteBuild", () => {
     it("keeps a branch it did not create, though merged into the base with nothing unpushed, and says nothing kept", async () => {
       const { build, worktreePath, runId } = await makeBuildOnExistingBranch();
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+      const result = await deleteBuild(deps(), buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await branches(repo.path)).toContain("feat-y");
       expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
       expect(await exists(build.dir)).toBe(false);
-      expectMarkedDeleted(runId);
+      expectGone(runId);
     });
 
     it("removes a dirty worktree on a branch it did not create, keeping the branch", async () => {
       const { build, worktreePath, runId } = await makeBuildOnExistingBranch();
       await writeFile(join(worktreePath, "notes.txt"), "work in progress\n");
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, buildId);
+      const result = await deleteBuild(deps(), buildId);
 
       expect(result).toEqual({ ok: true });
       expect(await worktreePaths(repo.path)).not.toContain(worktreePath);
       expect(await exists(build.dir)).toBe(false);
       expect(await branches(repo.path)).toContain("feat-y");
-      expectMarkedDeleted(runId);
+      expectGone(runId);
     });
 
     const recordOldBuild = (hash: string, dir: string) => {
@@ -337,11 +609,11 @@ describe("deleteBuild", () => {
       await writeFile(join(dir, "manifest.json"), "{}\n");
       recordOldBuild("oldhash1", dir);
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, "oldhash1");
+      const result = await deleteBuild(deps(), "oldhash1");
 
       expect(result).toEqual({ ok: true });
       expect(await exists(dir)).toBe(false);
-      expect(store.findBuild("oldhash1")?.deletedAt).not.toBeNull();
+      expect(store.findBuild("oldhash1")).toBeUndefined();
       expect(store.listBuilds().map((known) => known.id)).not.toContain("oldhash1");
     });
 
@@ -351,12 +623,46 @@ describe("deleteBuild", () => {
       await writeFile(join(dir, "manifest.json"), "{}\n");
       recordOldBuild("oldhash2", dir);
 
-      const result = await deleteBuild({ store, worktree, fs, home, stopRun: noStop }, "oldhash2");
+      const result = await deleteBuild(deps(), "oldhash2");
 
       expect(result).toEqual({ ok: true, kept: { kind: "folder", path: dir } });
       expect(await readFile(join(dir, "manifest.json"), "utf8")).toBe("{}\n");
-      expect(store.findBuild("oldhash2")?.deletedAt).not.toBeNull();
+      expect(store.findBuild("oldhash2")).toBeUndefined();
     });
+
+    it.each([
+      [
+        "under $FLOWDECK_HOME, with its Claude projects",
+        () => join(home, "builds", "oldhash3"),
+        false,
+      ],
+      [
+        "outside $FLOWDECK_HOME, keeping its Claude projects",
+        () => join(elsewhere, "oldhash3"),
+        true,
+      ],
+    ])(
+      "removes an old hash build's build-session folder when its folder is %s",
+      async (_label, dirOf, claudeKept) => {
+        const dir = dirOf();
+        const sessionFolder = join(home, "build-sessions", "fd-build-old");
+        const project = join(deps().claudeConfig.projectsDir, claudeProjectFolder(dir));
+        const claudeJson = `${JSON.stringify({ projects: { [dir]: {} } }, null, 2)}\n`;
+        await fs.writeFile(join(dir, "manifest.json"), "{}\n");
+        await fs.writeFile(join(sessionFolder, "notes.md"), "plan\n");
+        await fs.writeFile(join(project, "s1.jsonl"), "{}\n");
+        await fs.replaceFile(deps().claudeConfig.claudeJson, claudeJson);
+        recordOldBuild("oldhash3", dir);
+
+        await deleteBuild({ ...deps(), sessionFolder }, "oldhash3");
+
+        expect(await exists(sessionFolder)).toBe(false);
+        expect(await exists(project)).toBe(claudeKept);
+        expect(await readFile(deps().claudeConfig.claudeJson, "utf8")).toBe(
+          claudeKept ? claudeJson : `${JSON.stringify({ projects: {} }, null, 2)}\n`,
+        );
+      },
+    );
   });
 });
 
@@ -643,12 +949,27 @@ describe("storedBranch", () => {
   });
 });
 
+describe("claudeProjectFolder", () => {
+  it("names a folder the way Claude Code does, every character but a letter or digit made a dash", () => {
+    expect(claudeProjectFolder("/Users/me/.flowdeck/workspaces/a_b c")).toBe(
+      "-Users-me--flowdeck-workspaces-a-b-c",
+    );
+  });
+});
+
 describe("deleteBuildResultSchema", () => {
   it("reads each kept kind, a plain delete and a refusal", () => {
     const results = [
       { ok: true },
       { ok: true, kept: { kind: "worktree", path: "/w" } },
       { ok: true, kept: { kind: "branch", branch: "flowdeck/b" } },
+      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "open-pr" } },
+      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "pr-unknown" } },
+      {
+        ok: true,
+        kept: { kind: "branch", branch: "flowdeck/b", reason: "remote-moved", remotes: ["origin"] },
+      },
+      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "remote-delete-failed" } },
       { ok: true, kept: { kind: "folder", path: "/f" } },
       { ok: false, message: "no" },
     ];
