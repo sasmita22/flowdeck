@@ -275,7 +275,7 @@ const toRuns = async (window: Page) => {
   await window.getByTestId("menu-runs").click();
 };
 
-test("Runs lists every run numbered within its build, filters by build, and keeps a deleted build's run open to read only", async () => {
+test("Runs lists every run numbered within its build, filters by build, and keeps a deleted build's run whole, with no way back to the build", async () => {
   const { flowId } = seedFlow(home, laidOut([agent("p1")], []), repo.path);
   const window = await launch();
   const alpha = await buildAndRun(window, home, "alpha");
@@ -315,25 +315,33 @@ test("Runs lists every run numbered within its build, filters by build, and keep
   await window.getByTestId(pageTestIds.buildDelete(beta)).click();
   await window.getByTestId(pageTestIds.deletePromptConfirm).click();
   await expect(window.getByTestId(pageTestIds.buildCard(beta))).toHaveCount(0);
+  await expect(window.getByTestId(pageTestIds.buildCard(alpha))).toBeVisible();
   await window.getByTestId("menu-runs").click();
-  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("#1 beta");
-  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toContainText("(deleted)");
-  await expect(filter.locator("option", { hasText: "beta (deleted)" })).toHaveCount(1);
+  const betaCard = window.getByTestId(pageTestIds.runCard(betaFirst));
+  await expect(betaCard).toContainText("#1 beta");
+  await expect(betaCard).not.toContainText("deleted");
+  await expect(filter.locator("option", { hasText: "deleted" })).toHaveCount(0);
+  await expect(filter.locator("option", { hasText: "beta" })).toHaveCount(1);
 
   await window.getByTestId(pageTestIds.runOpen(betaFirst)).click();
   await finished(window);
-  await expect(window.getByTestId(pageTestIds.runDeletedNote)).toHaveText(
-    "This run's build was deleted. It can't be run again.",
+  await expect(window.getByTestId(pageTestIds.title)).toContainText("beta");
+  await expect(window.getByTestId(pageTestIds.runStageStatus(betaFirst, "p1"))).toHaveAttribute(
+    "data-status",
+    "done",
   );
+  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText("Fake story", {
+    timeout: 20_000,
+  });
+  await window.getByTestId("run-tab-cost").click();
+  await expect(window.getByTestId("cost-node-p1")).toBeVisible();
+  await expect(window.getByTestId("cost-total")).toContainText("Session");
+  await expect(window.getByTestId(pageTestIds.runBuildTag)).toHaveCount(0);
   await expect(window.getByTestId(pageTestIds.runAgain)).toHaveCount(0);
   await expect(window.getByTestId(pageTestIds.runResume)).toHaveCount(0);
 
-  const tag = window.getByTestId(pageTestIds.runBuildTag);
-  await expect(tag).toHaveText("beta");
-  await tag.click();
-  await expect(window.getByTestId(pageTestIds.title)).toContainText("beta");
-  await expect(
-    window.getByText("Deleted. These are the files it had; its workspace is gone."),
-  ).toBeVisible();
-  await expect(window.getByTestId(pageTestIds.runCard(betaFirst))).toBeVisible();
+  await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-builds").click();
+  await expect(window.getByTestId(pageTestIds.buildCard(alpha))).toBeVisible();
+  await expect(window.getByTestId(pageTestIds.buildCard(beta))).toHaveCount(0);
 });

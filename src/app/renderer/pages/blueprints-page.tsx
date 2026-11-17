@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
 import type { Actions } from "../actions.js";
+import { selectFlowBuilding, type BuildProgressState } from "../build-progress-store.js";
 import { folderText, formatWhen } from "../format.js";
 import { Icon } from "../icons.js";
 import { pinnedFirst, type LibraryState } from "../library-store.js";
@@ -20,15 +21,18 @@ function BlueprintCard({
   flow,
   library,
   run,
+  buildProgress,
   actions,
 }: {
   flow: FlowSummary;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
+  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const busy = useStore(run, (state) => state.starting);
+  const building = useStore(buildProgress, selectFlowBuilding(flow.flowId));
 
   const commit = async () => {
     if (draft === null) return;
@@ -107,7 +111,12 @@ function BlueprintCard({
         <button
           className="fd-btn"
           data-testid={pageTestIds.blueprintDelete(flow.flowId)}
-          title="Delete the blueprint; its builds and runs are kept"
+          disabled={building}
+          title={
+            building
+              ? "Wait for its build to finish"
+              : "Delete the blueprint; its builds and runs are kept"
+          }
           onClick={() => library.getState().askDelete(flow)}
         >
           Delete
@@ -122,12 +131,14 @@ export function BlueprintsPage({
   library,
   run,
   save,
+  buildProgress,
   actions,
 }: {
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   run: StoreApi<RunState>;
   save: StoreApi<SaveState>;
+  buildProgress: StoreApi<BuildProgressState>;
   actions: Actions;
 }) {
   const flows = useStore(library, (state) => state.flows);
@@ -162,6 +173,7 @@ export function BlueprintsPage({
             flow={flow}
             library={library}
             run={run}
+            buildProgress={buildProgress}
             actions={actions}
           />
         ))}

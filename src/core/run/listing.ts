@@ -17,7 +17,7 @@ export const runSummarySchema = z.object({
   buildName: z.string().nullable(),
   blueprintName: z.string().nullable(),
   blueprintVersion: z.number().int().nullable(),
-  buildDeleted: z.boolean(),
+  buildGone: z.boolean(),
   number: z.number().int(),
   doneCount: z.number().int(),
   storyLine: z.string().optional(),
@@ -93,7 +93,7 @@ export const buildFileContentSchema = z.object({
 
 export type BuildFileContent = z.infer<typeof buildFileContentSchema>;
 
-export const buildTreeSchema = z.object({ deleted: z.boolean(), paths: z.array(z.string()) });
+export const buildTreeSchema = z.object({ paths: z.array(z.string()) });
 
 export type BuildTree = z.infer<typeof buildTreeSchema>;
 

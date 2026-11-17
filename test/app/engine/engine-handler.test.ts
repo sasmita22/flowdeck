@@ -41,13 +41,15 @@ import type {
   BuildTurnResult,
 } from "../../../src/ports/build-agents.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
-import type { WorktreeAddOptions, WorktreeRemoveOptions } from "../../../src/ports/worktree.js";
+import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
+import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeRunNarrator } from "../../fakes/fake-run-narrator.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
@@ -171,6 +173,11 @@ const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOp
     worktree: new FakeWorktree(),
     gitState: new FakeGitState(),
     transcriptTurns: async () => [],
+    pullRequests: new FakePullRequests(),
+    claudeConfig: {
+      projectsDir: "/fd-home/claude/projects",
+      claudeJson: "/fd-home/claude/.claude.json",
+    },
     ...overrides,
   };
 };
@@ -556,6 +563,74 @@ describe("createEngineHandler", async () => {
         }),
       ).toMatchObject({ id: 3, ok: false });
     });
+
+    const startBuilding = (runs: FakeStore, flowId: string) => {
+      const start = runs.startPendingBuild({
+        flowId,
+        version: 1,
+        name: `build-of-${flowId}`,
+        origin: { source: { flowId, version: 1 }, blueprint: { name: "Untitled", version: 1 } },
+        startedAt: 1_000,
+      });
+      if (start.kind !== "started") throw new Error(`the build of ${flowId} did not start`);
+      return start.pendingId;
+    };
+
+    it("refuses to delete a blueprint while it is being built, and deletes it once that build has ended", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a") });
+      const runs = new FakeStore();
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+      flows.create("A");
+      const pendingId = startBuilding(runs, "flow-a");
+
+      expect(
+        await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({ id: 1, ok: false, error: expect.stringMatching(/\S/) });
+      expect(flows.isDeleted("flow-a")).toBe(false);
+
+      runs.endPendingBuild(pendingId, { outcome: "failed", endedAt: 2_000 });
+
+      expect(
+        await handler.handle({ id: 2, type: "delete-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({ id: 2, ok: true, value: null });
+      expect(flows.isDeleted("flow-a")).toBe(true);
+    });
+
+    it("deletes a blueprint while another blueprint is being built", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+      const runs = new FakeStore();
+      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
+      flows.create("A");
+      flows.create("B");
+      startBuilding(runs, "flow-b");
+
+      expect(
+        await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } }),
+      ).toEqual({ id: 1, ok: true, value: null });
+      expect(flows.isDeleted("flow-a")).toBe(true);
+    });
+
+    it("names the blueprint of each build in the progress list, going or ended", async () => {
+      const runs = new FakeStore();
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: new FakeFlowStore() }) }),
+      );
+      const going = startBuilding(runs, "flow-a");
+      const ended = startBuilding(runs, "flow-b");
+      runs.endPendingBuild(ended, { outcome: "failed", endedAt: 2_000 });
+
+      const listed = await handler.handle({ id: 1, type: "build-progress-list" });
+
+      expect(listed).toMatchObject({ ok: true });
+      const entries = (listed as { value: { pendingId: string; flowId?: string }[] }).value;
+      expect(entries.map(({ pendingId, flowId }) => ({ pendingId, flowId }))).toEqual(
+        expect.arrayContaining([
+          { pendingId: going, flowId: "flow-a" },
+          { pendingId: ended, flowId: "flow-b" },
+        ]),
+      );
+      expect(entries).toHaveLength(2);
+    });
   });
 
   describe("runs", () => {
@@ -579,7 +654,7 @@ describe("createEngineHandler", async () => {
       wires: [thenWire("start", "s1"), thenWire("s1", "s2"), thenWire("s2", "stop")],
     };
 
-    const seededRun = (built: Flow = builtFlow()) => {
+    const seededRun = (built: Flow = builtFlow(), nodeIds = ["s1", "s2"]) => {
       const flows = new FakeFlowStore({ newId: () => "flow-a" });
       const runs = new FakeStore();
       flows.create("Report");
@@ -606,7 +681,7 @@ describe("createEngineHandler", async () => {
       const { id } = runs.createRun({
         buildDir: "/fd-home/workspaces/b1",
         inputs: {},
-        nodeIds: ["s1", "s2"],
+        nodeIds,
         session: {
           tmuxName: "fd-run-x",
           cwd: "/fd-home/workspaces/b1/repo",
@@ -636,28 +711,7 @@ describe("createEngineHandler", async () => {
             buildName: "report",
             blueprintName: "Report",
             blueprintVersion: 1,
-            buildDeleted: false,
-            number: 1,
-            doneCount: 1,
-          }),
-        ],
-      });
-    });
-
-    it("still lists a deleted build's run, marked deleted, with its number and stages done", async () => {
-      const { flows, runs, runId } = seededRun();
-      runs.deleteBuild("b1");
-      const handler = createEngineHandler(options({ openStores: () => ({ runs, flows }) }));
-
-      expect(await handler.handle({ id: 1, type: "list-runs" })).toEqual({
-        id: 1,
-        ok: true,
-        value: [
-          expect.objectContaining({
-            id: runId,
-            buildId: "b1",
-            buildName: "report",
-            buildDeleted: true,
+            buildGone: false,
             number: 1,
             doneCount: 1,
           }),
@@ -768,24 +822,6 @@ describe("createEngineHandler", async () => {
       expect(digest).toContain("   Asked: Which channel ships it?");
     });
 
-    it("loads a run's stages from the stored manifest after its build is deleted and its folder is gone", async () => {
-      const { runs, runId } = seededRun();
-      runs.deleteBuild("b1");
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      expect(await handler.handle({ id: 1, type: "load-run", payload: { runId } })).toEqual({
-        id: 1,
-        ok: true,
-        value: expect.objectContaining({
-          run: expect.objectContaining({ id: runId, buildDeleted: true, number: 1 }),
-          name: "report",
-          stages: builtStages,
-        }),
-      });
-    });
-
     it("loads a run of a build with no stored manifest with the build's name and no stages, reading no blueprint", async () => {
       const { runs } = seededRun();
       const runId = withoutManifest(runs);
@@ -801,27 +837,6 @@ describe("createEngineHandler", async () => {
         value: expect.objectContaining({ name: "before-manifests", stages: null }),
       });
       expect((loaded as { value: object }).value).not.toHaveProperty("flow");
-    });
-
-    it("gives a deleted build's run its story header and digest", async () => {
-      const { runs, runId } = seededRun();
-      runs.deleteBuild("b1");
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
-
-      expect(loaded).toMatchObject({
-        ok: true,
-        value: {
-          story: {
-            header: { name: "report", blueprintName: "Report", blueprintVersion: 1 },
-            digest: expect.stringContaining("Build: report"),
-            written: null,
-          },
-        },
-      });
     });
 
     it("gives a run of a build with no stored manifest a story digest with no session line", async () => {
@@ -918,6 +933,160 @@ describe("createEngineHandler", async () => {
           ],
           total: expect.objectContaining({ tokens: 40, cost: 0.12 }),
         }),
+      });
+    });
+
+    describe("a run outlives its build", () => {
+      const askedFlow = () =>
+        onMainFlow(
+          [
+            { ...agent("s1"), label: "Plan" },
+            gate("s2", { settings: { shown: "Approve the release notes", skippable: false } }),
+            ask("s3", { settings: { question: "Which channel ships it?", options: ["a", "b"] } }),
+          ],
+          [thenWire("s1", "s2"), thenWire("s2", "s3")],
+        );
+
+      const finishedRun = () => {
+        const seeded = seededRun(askedFlow(), ["s1", "s2", "s3"]);
+        seeded.runs.append(seeded.runId, "s1", {
+          kind: "usage",
+          payload: { messages: [] },
+          tokens: 40,
+          cost: 0.12,
+        });
+        seeded.runs.appendRunStory({
+          runId: seeded.runId,
+          at: "2026-11-17T00:00:00.000Z",
+          runStatus: "failed",
+          text: "It planned, then stopped.",
+          cost: 0.01,
+        });
+        return seeded;
+      };
+
+      const readersOf = (runs: FakeStore, runId: string) => {
+        const handler = createEngineHandler(
+          options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+        );
+        return async () => ({
+          listed: await handler.handle({ id: 1, type: "list-runs" }),
+          loaded: await handler.handle({ id: 2, type: "load-run", payload: { runId } }),
+          cost: await handler.handle({ id: 3, type: "run-cost", payload: { runId } }),
+          pipeline: await handler.handle({
+            id: 4,
+            type: "run-pipeline" as never,
+            payload: { runId },
+          }),
+        });
+      };
+
+      it("shows a finished run of a deleted build with what it showed before, reading no blueprint", async () => {
+        const { runs, runId } = finishedRun();
+        const read = readersOf(runs, runId);
+        const before = await read();
+        expect(before.loaded).toMatchObject({
+          ok: true,
+          value: {
+            run: { id: runId, buildGone: false },
+            name: "report",
+            stages: { nodes: expect.arrayContaining([expect.objectContaining({ id: "s3" })]) },
+            story: {
+              header: { name: "report", blueprintName: "Report", blueprintVersion: 1 },
+              digest: expect.stringContaining("   Asked: Which channel ships it?"),
+              written: { text: "It planned, then stopped." },
+            },
+          },
+        });
+        expect(before.cost).toMatchObject({ ok: true, value: { total: { tokens: 40 } } });
+        expect(before.pipeline).toMatchObject({ ok: true, value: expect.any(Array) });
+
+        runs.deleteBuild("b1");
+        const after = await read();
+
+        expect(runs.findBuild("b1")).toBeUndefined();
+        expect(after.listed).toEqual({
+          id: 1,
+          ok: true,
+          value: [{ ...(before.listed as { value: object[] }).value[0], buildGone: true }],
+        });
+        const loadedBefore = (before.loaded as { value: { run: object } }).value;
+        expect(after.loaded).toEqual({
+          ...before.loaded,
+          value: { ...loadedBefore, run: { ...loadedBefore.run, buildGone: true } },
+        });
+        expect(after.cost).toEqual(before.cost);
+        expect(after.pipeline).toEqual(before.pipeline);
+      });
+
+      it("lists each gate and ask question of a deleted build's run in its digest", async () => {
+        const { runs, runId } = finishedRun();
+        runs.deleteBuild("b1");
+
+        const { loaded } = await readersOf(runs, runId)();
+
+        expect(loaded).toMatchObject({
+          ok: true,
+          value: {
+            story: {
+              header: {
+                name: "report",
+                blueprintName: "Report",
+                blueprintVersion: 1,
+                repo: "/repo",
+                values: {},
+              },
+              digest: expect.stringContaining("Build: report"),
+            },
+          },
+        });
+        const { digest } = (loaded as { value: { story: { digest: string } } }).value.story;
+        expect(digest).toContain("   Asked: Approve the release notes");
+        expect(digest).toContain("   Asked: Which channel ships it?");
+      });
+
+      it("answers a deleted build's run its stages, pipeline and per-stage cost", async () => {
+        const { runs, runId } = finishedRun();
+        runs.deleteBuild("b1");
+
+        const { loaded, cost, pipeline } = await readersOf(runs, runId)();
+
+        expect(loaded).toMatchObject({
+          ok: true,
+          value: {
+            stages: {
+              session: { name: "main" },
+              nodes: [
+                { id: "start", type: "trigger" },
+                { id: "s1", type: "agent", label: "Plan" },
+                { id: "s2", type: "gate" },
+                { id: "s3", type: "ask" },
+                { id: "stop", type: "output" },
+              ],
+            },
+          },
+        });
+        expect(
+          (pipeline as { value: { nodeId: string; status: string }[] | null }).value?.map(
+            ({ nodeId, status }) => ({ nodeId, status }),
+          ),
+        ).toEqual([
+          { nodeId: "start", status: "waiting" },
+          { nodeId: "s1", status: "done" },
+          { nodeId: "s2", status: "waiting" },
+          { nodeId: "s3", status: "waiting" },
+          { nodeId: "stop", status: "waiting" },
+        ]);
+        expect(cost).toEqual({
+          id: 3,
+          ok: true,
+          value: expect.objectContaining({
+            nodes: expect.arrayContaining([
+              expect.objectContaining({ nodeId: "s1", tokens: 40, cost: 0.12 }),
+            ]),
+            total: expect.objectContaining({ tokens: 40, cost: 0.12 }),
+          }),
+        });
       });
     });
 
@@ -1442,71 +1611,84 @@ describe("createEngineHandler", async () => {
       ]);
     });
 
-    it("answers a live run's cost with a Loop body node's unrecorded usage split by round, the total unchanged", async () => {
-      runs = new FakeStore({ now: () => new Date() });
-      const usage = new FakeUsageSource();
-      const spent: UsageEntry[] = [];
-      const turn: FakeTurnHandler = async (nodeId, opened) => {
-        if (nodeId !== "body") return "done";
-        const round = spent.length + 1;
-        spent.push({
-          messageId: `m${round}`,
-          model: "claude-haiku-5-5",
-          inputTokens: 100,
-          outputTokens: round * 1000,
-          cacheWrite5mTokens: 0,
-          cacheWrite1hTokens: 0,
-          cacheReadTokens: 0,
-          at: Date.now(),
+    it.each([
+      ["", false],
+      [", after its build is deleted from the store", true],
+    ])(
+      "answers a live run's cost with a Loop body node's unrecorded usage split by round, the total unchanged%s",
+      async (_, buildDeleted) => {
+        runs = new FakeStore({ now: () => new Date() });
+        const usage = new FakeUsageSource();
+        const spent: UsageEntry[] = [];
+        const turn: FakeTurnHandler = async (nodeId, opened) => {
+          if (nodeId !== "body") return "done";
+          const round = spent.length + 1;
+          spent.push({
+            messageId: `m${round}`,
+            model: "claude-haiku-5-5",
+            inputTokens: 100,
+            outputTokens: round * 1000,
+            cacheWrite5mTokens: 0,
+            cacheWrite1hTokens: 0,
+            cacheReadTokens: 0,
+            at: Date.now(),
+          });
+          usage.setEntries(opened.claudeSessionId, [...spent]);
+          if (round > 1) return "hold";
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return "done";
+        };
+        handler = handlerWith({
+          run: {
+            ...runEnvironment(new NodeFileSystem(), Date.now, turn),
+            waiter: new FakeWaiter([{ decision: "answer", answer: "again" }]),
+            usage,
+          },
         });
-        usage.setEntries(opened.claudeSessionId, [...spent]);
-        if (round > 1) return "hold";
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return "done";
-      };
-      handler = handlerWith({
-        run: {
-          ...runEnvironment(new NodeFileSystem(), Date.now, turn),
-          waiter: new FakeWaiter([{ decision: "answer", answer: "again" }]),
-          usage,
-        },
-      });
-      flows.save(
-        atRepo(
-          onMainFlow(
-            [
-              loop("rounds", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
-              agent("body", { parent: "rounds" }),
-            ],
-            [],
+        flows.save(
+          atRepo(
+            onMainFlow(
+              [
+                loop("rounds", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
+                agent("body", { parent: "rounds" }),
+              ],
+              [],
+            ),
           ),
-        ),
-      );
-      const runId = await startedOn(await builtId());
-      await vi.waitFor(() => {
-        expect(snapshotsOf(runId).at(-1)?.nodes["body"]).toBe("sent");
-        expect(spent).toHaveLength(2);
-      });
+        );
+        const buildId = await builtId();
+        const runId = await startedOn(buildId);
+        await vi.waitFor(() => {
+          expect(snapshotsOf(runId).at(-1)?.nodes["body"]).toBe("sent");
+          expect(spent).toHaveLength(2);
+        });
+        if (buildDeleted) runs.deleteBuild(buildId);
 
-      const answered = await handler.handle({ id: nextId++, type: "run-cost", payload: { runId } });
+        const answered = await handler.handle({
+          id: nextId++,
+          type: "run-cost",
+          payload: { runId },
+        });
 
-      expect(runs.events(runId).filter((event) => event.kind === "usage")).toEqual([]);
-      const report = (
-        answered as {
-          value: {
-            nodes: { nodeId: string; tokens: number; cost: number; rounds?: unknown[] }[];
-            total: { tokens: number; cost: number };
-          };
-        }
-      ).value;
-      const body = report.nodes.find((line) => line.nodeId === "body");
-      expect(body?.tokens).toBe(3200);
-      expect(body?.rounds).toEqual([
-        { round: 1, tokens: 1100, cost: costOf(spent.slice(0, 1)) },
-        { round: 2, tokens: 2100, cost: costOf(spent.slice(1)) },
-      ]);
-      expect(report.total.cost).toBeCloseTo(costOf(spent), 12);
-    });
+        expect(answered).toMatchObject({ ok: true });
+        expect(runs.events(runId).filter((event) => event.kind === "usage")).toEqual([]);
+        const report = (
+          answered as {
+            value: {
+              nodes: { nodeId: string; tokens: number; cost: number; rounds?: unknown[] }[];
+              total: { tokens: number; cost: number };
+            };
+          }
+        ).value;
+        const body = report.nodes.find((line) => line.nodeId === "body");
+        expect(body?.tokens).toBe(3200);
+        expect(body?.rounds).toEqual([
+          { round: 1, tokens: 1100, cost: costOf(spent.slice(0, 1)) },
+          { round: 2, tokens: 2100, cost: costOf(spent.slice(1)) },
+        ]);
+        expect(report.total.cost).toBeCloseTo(costOf(spent), 12);
+      },
+    );
 
     it("builds from the latest saved version", async () => {
       flows.save(twoAgents());
@@ -2275,7 +2457,7 @@ describe("createEngineHandler", async () => {
         expect(sent.at(-1)?.buildId).toBe(built?.id);
       });
 
-      it("pushes each entry with the build's name, start, events and blueprint, and no blueprint id", async () => {
+      it("pushes each entry with the build's name, start, events, blueprint and blueprint id", async () => {
         flows.save(twoAgents(), { name: "Nightly" });
 
         const pendingId = await startedPendingId("flow-1", "fix-login");
@@ -2283,7 +2465,7 @@ describe("createEngineHandler", async () => {
 
         const sent = progressPushes(pendingId);
         const ended = runs.pendingBuild(pendingId);
-        expect(sent.every((push) => !("flowId" in push))).toBe(true);
+        expect(sent.every((push) => push.flowId === "flow-1")).toBe(true);
         expect(sent.at(-1)).toMatchObject({
           pendingId,
           name: "fix-login",
@@ -2341,7 +2523,7 @@ describe("createEngineHandler", async () => {
         expect(listed).toMatchObject({ ok: true });
         const value = (listed as { value: Record<string, unknown>[] }).value;
         expect(value.map((entry) => entry.pendingId).sort()).toEqual([failed, open].sort());
-        expect(value.every((entry) => !("flowId" in entry))).toBe(true);
+        expect(value.every((entry) => entry.flowId === "flow-1")).toBe(true);
         expect(value).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -2692,6 +2874,8 @@ describe("createEngineHandler", async () => {
             isDirty: (path) => git.isDirty(path),
             hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+            branchTip: (repo, branch) => git.branchTip(repo, branch),
+            deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
           },
         });
         const saved = flows.save(
@@ -2752,6 +2936,8 @@ describe("createEngineHandler", async () => {
             isDirty: (path) => git.isDirty(path),
             hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+            branchTip: (repo, branch) => git.branchTip(repo, branch),
+            deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
           },
         });
         const saved = flows.save(
@@ -2819,6 +3005,8 @@ describe("createEngineHandler", async () => {
             isDirty: (path) => git.isDirty(path),
             hasUnpushed: (repo, branch, base) => git.hasUnpushed(repo, branch, base),
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
+            branchTip: (repo, branch) => git.branchTip(repo, branch),
+            deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
           },
         });
         const saved = flows.save(
@@ -3595,78 +3783,53 @@ describe("createEngineHandler", async () => {
 
       const silentNarrator = () => new FakeRunNarrator({ text: "Told.", cost: 0.25 });
 
-      const statusesWhenBuildMarked = (runId: () => string) => {
-        const seen: (string | undefined)[] = [];
-        const mark = runs.deleteBuild.bind(runs);
-        vi.spyOn(runs, "deleteBuild").mockImplementation((id) => {
-          seen.push(runs.findRun(runId())?.status);
-          mark(id);
-        });
-        onTestFinished(() => {
-          vi.restoreAllMocks();
-        });
-        return seen;
-      };
-
       const expectNoStory = async (narrator: FakeRunNarrator, runId: string) => {
         await settle();
         expect(narrator.calls).toEqual([]);
         expect(pushes).not.toContainEqual({ push: "story", runId });
       };
 
-      it("stops the build's going run and waits for its end before removing its worktree, then deletes the build, telling no story", async () => {
+      const runningRefusal = {
+        ok: false,
+        message: "This build has a run left going. Stop or resume it first.",
+      };
+
+      it("refuses to delete a build while its run is going, leaving the run going and the build in place", async () => {
         const narrator = silentNarrator();
-        let runId = "";
-        const removedWhile: (string | undefined)[] = [];
-        class WatchedWorktree extends FakeWorktree {
-          override async remove(removal: WorktreeRemoveOptions) {
-            removedWhile.push(runs.findRun(runId)?.status);
-            return super.remove(removal);
-          }
-        }
-        const worktree = new WatchedWorktree();
+        const worktree = new FakeWorktree();
         handler = handlerWith({ narrator, worktree });
-        flows.save(inFolder(sleeper(), { repo: repo.path, base: "main", variables: [] }));
+        flows.save(sleeper());
         const buildId = await builtId();
-        expect(worktree.calls).toHaveLength(1);
-        runId = await startedOn(buildId);
+        const runId = await startedOn(buildId);
         await vi.waitFor(() => {
           expect(snapshotsOf(runId).at(-1)?.nodes["nap"]).toBe("sent");
         });
-        const markedWhile = statusesWhenBuildMarked(() => runId);
 
-        expect(await deleteBuild(buildId)).toEqual({ ok: true });
+        expect(await deleteBuild(buildId)).toEqual(runningRefusal);
 
-        expect(removedWhile).toEqual(["stopped"]);
-        expect(markedWhile).toEqual(["stopped"]);
-        expect(runs.listBuilds()).toEqual([]);
+        expect(runs.findRun(runId)?.status).toBe("running");
+        expect(snapshotsOf(runId).at(-1)?.status).toBe("running");
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+        expect(worktree.removed).toEqual([]);
         await expectNoStory(narrator, runId);
       });
 
-      it("lets a starting run start, stops it, then deletes the build, telling no story", async () => {
-        const narrator = silentNarrator();
-        handler = handlerWith({ narrator });
+      it("lets a starting run start, then refuses to delete its build, leaving the run going", async () => {
         flows.save(sleeper());
         const buildId = await builtId();
-        const markedWhile = statusesWhenBuildMarked(() => runs.runs[0]?.id ?? "");
 
         const starting = handler.handle({ id: nextId++, type: "run-build", payload: { buildId } });
         const deleting = deleteBuild(buildId);
 
-        expect(await deleting).toEqual({ ok: true });
+        expect(await deleting).toEqual(runningRefusal);
         expect(await starting).toMatchObject({ value: { kind: "started" } });
-        const runId = runs.runs[0]?.id ?? "";
-        expect(runs.findRun(runId)?.status).toBe("stopped");
-        expect(markedWhile).toEqual(["stopped"]);
-        expect(runs.listBuilds()).toEqual([]);
-        await expectNoStory(narrator, runId);
+        expect(runs.runs.map((run) => run.status)).toEqual(["running"]);
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
       });
 
-      it("stops an interrupted run of the build and ends its session, telling no story, then deletes the build", async () => {
-        const narrator = silentNarrator();
+      it("refuses to delete a build whose run was left going, ending no session", async () => {
         const ended: string[] = [];
         handler = handlerWith({
-          narrator,
           sessionAlive: async (name) => name === "fd-run-left",
           endSession: async (name) => {
             ended.push(name);
@@ -3681,14 +3844,113 @@ describe("createEngineHandler", async () => {
           session: { tmuxName: "fd-run-left", cwd: repo.path, claudeSessionId: "c-left" },
           buildId,
         }).id;
-        const markedWhile = statusesWhenBuildMarked(() => runId);
+
+        expect(await deleteBuild(buildId)).toEqual(runningRefusal);
+
+        expect(ended).toEqual([]);
+        expect(runs.findRun(runId)?.status).toBe("running");
+        expect(runs.listBuilds().map((build) => build.id)).toEqual([buildId]);
+      });
+
+      it("removes the folder of the build's last build session when it deletes the build", async () => {
+        flows.save(twoAgents());
+        const buildId = await builtId();
+        const pendingId = pushes.findLast(
+          (push): push is Extract<EnginePush, { push: "build-progress" }> =>
+            push.push === "build-progress" && push.buildId === buildId,
+        )?.pendingId;
+        if (pendingId === undefined) throw new Error(`no build progress names ${buildId}`);
+        const session = runs.buildEvents(pendingId).findLast((event) => event.type === "session");
+        if (session?.type !== "session") throw new Error(`build ${buildId} has no session`);
+        const sessionFolder = join(home, "build-sessions", session.name);
+        const otherFolder = join(home, "build-sessions", "fd-build-other");
+        await mkdir(sessionFolder, { recursive: true });
+        await writeFile(join(sessionFolder, "settings.json"), "{}");
+        await mkdir(otherFolder, { recursive: true });
 
         expect(await deleteBuild(buildId)).toEqual({ ok: true });
 
-        expect(markedWhile).toEqual(["stopped"]);
-        expect(ended).toEqual(["fd-run-left"]);
-        expect(runs.listBuilds()).toEqual([]);
-        await expectNoStory(narrator, runId);
+        await expect(stat(sessionFolder)).rejects.toThrow();
+        expect(await readdir(join(home, "build-sessions"))).toEqual(["fd-build-other"]);
+      });
+
+      it("removes the build's Claude project folders and .claude.json entries from the configured Claude config", async () => {
+        const workspace = "/fd-home/workspaces/build-claude";
+        const projectFolder = "-fd-home-workspaces-build-claude";
+        const fs = new FakeFileSystem({
+          [`/claude/projects/${projectFolder}/s.jsonl`]: "{}",
+          [`/claude/projects/${projectFolder}-app/s.jsonl`]: "{}",
+          ["/claude/projects/-work-app/s.jsonl"]: "{}",
+          ["/claude/.claude.json"]: JSON.stringify({
+            numStartups: 3,
+            projects: { [workspace]: {}, [`${workspace}/app`]: {}, "/work/app": {} },
+          }),
+        });
+        handler = handlerWith({
+          home: "/fd-home",
+          fs,
+          claudeConfig: {
+            projectsDir: "/claude/projects",
+            claudeJson: "/claude/.claude.json",
+          },
+        });
+        runs.recordBuild({
+          id: "build-claude",
+          hash: "hash-claude",
+          name: "claude",
+          repo: "/repos/app",
+          base: "main",
+          branch: "flowdeck/claude",
+          branchCreated: false,
+          values: {},
+          dir: workspace,
+          source: { flowId: "flow-1", version: 1 },
+          files: [],
+          nodes: [],
+          manifest: "{}",
+        });
+
+        expect(await deleteBuild("build-claude")).toEqual({ ok: true });
+
+        expect(await fs.folders("/claude/projects")).toEqual(["-work-app"]);
+        expect(JSON.parse(await fs.readFile("/claude/.claude.json"))).toEqual({
+          numStartups: 3,
+          projects: { "/work/app": {} },
+        });
+      });
+
+      it("asks the configured pull requests source before deleting a branch it made, keeping one with an open PR", async () => {
+        const worktree = new FakeWorktree();
+        const pullRequests = new FakePullRequests({ "flowdeck/pr": "open" });
+        handler = handlerWith({
+          home: "/fd-home",
+          fs: new FakeFileSystem(),
+          worktree,
+          pullRequests,
+        });
+        runs.recordBuild({
+          id: "build-pr",
+          hash: "hash-pr",
+          name: "pr",
+          repo: "/repos/app",
+          base: "main",
+          branch: "flowdeck/pr",
+          branchCreated: true,
+          values: {},
+          dir: "/fd-home/workspaces/build-pr",
+          source: { flowId: "flow-1", version: 1 },
+          files: [],
+          nodes: [],
+          manifest: "{}",
+        });
+
+        expect(await deleteBuild("build-pr")).toEqual({
+          ok: true,
+          kept: { kind: "branch", branch: "flowdeck/pr", reason: "open-pr" },
+        });
+
+        expect(pullRequests.calls).toEqual([{ repo: "/repos/app", branch: "flowdeck/pr" }]);
+        expect(worktree.deletedRemoteBranches).toEqual([]);
       });
 
       it("previews whether deleting the build loses work in its worktree", async () => {
@@ -3767,7 +4029,7 @@ describe("createEngineHandler", async () => {
 
       const deletedBuildRefusal = (buildId: string) => ({
         kind: "error",
-        message: `Build ${runs.findBuild(buildId)?.name ?? buildId} was deleted.`,
+        message: `No build ${buildId}`,
       });
 
       it("refuses to resume a stopped run of a deleted build, opening no session and writing nothing", async () => {
@@ -3820,12 +4082,12 @@ describe("createEngineHandler", async () => {
 
         expect(await runBuild(buildId)).toEqual({
           kind: "error",
-          message: expect.stringContaining("was deleted"),
+          message: `No build ${buildId}`,
         });
         expect(runs.runs).toHaveLength(0);
       });
 
-      it("hides the build and removes a worktree that holds work", async () => {
+      it("deletes the build and removes a worktree that holds work", async () => {
         const source = await createTmpRepo({ commit: true });
         try {
           handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
@@ -4083,7 +4345,7 @@ describe("createEngineHandler", async () => {
           await handler.handle({ id: 1, type: "resume-run", payload: { runId } }),
         ).toMatchObject({
           ok: true,
-          value: { kind: "error", message: `Build ${hash} was deleted.` },
+          value: { kind: "error", message: `No build ${hash}` },
         });
         expect(store.findRun(runId)?.status).toBe("stopped");
         expect(waiter.calls).toEqual([]);

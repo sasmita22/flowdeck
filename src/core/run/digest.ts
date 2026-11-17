@@ -19,7 +19,7 @@ export type RunHeader = Pick<
 export type RunDigest = { header: RunHeader; text: string };
 
 export type DigestInput = {
-  build: BuildRecord;
+  build: RunHeader & Pick<BuildRecord, "hash">;
   stages: StageSources | null;
   events: readonly StoredEvent[];
   activity: readonly ActivityEntry[];
@@ -96,16 +96,16 @@ function stageLines(
   stage: PipelineStage,
   number: string,
   limits: Limits,
-  questions: DigestInput["questions"],
+  run: Pick<DigestInput, "questions" | "status">,
 ): string[] {
   const facts = [
-    displayStatus(stage.status),
+    displayStatus(stage.status, run.status),
     ...(stage.retries > 0 ? [`${stage.retries} ${stage.retries === 1 ? "retry" : "retries"}`] : []),
     ...(stage.ms === undefined ? [] : [`took ${Math.round(stage.ms / 1000)}s`]),
   ];
   const compactions = stage.timeline.filter((event) => event.kind === "compacted").length;
   const files = writtenPaths(stage.activity);
-  const question = questions[stage.nodeId] ?? "";
+  const question = run.questions[stage.nodeId] ?? "";
   return [
     `${number}. ${labelFor(stage)} (${stage.type}): ${facts.join(", ")}`,
     ...(question === "" ? [] : [`   Asked: ${shortened(question, limits.decision)}`]),
@@ -126,23 +126,21 @@ function itemLines(
   items: readonly PipelineItem[],
   prefix: string,
   limits: Limits,
-  questions: DigestInput["questions"],
+  run: Pick<DigestInput, "questions" | "status">,
 ): string[] {
   return items.flatMap((item, index) => {
     const number = `${prefix}${index + 1}`;
     if ("lanes" in item) {
       return [
         `${number}. In parallel:`,
-        ...item.lanes.flatMap((lane, at) =>
-          itemLines(lane, `${number}.${at + 1}.`, limits, questions),
-        ),
+        ...item.lanes.flatMap((lane, at) => itemLines(lane, `${number}.${at + 1}.`, limits, run)),
       ];
     }
     return [
-      ...stageLines(item, number, limits, questions),
+      ...stageLines(item, number, limits, run),
       ...(item.rounds ?? []).flatMap((round) => [
         `${number}. Round ${round.round}${round.item === undefined ? "" : ` (${round.item})`}:`,
-        ...itemLines(round.items, `${number}.${round.round}.`, limits, questions),
+        ...itemLines(round.items, `${number}.${round.round}.`, limits, run),
       ]),
     ];
   });
@@ -183,7 +181,7 @@ export function runDigest(input: DigestInput): RunDigest {
     ...(pullRequests.length === 0 ? [] : [`Pull requests: ${pullRequests.join(", ")}`]),
   ];
   const textWith = (limits: Limits) =>
-    [...facts, "Stages, in order:", ...itemLines(items, "", limits, input.questions)].join("\n");
+    [...facts, "Stages, in order:", ...itemLines(items, "", limits, input)].join("\n");
 
   for (const limits of [...attempts, tightest]) {
     const text = textWith(limits);

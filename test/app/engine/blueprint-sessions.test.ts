@@ -24,6 +24,7 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakeGithubTokenSource } from "../../fakes/fake-github-token.js";
+import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -102,6 +103,11 @@ describe("engine blueprint sessions", () => {
     },
     worktree: new FakeWorktree(),
     gitState: new FakeGitState(),
+    pullRequests: new FakePullRequests(),
+    claudeConfig: {
+      projectsDir: `${at}/claude/projects`,
+      claudeJson: `${at}/claude/.claude.json`,
+    },
     transcriptTurns: async () => [],
     blueprint: blueprintWith(undefined),
     ...overrides,

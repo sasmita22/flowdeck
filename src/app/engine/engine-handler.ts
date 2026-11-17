@@ -89,7 +89,13 @@ import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
 import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
-import type { BuildRecord, EventEntry, RunStatus, StoredEvent } from "../../core/run/store.js";
+import type {
+  BuildRecord,
+  EventEntry,
+  RunRecord,
+  RunStatus,
+  StoredEvent,
+} from "../../core/run/store.js";
 import {
   buildEntriesSchema,
   buildProjectSchema,
@@ -120,6 +126,7 @@ import type { ConnectorSource } from "../../ports/connector-source.js";
 import type { FileSystem } from "../../ports/file-system.js";
 import type { FlowStore, SaveFlowResult, SavedFlowRef } from "../../ports/flow-store.js";
 import type { GitState } from "../../ports/git-state.js";
+import type { PullRequests } from "../../ports/pull-requests.js";
 import type { RunNarrator } from "../../ports/run-narrator.js";
 import type { RunSummary, Store } from "../../ports/store.js";
 import type { Worktree } from "../../ports/worktree.js";
@@ -158,6 +165,8 @@ export type EngineHandlerOptions = {
   waits?: AppWaiter;
   worktree: Worktree;
   gitState: GitState;
+  pullRequests: PullRequests;
+  claudeConfig: { projectsDir: string; claudeJson: string };
   transcriptTurns: (claudeSessionId: string) => Promise<TranscriptTurn[]>;
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildSessionPollMs?: number;
@@ -367,6 +376,7 @@ const progressEntry = (
   return {
     pendingId: pending.id,
     name: pending.name,
+    flowId: pending.flowId,
     startedAt: pending.startedAt,
     ...(pending.endedAt === undefined ? {} : { endedAt: pending.endedAt }),
     ...(pending.outcome === undefined ? {} : { outcome: pending.outcome }),
@@ -386,10 +396,8 @@ type ProjectBuild = BuildRecord & { name: string; repo: string; base: string };
 const hasProject = (build: BuildRecord): build is ProjectBuild =>
   build.name !== null && build.repo !== null && build.base !== null;
 
-const assistantBuildState = (build: BuildRecord): AssistantBuildState => {
-  if (build.deletedAt !== null) return "deleted";
-  return isOld(build) ? "old" : "live";
-};
+const assistantBuildState = (build: BuildRecord): AssistantBuildState =>
+  isOld(build) ? "old" : "live";
 
 const assistantListedBuild = (build: BuildRecord): AssistantListedBuild => ({
   id: build.id,
@@ -1068,7 +1076,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const { runs } = stores;
     const built = runs.findBuild(buildId);
     if (built === undefined) return failure(`No build ${buildId}`);
-    if (built.deletedAt !== null) return failure(`Build ${built.name ?? buildId} was deleted.`);
     if (isOld(built)) {
       return failure(
         "This build was made before builds had names and a workspace. Make a new build from this blueprint to run it.",
@@ -1161,10 +1168,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) return failure(`No run ${runId}`);
-    const built = runs.findBuild(buildId);
-    if (built !== undefined && built.deletedAt !== null) {
-      return failure(`Build ${built.name ?? buildId} was deleted.`);
-    }
     const status = listed(summary).status;
     if (how.kind === "resume" && status !== "stopped" && status !== "interrupted") {
       return failure("Only a stopped or interrupted run can be resumed");
@@ -1408,11 +1411,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return runChoices(loaded.build);
   };
 
-  const storedManifest = (runs: Store, buildId: string): ParsedManifest | undefined => {
-    const text = runs.buildManifest(buildId);
-    const build = runs.findBuild(buildId);
-    return text === undefined || build === undefined ? undefined : parseManifest(text, build);
-  };
+  const manifestOf = (run: RunRecord): ParsedManifest | undefined =>
+    run.manifestJson === null || run.buildHash === null
+      ? undefined
+      : parseManifest(run.manifestJson, { hash: run.buildHash, name: run.buildName });
 
   const questionOf = (node: ParsedManifest["nodes"][number]): string | undefined => {
     if (node.type === "gate") return gateSettings.safeParse(node.settings).data?.shown;
@@ -1432,14 +1434,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
-    const build = record.buildId === undefined ? undefined : runs.findBuild(record.buildId);
-    if (build === undefined) return undefined;
-    const manifest = storedManifest(runs, build.id);
+    if (record.buildHash === null) return undefined;
+    const manifest = manifestOf(record);
     const events = runs.events(runId);
     const last = events.at(-1);
     const now = isActive(runId) || last === undefined ? options.run.now() : Date.parse(last.time);
     return runDigest({
-      build,
+      build: {
+        name: record.buildName,
+        hash: record.buildHash,
+        blueprintName: record.blueprintName,
+        blueprintVersion: record.source?.version ?? null,
+        repo: record.repo,
+        values: record.buildValues,
+      },
       stages: manifest === undefined ? null : stageSourcesOf(manifest),
       events,
       activity: runs.activity(runId),
@@ -1523,18 +1531,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const pendingUsage = async (
-    runs: Store,
-    buildId: string,
-    claudeSessionId: string,
-    events: StoredEvent[],
-    usage: UsageReader,
-  ) => {
-    const manifest = storedManifest(runs, buildId);
+  const pendingUsage = async (run: RunRecord, events: StoredEvent[], usage: UsageReader) => {
+    const manifest = manifestOf(run);
     if (manifest === undefined) throw new Error("manifest.json: missing");
     return chargeUsage({
       events,
-      entries: await usage.entries(claudeSessionId),
+      entries: await usage.entries(run.session.claudeSessionId),
       turnNodes: turnNodeIds(manifest),
       owners: usageOwners(manifest, events),
       parents: parentsOf(manifest),
@@ -1547,10 +1549,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const events = runs.events(runId);
     const live = isActive(runId);
     const usage = options.run.usage;
-    const pending =
-      live && usage !== undefined
-        ? await pendingUsage(runs, record.buildId, record.session.claudeSessionId, events, usage)
-        : [];
+    const pending = live && usage !== undefined ? await pendingUsage(record, events, usage) : [];
     const last = events.at(-1);
     const now = live || last === undefined ? options.run.now() : Date.parse(last.time);
     return costReport({ nodeIds: record.nodeIds, events, pending, now });
@@ -1563,8 +1562,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const { runs } = stores;
     const record = runs.findRun(runId);
     if (record === undefined) throw new Error(`No run ${runId}`);
-    const manifest =
-      record.buildId === undefined ? undefined : storedManifest(runs, record.buildId);
+    const manifest = manifestOf(record);
     if (manifest === undefined) return null;
     const { nodes, wires } = stageSourcesOf(manifest);
     return pipelineOf(
@@ -1633,16 +1631,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const buildTree = (runs: Store, buildId: string): BuildTree => {
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
-    return buildTreeSchema.parse({
-      deleted: build.deletedAt !== null,
-      paths: runs.buildFiles(buildId).map(({ path }) => path),
-    });
+    return buildTreeSchema.parse({ paths: runs.buildFiles(buildId).map(({ path }) => path) });
   };
 
   const buildProject = async (runs: Store, buildId: string): Promise<BuildProject | null> => {
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
-    if (build.deletedAt !== null || !hasProject(build)) return null;
+    if (!hasProject(build)) return null;
     const worktree = await readWorktree(build);
     if (worktree === null) return null;
     const { branch, create } = storedBranch(build, build.name);
@@ -1661,7 +1656,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   ): Promise<BuildEntry[]> => {
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
-    if (build.deletedAt !== null) throw new Error(`Build ${buildId} was deleted`);
     if (!hasProject(build)) throw new Error(`Build ${buildId} has no project`);
     const checkout = join(build.dir, repoFolder(build.repo));
     const target = join(build.dir, path);
@@ -1708,6 +1702,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     };
   };
 
+  const sessionFolderOf = (runs: Store, buildId: string): { sessionFolder?: string } => {
+    const pendingId = runs.buildSnapshot({ buildId })?.pendingId;
+    if (pendingId == null) return {};
+    const session = runs
+      .buildEvents(pendingId)
+      .findLast((event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session");
+    return session === undefined ? {} : { sessionFolder: buildSessionFolder(session.name) };
+  };
+
   const removeBuild = async (
     { runs }: EngineStores,
     buildId: string,
@@ -1721,7 +1724,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           worktree: options.worktree,
           fs: options.fs,
           home: options.home,
-          stopRun: stopForDelete,
+          pullRequests: options.pullRequests,
+          claudeConfig: options.claudeConfig,
+          ...sessionFolderOf(runs, buildId),
         },
         buildId,
       );
@@ -1781,7 +1786,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const run = listed(summary);
-    const manifest = run.buildId === undefined ? undefined : storedManifest(runs, run.buildId);
+    const manifest = manifestOf(record);
     const digest = digestOf(runs, runId);
     const written = runs.latestRunStory(runId);
     return {
@@ -1933,7 +1938,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           });
         case "delete-flow":
           return parsedAnswer(request, flowIdPayload, async ({ flowId }) => {
-            storesOrThrow().flows.delete(flowId);
+            const stores = storesOrThrow();
+            const building = stores.runs
+              .listPendingBuilds()
+              .some((pending) => pending.flowId === flowId && pending.endedAt === undefined);
+            if (building)
+              throw new Error("This blueprint is being built. Wait for the build to end first.");
+            stores.flows.delete(flowId);
             if (options.blueprint !== undefined) {
               await stopBlueprintSession(options.blueprint.sessions, flowId);
             }

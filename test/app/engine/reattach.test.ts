@@ -22,6 +22,7 @@ import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
+import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -149,6 +150,11 @@ describe("an app restart", () => {
       sessionAlive: async (name) => alive.has(name),
       worktree: new FakeWorktree(),
       gitState: new FakeGitState({ [repo.path]: { kind: "branch", name: "main" } }),
+      pullRequests: new FakePullRequests(),
+      claudeConfig: {
+        projectsDir: `${home}/claude/projects`,
+        claudeJson: `${home}/claude/.claude.json`,
+      },
       transcriptTurns: async () => [],
       ...overrides,
     });

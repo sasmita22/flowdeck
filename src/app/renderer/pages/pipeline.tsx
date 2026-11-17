@@ -8,6 +8,7 @@ import type {
   PipelineStage,
   TimelineEvent,
 } from "../../../core/run/pipeline.js";
+import type { SnapshotStatus } from "../../../core/run/snapshot.js";
 import type { NodeState } from "../../../core/run/state.js";
 import type { HumanDecision } from "../../../core/run/wait.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
@@ -48,6 +49,7 @@ const chosenStage = (
   items: readonly PipelineItem[],
   selection: StageSelection | undefined,
   live: Live,
+  runStatus: SnapshotStatus,
 ): Placed | undefined => {
   const all = placedIn(items);
   if (selection !== undefined) {
@@ -55,8 +57,9 @@ const chosenStage = (
     return matching.find((placed) => placed.round === selection.round) ?? matching.at(-1);
   }
   const top = all.filter((placed) => placed.round === undefined);
+  const needsLook: NodeState[] = runStatus === "running" ? ["failed", "needs-you"] : ["failed"];
   return (
-    top.find((placed) => ["failed", "needs-you"].includes(stateOf(placed, live))) ??
+    top.find((placed) => needsLook.includes(stateOf(placed, live))) ??
     top.findLast((placed) => stateOf(placed, live) !== "waiting") ??
     top[0]
   );
@@ -111,14 +114,15 @@ function StageTook({ stage, state }: { stage: PipelineStage; state: NodeState })
 type RailProps = {
   runId: string;
   live: Live;
+  runStatus: SnapshotStatus;
   chosen: Placed | undefined;
   onSelect: (selection: StageSelection) => void;
 };
 
 function StageRow({ placed, ...rail }: RailProps & { placed: Placed }) {
-  const { runId, live, chosen, onSelect } = rail;
+  const { runId, live, runStatus, chosen, onSelect } = rail;
   const { stage, round } = placed;
-  const shown = displayStatus(stateOf(placed, live));
+  const shown = displayStatus(stateOf(placed, live), runStatus);
   const selected = chosen?.stage === stage;
   return (
     <li className="fd-run-step">
@@ -208,6 +212,7 @@ function StageDetail({
   runId,
   placed,
   state,
+  runStatus,
   run,
   labels,
   canRetry,
@@ -216,13 +221,14 @@ function StageDetail({
   runId: string;
   placed: Placed;
   state: NodeState;
+  runStatus: SnapshotStatus;
   run: StoreApi<RunState>;
   labels: RunLabels;
   canRetry: boolean;
   onSelectNode: (nodeId: string) => void;
 }) {
   const { stage, round } = placed;
-  const shown = displayStatus(state);
+  const shown = displayStatus(state, runStatus);
   return (
     <section
       className="fd-run-detail"
@@ -313,6 +319,7 @@ export function RunPipeline({
     state.feed?.runId === runId ? state.feed.entries.length : 0,
   );
   const live = useStore(view, (state) => state.snapshot?.nodes);
+  const runStatus = useStore(view, (state) => state.snapshot?.status ?? "running");
 
   useEffect(() => {
     if (recorded) void run.getState().loadPipeline(runId);
@@ -326,7 +333,7 @@ export function RunPipeline({
     );
   }
   if (pipeline === undefined) return <p className="fd-muted">Reading the stages…</p>;
-  const chosen = chosenStage(pipeline, selection, live);
+  const chosen = chosenStage(pipeline, selection, live, runStatus);
   const onSelect = (stage: StageSelection) => run.getState().selectStage(runId, stage);
   return (
     <div className="fd-pipeline">
@@ -337,6 +344,7 @@ export function RunPipeline({
         className="fd-file-list fd-run-rail fd-pipeline-rail"
         runId={runId}
         live={live}
+        runStatus={runStatus}
         chosen={chosen}
         onSelect={onSelect}
       />
@@ -346,6 +354,7 @@ export function RunPipeline({
             runId={runId}
             placed={chosen}
             state={stateOf(chosen, live)}
+            runStatus={runStatus}
             run={run}
             labels={labels}
             canRetry={canRetry}

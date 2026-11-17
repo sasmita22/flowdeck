@@ -92,13 +92,13 @@ describe("build manifests", () => {
     expect(runs.buildManifest("nope")).toBeUndefined();
   });
 
-  it("still reads a build's manifest once the build is deleted", () => {
+  it("reads no manifest once the build is deleted", () => {
     const { runs } = stores();
     runs.recordBuild(newBuild("b1"));
 
     runs.deleteBuild("b1");
 
-    expect(runs.buildManifest("b1")).toBe(lockedManifest);
+    expect(runs.buildManifest("b1")).toBeUndefined();
   });
 
   describe("storeManifest", () => {
@@ -121,13 +121,12 @@ describe("build manifests", () => {
     });
   });
 
-  describe("a stored manifest is locked", () => {
+  describe("a stored manifest is locked, except for being deleted", () => {
     const manifestRows = (db: Database.Database) =>
       db.prepare("SELECT build_id, manifest_json FROM build_manifests ORDER BY build_id").all();
 
     it.each([
       ["a change", "UPDATE build_manifests SET manifest_json = '{}'"],
-      ["a deletion", "DELETE FROM build_manifests"],
       [
         "a replacement",
         "INSERT OR REPLACE INTO build_manifests (build_id, manifest_json) VALUES ('b1', '{}')",
@@ -139,6 +138,15 @@ describe("build manifests", () => {
       refused(() => db.exec(sql));
 
       expect(manifestRows(db)).toEqual([{ build_id: "b1", manifest_json: lockedManifest }]);
+    });
+
+    it("lets it be deleted", () => {
+      const { db, runs } = stores();
+      runs.recordBuild(newBuild("b1"));
+
+      db.exec("DELETE FROM build_manifests");
+
+      expect(manifestRows(db)).toEqual([]);
     });
   });
 

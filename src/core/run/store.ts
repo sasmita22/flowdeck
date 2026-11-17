@@ -52,11 +52,23 @@ export type BuildRecord = {
   blueprintVersion: number | null;
 };
 
-export type RunRecord = Omit<NewRun, "buildId"> & {
-  id: string;
-  status: RunStatus;
-  buildId?: string;
+export type RunBuildCopy = {
+  buildName: string | null;
+  buildHash: string | null;
+  blueprintName: string | null;
+  source?: BuildSource;
+  repo: string | null;
+  branch: string | null;
+  buildValues: VariableValues | null;
+  manifestJson: string | null;
 };
+
+export type RunRecord = Omit<NewRun, "buildId"> &
+  RunBuildCopy & {
+    id: string;
+    status: RunStatus;
+    buildId?: string;
+  };
 
 export type RunSummary = {
   id: string;
@@ -70,7 +82,7 @@ export type RunSummary = {
   buildName: string | null;
   blueprintName: string | null;
   blueprintVersion: number | null;
-  buildDeleted: boolean;
+  buildGone: boolean;
   number: number;
   doneCount: number;
   storyLine?: string;

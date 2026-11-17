@@ -100,4 +100,44 @@ export class GitWorktree implements Worktree {
       });
     }
   }
+
+  async branchTip(repo: string, branch: string): Promise<string | undefined> {
+    try {
+      const ref = `refs/heads/${branch}^{commit}`;
+      const { stdout } = await run("git", ["-C", repo, "rev-parse", "--verify", "--quiet", ref]);
+      return stdout.trim();
+    } catch {
+      return undefined;
+    }
+  }
+
+  async deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]> {
+    const ref = `refs/heads/${branch}`;
+    const { stdout } = await run("git", ["-C", repo, "remote"]);
+    const moved: string[] = [];
+    for (const remote of stdout.split("\n").filter((name) => name !== "")) {
+      const heads = await run("git", ["-C", repo, "ls-remote", "--heads", remote, ref]);
+      const line = heads.stdout.split("\n").find((entry) => entry.endsWith(`\t${ref}`));
+      if (line === undefined) continue;
+      if (line.split("\t")[0] !== tip) {
+        moved.push(remote);
+        continue;
+      }
+      try {
+        await run("git", [
+          "-C",
+          repo,
+          "push",
+          `--force-with-lease=${ref}:${tip}`,
+          remote,
+          "--delete",
+          ref,
+        ]);
+      } catch (error) {
+        const fallback = `git push ${remote} --delete ${branch} failed in ${repo}`;
+        throw new Error(stderrOf(error) || fallback, { cause: error });
+      }
+    }
+    return moved;
+  }
 }

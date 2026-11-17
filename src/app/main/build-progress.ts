@@ -1,32 +1,22 @@
+import {
+  buildProgressEntrySchema,
+  type BuildProgressEntry,
+} from "../../core/run/build-progress.js";
 import type { EnginePush } from "../engine/protocol.js";
-
-type BuildProgressUpdate = Omit<Extract<EnginePush, { push: "build-progress" }>, "push">;
 
 export type BuildProgressRelay = {
   onPush(push: EnginePush): void;
-  latest(pendingId: string): BuildProgressUpdate | null;
+  latest(pendingId: string): BuildProgressEntry | null;
 };
 
 export function createBuildProgressRelay(options: {
-  send: (update: BuildProgressUpdate) => void;
+  send: (update: BuildProgressEntry) => void;
 }): BuildProgressRelay {
-  const latest = new Map<string, BuildProgressUpdate>();
+  const latest = new Map<string, BuildProgressEntry>();
   return {
     onPush(push) {
       if (push.push !== "build-progress") return;
-      const { pendingId, name, startedAt, events, progress } = push;
-      const update: BuildProgressUpdate = {
-        pendingId,
-        name,
-        startedAt,
-        ...(push.endedAt === undefined ? {} : { endedAt: push.endedAt }),
-        ...(push.outcome === undefined ? {} : { outcome: push.outcome }),
-        ...(push.blueprintName === undefined ? {} : { blueprintName: push.blueprintName }),
-        ...(push.blueprintVersion === undefined ? {} : { blueprintVersion: push.blueprintVersion }),
-        events,
-        progress,
-        ...(push.buildId === undefined ? {} : { buildId: push.buildId }),
-      };
+      const update = buildProgressEntrySchema.parse(push);
       latest.set(update.pendingId, update);
       options.send(update);
     },

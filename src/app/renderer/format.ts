@@ -1,4 +1,5 @@
 import type { BuildConfig } from "../../core/flow/schema.js";
+import { usd } from "../../core/run/budget.js";
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 
@@ -26,8 +27,10 @@ export const formatTokens = (tokens: number): string => {
   return `${tokens} tokens`;
 };
 
-export const formatCost = (cost: number | null): string =>
-  cost === null ? "No cost recorded" : `$${cost.toFixed(2)}`;
+export const formatCost = (cost: number | null): string => {
+  if (cost === null) return "No cost recorded";
+  return cost === 0 ? "$0.00" : usd(cost);
+};
 
 const lastPart = (path: string) => {
   const trimmed = path.replace(/\/+$/, "");

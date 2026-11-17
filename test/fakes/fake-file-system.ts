@@ -6,6 +6,7 @@ export type FileSystemCall = {
     | "exists"
     | "writeFile"
     | "writePrivateFile"
+    | "replaceFile"
     | "readFile"
     | "list"
     | "folders"
@@ -40,6 +41,14 @@ export class FakeFileSystem implements FileSystem {
     this.calls.push({ method: "writePrivateFile", path });
     this.files.set(path, content);
     this.privatePaths.add(path);
+  }
+
+  async replaceFile(path: string, content: string): Promise<void> {
+    this.calls.push({ method: "replaceFile", path });
+    if (!this.files.has(path)) {
+      throw Object.assign(new Error(`No such file: ${path}`), { code: "ENOENT" });
+    }
+    this.files.set(path, content);
   }
 
   isPrivate(path: string): boolean {

@@ -3,6 +3,7 @@ import {
   createBuildProgressStore,
   selectBuildingCards,
   selectBuildingCount,
+  selectFlowBuilding,
   selectPipeline,
   type BuildProgressBridge,
 } from "../../../src/app/renderer/build-progress-store.js";
@@ -45,6 +46,7 @@ const atStep = (step: 1 | 2 | 3 | 4 | 5): BuildEvent[] =>
 
 const entry = (build: PendingBuild, events: BuildEvent[] = atStep(1), buildId?: string) => ({
   pendingId: build.id,
+  flowId: build.flowId,
   name: build.name,
   startedAt: build.startedAt,
   ...(build.endedAt === undefined ? {} : { endedAt: build.endedAt }),
@@ -298,6 +300,24 @@ describe("build progress store", () => {
 
       expect(selectBuildingCards(store.getState())).toEqual([]);
       expect(selectBuildingCount(store.getState())).toBe(0);
+    });
+  });
+
+  describe("whether a blueprint is being built", () => {
+    it("is true while a build of the blueprint has not ended, and false once it has", async () => {
+      const { store, push } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(2))]);
+
+      expect(selectFlowBuilding("flow-a")(store.getState())).toBe(true);
+
+      push(entry(pending("pb-1", "flow-a", 1, "failed"), atStep(2)));
+
+      expect(selectFlowBuilding("flow-a")(store.getState())).toBe(false);
+    });
+
+    it("is false for a blueprint while only another one is being built", async () => {
+      const { store } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(2))]);
+
+      expect(selectFlowBuilding("flow-b")(store.getState())).toBe(false);
     });
   });
 

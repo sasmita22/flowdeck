@@ -88,6 +88,13 @@ export const selectBuildingCount = (state: Shown): number =>
     .filter(isShown(state))
     .filter((entry) => entry.outcome === undefined).length;
 
+export const selectFlowBuilding =
+  (flowId: string) =>
+  (state: Pick<BuildProgressState, "entries">): boolean =>
+    Object.values(state.entries).some(
+      (entry) => entry.flowId === flowId && entry.endedAt === undefined,
+    );
+
 export const selectPipeline =
   (pendingId: string) =>
   (state: Pick<BuildProgressState, "entries" | "activity">): BuildPipeline | undefined => {

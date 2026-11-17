@@ -31,6 +31,7 @@ import type { HumanWaiter } from "../../src/core/run/wait.js";
 import type { BuildAgents, BuildAgentsOpenSpec } from "../../src/ports/build-agents.js";
 import type { RunNarrator } from "../../src/ports/run-narrator.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { FakePullRequests } from "../fakes/fake-pull-requests.js";
 import { fakeEngineBuildOptions } from "./fake-build-deps.js";
 import { claudeConfigDir } from "./claude-config.js";
 import { killTmuxServer, removeClaudeSessions } from "./live-claude.js";
@@ -282,6 +283,11 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
       : { newSessionName: () => options.sessionName ?? "" }),
     worktree: new GitWorktree(),
     gitState: new GitFolderState(),
+    pullRequests: new FakePullRequests(),
+    claudeConfig: {
+      projectsDir: join(claudeConfigDir(), "projects"),
+      claudeJson: join(claudeConfigDir(), ".claude.json"),
+    },
     transcriptTurns: async (id) => {
       const path = await transcriptOf(id);
       return path === undefined ? [] : parseTranscriptTurns(await readFile(path, "utf8"));

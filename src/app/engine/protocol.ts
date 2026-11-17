@@ -70,7 +70,7 @@ export type EnginePush =
 
 export type EngineMessage = EngineResponse | EnginePush;
 
-export type AssistantBuildState = "live" | "deleted" | "old";
+export type AssistantBuildState = "live" | "old";
 
 export type AssistantListedBuild = {
   id: string;

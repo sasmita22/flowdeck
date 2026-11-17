@@ -175,9 +175,9 @@ export function RunPage({
   const badge = (live === null ? null : selectLiveBadge(live)) ?? status;
   const waiting = useStore(wait, (state) => state.pending !== null);
   const inspectorOpen = useStore(shell, (state) => selectInspectorOpen(state, { snapshot }));
-  const deleted = loaded?.run.buildDeleted === true;
-  const canGoOn = !deleted && !starting && (status === "stopped" || status === "interrupted");
-  const canRetry = !deleted && !starting && status !== "running";
+  const gone = loaded?.run.buildGone === true;
+  const canGoOn = !gone && !starting && (status === "stopped" || status === "interrupted");
+  const canRetry = !gone && !starting && status !== "running";
   const selectNode = (nodeId: string) => run.getState().selectStage(runId, { nodeId });
   const page =
     loaded === null
@@ -208,7 +208,7 @@ export function RunPage({
               ? ""
               : ` v${loaded.run.blueprintVersion}`}
           </span>
-          {buildId !== undefined && loaded !== null && loaded.run.buildName !== null && (
+          {buildId !== undefined && !gone && loaded !== null && loaded.run.buildName !== null && (
             <button
               className="fd-crumb fd-hash"
               data-testid={pageTestIds.runBuildTag}
@@ -247,7 +247,7 @@ export function RunPage({
               Resume
             </button>
           )}
-          {buildId !== undefined && !deleted && (
+          {buildId !== undefined && !gone && (
             <button
               className="fd-btn fd-btn-primary"
               data-testid={pageTestIds.runAgain}
@@ -306,11 +306,6 @@ export function RunPage({
               run={run}
               actions={actions}
             />
-          )}
-          {deleted && (
-            <p className="fd-page-note" data-testid={pageTestIds.runDeletedNote} role="status">
-              This run&apos;s build was deleted. It can&apos;t be run again.
-            </p>
           )}
           {loaded !== null && (
             <RunPipeline

@@ -265,6 +265,13 @@ The run-story pass judged row 29 on all seven rules:
 | --- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 29  | `src/adapters/claude/claude-narrator.ts` `narratorPrompt` | Pass. Rule 4: the only part code reads is the first non-empty line (the Runs row's story line), and the prompt says the first line is a one-sentence summary that stands alone. Rule 5: the length bound ends it, and with no tools and the facts on stdin there is nothing it can be blocked on. Rule 6: it adds nothing to any run; it only tells what happened. Rule 7: "stages" and "labels" are the digest's and the Run page's words. 5 lines |
 
+The build-delete pass (deleting a build removes it; a stopped run's waiting stage reads stopped) judged the texts it changed on all seven rules. No skill or agent changed; the two changed texts are message text.
+
+| Row | File                                                     | Result                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 23  | `src/app/engine/engine-handler.ts` `assistantBuildState` | n/a (message text). The `list_builds` and `read_build` results give a build `state` of `live` or `old`; `deleted` is gone because a deleted build no longer exists. A deleted build's id is answered as `No build <id>`, the same refusal as an id that never existed |
+| 28  | `src/core/run/digest.ts` `runDigest`                     | n/a (message text). A stage waiting on the user in a run that is no longer running reads `stopped`, not `needs you`, the word the Run page shows; the narrator's prompt (row 29) names no status word, so it needs no change                                          |
+
 ## Stale claims
 
 Each claim was read against the code on this branch. T = a `test/kit/` check compares the text with the code (written failing first), then the text; R = reword.
@@ -294,6 +301,8 @@ The delete-blueprint pass read each claim of the texts it changed against the co
 
 The build-branch pass read each claim of the texts it changed against the code and found S12 only. Current: no kit skill, pane skill or build check reads a base branch from `CLAUDE.md`. S12 is reworded, as S5 was for the same agent's Inputs.
 
+The build-delete pass read each claim of the texts it changed against the code and found no stale claim. Current: no kit, pane skill or tool description mentions a deleted build or a `deleted` state (`list_builds` says "List the builds made from blueprints.", `read_build` says "Read one build."); `AssistantBuildState` is `"live" | "old"` (`protocol.ts`); `displayStatus` returns `stopped` for a `needs-you` stage only when the run is not `running` (`display.ts`).
+
 ## Gaps
 
 What a model needs to do its job and no text gave it.
@@ -317,6 +326,8 @@ The delete-blueprint pass found no new gap: the pane cannot delete a blueprint, 
 The build-branch pass found no new gap: the build agents read and edit build files only, so whether the branch is new or existing changes nothing they do, and the `CLAUDE.md` Branch line already names it.
 
 The run-story review pass closed G8 and G9, which the first run-story pass had raised as open. Both needed code, not rewording: the digest (row 28) now names a cleared label by its type's default and lists what each Gate and Ask asked. The narrator's prompt (row 29) is unchanged; its session now also runs with `--permission-mode dontAsk` and is killed as soon as its `system/init` line lists a tool, instead of being refused only after it ends. The pass found no new gap and no new stale claim.
+
+The build-delete pass found no new gap: the pane cannot delete a build, and a build that was deleted is simply absent from `list_builds` and answered as unknown by `read_build`, which the pane already handles for a wrong id.
 
 ## Skills added or changed and why
 
@@ -433,6 +444,15 @@ No model-facing text changed. The new engine requests (`build-tree`, `build-proj
 | `src/core/run/digest.ts` `runDigest`                      | Added               | Row 28, the facts the narrator reads        |
 
 The inventory gained rows 28 and 29. `src/adapters/claude/claude-narrator.ts` is outside the detection rule's folders and was found by the concept search (text passed to a Claude session); `src/core/run/digest.ts` is matched by the rule. Nothing else the ticket adds is model-facing: the narrator's account is shown to the user and read by no model.
+
+### Build delete
+
+| Skill or file                                            | Added or changed | Why                                                                                |
+| -------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------- |
+| `src/app/engine/engine-handler.ts` `assistantBuildState` | Changed          | Row 23: `list_builds` / `read_build` states are `live` or `old`; `deleted` removed |
+| `src/core/run/digest.ts` `runDigest`                     | Changed          | Row 28: a stopped run's waiting stage reads `stopped`                              |
+
+The inventory needed no new row: the pass changed only files already listed. The new start-up dialog handling in `src/adapters/claude/claude-cli.ts` sends keys, not text, and its error messages reach the app log and the run's failure, not a model.
 
 ### Test hygiene
 

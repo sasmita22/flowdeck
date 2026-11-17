@@ -107,16 +107,23 @@ describe("build snapshots", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
-  describe("a snapshot is append-only", () => {
-    it("refuses a change to its picture and its deletion, keeping the row as written", () => {
+  describe("a snapshot is locked, except for being deleted", () => {
+    it("refuses a change to its picture, keeping the row as written", () => {
       const { db } = seeded();
       const before = rows(db);
 
       refused(() => db.prepare("UPDATE build_snapshots SET svg = '<svg/>'").run());
-      refused(() => db.prepare("DELETE FROM build_snapshots").run());
 
       expect(before).toHaveLength(1);
       expect(rows(db)).toEqual(before);
+    });
+
+    it("lets it be deleted", () => {
+      const { db } = seeded();
+
+      db.prepare("DELETE FROM build_snapshots").run();
+
+      expect(rows(db)).toEqual([]);
     });
 
     it("lets its build id be set once from none, and refuses a second change to it", () => {
@@ -251,11 +258,10 @@ describe("build snapshots", () => {
       ]);
     });
 
-    it("still refuses deleting or replacing a row", async () => {
+    it("refuses replacing a row, and lets one be deleted", async () => {
       const db = await seedBeforeManifests();
       const before = all(db);
 
-      refused(() => db.exec("DELETE FROM build_snapshots WHERE id = 7"));
       refused(() =>
         db.exec(
           `INSERT OR REPLACE INTO build_snapshots (pending_id, blueprint_name, version, svg, created_at)
@@ -263,10 +269,14 @@ describe("build snapshots", () => {
         ),
       );
       expect(all(db)).toEqual(before);
+
+      db.exec("DELETE FROM build_snapshots WHERE id = 7");
+
+      expect(all(db)).toEqual(before.slice(1));
     });
   });
 
-  it("keeps a build's snapshot readable once the build is deleted", () => {
+  it("removes a build's snapshot once the build is deleted", () => {
     const { db, runs, pendingId } = seeded();
     runs.recordBuild(newBuild);
     runs.endPendingBuild(pendingId, { outcome: "built", endedAt: 2_000, buildId: "b1" });
@@ -275,7 +285,7 @@ describe("build snapshots", () => {
 
     expect(
       db.prepare("SELECT pending_id, build_id FROM build_snapshots WHERE build_id = 'b1'").all(),
-    ).toEqual([{ pending_id: pendingId, build_id: "b1" }]);
+    ).toEqual([]);
   });
 
   it("lets a second Flowdeck's backfill leave a just-recorded build to its own pending snapshot", () => {

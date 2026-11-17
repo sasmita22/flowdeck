@@ -28,8 +28,8 @@ const versionText = (card: Pick<BuildCard, "version">) =>
 
 const neverRun = { old: false, run: null };
 
-function useRunDisabled(run: StoreApi<RunState>, card: BuildCard | undefined, deleted = false) {
-  return useStore(run, (state) => deleted || selectRunDisabled(state, card ?? neverRun));
+function useRunDisabled(run: StoreApi<RunState>, card: BuildCard | undefined) {
+  return useStore(run, (state) => selectRunDisabled(state, card ?? neverRun));
 }
 
 const noPaths: string[] = [];
@@ -182,9 +182,8 @@ function BuildFiles({
   const project = useStore(library, (state) =>
     state.project?.buildId === buildId ? state.project : null,
   );
-  const deleted = tree?.deleted === true;
   const card = useCards(library).find((build) => build.id === buildId);
-  const blocked = useRunDisabled(run, card, deleted);
+  const blocked = useRunDisabled(run, card);
   const runs = useStore(library, (state) => state.runs);
   const snapshots = useStore(run, (state) => state.snapshots);
   const runCards = filterRunsByBuild(selectRunCards({ runs }), buildId);
@@ -196,7 +195,7 @@ function BuildFiles({
 
   const shown = files?.list.find((file) => file.path === files.selected);
   const selection =
-    deleted || files === null
+    files === null
       ? undefined
       : {
           selected: files.selected,
@@ -221,9 +220,7 @@ function BuildFiles({
         </nav>
         <div className="fd-page-bar">
           <p className="fd-page-note">
-            {deleted
-              ? "Deleted. These are the files it had; its workspace is gone."
-              : "Locked. These are the exact files a run of this build uses."}
+            Locked. These are the exact files a run of this build uses.
           </p>
           <button
             className="fd-btn fd-btn-primary"
@@ -240,13 +237,11 @@ function BuildFiles({
       <div className="fd-files">
         <div className="fd-files-side">
           <BuildTree paths={tree?.paths ?? noPaths} selection={selection} />
-          {!deleted && project !== null && <ProjectRow project={project} library={library} />}
+          {project !== null && <ProjectRow project={project} library={library} />}
         </div>
-        {!deleted && (
-          <pre className="fd-file-content" data-testid={pageTestIds.buildFileContent} tabIndex={0}>
-            {shown?.content ?? ""}
-          </pre>
-        )}
+        <pre className="fd-file-content" data-testid={pageTestIds.buildFileContent} tabIndex={0}>
+          {shown?.content ?? ""}
+        </pre>
       </div>
       <section className="fd-section fd-build-runs" aria-label="Runs">
         <div className="fd-section-head">
@@ -350,6 +345,7 @@ function BuildCardView({
   const blocked = useRunDisabled(run, card);
   const hint = selectRunHint(card);
   const interrupted = card.run?.status === "interrupted" ? card.run : null;
+  const runGoing = card.run?.status === "running" || interrupted !== null;
   const resume = async (runId: string) => {
     const resumed = await run.getState().resume(runId);
     await library.getState().refresh();
@@ -388,6 +384,7 @@ function BuildCardView({
             {
               testId: pageTestIds.buildDelete(card.id),
               label: "Delete",
+              ...(runGoing && { disabled: true, title: "Stop or resume its run first" }),
               onSelect: () => void run.getState().askDelete({ kind: "build", id: card.id }),
             },
           ]}

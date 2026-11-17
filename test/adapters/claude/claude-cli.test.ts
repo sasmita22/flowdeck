@@ -22,6 +22,24 @@ const dialog = (cursorOnYes: boolean) =>
   ].join("\n");
 const dialogPane = dialog(false);
 const dialogOnYes = dialog(true);
+const addDirDialog = (cursorOnYes: boolean) =>
+  [
+    "────────────────────────────────────────────────────────────────────────────────",
+    " Adding a new directory:",
+    " /private/var/folders/bm/flmnwhpj4dj0d9dtqyxd01jw0000gp/T/fd-l-38ENQG/workspace",
+    " s/3a3eedf3-3d05-4a93-97e6-2b431c4007a0",
+    " This session hasn't worked here before. Is this a directory you created or one",
+    " you trust?",
+    " Claude Code'll be able to read, edit, and execute files here. Its skills,",
+    " commands, and agents load and can run commands, and so can the git settings of",
+    " its repository. Your answer holds for this session.",
+    " Security guide",
+    cursorOnYes ? "   No, exit" : " ❯ No, exit",
+    cursorOnYes ? " ❯ Yes, add it" : "   Yes, add it",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+const addDirPane = addDirDialog(false);
+const addDirOnYes = addDirDialog(true);
 const bypassDialogPane = [
   rule,
   "  WARNING: Claude Code running in Bypass Permissions mode",
@@ -315,6 +333,91 @@ describe("ClaudeCli", () => {
       'Claude in session "fd-a" did not move the trust dialog cursor to "Yes, I trust this folder" within 100 ms',
     );
     expect(sessions.inputs("fd-a")).toEqual([{ key: "Down" }]);
+  });
+
+  describe("the add-dir dialog", () => {
+    it("moves the cursor to Yes, add it, presses Enter once, then is ready", async () => {
+      let paneAtEnter = "";
+      sessions.setPane("fd-a", addDirPane);
+      sessions.onInput("fd-a", (input) => {
+        if ("key" in input && input.key === "Down") sessions.setPane("fd-a", addDirOnYes);
+        if ("key" in input && input.key === "Enter") {
+          void sessions.capture("fd-a").then((pane) => (paneAtEnter = pane));
+          sessions.setPane("fd-a", readyPane);
+        }
+      });
+
+      await cli.waitUntilReady("fd-a");
+
+      expect(paneAtEnter).toBe(addDirOnYes);
+      expect(sessions.inputs("fd-a")).toEqual([{ key: "Down" }, { key: "Enter" }]);
+    });
+
+    it("answers the trust dialog, then the add-dir dialog, one Enter each in order", async () => {
+      const panesAtEnter: string[] = [];
+      let current = dialogPane;
+      const show = (pane: string) => {
+        current = pane;
+        sessions.setPane("fd-a", pane);
+      };
+      show(dialogPane);
+      sessions.onInput("fd-a", (input) => {
+        if (!("key" in input)) return;
+        if (input.key === "Down" && current === dialogPane) show(dialogOnYes);
+        else if (input.key === "Down" && current === addDirPane) show(addDirOnYes);
+        else if (input.key === "Enter") {
+          panesAtEnter.push(current);
+          if (current === dialogOnYes) show(addDirPane);
+          else if (current === addDirOnYes) show(readyPane);
+        }
+      });
+
+      await cli.waitUntilReady("fd-a");
+
+      expect(panesAtEnter).toEqual([dialogOnYes, addDirOnYes]);
+      expect(sessions.inputs("fd-a")).toEqual([
+        { key: "Down" },
+        { key: "Enter" },
+        { key: "Down" },
+        { key: "Enter" },
+      ]);
+    });
+
+    it("lets the add-dir dialog settle on its own after answering the trust dialog", async () => {
+      const settleMs = 60;
+      const settling = new ClaudeCli({
+        sessions,
+        homeDir: home,
+        pollIntervalMs: 2,
+        readyTimeoutMs: 1000,
+        dialogSettleMs: settleMs,
+      });
+      let addDirShownAt = 0;
+      let addDirDownAt = 0;
+      sessions.setPane("fd-a", dialogPane);
+      sessions.onInput("fd-a", (input) => {
+        if (!("key" in input)) return;
+        if (input.key === "Down" && addDirShownAt === 0) sessions.setPane("fd-a", dialogOnYes);
+        else if (input.key === "Down") {
+          addDirDownAt = Date.now();
+          sessions.setPane("fd-a", addDirOnYes);
+        } else if (input.key === "Enter" && addDirShownAt === 0) {
+          addDirShownAt = Date.now();
+          sessions.setPane("fd-a", addDirPane);
+        } else if (input.key === "Enter") sessions.setPane("fd-a", readyPane);
+      });
+
+      await settling.waitUntilReady("fd-a");
+
+      expect(addDirDownAt - addDirShownAt).toBeGreaterThanOrEqual(settleMs);
+    });
+
+    it("never presses Enter while No, exit is selected, and gives up naming Yes, add it", async () => {
+      sessions.setPane("fd-a", addDirPane);
+
+      await expect(cli.waitUntilReady("fd-a")).rejects.toThrow(/"Yes, add it"/);
+      expect(sessions.inputs("fd-a")).not.toContainEqual({ key: "Enter" });
+    });
   });
 
   describe("the Bypass Permissions warning", () => {

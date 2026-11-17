@@ -132,6 +132,7 @@ const storedBuildEventSchema = buildEventSchema.and(z.object({ seq: z.number(), 
 export const buildProgressEntrySchema = z.object({
   pendingId: z.string(),
   name: z.string(),
+  flowId: z.string().exactOptional(),
   startedAt: z.number(),
   endedAt: z.number().exactOptional(),
   outcome: buildOutcomeSchema.exactOptional(),

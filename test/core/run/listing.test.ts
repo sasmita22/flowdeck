@@ -12,7 +12,7 @@ const summary = {
   buildName: "fix-login",
   blueprintName: "Fix and verify",
   blueprintVersion: 3,
-  buildDeleted: false,
+  buildGone: false,
   number: 1,
   doneCount: 1,
 };

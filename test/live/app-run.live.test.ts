@@ -39,6 +39,7 @@ import { agent, flow as buildFlow, output, thenWire, trigger } from "../fixtures
 import { expectPaneToShow } from "../fixtures/pane-text.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
+import { FakePullRequests } from "../fakes/fake-pull-requests.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
 import {
   claudeConfigDir,
@@ -262,6 +263,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       worktree: new GitWorktree(),
       gitState: new GitFolderState(),
       newSessionName: () => sessionName,
+      pullRequests: new FakePullRequests(),
+      claudeConfig: {
+        projectsDir: join(claudeConfigDir(), "projects"),
+        claudeJson: join(claudeConfigDir(), ".claude.json"),
+      },
       transcriptTurns: async () => [],
     });
 
@@ -308,7 +314,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       );
 
       const shown = (id: string) =>
-        snapshots.map((snapshot) => displayStatus(snapshot.nodes[id] ?? "waiting"));
+        snapshots.map((snapshot) =>
+          displayStatus(snapshot.nodes[id] ?? "waiting", snapshot.status),
+        );
       for (const id of promptIds) {
         expect(withoutRepeats(shown(id)), `display statuses of ${id}`).toEqual([
           "waiting",
@@ -417,7 +425,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       await vi.waitFor(
         () => {
           expect(announced).toBe(true);
-          expect(displayStatus(latest()?.nodes.p1 ?? "waiting")).toBe("done");
+          expect(
+            displayStatus(latest()?.nodes.p1 ?? "waiting", latest()?.status ?? "running"),
+          ).toBe("done");
         },
         { timeout: runDeadlineMs, interval: 500 },
       );

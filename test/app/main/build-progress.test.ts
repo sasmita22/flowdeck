@@ -102,7 +102,7 @@ describe("createBuildProgressRelay", () => {
     expect(sent).toHaveLength(4);
   });
 
-  it("relays every field of an ended build's entry, and no blueprint id", () => {
+  it("relays every field of an ended build's entry, its blueprint id included", () => {
     const { relay, sent } = setup();
     const events = atStep(5);
     const progress = progressOf(pending("pending-1", "built"), events);
@@ -111,6 +111,7 @@ describe("createBuildProgressRelay", () => {
       push: "build-progress",
       pendingId: "pending-1",
       name: "fix-login",
+      flowId: "flow-1",
       startedAt: 1_000,
       endedAt: 9_000,
       outcome: "built",
@@ -124,6 +125,7 @@ describe("createBuildProgressRelay", () => {
     const relayed = {
       pendingId: "pending-1",
       name: "fix-login",
+      flowId: "flow-1",
       startedAt: 1_000,
       endedAt: 9_000,
       outcome: "built",
@@ -134,7 +136,6 @@ describe("createBuildProgressRelay", () => {
       buildId: "build-1",
     };
     expect(sent).toEqual([relayed]);
-    expect(sent[0]).not.toHaveProperty("flowId");
     expect(relay.latest("pending-1")).toEqual(relayed);
   });
 });

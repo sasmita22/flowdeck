@@ -486,7 +486,7 @@ test("A build whose yes/no value is no takes Branch's no path", async () => {
   expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({});
 });
 
-test("Stopping a run that waits at a Gate makes the status bar read stopped, not needs you", async () => {
+test("Stopping a run that waits at a Gate makes its stage and the status bar read stopped, not needs you", async () => {
   seedFlow(
     home,
     laidOut([agent("s1"), gate("g1"), agent("s2")], [thenWire("s1", "g1"), thenWire("g1", "s2")]),
@@ -496,11 +496,8 @@ test("Stopping a run that waits at a Gate makes the status bar read stopped, not
   const buildId = await buildAndRun(window, home, "gated");
   const runId = await runIdOf(home, buildId);
   const statusBar = window.getByTestId("run-status");
-  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "g1"))).toHaveAttribute(
-    "data-status",
-    "needs you",
-    { timeout: 20_000 },
-  );
+  const gateStage = window.getByTestId(pageTestIds.runStageStatus(runId, "g1"));
+  await expect(gateStage).toHaveAttribute("data-status", "needs you", { timeout: 20_000 });
   await expect(statusBar).toContainText("Needs you");
 
   await window.getByTestId(pageTestIds.runStop).click();
@@ -508,6 +505,7 @@ test("Stopping a run that waits at a Gate makes the status bar read stopped, not
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("stopped", {
     timeout: 20_000,
   });
+  await expect(gateStage).toHaveAttribute("data-status", "stopped");
   await expect(statusBar).not.toContainText(/needs you/i);
   await expect(statusBar).toHaveText(/^Stopped/);
 });

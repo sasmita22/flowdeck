@@ -1109,6 +1109,27 @@ describe("deleteBuild", () => {
       "The build is deleted. Its branch flowdeck/fix-login-b1 holds commits, so it was kept.",
     ],
     [
+      { kind: "branch", branch: "flowdeck/fix-login-b1", reason: "open-pr" },
+      "The build is deleted. Its branch flowdeck/fix-login-b1 was kept: an open pull request uses it.",
+    ],
+    [
+      { kind: "branch", branch: "flowdeck/fix-login-b1", reason: "pr-unknown" },
+      "The build is deleted. Its branch flowdeck/fix-login-b1 was kept: its pull request status could not be checked.",
+    ],
+    [
+      {
+        kind: "branch",
+        branch: "flowdeck/fix-login-b1",
+        reason: "remote-moved",
+        remotes: ["origin", "mirror"] as string[],
+      },
+      "The build is deleted. Its branch flowdeck/fix-login-b1 on origin, mirror has work this build didn't make, so it was kept.",
+    ],
+    [
+      { kind: "branch", branch: "flowdeck/fix-login-b1", reason: "remote-delete-failed" },
+      "The build is deleted. Its branch flowdeck/fix-login-b1 on GitHub could not be deleted.",
+    ],
+    [
       { kind: "folder", path: "/elsewhere/builds/oldhash" },
       "The build is deleted. Its folder /elsewhere/builds/oldhash is outside FLOWDECK_HOME, so it was left in place.",
     ],
@@ -1469,6 +1490,12 @@ describe("selectNodeDisplay", () => {
     expect(selectNodeDisplay(view, "c")).toBe("skipped");
     expect(selectNodeDisplay(view, "zz")).toBeNull();
   });
+  it("shows a Gate left waiting as stopped once the run is stopped, and as needs you while running", () => {
+    const nodes = { gate: "needs-you" } as const;
+
+    expect(selectNodeDisplay({ snapshot: snapshot("stopped", nodes) }, "gate")).toBe("stopped");
+    expect(selectNodeDisplay({ snapshot: snapshot("running", nodes) }, "gate")).toBe("needs you");
+  });
 });
 
 describe("selectRunSummary", () => {
@@ -1538,6 +1565,7 @@ describe("selectLiveBadge", () => {
     );
     expect(selectLiveBadge(snapshot("running", { a: "done", b: "needs-you" }))).toBe("needs you");
     expect(selectLiveBadge(snapshot("done", { a: "done" }))).toBeNull();
+    expect(selectLiveBadge(snapshot("stopped", { a: "done", gate: "needs-you" }))).toBeNull();
     expect(selectLiveBadge(null)).toBeNull();
   });
 });

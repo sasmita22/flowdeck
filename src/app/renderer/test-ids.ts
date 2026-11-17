@@ -109,7 +109,6 @@ export const pageTestIds = {
   runsBuildFilter: "runs-build-filter",
   runCard: (runId: string) => `run-card-${runId}`,
   runCardStages: (runId: string) => `run-card-stages-${runId}`,
-  runDeletedNote: "run-deleted-note",
   buildRuns: "build-runs",
   runOpen: (runId: string) => `run-open-${runId}`,
   runResult: (runId: string) => `run-result-${runId}`,

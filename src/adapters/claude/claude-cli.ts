@@ -17,9 +17,21 @@ export const PARENT_SESSION_VARS = [
   "CLAUDE_EFFORT",
 ] as const;
 
-const trustDialog = /Quick safety check|Yes, I trust this folder/;
 const bypassDialog = /^\s*WARNING: Claude Code running in Bypass Permissions mode\s*$/m;
-const cursorOnYes = /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m;
+
+type FolderDialog = { shows: RegExp; cursorOnYes: RegExp; cursorStuck: string };
+
+const trustDialog: FolderDialog = {
+  shows: /Quick safety check|Yes, I trust this folder/,
+  cursorOnYes: /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m,
+  cursorStuck: 'did not move the trust dialog cursor to "Yes, I trust this folder"',
+};
+const addDirDialog: FolderDialog = {
+  shows: /Adding a new directory|Yes, add it/,
+  cursorOnYes: /^\s*❯\s*(?:\d+\.\s*)?Yes, add it/m,
+  cursorStuck: 'did not move the add-dir dialog cursor to "Yes, add it"',
+};
+const folderDialogs = [trustDialog, addDirDialog];
 const rule = "────";
 const busy = "esc to interrupt";
 
@@ -133,8 +145,9 @@ export class ClaudeCli {
 
   async waitUntilReady(name: string): Promise<void> {
     const deadline = Date.now() + this.readyTimeoutMs;
+    let shown: FolderDialog | undefined;
     let dialogSince: number | undefined;
-    let answeredDialog = false;
+    const answered = new Set<FolderDialog>();
     for (;;) {
       const pane = await this.sessions.capture(name);
       if (bypassDialog.test(pane)) {
@@ -142,14 +155,16 @@ export class ClaudeCli {
           "Claude Code showed its Bypass Permissions warning: consent is missing from the session settings",
         );
       }
-      if (!trustDialog.test(pane)) {
-        dialogSince = undefined;
+      const dialog = folderDialogs.find(({ shows }) => shows.test(pane));
+      if (dialog !== shown) dialogSince = undefined;
+      shown = dialog;
+      if (dialog === undefined) {
         if (showsInputBox(pane)) break;
-      } else if (!answeredDialog) {
+      } else if (!answered.has(dialog)) {
         dialogSince ??= Date.now();
         if (Date.now() - dialogSince >= this.dialogSettleMs) {
-          answeredDialog = true;
-          await this.trustFolder(name, deadline);
+          answered.add(dialog);
+          await this.answerYes(name, dialog, deadline);
         }
       }
       if (Date.now() >= deadline) {
@@ -228,12 +243,16 @@ export class ClaudeCli {
     return undefined;
   }
 
-  private async trustFolder(name: string, deadline: number): Promise<void> {
+  private async answerYes(
+    name: string,
+    { cursorOnYes, cursorStuck }: FolderDialog,
+    deadline: number,
+  ): Promise<void> {
     await this.sessions.sendKey(name, "Down");
     while (!cursorOnYes.test(await this.sessions.capture(name))) {
       if (Date.now() >= deadline) {
         throw new Error(
-          `Claude in session "${name}" did not move the trust dialog cursor to "Yes, I trust this folder" within ${this.readyTimeoutMs} ms`,
+          `Claude in session "${name}" ${cursorStuck} within ${this.readyTimeoutMs} ms`,
         );
       }
       await sleep(this.pollIntervalMs);

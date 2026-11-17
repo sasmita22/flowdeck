@@ -11,6 +11,7 @@ import { ClaudeNarrator } from "../../adapters/claude/claude-narrator.js";
 import { openClaudeSession } from "../../adapters/claude/claude-session.js";
 import { parseTranscriptTurns } from "../../adapters/claude/transcript-turns.js";
 import { TranscriptUsage } from "../../adapters/claude/transcript-usage.js";
+import { GhPullRequests } from "../../adapters/gh/gh-pull-requests.js";
 import { GhTokenSource } from "../../adapters/gh/gh-token-source.js";
 import { GitFolderState } from "../../adapters/git/git-state.js";
 import { GitWorktree } from "../../adapters/git/worktree.js";
@@ -43,6 +44,11 @@ const dbPath = join(home, "flowdeck.db");
 
 const claudeConfig = process.env["FLOWDECK_CLAUDE_CONFIG"] || undefined;
 const claudeConfigDir = process.env["CLAUDE_CONFIG_DIR"] || undefined;
+
+const runClaudeConfig = {
+  projectsDir: join(claudeConfigDir ?? join(homedir(), ".claude"), "projects"),
+  claudeJson: join(claudeConfigDir ?? homedir(), ".claude.json"),
+};
 
 const transcriptReader = () =>
   new ClaudeCli({
@@ -165,6 +171,8 @@ const createHandler = async () =>
     waits,
     worktree: new GitWorktree(),
     gitState: new GitFolderState(),
+    pullRequests: new GhPullRequests(),
+    claudeConfig: runClaudeConfig,
     sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
     endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
     homeLock: { acquire: lockHome },

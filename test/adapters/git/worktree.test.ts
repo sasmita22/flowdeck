@@ -366,6 +366,118 @@ describe("GitWorktree", () => {
 
       expect(await worktree.hasUnpushed(repo.path, branch, "main")).toBe(true);
     });
+
+    const remoteHeads = async (remotePath: string): Promise<string[]> =>
+      (await git(repo.path, "ls-remote", "--heads", remotePath))
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => line.split("\t")[1] ?? "");
+
+    it("deletes the branch from every remote that holds it", async () => {
+      const mirror = await realpath(await mkdtemp(join(tmpdir(), "fd-remote-")));
+      try {
+        await run("git", ["init", "--quiet", "--bare", mirror]);
+        await git(repo.path, "remote", "add", "mirror", mirror);
+        const { path, branch } = await addBuildWorktree();
+        await commitIn(path, "made.txt");
+        await git(path, "push", "--quiet", "origin", branch);
+        await git(path, "push", "--quiet", "mirror", branch);
+        expect(await remoteHeads(remote)).toContain(`refs/heads/${branch}`);
+        expect(await remoteHeads(mirror)).toContain(`refs/heads/${branch}`);
+
+        const tip = await worktree.branchTip(repo.path, branch);
+
+        expect(await worktree.deleteRemoteBranch(repo.path, branch, tip ?? "")).toEqual([]);
+        expect(await remoteHeads(remote)).toEqual(["refs/heads/main"]);
+        expect(await remoteHeads(mirror)).toEqual([]);
+      } finally {
+        await rm(mirror, { recursive: true, force: true });
+      }
+    });
+
+    it("leaves every remote as it was when none holds the branch", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "made.txt");
+
+      const moved = await worktree.deleteRemoteBranch(
+        repo.path,
+        branch,
+        (await git(path, "rev-parse", "HEAD")).trim(),
+      );
+
+      expect(moved).toEqual([]);
+      expect(await remoteHeads(remote)).toEqual(["refs/heads/main"]);
+      expect(await branches(repo.path)).toContain(branch);
+    });
+
+    it("keeps a remote's same-named branch that points at another commit, and names that remote", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "theirs.txt");
+      await git(path, "push", "--quiet", "origin", branch);
+      const theirs = (await git(path, "rev-parse", "HEAD")).trim();
+      await git(path, "reset", "--quiet", "--hard", "main");
+      await commitIn(path, "ours.txt");
+      const tip = await worktree.branchTip(repo.path, branch);
+
+      expect(await worktree.deleteRemoteBranch(repo.path, branch, tip ?? "")).toEqual(["origin"]);
+      expect(await git(repo.path, "ls-remote", "--heads", remote, `refs/heads/${branch}`)).toBe(
+        `${theirs}\trefs/heads/${branch}\n`,
+      );
+    });
+
+    it("leaves the remote's other branches alone", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "made.txt");
+      await git(path, "push", "--quiet", "origin", branch);
+      await git(repo.path, "branch", "theirs");
+      await git(repo.path, "push", "--quiet", "origin", "theirs");
+
+      await worktree.deleteRemoteBranch(
+        repo.path,
+        branch,
+        (await git(path, "rev-parse", "HEAD")).trim(),
+      );
+
+      expect(await remoteHeads(remote)).toEqual(["refs/heads/main", "refs/heads/theirs"]);
+    });
+
+    it("throws git's own words when the remote refuses the delete, keeping the branch there", async () => {
+      const { path, branch } = await addBuildWorktree();
+      await commitIn(path, "made.txt");
+      await git(path, "push", "--quiet", "origin", branch);
+      const hook = join(remote, "hooks", "pre-receive");
+      await writeFile(hook, "#!/bin/sh\necho 'deletes are not allowed here' >&2\nexit 1\n", {
+        mode: 0o755,
+      });
+
+      await expect(
+        worktree.deleteRemoteBranch(
+          repo.path,
+          branch,
+          (await git(path, "rev-parse", "HEAD")).trim(),
+        ),
+      ).rejects.toThrow(/deletes are not allowed here/);
+      expect(await remoteHeads(remote)).toContain(`refs/heads/${branch}`);
+    });
+  });
+
+  it("reads a branch's tip commit", async () => {
+    const { path, branch } = await addBuildWorktree();
+    await commitIn(path, "made.txt");
+
+    expect(await worktree.branchTip(repo.path, branch)).toBe(
+      (await git(path, "rev-parse", "HEAD")).trim(),
+    );
+  });
+
+  it("reads no tip for a branch that is not there", async () => {
+    expect(await worktree.branchTip(repo.path, "flowdeck/missing")).toBeUndefined();
+  });
+
+  it("reads no tip for a branch that is not there, though a tag has its name", async () => {
+    await git(repo.path, "tag", "flowdeck/missing");
+
+    expect(await worktree.branchTip(repo.path, "flowdeck/missing")).toBeUndefined();
   });
 
   it("deletes a branch holding commits of its own once its worktree is gone, leaving other branches", async () => {

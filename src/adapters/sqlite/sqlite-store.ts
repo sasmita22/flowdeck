@@ -9,7 +9,7 @@ import type {
   PendingBuild,
   StoredBuildEvent,
 } from "../../core/run/build-progress.js";
-import { BuildRunningError } from "../../core/run/store.js";
+import { BuildRunningError, type RunBuildCopy } from "../../core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -46,6 +46,15 @@ type RunRow = {
   cwd: string;
   claude_session_id: string;
   build_id: string | null;
+  build_name: string | null;
+  build_hash: string | null;
+  blueprint_name: string | null;
+  flow_id: string | null;
+  flow_version: number | null;
+  repo: string | null;
+  branch: string | null;
+  build_values: string | null;
+  manifest_json: string | null;
 };
 
 type RunSummaryRow = {
@@ -61,7 +70,7 @@ type RunSummaryRow = {
   build_name: string | null;
   blueprint_name: string | null;
   blueprint_version: number | null;
-  build_deleted: number;
+  build_gone: number;
   number: number;
   done_count: number;
   story_text: string | null;
@@ -97,7 +106,7 @@ const toRunSummary = (row: RunSummaryRow): RunSummary => ({
   buildName: row.build_name,
   blueprintName: row.blueprint_name,
   blueprintVersion: row.blueprint_version,
-  buildDeleted: row.build_deleted === 1,
+  buildGone: row.build_gone === 1,
   number: row.number,
   doneCount: row.done_count,
   ...storyLineOf(row.story_text),
@@ -139,12 +148,31 @@ const runSummaries = `
          numbers.number,
          (SELECT text FROM run_stories WHERE run_stories.run_id = runs.id
            ORDER BY run_stories.seq DESC LIMIT 1) AS story_text,
-         builds.deleted_at IS NOT NULL AS build_deleted,
-         builds.flow_id, builds.version, builds.name AS build_name,
-         build_snapshots.blueprint_name, build_snapshots.version AS blueprint_version
+         builds.id IS NULL AS build_gone,
+         runs.flow_id, runs.flow_version AS version, runs.build_name,
+         runs.blueprint_name, runs.flow_version AS blueprint_version
     FROM runs JOIN (${runNumbers}) AS numbers ON numbers.id = runs.id
-         LEFT JOIN builds ON builds.id = runs.build_id
-         LEFT JOIN build_snapshots ON build_snapshots.build_id = runs.build_id`;
+         LEFT JOIN builds ON builds.id = runs.build_id`;
+
+const runBuildCopy = `SELECT builds.name, builds.hash, build_snapshots.blueprint_name, builds.flow_id,
+       builds.version, builds.repo, builds.branch, builds."values", build_manifests.manifest_json
+  FROM (SELECT ? AS id) AS named
+       LEFT JOIN builds ON builds.id = named.id
+       LEFT JOIN build_snapshots ON build_snapshots.build_id = named.id
+       LEFT JOIN build_manifests ON build_manifests.build_id = named.id`;
+
+const toRunBuildCopy = (row: RunRow): RunBuildCopy => ({
+  buildName: row.build_name,
+  buildHash: row.build_hash,
+  blueprintName: row.blueprint_name,
+  ...(row.flow_id === null || row.flow_version === null
+    ? {}
+    : { source: { flowId: row.flow_id, version: row.flow_version } }),
+  repo: row.repo,
+  branch: row.branch,
+  buildValues: row.build_values === null ? null : (JSON.parse(row.build_values) as VariableValues),
+  manifestJson: row.manifest_json,
+});
 
 const buildsWithSnapshot = `SELECT builds.id, builds.hash, builds.name, builds.repo, builds.base,
        builds.branch, builds.branch_created, builds."values", builds.deleted_at, builds.dir, builds.created_at, builds.flow_id,
@@ -268,9 +296,12 @@ export class SqliteStore implements Store {
     this.guarded(run.buildId, () => {
       this.db
         .prepare(
-          "INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id) VALUES (?, ?, ?, 'running', ?, ?)",
+          `INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id, build_name,
+                             build_hash, blueprint_name, flow_id, flow_version, repo, branch,
+                             build_values, manifest_json)
+           SELECT ?, ?, ?, 'running', ?, ?, copy.* FROM (${runBuildCopy}) AS copy`,
         )
-        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildId);
+        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildId, run.buildId);
       const session = this.db
         .prepare(
           "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
@@ -281,13 +312,17 @@ export class SqliteStore implements Store {
       );
       for (const nodeId of run.nodeIds) insertNode.run(id, nodeId, session.lastInsertRowid);
     });
-    return { ...run, id, status: "running" };
+    const created = this.findRun(id);
+    if (created === undefined) throw new Error(`run ${id} was not recorded`);
+    return created;
   }
 
   findRun(id: string): RunRecord | undefined {
     const row = this.db
       .prepare(
         `SELECT runs.id, runs.build_dir, runs.inputs, runs.status, runs.build_id,
+                runs.build_name, runs.build_hash, runs.blueprint_name, runs.flow_id,
+                runs.flow_version, runs.repo, runs.branch, runs.build_values, runs.manifest_json,
                 run_sessions.tmux_name, run_sessions.cwd, run_sessions.claude_session_id
            FROM runs JOIN run_sessions ON run_sessions.run_id = runs.id
           WHERE runs.id = ? ORDER BY run_sessions.id LIMIT 1`,
@@ -307,6 +342,7 @@ export class SqliteStore implements Store {
       session: { tmuxName: row.tmux_name, cwd: row.cwd, claudeSessionId: row.claude_session_id },
       status: row.status,
       ...(row.build_id === null ? {} : { buildId: row.build_id }),
+      ...toRunBuildCopy(row),
     };
   }
 
@@ -518,7 +554,22 @@ export class SqliteStore implements Store {
   }
 
   deleteBuild(id: string): void {
-    this.db.prepare("UPDATE builds SET deleted_at = ? WHERE id = ?").run(this.now().getTime(), id);
+    this.db.transaction(() => {
+      const pendingOfBuild = "SELECT id FROM pending_builds WHERE build_id = ?";
+      for (const table of ["build_activity", "build_events"]) {
+        this.db.prepare(`DELETE FROM ${table} WHERE pending_id IN (${pendingOfBuild})`).run(id);
+      }
+      for (const table of [
+        "pending_builds",
+        "build_nodes",
+        "build_files",
+        "build_manifests",
+        "build_snapshots",
+      ]) {
+        this.db.prepare(`DELETE FROM ${table} WHERE build_id = ?`).run(id);
+      }
+      this.db.prepare("DELETE FROM builds WHERE id = ?").run(id);
+    })();
   }
 
   listBuilds(): BuildRecord[] {
