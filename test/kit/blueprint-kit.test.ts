@@ -257,6 +257,16 @@ describe("the blueprint kit", () => {
       expect(copyFlow()).toContain(`say that ${clause}.`);
     });
 
+    it("blueprint sends no one to the session settings for connectors, and says how to add one", () => {
+      const sentences = skill().split(/(?<=\.)\s+/);
+      const settingsForConnectors = sentences.filter(
+        (sentence) => /connector/i.test(sentence) && /session'?s? settings/i.test(sentence),
+      );
+
+      expect(settingsForConnectors).toEqual([]);
+      expect(skill()).toContain("claude mcp add --scope user");
+    });
+
     it("blueprint's copy-flow pointer mentions a GitHub link", () => {
       const pointer = skill()
         .split("\n")

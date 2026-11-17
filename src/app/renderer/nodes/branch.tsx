@@ -1,7 +1,6 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { ports } from "../../../core/nodes/branch/ports.js";
 import { nodeWidth } from "../canvas/frames.js";
-import { useNodeDisplay } from "../canvas/status.js";
 import { nodeOutline } from "./outlines.js";
 import { Label, NodeShape, TagPill, type ShapeNode } from "./shape.js";
 
@@ -14,7 +13,6 @@ const placement: Record<(typeof ports)[number]["name"], Position> = {
 };
 
 export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
-  const status = useNodeDisplay(id);
   return (
     <NodeShape
       id={id}
@@ -44,16 +42,14 @@ export function BranchNode({ id, data, selected }: NodeProps<BranchViewNode>) {
     >
       <TagPill type="branch" />
       <Label type="branch" text={data.label} />
-      {status === null && (
-        <text
-          x={nodeOutline("branch").padL}
-          y={39}
-          fill="var(--muted)"
-          style={{ font: "400 11px var(--f-body)" }}
-        >
-          {data.sub}
-        </text>
-      )}
+      <text
+        x={nodeOutline("branch").padL}
+        y={39}
+        fill="var(--muted)"
+        style={{ font: "400 11px var(--f-body)" }}
+      >
+        {data.sub}
+      </text>
     </NodeShape>
   );
 }

@@ -64,7 +64,7 @@ const withStores = (kind: (typeof kinds)[number][1]) => {
   return Object.assign(open, { path });
 };
 
-describe.each(kinds)("%s listBuildsWithDeleted", (_name, kind) => {
+describe.each(kinds)("%s listBuilds", (_name, kind) => {
   const open = withStores(kind);
 
   it("returns the live builds only, a deleted build being gone", () => {
@@ -73,19 +73,10 @@ describe.each(kinds)("%s listBuildsWithDeleted", (_name, kind) => {
     store.recordBuild(build("gone1234", "gone"));
     store.deleteBuild("gone1234");
 
-    const listed = store.listBuildsWithDeleted();
+    const listed = store.listBuilds();
 
     expect(listed.map(({ id }) => id)).toEqual(["live1234"]);
     expect(listed[0]).toMatchObject({ name: "keep", deletedAt: null });
-  });
-
-  it("leaves listBuilds without the deleted builds", () => {
-    const store = open();
-    store.recordBuild(build("live1234", "keep"));
-    store.recordBuild(build("gone1234", "gone"));
-    store.deleteBuild("gone1234");
-
-    expect(store.listBuilds().map(({ id }) => id)).toEqual(["live1234"]);
   });
 });
 
@@ -572,7 +563,7 @@ describe.each(kinds)("%s deleting a build keeps its runs", (_name, kind) => {
     store.deleteBuild("b1");
 
     expect(store.findBuild("b1")).toBeUndefined();
-    expect(store.listBuildsWithDeleted().map(({ id }) => id)).not.toContain("b1");
+    expect(store.listBuilds().map(({ id }) => id)).not.toContain("b1");
     expect(store.buildFiles("b1")).toEqual([]);
     expect(store.buildManifest("b1")).toBeUndefined();
     expect(store.buildSnapshot({ buildId: "b1" })).toBeNull();

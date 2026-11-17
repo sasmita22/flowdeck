@@ -35,11 +35,13 @@ import {
 } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
+import { paneText, withWatchdog } from "../fixtures/live-evidence.js";
 
 const run = promisify(execFile);
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 const buildTimeoutMs = 900_000;
 const descriptionFloor = 60;
+const setupWatchdogMs = 100_000;
 const gate = "npm run gate:sample";
 
 const kitSkills = [
@@ -436,50 +438,92 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
   useTempClaudeConfig();
   const sessionName = newBuildSessionName(randomUUID);
   const claudeSessionId = randomUUID();
-  let home: string;
-  let repo: TmpRepo;
-  let workspaceDir: string;
+  let home: string | undefined;
+  let repo: TmpRepo | undefined;
+  let workspaceDir: string | undefined;
   let engine: LiveEngine | undefined;
   let agents: ClaudeBuildAgents | undefined;
 
-  beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), "fd-home-"));
-    repo = await createTmpRepo({ commit: true });
-    engine = liveEngine({ home, repo: repo.path });
-    ({ dir: workspaceDir } = await engine.saveAndBuild(onMainFlow([agent("p1")], []), {
-      name: "live-kit",
-    }));
-    const kit = await prepareKit({ sourceDir: kitSourceDir, home });
-    const settingsPath = join(home, "build-sessions", sessionName, "settings.json");
-    await mkdir(dirname(settingsPath), { recursive: true });
-    await writeFile(
-      settingsPath,
-      JSON.stringify(
-        buildSessionSettings({
-          guardCommand: [process.execPath, guardScriptPath, workspaceDir].map(shellQuote).join(" "),
-          hookCommand: hookCommand({ nodePath: process.execPath, hookScriptPath }),
-        }),
-      ),
+  const setupSteps: string[] = [];
+  let abandoned = false;
+  let setupDone: Promise<unknown> = Promise.resolve();
+  const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
+    if (abandoned) throw new Error(`AT-12 setup abandoned before ${name}`);
+    const started = Date.now();
+    setupSteps.push(`${name}: not finished`);
+    const result = await work();
+    setupSteps[setupSteps.length - 1] = `${name}: ${Date.now() - started} ms`;
+    return result;
+  };
+  const paneOrNote = () =>
+    withWatchdog(paneText(sessionName, sessionName), 5_000, async () => undefined).catch(
+      () => "no pane: capture timed out",
     );
-    agents = realBuildAgents(home);
-    await agents.open({
-      sessionName,
-      claudeSessionId,
-      workspaceDir,
-      kitDir: kit.dir,
-      settingsPath,
-      model: "haiku",
-      env: {},
+
+  const setUp = async () => {
+    const fdHome = await step("temp home", () => mkdtemp(join(tmpdir(), "fd-home-")));
+    home = fdHome;
+    const tmpRepo = await step("temp repo", () => createTmpRepo({ commit: true }));
+    repo = tmpRepo;
+    engine = liveEngine({ home: fdHome, repo: tmpRepo.path });
+    const live = engine;
+    const { dir: workDir } = await step("build with fake agents", () =>
+      live.saveAndBuild(onMainFlow([agent("p1")], []), { name: "live-kit" }),
+    );
+    workspaceDir = workDir;
+    const kit = await step("prepare kit", () =>
+      prepareKit({ sourceDir: kitSourceDir, home: fdHome }),
+    );
+    const settingsPath = join(fdHome, "build-sessions", sessionName, "settings.json");
+    await step("write settings", async () => {
+      await mkdir(dirname(settingsPath), { recursive: true });
+      await writeFile(
+        settingsPath,
+        JSON.stringify(
+          buildSessionSettings({
+            guardCommand: [process.execPath, guardScriptPath, workDir].map(shellQuote).join(" "),
+            hookCommand: hookCommand({ nodePath: process.execPath, hookScriptPath }),
+          }),
+        ),
+      );
     });
+    const real = realBuildAgents(fdHome);
+    agents = real;
+    await step("open build session", () =>
+      real.open({
+        sessionName,
+        claudeSessionId,
+        workspaceDir: workDir,
+        kitDir: kit.dir,
+        settingsPath,
+        model: "haiku",
+        env: {},
+      }),
+    );
+  };
+
+  beforeAll(async () => {
+    try {
+      const setup = setUp();
+      setupDone = setup.catch(() => undefined);
+      await withWatchdog(setup, setupWatchdogMs, async () => undefined);
+    } catch (error) {
+      abandoned = true;
+      throw new Error(
+        `AT-12 setup failed. Steps: ${setupSteps.join("; ")}\npane of ${sessionName}:\n${await paneOrNote()}`,
+        { cause: error },
+      );
+    }
   }, 120_000);
 
   afterAll(async () => {
+    await withWatchdog(setupDone, 30_000, async () => undefined).catch(() => undefined);
     await agents?.close(sessionName);
     await killTmuxServer(sessionName);
     await engine?.cleanup();
-    await removeClaudeSessions(workspaceDir, [claudeSessionId]);
-    await repo.cleanup();
-    await rm(home, { recursive: true, force: true });
+    if (workspaceDir !== undefined) await removeClaudeSessions(workspaceDir, [claudeSessionId]);
+    await repo?.cleanup();
+    if (home !== undefined) await rm(home, { recursive: true, force: true });
   }, 60_000);
 
   it(
@@ -490,7 +534,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
       const offered = (pane: string, skill: string) =>
         new RegExp(`${skill}\\s+\\(flowdeck-build\\)`).test(pane);
       const seen: string[] = [];
-      const panes: string[] = [];
       for (const skill of [...kitSkills, madeUpSkill]) {
         await sessions.typeText(sessionName, `/flowdeck-build:${skill}`);
         let pane = await sessions.capture(sessionName);
@@ -499,12 +542,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
           pane = await sessions.capture(sessionName);
         }
         if (offered(pane, skill)) seen.push(skill);
-        panes.push(pane);
+        console.log(`pane after /flowdeck-build:${skill}:\n${pane}`);
         await run("tmux", ["-L", sessionName, "send-keys", "-t", `=${sessionName}:`, "C-u"]);
         await sleep(500);
       }
 
-      console.log(`panes:\n${panes.join("\n")}`);
       expect(seen).toEqual(kitSkills);
     },
   );

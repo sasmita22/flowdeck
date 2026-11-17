@@ -576,10 +576,6 @@ export class SqliteStore implements Store {
     return this.selectBuilds("WHERE builds.deleted_at IS NULL");
   }
 
-  listBuildsWithDeleted(): BuildRecord[] {
-    return this.selectBuilds("");
-  }
-
   private selectBuilds(where: string): BuildRecord[] {
     const rows = this.db
       .prepare(`${buildsWithSnapshot} ${where} ORDER BY builds.created_at DESC, builds.rowid DESC`)

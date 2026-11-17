@@ -189,10 +189,19 @@ const setup = async (
   const canvas = createCanvasStore({ ready: false });
   const save = createSaveStore({ bridge: saveBridge, canvas });
   await save.getState().open();
-  const run = createRunStore({ bridge, save, canvas });
+  const timers = new Set<() => void>();
+  const every = vi.fn((_ms: number, fn: () => void) => {
+    timers.add(fn);
+    return () => timers.delete(fn);
+  });
+  const tick = async () => {
+    for (const fn of [...timers]) fn();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const run = createRunStore({ bridge, save, canvas, every });
   const push = (value: unknown) => pushListener(value);
 
-  return { bridge, saveBridge, canvas, save, run, calls, push };
+  return { bridge, saveBridge, canvas, save, run, calls, push, tick };
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
@@ -1358,6 +1367,55 @@ describe("controls", () => {
         total: { tokens: 10, cost: 0.5, ms: 1000 },
       },
     });
+  });
+
+  it("refreshes a live run's pipeline and cost together while nothing else changes", async () => {
+    const { bridge, run, tick } = await setup();
+    await run.getState().loadPipeline("run-7");
+    await run.getState().loadCost("run-7");
+    bridge.runPipeline.mockResolvedValue([{ ...stage("p1"), cost: 0.0042 }]);
+    bridge.runCost.mockResolvedValue({
+      nodes: [{ nodeId: "p1", tokens: 12, cost: 0.0042, ms: 1000 }],
+      total: { tokens: 12, cost: 0.0042, ms: 1000 },
+    });
+
+    run.getState().watchCost("run-7");
+    await tick();
+
+    expect(run.getState().pipelines["run-7"]?.[0]).toMatchObject({ nodeId: "p1", cost: 0.0042 });
+    expect(run.getState().cost?.report.nodes[0]?.cost).toBe(0.0042);
+  });
+
+  it("refreshes a run once per tick however many views watch it, until the last stops", async () => {
+    const { bridge, run, tick } = await setup();
+    const stopPipeline = run.getState().watchCost("run-7");
+    const stopCostTab = run.getState().watchCost("run-7");
+
+    await tick();
+    expect(bridge.runPipeline).toHaveBeenCalledTimes(1);
+
+    stopCostTab();
+    await tick();
+    expect(bridge.runPipeline).toHaveBeenCalledTimes(2);
+
+    stopPipeline();
+    await tick();
+    expect(bridge.runPipeline).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops refreshing once the watch is ended", async () => {
+    const { bridge, run, tick } = await setup();
+    const stop = run.getState().watchCost("run-7");
+    await tick();
+    const pipelineCalls = bridge.runPipeline.mock.calls.length;
+    const costCalls = bridge.runCost.mock.calls.length;
+
+    stop();
+    await tick();
+
+    expect(pipelineCalls).toBeGreaterThan(0);
+    expect(bridge.runPipeline).toHaveBeenCalledTimes(pipelineCalls);
+    expect(bridge.runCost).toHaveBeenCalledTimes(costCalls);
   });
 
   it("keeps the round lines of a cost report", async () => {

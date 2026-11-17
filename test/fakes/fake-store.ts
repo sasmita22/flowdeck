@@ -238,10 +238,6 @@ export class FakeStore implements Store {
     return this.allBuilds();
   }
 
-  listBuildsWithDeleted(): BuildRecord[] {
-    return this.allBuilds();
-  }
-
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {
     const open = this.openPendingBuilds();
     if (open.some((known) => known.name === build.name)) return { kind: "busy", reason: "name" };

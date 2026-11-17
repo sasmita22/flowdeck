@@ -57,10 +57,6 @@ class StoreWithOldBuild extends FakeStore {
     return [...super.listBuilds(), oldBuild];
   }
 
-  override listBuildsWithDeleted(): BuildRecord[] {
-    return [...super.listBuildsWithDeleted(), oldBuild];
-  }
-
   override findBuild(id: string): BuildRecord | undefined {
     return id === oldBuild.id ? oldBuild : super.findBuild(id);
   }
@@ -178,8 +174,8 @@ describe("engine build tools", () => {
     it("never lists a build as deleted, even one whose record carries a delete time", async () => {
       const handler = setup({
         prepare: (runs) => {
-          const records = runs.listBuildsWithDeleted();
-          vi.spyOn(runs, "listBuildsWithDeleted").mockReturnValue(
+          const records = runs.listBuilds();
+          vi.spyOn(runs, "listBuilds").mockReturnValue(
             records.map((record) =>
               record.id === live.id ? { ...record, deletedAt: deletedAtTime } : record,
             ),

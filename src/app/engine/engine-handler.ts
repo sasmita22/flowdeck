@@ -284,7 +284,6 @@ function detachable(store: Store, detached: () => boolean): Store {
     findBuild: (id) => store.findBuild(id),
     findBuildByName: (name) => store.findBuildByName(name),
     listBuilds: () => store.listBuilds(),
-    listBuildsWithDeleted: () => store.listBuildsWithDeleted(),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),
@@ -1983,7 +1982,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return answer(request.id, () => listBuilds(storesOrThrow().runs));
         case "assistant-list-builds":
           return answer(request.id, () =>
-            storesOrThrow().runs.listBuildsWithDeleted().map(assistantListedBuild),
+            storesOrThrow().runs.listBuilds().map(assistantListedBuild),
           );
         case "assistant-read-build":
           return parsedAnswer(request, assistantReadBuildPayload, ({ id }) =>
