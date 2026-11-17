@@ -25,6 +25,7 @@ import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
 import { emptyEnvOf } from "../../core/env/empty-env.js";
 import { createAppWaiter } from "./app-waiter.js";
+import { userClaudeJsonPath } from "./claude-json-path.js";
 import {
   createEngineHandler,
   type EngineHandlerOptions,
@@ -42,7 +43,6 @@ mkdirSync(home, { recursive: true });
 
 const dbPath = join(home, "flowdeck.db");
 
-const claudeConfig = process.env["FLOWDECK_CLAUDE_CONFIG"] || undefined;
 const claudeConfigDir = process.env["CLAUDE_CONFIG_DIR"] || undefined;
 
 const runClaudeConfig = {
@@ -164,9 +164,9 @@ const createHandler = async () =>
     kit: () => kit,
     isFolder: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true,
     fs,
-    connectors: new ClaudeUserConnectors(
-      claudeConfig === undefined ? {} : { configPath: claudeConfig },
-    ),
+    connectors: new ClaudeUserConnectors({
+      configPath: userClaudeJsonPath(process.env, homedir()),
+    }),
     run,
     waits,
     worktree: new GitWorktree(),

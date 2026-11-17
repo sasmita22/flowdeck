@@ -3,9 +3,11 @@ import type { ConnectorSource, McpServer } from "../../src/ports/connector-sourc
 export class FakeConnectorSource implements ConnectorSource {
   readonly calls: string[] = [];
   private readonly servers: Record<string, McpServer>;
+  readonly configPath: string;
 
-  constructor(servers: Record<string, McpServer> = {}) {
+  constructor(servers: Record<string, McpServer> = {}, configPath = "/fake/.claude.json") {
     this.servers = structuredClone(servers);
+    this.configPath = configPath;
   }
 
   async find(name: string): Promise<McpServer | undefined> {

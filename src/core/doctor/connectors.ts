@@ -53,15 +53,16 @@ const describeServer = (name: string, server: McpServer): InstalledConnector => 
   };
 };
 
-const fixFor = (connector: InstalledConnector): string | null => {
+const fixFor = (connector: InstalledConnector, configPath: string): string | null => {
   const empty = connector.settings.filter((setting) => !setting.set).map(({ name }) => name);
   if (empty.length === 0) return null;
-  return `Fill in ${empty.join(", ")} for "${connector.name}" under "mcpServers" in ~/.claude.json, then build again.`;
+  return `Fill in ${empty.join(", ")} for "${connector.name}" under "mcpServers" in ${configPath}, then build again.`;
 };
 
 export function diagnoseConnectors(
   installed: Readonly<Record<string, McpServer>>,
   needed: readonly string[],
+  configPath: string,
 ): DoctorReport {
   const described = Object.keys(installed)
     .sort()
@@ -81,7 +82,7 @@ export function diagnoseConnectors(
           fix: `Add it for your user with \`claude mcp add --scope user ${name} …\`, then build again.`,
         };
       }
-      return { ...found, fix: fixFor(found) };
+      return { ...found, fix: fixFor(found, configPath) };
     }),
   };
 }

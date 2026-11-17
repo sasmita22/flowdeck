@@ -1386,6 +1386,34 @@ describe("createEngineHandler", async () => {
       expect(JSON.stringify(answer)).not.toContain("xoxb-secret");
     });
 
+    it("names the file the connector source read in the fix for an empty setting", async () => {
+      const handler = createEngineHandler(
+        options({
+          connectors: new FakeConnectorSource(
+            {
+              jira: {
+                type: "http",
+                url: "https://mcp.example.com/jira",
+                headers: { Authorization: "" },
+              },
+            },
+            "/drive-home/.claude/.claude.json",
+          ),
+        }),
+      );
+
+      const answer = await handler.handle({
+        id: 1,
+        type: "doctor",
+        payload: { connectors: ["jira"] },
+      });
+
+      if (!answer.ok) throw new Error(answer.error);
+      const fix = (answer.value as { needed: { fix: string | null }[] }).needed[0]?.fix;
+      expect(fix).toContain("/drive-home/.claude/.claude.json");
+      expect(fix).not.toContain("~/.claude.json");
+    });
+
     it("answers a connector source that cannot be read as an error", async () => {
       const connectors = new FakeConnectorSource();
       connectors.list = () => Promise.reject(new Error("~/.claude.json is not valid JSON"));

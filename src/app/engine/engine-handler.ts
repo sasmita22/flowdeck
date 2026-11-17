@@ -1880,7 +1880,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const doctor = async (needed: readonly string[]): Promise<DoctorReport> =>
-    diagnoseConnectors(await options.connectors.list(), needed);
+    diagnoseConnectors(await options.connectors.list(), needed, options.connectors.configPath);
 
   const answer = async (id: number, work: () => unknown): Promise<EngineResponse> => {
     try {

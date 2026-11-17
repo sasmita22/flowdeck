@@ -518,7 +518,11 @@ describe("buildVersion", () => {
         ...ticketFlow(),
         session: { ...ticketFlow().session, connectors: ["jira"] },
       };
-      const noConnectors = { find: async () => undefined, list: async () => ({}) };
+      const noConnectors = {
+        find: async () => undefined,
+        list: async () => ({}),
+        configPath: "/fake/.claude.json",
+      };
 
       const result = await startBuild(withConnector, request, {
         ...deps,
@@ -731,6 +735,7 @@ describe("buildVersion", () => {
             throw new Error("keychain locked");
           },
           list: async () => ({}),
+          configPath: "/fake/.claude.json",
         },
       };
       const pending = await started(base);
