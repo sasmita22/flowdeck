@@ -309,6 +309,15 @@ describe("runDigest", () => {
       expect(text("running")).toContain("1. Gate (gate): needs you");
     });
 
+    it("reads a stage left running as stopped once the run is stopped", () => {
+      const running = stored([["g", 1, { kind: "running" }]]);
+      const text = (status: RunStatus) =>
+        runDigest(digestInput(running, { sources, activity: [], status })).text;
+
+      expect(text("stopped")).toContain("1. Gate (gate): stopped");
+      expect(text("running")).toContain("1. Gate (gate): running");
+    });
+
     it("prints no Asked line for a stage with no question or an empty one", () => {
       expect(digestOf({ g: "" })).not.toContain("Asked:");
     });

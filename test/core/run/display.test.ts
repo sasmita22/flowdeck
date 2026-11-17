@@ -4,27 +4,27 @@ import type { SnapshotStatus } from "../../../src/core/run/snapshot.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 
 describe("displayStatus", () => {
-  describe.each<SnapshotStatus>(["running", "stopped"])("in a %s run", (run) => {
-    it.each<[NodeState, string]>([
-      ["waiting", "waiting"],
-      ["sent", "sent"],
-      ["running", "running"],
-      ["failed", "failed"],
-      ["done", "done"],
-      ["skipped", "skipped"],
-    ])("shows %s as %s", (state, shown) => {
-      expect(displayStatus(state, run)).toBe(shown);
+  const ended: SnapshotStatus[] = ["stopped", "done", "failed", "interrupted"];
+
+  it.each<[NodeState, string]>([
+    ["waiting", "waiting"],
+    ["sent", "sent"],
+    ["running", "running"],
+    ["needs-you", "needs you"],
+    ["failed", "failed"],
+    ["done", "done"],
+    ["skipped", "skipped"],
+  ])("shows %s as %s while the run is running", (state, shown) => {
+    expect(displayStatus(state, "running")).toBe(shown);
+  });
+
+  describe.each(ended)("once the run is %s", (run) => {
+    it.each<NodeState>(["sent", "running", "needs-you"])("shows %s as stopped", (state) => {
+      expect(displayStatus(state, run)).toBe("stopped");
+    });
+
+    it.each<NodeState>(["waiting", "failed", "done", "skipped"])("shows %s as itself", (state) => {
+      expect(displayStatus(state, run)).toBe(state);
     });
   });
-
-  it("shows needs-you as needs you while the run is running", () => {
-    expect(displayStatus("needs-you", "running")).toBe("needs you");
-  });
-
-  it.each<SnapshotStatus>(["stopped", "done", "failed", "interrupted"])(
-    "shows needs-you as stopped once the run is %s",
-    (run) => {
-      expect(displayStatus("needs-you", run)).toBe("stopped");
-    },
-  );
 });

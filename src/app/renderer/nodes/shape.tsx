@@ -3,7 +3,7 @@ import { createElement, useId, type ReactNode } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
 import { labelFonts, labelX, SIDE_LABEL_GAP } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
-import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
+import { NodeIssueMarker } from "../canvas/status.js";
 import { nodeLook, tagWidth } from "./look.js";
 import { frameLook, nodeOutline, type OutlinedType, type ShapeExtra } from "./outlines.js";
 import "./tokens.css";
@@ -21,8 +21,6 @@ export const ignoredMarks = (ignored: boolean | undefined) =>
     : { className: "fd-node" };
 
 export const BODY_HEIGHT = 48;
-
-const REASON_OVERHANG = 30;
 
 export const ports = (id: string, type: NodeType, sourceLeft?: number) => {
   return nodeLook(type).ports.map(({ name, direction }) => (
@@ -71,7 +69,7 @@ export function NodeShape({
   const clip = `fd-clip-${useId().replace(/[^\w-]/g, "")}`;
   const { box: look, outline: stroke } = nodeLook(type);
   const box = { ...look, width: width ?? look.width };
-  const { path: outline, padL, fill, strokeWidth, extras } = nodeOutline(type, box.width);
+  const { path: outline, fill, strokeWidth, extras } = nodeOutline(type, box.width);
   return (
     <div
       {...ignoredMarks(ignored)}
@@ -107,11 +105,7 @@ export function NodeShape({
         </g>
         {overlay}
       </svg>
-      <div style={{ position: "absolute", left: padL, top: 25, color: "var(--fg)" }}>
-        <NodeStatusBadge nodeId={id} />
-      </div>
       <NodeIssueMarker nodeId={id} width={box.width} />
-      <NodeFailureReason nodeId={id} width={box.width + REASON_OVERHANG} />
       {handles}
     </div>
   );

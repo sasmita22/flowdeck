@@ -27,10 +27,13 @@ export function CostTab({
 }) {
   const report = useStore(run, (state) => (state.cost?.runId === runId ? state.cost.report : null));
   const changed = useStore(run, (state) => JSON.stringify(selectRunSnapshot(state, runId)));
+  const live = useStore(run, (state) => selectRunSnapshot(state, runId)?.status === "running");
 
   useEffect(() => {
     void run.getState().loadCost(runId);
   }, [run, runId, changed]);
+
+  useEffect(() => (live ? run.getState().watchCost(runId) : undefined), [run, runId, live]);
 
   if (report === null) return <p data-testid="cost-loading">Reading the cost…</p>;
   const shown = report.nodes.filter((line) => line.ms !== null || line.tokens > 0);

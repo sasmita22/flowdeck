@@ -206,6 +206,28 @@ test("The run page shows each stage with its status, and no canvas or Open bluep
   await darkShot(window, "stages.png");
 });
 
+test("A blueprint that has run shows no run status on the editor canvas; its run page does", async () => {
+  const { flowId } = seedFlow(home, laidOut([named("s1", "Plan")], []), repo.path);
+  const window = await launch();
+
+  const buildId = await buildAndRun(window, home, "no-editor-status");
+  const runId = await runIdOf(home, buildId);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+  await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(
+    "data-status",
+    "done",
+  );
+
+  await window.getByTestId(pageTestIds.runBack).click();
+  await window.getByTestId("menu-blueprints").click();
+  await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+  await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
+  await expect(window.getByTestId("node-s1")).toBeVisible();
+  await expect(window.locator('[data-testid^="node-status-"]')).toHaveCount(0);
+});
+
 test("The picture of the blueprint sits above the stages, collapsed until opened", async () => {
   seedFlow(
     home,

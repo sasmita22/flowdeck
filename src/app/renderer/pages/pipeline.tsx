@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { displayStatus } from "../../../core/run/display.js";
+import { displayStatus, type DisplayStatus } from "../../../core/run/display.js";
 import type {
   BudgetPause,
   PipelineItem,
@@ -104,9 +104,9 @@ const pauseText = (pause: BudgetPause) =>
 const stageName = (stage: PipelineStage, round: number | undefined) =>
   `${labelFor(stage)}${round === undefined ? "" : ` · round ${round}`}`;
 
-function StageTook({ stage, state }: { stage: PipelineStage; state: NodeState }) {
+function StageTook({ stage, shown }: { stage: PipelineStage; shown: DisplayStatus }) {
   if (stage.ms !== undefined) return <>{formatDuration(stage.ms)}</>;
-  if (stage.startedAt !== undefined && (state === "running" || state === "sent"))
+  if (stage.startedAt !== undefined && (shown === "running" || shown === "sent"))
     return <LiveElapsed since={stage.startedAt} />;
   return null;
 }
@@ -144,7 +144,7 @@ function StageRow({ placed, ...rail }: RailProps & { placed: Placed }) {
         </span>
         <span className="fd-ellipsis">{labelFor(stage)}</span>
         <span className="fd-pipeline-took">
-          <StageTook stage={stage} state={stateOf(placed, live)} />
+          <StageTook stage={stage} shown={shown} />
           {stage.cost !== undefined && stage.cost > 0 && ` · ${formatCost(stage.cost)}`}
         </span>
       </button>
@@ -324,6 +324,11 @@ export function RunPipeline({
   useEffect(() => {
     if (recorded) void run.getState().loadPipeline(runId);
   }, [run, runId, recorded, changed, activityCount]);
+
+  useEffect(
+    () => (recorded && runStatus === "running" ? run.getState().watchCost(runId) : undefined),
+    [run, runId, recorded, runStatus],
+  );
 
   if (!recorded || pipeline === null) {
     return (

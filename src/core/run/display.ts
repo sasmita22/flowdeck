@@ -9,9 +9,8 @@ export function displayStatus(state: NodeState, run: SnapshotStatus): DisplaySta
     case "waiting":
       return "waiting";
     case "sent":
-      return "sent";
     case "running":
-      return "running";
+      return run === "running" ? state : "stopped";
     case "needs-you":
       return run === "running" ? "needs you" : "stopped";
     case "failed":

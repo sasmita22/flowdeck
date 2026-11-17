@@ -3,7 +3,7 @@ import { labelFonts, labelTextWidth } from "../canvas/frames.js";
 import { nodeTitle } from "../canvas/palette-items.js";
 import { nodeLook } from "./look.js";
 import { barLook } from "./outlines.js";
-import { NodeFailureReason, NodeIssueMarker, NodeStatusBadge } from "../canvas/status.js";
+import { NodeIssueMarker } from "../canvas/status.js";
 import { ignoredMarks, ports, tagTextStyle, type ShapeNode } from "./shape.js";
 
 export function ParallelBar({
@@ -82,23 +82,6 @@ export function ParallelBar({
         }}
       >
         {data.label}
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          top: "100%",
-          left: "50%",
-          transform: "translateX(-50%)",
-          whiteSpace: "nowrap",
-          color: "var(--fg)",
-        }}
-      >
-        <NodeStatusBadge nodeId={id} />
-        <NodeFailureReason
-          nodeId={id}
-          width={Math.max(160, labelWidth)}
-          style={{ left: "50%", transform: "translateX(-50%)", textAlign: "center" }}
-        />
       </div>
       <NodeIssueMarker nodeId={id} width={170} />
       {ports(id, type)}

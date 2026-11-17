@@ -145,6 +145,7 @@ export type RunState = {
   resume(runId: string): Promise<string | null>;
   loadCost(runId: string): Promise<void>;
   loadPipeline(runId: string): Promise<void>;
+  watchCost(runId: string): () => void;
   selectStage(runId: string, stage: StageSelection): void;
   openMenu(key: string): void;
   closeMenu(): void;
@@ -299,16 +300,29 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 const without = <T>(record: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(record).filter(([kept]) => kept !== key));
 
+type Every = (ms: number, fn: () => void) => () => void;
+
+const everyInterval: Every = (ms, fn) => {
+  const timer = setInterval(fn, ms);
+  return () => clearInterval(timer);
+};
+
+const LIVE_COST_MS = 2000;
+
 export const createRunStore = ({
   bridge,
   save,
   canvas,
+  every = everyInterval,
 }: {
   bridge: RunBridge;
   save: StoreApi<SaveState>;
   canvas: StoreApi<CanvasState>;
+  every?: Every;
 }): StoreApi<RunState> =>
   createStore<RunState>()((set, get) => {
+    const costWatches = new Map<string, { watchers: number; cancel: () => void }>();
+
     const saveFirst = (): Promise<boolean> => {
       const saver = save.getState();
       if (selectDirty(canvas.getState())) return saver.save();
@@ -615,6 +629,27 @@ export const createRunStore = ({
         } catch (thrown) {
           set({ error: messageOf(thrown) });
         }
+      },
+
+      watchCost: (runId) => {
+        const watch = costWatches.get(runId) ?? {
+          watchers: 0,
+          cancel: every(LIVE_COST_MS, () => {
+            void get().loadPipeline(runId);
+            void get().loadCost(runId);
+          }),
+        };
+        watch.watchers += 1;
+        costWatches.set(runId, watch);
+        let stopped = false;
+        return () => {
+          if (stopped) return;
+          stopped = true;
+          watch.watchers -= 1;
+          if (watch.watchers > 0) return;
+          watch.cancel();
+          costWatches.delete(runId);
+        };
       },
 
       selectStage: (runId, stage) =>
