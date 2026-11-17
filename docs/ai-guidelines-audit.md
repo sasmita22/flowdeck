@@ -470,6 +470,14 @@ The inventory needed no new row: the pass changed only files already listed. The
 
 The fix text is shown on the Doctor page and read by no model, and `src/core/doctor/` is outside the detection rule's folders, so the inventory needs no row. Pass: the fix names the file the connector source read (`FLOWDECK_CLAUDE_CONFIG`, else `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`), so it no longer points at a file Doctor did not read; the "missing" fix and the refusal in `src/core/compiler/connectors.ts` are unchanged.
 
+### Test hygiene 2
+
+| Skill or file                  | Added or changed | Why                                                                                                                     |
+| ------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `.claude/rules/manual-test.md` | Changed          | Rule 6: cleanup also checks `~/.claude.json` for `projects` entries whose folders no longer exist and removes the run's |
+
+The file is read by the agents that work on this repo, not by a Flowdeck session, and sits outside the detection rule's folders, so the inventory needs no row. Standard, judged on the file as a whole: rule 1 pass (manual testing only); rule 2 n/a (a rules file, no frontmatter); rule 3 pass (43 lines); rule 4 pass (rule 9 still pins the result row); rule 5 pass (rule 6 still ends with reporting anything that could not be cleaned up); rule 6 n/a (no blueprint); rule 7 pass (`~/.claude.json` written as rule 10 writes it). Staleness: Claude Code keys `projects` in `~/.claude.json` by folder path and keeps keys for folders that are gone (560 of 613 keys on the machine this ran on pointed at deleted temporary folders), and rule 10 still holds because the new line covers runs other than `npm run drive`. No product model-facing text changed: `src/adapters/claude/claude-cli.ts` (`## Not model-facing`) changed only how it finds a scrolled input box.
+
 ### Raised, not changed here
 
 - Resolved by the GitHub-links pass: the blueprint session fetches github.com and raw.githubusercontent.com only, and `copy-flow` reads GitHub links. Still open: a fetch hands the session a summary of the page, not the file, so `copy-flow` prefers the GitHub tools and raw files; and a repo's text can carry instructions that add steps, which the user sees on the canvas before anything runs.

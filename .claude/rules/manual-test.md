@@ -24,8 +24,9 @@ host and run each check twice. Use these rules instead.
 5. **Keep live checks cheap.** Checks that start real Claude Code use the smallest model and the
    shortest prompt that proves the point.
 6. **Leave nothing behind.** Afterwards, stop every `fd-mt-*` tmux session, delete the temporary
-   `FLOWDECK_HOME` and any worktree the test made, and quit the app. Report anything that could
-   not be cleaned up.
+   `FLOWDECK_HOME` and any worktree the test made, and quit the app. Then check `~/.claude.json`
+   for `projects` entries whose folders no longer exist, and remove the ones the run created.
+   Report anything that could not be cleaned up.
 7. **The app stays hidden.** Drive runs started by an agent keep the window hidden (`CLAUDECODE=1`),
    so nothing appears on the user's screen. To watch a run, set `FLOWDECK_SHOW_WINDOW=1`.
 8. **No native dialogs.** Playwright can't click macOS file pickers or menus. Every v1 flow has an

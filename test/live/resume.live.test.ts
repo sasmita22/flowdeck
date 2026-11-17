@@ -4,8 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
-import { nodeMarker } from "../../src/core/run/agent-calls.js";
-import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -13,6 +12,7 @@ import { claudeConfigDir, useTempClaudeConfig } from "../fixtures/claude-config.
 
 const buildName = "live-resume";
 const watchdogMs = 180_000;
+const transcriptSettleMs = 10_000;
 const words = { p1: "ALPHA", p2: "BRAVO", p3: "CHARLIE" };
 
 const hasCode = (error: unknown, ...codes: (string | number)[]) =>
@@ -53,17 +53,46 @@ async function entriesOf(path: string): Promise<Entry[]> {
   });
 }
 
-const commandOf = (prefix: string, piece: string) =>
-  `<command-name>/${prefix}:${piece}</command-name>`;
+const agentCall = (prefix: string, piece: string) =>
+  `Use the Agent tool with subagent_type "${prefix}:${piece}"`;
 
-const userIndexes = (entries: Entry[], marker: string) =>
-  entries.flatMap((entry, i) =>
-    entry.type === "user" &&
-    entry.isMeta !== true &&
-    JSON.stringify(entry.message?.content ?? "").includes(marker)
+const userIndexes = (entries: Entry[], call: string) =>
+  entries.flatMap((entry, i) => {
+    const content = entry.message?.content;
+    return entry.type === "user" &&
+      entry.isMeta !== true &&
+      typeof content === "string" &&
+      content.startsWith(call)
       ? [i]
-      : [],
-  );
+      : [];
+  });
+
+const endedAfter = (entries: Entry[], call: string) =>
+  entries
+    .slice((userIndexes(entries, call)[0] ?? entries.length) + 1)
+    .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
+
+async function settledEntries(path: string, call: string): Promise<Entry[]> {
+  const deadline = Date.now() + transcriptSettleMs;
+  let entries = await entriesOf(path);
+  while (!endedAfter(entries, call) && Date.now() < deadline) {
+    await sleep(250);
+    entries = await entriesOf(path);
+  }
+  return entries;
+}
+
+const toolResult = (entries: Entry[], toolUseId: string) =>
+  entries
+    .flatMap((entry) => {
+      const content = entry.message?.content;
+      return Array.isArray(content)
+        ? (content as { tool_use_id?: string; content?: unknown }[])
+        : [];
+    })
+    .filter((block) => block.tool_use_id === toolUseId)
+    .map((block) => JSON.stringify(block.content))
+    .join("\n");
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
   "a run resumed by the engine with real claude",
@@ -93,7 +122,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
       "resumes a run interrupted during node 2 without resending it, and runs node 3",
       { timeout: watchdogMs + 30_000 },
       async () => {
-        const parsed = flow(
+        const parsed = onMainFlow(
           (["p1", "p2", "p3"] as const).map((id) =>
             agent(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
           ),
@@ -101,9 +130,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
         );
         const prompts = { ...parsed, session: { ...parsed.session, model: "haiku" } };
         const pieces = pieceNames(prompts);
-        const commandOfNode = (id: string) => commandOf(buildName, pieces.get(id) ?? "");
-        const typedTurn = (id: string) =>
-          `❯ /${buildName}:${pieces.get(id) ?? ""} ${nodeMarker(id)}`;
+        const callOfNode = (id: string) => agentCall(buildName, pieces.get(id) ?? "");
+        const typedTurn = (id: string) => `❯ ${callOfNode(id)}`;
         const first = liveEngine({ home, repo: repo.path, sessionName, sessionAlive });
         engines.push(first);
         const built = await first.saveAndBuild(prompts, { name: buildName });
@@ -129,7 +157,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
           until(async () => {
             const sent = runs.events(runId).some((e) => e.nodeId === "p2" && e.kind === "sent");
             const delivered =
-              userIndexes(await entriesOf(transcriptPath), commandOfNode("p2")).length > 0;
+              userIndexes(await entriesOf(transcriptPath), callOfNode("p2")).length > 0;
             return sent && delivered ? true : undefined;
           }),
           120_000,
@@ -162,12 +190,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
         ).finally(() => (ended = true));
         await polling;
 
-        const entries = await entriesOf(transcriptPath);
-        const p2Turns = userIndexes(entries, commandOfNode("p2"));
-        const p3Turns = userIndexes(entries, commandOfNode("p3"));
-        const p3Ended = entries
-          .slice((p3Turns[0] ?? entries.length) + 1)
-          .some((entry) => entry.type === "assistant" && entry.message?.stop_reason === "end_turn");
+        const entries = await settledEntries(transcriptPath, callOfNode("p3"));
+        const p2Turns = userIndexes(entries, callOfNode("p2"));
+        const p3Turns = userIndexes(entries, callOfNode("p3"));
+        const p3Ended = endedAfter(entries, callOfNode("p3"));
         const p3Done = runs.events(runId).find((e) => e.nodeId === "p3" && e.kind === "done");
         const report = [
           `status at detach: ${statusAtDetach}`,
@@ -184,10 +210,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
         expect(statusAtDetach, report).toBe("running");
         expect(status, report).toBe("done");
         expect(
-          paneLines.filter((line) => line === typedTurn("p2")),
+          paneLines.filter((line) => line.startsWith(typedTurn("p3"))),
           report,
         ).toHaveLength(1);
-        expect(paneLines, report).toContain(typedTurn("p3"));
         expect(p2Turns, report).toHaveLength(1);
         expect(p3Turns, report).toHaveLength(1);
         expect(p3Ended, report).toBe(true);
@@ -195,9 +220,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
           runs.events(runId).filter((e) => e.nodeId === "p2" && e.kind === "sent"),
           report,
         ).toHaveLength(1);
-        expect(p3Done, report).toMatchObject({
-          payload: { stopMessage: expect.stringContaining(words.p3) },
-        });
+        expect(p3Done, report).toMatchObject({ payload: { toolUseIds: [expect.any(String)] } });
+        const [p3Call = ""] = p3Done?.kind === "done" ? (p3Done.payload?.toolUseIds ?? []) : [];
+        expect(toolResult(entries, p3Call), report).toContain(words.p3);
       },
     );
   },

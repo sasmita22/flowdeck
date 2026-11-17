@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
+import { pieceNames } from "../../src/core/compiler/pieces.js";
 import type { RunStatus, StoredEvent } from "../../src/core/run/store.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import {
@@ -21,6 +22,7 @@ import { createTmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const buildName = "live-parallel";
+const branchSleeps = { a1: 15, a2: 15, a3: 15, a4: 30 };
 const runTimeoutMs = 420_000;
 const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
 
@@ -163,10 +165,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("parallel sections with real 
   let events: StoredEvent[] = [];
 
   beforeAll(async () => {
-    live = await runLive(
-      parallelFlow({ a1: 15, a2: 15, a3: 15, a4: 30 }, "all"),
-      `fd-live-parallel-${process.pid}`,
-    );
+    live = await runLive(parallelFlow(branchSleeps, "all"), `fd-live-parallel-${process.pid}`);
     ({ recorded, events } = live);
   }, runTimeoutMs);
 
@@ -196,14 +195,20 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("parallel sections with real 
   });
 
   it("starts the node after Join only after the last SubagentStop", () => {
-    const lastSubagentStop = Math.max(
-      ...recorded.filter((event) => event.kind === "SubagentStop").map(hookAt),
+    const pieces = pieceNames(parallelFlow(branchSleeps, "all"));
+    const branchTypes = Object.keys(branchSleeps).map((id) => `${buildName}:${pieces.get(id)}`);
+    const branchStops = recorded.filter(
+      (event) =>
+        event.kind === "SubagentStop" &&
+        branchTypes.includes(event.payload["agent_type"] as string),
     );
+    const lastSubagentStop = Math.max(...branchStops.map(hookAt));
     const afterSent = events.find((event) => event.nodeId === "after" && event.kind === "sent");
     console.log(
       `last SubagentStop: ${lastSubagentStop}, after sent: ${afterSent?.time ?? "never"}`,
     );
 
+    expect(branchStops).toHaveLength(Object.keys(branchSleeps).length);
     expect(afterSent).toBeDefined();
     expect(Date.parse(afterSent?.time ?? "")).toBeGreaterThan(lastSubagentStop);
   });

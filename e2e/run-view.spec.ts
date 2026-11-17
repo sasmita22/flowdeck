@@ -301,6 +301,7 @@ test("Against the stages, the gate banner answers, Stop and Resume work, and the
   await banner.getByTestId("wait-approve").click();
   await expect(stage("g1")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(stage("s2")).toHaveAttribute("data-status", "sent", { timeout: 20_000 });
+  await expect.poll(() => fakeClaudeDispatched(home), { timeout: 20_000 }).toContain("s2");
 
   await window.getByTestId(pageTestIds.runStop).click();
 
@@ -382,6 +383,7 @@ test("Stop ends a long agent turn and marks the run stopped, and Resume skips th
   await expect(status(window, "s2")).toHaveAttribute("data-status", "sent", {
     timeout: 20_000,
   });
+  await expect.poll(() => fakeClaudeDispatched(home), { timeout: 20_000 }).toContain("s2");
 
   await window.getByTestId(pageTestIds.runStop).click();
 

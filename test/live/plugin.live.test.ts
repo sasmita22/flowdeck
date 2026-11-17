@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
@@ -76,7 +76,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
     repo = await createTmpRepo({ commit: true });
     engine = liveEngine({ home, repo: repo.path });
     const built = await engine.saveAndBuild(
-      flow([agent("plan-step"), agent("plan-checker")], [thenWire("plan-step", "plan-checker")]),
+      onMainFlow(
+        [agent("plan-step"), agent("plan-checker")],
+        [thenWire("plan-step", "plan-checker")],
+      ),
       { name: buildName },
     );
     ({ hash, workFolder } = built);
@@ -98,18 +101,22 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build plugin in plain claude
     await rm(home, { recursive: true, force: true });
   });
 
-  it("lists the build's prompt and its run skill as skills and its agent as an agent", async () => {
-    const output = await details(pluginDir, workFolder);
+  it(
+    "lists the build's run skill as a skill and both its agents as agents",
+    { timeout: 90_000 },
+    async () => {
+      const output = await details(pluginDir, workFolder);
 
-    expect(inventory(output, "Skills")).toMatch(/^Skills \(2\)\s+plan-step, run$/);
-    expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);
-  });
+      expect(inventory(output, "Skills")).toMatch(/^Skills \(1\)\s+run$/);
+      expect(inventory(output, "Agents")).toMatch(/^Agents \(2\)\s+plan-step, plan-checker$/);
+    },
+  );
 
-  it("lists no skills once the build's skills folder is gone", async () => {
+  it("lists no skills once the build's skills folder is gone", { timeout: 90_000 }, async () => {
     const output = await details(withoutSkills, workFolder);
 
     expect(inventory(output, "Skills")).toMatch(/^Skills \(0\)/);
-    expect(inventory(output, "Agents")).toMatch(/^Agents \(1\)\s+plan-checker$/);
+    expect(inventory(output, "Agents")).toMatch(/^Agents \(2\)\s+plan-step, plan-checker$/);
   });
 
   it(

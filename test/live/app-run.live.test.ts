@@ -365,17 +365,8 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
           ? `tool ${entry.tool}`
           : `subagent ${entry.kind === "subagent" ? entry.state : ""}`;
 
-      expect(of("p2").map(shape).sort()).toEqual([
-        "subagent finished",
-        "tool Read",
-        "tool Read",
-        "tool Read",
-        "tool Read",
-        "tool Read",
-      ]);
-      expect(of("p1")).toEqual([]);
-      const writers = latest.filter((entry) => entry.kind === "tool" && entry.tool === "Write");
-      expect(new Set(writers.map((entry) => entry.nodeId))).toEqual(new Set(["p3"]));
+      for (const id of promptIds) expect(of(id).map(shape), id).toEqual(["subagent finished"]);
+      expect(latest.filter((entry) => entry.kind === "tool")).toEqual([]);
 
       const firstArrival = new Map<number, { entry: ActivityEntry; receivedAt: number }>();
       for (const arrival of arrivals) {

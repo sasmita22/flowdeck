@@ -72,9 +72,9 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
     "fails a logged-out session's Prompt node with its message, and the run ends failed",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
-      const parsed = builders.flow(
-        [builders.trigger("t"), builders.agent("p1", { settings: { instructions: "Say hi." } })],
-        [builders.thenWire("t", "p1")],
+      const parsed = builders.onMainFlow(
+        [builders.agent("p1", { settings: { instructions: "Say hi." } })],
+        [],
       );
       const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };
       const live = liveEngine({ home, repo: repo.path, sessionName });

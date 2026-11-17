@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
+import { defaultPermissionMode } from "../../src/core/flow/choices.js";
 import { parseFlow } from "../../src/core/flow/schema.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
+import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -97,8 +99,8 @@ function liveFlow() {
       name: "main",
       buildConfig: { base: "main", variables: [] },
       model: "haiku",
-      allowedTools: ["Bash(node --check:*)", "Read", "Edit"],
-      permissionMode: "acceptEdits",
+      allowedTools: ["Read", "Edit"],
+      permissionMode: defaultPermissionMode,
       connectors: [],
     },
   });
@@ -154,10 +156,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
     async () => {
       const replies: string[] = [];
       let events: TurnEvents | undefined;
+      const questions: WaitRequest[] = [];
+      let asked: () => void = () => undefined;
+      const question = new Promise<void>((resolve) => (asked = resolve));
+      const waiter: HumanWaiter = {
+        wait: async (request) => {
+          questions.push(request);
+          asked();
+          return { decision: "reject", reason: "this test answers no questions" };
+        },
+      };
       const live = liveEngine({
         home,
         repo: repo.path,
         sessionName,
+        waiter,
         startEvents: (start) => async (socketPath) => {
           const started = await start(socketPath);
           events = started.events;
@@ -199,7 +212,13 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
 
       const runId = await live.runBuild(built.buildId);
       const status = await withWatchdog(
-        live.waitForRunEnd(runId, watchdogMs + 30_000),
+        Promise.race([
+          live.waitForRunEnd(runId, watchdogMs + 30_000),
+          question.then(async () => {
+            await live.stopRun(runId);
+            return "asked a question" as const;
+          }),
+        ]),
         watchdogMs,
         async () => {
           const transcripts = await Promise.all(
@@ -243,6 +262,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("loop nodes with real claude"
         ].join("\n"),
       );
 
+      expect(questions, "the run asked a question").toEqual([]);
       expect.soft(status).toBe("done");
       expect.soft(loopProgress).toContain("l1 round 1");
       expect.soft(rounds.length).toBeGreaterThanOrEqual(1);

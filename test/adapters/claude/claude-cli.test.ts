@@ -40,6 +40,32 @@ const addDirDialog = (cursorOnYes: boolean) =>
   ].join("\n");
 const addDirPane = addDirDialog(false);
 const addDirOnYes = addDirDialog(true);
+const scrolledPane = [
+  "",
+  " ▐▛███▛█   Claude Code v2.1.326",
+  "▝▜██████▀  Haiku 5.5 · Claude Team",
+  " ▝▝   ▝▝   /…/fd-home-5OyXvI/workspaces/f064f88a-c07a-4371-9e09-e0ea32f81397",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "                                                         ctrl+g to edit in Vim",
+  "─── ↑ 1 more ───────────────────────────────────────────────────────────────────",
+  "  all calls in one message.",
+  "  Each call's prompt is that piece's block, exactly as written.",
+  "",
+  "  PIECE plugin/agents/sync-with-base-branch.md",
+  "  KIND agent",
+  "  REPO /private/var/folders/bm/flmnwhpj4dj0d9dtqyxd01jw0000gp/T/fd-repo-6rGlvN",
+  "",
+  "────────────────────────────────────────────────────────────────────────────────",
+  "  ⏸ manual mode on",
+];
 const bypassDialogPane = [
   rule,
   "  WARNING: Claude Code running in Bypass Permissions mode",
@@ -627,6 +653,57 @@ describe("ClaudeCli", () => {
       await ready.sendPrompt("fd-a", pastedPrompt);
 
       expect(sessions.inputs("fd-a")).toEqual([{ typed: pastedPrompt }, { key: "Enter" }]);
+    });
+
+    describe("in a box scrolled past its first line", () => {
+      const border = scrolledPane.findIndex((line) => line.includes("↑ 1 more"));
+      const closingRule = scrolledPane.findIndex((line, i) => i > border && line.startsWith("─"));
+      const scrolledBox = scrolledPane.slice(border + 1, closingRule);
+      const lastBoxLine = border + 1 + scrolledBox.findLastIndex((line) => line.trim() !== "");
+      const clearedPane = [
+        ...scrolledPane.slice(0, border + 1),
+        ...scrolledPane.slice(closingRule),
+      ].join("\n");
+      const chipPane = scrolledPane
+        .map((line, i) => (i === lastBoxLine ? `${line}[Pasted text #1]` : line))
+        .join("\n");
+      const scrolledPrompt = [
+        "Start every piece below with the Agent tool,",
+        ...scrolledBox.map((line) => line.trim()),
+      ].join("\n");
+
+      function claudeScrolls(shown: string, afterEnter: string) {
+        sessions.onInput("fd-a", (input) => {
+          sessions.setPane("fd-a", "typed" in input ? shown : afterEnter);
+        });
+      }
+
+      it("sees the prompt held by its visible end", async () => {
+        const ready = await readyCli({ submitRetryMs: 1000 });
+        claudeScrolls(scrolledPane.join("\n"), readyPane);
+
+        await ready.sendPrompt("fd-a", scrolledPrompt);
+
+        expect(sessions.inputs("fd-a")).toEqual([{ typed: scrolledPrompt }, { key: "Enter" }]);
+      });
+
+      it("takes the box emptied by Enter as submitted, without pressing Enter again", async () => {
+        const ready = await readyCli({ submitRetryMs: 10 });
+        claudeScrolls(scrolledPane.join("\n"), clearedPane);
+
+        await ready.sendPrompt("fd-a", scrolledPrompt);
+
+        expect(sessions.inputs("fd-a")).toEqual([{ typed: scrolledPrompt }, { key: "Enter" }]);
+      });
+
+      it("sees a paste chip at the end of the box as held", async () => {
+        const ready = await readyCli({ submitRetryMs: 1000 });
+        claudeScrolls(chipPane, readyPane);
+
+        await ready.sendPrompt("fd-a", pastedPrompt);
+
+        expect(sessions.inputs("fd-a")).toEqual([{ typed: pastedPrompt }, { key: "Enter" }]);
+      });
     });
 
     it("never presses Enter for a long prompt while the box holds unrelated text", async () => {

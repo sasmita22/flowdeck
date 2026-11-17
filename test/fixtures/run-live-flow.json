@@ -21,7 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Reply with the single word ONE.",
-        "model": "sonnet",
+        "model": "haiku",
         "tools": []
       }
     },
@@ -36,7 +36,7 @@
       "settings": {
         "role": "",
         "instructions": "Reply with the single word TWO.",
-        "model": "sonnet",
+        "model": "haiku",
         "tools": []
       }
     },
@@ -51,7 +51,7 @@
       "settings": {
         "role": "",
         "instructions": "Use the Write tool to create {{repo}}/ok.txt containing exactly: ok",
-        "model": "sonnet",
+        "model": "haiku",
         "tools": []
       }
     },

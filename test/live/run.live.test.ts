@@ -31,14 +31,17 @@ type Outcome = { status: string; progress: string[] };
 function turnSequence(entries: Entry[], prefix: string): string[] {
   const tokens: string[] = [];
   for (const entry of entries) {
-    const content = JSON.stringify(entry.message?.content ?? "");
-    const command = /<command-name>\/([^<]+)<\/command-name>/.exec(content);
-    if (entry.type === "user" && command) tokens.push(`command ${command[1]}`);
+    const content = entry.message?.content;
+    const call =
+      typeof content === "string"
+        ? /^Use the Agent tool with subagent_type "([^"]+)"/.exec(content)
+        : null;
+    if (entry.type === "user" && call) tokens.push(`agent ${call[1]}`);
     if (entry.type === "assistant" && entry.message?.stop_reason === "end_turn") {
       if (tokens.at(-1) !== "end_turn") tokens.push("end_turn");
     }
   }
-  return tokens.filter((token) => token === "end_turn" || token.startsWith(`command ${prefix}:`));
+  return tokens.filter((token) => token === "end_turn" || token.startsWith(`agent ${prefix}:`));
 }
 
 function expectOneTurnPerPromptInOrder(
@@ -47,7 +50,7 @@ function expectOneTurnPerPromptInOrder(
   pieces: ReadonlyMap<string, string>,
 ): void {
   expect(turnSequence(entries, prefix)).toEqual(
-    promptIds.flatMap((id) => [`command ${prefix}:${pieces.get(id) ?? ""}`, "end_turn"]),
+    promptIds.flatMap((id) => [`agent ${prefix}:${pieces.get(id) ?? ""}`, "end_turn"]),
   );
 }
 
