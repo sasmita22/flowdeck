@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, realpath, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -23,7 +23,7 @@ import type { Flow } from "../../src/core/flow/schema.js";
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { PendingWait } from "../../src/core/run/wait.js";
-import { agent, ask, flow, thenWire } from "../fixtures/flow-builders.js";
+import { agent, ask, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakePullRequests } from "../fakes/fake-pull-requests.js";
@@ -71,6 +71,18 @@ async function transcriptsIn(folder: string): Promise<string[]> {
     if (hasCode(error, "ENOENT")) return [];
     throw error;
   }
+}
+
+async function agentResult(transcript: string, toolUseId: string): Promise<string> {
+  const lines = (await readFile(transcript, "utf8")).split("\n").filter((line) => line !== "");
+  const blocks = lines.flatMap((line) => {
+    const content = (JSON.parse(line) as { message?: { content?: unknown } }).message?.content;
+    return Array.isArray(content) ? (content as { tool_use_id?: string; content?: unknown }[]) : [];
+  });
+  return blocks
+    .filter((block) => block.tool_use_id === toolUseId)
+    .map((block) => JSON.stringify(block.content))
+    .join("\n");
 }
 
 async function tmuxServerAlive(socketName: string): Promise<boolean> {
@@ -167,7 +179,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
     "carries the answer blue into the next Claude turn",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
-      const built = flow(
+      const built = onMainFlow(
         [
           ask("q"),
           agent("p", {
@@ -285,7 +297,15 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         (event): event is Extract<StoredEvent, { kind: "done" }> =>
           event.nodeId === "p" && event.kind === "done",
       );
-      expect(done?.payload).toEqual({ stopMessage: expect.stringMatching(/blue/i) });
+      expect(done?.payload).toEqual({
+        stopMessage: expect.stringMatching(/^DONE/),
+        toolUseIds: [expect.any(String)],
+      });
+      const [toolUseId = ""] = done?.payload?.toolUseIds ?? [];
+      const sessionId = stores.runs.findRun(runId)?.session.claudeSessionId ?? "";
+      expect(await agentResult(join(projectFolder, `${sessionId}.jsonl`), toolUseId)).toMatch(
+        /blue/i,
+      );
       expect(stores.runs.findRun(runId)?.status).toBe("done");
       expect(waits.at(-1)).toBeNull();
     },

@@ -46,6 +46,20 @@ async function transcriptTurns(sessionId: string): Promise<TranscriptTurn[]> {
   return path === undefined ? [] : parseTranscriptTurns(await readFile(path, "utf8"));
 }
 
+type ContentBlock = { tool_use_id?: string; content?: unknown };
+
+async function contentBlocks(sessionId: string): Promise<ContentBlock[]> {
+  const path = await findClaudeTranscript(sessionId);
+  if (path === undefined) return [];
+  return (await readFile(path, "utf8"))
+    .split("\n")
+    .filter((line) => line !== "")
+    .flatMap((line) => {
+      const content = (JSON.parse(line) as { message?: { content?: unknown } }).message?.content;
+      return Array.isArray(content) ? (content as ContentBlock[]) : [];
+    });
+}
+
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", () => {
   useTempClaudeConfig();
   const sessionName = `fd-live-foreach-${process.pid}`;
@@ -115,7 +129,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("for each with real claude", 
       const runEvents = live.stores.runs.events(runId);
       const turns = (await Promise.all(live.sessionIds.map(transcriptTurns))).flat();
       const p1Turns = turns.filter((turn) => turn.userText.includes(`${buildName}:p1`));
-      const replies = stops.map((event) => String(event.payload["last_assistant_message"]));
+      const blocks = (await Promise.all(live.sessionIds.map(contentBlocks))).flat();
+      const p1Calls = runEvents.flatMap((event) =>
+        event.nodeId === "p1" && event.kind === "done" ? (event.payload?.toolUseIds ?? []) : [],
+      );
+      const replies = p1Calls.map((toolUseId) =>
+        blocks
+          .filter((block) => block.tool_use_id === toolUseId)
+          .map((block) => JSON.stringify(block.content))
+          .join("\n"),
+      );
       console.log(
         [
           `hash: ${built.hash}`,

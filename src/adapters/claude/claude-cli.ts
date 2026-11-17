@@ -73,14 +73,19 @@ function showsInputBox(pane: string): boolean {
   );
 }
 
+const scrolledBorder = /^─+ ↑ \d+ more ─/;
+
 function inputBox(pane: string): string | undefined {
   const lines = pane.split("\n");
-  const start = lines.findLastIndex(
-    (line, i) => line.startsWith("❯") && lines[i - 1]?.startsWith(rule),
+  const top = lines.findLastIndex(
+    (line, i) =>
+      (line.startsWith("❯") && lines[i - 1]?.startsWith(rule)) || scrolledBorder.test(line),
   );
-  const end = lines.findIndex((line, i) => i > start && line.startsWith(rule));
-  if (start === -1 || end === -1) return undefined;
-  return lines.slice(start, end).join(" ").slice(1);
+  const end = lines.findIndex((line, i) => i > top && line.startsWith(rule));
+  const topLine = lines[top];
+  if (topLine === undefined || end === -1) return undefined;
+  const firstLine = scrolledBorder.test(topLine) ? [] : [topLine.slice(1)];
+  return [...firstLine, ...lines.slice(top + 1, end)].join(" ");
 }
 
 const squash = (text: string) => text.replace(/\s+/g, "");
