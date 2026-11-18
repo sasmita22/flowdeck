@@ -138,11 +138,13 @@ export const deletePreviewSchema = z.object({
 
 export type DeletePreview = z.infer<typeof deletePreviewSchema>;
 
-export async function deletePreview(
+export const deletePreview = (deps: TeardownDeps, build: BuildRecord): Promise<DeletePreview> =>
+  worktreePreview(deps, storedWorktree(build));
+
+export async function worktreePreview(
   deps: TeardownDeps,
-  build: BuildRecord,
+  worktree: RunWorktree | undefined,
 ): Promise<DeletePreview> {
-  const worktree = storedWorktree(build);
   if (worktree === undefined) return { dirtyWorktree: false, unpushedBranch: false };
   const dirtyWorktree =
     (await deps.fs.exists(worktree.path)) && (await deps.worktree.isDirty(worktree.path));

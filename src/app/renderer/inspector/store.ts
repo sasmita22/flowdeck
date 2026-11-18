@@ -124,10 +124,12 @@ export type WrittenFiles = {
   pullRequests: { nodeId: string; url: string }[];
 };
 
-export function selectFiles(
-  entries: readonly ActivityEntry[],
-  nodeOrder: readonly string[],
-): WrittenFiles {
+type FileNodes = readonly { id: string }[];
+
+const filesSelected = new WeakMap<readonly ActivityEntry[], WeakMap<FileNodes, WrittenFiles>>();
+
+function deriveFiles(entries: readonly ActivityEntry[], nodes: FileNodes): WrittenFiles {
+  const nodeOrder = nodes.map((node) => node.id);
   const ordered = [...entries].sort((a, b) => a.id - b.id);
   const paths = new Map<string, string[]>();
   for (const entry of ordered) {
@@ -147,6 +149,19 @@ export function selectFiles(
       entry.kind === "pr" ? [{ nodeId: entry.nodeId, url: entry.url }] : [],
     ),
   };
+}
+
+export function selectFiles(entries: readonly ActivityEntry[], nodes: FileNodes): WrittenFiles {
+  let byNodes = filesSelected.get(entries);
+  if (byNodes === undefined) {
+    byNodes = new WeakMap();
+    filesSelected.set(entries, byNodes);
+  }
+  const cached = byNodes.get(nodes);
+  if (cached !== undefined) return cached;
+  const files = deriveFiles(entries, nodes);
+  byNodes.set(nodes, files);
+  return files;
 }
 
 export const createInspectorStore = ({

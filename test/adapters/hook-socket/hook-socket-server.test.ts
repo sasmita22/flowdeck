@@ -278,6 +278,134 @@ describe("HookSocketServer", () => {
     });
   });
 
+  describe("tool starts", () => {
+    let preToolUse: Record<string, unknown> & { session_id: string };
+    let line: string;
+
+    beforeEach(async () => {
+      preToolUse = await parseFixture("pre-tool-use");
+      line = JSON.stringify({ ...preToolUse, flowdeck_hook_at: 1 }) + "\n";
+    });
+
+    function hold(): { promise: Promise<void>; open: () => void; fail: (error: Error) => void } {
+      let open = () => {};
+      let fail: (error: Error) => void = () => {};
+      const promise = new Promise<void>((resolve, reject) => {
+        open = resolve;
+        fail = reject;
+      });
+      return { promise, open, fail };
+    }
+
+    const within = <T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> =>
+      Promise.race([
+        promise,
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms)),
+      ]);
+
+    it("answers an empty line at once when no run is listening", async () => {
+      await startServer();
+
+      expect(await within(ask(socketPath, line).done, 1000)).toBe("\n");
+    });
+
+    it("answers only once the session's handler settles", async () => {
+      const server = await startServer();
+      const held = hold();
+      const handled: Record<string, unknown>[] = [];
+      server.onToolStart(preToolUse.session_id, (payload) => {
+        handled.push(payload);
+        return held.promise;
+      });
+
+      const reply = ask(socketPath, line);
+      await waitUntil(
+        () => handled.length === 1,
+        2000,
+        () => "expected the handler to be called",
+      );
+      expect(await within(reply.done, 200)).toBe("timeout");
+      held.open();
+
+      expect(await within(reply.done, 1000)).toBe("\n");
+      expect(handled).toEqual([{ ...preToolUse, flowdeck_hook_at: 1 }]);
+    });
+
+    it("still answers an empty line when the handler fails", async () => {
+      const server = await startServer();
+      server.onToolStart(preToolUse.session_id, async () => {
+        throw new Error("git broke");
+      });
+
+      expect(await within(ask(socketPath, line).done, 1000)).toBe("\n");
+    });
+
+    it("publishes the tool start to its session's subscribers", async () => {
+      const server = await startServer();
+      const events = collect(server, "PreToolUse", preToolUse.session_id);
+      server.onToolStart(preToolUse.session_id, async () => {});
+
+      await within(ask(socketPath, line).done, 1000);
+
+      expect(events).toEqual([
+        {
+          kind: "PreToolUse",
+          sessionId: preToolUse.session_id,
+          payload: { ...preToolUse, flowdeck_hook_at: 1 },
+        },
+      ]);
+    });
+
+    it("rejects a tool start without a session_id and still answers it", async () => {
+      await startServer();
+      const bare = '{"hook_event_name":"PreToolUse"}';
+
+      expect(await within(ask(socketPath, bare + "\n").done, 1000)).toBe("\n");
+      expect(rejected).toHaveBeenCalledTimes(1);
+      expect(rejected.mock.calls[0]).toEqual(["missing session_id", bare]);
+    });
+
+    it("does not answer other hook kinds", async () => {
+      const server = await startServer();
+      const client = connect(socketPath);
+      let data = "";
+      client.setEncoding("utf8");
+      client.on("data", (chunk: string) => (data += chunk));
+      client.write(JSON.stringify(stop) + "\n");
+
+      await expectBarrier(server);
+      client.destroy();
+
+      expect(data).toBe("");
+    });
+
+    it("keeps running when the client leaves before the handler settles", async () => {
+      const server = await startServer();
+      const held = hold();
+      let called = false;
+      server.onToolStart(preToolUse.session_id, () => {
+        called = true;
+        return held.promise;
+      });
+      const client = connect(socketPath);
+      const closed = once(client, "close");
+      client.write(line);
+      await waitUntil(
+        () => called,
+        2000,
+        () => "expected the handler to be called",
+      );
+
+      client.destroy();
+      await closed;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      held.open();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await expectBarrier(server);
+    });
+  });
+
   it("rejects invalid JSON once and keeps running", async () => {
     const server = await startServer();
     const stops = collect(server, "Stop", stop.session_id);

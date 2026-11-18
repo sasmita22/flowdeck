@@ -257,8 +257,27 @@ const otherRepoOnMaster = async () => {
   return path;
 };
 
-test("A run whose agent worked in another repo names that repo and its branch in the Story header", async () => {
+const headOf = (path: string) =>
+  execFileSync("git", ["-C", path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+const otherRepoBefores = (runId: string) => {
+  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
+  try {
+    return (
+      db
+        .prepare(
+          "SELECT repo, state_json FROM run_repo_states WHERE run_id = ? AND phase = 'before' AND repo IS NOT NULL",
+        )
+        .all(runId) as { repo: string; state_json: string }[]
+    ).map((row) => ({ repo: row.repo, state: JSON.parse(row.state_json) as { head?: string } }));
+  } finally {
+    db.close();
+  }
+};
+
+test("A run whose agent commits in another repo names that repo and its branch in the Story header, with its Before at the old HEAD and its After at the new one", async () => {
   const otherRepo = await otherRepoOnMaster();
+  const oldHead = headOf(otherRepo);
   seedBlueprint(
     home,
     "Other repo",
@@ -271,20 +290,35 @@ test("A run whose agent worked in another repo names that repo and its branch in
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
-    stepCommand: `cd ${otherRepo} && git pull`,
+    stepCommand: `cd ${otherRepo} && git commit --allow-empty -m change`,
+    stepCommitIn: otherRepo,
   });
   const { window } = launched;
   await expect(window.getByTestId("canvas-build")).toBeVisible();
-  await buildOnCanvas(window, home, "other-repo-run");
+  const buildId = await buildOnCanvas(window, home, "other-repo-run");
   await runFromDetail(window);
+  const runId = await runIdOf(home, buildId);
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 20_000,
   });
+  const newHead = headOf(otherRepo);
+  expect(newHead).not.toBe(oldHead);
 
   const header = window.getByTestId(pageTestIds.runStoryHeader);
   await expect(header).toContainText(otherRepo, { timeout: 20_000 });
   await expect(header).toContainText("master");
-  await expect(window.getByTestId(pageTestIds.runStoryOtherRepos)).toHaveText(
-    `${otherRepo} · master`,
-  );
+  const other = window.getByTestId(pageTestIds.runStoryOtherRepos);
+  await expect(other).toContainText(`${otherRepo} · master`);
+  await expect(other).toContainText(`Before: on master at ${oldHead.slice(0, 7)}`);
+  await expect(other).toContainText(`After: on master at ${newHead.slice(0, 7)}`);
+  await expect(other).not.toContainText("not recorded");
+  await expect(other.locator("li > div")).toHaveText([
+    /^Before: on master at /,
+    /^After: on master at /,
+  ]);
+  expect(await other.innerText()).toMatch(/untracked\nAfter: /);
+
+  expect(otherRepoBefores(runId)).toEqual([
+    { repo: otherRepo, state: expect.objectContaining({ head: oldHead.slice(0, 7) }) },
+  ]);
 });

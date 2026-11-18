@@ -6,6 +6,7 @@ import type { CompactionReader } from "./context.js";
 import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
+import type { ToolStarts } from "./tool-start.js";
 import { parseManifest, type ParsedManifest } from "./manifest.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
@@ -37,9 +38,12 @@ export type OpenedSession = {
 export type ExecuteDeps = {
   fs: VerifyFileSystem & Pick<RunnerDeps["files"], "writeFile">;
   waiter: HumanWaiter;
-  startEvents(
-    socketPath: string,
-  ): Promise<{ events: TurnEvents; permissions?: PermissionAsks; stop(): Promise<void> }>;
+  startEvents(socketPath: string): Promise<{
+    events: TurnEvents;
+    permissions?: PermissionAsks;
+    toolStarts?: ToolStarts;
+    stop(): Promise<void>;
+  }>;
   openSession(options: OpenSessionOptions): Promise<OpenedSession>;
   store: Store;
   onChange(line: string): void;
@@ -224,6 +228,10 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     repoStates: (id) => store.repoStates(id),
     appendStepText: (id, entryId, field, text) => store.appendStepText(id, entryId, field, text),
     stepTexts: (id, entryId) => store.stepTexts(id, entryId),
+    appendOtherRepoBefore: (id, repo, state) => store.appendOtherRepoBefore(id, repo, state),
+    appendBuildStepText: (pendingId, entryId, field, text) =>
+      store.appendBuildStepText(pendingId, entryId, field, text),
+    buildStepTexts: (pendingId, entryId) => store.buildStepTexts(pendingId, entryId),
     recordBuild: (build) => store.recordBuild(build),
     stopRun: (id) => store.stopRun(id),
     findBuild: (id) => store.findBuild(id),

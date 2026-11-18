@@ -18,6 +18,7 @@ import {
 } from "../../core/run/store.js";
 import { storyPartsOf } from "../../core/run/story.js";
 import {
+  mergeOtherRepos,
   otherRepoSchema,
   repoStateSchema,
   type OtherRepo,
@@ -168,7 +169,23 @@ type BuildRow = {
 
 const stateMovingKindList = stateMovingKinds.map((kind) => `'${kind}'`).join(", ");
 
-const runNumbers = `SELECT id, ROW_NUMBER() OVER (PARTITION BY build_id ORDER BY rowid) AS number FROM runs`;
+const runTables = [
+  ["step_texts", "run_id"],
+  ["run_repo_states", "run_id"],
+  ["run_stories", "run_id"],
+  ["activity", "run_id"],
+  ["events", "run_id"],
+  ["run_nodes", "run_id"],
+  ["run_sessions", "run_id"],
+  ["runs", "id"],
+] as const;
+
+const olderAttemptsOf = `SELECT older.id FROM pending_builds AS older
+  JOIN pending_builds AS gone ON gone.name = older.name AND gone.id <> older.id
+ WHERE gone.id IN (SELECT value FROM json_each(?))
+   AND older.build_id IS NULL AND older.ended_at IS NOT NULL
+   AND (older.started_at < gone.started_at
+     OR (older.started_at = gone.started_at AND older.rowid < gone.rowid))`;
 
 const runSummaries = `
   SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
@@ -181,14 +198,13 @@ const runSummaries = `
                    WHERE events.run_id = run_nodes.run_id AND events.node_id = run_nodes.node_id
                      AND events.kind IN (${stateMovingKindList})
                    ORDER BY events.seq DESC LIMIT 1) = 'done') AS done_count,
-         numbers.number,
+         runs.number,
          (SELECT text FROM run_stories WHERE run_stories.run_id = runs.id
            ORDER BY run_stories.seq DESC LIMIT 1) AS story_text,
          builds.id IS NULL AS build_gone,
          runs.flow_id, runs.flow_version AS version, runs.build_name,
          runs.blueprint_name, runs.flow_version AS blueprint_version
-    FROM runs JOIN (${runNumbers}) AS numbers ON numbers.id = runs.id
-         LEFT JOIN builds ON builds.id = runs.build_id`;
+    FROM runs LEFT JOIN builds ON builds.id = runs.build_id`;
 
 const runBuildCopy = `SELECT builds.name, builds.hash, build_snapshots.blueprint_name, builds.flow_id,
        builds.version, builds.repo, builds.branch, builds."values", build_manifests.manifest_json
@@ -332,12 +348,28 @@ export class SqliteStore implements Store {
     this.guarded(run.buildId, () => {
       this.db
         .prepare(
-          `INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id, build_name,
-                             build_hash, blueprint_name, flow_id, flow_version, repo, branch,
-                             build_values, manifest_json)
-           SELECT ?, ?, ?, 'running', ?, ?, copy.* FROM (${runBuildCopy}) AS copy`,
+          `INSERT INTO run_number_counters (build_id, last) VALUES (?, 1)
+           ON CONFLICT (build_id) DO UPDATE SET last = last + 1`,
         )
-        .run(id, run.buildDir, JSON.stringify(run.inputs), this.time(), run.buildId, run.buildId);
+        .run(run.buildId);
+      this.db
+        .prepare(
+          `INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id, number,
+                             build_name, build_hash, blueprint_name, flow_id, flow_version, repo,
+                             branch, build_values, manifest_json)
+           SELECT ?, ?, ?, 'running', ?, ?,
+                  (SELECT last FROM run_number_counters WHERE build_id = ?), copy.*
+             FROM (${runBuildCopy}) AS copy`,
+        )
+        .run(
+          id,
+          run.buildDir,
+          JSON.stringify(run.inputs),
+          this.time(),
+          run.buildId,
+          run.buildId,
+          run.buildId,
+        );
       const session = this.db
         .prepare(
           "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
@@ -467,9 +499,14 @@ export class SqliteStore implements Store {
   }
 
   deleteRun(runId: string): void {
-    this.db
-      .prepare("UPDATE runs SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
-      .run(this.now().getTime(), runId);
+    this.db.transaction(() => {
+      this.db
+        .prepare("UPDATE runs SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .run(this.now().getTime(), runId);
+      for (const [table, column] of runTables) {
+        this.db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).run(runId);
+      }
+    })();
   }
 
   stopRun(runId: string): void {
@@ -527,19 +564,38 @@ export class SqliteStore implements Store {
       .run(runId, phase, JSON.stringify(state), JSON.stringify(otherRepos), this.now().getTime());
   }
 
+  appendOtherRepoBefore(runId: string, repo: string, state: RepoState): void {
+    this.db
+      .prepare(
+        "INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at, repo) VALUES (?, 'before', ?, '[]', ?, ?)",
+      )
+      .run(runId, JSON.stringify(state), this.now().getTime(), repo);
+  }
+
   repoStates(runId: string): RunRepoStates {
     const row = (phase: RepoStatePhase, order: "ASC" | "DESC") =>
       this.db
         .prepare(
-          `SELECT state_json, other_repos_json FROM run_repo_states WHERE run_id = ? AND phase = ? ORDER BY id ${order} LIMIT 1`,
+          `SELECT state_json, other_repos_json FROM run_repo_states WHERE run_id = ? AND phase = ? AND repo IS NULL ORDER BY id ${order} LIMIT 1`,
         )
         .get(runId, phase) as { state_json: string; other_repos_json: string } | undefined;
     const before = row("before", "ASC");
     const after = row("after", "DESC");
+    const otherBefores = this.db
+      .prepare(
+        `SELECT repo, state_json FROM run_repo_states AS first
+          WHERE run_id = ? AND phase = 'before' AND repo IS NOT NULL
+            AND id = (SELECT MIN(id) FROM run_repo_states
+                       WHERE run_id = first.run_id AND phase = 'before' AND repo = first.repo)`,
+      )
+      .all(runId) as { repo: string; state_json: string }[];
     return {
       before: before === undefined ? null : repoStateOf(before.state_json),
       after: after === undefined ? null : repoStateOf(after.state_json),
-      otherRepos: after === undefined ? [] : otherReposOf(after.other_repos_json),
+      otherRepos: mergeOtherRepos(
+        new Map(otherBefores.map((other) => [other.repo, repoStateOf(other.state_json)])),
+        after === undefined ? [] : otherReposOf(after.other_repos_json),
+      ),
     };
   }
 
@@ -559,6 +615,32 @@ export class SqliteStore implements Store {
          ORDER BY field`,
       )
       .all(runId, entryId) as StepText[];
+  }
+
+  appendBuildStepText(
+    pendingId: string,
+    entryId: number,
+    field: StepTextField,
+    text: string,
+  ): void {
+    this.db
+      .prepare(
+        "INSERT INTO build_step_texts (pending_id, entry_id, field, text, at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(pendingId, entryId, field, text, this.now().getTime());
+  }
+
+  buildStepTexts(pendingId: string, entryId: number): StepText[] {
+    return this.db
+      .prepare(
+        `SELECT field, text FROM build_step_texts AS latest
+         WHERE pending_id = ? AND entry_id = ?
+           AND id = (SELECT MAX(id) FROM build_step_texts
+                     WHERE pending_id = latest.pending_id AND entry_id = latest.entry_id
+                       AND field = latest.field)
+         ORDER BY id`,
+      )
+      .all(pendingId, entryId) as StepText[];
   }
 
   activity(runId: string): ActivityEntry[] {
@@ -638,19 +720,15 @@ export class SqliteStore implements Store {
 
   deleteBuild(id: string): void {
     this.db.transaction(() => {
-      const pendingOfBuild = "SELECT id FROM pending_builds WHERE build_id = ?";
-      for (const table of ["build_activity", "build_events"]) {
-        this.db.prepare(`DELETE FROM ${table} WHERE pending_id IN (${pendingOfBuild})`).run(id);
-      }
-      for (const table of [
-        "pending_builds",
-        "build_nodes",
-        "build_files",
-        "build_manifests",
-        "build_snapshots",
-      ]) {
+      const pendingOfBuild = this.db
+        .prepare("SELECT id FROM pending_builds WHERE build_id = ?")
+        .pluck()
+        .all(id) as string[];
+      this.removePendingBuilds(pendingOfBuild);
+      for (const table of ["build_nodes", "build_files", "build_manifests", "build_snapshots"]) {
         this.db.prepare(`DELETE FROM ${table} WHERE build_id = ?`).run(id);
       }
+      this.db.prepare("DELETE FROM run_number_counters WHERE build_id = ?").run(id);
       this.db.prepare("DELETE FROM builds WHERE id = ?").run(id);
     })();
   }
@@ -771,9 +849,9 @@ export class SqliteStore implements Store {
   }
 
   deletePendingBuild(id: string): void {
-    this.db
-      .prepare("UPDATE pending_builds SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
-      .run(this.now().getTime(), id);
+    this.db.transaction(() => {
+      this.removePendingBuilds([id]);
+    })();
   }
 
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
@@ -899,6 +977,19 @@ export class SqliteStore implements Store {
         createdAt,
       });
     return inserted.changes > 0;
+  }
+
+  private removePendingBuilds(ids: readonly string[]): void {
+    const older = this.db.prepare(olderAttemptsOf).pluck().all(JSON.stringify(ids)) as string[];
+    const gone = JSON.stringify([...ids, ...older]);
+    const goneIds = "SELECT value FROM json_each(?)";
+    for (const table of ["build_activity", "build_events", "build_step_texts"]) {
+      this.db.prepare(`DELETE FROM ${table} WHERE pending_id IN (${goneIds})`).run(gone);
+    }
+    this.db
+      .prepare(`DELETE FROM build_snapshots WHERE pending_id IN (${goneIds}) AND build_id IS NULL`)
+      .run(gone);
+    this.db.prepare(`DELETE FROM pending_builds WHERE id IN (${goneIds})`).run(gone);
   }
 
   private appendBuildRow(

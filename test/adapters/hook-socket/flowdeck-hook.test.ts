@@ -1,7 +1,7 @@
 import { readFile, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FORWARD_CAP_MS, STDIN_CAP_MS } from "../../../bin/hook-limits.ts";
+import { FORWARD_CAP_MS, PRETOOL_CAP_MS, STDIN_CAP_MS } from "../../../bin/hook-limits.ts";
 import {
   type HookRun,
   type RunningHook,
@@ -17,7 +17,10 @@ const readFixture = (name: string) =>
 
 type Collector = { connections: string[]; close: () => Promise<void> };
 
-function listen(socketPath: string, options: { neverRead?: boolean } = {}): Promise<Collector> {
+function listen(
+  socketPath: string,
+  options: { neverRead?: boolean; answer?: boolean } = {},
+): Promise<Collector> {
   const connections: string[] = [];
   const open = new Set<Socket>();
   const server: Server = createServer((socket) => {
@@ -29,7 +32,11 @@ function listen(socketPath: string, options: { neverRead?: boolean } = {}): Prom
     }
     let data = "";
     socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => (data += chunk));
+    socket.on("error", () => {});
+    socket.on("data", (chunk: string) => {
+      data += chunk;
+      if (options.answer && data.includes("\n") && !socket.writableEnded) socket.write("\n");
+    });
     socket.on("end", () => connections.push(data));
   });
   return new Promise((resolve, reject) => {
@@ -132,7 +139,7 @@ describe("flowdeck-hook", () => {
   });
 
   async function sendAndWait(stdin: string): Promise<Collector> {
-    const listening = await listen(socketPath);
+    const listening = await listen(socketPath, { answer: true });
     collector = listening;
     expectQuiet(await runHook({ socketPath, stdin }));
     await waitUntil(
@@ -242,6 +249,94 @@ describe("flowdeck-hook", () => {
 
       expect(decisionOf(run)).toEqual(deniedWithReason);
     });
+  });
+
+  describe("tool starts", () => {
+    let responder: Responder | undefined;
+
+    afterEach(async () => {
+      await responder?.close();
+      responder = undefined;
+    });
+
+    it("waits for the reply line, then exits 0 without printing", async () => {
+      const request = await readFixture("pre-tool-use");
+      responder = await respond(socketPath, (socket) => socket.write("\n"), 500);
+
+      const run = await runHook({ socketPath, stdin: request });
+
+      expectQuiet(run);
+      expect(run.ms).toBeGreaterThanOrEqual(500);
+      expect(run.ms).toBeLessThan(PRETOOL_CAP_MS);
+      expect(responder.lines).toHaveLength(1);
+      expect(JSON.parse(responder.lines[0] ?? "")).toEqual({
+        ...(JSON.parse(request) as object),
+        flowdeck_hook_at: expect.any(Number),
+      });
+    });
+
+    it("exits well within a second when the reply comes at once", async () => {
+      responder = await respond(socketPath, (socket) => socket.write("\n"));
+
+      const run = await runHook({ socketPath, stdin: await readFixture("pre-tool-use") });
+
+      expectQuiet(run);
+      expect(run.ms).toBeLessThan(1000);
+    });
+
+    it("exits 0 at the cap when no reply comes", async () => {
+      responder = await respond(socketPath, () => {});
+
+      const run = await runHook({ socketPath, stdin: await readFixture("pre-tool-use") });
+
+      expectQuiet(run);
+      expect(run.ms).toBeGreaterThanOrEqual(PRETOOL_CAP_MS);
+      expect(run.ms).toBeLessThan(PRETOOL_CAP_MS + 1000);
+    }, 10_000);
+
+    it("exits 0 when the server closes without a reply", async () => {
+      responder = await respond(socketPath, (socket) => socket.end(), 300);
+
+      const run = await runHook({ socketPath, stdin: await readFixture("pre-tool-use") });
+
+      expectQuiet(run);
+      expect(run.ms).toBeGreaterThanOrEqual(300);
+      expect(run.ms).toBeLessThan(PRETOOL_CAP_MS);
+    });
+
+    it("exits 0 at once when the connection is refused", async () => {
+      await makeStaleSocket(socketPath);
+
+      const run = await runHook({ socketPath, stdin: await readFixture("pre-tool-use") });
+
+      expectQuiet(run);
+      expect(run.ms).toBeLessThan(1000);
+    });
+
+    it("exits 0 at once when FLOWDECK_SOCK is unset", async () => {
+      const run = await runHook({ stdin: await readFixture("pre-tool-use") });
+
+      expectQuiet(run);
+      expect(run.ms).toBeLessThan(1000);
+    });
+
+    it.each(["stop", "post-tool-use", "subagent-stop"])(
+      "does not wait for a reply to the %s sample",
+      async (name) => {
+        const listening = await listen(socketPath);
+        collector = listening;
+
+        const run = await runHook({ socketPath, stdin: await readFixture(name) });
+
+        expectQuiet(run);
+        expect(run.ms).toBeLessThan(FORWARD_CAP_MS);
+        await waitUntil(
+          () => listening.connections.length >= 1,
+          2000,
+          () => `expected 1 connection, got ${listening.connections.length}`,
+        );
+      },
+    );
   });
 
   it.each(fixtures)("forwards the multi-line %s sample as one compact line", async (name) => {

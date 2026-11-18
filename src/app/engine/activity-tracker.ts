@@ -84,6 +84,10 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       repoStates: (id) => inner.repoStates(id),
       appendStepText: (id, entryId, field, text) => inner.appendStepText(id, entryId, field, text),
       stepTexts: (id, entryId) => inner.stepTexts(id, entryId),
+      appendOtherRepoBefore: (id, repo, state) => inner.appendOtherRepoBefore(id, repo, state),
+      appendBuildStepText: (pendingId, entryId, field, text) =>
+        inner.appendBuildStepText(pendingId, entryId, field, text),
+      buildStepTexts: (pendingId, entryId) => inner.buildStepTexts(pendingId, entryId),
       recordBuild: (build) => inner.recordBuild(build),
       findBuild: (id) => inner.findBuild(id),
       findBuildByName: (name) => inner.findBuildByName(name),
@@ -133,7 +137,7 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
 export type BuildActivityOptions = {
   pendingId: string;
   now: () => number;
-  activity: Pick<Store, "appendBuildActivity" | "buildActivity">;
+  activity: Pick<Store, "appendBuildActivity" | "buildActivity" | "appendBuildStepText">;
   publish: (push: EnginePush) => void;
 };
 
@@ -178,6 +182,9 @@ export function createBuildActivity({
     const folded = foldHookEvent(feed, [], event);
     feed = folded.feed;
     save(folded.changed);
+    for (const { entryId, field, text } of folded.cut) {
+      activity.appendBuildStepText(pendingId, entryId, field, text);
+    }
   };
   const pieces = (matches: (entry: SubagentEntry) => boolean) =>
     feed.entries.filter(
@@ -205,6 +212,9 @@ export function createBuildActivity({
       ...(agentId === undefined ? {} : { agentId }),
       ...(report === undefined ? {} : { report: previewOf(report) }),
     });
+    if (report !== undefined && previewOf(report) !== report) {
+      activity.appendBuildStepText(pendingId, id, "report", report);
+    }
     if (started || agentId === undefined) return;
     const waiting = held.get(agentId) ?? [];
     held.delete(agentId);

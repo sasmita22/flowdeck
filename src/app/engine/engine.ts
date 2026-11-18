@@ -85,7 +85,12 @@ const run: EngineHandlerOptions["run"] = {
     await mkdir(dirname(socketPath), { recursive: true });
     const server = new HookSocketServer({ socketPath });
     await server.start();
-    return { events: server, permissions: server, stop: () => server.stop() };
+    return {
+      events: server,
+      permissions: server,
+      toolStarts: server,
+      stop: () => server.stop(),
+    };
   },
   usage,
   compactions: usage,

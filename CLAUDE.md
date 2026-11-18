@@ -42,12 +42,12 @@ flow.
 
 ### Layers
 
-| Folder          | Holds                                                                                                                                                                                           | May import                                                                                                               |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                                                                                                  | `core` only                                                                                                              |
-| `src/ports/`    | Interfaces only: BlueprintSessions, BuildAgents, ConnectorSource, EventSource, FileSystem, FlowStore, GitState, PermissionSource, SessionHost, Store, ToolSocket, UsageSource, Waiter, Worktree | `core`                                                                                                                   |
-| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                                                                                              | `core`, `ports`                                                                                                          |
-| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React)                                                                               | all of the above; the renderer only `core`, and `preload` for types, never `ports`, `adapters`, `main`, `engine` or Node |
+| Folder          | Holds                                                                                                                                                                                                            | May import                                                                                                               |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `src/core/`     | Pure logic: flow schema, node registry, validator, compiler, run state machine                                                                                                                                   | `core` only                                                                                                              |
+| `src/ports/`    | Interfaces only: BlueprintSessions, BuildAgents, ConnectorSource, EventSource, FileSystem, FlowStore, GitState, PermissionSource, SessionHost, Store, ToolSocket, ToolStartSource, UsageSource, Waiter, Worktree | `core`                                                                                                                   |
+| `src/adapters/` | Real implementations: tmux, claude-cli, hook-socket, sqlite, git, process, node-fs                                                                                                                               | `core`, `ports`                                                                                                          |
+| `src/app/`      | Electron: `main` (composition root, IPC), `engine` (utilityProcess), `preload` (typed bridge), `renderer` (React)                                                                                                | all of the above; the renderer only `core`, and `preload` for types, never `ports`, `adapters`, `main`, `engine` or Node |
 
 `test/` may import any layer. The layer rule is enforced by ESLint (`eslint-plugin-boundaries`,
 with `eslint-import-resolver-typescript` so `.js` import paths resolve to `.ts` files; without the
@@ -68,6 +68,7 @@ code to the right layer instead.
 - **The runner is a state machine.** Every allowed move between node states is in one transition
   table; an illegal move throws.
 - **Events are append-only.** A node's status is derived from its events; nothing edits history.
+  A run or build the user deletes is removed with all its rows; live runs stay append-only.
 - **UI state lives in Zustand stores.** React draws from state; nothing edits the screen by hand.
   Canvas edits are command objects with do and undo.
 - **The renderer has no Node access.** `contextIsolation` is on; everything goes through the typed

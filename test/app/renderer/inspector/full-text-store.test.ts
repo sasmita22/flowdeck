@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import {
   createFullTextStore,
   selectFullText,
 } from "../../../../src/app/renderer/inspector/full-text-store.js";
-
-type FullTextBridge = Pick<FlowdeckBridge, "stepFullText">;
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -17,22 +14,22 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 
-const setup = (answer: (payload: { runId: string; entryId: number }) => Promise<unknown>) => {
-  const bridge = { stepFullText: vi.fn(answer) } satisfies FullTextBridge;
-  const store = createFullTextStore({ bridge });
-  const shown = (runId: string, entryId: number) =>
-    selectFullText(store.getState(), runId, entryId);
-  return { bridge, store, shown };
+const setup = (answer: (ownerId: string, entryId: number) => Promise<unknown>) => {
+  const fetch = vi.fn(answer);
+  const store = createFullTextStore({ fetch });
+  const shown = (ownerId: string, entryId: number) =>
+    selectFullText(store.getState(), ownerId, entryId);
+  return { fetch, store, shown };
 };
 
 describe("request", () => {
-  it("is loading until the bridge answers, then holds the kept texts", async () => {
+  it("is loading until the fetch answers, then holds the kept texts", async () => {
     const answer = deferred<unknown>();
-    const { bridge, store, shown } = setup(() => answer.promise);
+    const { fetch, store, shown } = setup(() => answer.promise);
 
     const requested = store.getState().request("run-1", 3);
 
-    expect(bridge.stepFullText).toHaveBeenCalledWith({ runId: "run-1", entryId: 3 });
+    expect(fetch).toHaveBeenCalledWith("run-1", 3);
     expect(shown("run-1", 3)).toEqual({ kind: "loading" });
     answer.resolve({ kept: true, texts: { input: "full input", output: "full output" } });
     await requested;
@@ -50,7 +47,7 @@ describe("request", () => {
     expect(shown("run-1", 3)).toEqual({ kind: "not-kept" });
   });
 
-  it("ends failed with the error message when the bridge rejects", async () => {
+  it("ends failed with the error message when the fetch rejects", async () => {
     const { store, shown } = setup(async () => {
       throw new Error("No run run-1");
     });
@@ -71,26 +68,41 @@ describe("request", () => {
     });
   });
 
-  it("asks the bridge once per step", async () => {
-    const { bridge, store } = setup(async () => ({ kept: false }));
+  it("fetches once per step", async () => {
+    const { fetch, store } = setup(async () => ({ kept: false }));
 
     await store.getState().request("run-1", 3);
     await store.getState().request("run-1", 3);
 
-    expect(bridge.stepFullText).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps steps of different runs apart", async () => {
-    const { bridge, store, shown } = setup(async ({ runId }) =>
-      runId === "run-1" ? { kept: true, texts: { output: "from run 1" } } : { kept: false },
+  it("keeps steps of different owners apart", async () => {
+    const { fetch, store, shown } = setup(async (ownerId) =>
+      ownerId === "run-1" ? { kept: true, texts: { output: "from run 1" } } : { kept: false },
     );
 
     await store.getState().request("run-1", 3);
     await store.getState().request("run-2", 3);
 
-    expect(bridge.stepFullText).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(shown("run-1", 3)).toEqual({ kind: "kept", texts: { output: "from run 1" } });
     expect(shown("run-2", 3)).toEqual({ kind: "not-kept" });
     expect(shown("run-3", 3)).toBeUndefined();
+  });
+
+  it("never shares a step between two stores", async () => {
+    const runs = setup(async () => ({ kept: true, texts: { output: "from the run" } }));
+    const builds = setup(async () => ({ kept: true, texts: { output: "from the build" } }));
+
+    await runs.store.getState().request("same-id", 3);
+    await builds.store.getState().request("same-id", 3);
+
+    expect(builds.fetch).toHaveBeenCalledWith("same-id", 3);
+    expect(runs.shown("same-id", 3)).toEqual({ kind: "kept", texts: { output: "from the run" } });
+    expect(builds.shown("same-id", 3)).toEqual({
+      kind: "kept",
+      texts: { output: "from the build" },
+    });
   });
 });

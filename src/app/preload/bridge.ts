@@ -27,6 +27,10 @@ export const engineCalls = {
   listRuns: { channel: "flowdeck:list-runs", request: "list-runs" },
   loadRun: { channel: "flowdeck:load-run", request: "load-run" },
   stepFullText: { channel: "flowdeck:step-full-text", request: "step-full-text" },
+  buildStepFullText: {
+    channel: "flowdeck:build-step-full-text",
+    request: "build-step-full-text",
+  },
   doctor: { channel: "flowdeck:doctor", request: "doctor" },
   runOptions: { channel: "flowdeck:run-options", request: "run-options" },
   stopRun: { channel: "flowdeck:stop-run", request: "stop-run" },
@@ -43,6 +47,10 @@ export const engineCalls = {
   deleteRun: { channel: "flowdeck:delete-run", request: "delete-run" },
   deletePendingBuild: { channel: "flowdeck:delete-pending-build", request: "delete-pending-build" },
   deletePreview: { channel: "flowdeck:delete-preview", request: "delete-preview" },
+  deletePendingPreview: {
+    channel: "flowdeck:delete-pending-preview",
+    request: "delete-pending-preview",
+  },
   writeStory: { channel: "flowdeck:write-story", request: "write-story" },
   doctorWorktrees: { channel: "flowdeck:doctor-worktrees", request: "doctor-worktrees" },
   defaultBranch: { channel: "flowdeck:default-branch", request: "default-branch" },
@@ -87,6 +95,7 @@ export type EngineCalls = {
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;
   stepFullText(payload: { runId: string; entryId: number }): Promise<unknown>;
+  buildStepFullText(payload: { pendingId: string; entryId: number }): Promise<unknown>;
   doctor(payload: { connectors: string[] }): Promise<unknown>;
   runOptions(payload: { buildId: string }): Promise<unknown>;
   stopRun(payload: { runId: string }): Promise<unknown>;
@@ -100,6 +109,7 @@ export type EngineCalls = {
   deleteRun(payload: { runId: string }): Promise<unknown>;
   deletePendingBuild(payload: { id: string }): Promise<unknown>;
   deletePreview(payload: { buildId: string }): Promise<unknown>;
+  deletePendingPreview(payload: { id: string }): Promise<unknown>;
   writeStory(payload: { runId: string }): Promise<unknown>;
   doctorWorktrees(): Promise<unknown>;
   defaultBranch(payload: { repo: string }): Promise<unknown>;

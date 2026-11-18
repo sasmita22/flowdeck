@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  branchOf,
+  mergeOtherRepos,
+  otherRepoSchema,
   otherReposText,
   repoStateSchema,
   repoStateText,
@@ -46,6 +49,64 @@ describe("repoStateSchema", () => {
         upstream: { name: "origin/dev", ahead: -1, behind: 0 },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("otherRepoSchema", () => {
+  it("parses a repo stored with its path and branch only", () => {
+    expect(otherRepoSchema.parse({ path: "/work/web", branch: "dev" })).toEqual({
+      path: "/work/web",
+      branch: "dev",
+    });
+  });
+
+  it("parses a repo with its before and after states", () => {
+    const repo = { path: "/work/web", branch: "dev", before: noUpstream, after: onDev };
+
+    expect(otherRepoSchema.parse(repo)).toEqual(repo);
+  });
+
+  it("rejects a before that is not a repo state", () => {
+    expect(
+      otherRepoSchema.safeParse({ path: "/work/web", branch: "dev", before: { kind: "read" } })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("branchOf", () => {
+  it("gives the branch of a read state", () => {
+    expect(branchOf(onDev)).toBe("dev");
+  });
+
+  it("gives the head of a detached state", () => {
+    expect(branchOf({ ...onDev, branch: null })).toBe("detached abc1234");
+  });
+
+  it("gives nothing for an unreadable state", () => {
+    expect(branchOf({ kind: "unreadable" })).toBeUndefined();
+  });
+});
+
+describe("mergeOtherRepos", () => {
+  it("joins stored befores with the after entries, sorted by path", () => {
+    const befores = new Map<string, RepoState>([
+      ["/c", onDev],
+      ["/a", { ...onDev, branch: null }],
+      ["/d", { kind: "unreadable" }],
+    ]);
+
+    expect(
+      mergeOtherRepos(befores, [
+        { path: "/c", branch: "main", after: noUpstream },
+        { path: "/b", branch: "feature/x" },
+      ]),
+    ).toEqual([
+      { path: "/a", branch: "detached abc1234", before: { ...onDev, branch: null } },
+      { path: "/b", branch: "feature/x" },
+      { path: "/c", branch: "main", after: noUpstream, before: onDev },
+      { path: "/d", branch: "not recorded", before: { kind: "unreadable" } },
+    ]);
   });
 });
 
@@ -100,6 +161,47 @@ describe("otherReposText", () => {
         { path: "/work/alpha", branch: "dev" },
       ]),
     ).toBe("/work/alpha (dev); /work/zeta (main)");
+  });
+
+  it("gives each repo's before and after when they were recorded", () => {
+    expect(
+      otherReposText([{ path: "/work/web", branch: "dev", before: noUpstream, after: onDev }]),
+    ).toBe(`/work/web (dev): before ${repoStateText(noUpstream)}; after ${repoStateText(onDev)}`);
+  });
+
+  it("says not recorded for the side that is missing", () => {
+    expect(otherReposText([{ path: "/work/web", branch: "dev", before: noUpstream }])).toBe(
+      `/work/web (dev): before ${repoStateText(noUpstream)}; after not recorded`,
+    );
+    expect(otherReposText([{ path: "/work/web", branch: "dev", after: onDev }])).toBe(
+      `/work/web (dev): before not recorded; after ${repoStateText(onDev)}`,
+    );
+  });
+
+  it("names a repo stored with its path and branch only as before", () => {
+    expect(otherReposText([{ path: "/work/web", branch: "dev" }])).toBe("/work/web (dev)");
+  });
+
+  it("lists at most ten repos with states and counts the rest", () => {
+    const repos = Array.from({ length: 12 }, (_, index) => ({
+      path: `/work/repo-${String(index).padStart(2, "0")}`,
+      branch: "main",
+      before: noUpstream,
+      after: onDev,
+    }));
+    const text = otherReposText(repos);
+    expect(text).toContain(`/work/repo-09 (main): before ${repoStateText(noUpstream)}`);
+    expect(text).not.toContain("/work/repo-10");
+    expect(text.endsWith(`after ${repoStateText(onDev)}; and 2 more`)).toBe(true);
+  });
+
+  it("keeps the path and branch limits for a repo with states", () => {
+    const text = otherReposText([
+      { path: `/${"p".repeat(500)}`, branch: "b".repeat(500), after: onDev },
+    ]);
+    expect(text).toBe(
+      `/${"p".repeat(99)}… (${"b".repeat(60)}…): before not recorded; after ${repoStateText(onDev)}`,
+    );
   });
 
   it("lists at most ten and counts the rest", () => {

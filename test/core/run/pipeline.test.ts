@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import { costReport } from "../../../src/core/run/cost.js";
 import { plainReason } from "../../../src/core/run/failure.js";
-import { pipelineOf, pipelineSchema } from "../../../src/core/run/pipeline.js";
+import { pipelineOf, pipelineSchema, stageActivityOf } from "../../../src/core/run/pipeline.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
@@ -701,5 +701,97 @@ describe("pipelineOf", () => {
       expect(stageIn(first?.items ?? [], "work").activity).toEqual([tool(2, "work")]);
       expect(stageIn(second?.items ?? [], "work").activity).toEqual([tool(4, "work")]);
     });
+  });
+});
+
+describe("stage activity windows", () => {
+  type Windowed = { activityFrom?: number; activityTo?: number };
+  type StageLike = { nodeId: string } & Windowed;
+
+  const foreachItems = () =>
+    pipeline(
+      [
+        node("start", "trigger"),
+        node("each", "foreach"),
+        node("work", "agent", "each"),
+        node("stop", "output"),
+      ],
+      [then("start", "each"), then("each", "stop")],
+      stored([
+        ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two", "three"] } }],
+        ["work", 1, { kind: "sent" }],
+        ["work", 2, { kind: "done" }],
+        ["each", 2, { kind: "round", payload: { round: 2 } }],
+        ["work", 2, { kind: "reset" }],
+        ["work", 3, { kind: "sent" }],
+        ["work", 4, { kind: "done" }],
+        ["each", 4, { kind: "round", payload: { round: 3 } }],
+        ["work", 4, { kind: "reset" }],
+        ["work", 5, { kind: "sent" }],
+      ]),
+      [tool(2, "work"), tool(4, "work"), tool(5, "work")],
+    );
+
+  it("keeps only the stage's own entries in input order when the stage has no window", () => {
+    const entries = [tool(3, "a"), tool(2, "b"), tool(1, "a")];
+
+    expect(stageActivityOf(entries, { nodeId: "a" })).toEqual([tool(3, "a"), tool(1, "a")]);
+  });
+
+  it("keeps entries after the window's start up to and including its end", () => {
+    const entries = [tool(5, "a"), tool(4, "a"), tool(3, "b"), tool(2, "a"), tool(1, "a")];
+
+    expect(
+      stageActivityOf(entries, { nodeId: "a", activityFrom: at(1), activityTo: at(4) }),
+    ).toEqual([tool(4, "a"), tool(2, "a")]);
+  });
+
+  it("bounds a window on one side only when only that side is set", () => {
+    const entries = [tool(3, "a"), tool(2, "a"), tool(1, "a")];
+
+    expect(stageActivityOf(entries, { nodeId: "a", activityTo: at(2) })).toEqual([
+      tool(2, "a"),
+      tool(1, "a"),
+    ]);
+    expect(stageActivityOf(entries, { nodeId: "a", activityFrom: at(2) })).toEqual([tool(3, "a")]);
+  });
+
+  it("gives a round stage the finite edges of its round's window and a whole-run stage none", () => {
+    const items = foreachItems();
+    const [first, second, third] = roundsOf(items, "each");
+    const work = (round: Round | undefined) =>
+      stageIn(round?.items ?? [], "work") as unknown as Windowed;
+
+    expect(work(first)).toMatchObject({ activityTo: at(2) });
+    expect(work(first)).not.toHaveProperty("activityFrom");
+    expect(work(second)).toMatchObject({ activityFrom: at(2), activityTo: at(4) });
+    expect(work(third)).toMatchObject({ activityFrom: at(4) });
+    expect(work(third)).not.toHaveProperty("activityTo");
+    expect(stageIn(items, "each")).not.toHaveProperty("activityFrom");
+    expect(stageIn(items, "each")).not.toHaveProperty("activityTo");
+  });
+
+  it("selects the same activity from a whole feed as the pipeline gives each round", () => {
+    const items = foreachItems();
+    const feed = [tool(5, "work"), tool(4, "work"), tool(2, "work")];
+    const rounds = roundsOf(items, "each");
+
+    expect(
+      rounds.map((round) =>
+        stageActivityOf(feed, stageIn(round.items, "work") as unknown as StageLike),
+      ),
+    ).toEqual([[tool(2, "work")], [tool(4, "work")], [tool(5, "work")]]);
+  });
+
+  it("parses stages with and without window edges through the pipeline schema", () => {
+    const parsed = pipelineSchema.parse(JSON.parse(JSON.stringify(foreachItems())));
+    const [first, second] = roundsOf(parsed, "each");
+
+    expect(stageIn(second?.items ?? [], "work")).toMatchObject({
+      activityFrom: at(2),
+      activityTo: at(4),
+    });
+    expect(stageIn(first?.items ?? [], "work")).not.toHaveProperty("activityFrom");
+    expect(stageIn(parsed, "each")).not.toHaveProperty("activityTo");
   });
 });

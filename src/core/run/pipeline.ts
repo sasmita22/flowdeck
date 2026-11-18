@@ -45,6 +45,8 @@ export type PipelineStage = {
   reply?: string | undefined;
   timeline: TimelineEvent[];
   activity: ActivityEntry[];
+  activityFrom?: number | undefined;
+  activityTo?: number | undefined;
   rounds?: PipelineRound[] | undefined;
 };
 
@@ -117,6 +119,8 @@ const stageSchema = z.object({
   reply: z.string().optional(),
   timeline: z.array(timelineEventSchema),
   activity: z.array(activityEntrySchema),
+  activityFrom: z.number().optional(),
+  activityTo: z.number().optional(),
   get rounds() {
     return z.array(roundSchema).optional();
   },
@@ -160,6 +164,17 @@ const wholeRun: Window = {
   toAt: Infinity,
   whole: true,
 };
+
+export const stageActivityOf = (
+  entries: readonly ActivityEntry[],
+  stage: Pick<PipelineStage, "nodeId" | "activityFrom" | "activityTo">,
+): ActivityEntry[] =>
+  entries.filter(
+    (entry) =>
+      entry.nodeId === stage.nodeId &&
+      (stage.activityFrom === undefined || entry.at > stage.activityFrom) &&
+      (stage.activityTo === undefined || entry.at <= stage.activityTo),
+  );
 
 const startKinds = new Set<RunEvent["kind"]>(["sent", "running"]);
 const endKinds = new Set<RunEvent["kind"]>(["done", "failed", "skipped"]);
@@ -222,6 +237,10 @@ export function pipelineOf(
         : undefined;
     const rounds =
       node.type === "loop" || node.type === "foreach" ? roundsOf(node.id, window) : undefined;
+    const edges = {
+      ...(Number.isFinite(window.fromAt) ? { activityFrom: window.fromAt } : {}),
+      ...(Number.isFinite(window.toAt) ? { activityTo: window.toAt } : {}),
+    };
     return {
       nodeId: node.id,
       type: node.type,
@@ -250,9 +269,8 @@ export function pipelineOf(
       ),
       ...(reply === undefined ? {} : { reply }),
       timeline: window.whole ? own : own.filter((event) => event.kind !== "usage"),
-      activity: (activityOf.get(node.id) ?? []).filter(
-        (entry) => entry.at > window.fromAt && entry.at <= window.toAt,
-      ),
+      activity: stageActivityOf(activityOf.get(node.id) ?? [], { nodeId: node.id, ...edges }),
+      ...edges,
       ...(rounds === undefined ? {} : { rounds }),
     };
   };

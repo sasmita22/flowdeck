@@ -8,6 +8,7 @@ import type { StageSources } from "../../../src/core/run/manifest.js";
 import {
   otherReposText,
   repoStateText,
+  type RepoState,
   type RunRepoStates,
 } from "../../../src/core/run/repo-state.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
@@ -290,27 +291,25 @@ describe("runDigest", () => {
   });
 
   describe("repo states", () => {
-    const states: RunRepoStates = {
-      before: {
-        kind: "read",
-        branch: "flowdeck/nightly-login-fix",
-        head: "1a2b3c4d5e6f7a8b",
-        upstream: null,
-        staged: 0,
-        unstaged: 0,
-        untracked: 0,
-      },
-      after: {
-        kind: "read",
-        branch: "flowdeck/nightly-login-fix",
-        head: "9f8e7d6c5b4a",
-        upstream: { name: "origin/main", ahead: 2, behind: 1 },
-        staged: 1,
-        unstaged: 2,
-        untracked: 3,
-      },
-      otherRepos: [],
+    const before: RepoState = {
+      kind: "read",
+      branch: "flowdeck/nightly-login-fix",
+      head: "1a2b3c4d5e6f7a8b",
+      upstream: null,
+      staged: 0,
+      unstaged: 0,
+      untracked: 0,
     };
+    const after: RepoState = {
+      kind: "read",
+      branch: "flowdeck/nightly-login-fix",
+      head: "9f8e7d6c5b4a",
+      upstream: { name: "origin/main", ahead: 2, behind: 1 },
+      staged: 1,
+      unstaged: 2,
+      untracked: 3,
+    };
+    const states: RunRepoStates = { before, after, otherRepos: [] };
     const others = [
       { path: "/x/ios", branch: "develop" },
       { path: "/u/web", branch: "master" },
@@ -341,6 +340,17 @@ describe("runDigest", () => {
         `After: ${repoStateText(states.after)}\nOther repos: ${otherReposText(others)}\nVariables: `,
       );
       expect(header.otherRepos).toEqual(others);
+    });
+
+    it("gives each other repo's before and after on the other repos line", () => {
+      const tracked = [{ path: "/x/ios", branch: "develop", before, after }];
+      const { text } = runDigest(
+        digestInput(eventsOf(), { repoStates: { ...states, otherRepos: tracked } }),
+      );
+
+      expect(text).toContain(
+        `\nOther repos: /x/ios (develop): before ${repoStateText(before)}; after ${repoStateText(after)}\nVariables: `,
+      );
     });
 
     it("keeps today's header and adds no other repos line when there are none", () => {
@@ -752,6 +762,33 @@ describe("runDigest", () => {
       expect(text.length).toBeLessThanOrEqual(digestCap);
       expect(text).toContain(`Before: ${repoStateText(state)}\n`);
       expect(text).toContain(`Other repos: ${otherReposText(otherRepos)}\n`);
+    });
+
+    it("stays under the cap with twelve other repos at their longest before and after", () => {
+      const long = "x".repeat(500);
+      const state = {
+        kind: "read" as const,
+        branch: long,
+        head: long,
+        upstream: { name: long, ahead: 999_999, behind: 999_999 },
+        staged: 999_999,
+        unstaged: 999_999,
+        untracked: 999_999,
+      };
+      const otherRepos = Array.from({ length: 12 }, (_, index) => ({
+        path: `/${long}/${index}`,
+        branch: long,
+        before: state,
+        after: state,
+      }));
+
+      const { text } = runDigest(
+        digestInput(eventsOf(), { repoStates: { before: state, after: state, otherRepos } }),
+      );
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain(`Other repos: ${otherReposText(otherRepos)}\n`);
+      expect(otherReposText(otherRepos)).toContain(`: before ${repoStateText(state)}; after `);
     });
 
     const report = (length: number) =>

@@ -11,6 +11,7 @@ import type { WaitState } from "../inspector/wait-store.js";
 import { ItemMenu } from "../item-menu.js";
 import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { variablesText } from "../../../core/run/digest.js";
+import { repoStateText } from "../../../core/run/repo-state.js";
 import type { LoadedRun } from "../../../core/run/listing.js";
 import { storyPartsOf } from "../../../core/run/story.js";
 import { Ask } from "../inspector/ask.js";
@@ -103,6 +104,12 @@ function StoryPanel({
               {otherRepos.map((other) => (
                 <li key={other.path}>
                   <code className="fd-hash">{`${other.path} · ${other.branch}`}</code>
+                  {(other.before !== undefined || other.after !== undefined) && (
+                    <>
+                      <div>{`Before: ${repoStateText(other.before ?? null)}`}</div>
+                      <div>{`After: ${repoStateText(other.after ?? null)}`}</div>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
@@ -353,9 +360,10 @@ export function RunPage({
               run={run}
               view={view}
               inspector={inspector}
+              stored={loaded.activity}
               labels={labels}
               canRetry={canRetry}
-              fullText={{ runId, store: fullText }}
+              fullText={{ ownerId: runId, store: fullText }}
             />
           )}
         </div>

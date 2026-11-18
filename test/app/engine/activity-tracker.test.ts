@@ -647,5 +647,51 @@ describe("createBuildActivity", () => {
 
       expect(latest().find((entry) => entry.kind === "subagent")?.summary).toBe("s1");
     });
+
+    it("keeps the full input and output of a cut step", () => {
+      const longPath = `/work/${"p".repeat(3_000)}.md`;
+      const longOutput = `${"o".repeat(3_000)}END`;
+      start("s1", "t1", "A1");
+      step({
+        kind: "PreToolUse",
+        payload: { ...inner("ag-1", "A1", "r1", 20), tool_input: { file_path: longPath } },
+      });
+      step({
+        kind: "PostToolUse",
+        payload: {
+          ...inner("ag-1", "A1", "r1", 23),
+          tool_input: { file_path: longPath },
+          tool_response: longOutput,
+        },
+      });
+
+      const [cutStep] = toolSteps();
+      expect(store.buildStepTexts(pendingId, cutStep?.id ?? -1)).toEqual([
+        { field: "input", text: JSON.stringify({ file_path: longPath }) },
+        { field: "output", text: longOutput },
+      ]);
+    });
+
+    it("keeps the full report of an agent whose report was cut", () => {
+      const report = `Wrote s1. ${"r".repeat(3_000)}`;
+      start("s1", "t1", "A1");
+      record({ piece: "s1", toolUseId: "t1", agentType: "A1", status: "completed" }, report);
+
+      const [finished] = latest();
+      expect(store.buildStepTexts(pendingId, finished?.id ?? -1)).toEqual([
+        { field: "report", text: report },
+      ]);
+    });
+
+    it("keeps no full text for a step and a report that were not cut", () => {
+      start("s1", "t1", "A1");
+      read("ag-1", "A1", "r1");
+      readDone("ag-1", "A1", "r1");
+      record({ piece: "s1", toolUseId: "t1", agentType: "A1", status: "completed" }, "short");
+
+      for (const entry of latest()) {
+        expect(store.buildStepTexts(pendingId, entry.id)).toEqual([]);
+      }
+    });
   });
 });

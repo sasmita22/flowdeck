@@ -34,6 +34,39 @@ const send = (event) => {
   socket.on("error", () => undefined);
 };
 const stop = () => send({ hook_event_name: "Stop", last_assistant_message: "ok" });
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+const hookFiles = [
+  flag("--settings"),
+  ...argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "", "hooks", "hooks.json")] : [])),
+].filter((path) => path !== undefined && existsSync(path));
+const toolStartCommand = () =>
+  hookFiles
+    .map((path) => JSON.parse(readFileSync(path, "utf8")).hooks?.PreToolUse?.[0]?.hooks?.[0]?.command)
+    .find((command) => command !== undefined);
+const startTool = (event) =>
+  new Promise((done) => {
+    const line = JSON.stringify({ session_id: sessionId, ...event, flowdeck_hook_at: Date.now() });
+    const command = toolStartCommand();
+    if (command === undefined) {
+      const socket = connect(sock, () => socket.write(line + "\\n"));
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk) => chunk.includes("\\n") && socket.destroy());
+      socket.on("close", done);
+      socket.on("error", done);
+      return;
+    }
+    const { spawn } = require("node:child_process");
+    const hook = spawn("sh", ["-c", command], { stdio: ["pipe", "ignore", "ignore"] });
+    hook.on("exit", done);
+    hook.on("error", done);
+    hook.stdin.end(line);
+  });
+const commitInOtherRepo = () => {
+  if (plannedStep.commitIn === undefined) return;
+  const { execFileSync } = require("node:child_process");
+  const identity = ["-c", "user.name=Fake Claude", "-c", "user.email=fake@flowdeck.invalid", "-c", "commit.gpgsign=false"];
+  execFileSync("git", ["-C", plannedStep.commitIn, ...identity, "commit", "--quiet", "--allow-empty", "-m", "fake change"]);
+};
 const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\\\"]+)/;
 const turnsFile = resolve(__dirname, "turns.json");
 const plannedTurns = existsSync(turnsFile) ? JSON.parse(readFileSync(turnsFile, "utf8")) : {};
@@ -70,7 +103,7 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
-const runTurn = (text) => {
+const runTurn = async (text) => {
   const match = dispatched.exec(text);
   if (match === null) return setTimeout(stop, 50);
   const [, agentType, nodeId] = match;
@@ -92,9 +125,10 @@ const runTurn = (text) => {
     tool_use_id: "fake-step-" + nodeId + "-" + Date.now(),
     tool_input: { command: plannedStep.command ?? "echo traced", description: "Echo a word" },
   };
+  const stepStart = { hook_event_name: "PreToolUse", ...step };
   const hooks = [
     { hook_event_name: "PreToolUse", ...agentCall },
-    { hook_event_name: "PreToolUse", ...step },
+    stepStart,
     stepEnd(nodeId, step),
     {
       hook_event_name: "PostToolUse",
@@ -107,10 +141,15 @@ const runTurn = (text) => {
       },
     },
   ];
-  hooks.forEach((hook, index) => {
-    setTimeout(() => send({ ...hook, flowdeck_hook_at: Date.now() }), 50 + 30 * index);
-  });
-  setTimeout(stop, 50 + 30 * hooks.length + 100);
+  await pause(50);
+  for (const hook of hooks) {
+    if (hook.hook_event_name === "PreToolUse") await startTool(hook);
+    else send({ ...hook, flowdeck_hook_at: Date.now() });
+    if (hook === stepStart) commitInOtherRepo();
+    await pause(30);
+  }
+  await pause(100);
+  stop();
 };
 
 const unfilledLine = /^@unfilled.*\\n\\n?/m;
@@ -165,7 +204,10 @@ const pieceSteps = (agentType, index, path) => {
     {
       hook_event_name: "PostToolUse",
       ...read,
-      tool_response: { type: "text", file: { filePath: read.tool_input.file_path, content: "Fake piece body." } },
+      tool_response: {
+        type: "text",
+        file: { filePath: read.tool_input.file_path, content: plannedStep.outputChars === undefined ? "Fake piece body." : stepOutput() },
+      },
       duration_ms: 3,
     },
   ];
@@ -390,6 +432,7 @@ export type FakeClaudeLaunchOptions = LaunchOptions & {
   stepCommand?: string;
   stepOutputChars?: number;
   stepFails?: string[];
+  stepCommitIn?: string;
 };
 
 export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Promise<LaunchedApp> {
@@ -405,6 +448,7 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     stepCommand,
     stepOutputChars,
     stepFails,
+    stepCommitIn,
     ...launchOptions
   } = options;
   const bin = join(options.home, "fake-claude-bin");
@@ -415,8 +459,15 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
   if (question !== undefined) await writeFile(join(bin, "question"), JSON.stringify(question));
   if (turns !== undefined) await writeFile(join(bin, "turns.json"), JSON.stringify(turns));
   if (writes !== undefined) await writeFile(join(bin, "writes.json"), JSON.stringify(writes));
-  if (stepCommand !== undefined || stepOutputChars !== undefined || stepFails !== undefined) {
-    const step = { command: stepCommand, outputChars: stepOutputChars, fails: stepFails };
+  if (
+    [stepCommand, stepOutputChars, stepFails, stepCommitIn].some((value) => value !== undefined)
+  ) {
+    const step = {
+      command: stepCommand,
+      outputChars: stepOutputChars,
+      fails: stepFails,
+      commitIn: stepCommitIn,
+    };
     await writeFile(join(bin, "step.json"), JSON.stringify(step));
   }
   if (usage !== undefined) {

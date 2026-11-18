@@ -3,6 +3,7 @@ import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
 import {
   createRunStore,
+  losesWork,
   needsSessionSetup,
   selectCanBuild,
   selectExistingBranches,
@@ -44,6 +45,7 @@ type RunBridge = Pick<
   | "deleteRun"
   | "deletePendingBuild"
   | "deletePreview"
+  | "deletePendingPreview"
   | "writeStory"
   | "defaultBranch"
   | "listBranches"
@@ -166,6 +168,10 @@ const setup = async (
     deleteRun: vi.fn<FlowdeckBridge["deleteRun"]>(async () => undefined),
     deletePendingBuild: vi.fn<FlowdeckBridge["deletePendingBuild"]>(async () => undefined),
     deletePreview: vi.fn<FlowdeckBridge["deletePreview"]>(async () => ({
+      dirtyWorktree: false,
+      unpushedBranch: false,
+    })),
+    deletePendingPreview: vi.fn<FlowdeckBridge["deletePendingPreview"]>(async () => ({
       dirtyWorktree: false,
       unpushedBranch: false,
     })),
@@ -1197,8 +1203,35 @@ describe("confirming a delete", () => {
     expect(run.getState().error).toBe("No build b-1");
   });
 
+  it("loads what deleting a pending build would lose into its confirm", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePendingPreview.mockResolvedValueOnce({
+      dirtyWorktree: false,
+      unpushedBranch: true,
+    });
+
+    await run.getState().askDelete({ kind: "pending", id: "pb-1" });
+
+    expect(bridge.deletePendingPreview).toHaveBeenCalledExactlyOnceWith({ id: "pb-1" });
+    expect(bridge.deletePreview).not.toHaveBeenCalled();
+    expect(run.getState().confirmingDelete).toEqual({
+      kind: "pending",
+      id: "pb-1",
+      preview: { dirtyWorktree: false, unpushedBranch: true },
+    });
+  });
+
+  it("opens no confirm for a pending build whose loss cannot be read, holding the error instead", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePendingPreview.mockRejectedValueOnce(new Error("No pending build pb-1"));
+
+    await run.getState().askDelete({ kind: "pending", id: "pb-1" });
+
+    expect(run.getState().confirmingDelete).toBeNull();
+    expect(run.getState().error).toBe("No pending build pb-1");
+  });
+
   it.each([
-    [{ kind: "pending", id: "pb-1" }],
     [{ kind: "run", id: "run-2", from: "runs" }],
     [{ kind: "run", id: "run-2", from: "run-page" }],
   ] as const)("asks to confirm %j without a preview", async (question) => {
@@ -1208,6 +1241,20 @@ describe("confirming a delete", () => {
 
     expect(run.getState().confirmingDelete).toEqual(question);
     expect(bridge.deletePreview).not.toHaveBeenCalled();
+    expect(bridge.deletePendingPreview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ dirtyWorktree: true, unpushedBranch: false }, true],
+    [{ dirtyWorktree: false, unpushedBranch: true }, true],
+    [{ dirtyWorktree: false, unpushedBranch: false }, false],
+  ] as const)("warns a build or pending delete loses work for %j: %s", (preview, warns) => {
+    expect(losesWork({ kind: "build", id: "b-1", preview })).toBe(warns);
+    expect(losesWork({ kind: "pending", id: "pb-1", preview })).toBe(warns);
+  });
+
+  it("never warns a run delete loses work", () => {
+    expect(losesWork({ kind: "run", id: "run-2", from: "runs" })).toBe(false);
   });
 
   it("cancel clears the confirm and deletes nothing", async () => {

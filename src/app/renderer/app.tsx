@@ -44,6 +44,7 @@ export type AppStores = {
   inspector: StoreApi<InspectorState>;
   wait: StoreApi<WaitState>;
   fullText: FullTextStore;
+  buildFullText: FullTextStore;
   shell: StoreApi<ShellState>;
   workspace: StoreApi<WorkspaceState>;
   nav: StoreApi<NavState>;
@@ -185,7 +186,8 @@ function StatusBar({ store, run, workspace, nav, wait }: AppStores) {
 }
 
 function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
-  const { nav, library, run, save, canvas, buildProgress, terminal, actions } = stores;
+  const { nav, library, run, save, canvas, buildProgress, terminal, buildFullText, actions } =
+    stores;
   switch (page.name) {
     case "blueprints":
       return (
@@ -217,6 +219,7 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
           library={library}
           buildProgress={buildProgress}
           terminal={terminal}
+          buildFullText={buildFullText}
         />
       );
     case "runs":

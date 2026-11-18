@@ -59,6 +59,15 @@ const startedId = (store: SqliteStore, build: NewPendingBuild): string => {
   return start.pendingId;
 };
 
+const activityOf = (id: number): ActivityEntry => ({
+  id,
+  nodeId: "p1",
+  at: 10,
+  kind: "tool",
+  tool: "Bash",
+  summary: "ls",
+});
+
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 describe("SqliteStore", () => {
@@ -162,9 +171,10 @@ describe("SqliteStore", () => {
       { name: "018_runs_deleted_at.sql" },
       { name: "019_runs_own_their_build.sql" },
       { name: "020_run_repo_states_and_step_texts.sql" },
+      { name: "021_complete_deletes_and_build_texts.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 20]);
+    expect(before).toEqual([1, 1, 3, 1, 21]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -607,7 +617,7 @@ describe("SqliteStore", () => {
   });
 
   describe("repo states", () => {
-    const state = (head: string): RepoState => ({
+    const state = (head: string): Extract<RepoState, { kind: "read" }> => ({
       kind: "read",
       branch: "flowdeck/fix-login",
       head,
@@ -643,6 +653,46 @@ describe("SqliteStore", () => {
       const { id } = store.createRun(newRun(["p1"]));
 
       expect(store.repoStates(id)).toEqual({ before: null, after: null, otherRepos: [] });
+    });
+
+    it("keeps another repo's before out of the run's own, and lists it merged with the after of the same repo, sorted by path", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      const web = { ...state("w1"), branch: "dev" };
+
+      store.appendOtherRepoBefore(id, "/x/web", web);
+      store.appendRepoState(id, "before", state("b1"), []);
+      store.appendOtherRepoBefore(id, "/x/web", state("w2"));
+      store.appendOtherRepoBefore(id, "/x/api", { ...state("p1"), branch: null });
+      store.appendOtherRepoBefore(id, "/x/old", { kind: "unreadable" });
+      store.appendRepoState(id, "after", state("a1"), [
+        { path: "/x/web", branch: "dev", after: state("w3") },
+        { path: "/x/ios", branch: "develop" },
+      ]);
+
+      expect(store.repoStates(id)).toEqual({
+        before: state("b1"),
+        after: state("a1"),
+        otherRepos: [
+          { path: "/x/api", branch: "detached p1", before: { ...state("p1"), branch: null } },
+          { path: "/x/ios", branch: "develop" },
+          { path: "/x/old", branch: "not recorded", before: { kind: "unreadable" } },
+          { path: "/x/web", branch: "dev", before: web, after: state("w3") },
+        ],
+      });
+    });
+
+    it("lists another repo's before while the run has no after yet", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+
+      store.appendOtherRepoBefore(id, "/x/web", state("w1"));
+
+      expect(store.repoStates(id)).toEqual({
+        before: null,
+        after: null,
+        otherRepos: [{ path: "/x/web", branch: "flowdeck/fix-login", before: state("w1") }],
+      });
     });
 
     it("reads a stored state that no longer fits the schema as unreadable and bad other repos as none", () => {
@@ -840,6 +890,28 @@ describe("SqliteStore", () => {
       expect(store.findBuildByName("fix-login")).toMatchObject({ id: "b3" });
     });
 
+    it("removes the build's step texts, its run number count and the older ended attempts of its name, keeping its runs", () => {
+      const store = open();
+      const older = startedId(store, { ...pending("flow-1", "fix-login"), startedAt: 100 });
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 200 });
+      const other = startedId(store, { ...pending("flow-1", "nightly"), startedAt: 100 });
+      store.endPendingBuild(other, { outcome: "failed", endedAt: 200 });
+      const built = startedId(store, pending("flow-1", "fix-login"));
+      store.appendBuildStepText(built, 1, "output", "full");
+      store.endPendingBuild(built, { outcome: "built", endedAt: 2_000, buildId: "b1" });
+      const run = store.createRun(newRun(["p1"]));
+      store.finishRun(run.id, "done");
+
+      store.deleteBuild("b1");
+
+      const db = raw();
+      expect(count(db, "build_step_texts")).toBe(0);
+      expect(db.prepare("SELECT build_id FROM run_number_counters").pluck().all()).toEqual([]);
+      expect(store.pendingBuild(older)).toBeNull();
+      expect(store.pendingBuild(other)).toMatchObject({ id: other });
+      expect(store.findRun(run.id)).toMatchObject({ id: run.id, buildId: "b1" });
+    });
+
     it("refuses a second build with the name of one not deleted", () => {
       const store = open();
 
@@ -858,19 +930,65 @@ describe("SqliteStore", () => {
       return [finished(), finished(), finished()];
     };
 
-    it("marks the run deleted and hides it from listRuns, keeping its row", () => {
+    const runTables = [
+      ["step_texts", "run_id"],
+      ["run_repo_states", "run_id"],
+      ["run_stories", "run_id"],
+      ["activity", "run_id"],
+      ["events", "run_id"],
+      ["run_nodes", "run_id"],
+      ["run_sessions", "run_id"],
+      ["runs", "id"],
+    ] as const;
+
+    const withRowsEverywhere = (store: SqliteStore, runId: string) => {
+      store.append(runId, "p1", { kind: "sent" });
+      store.recordActivity(runId, activityOf(1));
+      store.appendRunStory({ runId, at: "t", runStatus: "done", text: "Told.", cost: 0 });
+      store.appendRepoState(runId, "before", { kind: "unreadable" }, []);
+      store.appendOtherRepoBefore(runId, "/x/web", { kind: "unreadable" });
+      store.appendStepText(runId, 1, "output", "full");
+    };
+
+    const rowsOf = (runId: string) =>
+      Object.fromEntries(
+        runTables.map(([table, column]) => [
+          table,
+          (
+            raw().prepare(`SELECT count(*) AS n FROM ${table} WHERE ${column} = ?`).get(runId) as {
+              n: number;
+            }
+          ).n,
+        ]),
+      );
+
+    it("removes every row of the run from every run table and hides it from listRuns, keeping the others", () => {
       const store = open();
       const [first, second] = threeFinishedRuns(store);
+      withRowsEverywhere(store, first);
+      withRowsEverywhere(store, second);
+      const kept = rowsOf(first);
 
       store.deleteRun(second);
 
       expect(store.listRuns().map((run) => run.id)).not.toContain(second);
       expect(store.listRuns().map((run) => run.id)).toContain(first);
-      const row = raw().prepare("SELECT deleted_at FROM runs WHERE id = ?").get(second) as {
-        deleted_at: unknown;
-      };
-      expect(row.deleted_at).not.toBeNull();
-      expect(count(raw(), "runs")).toBe(3);
+      expect(rowsOf(second)).toEqual(Object.fromEntries(runTables.map(([table]) => [table, 0])));
+      expect(rowsOf(first)).toEqual(kept);
+      expect(Object.values(kept).every((n) => n > 0)).toBe(true);
+    });
+
+    it("still refuses a raw DELETE of a live run's activity once another run is deleted", () => {
+      const store = open();
+      const [first, second] = threeFinishedRuns(store);
+      withRowsEverywhere(store, first);
+      store.deleteRun(second);
+      const db = raw();
+
+      expect(() => db.prepare("DELETE FROM activity WHERE run_id = ?").run(first)).toThrow(
+        /append-only/,
+      );
+      expect(rowsOf(first).activity).toBe(1);
     });
 
     it("keeps the numbers of the build's other runs", () => {
@@ -883,49 +1001,87 @@ describe("SqliteStore", () => {
       expect([numberOf.get(first), numberOf.get(third)]).toEqual([1, 3]);
     });
 
-    it("still finds the deleted run by id, with its number", () => {
+    it("finds nothing for the deleted run by id", () => {
       const store = open();
       const [, second] = threeFinishedRuns(store);
 
       store.deleteRun(second);
 
-      expect(store.findRun(second)).toMatchObject({ id: second, status: "done" });
-      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+      expect(store.findRun(second)).toBeUndefined();
+      expect(store.findRunSummary(second)).toBeUndefined();
     });
 
-    it("leaves a deleted run's deletion time as it is when it is deleted again", () => {
-      let now = 1_000;
-      const store = open(() => new Date(now));
-      const [, second] = threeFinishedRuns(store);
+    it("does nothing when the run is deleted again", () => {
+      const store = open();
+      const [first, second] = threeFinishedRuns(store);
       store.deleteRun(second);
-      now = 2_000;
+      const listed = store.listRuns();
 
       store.deleteRun(second);
 
-      expect(raw().prepare("SELECT deleted_at FROM runs WHERE id = ?").get(second)).toEqual({
-        deleted_at: 1_000,
-      });
+      expect(store.listRuns()).toEqual(listed);
+      expect(store.findRun(first)).toBeDefined();
+    });
+
+    it("never gives a deleted top run's number to the build's next run", () => {
+      const store = open();
+      const [, , third] = threeFinishedRuns(store);
+      store.deleteRun(third);
+
+      const next = store.createRun(newRun(["p1"]));
+
+      expect(store.findRunSummary(next.id)).toMatchObject({ number: 4 });
     });
   });
 
   describe("deleting a pending build", () => {
-    it("marks an open build deleted and hides it from listPendingBuilds", () => {
+    const pendingTables = [
+      ["build_activity", "pending_id"],
+      ["build_events", "pending_id"],
+      ["build_snapshots", "pending_id"],
+      ["build_step_texts", "pending_id"],
+      ["pending_builds", "id"],
+    ] as const;
+
+    const snapshot = { blueprintName: "Nightly", version: 3, svg: "<svg/>" };
+
+    const withBuildRows = (store: SqliteStore, build: NewPendingBuild) => {
+      const id = startedId(store, { ...build, snapshot });
+      store.appendBuildEvent(id, { type: "step", step: 1, status: "running" });
+      store.appendBuildActivity(id, activityOf(1));
+      store.appendBuildStepText(id, 1, "output", "full");
+      return id;
+    };
+
+    const pendingRowsOf = (id: string) =>
+      Object.fromEntries(
+        pendingTables.map(([table, column]) => [
+          table,
+          (
+            raw().prepare(`SELECT count(*) AS n FROM ${table} WHERE ${column} = ?`).get(id) as {
+              n: number;
+            }
+          ).n,
+        ]),
+      );
+
+    const none = Object.fromEntries(pendingTables.map(([table]) => [table, 0]));
+
+    it("removes an open build and every row of it, hiding it from listPendingBuilds", () => {
       const store = open();
-      const gone = startedId(store, pending("flow-1", "nightly"));
-      const kept = startedId(store, pending("flow-2", "weekly"));
+      const gone = withBuildRows(store, pending("flow-1", "nightly"));
+      const kept = withBuildRows(store, pending("flow-2", "weekly"));
 
       store.deletePendingBuild(gone);
 
       expect(store.listPendingBuilds().map((each) => each.id)).toEqual([kept]);
-      const row = raw().prepare("SELECT deleted_at FROM pending_builds WHERE id = ?").get(gone) as {
-        deleted_at: unknown;
-      };
-      expect(row.deleted_at).not.toBeNull();
+      expect(pendingRowsOf(gone)).toEqual(none);
+      expect(Object.values(pendingRowsOf(kept)).every((n) => n === 1)).toBe(true);
     });
 
-    it("hides an ended build from listLatestEndedPendingBuildsByName", () => {
+    it("removes an ended build, hiding it from listLatestEndedPendingBuildsByName", () => {
       const store = open();
-      const gone = startedId(store, pending("flow-1", "first"));
+      const gone = withBuildRows(store, pending("flow-1", "first"));
       store.endPendingBuild(gone, { outcome: "failed", endedAt: 2_000 });
       const kept = startedId(store, pending("flow-1", "second"));
       store.endPendingBuild(kept, { outcome: "failed", endedAt: 3_000 });
@@ -933,11 +1089,12 @@ describe("SqliteStore", () => {
       store.deletePendingBuild(gone);
 
       expect(store.listLatestEndedPendingBuildsByName().map((each) => each.id)).toEqual([kept]);
+      expect(pendingRowsOf(gone)).toEqual(none);
     });
 
     it("does not bring back an older ended build of the name once the latest is hidden", () => {
       const store = open();
-      const older = startedId(store, pending("flow-1", "nightly"));
+      const older = withBuildRows(store, pending("flow-1", "nightly"));
       store.endPendingBuild(older, { outcome: "failed", endedAt: 2_000 });
       const latest = startedId(store, pending("flow-1", "nightly"));
       store.endPendingBuild(latest, { outcome: "needs-you", endedAt: 3_000 });
@@ -945,21 +1102,66 @@ describe("SqliteStore", () => {
       store.deletePendingBuild(latest);
 
       expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
+      expect(pendingRowsOf(older)).toEqual(none);
     });
 
-    it("leaves a deleted build's deletion time as it is when it is deleted again", () => {
-      let now = 1_000;
-      const store = open(() => new Date(now));
+    it("leaves a going build of the name, started earlier, as it is", () => {
+      const store = open();
+      const older = startedId(store, { ...pending("flow-1", "nightly"), startedAt: 100 });
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 200 });
+      const latest = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(latest, { outcome: "failed", endedAt: 2_000 });
+      const going = withBuildRows(store, { ...pending("flow-1", "nightly"), startedAt: 500 });
+
+      store.deletePendingBuild(latest);
+
+      expect(store.pendingBuild(older)).toBeNull();
+      expect(store.listPendingBuilds().map((each) => each.id)).toEqual([going]);
+      expect(Object.values(pendingRowsOf(going)).every((n) => n === 1)).toBe(true);
+    });
+
+    it("does nothing when the build is deleted again", () => {
+      const store = open();
       const id = startedId(store, pending());
       store.endPendingBuild(id, { outcome: "failed", endedAt: 2_000 });
       store.deletePendingBuild(id);
-      now = 2_000;
 
       store.deletePendingBuild(id);
 
-      expect(raw().prepare("SELECT deleted_at FROM pending_builds WHERE id = ?").get(id)).toEqual({
-        deleted_at: 1_000,
-      });
+      expect(store.pendingBuild(id)).toBeNull();
+      expect(pendingRowsOf(id)).toEqual(none);
+    });
+  });
+
+  describe("build step texts", () => {
+    it("reads back the latest text per field of one entry in the order they were written", () => {
+      const store = open();
+      const id = startedId(store, pending());
+      const other = startedId(store, pending("flow-2", "weekly"));
+
+      store.appendBuildStepText(id, 1, "output", "old output");
+      store.appendBuildStepText(id, 1, "input", "input");
+      store.appendBuildStepText(id, 1, "output", "new output");
+      store.appendBuildStepText(id, 2, "report", "another entry");
+      store.appendBuildStepText(other, 1, "output", "another build");
+
+      expect(store.buildStepTexts(id, 1)).toEqual([
+        { field: "input", text: "input" },
+        { field: "output", text: "new output" },
+      ]);
+      expect(store.buildStepTexts(id, 2)).toEqual([{ field: "report", text: "another entry" }]);
+      expect(store.buildStepTexts("nope", 1)).toEqual([]);
+    });
+
+    it("rejects a raw UPDATE on build_step_texts", () => {
+      const store = open();
+      const id = startedId(store, pending());
+      store.appendBuildStepText(id, 1, "output", "full");
+
+      expect(() => raw().exec("UPDATE build_step_texts SET text = 'edited'")).toThrow(
+        /append-only/,
+      );
+      expect(store.buildStepTexts(id, 1)).toEqual([{ field: "output", text: "full" }]);
     });
   });
 

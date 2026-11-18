@@ -28,10 +28,7 @@ export function FilesTab({
 }) {
   const runId = useStore(run, (state) => state.snapshot?.runId);
   const feed = useStore(inspector, (state) => state.feed);
-  const files = selectFiles(
-    selectActivity({ feed }, runId, stored),
-    labels.nodes.map((node) => node.id),
-  );
+  const files = selectFiles(selectActivity({ feed }, runId, stored), labels.nodes);
   if (files.nodes.length === 0 && files.pullRequests.length === 0) {
     return <p data-testid="files-empty">No node has written a file yet</p>;
   }

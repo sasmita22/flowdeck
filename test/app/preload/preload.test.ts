@@ -87,6 +87,7 @@ describe("preload run-state wiring", () => {
     ["deleteRun", "flowdeck:delete-run", { runId: "run-1" }],
     ["deletePendingBuild", "flowdeck:delete-pending-build", { id: "pending-1" }],
     ["deletePreview", "flowdeck:delete-preview", { buildId: "b1" }],
+    ["deletePendingPreview", "flowdeck:delete-pending-preview", { id: "pending-1" }],
     ["writeStory", "flowdeck:write-story", { runId: "run-1" }],
     ["doctorWorktrees", "flowdeck:doctor-worktrees", undefined],
     ["defaultBranch", "flowdeck:default-branch", { repo: "/code/shop" }],
@@ -94,6 +95,7 @@ describe("preload run-state wiring", () => {
     ["listRuns", "flowdeck:list-runs", undefined],
     ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
     ["stepFullText", "flowdeck:step-full-text", { runId: "run-1", entryId: 3 }],
+    ["buildStepFullText", "flowdeck:build-step-full-text", { pendingId: "pending-1", entryId: 3 }],
     ["runPipeline", "flowdeck:run-pipeline", { runId: "run-1" }],
     ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
     ["listBuildProgress", "flowdeck:build-progress-list", undefined],
@@ -134,6 +136,7 @@ describe("preload run-state wiring", () => {
     ["delete-run", "deleteRun"],
     ["delete-pending-build", "deletePendingBuild"],
     ["delete-preview", "deletePreview"],
+    ["delete-pending-preview", "deletePendingPreview"],
     ["write-story", "writeStory"],
     ["doctor-worktrees", "doctorWorktrees"],
     ["default-branch", "defaultBranch"],
@@ -144,6 +147,7 @@ describe("preload run-state wiring", () => {
     ["build-rebuild", "buildRebuild"],
     ["run-pipeline", "runPipeline"],
     ["step-full-text", "stepFullText"],
+    ["build-step-full-text", "buildStepFullText"],
     ["build-picture", "buildPicture"],
     ["build-tree", "buildTree"],
     ["build-project", "buildProject"],
@@ -208,9 +212,16 @@ describe("preload run-state wiring", () => {
     expectTypeOf<Parameters<EngineCalls["deletePreview"]>[0]>().toEqualTypeOf<{
       buildId: string;
     }>();
+    expectTypeOf<Parameters<EngineCalls["deletePendingPreview"]>[0]>().toEqualTypeOf<{
+      id: string;
+    }>();
     expectTypeOf<Parameters<EngineCalls["writeStory"]>[0]>().toEqualTypeOf<{ runId: string }>();
     expectTypeOf<Parameters<EngineCalls["stepFullText"]>[0]>().toEqualTypeOf<{
       runId: string;
+      entryId: number;
+    }>();
+    expectTypeOf<Parameters<EngineCalls["buildStepFullText"]>[0]>().toEqualTypeOf<{
+      pendingId: string;
       entryId: number;
     }>();
     expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();

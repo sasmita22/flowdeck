@@ -50,7 +50,7 @@ export function ActivityFeed({
   );
 }
 
-export type FullTextSource = { runId: string; store: FullTextStore };
+export type FullTextSource = { ownerId: string; store: FullTextStore };
 
 const stepDetailOf = (entry: ActivityEntry): { input?: string; output?: string } => {
   if (entry.kind === "tool")
@@ -148,13 +148,13 @@ function StepBody({
 }
 
 function StepWithFullText({ entry, fullText }: { entry: ActivityEntry; fullText: FullTextSource }) {
-  const { runId, store } = fullText;
-  const full = useStore(store, (state) => selectFullText(state, runId, entry.id));
+  const { ownerId, store } = fullText;
+  const full = useStore(store, (state) => selectFullText(state, ownerId, entry.id));
   return (
     <StepBody
       entry={entry}
       full={full}
-      onShowFull={() => void store.getState().request(runId, entry.id)}
+      onShowFull={() => void store.getState().request(ownerId, entry.id)}
     />
   );
 }

@@ -378,6 +378,19 @@ describe("narratorPrompt", () => {
     expect(promptLinesAbout("other repo")).toContain("Other repos:");
   });
 
+  it("has Context and Result take other repos' before and after from the Other repos: line", () => {
+    const sentence = narratorPrompt
+      .split("\n")
+      .filter(
+        (line) =>
+          line.includes("Other repos:") && line.includes("Context") && line.includes("Result"),
+      )
+      .join("\n");
+
+    expect(sentence).toMatch(/before/i);
+    expect(sentence).toMatch(/after/i);
+  });
+
   it("no longer promises a first line shown alone in the list of runs", () => {
     expect(narratorPrompt).not.toMatch(/shown alone/i);
     expect(narratorPrompt).not.toMatch(/list of runs/i);

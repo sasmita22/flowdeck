@@ -52,7 +52,12 @@ function renderApp(root: HTMLElement) {
   void inspector.getState().connect();
   const wait = createWaitStore({ bridge: window.flowdeck });
   void wait.getState().connect();
-  const fullText = createFullTextStore({ bridge: window.flowdeck });
+  const fullText = createFullTextStore({
+    fetch: (runId, entryId) => window.flowdeck.stepFullText({ runId, entryId }),
+  });
+  const buildFullText = createFullTextStore({
+    fetch: (pendingId, entryId) => window.flowdeck.buildStepFullText({ pendingId, entryId }),
+  });
   const shell = createShellStore({ canvas, storage: browserStorage() });
   const syncWindowWidth = () => shell.getState().setWindowWidth(window.innerWidth);
   syncWindowWidth();
@@ -106,6 +111,7 @@ function renderApp(root: HTMLElement) {
       inspector={inspector}
       wait={wait}
       fullText={fullText}
+      buildFullText={buildFullText}
       shell={shell}
       workspace={workspace}
       nav={nav}

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import type { ActivityEntry } from "../../../core/run/activity.js";
 import { displayStatus, type DisplayStatus } from "../../../core/run/display.js";
 import type {
   BudgetPause,
@@ -16,7 +17,7 @@ import { statusBadge } from "../canvas/status-look.js";
 import { formatCost, formatDuration, formatTokens, formatWhen } from "../format.js";
 import { ActivityList, type FullTextSource } from "../inspector/activity-feed.js";
 import type { RunLabels } from "../inspector/inspector.js";
-import { stepsEndedOf, type InspectorState } from "../inspector/store.js";
+import { selectActivity, stepsEndedOf, type InspectorState } from "../inspector/store.js";
 import {
   selectRunSnapshot,
   type RunState,
@@ -25,6 +26,7 @@ import {
 } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { LiveElapsed } from "./pipeline-parts.js";
+import { selectStageActivity } from "./stage-activity.js";
 
 type Placed = { stage: PipelineStage; round: number | undefined };
 
@@ -214,6 +216,7 @@ function StageDetail({
   state,
   runStatus,
   run,
+  activity,
   labels,
   canRetry,
   onSelectNode,
@@ -224,6 +227,7 @@ function StageDetail({
   state: NodeState;
   runStatus: SnapshotStatus;
   run: StoreApi<RunState>;
+  activity: readonly ActivityEntry[];
   labels: RunLabels;
   canRetry: boolean;
   onSelectNode: (nodeId: string) => void;
@@ -289,7 +293,7 @@ function StageDetail({
       </ol>
       <h3 className="fd-run-detail-heading">Activity</h3>
       <ActivityList
-        entries={[...stage.activity].sort((a, b) => b.id - a.id)}
+        entries={selectStageActivity(activity, stage)}
         labels={labels}
         onSelectNode={onSelectNode}
         withSteps
@@ -306,6 +310,7 @@ export function RunPipeline({
   run,
   view,
   inspector,
+  stored,
   labels,
   canRetry,
   fullText,
@@ -315,6 +320,7 @@ export function RunPipeline({
   run: StoreApi<RunState>;
   view: StoreApi<RunView>;
   inspector: StoreApi<InspectorState>;
+  stored: readonly ActivityEntry[];
   labels: RunLabels;
   canRetry: boolean;
   fullText: FullTextSource;
@@ -322,15 +328,13 @@ export function RunPipeline({
   const pipeline = useStore(run, (state) => state.pipelines[runId]);
   const selection = useStore(run, (state) => state.selectedStage[runId]);
   const changed = useStore(run, (state) => JSON.stringify(selectRunSnapshot(state, runId)));
-  const activityCount = useStore(inspector, (state) =>
-    state.feed?.runId === runId ? state.feed.entries.length : 0,
-  );
+  const activity = useStore(inspector, (state) => selectActivity(state, runId, stored));
   const live = useStore(view, (state) => state.snapshot?.nodes);
   const runStatus = useStore(view, (state) => state.snapshot?.status ?? "running");
 
   useEffect(() => {
     if (recorded) void run.getState().loadPipeline(runId);
-  }, [run, runId, recorded, changed, activityCount]);
+  }, [run, runId, recorded, changed]);
 
   useEffect(
     () => (recorded && runStatus === "running" ? run.getState().watchCost(runId) : undefined),
@@ -368,6 +372,7 @@ export function RunPipeline({
             state={stateOf(chosen, live)}
             runStatus={runStatus}
             run={run}
+            activity={activity}
             labels={labels}
             canRetry={canRetry}
             onSelectNode={(nodeId) => onSelect({ nodeId })}
