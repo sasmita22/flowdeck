@@ -22,7 +22,6 @@
         "role": "",
         "instructions": "Do the work.",
         "model": "sonnet",
-        "tools": [],
         "given": ["plan.md"]
       }
     },
@@ -38,7 +37,6 @@
         "role": "",
         "instructions": "Write the plan.",
         "model": "sonnet",
-        "tools": [],
         "writes": ["plan.md"]
       }
     },
@@ -95,17 +93,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

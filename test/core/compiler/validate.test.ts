@@ -7,7 +7,6 @@ import {
   flow,
   forEach,
   loop,
-  onMainFlow,
   output,
   thenWire,
   trigger,
@@ -33,30 +32,29 @@ describe("validate", () => {
 
     expect(ids).toEqual(
       expect.arrayContaining([
-        "undeclared-variable",
+        "variable-kind",
         "variable-names",
         "branch-variable",
         "repo-required",
       ]),
     );
+    expect(ids).not.toContain("agent-tools");
+    expect(ids).not.toContain("undeclared-variable");
     expect(ids).not.toContain("branch-flag");
     expect(ids).not.toContain("session-folder");
     expect(brokenFixtures).not.toContain("branch-flag.json");
     expect(brokenFixtures).not.toContain("session-folder.json");
   });
 
-  it.each([
-    "undeclared-variable",
-    "variable-names",
-    "branch-variable",
-    "branch-value",
-    "repo-required",
-  ])("reports exactly %s for its broken fixture", (ruleId) => {
-    const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
+  it.each(["variable-names", "branch-variable", "branch-value", "repo-required"])(
+    "reports exactly %s for its broken fixture",
+    (ruleId) => {
+      const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
 
-    expect(errors.length).toBeGreaterThan(0);
-    expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
-  });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
+    },
+  );
 
   it("has one broken fixture per rule", () => {
     const fixtureIds = brokenFixtures.map((name) => name.replace(/\.json$/, ""));
@@ -91,14 +89,6 @@ describe("validate", () => {
       { rule: "ports", node: "start" },
       { rule: "loop-body", node: "retry" },
       { rule: "loop-body", node: "inner" },
-    ]);
-  });
-
-  it("refuses an Agent that asks for a tool the session does not allow", () => {
-    const input = onMainFlow([agent("review", { settings: { tools: ["Bash"] } })], []);
-
-    expect(validate(input).map(({ rule, node }) => ({ rule, node }))).toEqual([
-      { rule: "agent-tools", node: "review" },
     ]);
   });
 

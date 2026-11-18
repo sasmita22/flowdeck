@@ -9,7 +9,7 @@ import {
   type CanvasState,
 } from "../canvas/store.js";
 import { Field, type Commit } from "./field.js";
-import { applyNodeSetting, describeNodeFields, missingYesNoVariable } from "./node-form.js";
+import { applyNodeSetting, describeNodeFields } from "./node-form.js";
 
 const headingStyle: CSSProperties = { fontSize: "var(--fs-md)", margin: "12px 0 4px" };
 
@@ -23,7 +23,6 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const fields = describeNodeFields(node.type, flow, node.settings);
   const issues = selectFieldIssues(flow, node.id);
   const problems = selectNodeIssues(flow)[node.id] ?? [];
-  const noVariables = missingYesNoVariable(node, flow);
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {
@@ -104,12 +103,6 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
           issues={issues}
         />
       ))}
-      {noVariables && (
-        <span className="fd-hint" data-testid="branch-no-variables">
-          No yes/no variable yet. Add one under Variables in the session settings, then pick it
-          here.
-        </span>
-      )}
       {fields.length === 0 && (
         <span className="fd-palette-description">Nothing else to set up.</span>
       )}

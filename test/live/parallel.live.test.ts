@@ -43,7 +43,6 @@ const sleeper = (id: string, seconds: number) =>
       role: "",
       instructions: `Run \`sleep ${seconds}\` with the Bash tool. Then reply DONE.`,
       model: "haiku",
-      tools: ["Bash"],
     },
   });
 
@@ -71,9 +70,8 @@ function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
     session: {
       ...parsed.session,
       model: "haiku",
-      allowedTools: ["Bash"],
-      permissionMode: "acceptEdits" as const,
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" as const },
   };
 }
 
@@ -87,7 +85,6 @@ function missingReadThenEchoFlow(): Flow {
           instructions:
             "Use the Read tool on missing.txt. Then run `echo ok` with the Bash tool. Then reply DONE.",
           model: "haiku",
-          tools: ["Read", "Bash"],
         },
       }),
       output("o"),
@@ -99,9 +96,8 @@ function missingReadThenEchoFlow(): Flow {
     session: {
       ...parsed.session,
       model: "haiku",
-      allowedTools: ["Read", "Bash"],
-      permissionMode: "acceptEdits",
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   };
 }
 

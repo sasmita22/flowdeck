@@ -3,8 +3,8 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Problem } from "../../core/compiler/problems.js";
 import { openedFlowSchema } from "../../core/flow/flow-store.js";
 import { mainFlow } from "../../core/flow/main-flow.js";
-import type { BuildConfig, Variable } from "../../core/flow/schema.js";
-import { unsetVariables } from "../../core/flow/variables.js";
+import type { BuildConfig } from "../../core/flow/schema.js";
+import { foundVariables, type FoundVariable } from "../../core/flow/variables.js";
 import {
   isValidBranchName,
   recommendedBranch,
@@ -72,7 +72,7 @@ export type BuildDialog = {
   name: string;
   repo: string;
   base: string;
-  variables: Variable[];
+  variables: FoundVariable[];
   values: Record<string, string | boolean>;
   buildModel: string;
   branches: string[];
@@ -93,7 +93,12 @@ type BuildDialogEdit = Partial<
   >
 >;
 
-export type BuildSource = { flowId: string; version: number; buildConfig: BuildConfig };
+export type BuildSource = {
+  flowId: string;
+  version: number;
+  buildConfig: BuildConfig;
+  variables: FoundVariable[];
+};
 
 export type BuildCardRun = {
   old: boolean;
@@ -215,6 +220,16 @@ const chosenBranch = (dialog: BuildDialog): RequestBranch | null => {
   return free ? { mode: "existing", name } : null;
 };
 
+const emptyTextValues = ({ variables, values }: BuildDialog): string[] =>
+  variables
+    .filter(({ kind, name }) => kind === "text" && (values[name] ?? "") === "")
+    .map(({ name }) => name);
+
+export const selectBuildRefusal = (run: Pick<RunState, "buildDialog">): string | null => {
+  const empty = run.buildDialog === null ? [] : emptyTextValues(run.buildDialog);
+  return empty.length === 0 ? null : `Give a value for ${empty.join(", ")}`;
+};
+
 export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
   const dialog = run.buildDialog;
   if (dialog === null) return false;
@@ -223,7 +238,7 @@ export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
     dialog.repo !== "" &&
     (dialog.branchMode === "existing" || dialog.base !== "") &&
     chosenBranch(dialog) !== null &&
-    unsetVariables({ variables: dialog.variables }, dialog.values).length === 0
+    emptyTextValues(dialog).length === 0
   );
 };
 
@@ -292,11 +307,9 @@ export const selectKeptNote = (kept: KeptBuild): string => {
   }
 };
 
-const defaults = (variables: readonly Variable[]): Record<string, string | boolean> =>
+const defaults = (variables: readonly FoundVariable[]): Record<string, string | boolean> =>
   Object.fromEntries(
-    variables.flatMap((variable) =>
-      variable.default === undefined ? [] : [[variable.name, variable.default]],
-    ),
+    variables.flatMap(({ name, kind }) => (kind === "yes-no" ? [[name, false]] : [])),
   );
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -344,7 +357,13 @@ export const createRunStore = ({
         set({ error: "Save the blueprint before building it" });
         return null;
       }
-      return { flowId, version, buildConfig: canvas.getState().flow.session.buildConfig };
+      const { flow } = canvas.getState();
+      return {
+        flowId,
+        version,
+        buildConfig: flow.session.buildConfig,
+        variables: foundVariables(flow),
+      };
     };
 
     const startingBase = async ({ repo, base }: BuildConfig): Promise<string> => {
@@ -373,10 +392,15 @@ export const createRunStore = ({
         ? dialog
         : { ...dialog, branchName: recommendedBranch(dialog.name, dialog.branches) };
 
-    const ignoredIn = async (flowId: string): Promise<IgnoredNode[]> => {
+    const openedVersion = async (
+      flowId: string,
+    ): Promise<{ ignored: IgnoredNode[]; buildModel: string }> => {
       const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
       const main = flow ? mainFlow(flow) : undefined;
-      return (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) }));
+      return {
+        ignored: (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
+        buildModel: flow?.settings.buildModel ?? "",
+      };
     };
 
     const editDialog = (edit: (dialog: BuildDialog) => BuildDialog) => {
@@ -464,11 +488,11 @@ export const createRunStore = ({
       openBuild: async (source) => {
         const opened = source ?? (await savedSource());
         if (opened === null) return;
-        const { flowId, version, buildConfig } = opened;
+        const { flowId, version, buildConfig, variables } = opened;
         const repo = buildConfig.repo ?? "";
-        const [base, ignored, { branches, checkedOut }] = await Promise.all([
+        const [base, { ignored, buildModel }, { branches, checkedOut }] = await Promise.all([
           startingBase(buildConfig),
-          ignoredIn(flowId),
+          openedVersion(flowId),
           repoBranches(repo),
         ]);
         set({
@@ -479,9 +503,9 @@ export const createRunStore = ({
             name: "",
             repo,
             base,
-            variables: buildConfig.variables,
-            values: defaults(buildConfig.variables),
-            buildModel: buildConfig.buildModel ?? "",
+            variables,
+            values: defaults(variables),
+            buildModel,
             branches,
             checkedOut,
             branchMode: "new",
@@ -513,7 +537,7 @@ export const createRunStore = ({
           set({ buildDialog: followName({ ...dialog, ...loaded }) });
         });
         if (get().buildDialog?.base !== "") return;
-        void startingBase({ repo, variables: [] })
+        void startingBase({ repo })
           .catch(() => "")
           .then((base) => {
             const dialog = get().buildDialog;

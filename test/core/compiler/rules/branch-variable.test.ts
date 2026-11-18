@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/branch-variable.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { parseFlow, type BuildConfig } from "../../../../src/core/flow/schema.js";
+import { parseFlow } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   branch,
@@ -15,48 +15,26 @@ import {
   wire,
 } from "../../../fixtures/flow-builders.js";
 
-const yesno = (name: string): BuildConfig["variables"][number] => ({ name, kind: "yesno" });
-
-const check = (nodes: unknown[], variables: BuildConfig["variables"], wires: unknown[] = []) => {
-  const base = flow(nodes, wires);
-  return rule.check({ ...base, session: { ...base.session, buildConfig: { variables } } });
-};
+const check = (nodes: unknown[], wires: unknown[] = []) => rule.check(flow(nodes, wires));
 
 describe("branch-variable", () => {
-  it.each([
-    ["not declared", [{ name: "ticket", kind: "text" as const }]],
-    ["declared as text", [{ name: "proceed-e2e", kind: "text" as const }]],
-  ])("reports a branch on a variable %s, naming the node and the variable", (_, variables) => {
-    const errors = check([trigger("start"), branch("ife2e", "proceed-e2e")], variables);
-
-    expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
-      { rule: "branch-variable", node: "ife2e" },
-    ]);
-    expect(errors[0]?.message).toContain("proceed-e2e");
-  });
-
   it("reports a branch with no variable picked", () => {
-    const errors = check([trigger("start"), branch("ife2e", "")], [yesno("proceed-e2e")]);
+    const errors = check([trigger("start"), branch("ife2e", "")]);
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "branch-variable", node: "ife2e" },
     ]);
   });
 
-  it("accepts a branch on a declared yes/no variable", () => {
-    expect(
-      check([trigger("start"), branch("ife2e", "proceed-e2e")], [yesno("proceed-e2e")]),
-    ).toEqual([]);
+  it("accepts a branch with a variable name, with nothing declared", () => {
+    expect(check([trigger("start"), branch("ife2e", "proceed-e2e")])).toEqual([]);
   });
 
   it.each([
     ["a loop", loop("body")],
     ["a for each", forEach("body")],
   ])("reports a branch inside %s", (_, parent) => {
-    const errors = check(
-      [trigger("start"), parent, branch("ife2e", "e2e", { parent: "body" })],
-      [yesno("e2e")],
-    );
+    const errors = check([trigger("start"), parent, branch("ife2e", "e2e", { parent: "body" })]);
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "branch-variable", node: "ife2e" },
@@ -68,7 +46,6 @@ describe("branch-variable", () => {
     expect(
       check(
         [trigger("start"), branch("ife2e", "e2e"), agent("next"), output("done")],
-        [yesno("e2e")],
         [thenWire("start", "ife2e"), wire("ife2e", port, "next", "in"), thenWire("next", "done")],
       ),
     ).toEqual([]);
@@ -84,7 +61,6 @@ describe("branch-variable", () => {
     expect(
       check(
         [trigger("start"), producer, valueBranch],
-        [],
         [thenWire("start", "check"), thenWire("check", "ifpassed")],
       ),
     ).toEqual([]);

@@ -44,12 +44,11 @@ const cases: Case[] = [
       role: "reviewer",
       instructions: "Review",
       model: "sonnet",
-      tools: ["Read"],
       given: ["plan.md"],
       writes: ["review.md"],
     },
-    bad: { role: "reviewer", instructions: "Review", model: "sonnet", tools: "Read" },
-    badPath: ["tools"],
+    bad: { role: "reviewer", instructions: "Review", model: 1 },
+    badPath: ["model"],
     expectedPorts: [inPort, outPort],
   },
   {
@@ -182,9 +181,15 @@ describe("required and lenient settings", () => {
       role: "reviewer",
       instructions: "",
       model: "sonnet",
-      tools: [],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("has no tools setting on an agent, keeping its own model", () => {
+    expect(Object.keys(agentSettings.shape)).not.toContain("tools");
+    expect(
+      agentSettings.parse({ role: "", instructions: "Go.", model: "haiku", tools: ["Read"] }),
+    ).toEqual({ role: "", instructions: "Go.", model: "haiku" });
   });
 
   it("keeps a disabled hardstop's enabled flag", () => {

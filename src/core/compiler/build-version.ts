@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
-import type { BuildConfig, Flow } from "../flow/schema.js";
-import { unsetVariables, type VariableValues } from "../flow/variables.js";
+import type { Flow } from "../flow/schema.js";
+import { foundVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
 import type { AgentCall } from "../run/agent-calls.js";
 import {
@@ -34,7 +34,6 @@ import { buildSessionSettings } from "./build-session.js";
 import { auditTurn, nodeIdsOf, pieceKind, writeTurn } from "./build-turns.js";
 import { canonicalJson } from "./canonical-json.js";
 import { checkBuild, type BuildCheckFailure } from "./check-build.js";
-import { resolveConnectors } from "./connectors.js";
 import { reportPath } from "./emit.js";
 import { sha256Hex } from "./hash.js";
 import { shellQuote } from "./hook-settings.js";
@@ -112,14 +111,20 @@ const refused = (rule: string, message: string): BuildResult => ({
   errors: [{ rule, message }],
 });
 
-const withDefaults = (buildConfig: BuildConfig, values: VariableValues): VariableValues => ({
+const withDefaults = (flow: Flow, values: VariableValues): VariableValues => ({
   ...Object.fromEntries(
-    buildConfig.variables.flatMap((variable) =>
-      variable.default === undefined ? [] : [[variable.name, variable.default]],
+    foundVariables(flow).flatMap((variable) =>
+      variable.kind === "yes-no" ? [[variable.name, false]] : [],
     ),
   ),
   ...values,
 });
+
+const emptyTextVariables = (flow: Flow, values: VariableValues): string[] =>
+  foundVariables(flow)
+    .filter((variable) => variable.kind === "text")
+    .filter((variable) => values[variable.name] === undefined || values[variable.name] === "")
+    .map((variable) => variable.name);
 
 export const stoppedRule = "build-stopped";
 
@@ -181,7 +186,7 @@ async function branchProblem(
 async function requestProblems(
   request: BuildRequest,
   repo: string,
-  buildConfig: BuildConfig,
+  flow: Flow,
   deps: BuildFlowDeps,
 ): Promise<ValidationError[]> {
   if (!kebabCase.test(request.name)) {
@@ -203,7 +208,7 @@ async function requestProblems(
     const problem = state.kind === "missing" ? "does not exist" : "is not a git repository";
     return [{ rule: "build-repo", message: `${repo} ${problem}.` }];
   }
-  const unset = unsetVariables(buildConfig, request.values);
+  const unset = emptyTextVariables(flow, request.values);
   if (unset.length > 0) {
     return [{ rule: "build-values", message: `Give a value for ${unset.join(", ")}.` }];
   }
@@ -243,9 +248,9 @@ const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
         ...flow.session.buildConfig,
         ...(repo === undefined ? {} : { repo }),
         ...(base === undefined ? {} : { base }),
-        ...(buildModel === undefined ? {} : { buildModel }),
       },
     },
+    settings: { ...flow.settings, ...(buildModel === undefined ? {} : { buildModel }) },
   };
 };
 
@@ -263,7 +268,7 @@ export async function startBuild(
   const { buildConfig } = flow.session;
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
-  const problems = await requestProblems(request, buildConfig.repo ?? "", buildConfig, deps).catch(
+  const problems = await requestProblems(request, buildConfig.repo ?? "", flow, deps).catch(
     (error: unknown) => {
       if (error instanceof BuildStopped) return undefined;
       throw error;
@@ -271,8 +276,6 @@ export async function startBuild(
   );
   if (problems === undefined) return stoppedResult;
   if (problems.length > 0) return { ok: false, errors: problems };
-  const connectors = await resolveConnectors(flow.session.connectors, deps.connectors);
-  if (!connectors.ok) return connectors;
   if (deps.signal?.aborted === true) return stoppedResult;
   const start = deps.store.startPendingBuild({
     flowId: origin?.source.flowId ?? `file:${request.name}`,
@@ -473,7 +476,7 @@ export async function runBuild(
     const identity = {
       id,
       name: request.name,
-      values: withDefaults(buildConfig, request.values),
+      values: withDefaults(flow, request.values),
       repo,
       base,
       branch,
@@ -496,7 +499,6 @@ export async function runBuild(
       layDown(flow, {
         home: deps.home,
         kitVersion: deps.kit.version,
-        ...(deps.connectors === undefined ? {} : { connectors: deps.connectors }),
         ...(origin === undefined ? {} : { source: origin.source }),
         workspace: {
           ...identity,
@@ -557,7 +559,7 @@ export async function runBuild(
         values: identity.values,
         branch,
         branchCreated,
-        ...(buildConfig.buildModel === undefined ? {} : { model: buildConfig.buildModel }),
+        model: flow.settings.buildModel,
       });
       await settled(
         deps.fs.writeFile(
@@ -580,7 +582,7 @@ export async function runBuild(
       workspaceDir: dir,
       kitDir: deps.kit.dir,
       settingsPath: deps.settingsPath,
-      ...(buildConfig.buildModel === undefined ? {} : { model: buildConfig.buildModel }),
+      model: flow.settings.buildModel,
       env: {},
       ...(resume === undefined ? {} : { attach: true as const }),
     });

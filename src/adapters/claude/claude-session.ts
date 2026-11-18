@@ -22,7 +22,6 @@ export async function openClaudeSession(
     cwd,
     layout,
     hooks,
-    mcpConfigPath,
     attach,
     resume,
   }: OpenSessionOptions,
@@ -46,7 +45,6 @@ export async function openClaudeSession(
         { sessionId, model, ...(resume === true ? { resume } : {}) },
         {
           ...buildFiles,
-          ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }),
           env: {
             FLOWDECK_SOCK: socketPath,
             CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",

@@ -38,15 +38,15 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "files": {
     "CLAUDE.md": "ff27b080caa7705f5445769c210266c27c7dcd280ac966aa86040f4dd048d1bb",
     "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
-    "plugin/agents/a.md": "4934aa74780a4ea28f467a14b00836d6526f2595ffc1b90d013802c54abc633b",
+    "plugin/agents/a.md": "065d49c46327a6d29d6147b3b434f49eae666bd9a944f8781b49c4b3a02ee0db",
     "plugin/agents/p.md": "be7dac079510a1c843ed0729687f58d71a748c462ddb110f65caa96bc7ea0b6b",
     "plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
     "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
-    "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
+    "settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "3f21a44586f33e0c2ba51552ce2c3584a1fc335072623e6d4362e773f83a1544",
+  "hash": "3a5fa669f6165f5fdc1ea39029415397c5ca1d4816ed3bda71410c673073a809",
   "layout": "workspace",
   "nodes": [
     {
@@ -63,8 +63,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
       "settings": {
         "instructions": "Do the work.",
         "model": "sonnet",
-        "role": "implementer",
-        "tools": []
+        "role": "implementer"
       },
       "type": "agent"
     },
@@ -76,10 +75,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
       "settings": {
         "instructions": "Implement the plan.",
         "model": "sonnet",
-        "role": "implementer",
-        "tools": [
-          "Grep"
-        ]
+        "role": "implementer"
       },
       "type": "agent"
     },
@@ -102,19 +98,15 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   ],
   "prefix": "fix-login",
   "session": {
-    "allowedTools": [
-      "Read",
-      "Edit",
-      "Grep"
-    ],
     "buildConfig": {
       "base": "main",
-      "repo": "/work/repo",
-      "variables": []
+      "repo": "/work/repo"
     },
-    "connectors": [],
     "model": "sonnet",
-    "name": "main",
+    "name": "main"
+  },
+  "settings": {
+    "buildModel": "sonnet",
     "permissionMode": "default"
   },
   "values": {},
@@ -163,7 +155,6 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "plugin/agents/a.md": "---
 name: "a"
 description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. implementer"
-tools: "Grep"
 model: "sonnet"
 ---
 @unfilled: the build agents replace this draft with the finished agent.
@@ -355,15 +346,11 @@ Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-we
 4. NODE stop (stop): the run ends here; its result is \`result\` (text), handed back to the user, not a file any step writes.
 ",
   "settings.json": "{
+  "enableAllProjectMcpServers": true,
   "env": {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
   },
   "permissions": {
-    "allow": [
-      "Read",
-      "Edit",
-      "Grep"
-    ],
     "defaultMode": "default"
   }
 }

@@ -21,8 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Write a short plan for the change.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -37,7 +36,6 @@
         "role": "Reviewer of the repository",
         "instructions": "Read README.md and list the risks it finds.\nExpected output: review-notes.md, the risks found.",
         "model": "sonnet",
-        "tools": [],
         "writes": ["review-notes.md"]
       }
     },
@@ -53,7 +51,6 @@
         "role": "",
         "instructions": "Read review-notes.md and update the plan to address each risk.",
         "model": "sonnet",
-        "tools": [],
         "given": ["review-notes.md"]
       }
     },
@@ -120,12 +117,12 @@
   "session": {
     "name": "main",
     "buildConfig": {
-      "base": "main",
-      "variables": []
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

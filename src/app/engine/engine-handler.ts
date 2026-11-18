@@ -24,10 +24,8 @@ import {
   type BuildRequest,
   type BuildResume,
 } from "../../core/compiler/build-version.js";
-import { resolveConnectors } from "../../core/compiler/connectors.js";
 import { hookCommand, shellQuote } from "../../core/compiler/hook-settings.js";
 import { plainProblems, type Problem } from "../../core/compiler/problems.js";
-import type { ValidationError } from "../../core/compiler/validate.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
 import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
 import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
@@ -55,21 +53,13 @@ import {
   needsClaude,
   noClaude,
   parentsOf,
-  runMcpConfigPath,
   runSocketPath,
   turnNodeIds,
   type LoadedBuild,
   type OpenedSession,
   type RunEnvironment,
 } from "../../core/run/execute.js";
-import {
-  optionsClash,
-  runChoices,
-  storedAuto,
-  storedFlags,
-  storedOptions,
-  type RunChoices,
-} from "../../core/run/options.js";
+import { runChoices, storedAuto, storedOptions, type RunChoices } from "../../core/run/options.js";
 import {
   deleteBuild,
   deletePreview,
@@ -153,7 +143,15 @@ import type {
 import { createPublishingStore } from "./publishing-store.js";
 import { createRepoGate } from "./repo-gate.js";
 
-export type EngineStores = { runs: Store; flows: FlowStore };
+export type EngineStores = {
+  runs: Store;
+  flows: FlowStore;
+  migrations?: { applied: readonly string[]; existedBefore: boolean };
+};
+
+const cleanStartMigration = "022_clean_start";
+
+const cleanStartFolders = ["workspaces", "runs", "build-sessions", "worktrees"];
 
 export type EngineHandlerOptions = {
   version: string;
@@ -256,8 +254,6 @@ const pinFlowPayload = z.object({ flowId: z.string(), pinned: z.boolean() });
 const openFlowPayload = z.object({ flowId: z.string().optional() });
 
 const loadRunPayload = z.object({ runId: z.string() });
-
-const doctorPayload = z.object({ connectors: z.array(z.string()) });
 
 const runBuildPayload = z.object({ buildId: z.string(), auto: z.boolean().optional() });
 
@@ -380,9 +376,6 @@ const fullTextOf = (kept: readonly StepText[]): StepFullText =>
     : { kept: true, texts: Object.fromEntries(kept.map(({ field, text }) => [field, text])) };
 
 const problemText = ({ node, text }: Problem) => (node === undefined ? text : `${node}: ${text}`);
-
-const problemsOf = (result: { errors: readonly ValidationError[] }) =>
-  plainProblems(result.errors).map(problemText).join("\n");
 
 const refusedBuild = (result: Extract<BuildResult, { ok: false }>): BuiltVersion => {
   const problems = plainProblems(result.errors);
@@ -556,7 +549,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     store: stores.runs,
     fs: options.fs,
     home: options.home,
-    connectors: options.connectors,
     gitState: options.gitState,
     worktree: options.worktree,
     newId: randomUUID,
@@ -1047,7 +1039,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         manifest,
         cwd: launch.cwd,
         auto: storedAuto(launch.stored),
-        flags: storedFlags(launch.stored, manifest),
         socketPath: launch.socketPath,
         open: async () => {
           const opened = await launch.open();
@@ -1094,20 +1085,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return { kind: "started", runId };
   };
 
-  const sessionOptions = async (
-    runId: string,
+  const sessionOptions = (
     manifest: LoadedBuild,
     buildDir: string,
     session: { sessionName: string; socketPath: string; cwd: string; claudeSessionId: string },
     hooks: Extract<HooksResult, { kind: "ok" }>,
-    servers: Parameters<typeof writeSessionMcpConfig>[2],
   ) => ({
     ...session,
     buildDir,
     layout: manifest.layout,
     model: manifest.session.model,
     hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
-    ...(await writeSessionMcpConfig(options.fs, runMcpConfigPath(options.home, runId), servers)),
   });
 
   type RunBuildOptions = Omit<z.infer<typeof runBuildPayload>, "buildId">;
@@ -1134,8 +1122,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
-    const connectors = await resolveConnectors(manifest.session.connectors, options.connectors);
-    if (!connectors.ok) return failure(problemsOf(connectors));
     const cwd = manifest.worktree;
     if (cwd === undefined || !options.isFolder(cwd)) {
       return failure(`Working folder not found: ${cwd ?? built.dir}`);
@@ -1175,16 +1161,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         await recordedBefore;
         return needsClaude(manifest)
           ? announced(
-              await options.run.openSession(
-                await sessionOptions(
-                  runId,
-                  manifest,
-                  built.dir,
-                  session,
-                  hooks,
-                  connectors.servers,
-                ),
-              ),
+              await options.run.openSession(sessionOptions(manifest, built.dir, session, hooks)),
               runId,
               sessionName,
               options.publish,
@@ -1253,8 +1230,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     } catch (error) {
       return failure(messageOf(error));
     }
-    const connectors = await resolveConnectors(manifest.session.connectors, options.connectors);
-    if (!connectors.ok) return failure(problemsOf(connectors));
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failure(hooks.message);
     const socket = runSocketPath(options.home, sessionName);
@@ -1265,14 +1240,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       try {
         opened = announced(
           await options.run.openSession({
-            ...(await sessionOptions(
-              runId,
+            ...sessionOptions(
               manifest,
               record.buildDir,
               { sessionName, socketPath: socket.path, cwd, claudeSessionId },
               hooks,
-              connectors.servers,
-            )),
+            ),
             ...(attach ? { attach: true } : {}),
             ...(restart ? { resume: true } : {}),
           }),
@@ -1313,6 +1286,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const holdsHome = async () => options.homeLock === undefined || options.homeLock.acquire();
+
+  const sweepAfterCleanStart = async (): Promise<void> => {
+    const result = openStoresOnce();
+    if (result.kind === "error") return;
+    const { migrations } = result.stores;
+    if (migrations?.existedBefore !== true) return;
+    if (!migrations.applied.includes(cleanStartMigration)) return;
+    if (!(await holdsHome())) return;
+    await Promise.all(
+      cleanStartFolders.map((folder) => options.fs.removeTree(join(options.home, folder))),
+    );
+  };
 
   const backfillStoredManifests = async (): Promise<void> => {
     const result = openStoresOnce();
@@ -1533,8 +1518,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") throw new Error(loaded.message);
-    const clash = optionsClash(loaded.build);
-    if (clash !== undefined) throw new Error(clash);
     return runChoices(loaded.build);
   };
 
@@ -2049,8 +2032,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (options.blueprint !== undefined) await stopAllBlueprintSessions(options.blueprint.sessions);
   };
 
-  const doctor = async (needed: readonly string[]): Promise<DoctorReport> =>
-    diagnoseConnectors(await options.connectors.list(), needed, options.connectors.configPath);
+  const doctor = async (): Promise<DoctorReport> =>
+    diagnoseConnectors(await options.connectors.list());
 
   const answer = async (id: number, work: () => unknown): Promise<EngineResponse> => {
     try {
@@ -2077,6 +2060,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     async startUp() {
       await sweepBlueprintSessions().catch((error: unknown) => {
         console.log(`engine: blueprint sweep error ${messageOf(error)}`);
+      });
+      await sweepAfterCleanStart().catch((error: unknown) => {
+        console.log(`engine: clean start sweep error ${messageOf(error)}`);
       });
       await backfillStoredManifests().catch((error: unknown) => {
         console.log(`engine: manifest backfill error ${messageOf(error)}`);
@@ -2138,7 +2124,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             buildStepFullText(storesOrThrow(), pendingId, entryId),
           );
         case "doctor":
-          return parsedAnswer(request, doctorPayload, ({ connectors }) => doctor(connectors));
+          return answer(request.id, doctor);
         case "build-version": {
           const parsed = buildVersionPayload.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

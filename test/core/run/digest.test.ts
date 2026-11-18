@@ -459,25 +459,29 @@ describe("runDigest", () => {
     expect(result.text.length).toBeLessThan(2000);
   });
 
-  it("names budget pauses and compactions only when they happened", () => {
+  it("names compactions only when they happened, and keeps the cost", () => {
     const { text } = runDigest(
       digestInput(
-        eventsOf({
-          extra: [
-            ["fix", 7, { kind: "budget", payload: { step: "paused", spend: 2, budget: 3 } }],
-            ["fix", 8, { kind: "compacted", payload: { tokens: 50_000 } }],
-          ],
-        }),
+        eventsOf({ extra: [["fix", 8, { kind: "compacted", payload: { tokens: 50_000 } }]] }),
       ),
     );
     const plain = runDigest(digestInput(eventsOf())).text;
 
-    expect(text).toMatch(/budget/i);
-    expect(text).toContain(usd(2));
-    expect(text).toContain(usd(3));
     expect(text).toMatch(/compact/i);
-    expect(plain).not.toMatch(/budget/i);
+    expect(text).toContain(usd(1.25));
     expect(plain).not.toMatch(/compact/i);
+  });
+
+  it("writes no budget line, even for a stored budget pause", () => {
+    const stalePause = {
+      kind: "budget",
+      payload: { step: "paused", spend: 2, budget: 3 },
+    } as unknown as RunEvent;
+
+    const { text } = runDigest(digestInput(eventsOf({ extra: [["fix", 7, stalePause]] })));
+
+    expect(text).not.toMatch(/budget/i);
+    expect(text).toContain(usd(1.25));
   });
 
   describe("gate and ask stages", () => {

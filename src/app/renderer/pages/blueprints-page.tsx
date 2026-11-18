@@ -52,7 +52,8 @@ function BlueprintCard({
     run.getState().openBuild({
       flowId: flow.flowId,
       version: flow.versions,
-      buildConfig: flow.buildConfig ?? { variables: [] },
+      buildConfig: flow.buildConfig ?? {},
+      variables: flow.variables,
     });
 
   return (

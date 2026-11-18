@@ -52,7 +52,7 @@ import {
   type LoopStep,
 } from "../nodes/loop/execute.js";
 import { agentCallOf, type AgentCall } from "./agent-calls.js";
-import { budgetReached, costOf, usd, type UsageEntry, type UsageReader } from "./budget.js";
+import type { UsageReader } from "./budget.js";
 import { contextFull, contextUse, type CompactionReader } from "./context.js";
 import {
   denied,
@@ -87,7 +87,6 @@ export type RunnerDeps = {
     writeFile(path: string, content: string): Promise<void>;
   };
   auto?: boolean;
-  flags?: Record<string, boolean>;
   onChange?: (line: string) => void;
   cwd: string;
   sessionId: string;
@@ -98,8 +97,6 @@ export type RunnerDeps = {
   permissions?: PermissionAsks;
   usage?: UsageReader;
   compactions?: CompactionReader;
-  budget?: number;
-  usageSettleMs?: number;
   settleQuietMs?: number;
 };
 
@@ -118,10 +115,9 @@ type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait; onBranchFail?: JoinOnBranchFail };
 type ForEachSettings = { file: string };
-type StoredBranchSettings = BranchSettings & { flag?: string };
 
 type StepOutcome = { status: "done"; line: string } | { status: "failed"; reason: string };
-type Failure = { nodeId: string; reason: string; halted?: boolean };
+type Failure = { nodeId: string; reason: string };
 type StepResult = { failure: Failure } | { failure?: never; reply?: string | undefined };
 type TurnResult = { failure: string } | { failure?: never; reply: string | undefined };
 type RunContext = {
@@ -133,9 +129,7 @@ type RunContext = {
 };
 
 const defaultTurnTimeoutMs = 600_000;
-const defaultUsageSettleMs = 2_000;
 const defaultSettleQuietMs = 5_000;
-const usagePollMs = 50;
 const compactPollMs = 250;
 const runnable = new Set<ManifestNode["type"]>([
   "agent",
@@ -179,18 +173,6 @@ const lastMessage = (event: TurnEndEvent) => {
   const message = event.payload["last_assistant_message"];
   return typeof message === "string" ? message : undefined;
 };
-
-type FinishedTurn = { before: Set<string>; message: string | undefined };
-
-const hasLanded = (entries: readonly UsageEntry[], turn: FinishedTurn) =>
-  entries.some(
-    (entry) =>
-      !turn.before.has(entry.messageId) &&
-      (turn.message === undefined ||
-        (entry.text !== undefined &&
-          entry.text.trim() !== "" &&
-          turn.message.endsWith(entry.text.trim()))),
-  );
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -261,9 +243,6 @@ export class Runner {
   private actions = new Map<string, ResumeAction>();
   private pendingAnswers: string[] = [];
   private answersSentWith = new Map<string, string[]>();
-  private budget: number | undefined;
-  private usageBeforeTurn: Set<string> | undefined;
-  private finishedTurn: FinishedTurn | undefined;
   private inTurn: string | undefined;
   private openAsks = 0;
   private compactedAt: string | undefined;
@@ -271,7 +250,6 @@ export class Runner {
   constructor(deps: RunnerDeps) {
     this.deps = deps;
     this.emit = deps.onChange ?? (() => undefined);
-    this.budget = deps.budget;
   }
 
   async run(manifest: RunnableManifest, options: RunOptions = {}): Promise<RunResult> {
@@ -338,7 +316,7 @@ export class Runner {
       const { failure } = await this.runStep(node, context);
       if (failure !== undefined) {
         const line = `${failure.nodeId} failed: ${failure.reason}`;
-        if (failure.halted !== true && this.status(failure.nodeId) !== "failed") {
+        if (this.status(failure.nodeId) !== "failed") {
           this.record(failure.nodeId, { kind: "failed", payload: { message: line } });
         }
         this.emit(line);
@@ -478,8 +456,6 @@ export class Runner {
         { nodeId: node.id, event: { kind: "done" } },
       ]);
     } else if (node.type === "agent") {
-      const halted = await this.checkBudget(node.id);
-      if (halted !== undefined) return halted;
       await this.compactIfFull(node.id, ensureStarted);
       this.inTurn = node.id;
       let turn: TurnResult;
@@ -538,11 +514,11 @@ export class Runner {
   }
 
   private variableDecision(branch: ManifestNode, manifest: RunnableManifest): BranchPort {
-    return branchDecision(manifest, branch.settings as StoredBranchSettings, this.deps.flags ?? {});
+    return branchDecision(manifest, branch.settings as BranchSettings);
   }
 
   private pastDecision(branch: ManifestNode, manifest: RunnableManifest): BranchPort {
-    const settings = branch.settings as StoredBranchSettings;
+    const settings = branch.settings as BranchSettings;
     if (!decidedByValue(settings)) return this.variableDecision(branch, manifest);
     const events = this.allEvents();
     const decidedAt = events.findLastIndex(
@@ -566,7 +542,7 @@ export class Runner {
     branch: ManifestNode,
     { manifest }: RunContext,
   ): Promise<{ port: BranchPort; asked: boolean } | { failure: Failure }> {
-    const settings = branch.settings as StoredBranchSettings;
+    const settings = branch.settings as BranchSettings;
     if (!decidedByValue(settings)) {
       return { port: this.variableDecision(branch, manifest), asked: false };
     }
@@ -597,59 +573,6 @@ export class Runner {
     return { port: answer, asked: true };
   }
 
-  private async checkBudget(nodeId: string): Promise<StepResult | undefined> {
-    const { usage } = this.deps;
-    if (this.budget === undefined || usage === undefined || this.status(nodeId) !== "waiting") {
-      return undefined;
-    }
-    const budget = this.budget;
-    const { entries, landed } = await this.usageAfterTurn(usage);
-    this.usageBeforeTurn = new Set(entries.map((entry) => entry.messageId));
-    const spend = costOf(entries);
-    const reached = budgetReached(spend, budget);
-    if (landed && !reached) return undefined;
-    const confirmed = landed || reached;
-    const unconfirmed = confirmed ? {} : { unconfirmed: true as const };
-    const lastRead = `last read ${usd(spend)} of ${usd(budget)}`;
-    this.record(nodeId, {
-      kind: "budget",
-      payload: { step: "paused", spend, budget, ...unconfirmed },
-    });
-    this.emit(
-      confirmed
-        ? `${nodeId} paused: spent ${usd(spend)} of ${usd(budget)} budget`
-        : `${nodeId} paused: spend not confirmed yet, ${lastRead}`,
-    );
-    let reason: string;
-    try {
-      const reply = await this.deps.waiter.wait({
-        nodeId,
-        kind: "budget",
-        spend,
-        budget,
-        ...unconfirmed,
-      });
-      if (reply.decision === "raise") {
-        this.budget = reply.budget;
-        this.record(nodeId, { kind: "budget", payload: { step: "raised", budget: reply.budget } });
-        return undefined;
-      }
-      reason = reply.decision === "stop" ? reply.reason : reply.decision;
-    } catch (error) {
-      reason = messageOf(error);
-    }
-    this.record(nodeId, { kind: "budget", payload: { step: "stopped", reason } });
-    return {
-      failure: {
-        nodeId,
-        reason: confirmed
-          ? `budget reached: spent ${usd(spend)} of ${usd(budget)}`
-          : `spend not confirmed: ${lastRead} when the budget was checked`,
-        halted: true,
-      },
-    };
-  }
-
   private async compactIfFull(nodeId: string, ensureStarted: () => Promise<void>): Promise<void> {
     const { usage, compactions, sessionId } = this.deps;
     if (usage === undefined || compactions === undefined || this.status(nodeId) !== "waiting") {
@@ -677,22 +600,6 @@ export class Runner {
       return;
     }
     this.record(nodeId, { kind: "compacted", payload: { tokens: use.tokens } });
-  }
-
-  private async usageAfterTurn(
-    usage: UsageReader,
-  ): Promise<{ entries: UsageEntry[]; landed: boolean }> {
-    const turn = this.finishedTurn;
-    this.finishedTurn = undefined;
-    let entries = await usage.entries(this.deps.sessionId);
-    if (turn === undefined) return { entries, landed: true };
-    const settleMs = this.deps.usageSettleMs ?? defaultUsageSettleMs;
-    for (let waited = 0; !hasLanded(entries, turn); waited += usagePollMs) {
-      if (waited >= settleMs) return { entries, landed: false };
-      await sleep(usagePollMs);
-      entries = await usage.entries(this.deps.sessionId);
-    }
-    return { entries, landed: true };
   }
 
   private async runLoop(loop: ManifestNode, context: RunContext): Promise<StepResult> {
@@ -870,8 +777,6 @@ export class Runner {
       if (held !== undefined) return held;
       await this.copyTemplates(branch, context);
     }
-    const halted = await this.checkBudget(fork.id);
-    if (halted !== undefined) return halted;
     await this.compactIfFull(fork.id, context.ensureStarted);
     this.inTurn = fork.id;
     try {
@@ -1120,14 +1025,6 @@ export class Runner {
     toolUseIds: readonly string[] = [],
   ) {
     const nodeId = node.id;
-    const before = this.usageBeforeTurn;
-    this.usageBeforeTurn = undefined;
-    const trimmed = stopMessage?.trim();
-    const message = trimmed === "" ? undefined : trimmed;
-    this.finishedTurn =
-      before === undefined && message === undefined
-        ? undefined
-        : { before: before ?? new Set(), message };
     const payload = {
       ...(stopMessage === undefined ? {} : { stopMessage }),
       ...(toolUseIds.length === 0 ? {} : { toolUseIds: [...toolUseIds] }),

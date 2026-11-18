@@ -36,8 +36,7 @@
       "settings": {
         "role": "",
         "instructions": "Fix the failing tests.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -52,8 +51,7 @@
       "settings": {
         "role": "",
         "instructions": "Run `npm test` in the repo and report its exit code.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -119,17 +117,12 @@
   "session": {
     "name": "main",
     "buildConfig": {
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

@@ -172,9 +172,10 @@ describe("SqliteStore", () => {
       { name: "019_runs_own_their_build.sql" },
       { name: "020_run_repo_states_and_step_texts.sql" },
       { name: "021_complete_deletes_and_build_texts.sql" },
+      { name: "022_clean_start.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 21]);
+    expect(before).toEqual([1, 1, 3, 1, 22]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -1348,7 +1349,6 @@ describe("SqliteStore", () => {
         round: { kind: "round", payload: { round: 1 } },
         usage: { kind: "usage", payload: { messages: [] }, tokens: 1, cost: 0.01 },
         compacted: { kind: "compacted", payload: { tokens: 1 } },
-        budget: { kind: "budget", payload: { step: "raised", budget: 1 } },
       };
       const nodeIds = Object.keys(oneOfEach);
       const sqlite = open();
@@ -1362,7 +1362,7 @@ describe("SqliteStore", () => {
         return store.findRunSummary(id)?.doneCount;
       });
 
-      expect(doneCounts).toEqual([7, 7]);
+      expect(doneCounts).toEqual([6, 6]);
     });
 
     it("counts no done nodes for a run with no events", () => {

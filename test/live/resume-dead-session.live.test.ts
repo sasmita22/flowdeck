@@ -81,7 +81,6 @@ const reply = (id: string, word: string) => ({
     role: "",
     instructions: `Reply with the single word ${word} and nothing else. Use no tools.`,
     model: "haiku",
-    tools: [],
   },
 });
 
@@ -150,7 +149,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         session: {
           ...base.session,
           model: "haiku",
-          buildConfig: { repo: repo.path, variables: [] },
+          buildConfig: { repo: repo.path },
         },
       };
       const db = openDatabase({ path: join(home, "flowdeck.db") });

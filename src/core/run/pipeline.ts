@@ -11,13 +11,6 @@ import type { NodeState } from "./state.js";
 import type { StoredEvent } from "./store.js";
 import type { HumanDecision } from "./wait.js";
 
-export type BudgetPause = {
-  step: "paused";
-  spend: number;
-  budget: number;
-  unconfirmed?: true | undefined;
-};
-
 export type TimelineEvent = {
   nodeId: string;
   seq: number;
@@ -41,7 +34,6 @@ export type PipelineStage = {
   cost?: number | undefined;
   reason?: string | undefined;
   decisions: HumanDecision[];
-  budgetPauses: BudgetPause[];
   reply?: string | undefined;
   timeline: TimelineEvent[];
   activity: ActivityEntry[];
@@ -76,7 +68,6 @@ const runEventKind = z.enum([
   "round",
   "usage",
   "compacted",
-  "budget",
 ]) satisfies z.ZodType<RunEvent["kind"]>;
 
 const timelineEventSchema = z.object({
@@ -95,13 +86,6 @@ const humanDecisionSchema = z.union([
   z.object({ nodeId: z.string(), decision: z.literal("answered"), answer: z.string() }),
 ]);
 
-const budgetPauseSchema = z.object({
-  step: z.literal("paused"),
-  spend: z.number(),
-  budget: z.number(),
-  unconfirmed: z.literal(true).optional(),
-});
-
 const stageSchema = z.object({
   nodeId: z.string(),
   type: NodeType,
@@ -115,7 +99,6 @@ const stageSchema = z.object({
   cost: z.number().optional(),
   reason: z.string().optional(),
   decisions: z.array(humanDecisionSchema),
-  budgetPauses: z.array(budgetPauseSchema),
   reply: z.string().optional(),
   timeline: z.array(timelineEventSchema),
   activity: z.array(activityEntrySchema),
@@ -264,9 +247,6 @@ export function pipelineOf(
         ? { reason: plainReason(node.id, failed.payload.message) }
         : {}),
       decisions: decisionsOf(own),
-      budgetPauses: own.flatMap((event) =>
-        event.kind === "budget" && event.payload.step === "paused" ? [event.payload] : [],
-      ),
       ...(reply === undefined ? {} : { reply }),
       timeline: window.whole ? own : own.filter((event) => event.kind !== "usage"),
       activity: stageActivityOf(activityOf.get(node.id) ?? [], { nodeId: node.id, ...edges }),

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BuildConfig, Flow } from "./schema.js";
+import { FoundVariable } from "./variables.js";
 
 export interface SavedFlowRef {
   flowId: string;
@@ -24,6 +25,7 @@ export const flowSummarySchema = z.object({
   versions: z.number().int(),
   lastSavedAt: z.string().nullable(),
   buildConfig: BuildConfig.nullable(),
+  variables: z.array(FoundVariable),
   pinned: z.boolean(),
 });
 

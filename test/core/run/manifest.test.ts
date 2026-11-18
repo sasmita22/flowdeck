@@ -3,17 +3,8 @@ import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit } from "../../../src/core/compiler/emit.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { handoffPairs } from "../../../src/core/flow/handoff.js";
 import { parseManifest, stageSourcesOf } from "../../../src/core/run/manifest.js";
-import {
-  agent,
-  fileWire,
-  forEach,
-  gate,
-  loop,
-  onMainFlow,
-  thenWire,
-} from "../../fixtures/flow-builders.js";
+import { agent, forEach, gate, loop, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const hash = "a".repeat(64);
 
@@ -57,22 +48,6 @@ describe("parseManifest", () => {
     expect(manifest.layout).toBe("legacy");
   });
 
-  it("turns an old build's File wire into its agents' settings, keeping only Then wires", () => {
-    const text = legacyText(
-      onMainFlow(
-        [agent("plan"), agent("build")],
-        [thenWire("plan", "build"), fileWire("plan", "build", "plan.md")],
-      ),
-    );
-
-    const manifest = parseManifest(text, legacy);
-
-    expect(handoffPairs(manifest.nodes)).toEqual([
-      { file: "plan.md", reader: "build", writers: ["plan"] },
-    ]);
-    expect(manifest.wires.every((wire) => wire.kind === "then")).toBe(true);
-  });
-
   it("refuses text that is not JSON", () => {
     expect(() => parseManifest("{not json", named)).toThrow();
   });
@@ -86,7 +61,7 @@ describe("stageSourcesOf", () => {
   it("keeps the session name, each node's id, type, label and parent, and the Then wires in order", () => {
     const flow = onMainFlow(
       [agent("plan"), loop("review"), agent("fix", { parent: "review" }), forEach("each")],
-      [thenWire("plan", "review"), thenWire("review", "each"), fileWire("plan", "fix", "plan.md")],
+      [thenWire("plan", "review"), thenWire("review", "each")],
     );
     const manifest = parseManifest(manifestText(flow), named);
 

@@ -193,7 +193,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         session: {
           ...built.session,
           model: "haiku",
-          buildConfig: { repo: repo.path, variables: [] },
+          buildConfig: { repo: repo.path },
         },
       };
 

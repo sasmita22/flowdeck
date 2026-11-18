@@ -6,13 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
+import { canonicalJson } from "../src/core/compiler/canonical-json.js";
+import { hashBuild } from "../src/core/compiler/hash.js";
+import type { Manifest } from "../src/core/compiler/lower.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
 const run = promisify(execFile);
@@ -118,10 +121,42 @@ const atGate = (last: unknown): Flow =>
     [thenWire("p1", "g1"), thenWire("g1", (last as { id: string }).id)],
   );
 
-const startAtGate = async (input: Flow) => {
+const seedStaleConnectors = async (buildId: string) => {
+  const db = new Database(join(home, "flowdeck.db"));
+  try {
+    const { dir } = db.prepare("SELECT dir FROM builds WHERE id = ?").get(buildId) as {
+      dir: string;
+    };
+    const path = join(dir, "manifest.json");
+    const built = JSON.parse(await readFile(path, "utf8")) as Manifest;
+    const stale = { ...built, session: { ...built.session, connectors: ["jira"] } };
+    const files = await Promise.all(
+      Object.keys(stale.files).map(async (file) => ({
+        path: file,
+        content: await readFile(join(dir, file), "utf8"),
+      })),
+    );
+    const hash = hashBuild([...files, { path: "manifest.json", content: canonicalJson(stale) }]);
+    await writeFile(path, canonicalJson({ ...stale, hash }));
+    const { sql: lock } = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'builds_only_deleted_once'")
+      .get() as { sql: string };
+    db.transaction(() => {
+      db.exec("DROP TRIGGER builds_only_deleted_once");
+      db.prepare("UPDATE builds SET hash = ? WHERE id = ?").run(hash, buildId);
+      db.exec(lock);
+    })();
+  } finally {
+    db.close();
+  }
+};
+
+const startAtGate = async (input: Flow, beforeRun?: (buildId: string) => Promise<void>) => {
   seedFlow(home, input, repo.path);
   const window = await launch();
-  await buildAndRun(window, home, "survive");
+  const buildId = await buildOnCanvas(window, home, "survive");
+  await beforeRun?.(buildId);
+  await runFromDetail(window);
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 30_000 });
   const started = latestRun();
   if (started === undefined) throw new Error("no run was recorded");
@@ -201,7 +236,7 @@ test("A run whose session ended while the app was closed shows interrupted, and 
     id: runId,
     tmux_name: session,
     claude_session_id: claudeSessionId,
-  } = await startAtGate({ ...input, session: { ...input.session, connectors: ["jira"] } });
+  } = await startAtGate(input, seedStaleConnectors);
   await quit();
   await run("tmux", ["-L", session, "kill-server"]);
   expect(await tmuxAlive(session)).toBe(false);
@@ -240,7 +275,10 @@ test("A run whose session ended while the app was closed shows interrupted, and 
     "../settings.json",
     "../plugin",
   ]);
-  expect(firstLaunch).toContain("--mcp-config");
+  for (const argv of launches) {
+    expect(argv).not.toContain("--mcp-config");
+    expect(argv).not.toContain("--strict-mcp-config");
+  }
   expect(resumed).toEqual(firstLaunch?.map((arg) => (arg === "--session-id" ? "--resume" : arg)));
   expect(sentCount(runId, "p1")).toBe(1);
   expect(sentCount(runId, "p2")).toBe(1);

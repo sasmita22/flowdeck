@@ -223,11 +223,8 @@ describe("addItems", () => {
 describe("updateSession", () => {
   const edited = (source: Flow): Session => ({
     name: source.session.name,
-    buildConfig: { repo: "/r", base: "dev", variables: [] },
+    buildConfig: { repo: "/r", base: "dev" },
     model: "haiku",
-    allowedTools: ["Read"],
-    permissionMode: source.session.permissionMode,
-    connectors: source.session.connectors,
   });
 
   it("sets the session to the one given and changes nothing else", () => {
@@ -290,7 +287,7 @@ describe("commands", () => {
     ],
     [
       "updateSession",
-      (before) => updateSession({ ...before.session, model: "haiku", allowedTools: ["Read"] }),
+      (before) => updateSession({ ...before.session, model: "haiku", buildConfig: { repo: "/r" } }),
     ],
     ["updateNode", (before) => updateNode({ ...onlyNode(before), label: "Renamed" })],
   ];

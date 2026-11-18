@@ -5,6 +5,7 @@ import {
   createRunStore,
   losesWork,
   needsSessionSetup,
+  selectBuildRefusal,
   selectCanBuild,
   selectExistingBranches,
   selectKeptNote,
@@ -18,10 +19,12 @@ import {
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
+import type { FoundVariable } from "../../../src/core/flow/variables.js";
 import { recommendedBranch } from "../../../src/core/run/branch-name.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 import {
   agent,
+  branch,
   flow,
   onMainFlow,
   output,
@@ -69,18 +72,26 @@ const snapshot = (
   runId = "run-1",
 ) => ({ runId, status, nodes });
 
-const configured = (buildConfig: BuildConfig): Flow => {
-  const base = flow([agent("agent-1")], []);
-  return { ...base, session: { ...base.session, buildConfig } };
+const configured = (buildConfig: BuildConfig, buildModel = "sonnet"): Flow => {
+  const base = onMainFlow(
+    [branch("decide", "ship"), agent("plan", { settings: { instructions: "Say {{ticket}}." } })],
+    [thenWire("decide", "plan")],
+  );
+  return {
+    ...base,
+    session: { ...base.session, buildConfig },
+    settings: { ...base.settings, buildModel },
+  };
 };
 
-const declared: BuildConfig = {
-  repo: "/code/shop",
-  variables: [
-    { name: "ticket", kind: "text" },
-    { name: "deep", kind: "yesno", default: true },
-  ],
-};
+const shopRepo: BuildConfig = { repo: "/code/shop" };
+
+const found: FoundVariable[] = [
+  { name: "ship", kind: "yes-no", nodeIds: ["decide"] },
+  { name: "ticket", kind: "text", nodeIds: ["plan"] },
+];
+
+const fromCard = { flowId: "flow-b", version: 4, buildConfig: shopRepo, variables: found };
 
 const stage = (nodeId: string) => ({
   nodeId,
@@ -91,7 +102,6 @@ const stage = (nodeId: string) => ({
   tokens: 10,
   cost: 0.5,
   decisions: [],
-  budgetPauses: [],
   timeline: [],
   activity: [],
 });
@@ -307,7 +317,7 @@ describe("selectRunningCount", () => {
 describe("the Build dialog", () => {
   it("opens from the canvas on the saved version, prefilled with the blueprint's repo, base and defaults", async () => {
     const { bridge, run, calls } = await setup({
-      latest: configured({ ...declared, base: "dev" }),
+      latest: configured({ ...shopRepo, base: "dev" }),
     });
 
     await run.getState().openBuild();
@@ -320,9 +330,9 @@ describe("the Build dialog", () => {
       name: "",
       repo: "/code/shop",
       base: "dev",
-      variables: declared.variables,
-      values: { deep: true },
-      buildModel: "",
+      variables: found,
+      values: { ship: false },
+      buildModel: "sonnet",
       branches: ["main"],
       checkedOut: {},
       branchMode: "new",
@@ -336,7 +346,7 @@ describe("the Build dialog", () => {
   });
 
   it("saves a dirty canvas first and opens on the version that save made", async () => {
-    const { canvas, run, calls } = await setup({ latest: configured(declared) });
+    const { canvas, run, calls } = await setup({ latest: configured(shopRepo) });
     makeDirty(canvas);
 
     await run.getState().openBuild();
@@ -346,7 +356,7 @@ describe("the Build dialog", () => {
   });
 
   it("opens nothing and holds the save error when the save fails", async () => {
-    const { saveBridge, canvas, run } = await setup({ latest: configured(declared) });
+    const { saveBridge, canvas, run } = await setup({ latest: configured(shopRepo) });
     makeDirty(canvas);
     saveBridge.saveFlow.mockResolvedValueOnce({ kind: "error", message: "disk full" });
 
@@ -360,7 +370,7 @@ describe("the Build dialog", () => {
     const { bridge, canvas, run, calls } = await setup({ defaultBranch: "trunk" });
     makeDirty(canvas);
 
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
 
     expect(calls).toEqual(["defaultBranch"]);
     expect(bridge.defaultBranch).toHaveBeenCalledWith({ repo: "/code/shop" });
@@ -369,7 +379,8 @@ describe("the Build dialog", () => {
       version: 4,
       repo: "/code/shop",
       base: "trunk",
-      values: { deep: true },
+      variables: found,
+      values: { ship: false },
     });
   });
 
@@ -378,15 +389,15 @@ describe("the Build dialog", () => {
 
     await run
       .getState()
-      .openBuild({ flowId: "flow-b", version: 4, buildConfig: { variables: [] } });
+      .openBuild({ flowId: "flow-b", version: 4, buildConfig: {}, variables: [] });
 
     expect(bridge.defaultBranch).not.toHaveBeenCalled();
     expect(run.getState().buildDialog).toMatchObject({ repo: "", base: "" });
   });
 
-  it("cannot build until the name, repo, base and every value are set", async () => {
+  it("cannot build until the name, repo, base and every text value are set", async () => {
     const { run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     const canBuild = () => selectCanBuild(run.getState());
 
     expect(canBuild()).toBe(false);
@@ -411,7 +422,7 @@ describe("the Build dialog", () => {
 
   it("builds with the name, repo, base and values, and closes", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
 
@@ -424,14 +435,15 @@ describe("the Build dialog", () => {
       repo: "/code/shop",
       base: "main",
       branch: { mode: "new", name: "flowdeck/fix-login", base: "main" },
-      values: { ticket: "FD-1", deep: true },
+      values: { ship: false, ticket: "FD-1" },
+      buildModel: "sonnet",
     });
     expect(run.getState()).toMatchObject({ buildDialog: null, error: null });
   });
 
   it("builds with the build model given in the dialog", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login", buildModel: "haiku" });
     run.getState().setValue("ticket", "FD-1");
 
@@ -442,21 +454,70 @@ describe("the Build dialog", () => {
     );
   });
 
-  it("starts the build model field from the blueprint's build configuration", async () => {
-    const { run } = await setup();
+  it("starts the build model field from the blueprint's build model, opened from the canvas", async () => {
+    const { run } = await setup({ latest: configured(shopRepo, "opus") });
 
-    await run.getState().openBuild({
-      flowId: "flow-b",
-      version: 4,
-      buildConfig: { ...declared, buildModel: "sonnet" },
-    });
+    await run.getState().openBuild();
 
-    expect(run.getState().buildDialog?.buildModel).toBe("sonnet");
+    expect(run.getState().buildDialog?.buildModel).toBe("opus");
+  });
+
+  it("starts the build model field from the blueprint's build model, opened from its card", async () => {
+    const { run } = await setup({ built: configured(shopRepo, "haiku") });
+
+    await run.getState().openBuild(fromCard);
+
+    expect(run.getState().buildDialog?.buildModel).toBe("haiku");
+  });
+
+  it("asks for the same found variables from the canvas and from the blueprint's card", async () => {
+    const { run } = await setup({ latest: configured(shopRepo) });
+    const asked = () =>
+      run.getState().buildDialog?.variables.map(({ name, kind }) => ({ name, kind }));
+
+    await run.getState().openBuild();
+    const fromCanvas = asked();
+    run.getState().cancelBuild();
+    await run.getState().openBuild(fromCard);
+
+    expect(fromCanvas).toEqual([
+      { name: "ship", kind: "yes-no" },
+      { name: "ticket", kind: "text" },
+    ]);
+    expect(asked()).toEqual(fromCanvas);
+    expect(run.getState().buildDialog?.values).toEqual({ ship: false });
+  });
+
+  it("refuses to build while a text value is empty, naming it, and builds nothing", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild(fromCard);
+    run.getState().editBuild({ name: "fix-login" });
+
+    expect(selectCanBuild(run.getState())).toBe(false);
+    expect(selectBuildRefusal(run.getState())).toBe("Give a value for ticket");
+    await expect(run.getState().confirmBuild()).resolves.toBeNull();
+    expect(bridge.buildVersion).not.toHaveBeenCalled();
+
+    run.getState().setValue("ticket", "FD-1");
+
+    expect(selectBuildRefusal(run.getState())).toBeNull();
+    expect(selectCanBuild(run.getState())).toBe(true);
+  });
+
+  it("can build a blueprint with no found variables", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().openBuild({ ...fromCard, variables: [] });
+    run.getState().editBuild({ name: "fix-login" });
+
+    expect(selectCanBuild(run.getState())).toBe(true);
+    expect(selectBuildRefusal(run.getState())).toBeNull();
+    await run.getState().confirmBuild();
+    expect(bridge.buildVersion).toHaveBeenCalledWith(expect.objectContaining({ values: {} }));
   });
 
   it("does not build while it cannot", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
 
     await expect(run.getState().confirmBuild()).resolves.toBeNull();
 
@@ -472,7 +533,7 @@ describe("the Build dialog", () => {
     ["a folder that is not a git repo", "/code/shop is not a git repository."],
   ])("stays open on %s and shows the refusal", async (_case, message) => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
     bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message });
@@ -484,7 +545,7 @@ describe("the Build dialog", () => {
 
   it("clears the refusal once the name is edited", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
     bridge.buildVersion.mockResolvedValueOnce({ kind: "error", message: "taken" });
@@ -497,7 +558,7 @@ describe("the Build dialog", () => {
 
   it("closes with no error on a started build and answers its pending id", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
     bridge.buildVersion.mockResolvedValueOnce({ kind: "started", pendingId: "pb-7" });
@@ -514,7 +575,7 @@ describe("the Build dialog", () => {
 
   it("stays open and shows the problems of a refused build", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
     const problems = [{ node: "agent-1", field: "text", text: "Write the prompt." }];
@@ -531,7 +592,7 @@ describe("the Build dialog", () => {
 
   it("cancel closes it without building", async () => {
     const { bridge, run } = await setup();
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
 
     run.getState().cancelBuild();
 
@@ -563,7 +624,7 @@ const looseNodes = [
 describe("the Build dialog's confirm step", () => {
   const ready = async (built: Flow) => {
     const opened = await setup({ built });
-    await opened.run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await opened.run.getState().openBuild(fromCard);
     opened.run.getState().editBuild({ name: "fix-login" });
     opened.run.getState().setValue("ticket", "FD-1");
     return opened;
@@ -581,7 +642,7 @@ describe("the Build dialog's confirm step", () => {
   it("reads the blueprint's saved version when opened from the Blueprints page", async () => {
     const { bridge, run } = await setup({ built: withLooseNodes() });
 
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
 
     expect(bridge.openFlow).toHaveBeenCalledWith({ flowId: "flow-b" });
     expect(run.getState().buildDialog).toMatchObject({
@@ -640,7 +701,8 @@ describe("the Build dialog's repository", () => {
     await ready.run.getState().openBuild({
       flowId: "flow-b",
       version: 4,
-      buildConfig: { repo: "/a", base: "dev", variables: [] },
+      buildConfig: { repo: "/a", base: "dev" },
+      variables: [],
     });
     ready.bridge.defaultBranch.mockClear();
     return { ...ready, flowBefore: ready.canvas.getState().flow };
@@ -724,7 +786,7 @@ describe("the Build dialog's branch", () => {
     checkedOut: Record<string, string> = { main: "/code/shop" },
   ) => {
     const ready = await setup({ branches, checkedOut });
-    await ready.run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await ready.run.getState().openBuild(fromCard);
     return ready;
   };
 
@@ -914,7 +976,7 @@ describe("the Build dialog's branch", () => {
       new Error("/code/shop is not a git repository"),
     );
 
-    await run.getState().openBuild({ flowId: "flow-b", version: 4, buildConfig: declared });
+    await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
 
     expect(dialogOf(run)).toMatchObject({

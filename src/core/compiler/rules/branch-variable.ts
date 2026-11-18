@@ -6,14 +6,9 @@ const id = "branch-variable";
 export const rule: Rule = {
   id,
   message:
-    "A Branch must pick a yes/no variable declared in Build configuration, and cannot sit inside a Loop or For each body.",
-  check: (flow) => {
-    const yesno = new Set(
-      flow.session.buildConfig.variables
-        .filter((variable) => variable.kind === "yesno")
-        .map(({ name }) => name),
-    );
-    return flow.nodes.flatMap((node): ValidationError[] => {
+    "A Branch decided by a variable must name it, and cannot sit inside a Loop or For each body.",
+  check: (flow) =>
+    flow.nodes.flatMap((node): ValidationError[] => {
       if (node.type !== "branch") return [];
       const errors: ValidationError[] = [];
       const { variable } = node.settings;
@@ -25,13 +20,6 @@ export const rule: Rule = {
           field: "variable",
           message: `${node.id} has no variable picked; pick a yes/no variable to branch on.`,
         });
-      } else if (byVariable && !yesno.has(variable)) {
-        errors.push({
-          rule: id,
-          node: node.id,
-          field: "variable",
-          message: `${node.id} branches on "${variable}", which must be a yes/no variable declared in Build configuration.`,
-        });
       }
       if (node.parent !== undefined) {
         errors.push({
@@ -41,6 +29,5 @@ export const rule: Rule = {
         });
       }
       return errors;
-    });
-  },
+    }),
 };

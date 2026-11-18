@@ -21,8 +21,7 @@
       "settings": {
         "role": "reviewer",
         "instructions": "Review the change.",
-        "model": "sonnet",
-        "tools": ["Read", "Bash"]
+        "model": "sonnet"
       }
     }
   ],
@@ -43,12 +42,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": []
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": ["Read", "Bash"],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { Manifest } from "../compiler/lower.js";
-import { fileWiresToSettings } from "../flow/file-wires.js";
 import { NodeType, Wire } from "../flow/schema.js";
 
 export type ParsedManifest = Omit<Manifest, "prefix" | "layout"> & {
@@ -29,9 +28,9 @@ export function parseManifest(
   text: string,
   build: { hash: string; name: string | null },
 ): ParsedManifest {
-  const normalised: unknown = fileWiresToSettings(JSON.parse(text));
-  storedManifestSchema.parse(normalised);
-  const manifest = normalised as Manifest & { hash: string };
+  const parsed: unknown = JSON.parse(text);
+  storedManifestSchema.parse(parsed);
+  const manifest = parsed as Manifest & { hash: string };
   return {
     ...manifest,
     prefix: manifest.prefix ?? build.hash,

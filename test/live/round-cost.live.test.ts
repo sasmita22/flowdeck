@@ -35,7 +35,7 @@ function twoRoundLoop() {
         type: "agent",
         position: at(2),
         parent: "l1",
-        settings: { role: "", instructions: "Reply ok.", model: "haiku", tools: [] },
+        settings: { role: "", instructions: "Reply ok.", model: "haiku" },
       },
       {
         id: "o",
@@ -48,12 +48,10 @@ function twoRoundLoop() {
     wires: [then("t", "l1"), then("l1", "o")],
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: [],
-      permissionMode: "acceptEdits",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   });
 }
 

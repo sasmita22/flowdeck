@@ -78,7 +78,7 @@ describe("test ids", () => {
     ]);
   });
 
-  it("names the Build dialog's controls, one per declared variable", () => {
+  it("names the Build dialog's controls, one per found variable, and its refusal", () => {
     expect(buildDialogTestIds).toMatchObject({
       dialog: "build-dialog",
       name: "build-dialog-name",
@@ -93,6 +93,7 @@ describe("test ids", () => {
       branchNew: "build-dialog-branch-new",
       branchExisting: "build-dialog-branch-existing",
       branchName: "build-dialog-branch-name",
+      refusal: "build-dialog-refusal",
     });
     expect(buildDialogTestIds.variable("ticket")).toBe("build-dialog-variable-ticket");
     expect(buildDialogTestIds.existingBranch("feat-y")).toBe("build-dialog-existing-branch-feat-y");
@@ -243,9 +244,11 @@ describe("test ids", () => {
       repoBrowse: "session-build-config-repo-browse",
       baseInfo: "session-build-config-base-info",
       branchesError: "session-branches-error",
-      addVariable: "build-config-add-variable",
     });
-    expect(buildConfigTestIds.variable("deep")).toBe("build-config-variable-deep");
+  });
+
+  it("names no variable controls in the session form, since variables are found, not declared", () => {
+    expect(Object.keys(buildConfigTestIds).filter((key) => /variable/i.test(key))).toEqual([]);
   });
 
   it("names the stop-agent confirm and its two answers", () => {

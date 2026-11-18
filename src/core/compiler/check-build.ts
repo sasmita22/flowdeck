@@ -2,11 +2,11 @@ import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
-import type { BuildFile, Manifest, ManifestNode } from "./lower.js";
+import type { BuildFile, Manifest } from "./lower.js";
 import { orchestratorPath } from "./orchestrator.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
-import { SHARED_PIECE_TOOL, sharedPath } from "./shared.js";
+import { sharedPath } from "./shared.js";
 import { standardRules } from "./standard-rules.js";
 
 export type BuildCheckFailure = { file: string; rule: string; detail: string };
@@ -49,16 +49,10 @@ const frontmatterOf = (content: string): Map<string, string> => {
   return fields;
 };
 
-const toolsOf = (content: string): string[] =>
-  (frontmatterOf(content).get("tools") ?? "")
-    .split(",")
-    .map((tool) => tool.trim())
-    .filter((tool) => tool !== "");
-
 const bodyOf = (content: string) =>
   content.replace(frontmatterBlock, "").replace(unfilledLine, "").trim();
 
-type Piece = { file: string; piece: string; type: ManifestNode["type"]; labels: string[] };
+type Piece = { file: string; piece: string; labels: string[] };
 
 const piecesOf = (manifest: Manifest): Piece[] => {
   const byFile = new Map<string, Piece>();
@@ -69,7 +63,6 @@ const piecesOf = (manifest: Manifest): Piece[] => {
       byFile.set(node.file, {
         file: node.file,
         piece: pieceOf(node),
-        type: node.type,
         labels: [node.label],
       });
     } else {
@@ -94,7 +87,6 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     ...shared.map((entry) => entry.name),
   ]);
   const prefix = manifest.prefix ?? "";
-  const allowed = new Set(manifest.session.allowedTools);
 
   for (const piece of pieces) {
     const content = back.get(piece.file);
@@ -123,12 +115,12 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
         fail(piece.file, "description", "description is the node label");
     }
 
-    if (piece.type === "agent") {
-      const tools = toolsOf(content);
-      const outside = tools.filter((tool) => !allowed.has(tool));
-      if (outside.length > 0)
-        fail(piece.file, "tools", `tools outside the session's allow list: ${outside.join(", ")}`);
-    }
+    if (fields.has("tools"))
+      fail(
+        piece.file,
+        "tools",
+        `piece ${piece.piece} has a tools line; every agent uses every tool`,
+      );
 
     if (bodyOf(content) === bodyOf(laid.get(piece.file) ?? ""))
       fail(piece.file, "body", "body has nothing beyond its draft");
@@ -154,9 +146,6 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
       if (agentFile === undefined) continue;
       if (!agentFile.includes(reference))
         fail(file, "shared", `never runs the shared ${entry.kind} ${reference}`);
-      const tools = toolsOf(agentFile);
-      if (tools.length > 0 && !tools.includes(SHARED_PIECE_TOOL))
-        fail(file, "tools", `tools leave out ${SHARED_PIECE_TOOL}, which runs ${reference}`);
     }
   }
 

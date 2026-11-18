@@ -41,23 +41,27 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
+  branch,
   flow,
+  flowSettings,
   onMainFlow,
   output,
   thenWire,
   trigger,
+  wire,
 } from "../../fixtures/flow-builders.js";
 
 const repo = "/work/carousell-web";
-const ticketConfig: BuildConfig = {
-  repo,
-  base: "main",
-  variables: [{ name: "ticket", kind: "text" }],
-};
+const ticketConfig: BuildConfig = { repo, base: "main" };
 
 const withConfig = (base: Flow, buildConfig: BuildConfig): Flow => ({
   ...base,
   session: { ...base.session, buildConfig },
+});
+
+const withBuildModel = (base: Flow, buildModel: string): Flow => ({
+  ...base,
+  settings: { ...flowSettings, buildModel },
 });
 
 const ticketFlow = (buildConfig: BuildConfig = ticketConfig) =>
@@ -393,20 +397,30 @@ describe("buildVersion", () => {
       expect(store.findBuildByName("fix-login")?.id).toBe(secondId);
     });
 
-    it("accepts a variable left empty in the dialog when the blueprint gives it a default", async () => {
-      const { deps } = setup({
-        flows: [
-          ticketFlow({
-            ...ticketConfig,
-            variables: [{ name: "ticket", kind: "text", default: "FD-0" }],
-          }),
-        ],
+    describe("a yes/no variable a Branch decides on", () => {
+      const shipFlow = () =>
+        withConfig(
+          onMainFlow(
+            [branch("decide", "ship"), agent("release"), agent("hold")],
+            [wire("decide", "yes", "release", "in"), wire("decide", "no", "hold", "in")],
+          ),
+          ticketConfig,
+        );
+
+      const builtValues = async (values: Record<string, boolean>) => {
+        const { fs, deps } = setup({ flows: [shipFlow()] });
+        const result = await buildVersion(v1, { name: "fix-login", repo, values }, deps);
+        if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+        return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest).values;
+      };
+
+      it("lands in the manifest as false when the request leaves it out", async () => {
+        expect(await builtValues({})).toStrictEqual({ ship: false });
       });
 
-      const result = await buildVersion(v1, { name: "fix-login", repo, values: {} }, deps);
-
-      expect(errorMessages(result)).toEqual([]);
-      expect(result.ok).toBe(true);
+      it("keeps a true the request gives", async () => {
+        expect(await builtValues({ ship: true })).toStrictEqual({ ship: true });
+      });
     });
   });
 
@@ -512,28 +526,18 @@ describe("buildVersion", () => {
       ]);
     });
 
-    it("refuses a connector Claude Code lacks before reserving anything", async () => {
-      const { store, fs, worktree, deps } = setup();
-      const withConnector: Flow = {
+    it("starts a blueprint whose stored session still names a connector, looking nothing up", async () => {
+      const { store, deps } = setup();
+      const withConnector = {
         ...ticketFlow(),
         session: { ...ticketFlow().session, connectors: ["jira"] },
-      };
-      const noConnectors = {
-        find: async () => undefined,
-        list: async () => ({}),
-        configPath: "/fake/.claude.json",
-      };
+      } as Flow;
 
-      const result = await startBuild(withConnector, request, {
-        ...deps,
-        connectors: noConnectors,
-      });
+      const result = await startBuild(withConnector, request, deps);
 
-      expect(errorMessages(result)).toEqual([
-        expect.stringMatching(/^Connector "jira" is not set up in Claude Code/),
-      ]);
-      expect(store.listPendingBuilds()).toEqual([]);
-      expectNothingDone(store, fs, worktree);
+      expect(errorMessages(result)).toEqual([]);
+      expect(result).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(store.listPendingBuilds()).toHaveLength(1);
     });
 
     it("refuses a name that is not kebab-case before reserving anything", async () => {
@@ -724,23 +728,18 @@ describe("buildVersion", () => {
     it("fails step 2 on a throw while laying down, ending the build failed and keeping its events", async () => {
       const base = setup();
       const ends = endsOf(base.store);
-      const withConnector: Flow = {
-        ...ticketFlow(),
-        session: { ...ticketFlow().session, connectors: ["jira"] },
-      };
       const deps = {
         ...base.deps,
-        connectors: {
-          find: async () => {
+        kit: {
+          dir: kit.dir,
+          get version(): string {
             throw new Error("keychain locked");
           },
-          list: async () => ({}),
-          configPath: "/fake/.claude.json",
         },
       };
       const pending = await started(base);
 
-      await expect(runBuild(pending, withConnector, request, deps)).rejects.toThrow(
+      await expect(runBuild(pending, ticketFlow(), request, deps)).rejects.toThrow(
         "keychain locked",
       );
 
@@ -782,50 +781,34 @@ describe("buildVersion", () => {
       expect(worktree).toBeLessThan(events.findIndex((event) => event.type === "session"));
     });
 
-    it("records the session with the blueprint's build model, and none when it names none", async () => {
-      const withModel = setup();
-      const modelled = await started(withModel);
-      await runBuild(
-        modelled,
-        ticketFlow({ ...ticketConfig, buildModel: "haiku" }),
-        request,
-        withModel.deps,
-      );
-      const plain = setup();
-      const unmodelled = await started(plain);
-      await runBuild(unmodelled, ticketFlow(), request, plain.deps);
-
-      const sessionOf = (store: FakeStore, pendingId: string) =>
-        eventsOf(store, pendingId).find((event) => event.type === "session");
-      expect(sessionOf(withModel.store, modelled.pendingId)).toEqual(
-        expect.objectContaining({ type: "session", model: "haiku" }),
-      );
-      expect(sessionOf(plain.store, unmodelled.pendingId)).toEqual(
-        expect.objectContaining({ type: "session" }),
-      );
-      expect(sessionOf(plain.store, unmodelled.pendingId)).not.toHaveProperty("model");
-    });
-
-    it.each([
-      { blueprintModel: undefined, requestModel: "haiku" },
-      { blueprintModel: "sonnet", requestModel: "haiku" },
-    ])(
-      "records and opens the session with the request's build model $requestModel over the blueprint's $blueprintModel",
-      async ({ blueprintModel, requestModel }) => {
+    it.each(["haiku", "opus"])(
+      "records and opens the session with the blueprint's build model %s",
+      async (buildModel) => {
         const base = setup();
         const pending = await started(base);
-        const blueprint = ticketFlow(
-          blueprintModel === undefined
-            ? ticketConfig
-            : { ...ticketConfig, buildModel: blueprintModel },
-        );
 
-        await runBuild(pending, blueprint, { ...request, buildModel: requestModel }, base.deps);
+        await runBuild(pending, withBuildModel(ticketFlow(), buildModel), request, base.deps);
 
         expect(
           eventsOf(base.store, pending.pendingId).find((event) => event.type === "session"),
-        ).toEqual(expect.objectContaining({ model: requestModel }));
-        expect(base.agents.opened.map((spec) => spec.model)).toEqual([requestModel]);
+        ).toEqual(expect.objectContaining({ type: "session", model: buildModel }));
+        expect(base.agents.opened.map((spec) => spec.model)).toEqual([buildModel]);
+      },
+    );
+
+    it.each(["sonnet", "opus"])(
+      "records and opens the session with the request's build model over the blueprint's %s",
+      async (blueprintModel) => {
+        const base = setup();
+        const pending = await started(base);
+        const blueprint = withBuildModel(ticketFlow(), blueprintModel);
+
+        await runBuild(pending, blueprint, { ...request, buildModel: "haiku" }, base.deps);
+
+        expect(
+          eventsOf(base.store, pending.pendingId).find((event) => event.type === "session"),
+        ).toEqual(expect.objectContaining({ model: "haiku" }));
+        expect(base.agents.opened.map((spec) => spec.model)).toEqual(["haiku"]);
       },
     );
 
@@ -858,15 +841,15 @@ describe("buildVersion", () => {
 
     it("records a refused lay-down's problems on the failed step", async () => {
       const base = setup();
-      const withConnector: Flow = {
-        ...ticketFlow(),
-        session: { ...ticketFlow().session, connectors: ["jira"] },
-      };
+      const blankAgent = withConfig(
+        onMainFlow([agent("a1", { settings: { instructions: "  " } })], []),
+        ticketConfig,
+      );
       const pending = await started(base);
 
-      const result = await runBuild(pending, withConnector, request, base.deps);
+      const result = await runBuild(pending, blankAgent, request, base.deps);
 
-      if (result.ok) throw new Error("built with a connector Claude Code lacks");
+      if (result.ok) throw new Error("built an Agent with blank instructions");
       expect(result.errors).not.toEqual([]);
       expect(eventsOf(base.store, pending.pendingId).at(-1)).toEqual({
         type: "step",
@@ -2022,7 +2005,7 @@ describe("buildVersion", () => {
     it("opens the session with the blueprint's build model", async () => {
       const t = traced();
 
-      await t.run(agentsFlow({ ...ticketConfig, buildModel: "haiku" } as BuildConfig));
+      await t.run(withBuildModel(agentsFlow(), "haiku"));
 
       expect(t.fake.opened).toEqual([expect.objectContaining({ model: "haiku" })]);
     });
@@ -2072,7 +2055,7 @@ describe("buildVersion", () => {
 
   describe("a blueprint that names no repo", () => {
     it("builds from the repo and base the request gives, leaving the saved version as it was", async () => {
-      const unset: BuildConfig = { variables: ticketConfig.variables };
+      const unset: BuildConfig = {};
       const { flows, store, worktree, deps } = setup({ flows: [ticketFlow(unset)] });
 
       const result = await buildVersion(
@@ -2127,9 +2110,7 @@ describe("buildVersion", () => {
     });
 
     it("is the repo's default branch when neither gives one", async () => {
-      expect(await baseOf({ repo, variables: ticketConfig.variables }, undefined, "trunk")).toBe(
-        "trunk",
-      );
+      expect(await baseOf({ repo }, undefined, "trunk")).toBe("trunk");
     });
 
     it("is recorded with the build", async () => {
@@ -2345,7 +2326,7 @@ describe("buildVersion", () => {
 
     it("a build with no repo given and none in the blueprint", async () => {
       const { store, fs, worktree, deps } = setup({
-        flows: [ticketFlow({ base: "main", variables: ticketConfig.variables })],
+        flows: [ticketFlow({ base: "main" })],
       });
 
       const result = await buildVersion(
@@ -2361,23 +2342,26 @@ describe("buildVersion", () => {
 
     it.each<[string, Record<string, string>]>([
       ["missing", {}],
-      ["empty", { ticket: "" }],
-    ])("a variable whose value is %s, naming every unset one", async (_label, values) => {
+      ["empty", { ticket: "", reviewer: "" }],
+    ])("a text variable whose value is %s, naming every unset one", async (_label, values) => {
       const { store, fs, worktree, deps } = setup({
         flows: [
-          ticketFlow({
-            ...ticketConfig,
-            variables: [
-              { name: "ticket", kind: "text" },
-              { name: "reviewer", kind: "text" },
-            ],
-          }),
+          withConfig(
+            onMainFlow(
+              [agent("p1", { settings: { instructions: "Fix {{ticket}} for {{reviewer}}" } })],
+              [],
+            ),
+            ticketConfig,
+          ),
         ],
       });
 
       const result = await buildVersion(v1, { name: "fix-login", repo, values }, deps);
 
-      expect(result.ok).toBe(false);
+      expect(result).toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: "build-values" })],
+      });
       const message = errorMessages(result).join("\n");
       expect(message).toContain("ticket");
       expect(message).toContain("reviewer");
@@ -2440,7 +2424,7 @@ describe("buildVersion", () => {
         flows: [
           onMainFlow([agent("p1")], []),
           onMainFlow([agent("p1"), agent("s1")], [thenWire("p1", "s1")]),
-        ].map((saved) => withConfig(saved, { repo, base: "main", variables: [] })),
+        ].map((saved) => withConfig(saved, { repo, base: "main" })),
       });
 
     it("builds the chosen version and records it with its flow version", async () => {
@@ -2484,7 +2468,7 @@ describe("buildVersion", () => {
     const request = { name: "fix-login", repo, base: "main", values: { ticket: "FD-1" } };
 
     const labelled = (label: string): Flow => {
-      const base = ticketFlow({ variables: ticketConfig.variables });
+      const base = ticketFlow({});
       const nodes = base.nodes.map((node) => (node.id === "p1" ? { ...node, label } : node));
       return { ...base, nodes: [...nodes, agent("loose")] as Flow["nodes"] };
     };

@@ -613,7 +613,7 @@ test("Branch shown", async () => {
   const seeded = parseFlow(twoAgents());
   seedFlow(home, {
     ...seeded,
-    session: { ...seeded.session, buildConfig: { repo: repo.path, variables: [] } },
+    session: { ...seeded.session, buildConfig: { repo: repo.path } },
   });
   const { window } = await launch();
 

@@ -3,7 +3,7 @@ import { createAppWaiter, type AppWaiter } from "../../../src/app/engine/app-wai
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { PendingWait, WaitAnswer, WaitReply } from "../../../src/core/run/wait.js";
 import type { Waiter } from "../../../src/ports/waiter.js";
-import { budget, gate, permission, pick } from "../../fixtures/waits.js";
+import { gate, permission, pick } from "../../fixtures/waits.js";
 
 const pending = Symbol("pending");
 
@@ -98,10 +98,7 @@ describe("createAppWaiter", () => {
     expect(await settled(reply)).toBe(pending);
   });
 
-  it.each([
-    { request: gate, fitting: { decision: "approve" } as WaitAnswer["reply"] },
-    { request: budget, fitting: { decision: "stop", reason: "" } as WaitAnswer["reply"] },
-  ])(
+  it.each([{ request: gate, fitting: { decision: "approve" } as WaitAnswer["reply"] }])(
     "drops a $request.kind wait without resolving it, pushes it cleared, and refuses a later answer",
     async ({ request, fitting }) => {
       const reply = run.wait(request);

@@ -21,8 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Run `echo one` in the repo and report its exit code.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -36,8 +35,7 @@
       "settings": {
         "role": "",
         "instructions": "Run `echo two` in the repo and report its exit code.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -93,12 +91,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": []
+      "base": "main"
     },
-    "model": "haiku",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "haiku"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

@@ -75,8 +75,6 @@ export function costOf(entries: UsageEntry[]): number {
   return [...byMessage.values()].reduce((sum, entry) => sum + priceOf(entry), 0);
 }
 
-export const budgetReached = (spend: number, budget: number) => spend >= budget;
-
 export function usd(amount: number): string {
   return amount >= 0.01 ? `$${amount.toFixed(2)}` : `$${amount.toFixed(4)}`;
 }

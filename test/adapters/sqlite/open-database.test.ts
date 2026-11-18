@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
+import { openDatabase, type MigrationReport } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import type { NewBuild, NewRun } from "../../../src/ports/store.js";
 
@@ -57,7 +57,10 @@ const allMigrations = [
   { name: "019_runs_own_their_build.sql" },
   { name: "020_run_repo_states_and_step_texts.sql" },
   { name: "021_complete_deletes_and_build_texts.sql" },
+  { name: "022_clean_start.sql" },
 ];
+
+const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");
 
 const noTransaction = "-- flowdeck:no-transaction\n";
 
@@ -105,6 +108,19 @@ describe("openDatabase", () => {
       await copyFile(join(migrationsDir, file), join(dir, file));
     }
     return dir;
+  };
+
+  const openTo021 = async () => open(await stage("to-021", "022"));
+
+  const openReporting = (dir?: string) => {
+    const reports: MigrationReport[] = [];
+    const db = openDatabase({
+      path,
+      ...(dir === undefined ? {} : { migrationsDir: dir }),
+      onMigrated: (report) => reports.push(report),
+    });
+    opened.push(db);
+    return { db, reports };
   };
 
   beforeEach(async () => {
@@ -439,9 +455,9 @@ describe("openDatabase", () => {
     it("records 008 and keeps every row, the build hash now the build id", async () => {
       const before = await seedOldDatabase();
 
-      const db = open();
+      const db = await openTo021();
 
-      expect(migrations(db)).toEqual(allMigrations);
+      expect(migrations(db)).toEqual(migrationsTo021);
       expect(db.prepare("SELECT * FROM flows").all(), "flows").toEqual(
         (before["flows"] ?? []).map((row) => ({ ...row, pinned: 0, deleted_at: null })),
       );
@@ -466,7 +482,7 @@ describe("openDatabase", () => {
     it("gives every old build its hash as its id and no name, repo, base, values or deletion", async () => {
       await seedOldDatabase();
 
-      const db = open();
+      const db = await openTo021();
 
       expect(
         db
@@ -508,7 +524,7 @@ describe("openDatabase", () => {
     it("keeps both running runs of one build running", async () => {
       await seedOldDatabase();
 
-      const db = open();
+      const db = await openTo021();
 
       expect(
         db.prepare("SELECT id, status FROM runs WHERE build_id = 'h1' ORDER BY id").all(),
@@ -521,7 +537,7 @@ describe("openDatabase", () => {
     it("points runs, build files and build nodes at the build id, with foreign keys on and whole", async () => {
       await seedOldDatabase();
 
-      const db = open();
+      const db = await openTo021();
       const references = (table: string) =>
         (
           db.prepare(`SELECT "table", "from", "to" FROM pragma_foreign_key_list(?)`).all(table) as {
@@ -599,7 +615,7 @@ describe("openDatabase", () => {
     it("keeps both runs and every row under them, each run with its copy of its build", async () => {
       await seedBefore019();
 
-      const db = open();
+      const db = await openTo021();
 
       expect(
         db
@@ -645,7 +661,7 @@ describe("openDatabase", () => {
     it("purges the deleted build and every row it owns, keeping its run, with no broken foreign key", async () => {
       await seedBefore019();
 
-      const db = open();
+      const db = await openTo021();
 
       for (const table of [
         "build_files",
@@ -672,7 +688,7 @@ describe("openDatabase", () => {
       { table: "builds", first: ["build_nodes", "build_files"] },
     ])("lets $table rows be deleted", async ({ table, first }) => {
       await seedBefore019();
-      const db = open();
+      const db = await openTo021();
       for (const each of first) db.exec(`DELETE FROM ${each}`);
 
       db.exec(`DELETE FROM ${table}`);
@@ -682,7 +698,7 @@ describe("openDatabase", () => {
 
     it("keeps the run triggers firing after the rebuild", async () => {
       await seedBefore019();
-      const db = open();
+      const db = await openTo021();
       const insertRun = (id: string, status: string) =>
         db
           .prepare(
@@ -762,7 +778,7 @@ describe("openDatabase", () => {
     it("stores every run's number as it was shown, and counts each build's numbers so far", async () => {
       await seedBefore021();
 
-      const db = open();
+      const db = await openTo021();
 
       expect(db.prepare("SELECT id, number FROM runs ORDER BY id").all()).toEqual([
         { id: "r1", number: 1 },
@@ -780,7 +796,7 @@ describe("openDatabase", () => {
     it("removes every row of a deleted run and keeps every row of the others", async () => {
       await seedBefore021();
 
-      const db = open();
+      const db = await openTo021();
 
       for (const table of [
         "step_texts",
@@ -800,7 +816,7 @@ describe("openDatabase", () => {
     it("removes a deleted pending build and the older ended attempts of its name, keeping the open one, a later one and other names", async () => {
       await seedBefore021();
 
-      const db = open();
+      const db = await openTo021();
 
       const kept = ["pb-going", "pb-later", "pb-weekly"];
       expect(ids(db, "SELECT id FROM pending_builds")).toEqual(kept);
@@ -813,7 +829,7 @@ describe("openDatabase", () => {
     it("adds an optional repo to run repo states, and a build step text table that refuses edits", async () => {
       await seedBefore021();
 
-      const db = open();
+      const db = await openTo021();
 
       expect(
         db
@@ -843,11 +859,135 @@ describe("openDatabase", () => {
       "still refuses to delete a %s row of a run that is not deleted",
       async (table) => {
         await seedBefore021();
-        const db = open();
+        const db = await openTo021();
 
         expect(() => db.exec(`DELETE FROM ${table} WHERE run_id = 'r1'`)).toThrow(/append-only/);
         expect(ids(db, `SELECT run_id FROM ${table} WHERE run_id = 'r1'`)).toEqual(["r1"]);
       },
     );
+  });
+
+  describe("migrating a database made by 001 to 021 to 022", () => {
+    const everyTable = [
+      "flows",
+      "flow_versions",
+      "nodes",
+      "ports",
+      "wires",
+      "builds",
+      "build_files",
+      "build_nodes",
+      "build_manifests",
+      "build_snapshots",
+      "pending_builds",
+      "build_events",
+      "build_activity",
+      "build_step_texts",
+      "runs",
+      "run_sessions",
+      "run_nodes",
+      "events",
+      "activity",
+      "run_stories",
+      "run_repo_states",
+      "step_texts",
+      "run_number_counters",
+    ];
+
+    const count = (db: Database.Database, table: string) =>
+      db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
+
+    const seedBefore022 = async () => {
+      const before = openDatabase({ path, migrationsDir: await stage("to-021", "022") });
+      before.exec(`
+        BEGIN;
+        INSERT INTO flows (id, name, created_at) VALUES ('f1', 'old', 't');
+        INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
+          VALUES ('f1', 1, 0, 'p1', 'agent', 'Plan', 0, 0, NULL, '{}');
+        INSERT INTO ports (flow_id, version, node_id, ordinal, name, direction, kind)
+          VALUES ('f1', 1, 'p1', 0, 'in', 'in', 'then');
+        INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
+          VALUES ('f1', 1, 0, 'then', 'p1', 'out', 'p1', 'in', NULL);
+        INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('f1', 1, '{}', 't');
+        INSERT INTO build_files (build_id, path, sha256) VALUES ('b1', 'manifest.json', 'sha');
+        INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file)
+          VALUES ('b1', 0, 'p1', 'agent', '{}', 'manifest.json');
+        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version, branch, branch_created)
+          VALUES ('b1', 'h1', 'fix-login', '/repo', 'main', '{}', '/fd/workspaces/b1', 1, 'f1', 1, 'flowdeck/fix-login', 1);
+        INSERT INTO build_manifests (build_id, manifest_json) VALUES ('b1', '{}');
+        INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome)
+          VALUES ('pb1', 'f1', 1, 'fix-login', '{}', 0, 1, 'built');
+        INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
+          VALUES ('pb1', 'b1', 'old', 1, '<svg/>', 0);
+        INSERT INTO build_events (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
+        INSERT INTO build_activity (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
+        INSERT INTO build_step_texts (pending_id, entry_id, field, text, at)
+          VALUES ('pb1', 1, 'output', 'full', 1);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
+          VALUES ('r1', '/fd/workspaces/b1', '{}', 'done', 't', 'b1');
+        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status, parent)
+          VALUES (1, 'r1', 'fd-run-a', '/repo', 'c1', 'closed', NULL);
+        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r1', 'p1', 1);
+        INSERT INTO events (run_id, node_id, kind, time) VALUES ('r1', 'p1', 'sent', 't');
+        INSERT INTO activity (run_id, id, node_id, entry) VALUES ('r1', 1, 'p1', '{}');
+        INSERT INTO run_stories (run_id, at, run_status, text, cost)
+          VALUES ('r1', 't', 'done', 'It worked.', 0.01);
+        INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at)
+          VALUES ('r1', 'before', '{}', '[]', 1);
+        INSERT INTO step_texts (run_id, entry_id, field, text, at) VALUES ('r1', 1, 'output', 'kept', 1);
+        INSERT INTO run_number_counters (build_id, last) VALUES ('b1', 1);
+        COMMIT;
+      `);
+      for (const table of everyTable) expect(count(before, table), table).toBe(1);
+      before.close();
+    };
+
+    it("deletes every blueprint, build and run, leaving no broken foreign key", async () => {
+      await seedBefore022();
+
+      const db = open();
+
+      for (const table of everyTable) expect(count(db, table), table).toBe(0);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(migrations(db)).toEqual(allMigrations);
+    });
+
+    it("reports 022 as applied in this open, on a database that existed before it", async () => {
+      await seedBefore022();
+
+      const { reports } = openReporting();
+
+      expect(reports).toEqual([{ applied: ["022_clean_start"], existedBefore: true }]);
+    });
+
+    it("reports nothing applied when the database is opened again after 022", async () => {
+      await seedBefore022();
+      openReporting().db.close();
+
+      const { reports } = openReporting();
+
+      expect(reports).toEqual([{ applied: [], existedBefore: true }]);
+    });
+
+    it("gives saved blueprint versions a settings column", async () => {
+      await seedBefore022();
+
+      const db = open();
+
+      expect(
+        db.prepare("SELECT name FROM pragma_table_info('flow_versions')").pluck().all(),
+      ).toContain("settings");
+    });
+  });
+
+  it("reports every migration applied on a database that did not exist before", () => {
+    const { reports } = openReporting();
+
+    expect(reports).toEqual([
+      {
+        applied: allMigrations.map(({ name }) => name.replace(/\.sql$/, "")),
+        existedBefore: false,
+      },
+    ]);
   });
 });

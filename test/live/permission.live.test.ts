@@ -43,7 +43,7 @@ function liveFlow(instructions: string) {
         label: "Run",
         type: "agent",
         position: at(1),
-        settings: { role: "", instructions, model: "haiku", tools: [] },
+        settings: { role: "", instructions, model: "haiku" },
       },
       {
         id: "o",
@@ -56,12 +56,10 @@ function liveFlow(instructions: string) {
     wires: [then("t", "p1"), then("p1", "o")],
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: ["Read", "Edit"],
-      permissionMode: "default",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "default" },
   });
 }
 

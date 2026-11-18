@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { modelChoices, permissionModes, type Choice } from "../../../core/flow/choices.js";
-import { Session, type BuildConfig, type Node } from "../../../core/flow/schema.js";
+import { FlowSettings, Session, type Node } from "../../../core/flow/schema.js";
 import { producedName } from "../../../core/nodes/agent/settings.js";
 
 type Path = readonly string[];
@@ -32,9 +32,6 @@ export const sessionSettingsSchema = Session.pick({
   name: true,
   buildConfig: true,
   model: true,
-  allowedTools: true,
-  permissionMode: true,
-  budget: true,
 });
 
 export type Form = {
@@ -53,17 +50,20 @@ const sessionLabels: Record<string, string> = {
   "buildConfig.repo": "Repository",
   "buildConfig.base": "Start from branch",
   model: "Model",
-  allowedTools: "Allowed tools (one per line)",
-  permissionMode: "Permission mode",
-  budget: "Budget ($, optional)",
 };
 
 const sessionForm: Form = {
   prefix: "session",
   labels: sessionLabels,
   optionLabels: {},
-  hidden: new Set(["buildConfig.buildModel"]),
-  choices: { model: modelChoices, permissionMode: permissionModes },
+  choices: { model: modelChoices },
+};
+
+const settingsForm: Form = {
+  prefix: "settings",
+  labels: { buildModel: "Build model", permissionMode: "Permission mode" },
+  optionLabels: {},
+  choices: { buildModel: modelChoices, permissionMode: permissionModes },
 };
 
 const labelOf = (form: Form, path: Path): string => {
@@ -220,13 +220,12 @@ export const withChoices = (
 const asChoices = (values: readonly string[]): Choice[] =>
   values.map((value) => ({ value, label: value }));
 
-export const yesNoChoices = (buildConfig: Pick<BuildConfig, "variables">): Choice[] =>
-  asChoices(buildConfig.variables.filter(({ kind }) => kind === "yesno").map(({ name }) => name));
-
 export const producedChoices = (nodes: readonly Pick<Node, "settings">[]): Choice[] =>
   asChoices([...new Set(nodes.flatMap(({ settings }) => producedName(settings) ?? []))]);
 
 export const sessionFields = (): FieldDescription[] => describeFields(sessionSettingsSchema);
+
+export const settingsFields = (): FieldDescription[] => describeFields(FlowSettings, settingsForm);
 
 const emptyVariant = (variant: AnyObject, discriminator: string, kind: string) =>
   Object.fromEntries(

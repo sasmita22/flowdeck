@@ -51,7 +51,6 @@ function liveFlow(secret: string) {
           role: "",
           instructions: `The secret word is ${secret}. Write it to secret.md, then reply with only the secret word.`,
           model: "haiku",
-          tools: ["Read", "Write"],
           writes: ["secret.md"],
         },
       },
@@ -65,7 +64,6 @@ function liveFlow(secret: string) {
           instructions:
             "Write a file notes.md whose only content is the secret word you were told. If you were not told one, write UNKNOWN.",
           model: "haiku",
-          tools: ["Write"],
         },
       },
       {
@@ -78,7 +76,6 @@ function liveFlow(secret: string) {
           instructions:
             "Write a file control.md whose only content is the secret word in secret.md.",
           model: "haiku",
-          tools: ["Read", "Write"],
           given: ["secret.md"],
         },
       },
@@ -93,12 +90,10 @@ function liveFlow(secret: string) {
     wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: ["Read", "Write"],
-      permissionMode: "acceptEdits",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   });
 }
 

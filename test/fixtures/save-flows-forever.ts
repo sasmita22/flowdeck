@@ -6,7 +6,7 @@ import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 
 type RawNode = { id: string; parent?: string } & Record<string, unknown>;
 type RawWire = { from: { node: string }; to: { node: string } } & Record<string, unknown>;
-type RawFlow = { nodes: RawNode[]; wires: RawWire[]; session: unknown };
+type RawFlow = { nodes: RawNode[]; wires: RawWire[]; session: unknown; settings: unknown };
 
 const allTypes = (): RawFlow =>
   JSON.parse(readFileSync(new URL("../../examples/all-types.json", import.meta.url), "utf8"));
@@ -31,7 +31,7 @@ function cloned(copies: number): Flow {
       });
     }
   }
-  return parseFlow({ nodes, wires, session: base.session });
+  return parseFlow({ nodes, wires, session: base.session, settings: base.settings });
 }
 
 export function largeFlows(): { a: Flow; b: Flow } {

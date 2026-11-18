@@ -5,7 +5,15 @@ import { validate } from "../../../src/core/compiler/validate.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
 import { sectionOf } from "../../fixtures/frontmatter.js";
-import { agent, flow, loop, output, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  loop,
+  output,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 
 const sample = (): Flow =>
   flow(
@@ -159,17 +167,21 @@ describe("lower", () => {
 
   it("keeps the blueprint's Build configuration in the manifest", () => {
     const input = sample();
-    input.session.buildConfig = {
-      repo: "/r",
-      base: "main",
-      variables: [{ name: "ticket", kind: "text" }],
-    };
+    input.session.buildConfig = { repo: "/r", base: "main" };
 
     expect(lower(input, workspace).manifest.session.buildConfig).toStrictEqual({
       repo: "/r",
       base: "main",
-      variables: [{ name: "ticket", kind: "text" }],
     });
+  });
+
+  it("carries the blueprint's settings into the manifest", () => {
+    expect(lower(sample(), workspace).manifest.settings).toStrictEqual(flowSettings);
+
+    const chosen = { buildModel: "opus", permissionMode: "acceptEdits" };
+    const input = flow([trigger("start"), agent("p")], [thenWire("start", "p")], chosen);
+
+    expect(lower(input, workspace).manifest.settings).toStrictEqual(chosen);
   });
 
   it("records the build name as the prefix, the workspace layout and the build's values", () => {
@@ -207,7 +219,6 @@ describe("lower", () => {
       [agent("p", { settings: { instructions: "Fix {{ticket}}" } }), agent("a")],
       [thenWire("p", "a")],
     );
-    input.session.buildConfig.variables = [{ name: "ticket", kind: "text" }];
 
     const files = Object.fromEntries(
       lower(input, { ...workspace, values: { ticket: "FD-99" } }).nodeFiles.map(

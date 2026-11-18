@@ -19,34 +19,25 @@ const labelled = <T extends { label: string }>(node: T, label: string): T => ({ 
 
 const longLabel = "Review the draft spec against the ticket and list every gap found";
 
-const withTools = (base: Flow): Flow => ({
-  ...base,
-  session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] },
-});
-
 const sample = (): Flow =>
-  withTools(
-    onMainFlow(
-      [
-        labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
-        labelled(agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }), longLabel),
-        labelled(agent("s"), "Ship it"),
-      ],
-      [thenWire("p", "a"), thenWire("a", "s")],
-    ),
+  onMainFlow(
+    [
+      labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
+      labelled(agent("a", { settings: { given: ["spec.md"] } }), longLabel),
+      labelled(agent("s"), "Ship it"),
+    ],
+    [thenWire("p", "a"), thenWire("a", "s")],
   );
 
 const twoReviewers = (): Flow =>
-  withTools(
-    onMainFlow(
-      [
-        labelled(agent("p"), "Draft the spec"),
-        labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft"),
-        labelled(agent("b", { settings: { tools: ["Grep"] } }), "Review the draft again"),
-        labelled(agent("s"), "Ship it"),
-      ],
-      [thenWire("p", "a"), thenWire("a", "b"), thenWire("b", "s")],
-    ),
+  onMainFlow(
+    [
+      labelled(agent("p"), "Draft the spec"),
+      labelled(agent("a"), "Review the draft"),
+      labelled(agent("b"), "Review the draft again"),
+      labelled(agent("s"), "Ship it"),
+    ],
+    [thenWire("p", "a"), thenWire("a", "b"), thenWire("b", "s")],
   );
 
 const home = "/fd-home";
@@ -355,15 +346,24 @@ describe("checkBuild", () => {
       );
     });
 
-    it("names an agent whose tools fall outside the run session's allow list", async () => {
-      const inputs = await workspace();
-      const file = fileOf(inputs, "a");
+    it.each(["Grep", "Read, Skill"])(
+      "refuses an agent whose frontmatter has a tools line %j, naming its piece",
+      async (tools) => {
+        const inputs = await workspace();
+        const file = fileOf(inputs, "a");
+        const piece = inputs.manifest.nodes.find((node) => node.id === "a")?.piece ?? "";
 
-      expectFailsOn(
-        edited(inputs, file, (content) => withField(content, "tools", "Grep, Bash")),
-        file,
-      );
-    });
+        const failures = checkBuild(
+          edited(inputs, file, (content) => withField(content, "tools", tools)),
+        );
+
+        expect(piece).not.toBe("");
+        expect(failures).toEqual([
+          { file, rule: expect.any(String), detail: expect.stringContaining(piece) },
+        ]);
+        expect(failures[0]?.detail).toMatch(/tools/);
+      },
+    );
 
     it("names an agent whose body has nothing beyond its draft", async () => {
       const inputs = await workspace();
@@ -387,21 +387,19 @@ describe("checkBuild", () => {
 
     it("asks no template for a hand-off file that is not markdown", async () => {
       const base = sample();
-      const plain = withTools(
-        flow(
-          base.nodes.map((node) =>
-            node.type === "agent" && (node.id === "p" || node.id === "a")
-              ? {
-                  ...node,
-                  settings: {
-                    ...node.settings,
-                    [node.id === "p" ? "writes" : "given"]: ["spec.md", "greeting.txt"],
-                  },
-                }
-              : node,
-          ),
-          base.wires,
+      const plain = flow(
+        base.nodes.map((node) =>
+          node.type === "agent" && (node.id === "p" || node.id === "a")
+            ? {
+                ...node,
+                settings: {
+                  ...node.settings,
+                  [node.id === "p" ? "writes" : "given"]: ["spec.md", "greeting.txt"],
+                },
+              }
+            : node,
         ),
+        base.wires,
       );
       const inputs = await workspace(plain);
       const readBack = inputs.readBack.filter(
@@ -483,11 +481,6 @@ describe("checkBuild", () => {
         ],
         [thenWire("p", "a"), thenWire("a", "b"), thenWire("b", "s")],
       ),
-    });
-
-    const withAllowed = (inputs: BuildCheckInputs, allowedTools: string[]): BuildCheckInputs => ({
-      ...inputs,
-      manifest: { ...inputs.manifest, session: { ...inputs.manifest.session, allowedTools } },
     });
 
     const conventions: BuildReport["shared"][number] = {
@@ -607,38 +600,6 @@ describe("checkBuild", () => {
 
       expectFailsOn(
         edited(inputs, file, (content) => `${content}\nThen run \`alpha:repo-rules\`.\n`),
-        file,
-      );
-    });
-
-    it("names an agent in usedBy whose tools leave out Skill", async () => {
-      const shared = await sharing();
-      const inputs = withAllowed(shared, ["Read", "Skill", "SlashCommand"]);
-      const file = fileOf(inputs, "b");
-
-      expectFailsOn(
-        edited(inputs, file, (content) => withField(content, "tools", "Read, SlashCommand")),
-        file,
-      );
-    });
-
-    it("passes an agent in usedBy whose tools list Skill, and Skill is allowed", async () => {
-      const shared = await sharing();
-      const inputs = withAllowed(shared, ["Read", "Skill"]);
-      const file = fileOf(inputs, "b");
-
-      expect(
-        checkBuild(edited(inputs, file, (content) => withField(content, "tools", "Read, Skill"))),
-      ).toEqual([]);
-    });
-
-    it("names an agent in usedBy whose tools list Skill when Skill is not allowed", async () => {
-      const shared = await sharing();
-      const inputs = withAllowed(shared, ["Read"]);
-      const file = fileOf(inputs, "b");
-
-      expectFailsOn(
-        edited(inputs, file, (content) => withField(content, "tools", "Read, Skill")),
         file,
       );
     });

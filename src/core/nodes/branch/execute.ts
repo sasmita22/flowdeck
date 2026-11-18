@@ -8,39 +8,12 @@ import type { SectionNode } from "../fork/execute.js";
 
 export type BranchPort = "yes" | "no";
 
-export function triggerFlags(
-  nodes: readonly Pick<Node, "type" | "settings">[],
-): Record<string, boolean> {
-  const flags: Record<string, boolean> = {};
-  for (const node of nodes) {
-    if (node.type !== "trigger" || !("flags" in node.settings)) continue;
-    for (const [name, value] of Object.entries(node.settings.flags)) {
-      if (typeof value === "boolean" && !(name in flags)) flags[name] = value;
-    }
-  }
-  return flags;
-}
-
-export function branchTakes(
-  flag: string,
-  defaults: Readonly<Record<string, boolean>>,
-  overrides: Readonly<Record<string, boolean>>,
-): BranchPort {
-  const value = overrides[flag] ?? defaults[flag];
-  if (typeof value !== "boolean") {
-    throw new Error(`Branch variable "${flag}" is not a yes/no variable on the blueprint.`);
-  }
-  return value ? "yes" : "no";
-}
-
 export function branchDecision(
   manifest: { nodes: readonly Pick<Node, "type" | "settings">[]; values?: VariableValues },
-  settings: { variable?: string; flag?: string },
-  flags: Readonly<Record<string, boolean>>,
+  settings: { variable: string },
 ): BranchPort {
-  const name = settings.variable ?? settings.flag ?? "";
-  if (manifest.values === undefined) return branchTakes(name, triggerFlags(manifest.nodes), flags);
-  const value = manifest.values[name];
+  const name = settings.variable;
+  const value = manifest.values?.[name];
   if (typeof value !== "boolean") {
     throw new Error(`Branch variable "${name}" has no yes/no value in this build.`);
   }

@@ -20,7 +20,7 @@ import { prepareKit } from "../../adapters/node-fs/kit-copy.js";
 import { NodeFileSystem } from "../../adapters/node-fs/node-file-system.js";
 import { HomeLock } from "../../adapters/process/home-lock.js";
 import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
-import { openDatabase } from "../../adapters/sqlite/open-database.js";
+import { openDatabase, type MigrationReport } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
 import { emptyEnvOf } from "../../core/env/empty-env.js";
@@ -58,8 +58,18 @@ const transcriptReader = () =>
 
 const openStores = (): EngineStores => {
   try {
-    const db = openDatabase({ path: dbPath, migrationsDir: join(__dirname, "migrations") });
-    const stores = { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };
+    const reports: MigrationReport[] = [];
+    const db = openDatabase({
+      path: dbPath,
+      migrationsDir: join(__dirname, "migrations"),
+      onMigrated: (report) => reports.push(report),
+    });
+    const [migrations] = reports;
+    const stores = {
+      runs: new SqliteStore({ db }),
+      flows: new SqliteFlowStore({ db }),
+      ...(migrations === undefined ? {} : { migrations }),
+    };
     console.log(`engine: store ready ${dbPath}`);
     return stores;
   } catch (error) {

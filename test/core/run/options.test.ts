@@ -1,32 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
-import {
-  optionsClash,
-  runChoices,
-  storedAuto,
-  storedFlags,
-  storedOptions,
-} from "../../../src/core/run/options.js";
+import { lower } from "../../../src/core/compiler/lower.js";
+import { runChoices, storedAuto, storedOptions } from "../../../src/core/run/options.js";
 import { agent, flow, gate } from "../../fixtures/flow-builders.js";
 
 const manifestOf = (nodes: unknown[]) =>
   lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest;
-
-const oldTrigger = (inputs: string[], flags: Record<string, unknown>): ManifestNode => ({
-  id: "t",
-  type: "trigger",
-  label: "t",
-  settings: { inputs, flags } as unknown as ManifestNode["settings"],
-});
-
-const oldGate = (id: string): ManifestNode => ({
-  id,
-  type: "gate",
-  label: id,
-  settings: { shown: "Check", skippable: false },
-});
-
-const oldManifest = (nodes: ManifestNode[], inputs: string[] = []) => ({ nodes, inputs });
 
 describe("runChoices", () => {
   it("offers only automatic mode for a build with a skippable gate", () => {
@@ -51,48 +29,8 @@ describe("stored run options", () => {
     expect(storedOptions({ inputs: {}, flags: {}, auto: false })).toEqual({});
   });
 
-  it("reads back an old build's boolean Trigger flags, and automatic mode, for a resume", () => {
-    const manifest = oldManifest([oldTrigger([], { deep: true }), oldGate("s")]);
-    const stored = { ticket: "FD-1", deep: false, other: true, auto: true };
-
-    expect(storedFlags(stored, manifest)).toEqual({ deep: false });
-    expect(storedAuto(stored)).toBe(true);
+  it("reads back automatic mode for a resume", () => {
+    expect(storedAuto({ ticket: "FD-1", deep: false, auto: true })).toBe(true);
     expect(storedAuto({ auto: "yes" })).toBe(false);
-  });
-});
-
-describe("optionsClash on an old build", () => {
-  const triggerWith = (inputs: string[], flags: Record<string, boolean>) =>
-    oldManifest([oldTrigger(inputs, flags), oldGate("s")], inputs);
-
-  it("refuses a Trigger flag named auto, which a run reads as the auto option", () => {
-    expect(optionsClash(triggerWith([], { auto: true }))).toBe(
-      'Blueprint variable "auto" clashes with the built-in option --auto',
-    );
-  });
-
-  it("refuses a Trigger input named auto", () => {
-    expect(optionsClash(triggerWith(["auto"], {}))).toBe(
-      'Blueprint variable "auto" clashes with the built-in option --auto',
-    );
-  });
-
-  it("refuses a Trigger input or flag named model, which a resume reads as the model", () => {
-    expect(optionsClash(triggerWith(["model"], {}))).toBe(
-      'Blueprint variable "model" clashes with the built-in option --model',
-    );
-    expect(optionsClash(triggerWith([], { model: true }))).toBe(
-      'Blueprint variable "model" clashes with the built-in option --model',
-    );
-  });
-
-  it("refuses a Trigger input and flag with the same name", () => {
-    expect(optionsClash(triggerWith(["deep"], { deep: true }))).toBe(
-      'Blueprint variable "deep" is declared twice, once as text and once as yes/no',
-    );
-  });
-
-  it("accepts distinct names", () => {
-    expect(optionsClash(triggerWith(["ticket"], { deep: true }))).toBeUndefined();
   });
 });

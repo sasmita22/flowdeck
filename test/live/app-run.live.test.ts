@@ -234,7 +234,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
   ): Promise<{ runId: string; runs: SqliteStore }> {
     const flow: Flow = {
       ...fixture,
-      session: { ...fixture.session, buildConfig: { repo: repo.path, variables: [] } },
+      session: { ...fixture.session, buildConfig: { repo: repo.path } },
     };
 
     const db = openDatabase({ path: join(home, "flowdeck.db") });

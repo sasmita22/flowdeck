@@ -186,8 +186,7 @@ function StatusBar({ store, run, workspace, nav, wait }: AppStores) {
 }
 
 function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
-  const { nav, library, run, save, canvas, buildProgress, terminal, buildFullText, actions } =
-    stores;
+  const { nav, library, run, save, buildProgress, terminal, buildFullText, actions } = stores;
   switch (page.name) {
     case "blueprints":
       return (
@@ -225,7 +224,7 @@ function ListPage({ page, stores }: { page: Page; stores: AppStores }) {
     case "runs":
       return <RunsPage nav={nav} library={library} run={run} />;
     case "doctor":
-      return <DoctorPage nav={nav} library={library} save={save} canvas={canvas} />;
+      return <DoctorPage nav={nav} library={library} />;
     default:
       return null;
   }

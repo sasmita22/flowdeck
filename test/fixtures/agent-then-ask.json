@@ -21,8 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Reply with the single word OK.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -91,12 +90,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": []
+      "base": "main"
     },
-    "model": "haiku",
-    "allowedTools": [],
-    "permissionMode": "acceptEdits",
-    "connectors": []
+    "model": "haiku"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "acceptEdits"
   }
 }

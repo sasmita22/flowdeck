@@ -135,7 +135,6 @@ type AgentSpec = {
   id: string;
   label: string;
   instructions: string;
-  tools: string[];
   given?: string[];
   writes?: string[];
 };
@@ -147,7 +146,7 @@ const then = (from: string, to: string) => ({
   to: { node: to, port: "in" },
 });
 
-function liveFlow(steps: AgentSpec[], allowedTools: string[]): Flow {
+function liveFlow(steps: AgentSpec[]): Flow {
   const ids = ["t", ...steps.map((step) => step.id), "o"];
   return parseFlow({
     nodes: [
@@ -161,7 +160,6 @@ function liveFlow(steps: AgentSpec[], allowedTools: string[]): Flow {
           role: "",
           instructions: step.instructions,
           model: "haiku",
-          tools: step.tools,
           ...(step.given === undefined ? {} : { given: step.given }),
           ...(step.writes === undefined ? {} : { writes: step.writes }),
         },
@@ -177,12 +175,10 @@ function liveFlow(steps: AgentSpec[], allowedTools: string[]): Flow {
     wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [], buildModel: "haiku" },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools,
-      permissionMode: "acceptEdits",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   });
 }
 
@@ -260,18 +256,14 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
       "gives an agent labelled 'sync with base branch' a description that says what it does and when",
       { timeout: buildTimeoutMs },
       async () => {
-        const flow = liveFlow(
-          [
-            {
-              id: "a1",
-              label: "sync with base branch",
-              instructions:
-                "Bring this branch up to date with the base branch: merge the local main branch in, and stop on a conflict.",
-              tools: ["Bash"],
-            },
-          ],
-          ["Bash"],
-        );
+        const flow = liveFlow([
+          {
+            id: "a1",
+            label: "sync with base branch",
+            instructions:
+              "Bring this branch up to date with the base branch: merge the local main branch in, and stop on a conflict.",
+          },
+        ]);
 
         const built = await builds.saveAndEndBuild(flow, { name: "live-at4" });
 
@@ -292,26 +284,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
       "quotes the sample repo's own gate command in the 'Review code' piece",
       { timeout: buildTimeoutMs },
       async () => {
-        const flow = liveFlow(
-          [
-            {
-              id: "a1",
-              label: "Review code",
-              instructions:
-                "Review the code under src/ and write the problems you find to review.md.",
-              tools: ["Read", "Grep", "Glob", "Bash", "Write"],
-              writes: ["review.md"],
-            },
-            {
-              id: "p1",
-              label: "Share review",
-              instructions: "Read review.md and reply with its first problem in one line.",
-              tools: ["Read"],
-              given: ["review.md"],
-            },
-          ],
-          ["Read", "Grep", "Glob", "Bash", "Write"],
-        );
+        const flow = liveFlow([
+          {
+            id: "a1",
+            label: "Review code",
+            instructions:
+              "Review the code under src/ and write the problems you find to review.md.",
+            writes: ["review.md"],
+          },
+          {
+            id: "p1",
+            label: "Share review",
+            instructions: "Read review.md and reply with its first problem in one line.",
+            given: ["review.md"],
+          },
+        ]);
         expect(JSON.stringify(flow)).not.toContain(gate);
 
         const built = await builds.saveAndEndBuild(flow, { name: "live-at5" });
@@ -327,23 +314,18 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
       "ends needs-you when an agent reads notes.md that no node writes, naming the reader and the upstream node",
       { timeout: buildTimeoutMs },
       async () => {
-        const flow = liveFlow(
-          [
-            {
-              id: "p1",
-              label: "Take notes",
-              instructions: "List the open questions about the login bug.",
-              tools: ["Read"],
-            },
-            {
-              id: "a1",
-              label: "Summarise notes",
-              instructions: "Read notes.md and write a three-line summary of it to summary.md.",
-              tools: ["Read", "Write"],
-            },
-          ],
-          ["Read", "Write"],
-        );
+        const flow = liveFlow([
+          {
+            id: "p1",
+            label: "Take notes",
+            instructions: "List the open questions about the login bug.",
+          },
+          {
+            id: "a1",
+            label: "Summarise notes",
+            instructions: "Read notes.md and write a three-line summary of it to summary.md.",
+          },
+        ]);
 
         const built = await builds.saveAndEndBuild(flow, { name: "live-at6" });
 
@@ -360,25 +342,20 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
       "merges two differently worded review agents into one piece that both nodes carry, each with its own details",
       { timeout: buildTimeoutMs },
       async () => {
-        const flow = liveFlow(
-          [
-            {
-              id: "a1",
-              label: "Review greet.js",
-              instructions: "Read src/greet.js and list any bugs you find.",
-              tools: ["Read", "Grep", "Write"],
-              writes: ["review-1.md"],
-            },
-            {
-              id: "a2",
-              label: "Look for defects",
-              instructions: "Go over the code in src/greet.js and report the defects in it.",
-              tools: ["Read", "Grep", "Write"],
-              writes: ["review-2.md"],
-            },
-          ],
-          ["Read", "Grep", "Write"],
-        );
+        const flow = liveFlow([
+          {
+            id: "a1",
+            label: "Review greet.js",
+            instructions: "Read src/greet.js and list any bugs you find.",
+            writes: ["review-1.md"],
+          },
+          {
+            id: "a2",
+            label: "Look for defects",
+            instructions: "Go over the code in src/greet.js and report the defects in it.",
+            writes: ["review-2.md"],
+          },
+        ]);
 
         const built = await builds.saveAndEndBuild(flow, { name: "live-at7" });
 
@@ -400,25 +377,20 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("build agents with real claud
       "keeps two agents both labelled 'Check' with different jobs as two pieces, with the reason",
       { timeout: buildTimeoutMs },
       async () => {
-        const flow = liveFlow(
-          [
-            {
-              id: "a1",
-              label: "Check",
-              instructions:
-                "Check that every exported function under src has a unit test, and list the ones that do not.",
-              tools: ["Read", "Grep", "Glob"],
-            },
-            {
-              id: "a2",
-              label: "Check",
-              instructions:
-                "Check README.md for relative links to files that do not exist in the repo, and list them.",
-              tools: ["Read", "Grep", "Glob"],
-            },
-          ],
-          ["Read", "Grep", "Glob"],
-        );
+        const flow = liveFlow([
+          {
+            id: "a1",
+            label: "Check",
+            instructions:
+              "Check that every exported function under src has a unit test, and list the ones that do not.",
+          },
+          {
+            id: "a2",
+            label: "Check",
+            instructions:
+              "Check README.md for relative links to files that do not exist in the repo, and list them.",
+          },
+        ]);
 
         const built = await builds.saveAndEndBuild(flow, { name: "live-at8" });
 

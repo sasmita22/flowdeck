@@ -19,7 +19,8 @@ const report = {
   createdAt: "2026-01-01T00:00:00.000Z",
   versions: 2,
   lastSavedAt: "2026-01-02T00:00:00.000Z",
-  buildConfig: { repo: "/code/shop", variables: [] },
+  buildConfig: { repo: "/code/shop" },
+  variables: [],
   pinned: false,
 };
 
@@ -179,17 +180,11 @@ const fakeBridge = () =>
       flow: {
         nodes: [],
         wires: [],
-        session: {
-          name: "main",
-          buildConfig: { variables: [] },
-          model: "sonnet",
-          allowedTools: [],
-          permissionMode: "default",
-          connectors: ["slack"],
-        },
+        session: { name: "main", buildConfig: {}, model: "sonnet" },
+        settings: { buildModel: "sonnet", permissionMode: "default" },
       },
     })),
-    doctor: vi.fn(async () => ({ installed: [], needed: [] })),
+    doctor: vi.fn(async () => ({ installed: [] })),
     doctorWorktrees: vi.fn(async () => []),
     buildPicture: vi.fn(async (key: { pendingId: string } | { buildId: string }) =>
       "buildId" in key ? { svg: picture } : { svg: null },
@@ -319,17 +314,15 @@ describe("createLibraryStore", () => {
     expect(library.getState().files?.selected).toBe("commands/p1.md");
   });
 
-  it("checks the connectors it is given, or the ones a saved blueprint needs", async () => {
+  it("lists the connectors installed on this Mac, asking for no blueprint's needs", async () => {
     const bridge = fakeBridge();
     const library = createLibraryStore({ bridge });
 
-    await library.getState().diagnose(null, ["jira"]);
-    expect(bridge.doctor).toHaveBeenLastCalledWith({ connectors: ["jira"] });
-    expect(library.getState().doctor).toEqual({ installed: [], needed: [] });
+    await library.getState().diagnose();
 
-    await library.getState().diagnose("flow-a", ["jira"]);
-    expect(bridge.openFlow).toHaveBeenLastCalledWith({ flowId: "flow-a" });
-    expect(bridge.doctor).toHaveBeenLastCalledWith({ connectors: ["slack"] });
+    expect(bridge.doctor).toHaveBeenCalledWith();
+    expect(bridge.openFlow).not.toHaveBeenCalled();
+    expect(library.getState().doctor).toEqual({ installed: [] });
   });
 });
 
@@ -638,6 +631,7 @@ describe("pinnedFirst", () => {
     versions: 1,
     lastSavedAt: "2026-01-02T00:00:00.000Z",
     buildConfig: null,
+    variables: [],
     pinned,
   });
 

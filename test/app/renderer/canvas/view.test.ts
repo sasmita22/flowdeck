@@ -271,28 +271,21 @@ describe("toViewNodes delete lock", () => {
 });
 
 describe("toViewNodes with a branch", () => {
-  const branchData = (variables: Flow["session"]["buildConfig"]["variables"]) => {
-    const base = flow(
+  const branchData = () => {
+    const source = flow(
       [{ ...branch("B", "e2e"), settings: { variable: "e2e" }, label: "E2E?" }],
       [],
     );
-    const source = { ...base, session: { ...base.session, buildConfig: { variables } } };
     return toViewNodes(source, [], {}, null).find((node) => node.id === "B")?.data;
   };
 
   it("sub-lines the branch with the yes/no variable it follows", () => {
-    expect(branchData([{ name: "e2e", kind: "yesno", default: true }])).toEqual({
+    expect(branchData()).toEqual({
       label: "E2E?",
       highlighted: false,
       ignored: false,
       sub: "e2e",
     });
-  });
-
-  it("names the variable whatever its default, and when it is not declared", () => {
-    expect(branchData([{ name: "e2e", kind: "yesno", default: false }])?.sub).toBe("e2e");
-    expect(branchData([{ name: "e2e", kind: "yesno" }])?.sub).toBe("e2e");
-    expect(branchData([])?.sub).toBe("e2e");
   });
 
   it("adds no sub to any other type", () => {

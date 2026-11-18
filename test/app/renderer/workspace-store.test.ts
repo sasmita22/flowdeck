@@ -19,8 +19,8 @@ const deferred = <T>() => {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const shop = { repo: "/code/shop", variables: [] };
-const blog = { repo: "/code/blog", variables: [] };
+const shop = { repo: "/code/shop" };
+const blog = { repo: "/code/blog" };
 
 const atFolder = (buildConfig: Flow["session"]["buildConfig"]): Flow => {
   const base = flow([agent("agent-1")], []);
