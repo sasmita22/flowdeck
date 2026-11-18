@@ -11,6 +11,7 @@ import { ItemMenu } from "../item-menu.js";
 import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { variablesText } from "../../../core/run/digest.js";
 import type { LoadedRun } from "../../../core/run/listing.js";
+import { storyPartsOf } from "../../../core/run/story.js";
 import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
 import { PanelToggle } from "../panel-toggle.js";
@@ -36,6 +37,31 @@ const tone = {
 } as const;
 
 type Story = NonNullable<LoadedRun["story"]>;
+
+function StoryAccount({ text }: { text: string }) {
+  const parts = storyPartsOf(text);
+  if (parts === undefined)
+    return (
+      <p className="fd-run-reply fd-run-story-account" data-testid={pageTestIds.runStoryAccount}>
+        {text}
+      </p>
+    );
+  const blocks = [
+    { label: "Context", text: parts.context, testId: pageTestIds.runStoryContext },
+    { label: "Goal", text: parts.goal, testId: pageTestIds.runStoryGoal },
+    { label: "Result", text: parts.result, testId: pageTestIds.runStoryResult },
+  ];
+  return (
+    <div className="fd-run-story-account" data-testid={pageTestIds.runStoryAccount}>
+      {blocks.map((block) => (
+        <div key={block.label} data-testid={block.testId}>
+          <h3 className="fd-run-detail-heading">{block.label}</h3>
+          <p className="fd-run-reply">{block.text}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function StoryPanel({
   story,
@@ -66,13 +92,10 @@ function StoryPanel({
           </span>
         )}
         {header.repo !== null && <code className="fd-hash">{header.repo}</code>}
+        {header.branch != null && <code className="fd-hash">{header.branch}</code>}
         {variables !== "" && <span>{variables}</span>}
       </div>
-      {story.written !== null && (
-        <p className="fd-run-reply fd-run-story-account" data-testid={pageTestIds.runStoryAccount}>
-          {story.written.text}
-        </p>
-      )}
+      {story.written !== null && <StoryAccount text={story.written.text} />}
       {ended && story.written === null && (
         <button
           className="fd-btn fd-btn-primary fd-run-story-toggle"

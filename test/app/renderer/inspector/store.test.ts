@@ -5,7 +5,10 @@ import {
   entryText,
   selectActivity,
   selectFiles,
+  stepsEndedOf,
 } from "../../../../src/app/renderer/inspector/store.js";
+import type { DisplayStatus } from "../../../../src/core/run/display.js";
+import type { SnapshotStatus } from "../../../../src/core/run/snapshot.js";
 import type { ActivityEntry } from "../../../../src/core/run/activity.js";
 import { subagent, tool } from "../../../fixtures/activity-entries.js";
 
@@ -258,6 +261,49 @@ describe("entryText", () => {
     ],
   ])("says %j as %j", (entry, text) => {
     expect(entryText(entry)).toBe(text);
+  });
+
+  const traced: Extract<ActivityEntry, { kind: "tool" }> = {
+    ...base,
+    kind: "tool",
+    tool: "Bash",
+    summary: "ls",
+    input: '{"command":"ls"}',
+  };
+
+  it.each<[ActivityEntry, string]>([
+    [{ ...traced, output: "a.ts", result: "ok", durationMs: 1234 }, "Bash ls · ok · 1.2s"],
+    [
+      { ...traced, output: "no such file", result: "error", durationMs: 1234 },
+      "Bash ls · error · 1.2s",
+    ],
+    [traced, "Bash ls · running"],
+  ])("says a traced step %j as %j", (entry, text) => {
+    expect(entryText(entry)).toBe(text);
+  });
+
+  it("says a step with no result has none once its run or stage has ended, and keeps a result", () => {
+    expect(entryText(traced, { ended: true })).toBe("Bash ls · no result");
+    expect(entryText({ ...traced, result: "ok", durationMs: 1234 }, { ended: true })).toBe(
+      "Bash ls · ok · 1.2s",
+    );
+    expect(entryText(tool(1), { ended: true })).toBe("Bash ls");
+  });
+});
+
+describe("stepsEndedOf", () => {
+  it.each<[SnapshotStatus | undefined, DisplayStatus | undefined, boolean]>([
+    ["running", "running", false],
+    ["running", "done", true],
+    ["running", "failed", true],
+    ["done", undefined, true],
+    ["failed", undefined, true],
+    ["stopped", undefined, false],
+    ["stopped", "stopped", false],
+    ["interrupted", undefined, false],
+    [undefined, undefined, false],
+  ])("says steps of a %s run in a %s stage ended: %s", (run, stage, ended) => {
+    expect(stepsEndedOf(run, stage)).toBe(ended);
   });
 });
 

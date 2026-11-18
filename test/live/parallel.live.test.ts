@@ -2,10 +2,14 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
+import type { Flow } from "../../src/core/flow/schema.js";
+import type { ActivityEntry } from "../../src/core/run/activity.js";
+import type { CostReport } from "../../src/core/run/cost.js";
 import type { RunStatus, StoredEvent } from "../../src/core/run/store.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import {
@@ -24,7 +28,14 @@ import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 const buildName = "live-parallel";
 const branchSleeps = { a1: 15, a2: 15, a3: 15, a4: 30 };
 const runTimeoutMs = 420_000;
-const hookKinds = ["Stop", "PreToolUse", "PostToolUse", "SubagentStop"] as const;
+const lateEventsMs = 10_000;
+const hookKinds = [
+  "Stop",
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "SubagentStop",
+] as const;
 
 const sleeper = (id: string, seconds: number) =>
   agent(id, {
@@ -66,6 +77,34 @@ function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
   };
 }
 
+function missingReadThenEchoFlow(): Flow {
+  const parsed = flow(
+    [
+      trigger("t"),
+      agent("a", {
+        settings: {
+          role: "",
+          instructions:
+            "Use the Read tool on missing.txt. Then run `echo ok` with the Bash tool. Then reply DONE.",
+          model: "haiku",
+          tools: ["Read", "Bash"],
+        },
+      }),
+      output("o"),
+    ],
+    [thenWire("t", "a"), thenWire("a", "o")],
+  );
+  return {
+    ...parsed,
+    session: {
+      ...parsed.session,
+      model: "haiku",
+      allowedTools: ["Read", "Bash"],
+      permissionMode: "acceptEdits",
+    },
+  };
+}
+
 const hookAt = (event: HookEvent) => event.payload["flowdeck_hook_at"] as number;
 
 const describeEvent = ({ kind, payload }: HookEvent) =>
@@ -84,13 +123,11 @@ type LiveRun = {
   status: RunStatus | undefined;
   recorded: HookEvent[];
   events: StoredEvent[];
+  activity: ActivityEntry[];
   cleanup: () => Promise<void>;
 };
 
-async function runLive(
-  parsed: ReturnType<typeof parallelFlow>,
-  sessionName: string,
-): Promise<LiveRun> {
+async function runLive(parsed: Flow, sessionName: string): Promise<LiveRun> {
   const recorded: HookEvent[] = [];
   const home = await mkdtemp(join(tmpdir(), "fd-home-"));
   const repo = await createTmpRepo({ commit: true });
@@ -139,7 +176,16 @@ async function runLive(
       );
     }
     const events = engine.stores.runs.events(runId);
-    return { status, recorded, events, cleanup };
+    await delay(lateEventsMs);
+    const activity = engine.stores.runs.activity(runId);
+    const cost = await engine.ask<CostReport>("run-cost", { runId });
+    process.stderr.write(`run cost: $${cost.total.cost.toFixed(3)}\n`);
+    process.stderr.write(
+      `activity after ${lateEventsMs} ms:\n${activity
+        .map((entry) => `${entry.at} ${entry.nodeId} ${entry.kind} ${entry.summary}`)
+        .join("\n")}\n`,
+    );
+    return { status, recorded, events, activity, cleanup };
   } catch (error) {
     await cleanup();
     throw error;
@@ -247,6 +293,80 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
 
     it("leaves no sleep of the slow branch running", async () => {
       expect(await processesMatching("sleep 90")).toBe("");
+    });
+
+    it("keeps each lane's Bash step under its own lane, the cut-off one included", () => {
+      const stepOf = (command: string) =>
+        live?.activity.find(
+          (entry) =>
+            entry.kind === "tool" && entry.tool === "Bash" && entry.summary.includes(command),
+        );
+
+      expect(stepOf("sleep 5")?.nodeId).toBe("a1");
+      expect(stepOf("sleep 90")?.nodeId).toBe("a2");
+    });
+  },
+);
+
+describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
+  "a subagent's failed and successful tool calls with real claude",
+  () => {
+    useTempClaudeConfig();
+    let live: LiveRun | undefined;
+    let recorded: HookEvent[] = [];
+
+    beforeAll(async () => {
+      live = await runLive(missingReadThenEchoFlow(), `fd-live-tool-result-${process.pid}`);
+      ({ recorded } = live);
+    }, runTimeoutMs);
+
+    afterAll(async () => {
+      await live?.cleanup();
+    }, 60_000);
+
+    const subagentPreToolUse = (toolName: string) =>
+      recorded.find(
+        (event) =>
+          event.kind === "PreToolUse" &&
+          event.payload["agent_id"] !== undefined &&
+          event.payload["tool_name"] === toolName,
+      );
+
+    const postFor = (kind: HookEvent["kind"], pre: HookEvent | undefined) =>
+      recorded.find(
+        (event) =>
+          event.kind === kind &&
+          pre !== undefined &&
+          event.payload["tool_use_id"] === pre.payload["tool_use_id"],
+      );
+
+    it("reports the subagent's successful call with its agent, tool use, response and duration", () => {
+      const pre = subagentPreToolUse("Bash");
+      const post = postFor("PostToolUse", pre);
+
+      expect(post?.payload).toEqual(
+        expect.objectContaining({
+          agent_id: pre?.payload["agent_id"],
+          tool_use_id: expect.any(String),
+          tool_response: expect.anything(),
+          duration_ms: expect.any(Number),
+        }),
+      );
+    });
+
+    it("sends a PostToolUseFailure, not a PostToolUse, for the subagent's failed Read", () => {
+      const pre = subagentPreToolUse("Read");
+      const failure = postFor("PostToolUseFailure", pre);
+
+      expect(pre).toBeDefined();
+      expect(postFor("PostToolUse", pre)).toBeUndefined();
+      expect(failure?.payload).toEqual(
+        expect.objectContaining({
+          agent_id: pre?.payload["agent_id"],
+          error: expect.any(String),
+          duration_ms: expect.any(Number),
+        }),
+      );
     });
   },
 );

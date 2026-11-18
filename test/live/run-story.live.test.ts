@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeNarrator } from "../../src/adapters/claude/claude-narrator.js";
 import { nodeStatus } from "../../src/core/run/run-events.js";
+import { storyPartsOf } from "../../src/core/run/story.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import * as builders from "../fixtures/flow-builders.js";
 import { liveEngine } from "../fixtures/live-engine.js";
@@ -31,13 +32,16 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude 
     await rm(home, { recursive: true, force: true });
   });
 
-  it("narrator: names the failed stage, reports a cost, and runs with no tools", async () => {
+  it("narrator: writes Context, Goal and Result, the Goal naming the test stage, reports a cost, and runs with no tools", async () => {
     const { text, cost } = await new ClaudeNarrator({ home }).narrate(
       digest,
       new AbortController().signal,
     );
+    const told = JSON.stringify({ text, cost });
+    const parts = storyPartsOf(text);
 
-    expect(text).toMatch(/run the test suite/i);
+    expect(parts, told).toBeDefined();
+    expect(parts?.goal, told).toMatch(/run the test suite/i);
     expect(Number.isFinite(cost)).toBe(true);
     expect(cost).toBeGreaterThanOrEqual(0);
   }, 150_000);

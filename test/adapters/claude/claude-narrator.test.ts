@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PARENT_SESSION_VARS } from "../../../src/adapters/claude/claude-cli.js";
-import { ClaudeNarrator } from "../../../src/adapters/claude/claude-narrator.js";
+import { ClaudeNarrator, narratorPrompt } from "../../../src/adapters/claude/claude-narrator.js";
 
 let folder: string;
 let home: string;
@@ -116,6 +116,7 @@ describe("ClaudeNarrator", () => {
     expect(argv[0]).toBe("-p");
     expect(typeof argv[1]).toBe("string");
     expect(argv[1]?.trim()).not.toBe("");
+    expect(argv[1]).toBe(narratorPrompt);
     expect(argv.slice(2)).toEqual([
       "--model",
       "haiku",
@@ -319,5 +320,57 @@ setTimeout(() => {}, 60000);
 
     await expect(pending).rejects.toThrow();
     expect(alive(child)).toBe(false);
+  });
+});
+
+const promptLinesAbout = (label: string) =>
+  narratorPrompt
+    .split("\n")
+    .filter((line) => line.includes(label))
+    .join("\n");
+
+describe("narratorPrompt", () => {
+  it("asks for three parts, each on its own line, labelled Context:, Goal: and Result: in that order", () => {
+    const context = narratorPrompt.indexOf("Context:");
+    const goal = narratorPrompt.indexOf("Goal:");
+    const result = narratorPrompt.indexOf("Result:");
+
+    expect(context).toBeGreaterThanOrEqual(0);
+    expect(goal).toBeGreaterThan(context);
+    expect(result).toBeGreaterThan(goal);
+    expect(narratorPrompt).toMatch(/three/i);
+    expect(narratorPrompt).toMatch(/own line/i);
+  });
+
+  it("has Context name the repo, the branch and how things stood before, as recorded", () => {
+    const context = promptLinesAbout("Context");
+
+    expect(context).toMatch(/repo/i);
+    expect(context).toMatch(/branch/i);
+    expect(context).toMatch(/before/i);
+  });
+
+  it("has Goal say what the job was meant to accomplish, from the instructions", () => {
+    expect(promptLinesAbout("Goal")).toMatch(/instructions/i);
+  });
+
+  it("has Result say what was done and how it stands after, and for a failed or stopped run where it stopped and what was left undone", () => {
+    const result = promptLinesAbout("Result");
+
+    expect(result).toMatch(/after/i);
+    expect(result).toMatch(/fail/i);
+    expect(result).toMatch(/stopped/i);
+    expect(result).toMatch(/undone|not done|unfinished/i);
+  });
+
+  it("keeps to digest facts, names other repos only when recorded, and says plainly when a before or after state was not recorded", () => {
+    expect(narratorPrompt).toMatch(/only facts from the digest|only digest facts/i);
+    expect(narratorPrompt).toMatch(/other repo/i);
+    expect(narratorPrompt).toMatch(/not recorded/i);
+  });
+
+  it("no longer promises a first line shown alone in the list of runs", () => {
+    expect(narratorPrompt).not.toMatch(/shown alone/i);
+    expect(narratorPrompt).not.toMatch(/list of runs/i);
   });
 });

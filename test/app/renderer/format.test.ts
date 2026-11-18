@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatClock,
   formatCost,
   formatDuration,
   formatTokens,
@@ -17,6 +18,15 @@ describe("format", () => {
     const at = new Date(2026, 10, 2, 9, 5);
     expect(formatWhen(at.toISOString())).toBe("Nov 2, 09:05");
     expect(formatWhen(at.getTime())).toBe("Nov 2, 09:05");
+  });
+
+  it("writes a clock time to the second in the local zone, so two stamps in one minute differ", () => {
+    const first = new Date(2026, 10, 2, 9, 5, 7);
+    const second = new Date(2026, 10, 2, 9, 5, 42);
+
+    expect(formatClock(first.toISOString())).toBe("09:05:07");
+    expect(formatClock(first.getTime())).toBe("09:05:07");
+    expect(formatClock(second.getTime())).toBe("09:05:42");
   });
 
   it("writes a duration in the two largest units", () => {

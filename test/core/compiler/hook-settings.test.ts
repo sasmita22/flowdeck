@@ -69,12 +69,19 @@ describe("hookSettings", () => {
     ]);
   });
 
+  it("routes a failed tool call to the hook script exactly as a finished one", () => {
+    const { hooks } = settings() as unknown as { hooks: Record<string, GuardEntry[]> };
+
+    expect(hooks.PostToolUseFailure).toStrictEqual(hooks.PostToolUse);
+  });
+
   it("registers the force-push guard on Bash and the rules hook after compaction, and nothing else", () => {
     const { hooks } = settings() as unknown as { hooks: Record<string, GuardEntry[]> };
 
     expect(Object.keys(hooks).sort()).toEqual([
       "PermissionRequest",
       "PostToolUse",
+      "PostToolUseFailure",
       "PreToolUse",
       "SessionStart",
       "Stop",

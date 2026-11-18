@@ -61,16 +61,43 @@ const runTurn = (text) => {
   if (outcome === "hold") return;
   if (outcome === "fail") return setTimeout(stop, 50);
   writeFor(nodeId);
-  setTimeout(() => {
-    send({
+  const agentId = "fake-agent-" + nodeId;
+  const agentCall = {
+    tool_name: "Agent",
+    tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+    tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+  };
+  const step = {
+    agent_id: agentId,
+    agent_type: agentType,
+    tool_name: "Bash",
+    tool_use_id: "fake-step-" + nodeId + "-" + Date.now(),
+    tool_input: { command: "echo traced", description: "Echo a word" },
+  };
+  const hooks = [
+    { hook_event_name: "PreToolUse", ...agentCall },
+    { hook_event_name: "PreToolUse", ...step },
+    {
       hook_event_name: "PostToolUse",
-      tool_name: "Agent",
-      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
-      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
-      tool_response: { agentType, status: "completed" },
-    });
-    setTimeout(stop, 100);
-  }, 50);
+      ...step,
+      tool_response: { stdout: "traced\\n", stderr: "", interrupted: false },
+      duration_ms: 7,
+    },
+    {
+      hook_event_name: "PostToolUse",
+      ...agentCall,
+      tool_response: {
+        agentType,
+        agentId,
+        status: "completed",
+        content: [{ type: "text", text: "Fake report from " + nodeId + "." }],
+      },
+    },
+  ];
+  hooks.forEach((hook, index) => {
+    setTimeout(() => send({ ...hook, flowdeck_hook_at: Date.now() }), 50 + 30 * index);
+  });
+  setTimeout(stop, 50 + 30 * hooks.length + 100);
 };
 
 const unfilledLine = /^@unfilled.*\\n\\n?/m;
@@ -210,7 +237,7 @@ if (argv.includes("-p")) {
   if (process.env.FAKE_CLAUDE_NARRATE_FAIL === "1") process.exit(1);
   const lines = [
     { type: "system", subtype: "init", tools: [] },
-    { type: "result", subtype: "success", is_error: false, result: "Fake story: the run ended.\\nNothing got in the way.", total_cost_usd: 0 },
+    { type: "result", subtype: "success", is_error: false, result: "Context: The fake repo sat on its branch.\\nGoal: The fake run was meant to end.\\nResult: The fake run ended.", total_cost_usd: 0 },
   ];
   writeFileSync(1, lines.map((line) => JSON.stringify(line) + "\\n").join(""));
   process.exit(0);

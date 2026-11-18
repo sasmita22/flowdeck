@@ -4,6 +4,8 @@ import {
   activityUpdateSchema,
   type ActivityEntry,
 } from "../../../core/run/activity.js";
+import type { DisplayStatus } from "../../../core/run/display.js";
+import type { SnapshotStatus } from "../../../core/run/snapshot.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 
 export type InspectorBridge = Pick<FlowdeckBridge, "getActivity" | "onActivity">;
@@ -32,10 +34,31 @@ export const selectActivity = (
   return merge(stored, live).sort((a, b) => b.id - a.id);
 };
 
-export function entryText(entry: ActivityEntry): string {
+const endedOnItsOwn = (status: SnapshotStatus | DisplayStatus | undefined) =>
+  status === "done" || status === "failed";
+
+export const stepsEndedOf = (
+  runStatus: SnapshotStatus | undefined,
+  stageStatus?: DisplayStatus,
+): boolean => endedOnItsOwn(runStatus) || (runStatus === "running" && endedOnItsOwn(stageStatus));
+
+function stepOutcome(entry: Extract<ActivityEntry, { kind: "tool" }>, ended: boolean): string {
+  if (entry.result !== undefined) {
+    const duration =
+      entry.durationMs === undefined ? "" : ` · ${(entry.durationMs / 1000).toFixed(1)}s`;
+    return ` · ${entry.result}${duration}`;
+  }
+  if (entry.input === undefined) return "";
+  return ended ? " · no result" : " · running";
+}
+
+export function entryText(
+  entry: ActivityEntry,
+  { ended = false }: { ended?: boolean } = {},
+): string {
   switch (entry.kind) {
     case "tool":
-      return `${entry.tool} ${entry.summary}`;
+      return `${entry.tool} ${entry.summary}${stepOutcome(entry, ended)}`;
     case "subagent":
       return `${entry.agentType} ${entry.summary} ${entry.state}`;
     case "turn":

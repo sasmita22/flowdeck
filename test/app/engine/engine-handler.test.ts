@@ -788,6 +788,7 @@ describe("createEngineHandler", async () => {
               blueprintName: "Report",
               blueprintVersion: 1,
               repo: "/repo",
+              branch: "flowdeck/report",
               values: {},
             },
             digest: expect.stringMatching(/\S/),
@@ -820,6 +821,29 @@ describe("createEngineHandler", async () => {
       const digest = (loaded as { value: { story: { digest: string } } }).value.story.digest;
       expect(digest).toContain("   Asked: Approve the release notes");
       expect(digest).toContain("   Asked: Which channel ships it?");
+    });
+
+    it("names a loaded run's branch and each Agent stage's instructions from the stored manifest in its digest", async () => {
+      const { runs, runId } = seededRun(
+        onMainFlow(
+          [
+            agent("s1", { settings: { instructions: "Draft the release notes from merged PRs." } }),
+            agent("s2", { settings: { instructions: "Post the notes to the release channel." } }),
+          ],
+          [thenWire("s1", "s2")],
+        ),
+      );
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
+
+      expect((loaded as { error?: string }).error).toBeUndefined();
+      const digest = (loaded as { value: { story: { digest: string } } }).value.story.digest;
+      expect(digest).toContain("Repo: /repo\nBranch: flowdeck/report\n");
+      expect(digest).toContain("Instructions: Draft the release notes from merged PRs.");
+      expect(digest).toContain("Instructions: Post the notes to the release channel.");
     });
 
     it("loads a run of a build with no stored manifest with the build's name and no stages, reading no blueprint", async () => {
@@ -5166,7 +5190,15 @@ describe("createEngineHandler", async () => {
           push: "activity",
           value: {
             runId,
-            entry: { id: 1, nodeId: "plan", at: 1200, kind: "tool", tool: "Bash", summary: "ls" },
+            entry: {
+              id: 1,
+              nodeId: "plan",
+              at: 1200,
+              kind: "tool",
+              tool: "Bash",
+              summary: "ls",
+              input: '{"command":"ls"}',
+            },
           },
         },
         {

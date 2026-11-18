@@ -10,6 +10,7 @@ import type {
   StoredBuildEvent,
 } from "../../core/run/build-progress.js";
 import { BuildRunningError, type RunBuildCopy } from "../../core/run/store.js";
+import { storyPartsOf } from "../../core/run/story.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -84,11 +85,15 @@ type RunStoryRow = {
   cost: number;
 };
 
-const storyLineOf = (text: string | null): { storyLine?: string } => {
-  const storyLine = text
-    ?.split("\n")
+const firstLineOf = (text: string) =>
+  text
+    .split("\n")
     .map((line) => line.trim())
     .find((line) => line !== "");
+
+const storyLineOf = (text: string | null): { storyLine?: string } => {
+  if (text === null) return {};
+  const storyLine = firstLineOf(storyPartsOf(text)?.result ?? "") ?? firstLineOf(text);
   return storyLine === undefined ? {} : { storyLine };
 };
 

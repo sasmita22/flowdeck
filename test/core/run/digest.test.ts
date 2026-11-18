@@ -118,6 +118,58 @@ const pr: ActivityEntry = {
   summary: "opened a pull request",
 };
 
+const step = (
+  id: number,
+  nodeId: string,
+  seconds: number,
+  tool: string,
+  summary: string,
+  result?: "ok" | "error",
+): ActivityEntry => ({
+  id,
+  nodeId,
+  at: at(seconds),
+  kind: "tool",
+  tool,
+  summary,
+  ...(result === undefined ? {} : { result }),
+});
+
+const subagent = (id: number, nodeId: string, seconds: number, report: string): ActivityEntry => ({
+  id,
+  nodeId,
+  at: at(seconds),
+  kind: "subagent",
+  agentType: "general-purpose",
+  state: "finished",
+  agentId: `agent-${id}`,
+  summary: "general-purpose",
+  report,
+});
+
+const withInstructions = (instructions: Record<string, string>) => ({
+  ...stages,
+  nodes: stages.nodes.map((node) =>
+    instructions[node.id] === undefined ? node : { ...node, instructions: instructions[node.id] },
+  ),
+});
+
+const stageBlock = (text: string, heading: string): string[] => {
+  const lines = text.split("\n");
+  const from = lines.findIndex((line) => line.startsWith(heading));
+  if (from < 0) throw new Error(`no stage "${heading}" in the digest`);
+  const to = lines.findIndex((line, index) => index > from && /^\d+(\.\d+)*\. /.test(line));
+  return lines.slice(from + 1, to < 0 ? undefined : to).map((line) => line.trim());
+};
+
+const stepLines = (block: string[]): string[] => {
+  const from = block.indexOf("Steps:");
+  if (from < 0) return [];
+  const rest = block.slice(from + 1);
+  const end = rest.findIndex((line) => !line.startsWith("- "));
+  return end < 0 ? rest : rest.slice(0, end);
+};
+
 type DigestInput = Parameters<typeof runDigest>[0];
 
 const digestInput = (
@@ -218,8 +270,67 @@ describe("runDigest", () => {
       blueprintName: "Fix and verify",
       blueprintVersion: 3,
       repo: "/work/shop-repo",
+      branch: "flowdeck/nightly-login-fix",
       values: { target: "login page", strict: true },
     });
+  });
+
+  it("names the branch on the line after the repo", () => {
+    const { text } = runDigest(digestInput(eventsOf()));
+
+    expect(text).toContain("Repo: /work/shop-repo\nBranch: flowdeck/nightly-login-fix\n");
+  });
+
+  describe("what each Agent stage was asked, reported and did", () => {
+    const instructed = withInstructions({ fix: "Fix the cookie check in src/login.ts." });
+    const activity = [
+      step(1, "fix", 6, "Bash", "npm test", "ok"),
+      step(2, "fix", 7, "Read", "src/login.ts", "error"),
+      step(3, "fix", 8, "Grep", "cookie"),
+      subagent(4, "fix", 9, "Patched src/login.ts; the cookie check passes."),
+      step(5, "verify", 50, "Bash", "npm run e2e", "error"),
+    ];
+    const text = runDigest(digestInput(eventsOf(), { sources: instructed, activity })).text;
+    const fix = stageBlock(text, "2. Fix the login bug (agent)");
+    const verify = stageBlock(text, "4. Run the test suite (agent)");
+    const choose = stageBlock(text, "3. Pick the approach (ask)");
+
+    it("gives an Agent stage its instructions, or says they were not recorded", () => {
+      expect(fix).toContain("Instructions: Fix the cookie check in src/login.ts.");
+      expect(verify).toContain("Instructions: not recorded");
+    });
+
+    it("gives an Agent stage its subagent's report, or says it was not recorded", () => {
+      expect(fix).toContain("Report: Patched src/login.ts; the cookie check passes.");
+      expect(verify).toContain("Report: not recorded");
+    });
+
+    it("gives a stage that is not an Agent no instructions or report line", () => {
+      expect(choose.some((line) => line.startsWith("Instructions:"))).toBe(false);
+      expect(choose.some((line) => line.startsWith("Report:"))).toBe(false);
+    });
+
+    it("lists each tool step of a stage in order with its result, or not recorded when it has none after the run ended", () => {
+      expect(stepLines(fix)).toEqual([
+        "- Bash npm test → ok",
+        "- Read src/login.ts → error",
+        "- Grep cookie → not recorded",
+      ]);
+      expect(stepLines(verify)).toEqual(["- Bash npm run e2e → error"]);
+    });
+
+    it.each<RunStatus>(["running", "stopped"])(
+      "says a step with no result is running in a %s run",
+      (status) => {
+        const digest = runDigest(
+          digestInput(eventsOf(), { sources: instructed, activity, status }),
+        ).text;
+
+        expect(stepLines(stageBlock(digest, "2. Fix the login bug (agent)"))).toContain(
+          "- Grep cookie → running",
+        );
+      },
+    );
   });
 
   it("takes the stages from the events' node ids, in order, when there is no stored manifest", () => {
@@ -342,6 +453,7 @@ describe("runDigest", () => {
       ...build,
       name: null,
       repo: null,
+      branch: null,
       values: null,
       blueprintName: null,
       blueprintVersion: null,
@@ -357,11 +469,13 @@ describe("runDigest", () => {
       blueprintName: null,
       blueprintVersion: null,
       repo: null,
+      branch: null,
       values: null,
     });
     expect(text).toContain("Blueprint: unknown\n");
     expect(text).toContain(`Build: ${build.hash}\n`);
     expect(text).toContain("Repo: none\n");
+    expect(text).toContain("Branch: none\n");
     expect(text).toContain("Variables: none\n");
     expect(text).toContain("Ended: not recorded\n");
     expect(text).not.toContain("Session:");
@@ -518,6 +632,88 @@ describe("runDigest", () => {
 
       expect(text.length).toBeLessThanOrEqual(digestCap);
       expect(text.startsWith("Blueprint: Fix and verify, version 3\n")).toBe(true);
+    });
+
+    const report = (length: number) =>
+      `Report start. ${"the cookie check now reads the new header. ".repeat(length / 43)}`;
+    const checks = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        step(index + 1, "fix", 6, "Bash", `run check number ${index + 1} of the suite`, "ok"),
+      );
+
+    it("cuts the step lines first, keeping the whole report when that is enough", () => {
+      const whole = report(3000);
+      const activity = [...checks(300), subagent(1000, "fix", 9, whole)];
+
+      const { text } = runDigest(digestInput(eventsOf(), { activity }));
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain(`Report: ${whole}`);
+      expect(text).toContain("Patched the cookie check.");
+      expect(text).not.toContain("run check number 300 of the suite");
+    });
+
+    it("shortens the report only after every step line is cut, keeping the reply whole", () => {
+      const long = report(14_000);
+      const activity = [...checks(5), subagent(1000, "fix", 9, long)];
+
+      const { text } = runDigest(digestInput(eventsOf(), { activity }));
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain("Report: Report start.");
+      expect(text).not.toContain(long);
+      expect(text).not.toContain("run check number 1 of the suite");
+      expect(text).toContain("Patched the cookie check.");
+    });
+
+    it("shortens the report before the final reply", () => {
+      const reply = `Reply start. ${"the patch touched the cookie handler again. ".repeat(180)}`;
+      const long = report(6000);
+      const activity = [subagent(1000, "fix", 9, long)];
+
+      const { text } = runDigest(digestInput(eventsOf({ reply }), { activity }));
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain(`Final reply: ${reply}`);
+      expect(text).toContain("Report: Report start.");
+      expect(text).not.toContain(long);
+    });
+
+    it("shortens the instructions last, after the reply, the files and the decision texts", () => {
+      const instructions = `Instructions start. ${"keep the old cookie path working. ".repeat(150)}`;
+      const longAnswer = `Answer start. ${"keep the old cookie for one more release. ".repeat(350)}`;
+      const events = eventsOf({ reply: longReply }).map((event) =>
+        event.kind === "answered"
+          ? ({ ...event, payload: { ...event.payload, answer: longAnswer } } as StoredEvent)
+          : event,
+      );
+
+      const { text } = runDigest(
+        digestInput(events, {
+          sources: withInstructions({ fix: instructions }),
+          activity: [...files(600), pr],
+        }),
+      );
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain(`Instructions: ${instructions}`);
+      expect(text).not.toContain(longReply);
+      expect(text).not.toContain(longAnswer);
+      expect(text).toContain("…and 600 more");
+    });
+
+    it("shortens instructions longer than the cap and keeps every later stage", () => {
+      const instructions = `Instructions start. ${"keep the old cookie path working. ".repeat(600)}`;
+
+      const { text } = runDigest(
+        digestInput(eventsOf(), { sources: withInstructions({ fix: instructions }) }),
+      );
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain("Instructions: Instructions start.");
+      expect(text).not.toContain(instructions);
+      expect(text).toContain("Run the test suite");
+      expect(text).toContain(plainReason("verify", failure));
     });
   });
 });

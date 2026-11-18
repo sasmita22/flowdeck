@@ -7,7 +7,19 @@ import type { RunEvent } from "./run-events.js";
 const base = { id: z.number().int(), nodeId: z.string(), at: z.number(), summary: z.string() };
 
 export const activityEntrySchema = z.discriminatedUnion("kind", [
-  z.object({ ...base, kind: z.literal("tool"), tool: z.string(), path: z.string().optional() }),
+  z.object({
+    ...base,
+    kind: z.literal("tool"),
+    tool: z.string(),
+    path: z.string().optional(),
+    input: z.string().optional(),
+    output: z.string().optional(),
+    result: z.enum(["ok", "error"]).optional(),
+    durationMs: z.number().optional(),
+    agentId: z.string().optional(),
+    childAgentId: z.string().optional(),
+    toolUseId: z.string().optional(),
+  }),
   z.object({
     ...base,
     kind: z.literal("subagent"),
@@ -15,6 +27,7 @@ export const activityEntrySchema = z.discriminatedUnion("kind", [
     state: z.enum(["running", "finished"]),
     toolUseId: z.string().optional(),
     agentId: z.string().optional(),
+    report: z.string().optional(),
   }),
   z.object({ ...base, kind: z.literal("turn") }),
   z.object({ ...base, kind: z.literal("failure") }),
@@ -37,7 +50,7 @@ export type ActivityFeed = { nextId: number; entries: ActivityEntry[] };
 export const emptyFeed: ActivityFeed = { nextId: 1, entries: [] };
 
 export type ActivityHookEvent = {
-  kind: "PreToolUse" | "PostToolUse" | "SubagentStop";
+  kind: "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "SubagentStop";
   payload: Record<string, unknown>;
 };
 
@@ -46,9 +59,15 @@ export const feedOf = (entries: readonly ActivityEntry[]): ActivityFeed => ({
   entries: [...entries],
 });
 
-export type FoldResult = { feed: ActivityFeed; changed: ActivityEntry | undefined };
+export type FoldResult = { feed: ActivityFeed; changed: readonly ActivityEntry[] };
 
 const summaryLimit = 80;
+const previewCap = 2_000;
+
+export const previewOf = (text: string): string =>
+  text.length > previewCap
+    ? `${text.slice(0, previewCap)}\n… cut, ${text.length - previewCap} more characters`
+    : text;
 const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const pullRequestUrl = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const defaultAgentType = "general-purpose";
@@ -68,6 +87,9 @@ const firstString = (input: Record<string, unknown>, keys: readonly string[]): s
 };
 
 type SubagentEntry = Extract<ActivityEntry, { kind: "subagent" }>;
+type ToolEntry = Extract<ActivityEntry, { kind: "tool" }>;
+
+const unchangedFeed = (feed: ActivityFeed): FoldResult => ({ feed, changed: [] });
 
 export type WorkingPlace = { cwd: string; home?: string };
 
@@ -84,50 +106,131 @@ export function shownPath(path: string, { cwd, home }: WorkingPlace): string {
   return `outside the working folder: ${outside}`;
 }
 
+const linkedNode = (feed: ActivityFeed, agentId: string): string | undefined =>
+  feed.entries.find(
+    (entry) =>
+      (entry.kind === "subagent" && entry.agentId === agentId) ||
+      (entry.kind === "tool" && entry.childAgentId === agentId),
+  )?.nodeId;
+
+const runningUnlinked = (feed: ActivityFeed): SubagentEntry[] =>
+  feed.entries.filter(
+    (entry): entry is SubagentEntry =>
+      entry.kind === "subagent" && entry.state === "running" && entry.agentId === undefined,
+  );
+
+const onlyOfType = (
+  feed: ActivityFeed,
+  calls: readonly SubagentEntry[],
+  agentType: unknown,
+): SubagentEntry | undefined => {
+  if (nestedAgentRunning(feed)) return undefined;
+  const [only, ...others] = calls.filter((entry) => entry.agentType === agentType);
+  return others.length === 0 ? only : undefined;
+};
+
+function subagentStepNode(
+  feed: ActivityFeed,
+  windows: readonly NodeWindow[],
+  agentId: string,
+  agentType: unknown,
+  at: number,
+): string | undefined {
+  const linked = linkedNode(feed, agentId);
+  if (linked !== undefined) return linked;
+  const calls = runningUnlinked(feed).filter(
+    (call) => attribute(windows, at, call.nodeId) === call.nodeId || call.agentType === agentType,
+  );
+  const [only, ...others] = calls;
+  if (only === undefined) return undefined;
+  if (others.length === 0) return only.nodeId;
+  return onlyOfType(feed, calls, agentType)?.nodeId ?? attribute(windows, at);
+}
+
+const agentsUnder = (feed: ActivityFeed, agentId: string): ReadonlySet<string> => {
+  const agents = new Set([agentId]);
+  for (const agent of agents) {
+    for (const entry of feed.entries) {
+      if (entry.kind === "tool" && entry.agentId === agent && entry.childAgentId !== undefined) {
+        agents.add(entry.childAgentId);
+      }
+    }
+  }
+  return agents;
+};
+
+function recredit(feed: ActivityFeed, agentId: string, nodeId: string): FoldResult {
+  const agents = agentsUnder(feed, agentId);
+  const entries = feed.entries.map((entry) =>
+    entry.kind === "tool" &&
+    entry.agentId !== undefined &&
+    agents.has(entry.agentId) &&
+    entry.nodeId !== nodeId
+      ? { ...entry, nodeId }
+      : entry,
+  );
+  return {
+    feed: { ...feed, entries },
+    changed: entries.filter((entry, index) => entry !== feed.entries[index]),
+  };
+}
+
+const followedBy = (first: FoldResult, next: (feed: ActivityFeed) => FoldResult): FoldResult => {
+  const second = next(first.feed);
+  return { feed: second.feed, changed: [...first.changed, ...second.changed] };
+};
+
 function addEntry(
   feed: ActivityFeed,
   windows: readonly NodeWindow[],
   payload: Record<string, unknown>,
   place: WorkingPlace | undefined,
 ): FoldResult {
-  const unchanged = { feed, changed: undefined };
+  const unchanged = unchangedFeed(feed);
   const at = payload["flowdeck_hook_at"];
-  if (payload["agent_id"] !== undefined || typeof at !== "number") return unchanged;
+  if (typeof at !== "number") return unchanged;
+  const agentId = payload["agent_id"];
+  const inSubagent = typeof agentId === "string";
   const tool = String(payload["tool_name"]);
   const input = recordOf(payload["tool_input"]);
   const subagentType = input["subagent_type"];
   const call = agentCallOf({ kind: "PreToolUse", payload });
-  const nodeId = attribute(windows, at, call?.nodeId);
+  const nodeId = inSubagent
+    ? subagentStepNode(feed, windows, agentId, payload["agent_type"], at)
+    : attribute(windows, at, call?.nodeId);
   if (nodeId === undefined) return unchanged;
   const common = { id: feed.nextId, nodeId, at };
-  const changed: ActivityEntry =
-    tool === "Agent"
+  if (tool === "Agent" && !inSubagent) {
+    return added(feed, {
+      ...common,
+      kind: "subagent",
+      agentType: typeof subagentType === "string" ? subagentType : defaultAgentType,
+      summary: cut(firstString(input, ["description"])),
+      state: "running",
+      ...(call?.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
+    });
+  }
+  const inputText = JSON.stringify(payload["tool_input"]) as string | undefined;
+  const toolUseId = payload["tool_use_id"];
+  return added(feed, {
+    ...common,
+    kind: "tool",
+    tool,
+    summary: cut(firstString(input, ["file_path", "command", "pattern"])),
+    ...(writeTools.has(tool) && typeof input["file_path"] === "string"
       ? {
-          ...common,
-          kind: "subagent",
-          agentType: typeof subagentType === "string" ? subagentType : defaultAgentType,
-          summary: cut(firstString(input, ["description"])),
-          state: "running",
-          ...(call?.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
+          path: place === undefined ? input["file_path"] : shownPath(input["file_path"], place),
         }
-      : {
-          ...common,
-          kind: "tool",
-          tool,
-          summary: cut(firstString(input, ["file_path", "command", "pattern"])),
-          ...(writeTools.has(tool) && typeof input["file_path"] === "string"
-            ? {
-                path:
-                  place === undefined ? input["file_path"] : shownPath(input["file_path"], place),
-              }
-            : {}),
-        };
-  return added(feed, changed);
+      : {}),
+    ...(inputText === undefined ? {} : { input: previewOf(inputText) }),
+    ...(inSubagent ? { agentId } : {}),
+    ...(typeof toolUseId === "string" ? { toolUseId } : {}),
+  });
 }
 
 const added = (feed: ActivityFeed, changed: ActivityEntry): FoldResult => ({
-  feed: { nextId: feed.nextId + 1, entries: [...feed.entries, changed] },
-  changed,
+  feed: { ...feed, nextId: feed.nextId + 1, entries: [...feed.entries, changed] },
+  changed: [changed],
 });
 
 function addPullRequest(
@@ -135,7 +238,7 @@ function addPullRequest(
   windows: readonly NodeWindow[],
   payload: Record<string, unknown>,
 ): FoldResult {
-  const unchanged = { feed, changed: undefined };
+  const unchanged = unchangedFeed(feed);
   const at = payload["flowdeck_hook_at"];
   const command = recordOf(payload["tool_input"])["command"];
   if (typeof at !== "number" || typeof command !== "string" || !command.includes("gh pr create")) {
@@ -151,7 +254,7 @@ function addPullRequest(
 
 const replaced = (feed: ActivityFeed, old: ActivityEntry, changed: ActivityEntry): FoldResult => ({
   feed: { ...feed, entries: feed.entries.map((entry) => (entry === old ? changed : entry)) },
-  changed,
+  changed: [changed],
 });
 
 const runningWhere = (feed: ActivityFeed, matches: (entry: SubagentEntry) => boolean) =>
@@ -160,6 +263,15 @@ const runningWhere = (feed: ActivityFeed, matches: (entry: SubagentEntry) => boo
       entry.kind === "subagent" && entry.state === "running" && matches(entry),
   );
 
+const reportOf = (payload: Record<string, unknown>): string | undefined => {
+  const content = recordOf(payload["tool_response"])["content"];
+  const texts = (Array.isArray(content) ? (content as unknown[]) : []).flatMap((part) => {
+    const text = recordOf(part)["text"];
+    return typeof text === "string" ? [text] : [];
+  });
+  return texts.length === 0 ? undefined : texts.join("\n");
+};
+
 function finishCall(feed: ActivityFeed, payload: Record<string, unknown>): FoldResult {
   const call = agentCallOf({ kind: "PostToolUse", payload });
   const toolUseId = call?.toolUseId;
@@ -167,23 +279,106 @@ function finishCall(feed: ActivityFeed, payload: Record<string, unknown>): FoldR
     toolUseId === undefined
       ? undefined
       : runningWhere(feed, (entry) => entry.toolUseId === toolUseId);
-  if (call === undefined || running === undefined) return { feed, changed: undefined };
-  return replaced(feed, running, {
+  if (call === undefined || running === undefined) return unchangedFeed(feed);
+  const report = reportOf(payload);
+  const finished: SubagentEntry = {
     ...running,
     state: "finished",
     ...(call.nodeId === undefined ? {} : { nodeId: call.nodeId }),
     ...(call.agentId === undefined ? {} : { agentId: call.agentId }),
-  });
+    ...(report === undefined ? {} : { report: previewOf(report) }),
+  };
+  const { agentId } = call;
+  const done = replaced(feed, running, finished);
+  return agentId === undefined
+    ? done
+    : followedBy(done, (next) => recredit(next, agentId, finished.nodeId));
+}
+
+const hasSteps = (feed: ActivityFeed, agentId: string) =>
+  feed.entries.some((entry) => entry.kind === "tool" && entry.agentId === agentId);
+
+const nestedAgentRunning = (feed: ActivityFeed) =>
+  feed.entries.some(
+    (entry) =>
+      entry.kind === "tool" &&
+      entry.tool === "Agent" &&
+      entry.agentId !== undefined &&
+      entry.result === undefined,
+  );
+
+function linkStopped(feed: ActivityFeed, agentId: string, agentType: unknown): FoldResult {
+  if (
+    linkedNode(feed, agentId) !== undefined ||
+    !hasSteps(feed, agentId) ||
+    nestedAgentRunning(feed)
+  ) {
+    return unchangedFeed(feed);
+  }
+  const [only, ...others] = runningUnlinked(feed).filter((entry) => entry.agentType === agentType);
+  if (only === undefined || others.length > 0) return unchangedFeed(feed);
+  return followedBy(replaced(feed, only, { ...only, agentId }), (next) =>
+    recredit(next, agentId, only.nodeId),
+  );
 }
 
 function finishSubagent(feed: ActivityFeed, payload: Record<string, unknown>): FoldResult {
   const call = agentCallOf({ kind: "SubagentStop", payload });
   const agentId = payload["agent_id"];
-  if (call?.background === true || typeof agentId !== "string") return { feed, changed: undefined };
+  if (call?.background === true || typeof agentId !== "string") return unchangedFeed(feed);
   const running = runningWhere(feed, (entry) => entry.agentId === agentId);
   return running === undefined
-    ? { feed, changed: undefined }
+    ? linkStopped(feed, agentId, payload["agent_type"])
     : replaced(feed, running, { ...running, state: "finished" });
+}
+
+const outputOf = (response: unknown): string | undefined =>
+  typeof response === "string" ? response : (JSON.stringify(response) as string | undefined);
+
+function endStep(
+  feed: ActivityFeed,
+  payload: Record<string, unknown>,
+  failed: boolean,
+): FoldResult {
+  const toolUseId = payload["tool_use_id"];
+  const step = feed.entries.find(
+    (entry): entry is ToolEntry =>
+      entry.kind === "tool" && entry.toolUseId === toolUseId && entry.result === undefined,
+  );
+  if (typeof toolUseId !== "string" || step === undefined) return unchangedFeed(feed);
+  const output = failed ? payload["error"] : outputOf(payload["tool_response"]);
+  const childAgentId =
+    failed || payload["tool_name"] !== "Agent"
+      ? undefined
+      : agentCallOf({ kind: "PostToolUse", payload })?.agentId;
+  const reported = payload["duration_ms"];
+  const stamp = payload["flowdeck_hook_at"];
+  const durationMs =
+    typeof reported === "number"
+      ? reported
+      : typeof stamp === "number"
+        ? stamp - step.at
+        : undefined;
+  const ended = replaced(feed, step, {
+    ...step,
+    ...(typeof output === "string" ? { output: previewOf(output) } : {}),
+    result: failed ? "error" : "ok",
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(childAgentId === undefined ? {} : { childAgentId }),
+  });
+  return childAgentId === undefined
+    ? ended
+    : followedBy(ended, (next) => recredit(next, childAgentId, step.nodeId));
+}
+
+function endToolCall(
+  feed: ActivityFeed,
+  windows: readonly NodeWindow[],
+  payload: Record<string, unknown>,
+): FoldResult {
+  return followedBy(endStep(feed, payload, false), (next) =>
+    addPullRequest(next, windows, payload),
+  );
 }
 
 export function foldHookEvent(
@@ -198,7 +393,9 @@ export function foldHookEvent(
     case "PostToolUse":
       return event.payload["tool_name"] === "Agent" && event.payload["agent_id"] === undefined
         ? finishCall(feed, event.payload)
-        : addPullRequest(feed, windows, event.payload);
+        : endToolCall(feed, windows, event.payload);
+    case "PostToolUseFailure":
+      return endStep(feed, event.payload, true);
     case "SubagentStop":
       return finishSubagent(feed, event.payload);
   }
@@ -225,7 +422,7 @@ export function foldNodeEvent(
       summary: `Context compacted at ${thousands}k tokens`,
     });
   }
-  if (event.kind !== "done" || !turnNodes.has(nodeId)) return { feed, changed: undefined };
+  if (event.kind !== "done" || !turnNodes.has(nodeId)) return unchangedFeed(feed);
   const message = event.payload?.stopMessage?.trim() ?? "";
   return added(feed, {
     ...common,

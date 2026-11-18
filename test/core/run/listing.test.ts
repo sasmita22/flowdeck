@@ -69,6 +69,15 @@ describe("loadedRunSchema", () => {
     expect(loadedRunSchema.parse(run)).toEqual(run);
   });
 
+  it("keeps the branch in a story's header", () => {
+    const run = {
+      ...loaded,
+      story: { header: { ...header, branch: "flowdeck/fix" }, digest, written },
+    };
+
+    expect(loadedRunSchema.parse(run)).toEqual(run);
+  });
+
   it("rejects a story missing its header or its digest", () => {
     expect(() => loadedRunSchema.parse({ ...loaded, story: { digest, written } })).toThrow();
     expect(() => loadedRunSchema.parse({ ...loaded, story: { header, written } })).toThrow();

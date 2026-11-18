@@ -12,6 +12,11 @@ export const formatWhen = (at: string | number): string => {
   return `${months[date.getMonth()]} ${date.getDate()}, ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
 };
 
+export const formatClock = (at: string | number): string => {
+  const date = new Date(at);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()].map(twoDigits).join(":");
+};
+
 export const formatDuration = (ms: number): string => {
   const seconds = Math.floor(ms / 1000);
   const hours = Math.floor(seconds / 3600);

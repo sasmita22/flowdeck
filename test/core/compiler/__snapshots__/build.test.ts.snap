@@ -40,13 +40,13 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
     "plugin/agents/a.md": "4934aa74780a4ea28f467a14b00836d6526f2595ffc1b90d013802c54abc633b",
     "plugin/agents/p.md": "be7dac079510a1c843ed0729687f58d71a748c462ddb110f65caa96bc7ea0b6b",
-    "plugin/hooks/hooks.json": "59e2e7b56c83a29cdd5a0dc97d28f1b7ce85bacc0409cf6fff7ccf6d0101e4a4",
+    "plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
     "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
     "settings.json": "e51638e41f2e43b2c40a1fd91e13c4f7eb7ad71ad8dda981d62d343ff2318ac9"
   },
-  "hash": "0579e25c8207d4e3acc8df07031d0cc9fd501b491e17a226fbe00137b74bf763",
+  "hash": "3f21a44586f33e0c2ba51552ce2c3584a1fc335072623e6d4362e773f83a1544",
   "layout": "workspace",
   "nodes": [
     {
@@ -233,6 +233,16 @@ Stop once the output is written.
       }
     ],
     "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
       {
         "hooks": [
           {
