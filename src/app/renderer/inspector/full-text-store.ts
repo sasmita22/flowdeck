@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { FlowdeckBridge } from "../../preload/bridge.js";
 
-export type FullTextBridge = Pick<FlowdeckBridge, "stepFullText">;
+type FetchFullText = (ownerId: string, entryId: number) => Promise<unknown>;
 
 const answerSchema = z.discriminatedUnion("kept", [
   z.object({ kept: z.literal(false) }),
@@ -25,12 +24,12 @@ export type FullText =
 
 export type FullTextState = {
   texts: Record<string, FullText>;
-  request(runId: string, entryId: number): Promise<void>;
+  request(ownerId: string, entryId: number): Promise<void>;
 };
 
 export type FullTextStore = StoreApi<FullTextState>;
 
-const keyOf = (runId: string, entryId: number) => `${runId}:${entryId}`;
+const keyOf = (ownerId: string, entryId: number) => `${ownerId}:${entryId}`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -42,11 +41,11 @@ const shownOf = (answer: unknown): FullText => {
 
 export const selectFullText = (
   state: Pick<FullTextState, "texts">,
-  runId: string,
+  ownerId: string,
   entryId: number,
-): FullText | undefined => state.texts[keyOf(runId, entryId)];
+): FullText | undefined => state.texts[keyOf(ownerId, entryId)];
 
-export const createFullTextStore = ({ bridge }: { bridge: FullTextBridge }): FullTextStore =>
+export const createFullTextStore = ({ fetch }: { fetch: FetchFullText }): FullTextStore =>
   createStore<FullTextState>()((set, get) => {
     const show = (key: string, text: FullText) =>
       set((state) => ({ texts: { ...state.texts, [key]: text } }));
@@ -54,12 +53,12 @@ export const createFullTextStore = ({ bridge }: { bridge: FullTextBridge }): Ful
     return {
       texts: {},
 
-      request: async (runId, entryId) => {
-        const key = keyOf(runId, entryId);
+      request: async (ownerId, entryId) => {
+        const key = keyOf(ownerId, entryId);
         if (get().texts[key] !== undefined) return;
         show(key, { kind: "loading" });
         try {
-          show(key, shownOf(await bridge.stepFullText({ runId, entryId })));
+          show(key, shownOf(await fetch(ownerId, entryId)));
         } catch (error) {
           show(key, { kind: "failed", error: messageOf(error) });
         }

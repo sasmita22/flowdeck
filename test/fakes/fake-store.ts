@@ -5,7 +5,12 @@ import type {
   StoredBuildEvent,
 } from "../../src/core/run/build-progress.js";
 import { stateMovingKinds, type RunEvent } from "../../src/core/run/run-events.js";
-import type { OtherRepo, RepoState, RunRepoStates } from "../../src/core/run/repo-state.js";
+import {
+  mergeOtherRepos,
+  type OtherRepo,
+  type RepoState,
+  type RunRepoStates,
+} from "../../src/core/run/repo-state.js";
 import {
   BuildRunningError,
   type RepoStatePhase,
@@ -62,6 +67,11 @@ const storyLineOf = (story: RunStory | undefined): { storyLine?: string } => {
   return storyLine === undefined ? {} : { storyLine };
 };
 
+const keep = <T>(list: T[], kept: (item: T) => boolean) => {
+  const remaining = list.filter(kept);
+  list.splice(0, list.length, ...remaining);
+};
+
 export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
@@ -69,8 +79,8 @@ export class FakeStore implements Store {
   private readonly buildRecords: RecordedBuild[] = [];
   private readonly manifests = new Map<string, string>();
   private readonly buildCreatedAt = new Map<string, number>();
-  private readonly deletedRuns = new Set<string>();
-  private readonly deletedPendingBuilds = new Set<string>();
+  private readonly runNumbers = new Map<string, number>();
+  private readonly lastRunNumbers = new Map<string, number>();
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
   private readonly stories: RunStory[] = [];
@@ -79,6 +89,7 @@ export class FakeStore implements Store {
     phase: RepoStatePhase;
     state: RepoState;
     otherRepos: OtherRepo[];
+    repo?: string;
   }[] = [];
   private readonly stepTextRows: {
     runId: string;
@@ -90,6 +101,12 @@ export class FakeStore implements Store {
   private readonly pendingBuilds: PendingBuild[] = [];
   private readonly buildEventLog: { pendingId: string; event: StoredBuildEvent }[] = [];
   private readonly buildActivityLog: { pendingId: string; entry: ActivityEntry }[] = [];
+  private readonly buildStepTextRows: {
+    pendingId: string;
+    entryId: number;
+    field: StepTextField;
+    text: string;
+  }[] = [];
   private readonly snapshots: BuildSnapshot[] = [];
   private nextRun = 1;
   private nextPending = 1;
@@ -116,6 +133,9 @@ export class FakeStore implements Store {
       status: "running",
     };
     this.runRecords.push(record);
+    const number = (this.lastRunNumbers.get(run.buildId) ?? 0) + 1;
+    this.lastRunNumbers.set(run.buildId, number);
+    this.runNumbers.set(record.id, number);
     for (const nodeId of run.nodeIds) this.nodeEntries.push({ runId: record.id, nodeId });
     return copy(record);
   }
@@ -128,7 +148,6 @@ export class FakeStore implements Store {
   listRuns(): RunSummary[] {
     return this.runRecords
       .map((run, index) => this.summaryOf(run, index))
-      .filter((run) => !this.deletedRuns.has(run.id))
       .reverse()
       .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"));
   }
@@ -140,7 +159,18 @@ export class FakeStore implements Store {
   }
 
   deleteRun(runId: string): void {
-    if (this.runRecords.some((run) => run.id === runId)) this.deletedRuns.add(runId);
+    const ofOtherRuns = <T extends { runId: string }>(list: T[]) => {
+      keep(list, (item) => item.runId !== runId);
+    };
+    keep(this.runRecords, (run) => run.id !== runId);
+    ofOtherRuns(this.nodeEntries);
+    ofOtherRuns(this.stored);
+    ofOtherRuns(this.stories);
+    ofOtherRuns(this.repoStateRows);
+    ofOtherRuns(this.stepTextRows);
+    this.activityByRun.delete(runId);
+    this.costs.delete(runId);
+    this.runNumbers.delete(runId);
   }
 
   private buildCopyOf(buildId: string): RunBuildCopy {
@@ -160,9 +190,6 @@ export class FakeStore implements Store {
   private summaryOf(run: RunRecord, index: number): RunSummary {
     const events = this.events(run.id);
     const last = events.at(-1);
-    const earlierOfBuild = this.runRecords
-      .slice(0, index)
-      .filter((earlier) => earlier.buildId === run.buildId).length;
     const doneCount = run.nodeIds.filter(
       (nodeId) =>
         events.findLast((event) => event.nodeId === nodeId && stateMoving.has(event.kind))?.kind ===
@@ -181,7 +208,7 @@ export class FakeStore implements Store {
       blueprintName: run.blueprintName,
       blueprintVersion: run.source?.version ?? null,
       buildGone: !this.buildRecords.some((known) => known.id === run.buildId),
-      number: earlierOfBuild + 1,
+      number: this.runNumbers.get(run.id) ?? 0,
       doneCount,
       ...storyLineOf(this.latestRunStory(run.id)),
     };
@@ -238,19 +265,41 @@ export class FakeStore implements Store {
   }
 
   deleteBuild(id: string): void {
-    const pendingIds = new Set(
+    this.removePendingBuilds(
       this.pendingBuilds.filter((known) => known.buildId === id).map((known) => known.id),
     );
-    const keep = <T>(list: T[], kept: (item: T) => boolean) => {
-      const remaining = list.filter(kept);
-      list.splice(0, list.length, ...remaining);
-    };
-    keep(this.buildActivityLog, (known) => !pendingIds.has(known.pendingId));
-    keep(this.buildEventLog, (known) => !pendingIds.has(known.pendingId));
-    keep(this.pendingBuilds, (known) => !pendingIds.has(known.id));
     keep(this.snapshots, (known) => known.buildId !== id);
     keep(this.buildRecords, (known) => known.id !== id);
     this.manifests.delete(id);
+    this.lastRunNumbers.delete(id);
+  }
+
+  private removePendingBuilds(ids: readonly string[]): void {
+    const removed = new Set(ids);
+    for (const gone of this.pendingBuilds.filter((known) => ids.includes(known.id))) {
+      const goneAt = this.pendingBuilds.indexOf(gone);
+      this.pendingBuilds.forEach((older, olderAt) => {
+        if (
+          older.name === gone.name &&
+          older !== gone &&
+          older.buildId === undefined &&
+          older.endedAt !== undefined &&
+          (older.startedAt < gone.startedAt ||
+            (older.startedAt === gone.startedAt && olderAt < goneAt))
+        ) {
+          removed.add(older.id);
+        }
+      });
+    }
+    keep(this.buildActivityLog, (known) => !removed.has(known.pendingId));
+    keep(this.buildEventLog, (known) => !removed.has(known.pendingId));
+    keep(this.buildStepTextRows, (known) => !removed.has(known.pendingId));
+    keep(
+      this.snapshots,
+      (known) =>
+        known.pendingId === null || !removed.has(known.pendingId) || known.buildId !== null,
+    );
+    keep(this.pendingBuilds, (known) => !removed.has(known.id));
   }
 
   listBuilds(): BuildRecord[] {
@@ -301,7 +350,7 @@ export class FakeStore implements Store {
   }
 
   listPendingBuilds(): PendingBuild[] {
-    return this.openPendingBuilds().filter((known) => !this.deletedPendingBuilds.has(known.id));
+    return this.openPendingBuilds();
   }
 
   private openPendingBuilds(): PendingBuild[] {
@@ -318,7 +367,7 @@ export class FakeStore implements Store {
       }
     }
     return [...latest.values()]
-      .filter((known) => known.outcome !== "built" && !this.deletedPendingBuilds.has(known.id))
+      .filter((known) => known.outcome !== "built")
       .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
       .map(copy);
   }
@@ -333,7 +382,7 @@ export class FakeStore implements Store {
   }
 
   deletePendingBuild(id: string): void {
-    if (this.pendingBuilds.some((known) => known.id === id)) this.deletedPendingBuilds.add(id);
+    this.removePendingBuilds([id]);
   }
 
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void {
@@ -460,16 +509,20 @@ export class FakeStore implements Store {
     this.repoStateRows.push(copy({ runId, phase, state, otherRepos }));
   }
 
+  appendOtherRepoBefore(runId: string, repo: string, state: RepoState): void {
+    this.repoStateRows.push(copy({ runId, phase: "before", state, otherRepos: [], repo }));
+  }
+
   repoStates(runId: string): RunRepoStates {
-    const before = this.repoStateRows.find((row) => row.runId === runId && row.phase === "before");
-    const after = this.repoStateRows.findLast(
-      (row) => row.runId === runId && row.phase === "after",
-    );
-    return copy({
-      before: before?.state ?? null,
-      after: after?.state ?? null,
-      otherRepos: after?.otherRepos ?? [],
-    });
+    const ofRun = this.repoStateRows.filter((row) => row.runId === runId);
+    const before = ofRun.find((row) => row.phase === "before" && row.repo === undefined);
+    const after = ofRun.findLast((row) => row.phase === "after" && row.repo === undefined);
+    const befores = new Map<string, RepoState>();
+    for (const row of ofRun) {
+      if (row.repo !== undefined && !befores.has(row.repo)) befores.set(row.repo, row.state);
+    }
+    const otherRepos = mergeOtherRepos(befores, after?.otherRepos ?? []);
+    return copy({ before: before?.state ?? null, after: after?.state ?? null, otherRepos });
   }
 
   appendStepText(runId: string, entryId: number, field: StepTextField, text: string): void {
@@ -484,6 +537,24 @@ export class FakeStore implements Store {
     return [...latest]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([field, text]) => ({ field, text }));
+  }
+
+  appendBuildStepText(
+    pendingId: string,
+    entryId: number,
+    field: StepTextField,
+    text: string,
+  ): void {
+    this.buildStepTextRows.push({ pendingId, entryId, field, text });
+  }
+
+  buildStepTexts(pendingId: string, entryId: number): StepText[] {
+    const ofEntry = this.buildStepTextRows.filter(
+      (row) => row.pendingId === pendingId && row.entryId === entryId,
+    );
+    return ofEntry
+      .filter((row, at) => !ofEntry.slice(at + 1).some((later) => later.field === row.field))
+      .map(({ field, text }) => ({ field, text }));
   }
 
   activity(runId: string): ActivityEntry[] {

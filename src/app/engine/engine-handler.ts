@@ -76,6 +76,7 @@ import {
   isInside,
   storedBranch,
   teardownWorkspace,
+  worktreePreview,
   type DeleteBuildResult,
 } from "../../core/run/delete-build.js";
 import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
@@ -88,7 +89,7 @@ import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/r
 import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
 import { candidatePaths } from "../../core/run/other-repos.js";
-import type { OtherRepo, RepoState } from "../../core/run/repo-state.js";
+import { branchOf, type OtherRepo, type RepoState } from "../../core/run/repo-state.js";
 import { settings as agentSettings } from "../../core/nodes/agent/settings.js";
 import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
@@ -97,6 +98,7 @@ import type {
   EventEntry,
   RunRecord,
   RunStatus,
+  StepText,
   StoredEvent,
 } from "../../core/run/store.js";
 import {
@@ -149,6 +151,7 @@ import type {
   StoreOpenResult,
 } from "./protocol.js";
 import { createPublishingStore } from "./publishing-store.js";
+import { createRepoGate } from "./repo-gate.js";
 
 export type EngineStores = { runs: Store; flows: FlowStore };
 
@@ -262,6 +265,8 @@ const runIdPayload = z.object({ runId: z.string() });
 
 const stepFullTextPayload = z.object({ runId: z.string(), entryId: z.number().int() });
 
+const buildStepFullTextPayload = z.object({ pendingId: z.string(), entryId: z.number().int() });
+
 const retryPayload = z.object({ runId: z.string(), nodeId: z.string() });
 
 const flowIdPayload = z.object({ flowId: z.string() });
@@ -343,6 +348,12 @@ function detachable(store: Store, detached: () => boolean): Store {
       if (!detached()) store.appendStepText(id, entryId, field, text);
     },
     stepTexts: (id, entryId) => store.stepTexts(id, entryId),
+    appendOtherRepoBefore(id, repo, state) {
+      if (!detached()) store.appendOtherRepoBefore(id, repo, state);
+    },
+    appendBuildStepText: (pendingId, entryId, field, text) =>
+      store.appendBuildStepText(pendingId, entryId, field, text),
+    buildStepTexts: (pendingId, entryId) => store.buildStepTexts(pendingId, entryId),
   };
 }
 
@@ -362,6 +373,11 @@ const saveTo = (
   name: string | undefined,
   flow: Flow,
 ): SavedFlowRef => flows.save(flow, flowId ?? { name: name ?? "Untitled" });
+
+const fullTextOf = (kept: readonly StepText[]): StepFullText =>
+  kept.length === 0
+    ? { kept: false }
+    : { kept: true, texts: Object.fromEntries(kept.map(({ field, text }) => [field, text])) };
 
 const problemText = ({ node, text }: Problem) => (node === undefined ? text : `${node}: ${text}`);
 
@@ -842,26 +858,33 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     );
   };
 
+  const lastSession = (runs: Store, pendingId: string) =>
+    runs
+      .buildEvents(pendingId)
+      .findLast((event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session");
+
+  const sessionWorkspace = async (session: BuildSessionEvent, name: string) => {
+    const dir = workspaceDir(options.home, session.buildId);
+    const { branch, branchCreated } = sessionBranch(session, name, session.buildId);
+    const worktree = {
+      repo: session.repo,
+      base: session.base,
+      ...buildWorktree({ repo: session.repo, dir, branch, create: branchCreated }),
+    };
+    const added = await options.fs.exists(worktree.path);
+    return { dir, ...(added ? { worktree } : {}) };
+  };
+
   const failLeftBuild = async (runs: Store, pending: PendingBuild, why: string) => {
     console.log(`engine: build ${pending.id} not reattached (${why})`);
-    const session = runs
-      .buildEvents(pending.id)
-      .findLast((event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session");
+    const session = lastSession(runs, pending.id);
     if (session !== undefined) {
       if (await options.buildAgents.alive(session.name))
         await options.buildAgents.close(session.name);
       await options.fs.removeTree(buildSessionFolder(session.name));
-      const dir = workspaceDir(options.home, session.buildId);
-      const { branch, branchCreated } = sessionBranch(session, pending.name, session.buildId);
-      const worktree = {
-        repo: session.repo,
-        base: session.base,
-        ...buildWorktree({ repo: session.repo, dir, branch, create: branchCreated }),
-      };
-      const added = await options.fs.exists(worktree.path);
       await teardownWorkspace(
         { fs: options.fs, worktree: options.worktree },
-        { dir, ...(added ? { worktree } : {}) },
+        await sessionWorkspace(session, pending.name),
       );
     }
     runs.endPendingBuild(pending.id, { outcome: "failed", endedAt: options.run.now() });
@@ -998,8 +1021,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             throw error;
           });
           const unwatch = tracker.watch(started.events, claudeSessionId);
+          const repoGate = repoGateOf(runs, runId, launch.cwd);
+          const ungate = started.toolStarts?.onToolStart(claudeSessionId, repoGate.check);
           const stopEvents = async () => {
             unwatch();
+            repoGate.close();
+            ungate?.();
             await started.stop();
           };
           run.stopEvents = stopEvents;
@@ -1397,15 +1424,37 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const branchOf = (state: RepoState): string | undefined =>
-    state.kind === "read" ? (state.branch ?? `detached ${state.head}`) : undefined;
+  const repoGateOf = (runs: Store, runId: string, cwd: string) => {
+    const repo = runs.findRun(runId)?.repo ?? null;
+    return createRepoGate({
+      own: [cwd, ...(repo === null ? [] : [repo])],
+      seen: runs
+        .repoStates(runId)
+        .otherRepos.filter((other) => other.before !== undefined)
+        .map((other) => other.path),
+      ...(options.userHome === undefined ? {} : { home: options.userHome }),
+      gitState: options.gitState,
+      readState: readRepoState,
+      record: (path, state) => {
+        runs.appendOtherRepoBefore(runId, path, state);
+      },
+      log: (line) => console.log(`engine: run ${runId} ${line}`),
+    });
+  };
 
   const otherReposOf = async (runs: Store, record: RunRecord): Promise<OtherRepo[]> => {
     const { gitState, userHome } = options;
     const own = [record.session.cwd, ...(record.repo === null ? [] : [record.repo])];
     const skipped = new Set(own);
     for (const path of own) skipped.add((await gitState.topLevel(path)) ?? path);
-    const tops = new Set<string>();
+    const befores = new Map(
+      runs
+        .repoStates(record.id)
+        .otherRepos.flatMap((other) =>
+          other.before === undefined ? [] : [[other.path, other.before] as const],
+        ),
+    );
+    const tops = new Set(befores.keys());
     for (const path of candidatePaths(
       runs.activity(record.id),
       userHome === undefined ? {} : { home: userHome },
@@ -1415,8 +1464,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
     const repos: OtherRepo[] = [];
     for (const path of [...tops].sort()) {
-      const branch = branchOf(await readRepoState(path));
-      if (branch !== undefined) repos.push({ path, branch });
+      const after = await readRepoState(path);
+      const before = befores.get(path);
+      const branch =
+        branchOf(after) ??
+        (before === undefined ? undefined : (branchOf(before) ?? "not recorded"));
+      if (branch !== undefined) repos.push({ path, branch, after });
     }
     return repos;
   };
@@ -1663,13 +1716,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const manifest = manifestOf(record);
     if (manifest === undefined) return null;
     const { nodes, wires } = stageSourcesOf(manifest);
-    return pipelineOf(
-      nodes,
-      wires,
-      runs.events(runId),
-      runs.activity(runId),
-      await runCost(stores, runId),
-    );
+    return pipelineOf(nodes, wires, runs.events(runId), [], await runCost(stores, runId));
   };
 
   const buildFiles = async (stores: EngineStores, buildId: string): Promise<BuildFileContent[]> => {
@@ -1839,15 +1886,26 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return deletePreview({ worktree: options.worktree, fs: options.fs }, build);
   };
 
+  const previewPendingDelete = async (runs: Store, id: string) => {
+    const pending = runs.pendingBuild(id);
+    if (pending === null) throw new Error(`No pending build ${id}`);
+    const session = lastSession(runs, id);
+    const left = session === undefined ? undefined : await sessionWorkspace(session, pending.name);
+    return worktreePreview({ worktree: options.worktree, fs: options.fs }, left?.worktree);
+  };
+
   const removePendingBuild = async (runs: Store, id: string): Promise<void> => {
-    if (buildStops.has(id)) {
-      await stopBuild(id);
-      const session = runs
-        .buildEvents(id)
-        .findLast(
-          (event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session",
+    if (buildStops.has(id)) await stopBuild(id);
+    const pending = runs.pendingBuild(id);
+    const session = lastSession(runs, id);
+    if (pending !== null && session !== undefined) {
+      await options.fs.removeTree(buildSessionFolder(session.name));
+      const left = await sessionWorkspace(session, pending.name);
+      if (await options.fs.exists(left.dir))
+        await teardownWorkspace(
+          { fs: options.fs, worktree: options.worktree },
+          { ...left, force: true },
         );
-      if (session !== undefined) await options.fs.removeTree(buildSessionFolder(session.name));
     }
     runs.deletePendingBuild(id);
   };
@@ -1921,9 +1979,16 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const stepFullText = ({ runs }: EngineStores, runId: string, entryId: number): StepFullText => {
     if (runs.findRunSummary(runId) === undefined) throw new Error(`No run ${runId}`);
-    const kept = runs.stepTexts(runId, entryId);
-    if (kept.length === 0) return { kept: false };
-    return { kept: true, texts: Object.fromEntries(kept.map(({ field, text }) => [field, text])) };
+    return fullTextOf(runs.stepTexts(runId, entryId));
+  };
+
+  const buildStepFullText = (
+    { runs }: EngineStores,
+    pendingId: string,
+    entryId: number,
+  ): StepFullText => {
+    if (runs.pendingBuild(pendingId) === null) throw new Error(`No pending build ${pendingId}`);
+    return fullTextOf(runs.buildStepTexts(pendingId, entryId));
   };
 
   const blueprintOrThrow = () => {
@@ -2068,6 +2133,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           return parsedAnswer(request, stepFullTextPayload, ({ runId, entryId }) =>
             stepFullText(storesOrThrow(), runId, entryId),
           );
+        case "build-step-full-text":
+          return parsedAnswer(request, buildStepFullTextPayload, ({ pendingId, entryId }) =>
+            buildStepFullText(storesOrThrow(), pendingId, entryId),
+          );
         case "doctor":
           return parsedAnswer(request, doctorPayload, ({ connectors }) => doctor(connectors));
         case "build-version": {
@@ -2135,6 +2204,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "delete-preview":
           return parsedAnswer(request, buildIdPayload, ({ buildId }) =>
             previewDelete(storesOrThrow().runs, buildId),
+          );
+        case "delete-pending-preview":
+          return parsedAnswer(request, pendingRowPayload, ({ id }) =>
+            previewPendingDelete(storesOrThrow().runs, id),
           );
         case "write-story":
           return parsedAnswer(request, runIdPayload, ({ runId }) =>

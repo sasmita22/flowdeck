@@ -56,6 +56,7 @@ const allMigrations = [
   { name: "018_runs_deleted_at.sql" },
   { name: "019_runs_own_their_build.sql" },
   { name: "020_run_repo_states_and_step_texts.sql" },
+  { name: "021_complete_deletes_and_build_texts.sql" },
 ];
 
 const noTransaction = "-- flowdeck:no-transaction\n";
@@ -703,5 +704,150 @@ describe("openDatabase", () => {
         /a run is deleted once/,
       );
     });
+  });
+  describe("migrating a database made by 001 to 020 to 021", () => {
+    const seedBefore021 = async () => {
+      const before = openDatabase({ path, migrationsDir: await stage("to-020", "021") });
+      before.exec(`
+        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, branch, branch_created)
+          VALUES ('b1', 'h1', 'fix-login', '/repo', 'main', '{}', '/fd/workspaces/b1', 1, 'flowdeck/fix-login', 1),
+                 ('b2', 'h2', 'fix-signup', '/repo', 'main', '{}', '/fd/workspaces/b2', 2, 'flowdeck/fix-signup', 1);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
+          VALUES ('r1', '/b1', '{}', 'done', 't1', 'b1'),
+                 ('r4', '/b2', '{}', 'done', 't2', 'b2'),
+                 ('r2', '/b1', '{}', 'failed', 't3', 'b1'),
+                 ('r3', '/b1', '{}', 'done', 't4', 'b1');
+        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status, parent)
+          VALUES (1, 'r1', 'fd-a', '/repo', 'c1', 'closed', NULL),
+                 (2, 'r2', 'fd-b', '/repo', 'c2', 'closed', NULL),
+                 (3, 'r2', 'fd-b', '/repo', 'c3', 'closed', 2);
+        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r1', 'p1', 1), ('r2', 'p1', 3);
+        INSERT INTO events (run_id, node_id, kind, time)
+          VALUES ('r1', 'p1', 'sent', 't'), ('r2', 'p1', 'failed', 't');
+        INSERT INTO activity (run_id, id, node_id, entry)
+          VALUES ('r1', 1, 'p1', '{}'), ('r2', 1, 'p1', '{}');
+        INSERT INTO run_stories (run_id, at, run_status, text, cost)
+          VALUES ('r1', 't', 'done', 'It worked.', 0.01), ('r2', 't', 'failed', 'It broke.', 0.01);
+        INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at)
+          VALUES ('r1', 'before', '{}', '[]', 1), ('r2', 'after', '{}', '[]', 1);
+        INSERT INTO step_texts (run_id, entry_id, field, text, at)
+          VALUES ('r1', 1, 'output', 'kept', 1), ('r2', 1, 'output', 'gone', 1);
+        UPDATE runs SET deleted_at = 9 WHERE id = 'r2';
+        INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome)
+          VALUES ('pb-going', 'flow-1', 1, 'nightly', '{}', 0, NULL, NULL),
+                 ('pb-older', 'flow-1', 1, 'nightly', '{}', 1, 2, 'failed'),
+                 ('pb-gone', 'flow-1', 1, 'nightly', '{}', 3, 4, 'stopped'),
+                 ('pb-later', 'flow-1', 1, 'nightly', '{}', 5, 6, 'failed'),
+                 ('pb-weekly', 'flow-2', 1, 'weekly', '{}', 1, 2, 'failed');
+        INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
+          VALUES ('pb-going', NULL, 'Nightly', 1, '<svg/>', 0),
+                 ('pb-older', NULL, 'Nightly', 1, '<svg/>', 1),
+                 ('pb-gone', NULL, 'Nightly', 1, '<svg/>', 3),
+                 ('pb-later', NULL, 'Nightly', 1, '<svg/>', 5),
+                 ('pb-weekly', NULL, 'Weekly', 1, '<svg/>', 1);
+        INSERT INTO build_events (pending_id, seq, at, body_json)
+          VALUES ('pb-going', 1, 1, '{}'), ('pb-older', 1, 1, '{}'), ('pb-gone', 1, 1, '{}'),
+                 ('pb-later', 1, 1, '{}'), ('pb-weekly', 1, 1, '{}');
+        INSERT INTO build_activity (pending_id, seq, at, body_json)
+          VALUES ('pb-going', 1, 1, '{}'), ('pb-older', 1, 1, '{}'), ('pb-gone', 1, 1, '{}'),
+                 ('pb-later', 1, 1, '{}'), ('pb-weekly', 1, 1, '{}');
+        UPDATE pending_builds SET deleted_at = 9 WHERE id = 'pb-gone';
+      `);
+      before.close();
+    };
+
+    const ids = (db: Database.Database, sql: string) =>
+      (db.prepare(sql).pluck().all() as string[]).sort();
+
+    it("stores every run's number as it was shown, and counts each build's numbers so far", async () => {
+      await seedBefore021();
+
+      const db = open();
+
+      expect(db.prepare("SELECT id, number FROM runs ORDER BY id").all()).toEqual([
+        { id: "r1", number: 1 },
+        { id: "r3", number: 3 },
+        { id: "r4", number: 1 },
+      ]);
+      expect(
+        db.prepare("SELECT build_id, last FROM run_number_counters ORDER BY build_id").all(),
+      ).toEqual([
+        { build_id: "b1", last: 3 },
+        { build_id: "b2", last: 1 },
+      ]);
+    });
+
+    it("removes every row of a deleted run and keeps every row of the others", async () => {
+      await seedBefore021();
+
+      const db = open();
+
+      for (const table of [
+        "step_texts",
+        "run_repo_states",
+        "run_stories",
+        "activity",
+        "events",
+        "run_nodes",
+        "run_sessions",
+      ]) {
+        expect(ids(db, `SELECT DISTINCT run_id FROM ${table}`), table).toEqual(["r1"]);
+      }
+      expect(ids(db, "SELECT id FROM runs")).toEqual(["r1", "r3", "r4"]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    });
+
+    it("removes a deleted pending build and the older ended attempts of its name, keeping the open one, a later one and other names", async () => {
+      await seedBefore021();
+
+      const db = open();
+
+      const kept = ["pb-going", "pb-later", "pb-weekly"];
+      expect(ids(db, "SELECT id FROM pending_builds")).toEqual(kept);
+      for (const table of ["build_activity", "build_events", "build_snapshots"]) {
+        expect(ids(db, `SELECT pending_id FROM ${table}`), table).toEqual(kept);
+      }
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    });
+
+    it("adds an optional repo to run repo states, and a build step text table that refuses edits", async () => {
+      await seedBefore021();
+
+      const db = open();
+
+      expect(
+        db
+          .prepare(
+            "SELECT name, \"notnull\" FROM pragma_table_info('run_repo_states') WHERE name = 'repo'",
+          )
+          .all(),
+      ).toEqual([{ name: "repo", notnull: 0 }]);
+      db.exec(
+        "INSERT INTO build_step_texts (pending_id, entry_id, field, text, at) VALUES ('pb-later', 1, 'output', 'full', 1)",
+      );
+      expect(() => db.exec("UPDATE build_step_texts SET text = 'edited'")).toThrow(/append-only/);
+      expect(() =>
+        db.exec(
+          "INSERT OR REPLACE INTO build_step_texts (id, pending_id, entry_id, field, text, at) SELECT id, 'pb-later', 1, 'output', 'replaced', 1 FROM build_step_texts",
+        ),
+      ).toThrow(/append-only/);
+      expect(() =>
+        db.exec(
+          "INSERT INTO build_step_texts (pending_id, entry_id, field, text, at) VALUES ('pb-later', 1, 'notes', 'x', 1)",
+        ),
+      ).toThrow(/CHECK/);
+      expect(db.prepare("SELECT text FROM build_step_texts").pluck().all()).toEqual(["full"]);
+    });
+
+    it.each(["events", "activity", "run_stories", "run_repo_states", "step_texts"])(
+      "still refuses to delete a %s row of a run that is not deleted",
+      async (table) => {
+        await seedBefore021();
+        const db = open();
+
+        expect(() => db.exec(`DELETE FROM ${table} WHERE run_id = 'r1'`)).toThrow(/append-only/);
+        expect(ids(db, `SELECT run_id FROM ${table} WHERE run_id = 'r1'`)).toEqual(["r1"]);
+      },
+    );
   });
 });

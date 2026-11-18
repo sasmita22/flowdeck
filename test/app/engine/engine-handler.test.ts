@@ -50,6 +50,7 @@ import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
+import { FakeToolStartSource } from "../../fakes/fake-tool-start-source.js";
 import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeRunNarrator } from "../../fakes/fake-run-narrator.js";
 import { FakeStore } from "../../fakes/fake-store.js";
@@ -911,6 +912,68 @@ describe("createEngineHandler", async () => {
       ]);
     });
 
+    it("answers a run's pipeline without its activity, while the run's story still lists each stage's steps", async () => {
+      const { runs, runId } = seededRun(
+        onMainFlow(
+          [{ ...agent("s1"), label: "Plan" }, loop("rounds"), agent("body", { parent: "rounds" })],
+          [thenWire("s1", "rounds")],
+        ),
+        ["s1", "rounds", "body"],
+      );
+      runs.append(runId, "rounds", { kind: "running" });
+      runs.append(runId, "rounds", { kind: "round", payload: { round: 1 } });
+      runs.append(runId, "body", { kind: "sent" });
+      runs.append(runId, "body", { kind: "done" });
+      runs.append(runId, "rounds", { kind: "round", payload: { round: 2 } });
+      runs.append(runId, "body", { kind: "reset" });
+      runs.append(runId, "body", { kind: "sent" });
+      for (const [id, nodeId] of [
+        [1, "s1"],
+        [2, "body"],
+      ] as const)
+        runs.recordActivity(runId, {
+          id,
+          nodeId,
+          at: 0,
+          summary: `step of ${nodeId}`,
+          kind: "tool",
+          tool: "Read",
+          result: "ok",
+        });
+      const handler = createEngineHandler(
+        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+      );
+
+      const answered = await handler.handle({ id: 1, type: "run-pipeline", payload: { runId } });
+
+      type Stage = {
+        nodeId: string;
+        activity: unknown[];
+        activityFrom?: number;
+        activityTo?: number;
+        rounds?: { round: number; items: Stage[] }[];
+      };
+      const stagesOf = (items: Stage[]): Stage[] =>
+        items.flatMap((stage) => [
+          stage,
+          ...(stage.rounds ?? []).flatMap((round) => stagesOf(round.items)),
+        ]);
+      const stages = stagesOf((answered as { value: Stage[] }).value);
+      expect(stages.map((stage) => stage.nodeId)).toEqual(
+        expect.arrayContaining(["s1", "rounds", "body"]),
+      );
+      expect(stages.flatMap((stage) => stage.activity)).toEqual([]);
+      const bodies = stages.filter((stage) => stage.nodeId === "body");
+      expect(bodies.map(({ activityFrom, activityTo }) => ({ activityFrom, activityTo }))).toEqual([
+        { activityFrom: undefined, activityTo: expect.any(Number) },
+        { activityFrom: expect.any(Number), activityTo: undefined },
+      ]);
+      const loaded = await handler.handle({ id: 2, type: "load-run", payload: { runId } });
+      const { digest } = (loaded as { value: { story: { digest: string } } }).value.story;
+      expect(digest).toContain("Read step of s1 → ok");
+      expect(digest).toContain("Read step of body → ok");
+    });
+
     it("answers no pipeline for a run of a build with no stored manifest", async () => {
       const { runs } = seededRun();
       const runId = withoutManifest(runs);
@@ -1203,11 +1266,11 @@ describe("createEngineHandler", async () => {
 
         expect(
           await handlerOn(runs).handle({ id: 6, type: "load-run", payload: { runId } }),
-        ).toMatchObject({ ok: true });
+        ).toEqual({ id: 6, ok: false, error: `No run ${runId}` });
         expect(await fullTextOf(runs, { runId, entryId: 3 })).toEqual({
           id: 7,
-          ok: true,
-          value: { kept: true, texts: { output: "kept" } },
+          ok: false,
+          error: `No run ${runId}`,
         });
         expect(
           await handlerOn(runs).handle({ id: 6, type: "load-run", payload: { runId: "nope" } }),
@@ -1216,6 +1279,84 @@ describe("createEngineHandler", async () => {
           id: 7,
           ok: false,
           error: "No run nope",
+        });
+      });
+    });
+
+    describe("build-step-full-text", () => {
+      const pendingStore = () => {
+        const runs = new FakeStore();
+        const started = runs.startPendingBuild({
+          flowId: "flow-a",
+          version: 1,
+          name: "report",
+          origin: {
+            source: { flowId: "flow-a", version: 1 },
+            blueprint: { name: "Report", version: 1 },
+          },
+          startedAt: 1_000,
+          snapshot: { blueprintName: "Report", version: 1, svg: "<svg/>" },
+        });
+        if (started.kind !== "started") throw new Error("the pending build did not start");
+        return { runs, pendingId: started.pendingId };
+      };
+
+      const buildFullTextOf = (runs: FakeStore, payload: unknown) =>
+        createEngineHandler(
+          options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+        ).handle({ id: 8, type: "build-step-full-text", payload });
+
+      it("answers the kept full text of a cut build step, the latest one per field", async () => {
+        const { runs, pendingId } = pendingStore();
+        runs.appendBuildStepText(pendingId, 3, "output", "first full output");
+        runs.appendBuildStepText(pendingId, 3, "output", `${"x".repeat(5000)}END`);
+        runs.appendBuildStepText(pendingId, 3, "report", "full report");
+        runs.appendBuildStepText(pendingId, 4, "input", "another step's input");
+
+        expect(await buildFullTextOf(runs, { pendingId, entryId: 3 })).toEqual({
+          id: 8,
+          ok: true,
+          value: {
+            kept: true,
+            texts: { output: `${"x".repeat(5000)}END`, report: "full report" },
+          },
+        });
+      });
+
+      it("answers that the full text was not kept for a build step with no stored text", async () => {
+        const { runs, pendingId } = pendingStore();
+        runs.appendBuildStepText(pendingId, 3, "output", "kept");
+
+        expect(await buildFullTextOf(runs, { pendingId, entryId: 4 })).toEqual({
+          id: 8,
+          ok: true,
+          value: { kept: false },
+        });
+      });
+
+      it("refuses an unknown pending build, naming it", async () => {
+        const { runs } = pendingStore();
+
+        expect(await buildFullTextOf(runs, { pendingId: "nope", entryId: 3 })).toEqual({
+          id: 8,
+          ok: false,
+          error: "No pending build nope",
+        });
+      });
+
+      it.each([
+        ["no entry id", {}],
+        ["an entry id that is not a whole number", { entryId: 1.5 }],
+        ["an entry id that is text", { entryId: "3" }],
+        ["no pending id", { pendingId: undefined, entryId: 3 }],
+      ])("refuses a payload with %s", async (_label, fields) => {
+        const { runs, pendingId } = pendingStore();
+        runs.appendBuildStepText(pendingId, 3, "output", "kept");
+
+        expect(await buildFullTextOf(runs, { pendingId, ...fields })).toEqual({
+          id: 8,
+          ok: false,
+          error: expect.stringContaining("invalid_type"),
         });
       });
     });
@@ -3467,13 +3608,13 @@ describe("createEngineHandler", async () => {
           return { pendingId, opened };
         };
 
-        it("stops a building row's build first, then hides the row and leaves no session or workspace folder", async () => {
+        it("stops a building row's build first, then removes the row and leaves no session or workspace folder", async () => {
           const { pendingId, opened } = await heldBuild();
 
           await deletePendingBuild(pendingId);
 
           expect(agents.fake.closed).toEqual([opened.sessionName]);
-          expect(runs.pendingBuild(pendingId)?.outcome).toBe("stopped");
+          expect(runs.pendingBuild(pendingId)).toBeNull();
           expect(await progressIds()).not.toContain(pendingId);
           expect(runs.listLatestEndedPendingBuildsByName().map((ended) => ended.id)).toEqual([]);
           expect(await new NodeFileSystem().exists(dirname(opened.settingsPath))).toBe(false);
@@ -3507,7 +3648,7 @@ describe("createEngineHandler", async () => {
         });
 
         it.each(["needs-you", "failed", "stopped"] as const)(
-          "hides a row that ended %s, stopping nothing",
+          "removes a row that ended %s, stopping nothing",
           async (outcome) => {
             const start = runs.startPendingBuild({
               flowId: "flow-1",
@@ -3527,10 +3668,120 @@ describe("createEngineHandler", async () => {
 
             expect(await progressIds()).not.toContain(start.pendingId);
             expect(runs.listLatestEndedPendingBuildsByName()).toEqual([]);
-            expect(runs.pendingBuild(start.pendingId)?.outcome).toBe(outcome);
+            expect(runs.pendingBuild(start.pendingId)).toBeNull();
             expect(agents.fake.closed).toEqual([]);
           },
         );
+
+        describe("an ended row whose build left its worktree", () => {
+          const keptPath = (name: string) => `/fd-home/workspaces/b-${name}/app`;
+          const sessionFolder = (name: string) => `/fd-home/build-sessions/fd-build-${name}`;
+
+          const endedRow = (name: string, { session = true } = {}) => {
+            const start = runs.startPendingBuild({
+              flowId: "flow-1",
+              version: 1,
+              name,
+              origin: {
+                source: { flowId: "flow-1", version: 1 },
+                blueprint: { name: "Untitled", version: 1 },
+              },
+              startedAt: 1_000,
+            });
+            if (start.kind !== "started") throw new Error("the ended build did not start");
+            if (session)
+              runs.appendBuildEvent(start.pendingId, {
+                type: "session",
+                name: `fd-build-${name}`,
+                claudeSessionId: `claude-${name}`,
+                buildId: `b-${name}`,
+                repo: "/repos/app",
+                base: "main",
+                values: {},
+                branch: `flowdeck/${name}`,
+                branchCreated: true,
+              });
+            runs.endPendingBuild(start.pendingId, { outcome: "failed", endedAt: 2_000 });
+            return start.pendingId;
+          };
+
+          const leftOnDisk = (...names: string[]) =>
+            new FakeFileSystem(
+              Object.fromEntries(
+                names.flatMap((name) => [
+                  [`${keptPath(name)}/work.txt`, "kept\n"],
+                  [`${sessionFolder(name)}/settings.json`, "{}"],
+                ]),
+              ),
+            );
+
+          const preview = (id: string) =>
+            handler.handle({ id: nextId++, type: "delete-pending-preview", payload: { id } });
+
+          it("previews the uncommitted or unpushed work deleting it would lose", async () => {
+            handler = handlerWith({
+              home: "/fd-home",
+              fs: leftOnDisk("dirty", "unpushed"),
+              worktree: new FakeWorktree({
+                dirty: [keptPath("dirty")],
+                unpushed: ["flowdeck/unpushed", "flowdeck/torn-down"],
+              }),
+            });
+            const dirty = endedRow("dirty");
+            const unpushed = endedRow("unpushed");
+            const tornDown = endedRow("torn-down");
+            const sessionless = endedRow("sessionless", { session: false });
+
+            expect(await preview(dirty)).toMatchObject({
+              ok: true,
+              value: { dirtyWorktree: true, unpushedBranch: false },
+            });
+            expect(await preview(unpushed)).toMatchObject({
+              ok: true,
+              value: { dirtyWorktree: false, unpushedBranch: true },
+            });
+            expect(await preview(tornDown)).toMatchObject({
+              ok: true,
+              value: { dirtyWorktree: false, unpushedBranch: false },
+            });
+            expect(await preview(sessionless)).toMatchObject({
+              ok: true,
+              value: { dirtyWorktree: false, unpushedBranch: false },
+            });
+            expect(runs.pendingBuild(dirty)).not.toBeNull();
+          });
+
+          it("removes the kept worktree with its work, the workspace and the session folder", async () => {
+            const fs = leftOnDisk("kept");
+            const worktree = new FakeWorktree({
+              dirty: [keptPath("kept")],
+              unpushed: ["flowdeck/kept"],
+            });
+            handler = handlerWith({ home: "/fd-home", fs, worktree });
+            const id = endedRow("kept");
+
+            await deletePendingBuild(id);
+
+            expect(worktree.removed).toEqual([
+              expect.objectContaining({ path: keptPath("kept"), force: true }),
+            ]);
+            expect(await fs.exists("/fd-home/workspaces/b-kept")).toBe(false);
+            expect(await fs.exists(sessionFolder("kept"))).toBe(false);
+            expect(runs.pendingBuild(id)).toBeNull();
+            expect(runs.buildEvents(id)).toEqual([]);
+          });
+
+          it("touches no folder for a row whose build never opened a session", async () => {
+            const fs = new FakeFileSystem();
+            handler = handlerWith({ home: "/fd-home", fs, worktree: new FakeWorktree() });
+            const id = endedRow("sessionless", { session: false });
+
+            await deletePendingBuild(id);
+
+            expect(fs.calls.filter((call) => call.method === "removeTree")).toEqual([]);
+            expect(runs.pendingBuild(id)).toBeNull();
+          });
+        });
       });
 
       describe("build-rebuild", () => {
@@ -4310,12 +4561,7 @@ describe("createEngineHandler", async () => {
 
       const listedIds = () => store.listRuns().map((run) => run.id);
 
-      const deletedAt = (runId: string) =>
-        (
-          db.prepare("SELECT deleted_at FROM runs WHERE id = ?").get(runId) as {
-            deleted_at: number | null;
-          }
-        ).deleted_at;
+      const runRows = (runId: string) => db.prepare("SELECT id FROM runs WHERE id = ?").all(runId);
 
       const statusesWhenRunMarked = () => {
         const seen: (string | undefined)[] = [];
@@ -4363,7 +4609,7 @@ describe("createEngineHandler", async () => {
         db.close();
       });
 
-      it("hides an ended run from the list, keeps its row and status, and tells no further story", async () => {
+      it("hides an ended run from the list, leaves no row of it, and tells no further story", async () => {
         blueprints.save(twoAgents());
         const runId = await startedOn(await builtId());
         await untilFinished(runId);
@@ -4372,8 +4618,8 @@ describe("createEngineHandler", async () => {
         await deleteRun(runId);
 
         expect(listedIds()).not.toContain(runId);
-        expect(deletedAt(runId)).toEqual(expect.any(Number));
-        expect(store.findRun(runId)?.status).toBe("done");
+        expect(runRows(runId)).toEqual([]);
+        expect(store.findRun(runId)).toBeUndefined();
         await settle();
         expect(narrator.calls).toHaveLength(1);
       });
@@ -4423,6 +4669,7 @@ describe("createEngineHandler", async () => {
         await handler.reattach();
         await settle();
 
+        expect(runRows(runId)).toEqual([]);
         expect(store.events(runId)).toEqual(eventsBefore);
         expect(sessionPushes(runId)).toEqual([]);
         expect(snapshotsOf(runId)).toEqual([]);
@@ -5143,15 +5390,147 @@ describe("createEngineHandler", async () => {
           await vi.waitFor(() => expect(appended()).toHaveLength(1));
 
           const otherRepos = [
-            { path: "/u/web", branch: "master" },
-            { path: "/x/det", branch: "detached 3333333" },
-            { path: "/x/ios", branch: "develop" },
+            { path: "/u/web", branch: "master", after: readState("1111111", 0, "master") },
+            { path: "/x/det", branch: "detached 3333333", after: readState("3333333", 0, null) },
+            { path: "/x/ios", branch: "develop", after: readState("2222222", 0, "develop") },
           ];
           expect(phases.mock.calls.at(-1)?.[3]).toEqual(otherRepos);
           expect(narrator.calls[0]).toContain(
-            "Other repos: /u/web (master); /x/det (detached 3333333); /x/ios (develop)",
+            "Other repos: /u/web (master): before not recorded; after on master at 1111111,",
+          );
+          expect(narrator.calls[0]).toContain(
+            "/x/det (detached 3333333): before not recorded; after detached at 3333333,",
+          );
+          expect(narrator.calls[0]).toContain(
+            "/x/ios (develop): before not recorded; after on develop at 2222222,",
           );
           expect(await loadedStory(runId)).toMatchObject({ header: { otherRepos } });
+        });
+
+        it("loads a run whose other repos were stored with their branches only", async () => {
+          handler = repoHandler();
+          flows.save(sleeper());
+          const runId = leftRunning(await builtId());
+          runs.finishRun(runId, "stopped");
+          runs.appendRepoState(runId, "after", { kind: "unreadable" }, [
+            { path: "/x/old", branch: "main" },
+          ]);
+
+          const story = (await loadedStory(runId)) as { header: object; digest: string };
+
+          expect(story.header).toMatchObject({ otherRepos: [{ path: "/x/old", branch: "main" }] });
+          expect(story.digest).toMatch(/^Other repos: \/x\/old \(main\)$/m);
+        });
+
+        describe("another repo an agent touches", () => {
+          let toolStarts: FakeToolStartSource;
+
+          const gatedHandler = (turn: FakeTurnHandler) => {
+            const environment = runEnvironment(new NodeFileSystem(), Date.now, turn);
+            return repoHandler(turn, {
+              userHome: "/u",
+              run: {
+                ...environment,
+                startEvents: async () => ({ ...(await environment.startEvents()), toolStarts }),
+              },
+            });
+          };
+
+          const touchB = (opening: OpenSessionOptions, file = "/x/b/src/a.ts") =>
+            toolStarts.start(opening.claudeSessionId, {
+              tool_name: "Edit",
+              tool_input: { file_path: file, old_string: "a", new_string: "b" },
+            });
+
+          beforeEach(() => {
+            toolStarts = new FakeToolStartSource();
+            gitState.tops.set("/x/b", "/x/b");
+            gitState.repoStates.set("/x/b", readState("1111111", 0, "main"));
+          });
+
+          it("records its before on the first touch and its after at the run's end", async () => {
+            handler = gatedHandler(async (nodeId, opening) => {
+              if (nodeId === "write") {
+                await touchB(opening);
+                runs.recordActivity(
+                  latestRunId(),
+                  toolStep(901, "Edit", { file_path: "/x/b/src/a.ts" }),
+                );
+                gitState.repoStates.set("/x/b", readState("2222222", 0, "main"));
+              }
+              return "done" as const;
+            });
+            flows.save(twoAgents());
+            const runId = await startedRunId();
+            await untilFinished(runId);
+            await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+            const otherRepos = [
+              {
+                path: "/x/b",
+                branch: "main",
+                before: readState("1111111", 0, "main"),
+                after: readState("2222222", 0, "main"),
+              },
+            ];
+            expect(runs.repoStates(runId).otherRepos).toEqual(otherRepos);
+            expect(narrator.calls[0]).toContain(
+              "Other repos: /x/b (main): before on main at 1111111,",
+            );
+            expect(narrator.calls[0]).toContain("; after on main at 2222222,");
+            expect(await loadedStory(runId)).toMatchObject({ header: { otherRepos } });
+          });
+
+          it("reads the after of a repo with a before that no step's preview names", async () => {
+            handler = gatedHandler(async (nodeId, opening) => {
+              if (nodeId === "write") {
+                await touchB(opening);
+                gitState.repoStates.set("/x/b", readState("2222222", 0, "main"));
+              }
+              return "done" as const;
+            });
+            flows.save(twoAgents());
+            const runId = await startedRunId();
+            await untilFinished(runId);
+            await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+            expect(runs.repoStates(runId).otherRepos).toEqual([
+              {
+                path: "/x/b",
+                branch: "main",
+                before: readState("1111111", 0, "main"),
+                after: readState("2222222", 0, "main"),
+              },
+            ]);
+          });
+
+          it("does not record the before again when a resumed run touches the repo", async () => {
+            let naps = 0;
+            const befores = vi.spyOn(runs, "appendOtherRepoBefore");
+            handler = gatedHandler(async (nodeId, opening) => {
+              if (nodeId !== "nap") return "done";
+              await touchB(opening, `/x/b/nap-${++naps}.ts`);
+              return naps === 1 ? "hold" : "done";
+            });
+            flows.save(sleeper());
+            const runId = await startedOn(await builtId());
+            await napSent(runId);
+            await stopRunRequest(runId);
+            await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+            gitState.repoStates.set("/x/b", readState("3333333", 0, "main"));
+
+            expect(
+              await handler.handle({ id: nextId++, type: "resume-run", payload: { runId } }),
+            ).toMatchObject({ ok: true, value: { kind: "started", runId } });
+            await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
+            await vi.waitFor(() => expect(narrator.calls).toHaveLength(2));
+
+            expect(naps).toBe(2);
+            expect(befores.mock.calls).toEqual([[runId, "/x/b", readState("1111111", 0, "main")]]);
+            expect(runs.repoStates(runId).otherRepos).toMatchObject([
+              { path: "/x/b", before: readState("1111111", 0, "main") },
+            ]);
+          });
         });
 
         it("loads a run from before repo states were kept with no other repos and not recorded", async () => {

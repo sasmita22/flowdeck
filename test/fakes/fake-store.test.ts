@@ -306,6 +306,27 @@ describe("FakeStore", () => {
       expect(store.builds()).toEqual([build("b1", "fix-login")]);
     });
 
+    it("removes the build's step texts and the older ended attempts of its name, keeping its runs", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1", "fix-login"));
+      const older = startedId(store, { ...pending("flow-1", "fix-login"), startedAt: 100 });
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 200 });
+      const other = startedId(store, { ...pending("flow-1", "nightly"), startedAt: 100 });
+      store.endPendingBuild(other, { outcome: "failed", endedAt: 200 });
+      const built = startedId(store, pending("flow-1", "fix-login"));
+      store.appendBuildStepText(built, 1, "output", "full");
+      store.endPendingBuild(built, { outcome: "built", endedAt: 2_000, buildId: "b1" });
+      const run = store.createRun(newRun(["p1"]));
+      store.finishRun(run.id, "done");
+
+      store.deleteBuild("b1");
+
+      expect(store.buildStepTexts(built, 1)).toEqual([]);
+      expect(store.pendingBuild(older)).toBeNull();
+      expect(store.pendingBuild(other)).toMatchObject({ id: other });
+      expect(store.findRun(run.id)).toMatchObject({ id: run.id, buildId: "b1" });
+    });
+
     it("deletes a build twice without an error", () => {
       const store = new FakeStore();
       store.recordBuild(build("b1"));
@@ -585,7 +606,7 @@ describe("FakeStore", () => {
   });
 
   describe("repo states", () => {
-    const state = (head: string): RepoState => ({
+    const state = (head: string): Extract<RepoState, { kind: "read" }> => ({
       kind: "read",
       branch: "flowdeck/fix-login",
       head,
@@ -611,6 +632,52 @@ describe("FakeStore", () => {
         otherRepos: [{ path: "/x/ios", branch: "develop" }],
       });
       expect(store.repoStates("nope")).toEqual({ before: null, after: null, otherRepos: [] });
+    });
+
+    it("keeps another repo's before out of the run's own, and lists it merged with the after of the same repo, sorted by path", () => {
+      const store = new FakeStore();
+      const { id } = store.createRun(newRun(["p1"]));
+      const web = { ...state("w1"), branch: "dev" };
+
+      store.appendOtherRepoBefore(id, "/x/web", web);
+      store.appendRepoState(id, "before", state("b1"), []);
+      store.appendOtherRepoBefore(id, "/x/web", state("w2"));
+      store.appendOtherRepoBefore(id, "/x/api", { ...state("p1"), branch: null });
+      store.appendOtherRepoBefore(id, "/x/old", { kind: "unreadable" });
+      store.appendRepoState(id, "after", state("a1"), [
+        { path: "/x/web", branch: "dev", after: state("w3") },
+        { path: "/x/ios", branch: "develop" },
+      ]);
+
+      expect(store.repoStates(id)).toEqual({
+        before: state("b1"),
+        after: state("a1"),
+        otherRepos: [
+          { path: "/x/api", branch: "detached p1", before: { ...state("p1"), branch: null } },
+          { path: "/x/ios", branch: "develop" },
+          { path: "/x/old", branch: "not recorded", before: { kind: "unreadable" } },
+          { path: "/x/web", branch: "dev", before: web, after: state("w3") },
+        ],
+      });
+    });
+  });
+
+  describe("build step texts", () => {
+    it("reads back the latest text per field of one entry in the order they were written", () => {
+      const store = new FakeStore();
+      const id = startedId(store, pending());
+
+      store.appendBuildStepText(id, 1, "output", "old output");
+      store.appendBuildStepText(id, 1, "input", "input");
+      store.appendBuildStepText(id, 1, "output", "new output");
+      store.appendBuildStepText(id, 2, "report", "another entry");
+
+      expect(store.buildStepTexts(id, 1)).toEqual([
+        { field: "input", text: "input" },
+        { field: "output", text: "new output" },
+      ]);
+      expect(store.buildStepTexts(id, 2)).toEqual([{ field: "report", text: "another entry" }]);
+      expect(store.buildStepTexts("nope", 1)).toEqual([]);
     });
   });
 
@@ -706,15 +773,38 @@ describe("FakeStore", () => {
       return [finished(), finished(), finished()];
     };
 
-    it("hides the run from listRuns, keeping its record", () => {
+    it("removes the run and every row of it, hiding it from listRuns and keeping the others", () => {
       const store = new FakeStore();
       const [first, second] = threeFinishedRuns(store);
+      for (const id of [first, second]) {
+        store.append(id, "p1", { kind: "sent" });
+        store.recordActivity(id, {
+          id: 1,
+          nodeId: "p1",
+          at: 1,
+          kind: "tool",
+          tool: "Bash",
+          summary: "ls",
+        });
+        store.appendRunStory({ runId: id, at: "t", runStatus: "done", text: "Told.", cost: 0 });
+        store.appendRepoState(id, "before", { kind: "unreadable" }, []);
+        store.appendOtherRepoBefore(id, "/x/web", { kind: "unreadable" });
+        store.appendStepText(id, 1, "output", "full");
+      }
 
       store.deleteRun(second);
 
       expect(store.listRuns().map((run) => run.id)).not.toContain(second);
       expect(store.listRuns().map((run) => run.id)).toContain(first);
-      expect(store.runs).toHaveLength(3);
+      expect(store.runs).toHaveLength(2);
+      expect(store.nodes.filter((node) => node.runId === second)).toEqual([]);
+      expect(store.events(second)).toEqual([]);
+      expect(store.activity(second)).toEqual([]);
+      expect(store.latestRunStory(second)).toBeUndefined();
+      expect(store.repoStates(second)).toEqual({ before: null, after: null, otherRepos: [] });
+      expect(store.stepTexts(second, 1)).toEqual([]);
+      expect(store.events(first)).toHaveLength(1);
+      expect(store.repoStates(first).otherRepos).toHaveLength(1);
     });
 
     it("keeps the numbers of the build's other runs", () => {
@@ -727,14 +817,24 @@ describe("FakeStore", () => {
       expect([numberOf.get(first), numberOf.get(third)]).toEqual([1, 3]);
     });
 
-    it("still finds the deleted run by id, with its number", () => {
+    it("finds nothing for the deleted run by id", () => {
       const store = new FakeStore();
       const [, second] = threeFinishedRuns(store);
 
       store.deleteRun(second);
 
-      expect(store.findRun(second)).toMatchObject({ id: second, status: "done" });
-      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+      expect(store.findRun(second)).toBeUndefined();
+      expect(store.findRunSummary(second)).toBeUndefined();
+    });
+
+    it("never gives a deleted top run's number to the build's next run", () => {
+      const store = new FakeStore();
+      const [, , third] = threeFinishedRuns(store);
+      store.deleteRun(third);
+
+      const next = store.createRun(newRun(["p1"]));
+
+      expect(store.findRunSummary(next.id)).toMatchObject({ number: 4 });
     });
 
     it("summarises a run that is not deleted as listRuns does", () => {
@@ -748,27 +848,50 @@ describe("FakeStore", () => {
       }
     });
 
-    it("leaves a deleted run as it is when it is deleted again", () => {
+    it("does nothing when the run is deleted again", () => {
       const store = new FakeStore();
       const [, second] = threeFinishedRuns(store);
       store.deleteRun(second);
+      const listed = store.listRuns();
 
       store.deleteRun(second);
 
-      expect(store.listRuns().map((run) => run.id)).not.toContain(second);
-      expect(store.findRunSummary(second)).toMatchObject({ id: second, number: 2 });
+      expect(store.listRuns()).toEqual(listed);
+      expect(store.findRunSummary(second)).toBeUndefined();
     });
   });
 
   describe("deleting a pending build", () => {
-    it("hides an open build from listPendingBuilds", () => {
+    it("removes an open build and every row of it, hiding it from listPendingBuilds", () => {
       const store = new FakeStore();
-      const gone = startedId(store, pending("flow-1", "nightly"));
+      const gone = startedId(store, {
+        ...pending("flow-1", "nightly"),
+        snapshot: snapshot("Nightly"),
+      });
       const kept = startedId(store, pending("flow-2", "weekly"));
+      for (const id of [gone, kept]) {
+        store.appendBuildEvent(id, { type: "step", step: 1, status: "running" });
+        store.appendBuildActivity(id, {
+          id: 1,
+          nodeId: "p1",
+          at: 1,
+          kind: "tool",
+          tool: "Bash",
+          summary: "ls",
+        });
+        store.appendBuildStepText(id, 1, "output", "full");
+      }
 
       store.deletePendingBuild(gone);
 
       expect(store.listPendingBuilds().map((each) => each.id)).toEqual([kept]);
+      expect(store.pendingBuild(gone)).toBeNull();
+      expect(store.buildEvents(gone)).toEqual([]);
+      expect(store.buildActivity(gone)).toEqual([]);
+      expect(store.buildStepTexts(gone, 1)).toEqual([]);
+      expect(store.buildSnapshot({ pendingId: gone })).toBeNull();
+      expect(store.buildEvents(kept)).toHaveLength(1);
+      expect(store.buildStepTexts(kept, 1)).toEqual([{ field: "output", text: "full" }]);
     });
 
     it("hides an ended build from listLatestEndedPendingBuildsByName", () => {
@@ -793,6 +916,21 @@ describe("FakeStore", () => {
       store.deletePendingBuild(latest);
 
       expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
+      expect(store.pendingBuild(older)).toBeNull();
+    });
+
+    it("leaves a going build of the name, started earlier, as it is", () => {
+      const store = new FakeStore();
+      const older = startedId(store, { ...pending("flow-1", "nightly"), startedAt: 100 });
+      store.endPendingBuild(older, { outcome: "failed", endedAt: 200 });
+      const latest = startedId(store, pending("flow-1", "nightly"));
+      store.endPendingBuild(latest, { outcome: "failed", endedAt: 2_000 });
+      const going = startedId(store, { ...pending("flow-1", "nightly"), startedAt: 500 });
+
+      store.deletePendingBuild(latest);
+
+      expect(store.pendingBuild(older)).toBeNull();
+      expect(store.listPendingBuilds().map((each) => each.id)).toEqual([going]);
     });
 
     it("leaves a deleted pending build as it is when it is deleted again", () => {
@@ -804,7 +942,7 @@ describe("FakeStore", () => {
       store.deletePendingBuild(id);
 
       expect(store.listLatestEndedPendingBuildsByName()).toEqual([]);
-      expect(store.pendingBuild(id)).toMatchObject({ id, outcome: "failed" });
+      expect(store.pendingBuild(id)).toBeNull();
     });
   });
 

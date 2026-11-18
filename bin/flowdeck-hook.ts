@@ -1,5 +1,5 @@
 import { connect } from "node:net";
-import { FORWARD_CAP_MS, STDIN_CAP_MS } from "./hook-limits.ts";
+import { FORWARD_CAP_MS, PRETOOL_CAP_MS, STDIN_CAP_MS } from "./hook-limits.ts";
 
 const stdinCap = setTimeout(() => process.exit(0), STDIN_CAP_MS);
 
@@ -15,6 +15,21 @@ function forward(input: string): void {
   const socket = connect(socketPath);
   socket.on("error", () => process.exit(0));
   socket.end(toLine(input), () => process.exit(0));
+}
+
+function awaitToolStart(input: string): void {
+  clearTimeout(stdinCap);
+  setTimeout(() => process.exit(0), PRETOOL_CAP_MS);
+  const socketPath = process.env["FLOWDECK_SOCK"];
+  if (input.length === 0 || !socketPath) process.exit(0);
+  const socket = connect(socketPath);
+  socket.on("error", () => process.exit(0));
+  socket.on("close", () => process.exit(0));
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk: string) => {
+    if (chunk.includes("\n")) process.exit(0);
+  });
+  socket.write(toLine(input));
 }
 
 let decided = false;
@@ -87,20 +102,24 @@ function toLine(input: string): string {
   }
 }
 
-function isPermissionRequest(input: string): boolean {
+function hookEventName(input: string): unknown {
   try {
     const payload = JSON.parse(input) as { hook_event_name?: unknown } | null;
-    return payload?.hook_event_name === "PermissionRequest";
+    return payload?.hook_event_name;
   } catch {
-    return false;
+    return undefined;
   }
 }
+
+const isPermissionRequest = (input: string) => hookEventName(input) === "PermissionRequest";
+const isPreToolUse = (input: string) => hookEventName(input) === "PreToolUse";
 
 const chunks: Buffer[] = [];
 process.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
 process.stdin.on("end", () => {
   const input = Buffer.concat(chunks).toString("utf8");
   if (isPermissionRequest(input)) askFlowdeck(input);
+  else if (isPreToolUse(input)) awaitToolStart(input);
   else forward(input);
 });
 process.stdin.on("error", () => process.exit(0));

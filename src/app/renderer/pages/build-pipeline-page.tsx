@@ -17,6 +17,7 @@ import type {
 import { selectPipeline, type BuildProgressState } from "../build-progress-store.js";
 import { formatCost, formatDuration, formatWhen } from "../format.js";
 import { ActivityList } from "../inspector/activity-feed.js";
+import type { FullTextStore } from "../inspector/full-text-store.js";
 import type { RunLabels } from "../inspector/inspector.js";
 import type { LibraryState } from "../library-store.js";
 import type { NavState } from "../nav-store.js";
@@ -279,11 +280,13 @@ function LogView({
   lane,
   row,
   ended,
+  buildFullText,
 }: {
   pendingId: string;
   lane: PipelineLane | undefined;
   row: PipelineRow | undefined;
   ended: boolean;
+  buildFullText: FullTextStore;
 }) {
   const entries: readonly ActivityEntry[] = row?.log ?? lane?.log ?? [];
   const notes =
@@ -315,6 +318,7 @@ function LogView({
               onSelectNode={() => undefined}
               withSteps
               stepsEnded={ended}
+              fullText={{ ownerId: pendingId, store: buildFullText }}
             />
           </div>
         )}
@@ -430,12 +434,14 @@ export function BuildPipelinePage({
   library,
   buildProgress,
   terminal,
+  buildFullText,
 }: {
   pendingId: string;
   nav: StoreApi<NavState>;
   library: StoreApi<LibraryState>;
   buildProgress: StoreApi<BuildProgressState>;
   terminal: StoreApi<TerminalState>;
+  buildFullText: FullTextStore;
 }) {
   const entries = useStore(buildProgress, (state) => state.entries);
   const activity = useStore(buildProgress, (state) => state.activity);
@@ -544,7 +550,13 @@ export function BuildPipelinePage({
           {showTerminal ? (
             <BuildTerminal terminal={terminal} />
           ) : (
-            <LogView pendingId={pendingId} lane={lane} row={row} ended={!open} />
+            <LogView
+              pendingId={pendingId}
+              lane={lane}
+              row={row}
+              ended={!open}
+              buildFullText={buildFullText}
+            />
           )}
         </div>
       </div>

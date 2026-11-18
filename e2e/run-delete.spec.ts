@@ -35,9 +35,7 @@ const runsOfBuild = (buildId: string) =>
     ({ id }) => id,
   );
 
-const runDeletedAt = (runId: string) =>
-  rows<{ deleted_at: number | null }>("SELECT deleted_at FROM runs WHERE id = ?", runId)[0]
-    ?.deleted_at;
+const runRows = (runId: string) => rows<{ id: string }>("SELECT id FROM runs WHERE id = ?", runId);
 
 const tmuxAlive = async (name: string) => {
   try {
@@ -127,7 +125,8 @@ test("A Runs row has a ⋯ and no Delete button; deleting a done run from Runs r
   await expect(window.getByTestId(pageTestIds.runCard(second))).toHaveCount(0);
   await expect(window.getByTestId(pageTestIds.runCard(first))).toContainText("#1 alpha");
   await expect(window.getByTestId(pageTestIds.runCard(third))).toContainText("#3 alpha");
-  expect(runDeletedAt(second)).not.toBeNull();
+  expect(runRows(second)).toEqual([]);
+  expect(runsOfBuild(buildId)).toEqual([first, third]);
 
   await window.getByTestId("menu-builds").click();
   await window.getByTestId(pageTestIds.buildOpen(buildId)).click();
@@ -161,10 +160,11 @@ test("Deleting a going run from its page stops it, lands on Runs without it, and
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("Runs", { timeout: watchMs });
   await expect(window.getByTestId(pageTestIds.runCard(runId))).toHaveCount(0);
   await expect.poll(() => tmuxAlive(tmuxName), { timeout: watchMs }).toBe(false);
-  expect(runDeletedAt(runId)).not.toBeNull();
+  expect(runRows(runId)).toEqual([]);
+  expect(runsOfBuild(buildId)).toEqual([]);
 
   await window.getByTestId("menu-builds").click();
   await window.getByTestId(pageTestIds.buildOpen(buildId)).click();
   await runFromDetail(window);
-  await expect.poll(() => runsOfBuild(buildId).length, { timeout: watchMs }).toBe(2);
+  await expect.poll(() => runsOfBuild(buildId).length, { timeout: watchMs }).toBe(1);
 });

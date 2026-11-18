@@ -3,6 +3,7 @@ import { EventBus } from "../../core/event-bus.js";
 import { denied } from "../../core/run/permission.js";
 import type { EventSource, HookEvent, HookEventKind } from "../../ports/event-source.js";
 import type { PermissionDecision, PermissionSource } from "../../ports/permission-source.js";
+import type { ToolStartSource } from "../../ports/tool-start-source.js";
 import { hasCode, removeStaleSocket } from "../unix-socket/stale-socket.js";
 
 const maxLineLength = 10 * 1024 * 1024;
@@ -29,14 +30,18 @@ type PermissionHandler = (
   signal: AbortSignal,
 ) => Promise<PermissionDecision>;
 
-const permissionRequest = "PermissionRequest";
+type ToolStartHandler = (payload: Record<string, unknown>) => Promise<void>;
 
-export class HookSocketServer implements EventSource, PermissionSource {
+const permissionRequest = "PermissionRequest";
+const toolStart = "PreToolUse";
+
+export class HookSocketServer implements EventSource, PermissionSource, ToolStartSource {
   private readonly socketPath: string;
   private readonly onRejected: (reason: string, line: string) => void;
   private readonly bus = new EventBus<HookEvent>();
   private readonly connections = new Set<Socket>();
   private readonly permissionHandlers = new Map<string, PermissionHandler>();
+  private readonly toolStartHandlers = new Map<string, ToolStartHandler>();
   private readonly server: Server = createServer((socket) => this.accept(socket));
 
   constructor(options: {
@@ -79,6 +84,15 @@ export class HookSocketServer implements EventSource, PermissionSource {
     return () => {
       if (this.permissionHandlers.get(sessionId) === handler) {
         this.permissionHandlers.delete(sessionId);
+      }
+    };
+  }
+
+  onToolStart(sessionId: string, handler: ToolStartHandler): () => void {
+    this.toolStartHandlers.set(sessionId, handler);
+    return () => {
+      if (this.toolStartHandlers.get(sessionId) === handler) {
+        this.toolStartHandlers.delete(sessionId);
       }
     };
   }
@@ -141,9 +155,24 @@ export class HookSocketServer implements EventSource, PermissionSource {
     }
     if (typeof sessionId !== "string" || sessionId === "") {
       this.onRejected("missing session_id", line);
+      if (kind === toolStart) void this.release(socket, payload, undefined);
       return;
     }
     this.bus.publish({ kind, sessionId, payload });
+    if (kind === toolStart) void this.release(socket, payload, sessionId);
+  }
+
+  private async release(
+    socket: Socket,
+    payload: Record<string, unknown>,
+    sessionId: string | undefined,
+  ): Promise<void> {
+    const handler = sessionId === undefined ? undefined : this.toolStartHandlers.get(sessionId);
+    await Promise.resolve()
+      .then(() => handler?.(payload))
+      .catch(() => undefined);
+    if (socket.destroyed || socket.writableEnded) return;
+    socket.end("\n");
   }
 
   private async answer(

@@ -167,9 +167,12 @@ export interface Store {
     state: RepoState,
     otherRepos: OtherRepo[],
   ): void;
+  appendOtherRepoBefore(runId: string, repo: string, state: RepoState): void;
   repoStates(runId: string): RunRepoStates;
   appendStepText(runId: string, entryId: number, field: StepTextField, text: string): void;
   stepTexts(runId: string, entryId: number): StepText[];
+  appendBuildStepText(pendingId: string, entryId: number, field: StepTextField, text: string): void;
+  buildStepTexts(pendingId: string, entryId: number): StepText[];
   stopRun(runId: string): void;
   deleteRun(runId: string): void;
   recordBuild(build: NewBuild): void;

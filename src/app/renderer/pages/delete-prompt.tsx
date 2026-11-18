@@ -5,7 +5,7 @@ import type { Actions } from "../actions.js";
 import type { BuildProgressState } from "../build-progress-store.js";
 import type { LibraryState } from "../library-store.js";
 import type { NavState } from "../nav-store.js";
-import type { ConfirmingDelete, RunState } from "../run-store.js";
+import { losesWork, type ConfirmingDelete, type RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 
 const questionText = (question: ConfirmingDelete, name: string) =>
@@ -39,9 +39,6 @@ export function DeletePrompt({
   );
   const [busy, setBusy] = useState(false);
   if (question === null) return null;
-  const losesWork =
-    question.kind === "build" &&
-    (question.preview.dirtyWorktree || question.preview.unpushedBranch);
   const { cancelDelete } = run.getState();
 
   const confirm = async () => {
@@ -69,7 +66,7 @@ export function DeletePrompt({
         data-testid={pageTestIds.deletePrompt}
       >
         <p id="delete-prompt-text">{questionText(question, pendingName ?? name ?? question.id)}</p>
-        {losesWork && (
+        {losesWork(question) && (
           <p className="fd-dialog-warning" data-testid={pageTestIds.deletePromptWarning}>
             Work that is not committed or not pushed will be lost.
           </p>

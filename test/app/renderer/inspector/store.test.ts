@@ -419,17 +419,21 @@ describe("stepsEndedOf", () => {
 });
 
 describe("selectFiles", () => {
-  it("lists each node's written files once, in node order, and the pull requests", () => {
-    const write = (id: number, nodeId: string, tool: string, path: string): ActivityEntry => ({
-      id,
-      nodeId,
-      at: id,
-      kind: "tool",
-      tool,
-      summary: path,
-      path,
-    });
+  const write = (id: number, nodeId: string, tool: string, path: string): ActivityEntry => ({
+    id,
+    nodeId,
+    at: id,
+    kind: "tool",
+    tool,
+    summary: path,
+    path,
+  });
+  const nodes = [
+    { id: "p1", label: "Plan" },
+    { id: "p2", label: "Build" },
+  ];
 
+  it("lists each node's written files once, in node order, and the pull requests", () => {
     const files = selectFiles(
       [
         write(1, "p2", "Write", "/repo/b.ts"),
@@ -445,7 +449,7 @@ describe("selectFiles", () => {
           summary: "https://x/pull/7",
         },
       ],
-      ["p1", "p2"],
+      nodes,
     );
 
     expect(files).toEqual({
@@ -455,5 +459,30 @@ describe("selectFiles", () => {
       ],
       pullRequests: [{ nodeId: "p2", url: "https://x/pull/7" }],
     });
+  });
+
+  it("returns the same result for the same entries and nodes without sorting again", () => {
+    const entries = [write(2, "p2", "Write", "/repo/b.ts"), write(1, "p1", "Edit", "/repo/a.ts")];
+    const first = selectFiles(entries, nodes);
+    const sort = vi.spyOn(Array.prototype, "sort");
+    try {
+      const second = selectFiles(entries, nodes);
+      expect(second).toBe(first);
+      expect(sort).not.toHaveBeenCalled();
+    } finally {
+      sort.mockRestore();
+    }
+  });
+
+  it("derives a new result when the entries change", () => {
+    const entries = [write(1, "p1", "Edit", "/repo/a.ts")];
+    const first = selectFiles(entries, nodes);
+    const next = selectFiles([...entries, write(2, "p2", "Write", "/repo/b.ts")], nodes);
+
+    expect(next).not.toBe(first);
+    expect(next.nodes).toEqual([
+      { nodeId: "p1", paths: ["/repo/a.ts"] },
+      { nodeId: "p2", paths: ["/repo/b.ts"] },
+    ]);
   });
 });

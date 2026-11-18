@@ -62,6 +62,10 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     repoStates: (id) => store.repoStates(id),
     appendStepText: (id, entryId, field, text) => store.appendStepText(id, entryId, field, text),
     stepTexts: (id, entryId) => store.stepTexts(id, entryId),
+    appendOtherRepoBefore: (id, repo, state) => store.appendOtherRepoBefore(id, repo, state),
+    appendBuildStepText: (pendingId, entryId, field, text) =>
+      store.appendBuildStepText(pendingId, entryId, field, text),
+    buildStepTexts: (pendingId, entryId) => store.buildStepTexts(pendingId, entryId),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);
       publishFor(id);

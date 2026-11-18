@@ -322,6 +322,84 @@ test("an agent row's log shows each step its build agent took, with the time, th
   ).toEqual([expect.objectContaining({ tool: "Read", result: "ok" })]);
 });
 
+test("a build step cut short shows its full text on request, an uncut step has no such control, and one piece's full text does not reach another's", async () => {
+  test.setTimeout(90_000);
+  const s1 = "plugin/agents/s1.md";
+  const s2 = "plugin/agents/s2.md";
+  const tail = "END-OF-FULL-OUTPUT";
+  const { flowId } = seedBlueprint(home, "Fixer", twoAgents(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    stepOutputChars: 5000,
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  const pendingId = await startBuild(window, "fix-a");
+  await expect(window.getByTestId(pageTestIds.buildBuiltLink(pendingId))).toBeVisible({
+    timeout: watchMs,
+  });
+  const entryOf = (nodeId: string, kind: string, tool?: string) =>
+    buildActivityOf(pendingId).find(
+      (entry) =>
+        entry.nodeId === nodeId &&
+        entry.kind === kind &&
+        (tool === undefined || entry.tool === tool) &&
+        (kind !== "subagent" || entry.state === "finished"),
+    )?.id;
+  const longStep = entryOf(s1, "tool", "Read");
+  const shortStep = entryOf(s1, "subagent");
+  const otherLongStep = entryOf(s2, "tool", "Read");
+  expect([longStep, shortStep, otherLongStep]).toEqual([
+    expect.any(Number),
+    expect.any(Number),
+    expect.any(Number),
+  ]);
+
+  const log = window.getByTestId(pageTestIds.buildActivity(pendingId));
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, s1)).click();
+  await log.getByTestId(`activity-entry-${longStep}-summary`).click();
+  await log.getByTestId(`activity-entry-${shortStep}-summary`).click();
+  const output = log.getByTestId(`activity-entry-${longStep}-output`);
+  await expect(output).toContainText("… cut,");
+  await expect(output).not.toContainText(tail);
+  const fullText = log.getByTestId(`activity-entry-${longStep}-full-text`);
+  await expect(fullText).toHaveAttribute("data-node-id", s1);
+  await expect(log.getByTestId(`activity-entry-${shortStep}-output`)).toBeVisible();
+  await expect(log.getByTestId(`activity-entry-${shortStep}-full-text`)).toHaveCount(0);
+  await expect(
+    log.locator(`[data-testid^="activity-entry-"]:not([data-node-id="${s1}"])`),
+  ).toHaveCount(0);
+
+  await fullText.click();
+
+  await expect(output).toContainText(tail);
+  await expect(output).not.toContainText("… cut,");
+  expect(
+    rows<{ field: string; text: string }>(
+      "SELECT field, text FROM build_step_texts WHERE pending_id = ? AND entry_id = ?",
+      pendingId,
+      String(longStep),
+    ).map((row) => ({
+      field: row.field,
+      long: row.text.length > 2000,
+      holds: row.text.includes(tail),
+    })),
+  ).toContainEqual({ field: "output", long: true, holds: true });
+
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, s2)).click();
+  await log.getByTestId(`activity-entry-${otherLongStep}-summary`).click();
+  const otherOutput = log.getByTestId(`activity-entry-${otherLongStep}-output`);
+  await expect(otherOutput).toContainText("… cut,");
+  await expect(otherOutput).not.toContainText(tail);
+  await expect(log.getByTestId(`activity-entry-${otherLongStep}-full-text`)).toHaveAttribute(
+    "data-node-id",
+    s2,
+  );
+  await expect(log).not.toContainText(s1);
+});
+
 test("a build that ends needing you shows a Needs you card on Builds, its page shows the questions, and Rebuild with answers starts a new build listed as building", async () => {
   test.setTimeout(90_000);
   const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);

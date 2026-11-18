@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { previewOf, type ActivityEntry } from "../../../src/core/run/activity.js";
-import { candidatePaths } from "../../../src/core/run/other-repos.js";
+import { candidatePaths, toolInputPaths } from "../../../src/core/run/other-repos.js";
 
 const home = "/Users/me";
 
@@ -101,5 +101,35 @@ describe("candidatePaths", () => {
       tool(2, "Read", { file_path: "/x/a" }),
     ];
     expect(candidatePaths(entries, { home })).toEqual(candidatePaths([...entries], { home }));
+  });
+});
+
+describe("toolInputPaths", () => {
+  const input = (value: object) => JSON.stringify(value);
+
+  it("takes file_path, path and notebook_path from one tool input", () => {
+    expect(toolInputPaths(input({ file_path: "/x/ios/App.swift" }), { home })).toEqual([
+      "/x/ios/App.swift",
+    ]);
+    expect(toolInputPaths(input({ pattern: "foo", path: "/x/web/src" }), { home })).toEqual([
+      "/x/web/src",
+    ]);
+    expect(toolInputPaths(input({ notebook_path: "/x/data/a.ipynb" }), { home })).toEqual([
+      "/x/data/a.ipynb",
+    ]);
+  });
+
+  it("takes the folders after cd and git -C in a Bash command, expanding ~/", () => {
+    expect(
+      toolInputPaths(input({ command: "cd ~/web && git -C /x/ios pull --ff-only" }), { home }),
+    ).toEqual([`${home}/web`, "/x/ios"]);
+  });
+
+  it("drops relative paths, and ~/ paths when no home is given", () => {
+    expect(toolInputPaths(input({ command: "cd web && git -C ../ios pull" }), { home })).toEqual(
+      [],
+    );
+    expect(toolInputPaths(input({ file_path: "src/App.ts" }), { home })).toEqual([]);
+    expect(toolInputPaths(input({ command: "cd ~/web && cd /x/ios" }), {})).toEqual(["/x/ios"]);
   });
 });

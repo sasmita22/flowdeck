@@ -48,6 +48,7 @@ export type RunBridge = Pick<
   | "deleteRun"
   | "deletePendingBuild"
   | "deletePreview"
+  | "deletePendingPreview"
   | "writeStory"
   | "defaultBranch"
   | "listBranches"
@@ -109,8 +110,11 @@ export type DeleteQuestion =
   | { kind: "run"; id: string; from: "runs" | "run-page" };
 
 export type ConfirmingDelete =
-  | { kind: "build"; id: string; preview: DeletePreview }
-  | Exclude<DeleteQuestion, { kind: "build" }>;
+  | (Exclude<DeleteQuestion, { kind: "run" }> & { preview: DeletePreview })
+  | Extract<DeleteQuestion, { kind: "run" }>;
+
+export const losesWork = (question: ConfirmingDelete): boolean =>
+  question.kind !== "run" && (question.preview.dirtyWorktree || question.preview.unpushedBranch);
 
 export type RunState = {
   snapshots: Record<string, RunSnapshot>;
@@ -660,13 +664,15 @@ export const createRunStore = ({
       closeMenu: () => set({ menuOpen: null }),
 
       askDelete: async (question) => {
-        if (question.kind !== "build") {
+        if (question.kind === "run") {
           set({ confirmingDelete: question });
           return;
         }
         try {
           const preview = deletePreviewSchema.parse(
-            await bridge.deletePreview({ buildId: question.id }),
+            question.kind === "build"
+              ? await bridge.deletePreview({ buildId: question.id })
+              : await bridge.deletePendingPreview({ id: question.id }),
           );
           set({ confirmingDelete: { ...question, preview } });
         } catch (thrown) {

@@ -39,17 +39,20 @@ function absolute(path: string, home: string | undefined): string | undefined {
   return path.startsWith("/") ? path : undefined;
 }
 
+export function toolInputPaths(input: string, { home }: CandidateOptions): string[] {
+  return rawPaths(input)
+    .map((path) => absolute(path, home))
+    .filter((path) => path !== undefined);
+}
+
 export function candidatePaths(
   entries: readonly ActivityEntry[],
-  { home }: CandidateOptions,
+  options: CandidateOptions,
 ): string[] {
   const found = new Set<string>();
   for (const entry of entries) {
     if (entry.kind !== "tool" || entry.input === undefined) continue;
-    for (const path of rawPaths(entry.input)) {
-      const resolved = absolute(path, home);
-      if (resolved !== undefined) found.add(resolved);
-    }
+    for (const path of toolInputPaths(entry.input, options)) found.add(path);
   }
   return [...found].sort().slice(0, candidateCap);
 }
