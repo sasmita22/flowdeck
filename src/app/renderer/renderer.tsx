@@ -7,6 +7,7 @@ import { createBranchStore } from "./branch-store.js";
 import { createBuildProgressStore } from "./build-progress-store.js";
 import { createAppStore } from "./app-store.js";
 import { createCanvasStore } from "./canvas/store.js";
+import { createFullTextStore } from "./inspector/full-text-store.js";
 import { createInspectorStore } from "./inspector/store.js";
 import { createLibraryStore } from "./library-store.js";
 import { createNavStore } from "./nav-store.js";
@@ -51,6 +52,7 @@ function renderApp(root: HTMLElement) {
   void inspector.getState().connect();
   const wait = createWaitStore({ bridge: window.flowdeck });
   void wait.getState().connect();
+  const fullText = createFullTextStore({ bridge: window.flowdeck });
   const shell = createShellStore({ canvas, storage: browserStorage() });
   const syncWindowWidth = () => shell.getState().setWindowWidth(window.innerWidth);
   syncWindowWidth();
@@ -103,6 +105,7 @@ function renderApp(root: HTMLElement) {
       terminal={terminal}
       inspector={inspector}
       wait={wait}
+      fullText={fullText}
       shell={shell}
       workspace={workspace}
       nav={nav}

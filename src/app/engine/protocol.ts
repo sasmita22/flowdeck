@@ -17,6 +17,7 @@ export type EngineRequest = {
     | "open-flow"
     | "list-runs"
     | "load-run"
+    | "step-full-text"
     | "doctor"
     | "build-version"
     | "build-rebuild"
@@ -92,6 +93,9 @@ export type AssistantReadBuild = {
     unpushed: boolean | null;
   } | null;
 };
+
+export type StepFullText =
+  { kept: false } | { kept: true; texts: Partial<Record<"input" | "output" | "report", string>> };
 
 export type BlueprintSessionStarted = { session: string };
 

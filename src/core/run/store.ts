@@ -1,6 +1,7 @@
 import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
 import type { BuildEvent, BuildOutcome, PendingBuild, StoredBuildEvent } from "./build-progress.js";
+import type { OtherRepo, RepoState, RunRepoStates } from "./repo-state.js";
 import type { RunEvent } from "./run-events.js";
 
 export type RunStatus = "running" | "done" | "failed" | "stopped";
@@ -96,6 +97,12 @@ export type RunStory = {
   cost: number;
 };
 
+export type RepoStatePhase = "before" | "after";
+
+export type StepTextField = "input" | "output" | "report";
+
+export type StepText = { field: StepTextField; text: string };
+
 export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string };
 
 export type EventEntry = { nodeId: string; event: RunEvent };
@@ -154,6 +161,15 @@ export interface Store {
   recordCost(runId: string, totalCost: number): void;
   appendRunStory(story: RunStory): void;
   latestRunStory(runId: string): RunStory | undefined;
+  appendRepoState(
+    runId: string,
+    phase: RepoStatePhase,
+    state: RepoState,
+    otherRepos: OtherRepo[],
+  ): void;
+  repoStates(runId: string): RunRepoStates;
+  appendStepText(runId: string, entryId: number, field: StepTextField, text: string): void;
+  stepTexts(runId: string, entryId: number): StepText[];
   stopRun(runId: string): void;
   deleteRun(runId: string): void;
   recordBuild(build: NewBuild): void;

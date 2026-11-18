@@ -87,6 +87,8 @@ import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/run/manifest.js";
 import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
+import { candidatePaths } from "../../core/run/other-repos.js";
+import type { OtherRepo, RepoState } from "../../core/run/repo-state.js";
 import { settings as agentSettings } from "../../core/nodes/agent/settings.js";
 import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
@@ -143,6 +145,7 @@ import type {
   EnginePush,
   EngineRequest,
   EngineResponse,
+  StepFullText,
   StoreOpenResult,
 } from "./protocol.js";
 import { createPublishingStore } from "./publishing-store.js";
@@ -257,6 +260,8 @@ const runBuildPayload = z.object({ buildId: z.string(), auto: z.boolean().option
 
 const runIdPayload = z.object({ runId: z.string() });
 
+const stepFullTextPayload = z.object({ runId: z.string(), entryId: z.number().int() });
+
 const retryPayload = z.object({ runId: z.string(), nodeId: z.string() });
 
 const flowIdPayload = z.object({ flowId: z.string() });
@@ -331,6 +336,13 @@ function detachable(store: Store, detached: () => boolean): Store {
     },
     appendRunStory: (story) => store.appendRunStory(story),
     latestRunStory: (runId) => store.latestRunStory(runId),
+    appendRepoState: (id, phase, state, otherRepos) =>
+      store.appendRepoState(id, phase, state, otherRepos),
+    repoStates: (id) => store.repoStates(id),
+    appendStepText(id, entryId, field, text) {
+      if (!detached()) store.appendStepText(id, entryId, field, text);
+    },
+    stepTexts: (id, entryId) => store.stepTexts(id, entryId),
   };
 }
 
@@ -680,11 +692,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         if (spec.attach === true) await turnStopped(spec, resume?.turnsSent ?? 0);
       },
       async turn(name, text, onCall): Promise<BuildTurnResult> {
-        const result = await options.buildAgents.turn(name, text, (call) => {
-          if (stopped()) return;
-          recordCall(call);
-          onCall(call);
-        });
+        const result = await options.buildAgents.turn(
+          name,
+          text,
+          (call, report) => {
+            if (stopped()) return;
+            recordCall(call, report);
+            onCall(call);
+          },
+          (event) => {
+            if (!stopped()) recordCall.step(event);
+          },
+        );
         if (opened !== undefined) await recordCost(opened.claudeSessionId);
         return result;
       },
@@ -1031,7 +1050,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       .catch((error: unknown) => {
         console.log(`engine: run ${runId} finish error ${messageOf(error)}`);
       })
-      .finally(() => {
+      .finally(async () => {
         if (isDetached()) return;
         options.waits?.drop(runId);
         if (active.get(run.buildId) === run) active.delete(run.buildId);
@@ -1040,6 +1059,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         } catch (error) {
           console.log(`engine: run ${runId} unknown (${messageOf(error)})`);
         }
+        await recordAfter(launch.stores.runs, runId);
         if (run.untold !== true) void narrate(launch.stores.runs, runId);
       });
     active.set(run.buildId, run);
@@ -1113,6 +1133,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       value: runSnapshot({ runId, status: "running", nodeIds, events: [] }),
     });
     const session = { sessionName, socketPath: socket.path, cwd, claudeSessionId };
+    const recordedBefore = recordBefore(runs, runId, cwd);
     return startExecution({
       stores,
       runId,
@@ -1123,8 +1144,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       socketPath: socket.path,
       claudeSessionId,
       stored,
-      open: async () =>
-        needsClaude(manifest)
+      open: async () => {
+        await recordedBefore;
+        return needsClaude(manifest)
           ? announced(
               await options.run.openSession(
                 await sessionOptions(
@@ -1140,7 +1162,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
               sessionName,
               options.publish,
             )
-          : noClaude,
+          : noClaude;
+      },
     });
   };
 
@@ -1363,6 +1386,56 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     );
   };
 
+  const readRepoState = (folder: string): Promise<RepoState> =>
+    options.gitState.repoState(folder).catch(() => ({ kind: "unreadable" }) as const);
+
+  const recordBefore = async (runs: Store, runId: string, cwd: string): Promise<void> => {
+    try {
+      runs.appendRepoState(runId, "before", await readRepoState(cwd), []);
+    } catch (error) {
+      console.log(`engine: run ${runId} before state not recorded (${messageOf(error)})`);
+    }
+  };
+
+  const branchOf = (state: RepoState): string | undefined =>
+    state.kind === "read" ? (state.branch ?? `detached ${state.head}`) : undefined;
+
+  const otherReposOf = async (runs: Store, record: RunRecord): Promise<OtherRepo[]> => {
+    const { gitState, userHome } = options;
+    const own = [record.session.cwd, ...(record.repo === null ? [] : [record.repo])];
+    const skipped = new Set(own);
+    for (const path of own) skipped.add((await gitState.topLevel(path)) ?? path);
+    const tops = new Set<string>();
+    for (const path of candidatePaths(
+      runs.activity(record.id),
+      userHome === undefined ? {} : { home: userHome },
+    )) {
+      const top = await gitState.topLevel(path);
+      if (top !== null && !skipped.has(top)) tops.add(top);
+    }
+    const repos: OtherRepo[] = [];
+    for (const path of [...tops].sort()) {
+      const branch = branchOf(await readRepoState(path));
+      if (branch !== undefined) repos.push({ path, branch });
+    }
+    return repos;
+  };
+
+  const recordAfter = async (runs: Store, runId: string): Promise<void> => {
+    try {
+      const record = runs.findRun(runId);
+      if (record === undefined) return;
+      const state = await readRepoState(record.session.cwd);
+      const otherRepos = await otherReposOf(runs, record).catch((error: unknown) => {
+        console.log(`engine: run ${runId} other repos not read (${messageOf(error)})`);
+        return [];
+      });
+      runs.appendRepoState(runId, "after", state, otherRepos);
+    } catch (error) {
+      console.log(`engine: run ${runId} after state not recorded (${messageOf(error)})`);
+    }
+  };
+
   const stopActive = async (run: ActiveRun): Promise<void> => {
     if (run.interrupt === undefined) run.stopRequested = 143;
     else run.interrupt(143);
@@ -1384,6 +1457,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     if (record?.status !== "running") return { stopped: false };
     runs.stopRun(runId);
+    await recordAfter(runs, runId);
     if (tell) void narrate(runs, runId);
     const { tmuxName } = record.session;
     if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
@@ -1479,6 +1553,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       endedAt: summary.endedAt,
       status: record.status,
       questions: manifest === undefined ? {} : questionsOf(manifest),
+      repoStates: runs.repoStates(runId),
     });
   };
 
@@ -1844,6 +1919,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     };
   };
 
+  const stepFullText = ({ runs }: EngineStores, runId: string, entryId: number): StepFullText => {
+    if (runs.findRunSummary(runId) === undefined) throw new Error(`No run ${runId}`);
+    const kept = runs.stepTexts(runId, entryId);
+    if (kept.length === 0) return { kept: false };
+    return { kept: true, texts: Object.fromEntries(kept.map(({ field, text }) => [field, text])) };
+  };
+
   const blueprintOrThrow = () => {
     if (options.blueprint === undefined) throw new Error("Blueprint sessions are not available");
     return options.blueprint;
@@ -1981,6 +2063,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "load-run":
           return parsedAnswer(request, loadRunPayload, ({ runId }) =>
             loadRun(storesOrThrow(), runId),
+          );
+        case "step-full-text":
+          return parsedAnswer(request, stepFullTextPayload, ({ runId, entryId }) =>
+            stepFullText(storesOrThrow(), runId, entryId),
           );
         case "doctor":
           return parsedAnswer(request, doctorPayload, ({ connectors }) => doctor(connectors));

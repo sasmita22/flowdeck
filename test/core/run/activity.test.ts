@@ -7,6 +7,7 @@ import {
   feedOf,
   foldHookEvent,
   foldNodeEvent,
+  isCut,
   previewOf,
   type ActivityEntry,
   type ActivityFeed,
@@ -408,6 +409,7 @@ describe("Activity by node", () => {
     expect(foldHookEvent(emptyFeed, windows, pre({ agent_id: "a2acfd3c49ca63d33" }))).toEqual({
       feed: emptyFeed,
       changed: [],
+      cut: [],
     });
   });
 });
@@ -553,6 +555,7 @@ describe("a tool step's input, output, result and duration", () => {
     expect(foldHookEvent(feed, windows, post({ tool_use_id: "toolu_other" }))).toEqual({
       feed,
       changed: [],
+      cut: [],
     });
   });
 
@@ -564,6 +567,62 @@ describe("a tool step's input, output, result and duration", () => {
     expect(unended).not.toHaveProperty("output");
     expect(unended).not.toHaveProperty("result");
     expect(unended).not.toHaveProperty("durationMs");
+  });
+
+  describe("the full text of a cut field", () => {
+    it("keeps a long output's preview and reports its full text", () => {
+      const response = { stdout: "s".repeat(5_000) };
+      const full = JSON.stringify(response);
+      const { feed } = foldSteps([pre()]);
+
+      const ended = foldHookEvent(feed, windows, post({ tool_response: response }));
+
+      expect(ended.changed).toMatchObject([{ id: 1, output: previewOf(full) }]);
+      expect(ended.changed[0]).toMatchObject({
+        output: expect.stringMatching(/\n… cut, \d+ more characters$/) as unknown,
+      });
+      expect(ended.cut).toEqual([{ entryId: 1, field: "output", text: full }]);
+    });
+
+    it("reports a long input's full text", () => {
+      const full = JSON.stringify({ command: "x".repeat(3_000) });
+
+      const { cut } = foldHookEvent(
+        emptyFeed,
+        windows,
+        pre({ tool_input: { command: "x".repeat(3_000) } }),
+      );
+
+      expect(cut).toEqual([{ entryId: 1, field: "input", text: full }]);
+    });
+
+    it("reports a failed call's long error as its output", () => {
+      const error = "e".repeat(2_500);
+      const { feed } = foldSteps([readMissing]);
+
+      const { cut } = foldHookEvent(feed, windows, {
+        kind: "PostToolUseFailure",
+        payload: { ...readFailed.payload, error },
+      });
+
+      expect(cut).toEqual([{ entryId: 1, field: "output", text: error }]);
+    });
+
+    it("reports nothing when no field was cut", () => {
+      const { feed } = foldSteps([pre()]);
+
+      expect(foldHookEvent(emptyFeed, windows, pre()).cut).toEqual([]);
+      expect(foldHookEvent(feed, windows, post()).cut).toEqual([]);
+    });
+
+    it("keeps text with lone surrogates as given", () => {
+      const output = `${"a".repeat(1_999)}\uD800${"b".repeat(600)}\uDC00`;
+      const { feed } = foldSteps([pre()]);
+
+      const { cut } = foldHookEvent(feed, windows, post({ tool_response: output }));
+
+      expect(cut).toEqual([{ entryId: 1, field: "output", text: output }]);
+    });
   });
 });
 
@@ -647,6 +706,19 @@ describe("a subagent's steps credited to its stage", () => {
       ]);
 
       expect(changes[1]).toMatchObject([{ id: 1, report: previewOf(text) }]);
+    });
+
+    it("reports a long report's full text", () => {
+      const text = "r".repeat(2_500);
+      const { feed } = foldLanes([laneCall("l1")]);
+
+      const { cut } = foldHookEvent(
+        feed,
+        lanes,
+        laneDone("l1", "agent-x", [{ type: "text", text }]),
+      );
+
+      expect(cut).toEqual([{ entryId: 1, field: "report", text }]);
     });
 
     it("credits a later step of a linked agent to its call's node, not to the other running call", () => {
@@ -1004,6 +1076,20 @@ describe("previewOf", () => {
     const text = "a".repeat(2_000) + "b".repeat(537);
 
     expect(previewOf(text)).toBe(`${"a".repeat(2_000)}\n… cut, 537 more characters`);
+  });
+});
+
+describe("isCut", () => {
+  it("is true for a preview that was cut", () => {
+    expect(isCut(previewOf("a".repeat(2_001)))).toBe(true);
+  });
+
+  it("is false for text that was not cut", () => {
+    expect(isCut("a".repeat(2_000))).toBe(false);
+  });
+
+  it("is false for text that only mentions the marker before its end", () => {
+    expect(isCut("\n… cut, 5 more characters and then more")).toBe(false);
   });
 });
 

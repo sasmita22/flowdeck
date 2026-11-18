@@ -1,10 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import { agent, flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
 import { controlTestIds, dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -136,7 +137,12 @@ test("A run that ends shows its Story while the page stays open: header with rep
   expect(branch).toEqual(expect.any(String));
 
   await expectHeaderAndDigest(window);
-  await expect(window.getByTestId(pageTestIds.runStoryHeader)).toContainText(branch ?? "");
+  await expect(window.getByTestId(pageTestIds.runStoryHeader)).toHaveText(
+    ["story-run", "Gate check v1", repo.path, branch ?? ""].join(""),
+  );
+  await expect(window.getByTestId(pageTestIds.runStoryOtherRepos)).toHaveCount(0);
+  await expect(window.getByTestId(pageTestIds.runStoryDigest)).toContainText("Before: ");
+  await expect(window.getByTestId(pageTestIds.runStoryDigest)).toContainText("After: ");
   await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeResult, {
     timeout: 20_000,
   });
@@ -230,4 +236,55 @@ test("An ended run with no story offers Write story: it shows the narrator's err
   });
   await expect(reopened.getByTestId(pageTestIds.runStoryWrite)).toHaveCount(0);
   await expect(reopened.getByTestId(pageTestIds.runStoryWriteError)).toHaveCount(0);
+});
+
+const committer = [
+  "-c",
+  "user.name=Flowdeck Test",
+  "-c",
+  "user.email=test@flowdeck.invalid",
+  "-c",
+  "commit.gpgsign=false",
+];
+
+const otherRepoOnMaster = async () => {
+  const path = join(await realpath(home), "other-repo");
+  await mkdir(path);
+  execFileSync("git", ["init", "--quiet", "--initial-branch=master"], { cwd: path });
+  execFileSync("git", [...committer, "commit", "--quiet", "--allow-empty", "-m", "initial"], {
+    cwd: path,
+  });
+  return path;
+};
+
+test("A run whose agent worked in another repo names that repo and its branch in the Story header", async () => {
+  const otherRepo = await otherRepoOnMaster();
+  seedBlueprint(
+    home,
+    "Other repo",
+    flow(
+      [trigger("start"), agent("s1"), output("stop")],
+      [thenWire("start", "s1"), thenWire("s1", "stop")],
+    ),
+    repo.path,
+  );
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    stepCommand: `cd ${otherRepo} && git pull`,
+  });
+  const { window } = launched;
+  await expect(window.getByTestId("canvas-build")).toBeVisible();
+  await buildOnCanvas(window, home, "other-repo-run");
+  await runFromDetail(window);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+
+  const header = window.getByTestId(pageTestIds.runStoryHeader);
+  await expect(header).toContainText(otherRepo, { timeout: 20_000 });
+  await expect(header).toContainText("master");
+  await expect(window.getByTestId(pageTestIds.runStoryOtherRepos)).toHaveText(
+    `${otherRepo} · master`,
+  );
 });

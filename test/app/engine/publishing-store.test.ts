@@ -130,6 +130,35 @@ describe("createPublishingStore", () => {
     expect(inner.activity(runId)).toEqual([entry]);
   });
 
+  it("passes repo states and step texts to the inner store and back, publishing nothing", () => {
+    const { inner, runId, pushes, store } = setup();
+    const state = {
+      kind: "read" as const,
+      branch: "dev",
+      head: "abc",
+      upstream: null,
+      staged: 1,
+      unstaged: 0,
+      untracked: 0,
+    };
+
+    store.appendRepoState(runId, "before", state, []);
+    store.appendRepoState(runId, "after", { kind: "unreadable" }, [
+      { path: "/x/web", branch: "dev" },
+    ]);
+    store.appendStepText(runId, 1, "output", "full output");
+
+    expect(inner.repoStates(runId)).toEqual({
+      before: state,
+      after: { kind: "unreadable" },
+      otherRepos: [{ path: "/x/web", branch: "dev" }],
+    });
+    expect(store.repoStates(runId)).toEqual(inner.repoStates(runId));
+    expect(inner.stepTexts(runId, 1)).toEqual([{ field: "output", text: "full output" }]);
+    expect(store.stepTexts(runId, 1)).toEqual(inner.stepTexts(runId, 1));
+    expect(pushes).toEqual([]);
+  });
+
   it("deletes a build through the inner store, publishing no run state", () => {
     const { inner, pushes, store } = setup();
     inner.recordBuild(build);

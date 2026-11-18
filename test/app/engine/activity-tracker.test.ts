@@ -4,7 +4,8 @@ import {
   createBuildActivity,
 } from "../../../src/app/engine/activity-tracker.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
-import type { ActivityEntry } from "../../../src/core/run/activity.js";
+import { previewOf, type ActivityEntry } from "../../../src/core/run/activity.js";
+import type { BuildStepEvent } from "../../../src/ports/build-agents.js";
 import type { Store } from "../../../src/ports/store.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
@@ -18,6 +19,7 @@ describe("createActivityTracker", () => {
   let publish: (push: EnginePush) => void;
   let inner: FakeStore;
   let rows: ActivityEntry[];
+  let texts: unknown[][];
   let runId: string;
   let store: Store;
   let source: FakeEventSource;
@@ -62,6 +64,7 @@ describe("createActivityTracker", () => {
     publish = (push) => pushes.push(push);
     inner = new FakeStore();
     rows = [];
+    texts = [];
     runId = inner.createRun({
       buildDir: "/fd-home/builds/b1",
       inputs: {},
@@ -80,6 +83,10 @@ describe("createActivityTracker", () => {
           inner.recordActivity(id, entry);
         },
         activity: (id) => inner.activity(id),
+        appendStepText: (...call) => {
+          texts.push(call);
+          inner.appendStepText(...call);
+        },
       },
       turnNodes: new Set(["p2"]),
       place: { cwd: "/repo", home: "/Users/me" },
@@ -378,6 +385,53 @@ describe("createActivityTracker", () => {
     expect(inner.activity(runId)).toMatchObject([{ id: 1, result: "error" }]);
   });
 
+  describe("the full text of a cut step", () => {
+    const longOutput = "o".repeat(5_000);
+    const longCommand = "c".repeat(3_000);
+    const run = (command: string, output: string) => {
+      hook("PreToolUse", 350, {
+        tool_name: "Bash",
+        tool_input: { command },
+        tool_use_id: "toolu_long",
+      });
+      hook("PostToolUse", 360, {
+        tool_name: "Bash",
+        tool_input: { command },
+        tool_use_id: "toolu_long",
+        tool_response: output,
+      });
+    };
+
+    it("stores a cut output's full text once", () => {
+      run("ls", longOutput);
+
+      expect(texts).toEqual([[runId, 1, "output", longOutput]]);
+      expect(inner.stepTexts(runId, 1)).toEqual([{ field: "output", text: longOutput }]);
+    });
+
+    it("stores nothing for a step with nothing cut", () => {
+      run("ls", "README.md\n");
+
+      expect(texts).toEqual([]);
+    });
+
+    it("stores both fields when the input and the output were cut", () => {
+      run(longCommand, longOutput);
+
+      expect(texts).toEqual([
+        [runId, 1, "input", JSON.stringify({ command: longCommand })],
+        [runId, 1, "output", longOutput],
+      ]);
+    });
+
+    it("pushes and records only the preview", () => {
+      run("ls", longOutput);
+
+      expect(activity().at(-1)?.value).toMatchObject({ entry: { output: previewOf(longOutput) } });
+      expect(rows.at(-1)).toMatchObject({ output: previewOf(longOutput) });
+    });
+  });
+
   it("numbers new entries after the run's stored ones", () => {
     const stored = new FakeStore();
     const id = stored.createRun({
@@ -423,5 +477,175 @@ describe("createBuildActivity", () => {
 
     expect(store.buildActivity("pending-1")).toEqual([]);
     expect(pushes).toEqual([]);
+  });
+
+  describe("a build agent's own steps", () => {
+    const pendingId = "pending-1";
+    let store: FakeStore;
+    let pushes: EnginePush[];
+    let record: ReturnType<typeof createBuildActivity>;
+    const step = (event: BuildStepEvent) => record.step(event);
+
+    beforeEach(() => {
+      store = new FakeStore();
+      pushes = [];
+      record = createBuildActivity({
+        pendingId,
+        now: () => 10,
+        activity: store,
+        publish: (push) => pushes.push(push),
+      });
+    });
+
+    const latest = (): ActivityEntry[] => [
+      ...new Map(store.buildActivity(pendingId).map((entry) => [entry.id, entry])).values(),
+    ];
+    const toolSteps = () =>
+      latest().filter(
+        (entry): entry is Extract<ActivityEntry, { kind: "tool" }> => entry.kind === "tool",
+      );
+    const start = (piece: string, toolUseId: string, agentType: string) =>
+      record({ piece, toolUseId, agentType });
+    const finish = (piece: string, toolUseId: string, agentType: string, agentId: string) =>
+      record({ piece, toolUseId, agentType, agentId, status: "completed" });
+    const inner = (agentId: string, agentType: string, toolUseId: string, at: number) => ({
+      agent_id: agentId,
+      agent_type: agentType,
+      tool_name: "Read",
+      tool_use_id: toolUseId,
+      tool_input: { file_path: `/work/${toolUseId}.md` },
+      flowdeck_hook_at: at,
+    });
+    const read = (agentId: string, agentType: string, toolUseId: string, at = 20) =>
+      step({ kind: "PreToolUse", payload: inner(agentId, agentType, toolUseId, at) });
+    const readDone = (agentId: string, agentType: string, toolUseId: string, at = 23) =>
+      step({
+        kind: "PostToolUse",
+        payload: {
+          ...inner(agentId, agentType, toolUseId, at),
+          tool_response: "body",
+          duration_ms: 3,
+        },
+      });
+
+    it("credits a step to the one running piece of its agent type, with input, output and duration", () => {
+      start("s1", "t1", "A1");
+      start("s2", "t2", "A2");
+
+      read("ag-1", "A1", "r1");
+      readDone("ag-1", "A1", "r1");
+
+      expect(toolSteps()).toEqual([
+        expect.objectContaining({
+          nodeId: "s1",
+          tool: "Read",
+          at: 20,
+          input: previewOf(JSON.stringify({ file_path: "/work/r1.md" })),
+          output: "body",
+          result: "ok",
+          durationMs: 3,
+        }),
+      ]);
+    });
+
+    it("ends a failed step as failed, with its error", () => {
+      start("s1", "t1", "A1");
+
+      read("ag-1", "A1", "b1");
+      step({
+        kind: "PostToolUseFailure",
+        payload: { ...inner("ag-1", "A1", "b1", 25), error: "exit 1" },
+      });
+
+      expect(toolSteps()).toEqual([
+        expect.objectContaining({ nodeId: "s1", result: "error", output: "exit 1" }),
+      ]);
+    });
+
+    it("records no step whose agent type matches no started piece", () => {
+      start("s1", "t1", "A1");
+
+      read("ag-9", "A9", "r9");
+      readDone("ag-9", "A9", "r9");
+
+      expect(toolSteps()).toEqual([]);
+    });
+
+    it("holds the steps of pieces that share an agent type until each finish names its agent", () => {
+      start("s1", "t1", "flowdeck-build:piece-auditor");
+      start("s2", "t2", "flowdeck-build:piece-auditor");
+
+      read("ag-1", "flowdeck-build:piece-auditor", "r1");
+      readDone("ag-1", "flowdeck-build:piece-auditor", "r1");
+      read("ag-2", "flowdeck-build:piece-auditor", "r2", 30);
+      expect(toolSteps()).toEqual([]);
+
+      finish("s2", "t2", "flowdeck-build:piece-auditor", "ag-2");
+      expect(toolSteps().map((entry) => [entry.toolUseId, entry.nodeId])).toEqual([["r2", "s2"]]);
+
+      finish("s1", "t1", "flowdeck-build:piece-auditor", "ag-1");
+      expect(toolSteps().map((entry) => [entry.toolUseId, entry.nodeId, entry.result])).toEqual([
+        ["r2", "s2", undefined],
+        ["r1", "s1", "ok"],
+      ]);
+    });
+
+    it("keeps one piece's steps off a later piece of the same agent type", () => {
+      start("s1", "t1", "flowdeck-build:piece-auditor");
+      read("ag-1", "flowdeck-build:piece-auditor", "r1");
+      start("s2", "t2", "flowdeck-build:piece-auditor");
+      read("ag-2", "flowdeck-build:piece-auditor", "r2");
+      readDone("ag-1", "flowdeck-build:piece-auditor", "r1");
+      read("ag-1", "flowdeck-build:piece-auditor", "r3");
+
+      expect(toolSteps().map((entry) => [entry.toolUseId, entry.nodeId])).toEqual([
+        ["r1", "s1"],
+        ["r2", "s2"],
+        ["r3", "s1"],
+      ]);
+    });
+
+    it("puts the agent's report on its finish entry, as a preview", () => {
+      const report = `Wrote s1. ${"r".repeat(3_000)}`;
+      start("s1", "t1", "A1");
+
+      record({ piece: "s1", toolUseId: "t1", agentType: "A1", status: "completed" }, report);
+
+      expect(latest()).toEqual([
+        expect.objectContaining({
+          kind: "subagent",
+          nodeId: "s1",
+          state: "finished",
+          report: previewOf(report),
+        }),
+      ]);
+    });
+
+    it("gives every entry a unique, rising id and sends each new or changed entry to the store and the page", () => {
+      start("s1", "t1", "A1");
+      read("ag-1", "A1", "r1");
+      start("s2", "t2", "A2");
+      readDone("ag-1", "A1", "r1");
+      finish("s1", "t1", "A1", "ag-1");
+
+      const appended = store.buildActivity(pendingId);
+      const ids = [...new Set(appended.map((entry) => entry.id))];
+      expect(ids).toEqual([...ids].sort((a, b) => a - b));
+      expect(latest().map((entry) => [entry.kind, entry.nodeId])).toEqual([
+        ["subagent", "s1"],
+        ["tool", "s1"],
+        ["subagent", "s2"],
+      ]);
+      expect(pushes).toEqual(
+        appended.map((entry) => ({ push: "build-activity", pendingId, entry })),
+      );
+    });
+
+    it("keeps the piece as the summary of its start entry", () => {
+      start("s1", "t1", "A1");
+      read("ag-1", "A1", "r1");
+
+      expect(latest().find((entry) => entry.kind === "subagent")?.summary).toBe("s1");
+    });
   });
 });

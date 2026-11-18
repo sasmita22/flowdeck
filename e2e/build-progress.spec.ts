@@ -235,6 +235,93 @@ test("a build whose first check fails shows a round 2 lane, round 1 Verify shows
   await expect(log).not.toContainText("plugin/agents/s1.md");
 });
 
+type StoredEntry = {
+  id: number;
+  nodeId: string;
+  kind: string;
+  tool?: string;
+  state?: string;
+  result?: string;
+};
+
+const buildActivityOf = (pendingId: string): StoredEntry[] => [
+  ...new Map(
+    rows<{ body_json: string }>(
+      "SELECT body_json FROM build_activity WHERE pending_id = ? ORDER BY seq",
+      pendingId,
+    )
+      .map((row) => JSON.parse(row.body_json) as StoredEntry)
+      .map((entry) => [entry.id, entry] as const),
+  ).values(),
+];
+
+test("an agent row's log shows each step its build agent took, with the time, the detail and the agent's report, and none of another agent's steps", async () => {
+  test.setTimeout(90_000);
+  const s1 = "plugin/agents/s1.md";
+  const s2 = "plugin/agents/s2.md";
+  const { flowId } = seedBlueprint(home, "Fixer", twoAgents(), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    pieceMs,
+  });
+  const { window } = launched;
+  await openBlueprint(window, flowId);
+
+  const pendingId = await startBuild(window, "fix-a");
+  const log = window.getByTestId(pageTestIds.buildActivity(pendingId));
+  const toolOf = (nodeId: string, tool: string) =>
+    buildActivityOf(pendingId).find(
+      (entry) => entry.kind === "tool" && entry.nodeId === nodeId && entry.tool === tool,
+    );
+  const entryId = (entry: StoredEntry | undefined) => `activity-entry-${entry?.id ?? "missing"}`;
+
+  await expect(window.getByTestId(pageTestIds.buildStage(pendingId, 3, 1))).toContainText(
+    "running",
+    { timeout: watchMs },
+  );
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, s1)).click();
+  await expect.poll(() => toolOf(s1, "Read")?.result, { timeout: watchMs }).toBe("ok");
+  await expect(window.getByTestId(`${entryId(toolOf(s1, "Read"))}-time`)).toHaveText(
+    /^\d{2}:\d{2}:\d{2}$/,
+  );
+  await expect(window.getByTestId(pageTestIds.buildBuiltLink(pendingId))).toHaveCount(0);
+
+  await expect(window.getByTestId(pageTestIds.buildBuiltLink(pendingId))).toBeVisible({
+    timeout: watchMs,
+  });
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, s1)).click();
+  const read = entryId(toolOf(s1, "Read"));
+  await expect(window.getByTestId(`${read}-time`)).toHaveText(/^\d{2}:\d{2}:\d{2}$/);
+  await expect(window.getByTestId(read)).toContainText(/Read .* · ok · \d+\.\ds$/);
+  await window.getByTestId(`${read}-summary`).click();
+  await expect(window.getByTestId(`${read}-input`)).toContainText(s1);
+  await expect(window.getByTestId(`${read}-output`)).toContainText("Fake piece body.");
+
+  expect(toolOf(s1, "Bash")?.result).toBe("error");
+  const check = entryId(toolOf(s1, "Bash"));
+  await expect(window.getByTestId(check)).toContainText("Bash npm run check · error");
+  await window.getByTestId(`${check}-summary`).click();
+  await expect(window.getByTestId(`${check}-output`)).toContainText(`Fake check failed for ${s1}.`);
+
+  const finished = buildActivityOf(pendingId).find(
+    (entry) => entry.kind === "subagent" && entry.nodeId === s1 && entry.state === "finished",
+  );
+  const agentEntry = entryId(finished);
+  await window.getByTestId(`${agentEntry}-summary`).click();
+  await expect(window.getByTestId(`${agentEntry}-output`)).toHaveText(
+    `Fake build report from ${s1}.`,
+  );
+
+  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, s2)).click();
+  await expect(window.getByTestId(entryId(toolOf(s2, "Read")))).toBeVisible();
+  await expect(log).toContainText(s2);
+  await expect(log).not.toContainText(s1);
+  expect(
+    buildActivityOf(pendingId).filter((entry) => entry.nodeId === s2 && entry.kind === "tool"),
+  ).toEqual([expect.objectContaining({ tool: "Read", result: "ok" })]);
+});
+
 test("a build that ends needing you shows a Needs you card on Builds, its page shows the questions, and Rebuild with answers starts a new build listed as building", async () => {
   test.setTimeout(90_000);
   const { flowId } = seedBlueprint(home, "Fixer", oneAgent(), repo.path);

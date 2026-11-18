@@ -26,6 +26,7 @@ export const engineCalls = {
   runBuild: { channel: "flowdeck:run-build", request: "run-build" },
   listRuns: { channel: "flowdeck:list-runs", request: "list-runs" },
   loadRun: { channel: "flowdeck:load-run", request: "load-run" },
+  stepFullText: { channel: "flowdeck:step-full-text", request: "step-full-text" },
   doctor: { channel: "flowdeck:doctor", request: "doctor" },
   runOptions: { channel: "flowdeck:run-options", request: "run-options" },
   stopRun: { channel: "flowdeck:stop-run", request: "stop-run" },
@@ -85,6 +86,7 @@ export type EngineCalls = {
   runBuild(payload: { buildId: string; auto?: boolean }): Promise<unknown>;
   listRuns(): Promise<unknown>;
   loadRun(payload: { runId: string }): Promise<unknown>;
+  stepFullText(payload: { runId: string; entryId: number }): Promise<unknown>;
   doctor(payload: { connectors: string[] }): Promise<unknown>;
   runOptions(payload: { buildId: string }): Promise<unknown>;
   stopRun(payload: { runId: string }): Promise<unknown>;

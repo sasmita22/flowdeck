@@ -44,6 +44,24 @@ const writeFor = (nodeId) => {
     writeFileSync(resolve(process.cwd(), path), content);
   }
 };
+const stepFile = resolve(__dirname, "step.json");
+const plannedStep = existsSync(stepFile) ? JSON.parse(readFileSync(stepFile, "utf8")) : {};
+const fullOutputTail = "END-OF-FULL-OUTPUT";
+const stepOutput = () => {
+  const chars = plannedStep.outputChars;
+  if (chars === undefined) return "traced\\n";
+  const body = "0123456789abcdef".repeat(Math.ceil(chars / 16)).slice(0, Math.max(0, chars - fullOutputTail.length));
+  return body + fullOutputTail;
+};
+const stepEnd = (nodeId, step) =>
+  (plannedStep.fails ?? []).includes(nodeId)
+    ? { hook_event_name: "PostToolUseFailure", ...step, error: "Fake step failed in " + nodeId + "." }
+    : {
+        hook_event_name: "PostToolUse",
+        ...step,
+        tool_response: { stdout: stepOutput(), stderr: "", interrupted: false },
+        duration_ms: 7,
+      };
 const outcomeOf = (nodeId) => {
   const planned = plannedTurns[nodeId] ?? "done";
   if (!planned.endsWith("-once")) return planned;
@@ -72,17 +90,12 @@ const runTurn = (text) => {
     agent_type: agentType,
     tool_name: "Bash",
     tool_use_id: "fake-step-" + nodeId + "-" + Date.now(),
-    tool_input: { command: "echo traced", description: "Echo a word" },
+    tool_input: { command: plannedStep.command ?? "echo traced", description: "Echo a word" },
   };
   const hooks = [
     { hook_event_name: "PreToolUse", ...agentCall },
     { hook_event_name: "PreToolUse", ...step },
-    {
-      hook_event_name: "PostToolUse",
-      ...step,
-      tool_response: { stdout: "traced\\n", stderr: "", interrupted: false },
-      duration_ms: 7,
-    },
+    stepEnd(nodeId, step),
     {
       hook_event_name: "PostToolUse",
       ...agentCall,
@@ -136,6 +149,34 @@ const writeUsage = () => {
   };
   writeFileSync(resolve(projectsDir, sessionId + ".jsonl"), JSON.stringify(line) + "\\n");
 };
+const innerSpacing = 20;
+const failingPiece = "plugin/agents/s1.md";
+const pieceSteps = (agentType, index, path) => {
+  const inner = (toolName, toolInput) => ({
+    agent_id: "fake-build-agent-" + index,
+    agent_type: agentType,
+    tool_name: toolName,
+    tool_use_id: "fake-build-" + toolName + "-" + index + "-" + Date.now(),
+    tool_input: toolInput,
+  });
+  const read = inner("Read", { file_path: resolve(process.cwd(), path) });
+  const steps = [
+    { hook_event_name: "PreToolUse", ...read },
+    {
+      hook_event_name: "PostToolUse",
+      ...read,
+      tool_response: { type: "text", file: { filePath: read.tool_input.file_path, content: "Fake piece body." } },
+      duration_ms: 3,
+    },
+  ];
+  if (path !== failingPiece) return steps;
+  const check = inner("Bash", { command: "npm run check", description: "Check the piece" });
+  return [
+    ...steps,
+    { hook_event_name: "PreToolUse", ...check },
+    { hook_event_name: "PostToolUseFailure", ...check, error: "Fake check failed for " + path + "." },
+  ];
+};
 const buildTurn = (text) => {
   writeUsage();
   const agentType = /flowdeck-build:[a-z-]+/.exec(text)?.[0] ?? "";
@@ -146,12 +187,23 @@ const buildTurn = (text) => {
       const path = block.split("\\n", 1)[0].slice("PIECE ".length).trim();
       const call = { tool_name: "Agent", tool_use_id: "fake-" + index, tool_input: { subagent_type: agentType, prompt: block } };
       send({ hook_event_name: "PreToolUse", ...call });
+      const innerSteps = pieceSteps(agentType, index, path);
+      innerSteps.forEach((hook, at) => {
+        setTimeout(() => send({ ...hook, flowdeck_hook_at: Date.now() }), innerSpacing * (at + 1));
+      });
       const finish = () => {
         if (!(firstRound && path === unfilledOnce)) fill(path);
-        send({ hook_event_name: "PostToolUse", ...call, tool_response: { agentType, status: "completed" } });
+        send({
+          hook_event_name: "PostToolUse",
+          ...call,
+          tool_response: {
+            agentType,
+            status: "completed",
+            content: [{ type: "text", text: "Fake build report from " + path + "." }],
+          },
+        });
       };
-      if (pieceMs === 0) finish();
-      else setTimeout(finish, pieceMs);
+      setTimeout(finish, innerSpacing * (innerSteps.length + 1) + pieceMs);
     }, spacing * (index + 1));
   });
   setTimeout(() => {
@@ -335,6 +387,9 @@ export type FakeClaudeLaunchOptions = LaunchOptions & {
   usage?: { userHome: string; model: string; inputTokens: number; outputTokens: number };
   turns?: Record<string, FakeAgentTurn>;
   writes?: Record<string, Record<string, string>>;
+  stepCommand?: string;
+  stepOutputChars?: number;
+  stepFails?: string[];
 };
 
 export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Promise<LaunchedApp> {
@@ -347,6 +402,9 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     usage,
     turns,
     writes,
+    stepCommand,
+    stepOutputChars,
+    stepFails,
     ...launchOptions
   } = options;
   const bin = join(options.home, "fake-claude-bin");
@@ -357,6 +415,10 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
   if (question !== undefined) await writeFile(join(bin, "question"), JSON.stringify(question));
   if (turns !== undefined) await writeFile(join(bin, "turns.json"), JSON.stringify(turns));
   if (writes !== undefined) await writeFile(join(bin, "writes.json"), JSON.stringify(writes));
+  if (stepCommand !== undefined || stepOutputChars !== undefined || stepFails !== undefined) {
+    const step = { command: stepCommand, outputChars: stepOutputChars, fails: stepFails };
+    await writeFile(join(bin, "step.json"), JSON.stringify(step));
+  }
   if (usage !== undefined) {
     const { model, inputTokens, outputTokens } = usage;
     await writeFile(join(bin, "usage"), JSON.stringify({ model, inputTokens, outputTokens }));

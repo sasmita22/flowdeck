@@ -6,6 +6,7 @@ import { checkBuild } from "../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
 import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
+import type { BuildStepEvent } from "../../src/ports/build-agents.js";
 import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
@@ -142,6 +143,59 @@ describe("FakeBuildAgents", () => {
         [piece, "completed"],
       ]),
     );
+  });
+
+  it("sends a scripted piece's steps in order and its report with the finish call", async () => {
+    const state = await laid();
+    const [first = "", second = ""] = pieceFiles(state.manifest);
+    const read: BuildStepEvent = {
+      kind: "PreToolUse",
+      payload: { agent_id: "agent-1", tool_name: "Read", tool_use_id: "read-1" },
+    };
+    const readDone: BuildStepEvent = {
+      kind: "PostToolUse",
+      payload: { agent_id: "agent-1", tool_name: "Read", tool_use_id: "read-1" },
+    };
+    const agents = await openWith(state, {
+      steps: { [first]: [read, readDone] },
+      reports: { [first]: "Wrote the piece." },
+    });
+    const seen: unknown[] = [];
+
+    await agents.turn(
+      sessionName,
+      turnText([first, second]),
+      (...args) => seen.push(["call", ...args]),
+      (event) => seen.push(["step", event]),
+    );
+
+    expect(seen).toEqual([
+      ["call", { piece: first }],
+      ["step", read],
+      ["step", readDone],
+      ["call", { piece: first, status: "completed" }, "Wrote the piece."],
+      ["call", { piece: second }],
+      ["call", { piece: second, status: "completed" }],
+    ]);
+  });
+
+  it("sends no steps and no report when none are scripted", async () => {
+    const state = await laid();
+    const [piece = ""] = pieceFiles(state.manifest);
+    const agents = await openWith(state);
+    const seen: unknown[] = [];
+
+    await agents.turn(
+      sessionName,
+      turnText([piece]),
+      (...args) => seen.push(["call", ...args]),
+      (event) => seen.push(["step", event]),
+    );
+
+    expect(seen).toEqual([
+      ["call", { piece }],
+      ["call", { piece, status: "completed" }],
+    ]);
   });
 
   it("fills every named piece so the step-5 checker passes the workspace", async () => {

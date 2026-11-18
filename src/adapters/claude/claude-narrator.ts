@@ -8,11 +8,11 @@ import { PARENT_SESSION_VARS } from "./claude-cli.js";
 export const narratorPrompt = [
   "Stdin holds the digest of one finished Flowdeck run: the facts of a multi-step job Flowdeck ran for the user.",
   "Write exactly three parts, each starting on its own line with its label, in this order: Context:, Goal:, Result:.",
-  "Context: one or two sentences naming the repo and branch, from the Repo and Branch lines, and how things stood before the run.",
+  "Context: one or two sentences naming the repo and branch, from the Repo and Branch lines, and how things stood before the run, from the Before: line.",
   "Goal: one or two sentences on what the job was meant to accomplish, from the Instructions lines, or from the stage labels when there are none.",
-  "Result: what was done and how things stand after, from the Report, Steps, Files written and Final reply lines, the Run status line and each stage's status; for a failed or stopped run, where it stopped and what was left undone.",
-  "Use only facts from the digest and name stages by their labels. Name any other repo only when the digest shows it.",
-  'When the digest does not show how things stood before or after, write "not recorded" instead of guessing.',
+  "Result: what was done and how things stand after, from the After: line and the Report, Steps, Files written and Final reply lines, the Run status line and each stage's status; for a failed or stopped run, where it stopped and what was left undone.",
+  "Use only facts from the digest and name stages by their labels. Name any other repo only when an Other repos: line shows it.",
+  'When the Before: or After: line says "not recorded", or the digest does not show how things stood, write "not recorded" instead of guessing.',
   "Plain text: no headings, lists or markdown.",
 ].join("\n");
 

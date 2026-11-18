@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createBuildProgressStore,
   selectBuildingCards,
@@ -182,6 +182,54 @@ describe("build progress store", () => {
       subagent(1, "agents/c.md", "finished"),
       subagent(2, "agents/a.md", "running"),
     ]);
+  });
+
+  describe("a long build's activity", () => {
+    const ascending = 5_000;
+    const replaced = 100;
+
+    const pushLongActivity = (pushActivity: (update: unknown) => void) => {
+      for (let id = 1; id <= ascending; id += 1)
+        pushActivity({ pendingId: "pb-1", entry: subagent(id * 2, `agents/${id}.md`, "running") });
+      for (let id = 1; id <= replaced; id += 1)
+        pushActivity({
+          pendingId: "pb-1",
+          entry: subagent(id * 2, `agents/${id}.md`, "finished"),
+        });
+    };
+
+    it("takes each push without sorting or rebuilding the feed", async () => {
+      const { pushActivity } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(3))]);
+      const sorts = vi.spyOn(Array.prototype, "sort");
+      const sets = vi.spyOn(Map.prototype, "set");
+
+      try {
+        pushLongActivity(pushActivity);
+
+        expect(sorts).not.toHaveBeenCalled();
+        expect(sets.mock.calls.length).toBeLessThanOrEqual(4 * (ascending + replaced));
+      } finally {
+        sorts.mockRestore();
+        sets.mockRestore();
+      }
+    });
+
+    it("keeps the feed ordered by id, one entry per id, newest version of each", async () => {
+      const { store, pushActivity } = await setup([entry(pending("pb-1", "flow-a", 1), atStep(3))]);
+
+      pushLongActivity(pushActivity);
+      pushActivity({ pendingId: "pb-1", entry: subagent(3, "agents/late.md", "running") });
+
+      const feed = store.getState().activityFor("pb-1");
+      const ids = feed.map(({ id }) => id);
+      expect(ids).toEqual([2, 3, ...Array.from({ length: ascending - 1 }, (_, n) => (n + 2) * 2)]);
+      expect(feed.filter((kept) => "state" in kept && kept.state === "finished")).toHaveLength(
+        replaced,
+      );
+      expect(feed[0]).toEqual(subagent(2, "agents/1.md", "finished"));
+      expect(feed[1]).toEqual(subagent(3, "agents/late.md", "running"));
+      expect(feed.at(-1)).toEqual(subagent(ascending * 2, `agents/${ascending}.md`, "running"));
+    });
   });
 
   it("stops a build through the bridge", async () => {

@@ -9,8 +9,21 @@ import type {
   PendingBuild,
   StoredBuildEvent,
 } from "../../core/run/build-progress.js";
-import { BuildRunningError, type RunBuildCopy } from "../../core/run/store.js";
+import {
+  BuildRunningError,
+  type RepoStatePhase,
+  type RunBuildCopy,
+  type StepText,
+  type StepTextField,
+} from "../../core/run/store.js";
 import { storyPartsOf } from "../../core/run/story.js";
+import {
+  otherRepoSchema,
+  repoStateSchema,
+  type OtherRepo,
+  type RepoState,
+  type RunRepoStates,
+} from "../../core/run/repo-state.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -83,6 +96,24 @@ type RunStoryRow = {
   run_status: RunStory["runStatus"];
   text: string;
   cost: number;
+};
+
+const parsedJson = (json: string): unknown => {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+};
+
+const repoStateOf = (json: string): RepoState => {
+  const parsed = repoStateSchema.safeParse(parsedJson(json));
+  return parsed.success ? parsed.data : { kind: "unreadable" };
+};
+
+const otherReposOf = (json: string): OtherRepo[] => {
+  const parsed = otherRepoSchema.array().safeParse(parsedJson(json));
+  return parsed.success ? parsed.data : [];
 };
 
 const firstLineOf = (text: string) =>
@@ -481,6 +512,53 @@ export class SqliteStore implements Store {
           text: row.text,
           cost: row.cost,
         };
+  }
+
+  appendRepoState(
+    runId: string,
+    phase: RepoStatePhase,
+    state: RepoState,
+    otherRepos: OtherRepo[],
+  ): void {
+    this.db
+      .prepare(
+        "INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(runId, phase, JSON.stringify(state), JSON.stringify(otherRepos), this.now().getTime());
+  }
+
+  repoStates(runId: string): RunRepoStates {
+    const row = (phase: RepoStatePhase, order: "ASC" | "DESC") =>
+      this.db
+        .prepare(
+          `SELECT state_json, other_repos_json FROM run_repo_states WHERE run_id = ? AND phase = ? ORDER BY id ${order} LIMIT 1`,
+        )
+        .get(runId, phase) as { state_json: string; other_repos_json: string } | undefined;
+    const before = row("before", "ASC");
+    const after = row("after", "DESC");
+    return {
+      before: before === undefined ? null : repoStateOf(before.state_json),
+      after: after === undefined ? null : repoStateOf(after.state_json),
+      otherRepos: after === undefined ? [] : otherReposOf(after.other_repos_json),
+    };
+  }
+
+  appendStepText(runId: string, entryId: number, field: StepTextField, text: string): void {
+    this.db
+      .prepare("INSERT INTO step_texts (run_id, entry_id, field, text, at) VALUES (?, ?, ?, ?, ?)")
+      .run(runId, entryId, field, text, this.now().getTime());
+  }
+
+  stepTexts(runId: string, entryId: number): StepText[] {
+    return this.db
+      .prepare(
+        `SELECT field, text FROM step_texts AS latest
+         WHERE run_id = ? AND entry_id = ?
+           AND id = (SELECT MAX(id) FROM step_texts
+                     WHERE run_id = latest.run_id AND entry_id = latest.entry_id AND field = latest.field)
+         ORDER BY field`,
+      )
+      .all(runId, entryId) as StepText[];
   }
 
   activity(runId: string): ActivityEntry[] {

@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { ActivityEntry } from "../../../core/run/activity.js";
+import { isCut, type ActivityEntry } from "../../../core/run/activity.js";
 import { formatClock } from "../format.js";
 import type { RunView } from "../run-store.js";
+import { selectFullText, type FullText, type FullTextStore } from "./full-text-store.js";
 import { runNodeLabel, type RunLabels } from "./inspector.js";
 import { entryText, selectActivity, stepsEndedOf, type InspectorState } from "./store.js";
 
@@ -49,6 +50,8 @@ export function ActivityFeed({
   );
 }
 
+export type FullTextSource = { runId: string; store: FullTextStore };
+
 const stepDetailOf = (entry: ActivityEntry): { input?: string; output?: string } => {
   if (entry.kind === "tool")
     return {
@@ -59,10 +62,40 @@ const stepDetailOf = (entry: ActivityEntry): { input?: string; output?: string }
   return {};
 };
 
-function StepDetail({ entry }: { entry: ActivityEntry }) {
-  const { input, output } = stepDetailOf(entry);
+const withFullText = (
+  entry: ActivityEntry,
+  shown: { input?: string; output?: string },
+  full: FullText | undefined,
+): { input?: string; output?: string } => {
+  if (full?.kind !== "kept") return shown;
+  const output = entry.kind === "subagent" ? full.texts.report : full.texts.output;
+  return {
+    ...(shown.input === undefined ? {} : { input: full.texts.input ?? shown.input }),
+    ...(shown.output === undefined ? {} : { output: output ?? shown.output }),
+  };
+};
+
+const missingText = (full: FullText | undefined) => {
+  if (full?.kind === "not-kept") return "Full text was not kept";
+  if (full?.kind === "failed") return full.error;
+  return undefined;
+};
+
+function StepBody({
+  entry,
+  full,
+  onShowFull,
+}: {
+  entry: ActivityEntry;
+  full?: FullText | undefined;
+  onShowFull?: (() => void) | undefined;
+}) {
+  const preview = stepDetailOf(entry);
+  const { input, output } = withFullText(entry, preview, full);
   if (input === undefined && output === undefined) return null;
   const testId = `activity-entry-${entry.id}`;
+  const cut = [preview.input, preview.output].some((text) => text !== undefined && isCut(text));
+  const missing = missingText(full);
   return (
     <details data-testid={`${testId}-detail`} data-node-id={entry.nodeId}>
       <summary
@@ -90,7 +123,53 @@ function StepDetail({ entry }: { entry: ActivityEntry }) {
           {output}
         </pre>
       )}
+      {onShowFull !== undefined && cut && (full === undefined || full.kind === "loading") && (
+        <button
+          className="fd-btn"
+          data-testid={`${testId}-full-text`}
+          data-node-id={entry.nodeId}
+          disabled={full?.kind === "loading"}
+          onClick={onShowFull}
+        >
+          Show full text
+        </button>
+      )}
+      {missing !== undefined && (
+        <p
+          className="fd-muted"
+          data-testid={`${testId}-full-text-missing`}
+          data-node-id={entry.nodeId}
+        >
+          {missing}
+        </p>
+      )}
     </details>
+  );
+}
+
+function StepWithFullText({ entry, fullText }: { entry: ActivityEntry; fullText: FullTextSource }) {
+  const { runId, store } = fullText;
+  const full = useStore(store, (state) => selectFullText(state, runId, entry.id));
+  return (
+    <StepBody
+      entry={entry}
+      full={full}
+      onShowFull={() => void store.getState().request(runId, entry.id)}
+    />
+  );
+}
+
+function StepDetail({
+  entry,
+  fullText,
+}: {
+  entry: ActivityEntry;
+  fullText?: FullTextSource | undefined;
+}) {
+  return fullText === undefined ? (
+    <StepBody entry={entry} />
+  ) : (
+    <StepWithFullText entry={entry} fullText={fullText} />
   );
 }
 
@@ -100,12 +179,14 @@ export function ActivityList({
   onSelectNode,
   withSteps = false,
   stepsEnded = false,
+  fullText,
 }: {
   entries: readonly ActivityEntry[];
   labels: RunLabels;
   onSelectNode: (nodeId: string) => void;
   withSteps?: boolean;
   stepsEnded?: boolean;
+  fullText?: FullTextSource | undefined;
 }) {
   if (entries.length === 0) return <p data-testid="activity-empty">No activity yet</p>;
   return (
@@ -135,7 +216,7 @@ export function ActivityList({
             <strong>{runNodeLabel(labels, entry.nodeId)}</strong>{" "}
             {entryText(entry, { ended: stepsEnded })}
           </button>
-          {withSteps && <StepDetail entry={entry} />}
+          {withSteps && <StepDetail entry={entry} fullText={fullText} />}
         </li>
       ))}
     </ol>

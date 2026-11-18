@@ -8,6 +8,7 @@ import { nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import { BuildRunningError, type RunStory } from "../../../src/core/run/store.js";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
+import type { RepoState } from "../../../src/core/run/repo-state.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../../src/ports/store.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -160,9 +161,10 @@ describe("SqliteStore", () => {
       { name: "017_run_stories.sql" },
       { name: "018_runs_deleted_at.sql" },
       { name: "019_runs_own_their_build.sql" },
+      { name: "020_run_repo_states_and_step_texts.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 19]);
+    expect(before).toEqual([1, 1, 3, 1, 20]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -601,6 +603,141 @@ describe("SqliteStore", () => {
         "The run failed at Test.",
       );
       expect(store.findRunSummary(id)?.storyLine).toBe("The run failed at Test.");
+    });
+  });
+
+  describe("repo states", () => {
+    const state = (head: string): RepoState => ({
+      kind: "read",
+      branch: "flowdeck/fix-login",
+      head,
+      upstream: { name: "origin/main", ahead: 1, behind: 0 },
+      staged: 0,
+      unstaged: 2,
+      untracked: 1,
+    });
+
+    it("reads the first before, the latest after and that after's other repos", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.finishRun(id, "done");
+      const other = store.createRun(newRun(["p1"]));
+
+      store.appendRepoState(id, "before", state("b1"), []);
+      store.appendRepoState(id, "after", state("a1"), [{ path: "/x/web", branch: "dev" }]);
+      store.appendRepoState(id, "before", state("b2"), []);
+      store.appendRepoState(id, "after", { kind: "unreadable" }, [
+        { path: "/x/ios", branch: "develop" },
+      ]);
+      store.appendRepoState(other.id, "after", state("o1"), []);
+
+      expect(store.repoStates(id)).toEqual({
+        before: state("b1"),
+        after: { kind: "unreadable" },
+        otherRepos: [{ path: "/x/ios", branch: "develop" }],
+      });
+    });
+
+    it("reads nothing for a run with no rows", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+
+      expect(store.repoStates(id)).toEqual({ before: null, after: null, otherRepos: [] });
+    });
+
+    it("reads a stored state that no longer fits the schema as unreadable and bad other repos as none", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      const db = raw();
+      const insert = db.prepare(
+        "INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at) VALUES (?, ?, ?, ?, 0)",
+      );
+      insert.run(id, "before", JSON.stringify({ kind: "read", staged: -1 }), "[]");
+      insert.run(id, "after", "{not json", JSON.stringify([{ path: 1 }]));
+
+      expect(store.repoStates(id)).toEqual({
+        before: { kind: "unreadable" },
+        after: { kind: "unreadable" },
+        otherRepos: [],
+      });
+    });
+
+    it("rejects a raw UPDATE, DELETE or INSERT OR REPLACE on run_repo_states", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.appendRepoState(id, "before", state("b1"), []);
+      const db = raw();
+      const rows = () => db.prepare("SELECT * FROM run_repo_states ORDER BY id").all();
+      const before = rows();
+      const { rowId } = db.prepare("SELECT MIN(id) AS rowId FROM run_repo_states").get() as {
+        rowId: number;
+      };
+
+      expect(() => db.exec("UPDATE run_repo_states SET state_json = '{}'")).toThrow(/append-only/);
+      expect(() => db.exec("DELETE FROM run_repo_states")).toThrow(/append-only/);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO run_repo_states (id, run_id, phase, state_json, other_repos_json, at) VALUES (?, ?, 'after', '{}', '[]', 0)",
+          )
+          .run(rowId, id),
+      ).toThrow(/append-only/);
+      expect(rows()).toEqual(before);
+    });
+  });
+
+  describe("step texts", () => {
+    it("reads the latest full text per field of one entry", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      const large = "x".repeat(5 * 1024 * 1024);
+
+      store.appendStepText(id, 1, "input", "old input");
+      store.appendStepText(id, 1, "output", large);
+      store.appendStepText(id, 1, "input", "new input");
+      store.appendStepText(id, 2, "report", "another entry");
+
+      const texts = store.stepTexts(id, 1);
+      expect(texts).toHaveLength(2);
+      expect(texts).toEqual(
+        expect.arrayContaining([
+          { field: "input", text: "new input" },
+          { field: "output", text: large },
+        ]),
+      );
+      expect(store.stepTexts(id, 2)).toEqual([{ field: "report", text: "another entry" }]);
+    });
+
+    it("reads nothing for an unknown run or entry", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.appendStepText(id, 1, "input", "text");
+
+      expect(store.stepTexts("nope", 1)).toEqual([]);
+      expect(store.stepTexts(id, 9)).toEqual([]);
+    });
+
+    it("rejects a raw UPDATE, DELETE or INSERT OR REPLACE on step_texts", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.appendStepText(id, 1, "input", "text");
+      const db = raw();
+      const rows = () => db.prepare("SELECT * FROM step_texts ORDER BY id").all();
+      const before = rows();
+      const { rowId } = db.prepare("SELECT MIN(id) AS rowId FROM step_texts").get() as {
+        rowId: number;
+      };
+
+      expect(() => db.exec("UPDATE step_texts SET text = 'edited'")).toThrow(/append-only/);
+      expect(() => db.exec("DELETE FROM step_texts")).toThrow(/append-only/);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO step_texts (id, run_id, entry_id, field, text, at) VALUES (?, ?, 1, 'input', 'replaced', 0)",
+          )
+          .run(rowId, id),
+      ).toThrow(/append-only/);
+      expect(rows()).toEqual(before);
     });
   });
 

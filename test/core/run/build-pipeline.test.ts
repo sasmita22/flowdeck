@@ -328,6 +328,33 @@ describe("buildPipelineOf", () => {
       expect(ids(rowOf(pipeline, 4, 1, draft).log)).toEqual([3]);
     });
 
+    it("keeps a piece's own steps on its row, out of the row of a piece running beside it", () => {
+      const ownStep = (id: number, nodeId: string, at: number): ActivityEntry => ({
+        id,
+        nodeId,
+        at,
+        kind: "tool",
+        tool: "Read",
+        summary: nodeId,
+        agentId: `agent-of-${nodeId}`,
+        result: "ok",
+      });
+      const pipeline = buildPipelineOf(
+        pending(),
+        stored([
+          ...laidDown,
+          [200, step(3, "running", { round: 1 })],
+          [200, component(draft, "running", ["p1"], ["Draft the fix"])],
+          [200, component(review, "running", ["a"], ["Review the fix"])],
+        ]),
+        [ownStep(1, draft, 210), ownStep(2, review, 215), ownStep(3, draft, 220)],
+      );
+
+      expect(ids(rowOf(pipeline, 3, 1, draft).log)).toEqual([1, 3]);
+      expect(ids(rowOf(pipeline, 3, 1, review).log)).toEqual([2]);
+      expect(ids(laneOf(pipeline, 3, 1).log)).toEqual([1, 2, 3]);
+    });
+
     it("keeps a running lane's window open", () => {
       const pipeline = buildPipelineOf(
         pending(),

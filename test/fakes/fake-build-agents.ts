@@ -5,6 +5,7 @@ import type { FileSystem } from "../../src/ports/file-system.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
+  BuildStepEvent,
   BuildTurnResult,
 } from "../../src/ports/build-agents.js";
 
@@ -17,6 +18,8 @@ export type FakeBuildScript = {
   merges?: BuildReport["merges"];
   shared?: BuildReport["shared"];
   keptApart?: BuildReport["keptApart"];
+  steps?: Record<string, BuildStepEvent[]>;
+  reports?: Record<string, string>;
   failTurn?: string;
   aliveAfterRestart?: boolean;
 };
@@ -61,6 +64,7 @@ export class FakeBuildAgents implements BuildAgents {
     sessionName,
     text,
     onCall,
+    onStep,
   ): Promise<BuildTurnResult> => {
     this.turns.push({ sessionName, text });
     const script = this.options.script ?? {};
@@ -78,8 +82,11 @@ export class FakeBuildAgents implements BuildAgents {
         : await this.sharedRuns(workspaceDir, pieces);
     for (const piece of pieces) {
       onCall({ piece });
+      for (const step of script.steps?.[piece] ?? []) onStep?.(step);
       if (workspaceDir !== undefined) await this.fill(workspaceDir, piece, runs.get(piece) ?? []);
-      onCall({ piece, status: "completed" });
+      const report = script.reports?.[piece];
+      if (report === undefined) onCall({ piece, status: "completed" });
+      else onCall({ piece, status: "completed" }, report);
     }
 
     if (workspaceDir !== undefined) {

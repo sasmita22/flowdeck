@@ -5,6 +5,11 @@ import { costReport } from "../../../src/core/run/cost.js";
 import { digestCap, runDigest, variablesText } from "../../../src/core/run/digest.js";
 import { plainReason } from "../../../src/core/run/failure.js";
 import type { StageSources } from "../../../src/core/run/manifest.js";
+import {
+  otherReposText,
+  repoStateText,
+  type RunRepoStates,
+} from "../../../src/core/run/repo-state.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { BuildRecord, RunStatus, StoredEvent } from "../../../src/core/run/store.js";
 
@@ -180,14 +185,17 @@ const digestInput = (
     status = "failed",
     endedAt = iso(125),
     questions = {},
+    repoStates,
   }: {
     activity?: ActivityEntry[];
     sources?: StageSources | null;
     status?: RunStatus;
     endedAt?: string | null;
     questions?: Record<string, string>;
+    repoStates?: RunRepoStates;
   } = {},
 ): DigestInput => ({
+  ...(repoStates === undefined ? {} : { repoStates }),
   build,
   stages: sources,
   events,
@@ -279,6 +287,87 @@ describe("runDigest", () => {
     const { text } = runDigest(digestInput(eventsOf()));
 
     expect(text).toContain("Repo: /work/shop-repo\nBranch: flowdeck/nightly-login-fix\n");
+  });
+
+  describe("repo states", () => {
+    const states: RunRepoStates = {
+      before: {
+        kind: "read",
+        branch: "flowdeck/nightly-login-fix",
+        head: "1a2b3c4d5e6f7a8b",
+        upstream: null,
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+      },
+      after: {
+        kind: "read",
+        branch: "flowdeck/nightly-login-fix",
+        head: "9f8e7d6c5b4a",
+        upstream: { name: "origin/main", ahead: 2, behind: 1 },
+        staged: 1,
+        unstaged: 2,
+        untracked: 3,
+      },
+      otherRepos: [],
+    };
+    const others = [
+      { path: "/x/ios", branch: "develop" },
+      { path: "/u/web", branch: "master" },
+    ];
+
+    it("puts the before and after states straight after the branch", () => {
+      const { text } = runDigest(digestInput(eventsOf(), { repoStates: states }));
+
+      expect(text).toContain(
+        `Branch: flowdeck/nightly-login-fix\nBefore: ${repoStateText(states.before)}\nAfter: ${repoStateText(states.after)}\nVariables: `,
+      );
+    });
+
+    it("reads not recorded for both states when the run has none", () => {
+      const { text } = runDigest(digestInput(eventsOf()));
+
+      expect(text).toContain(
+        "Branch: flowdeck/nightly-login-fix\nBefore: not recorded\nAfter: not recorded\nVariables: ",
+      );
+    });
+
+    it("names the other repos after the after state and in the header", () => {
+      const { header, text } = runDigest(
+        digestInput(eventsOf(), { repoStates: { ...states, otherRepos: others } }),
+      );
+
+      expect(text).toContain(
+        `After: ${repoStateText(states.after)}\nOther repos: ${otherReposText(others)}\nVariables: `,
+      );
+      expect(header.otherRepos).toEqual(others);
+    });
+
+    it("keeps today's header and adds no other repos line when there are none", () => {
+      const { header, text } = runDigest(digestInput(eventsOf(), { repoStates: states }));
+
+      expect(header).toEqual({
+        name: "nightly-login-fix",
+        blueprintName: "Fix and verify",
+        blueprintVersion: 3,
+        repo: "/work/shop-repo",
+        branch: "flowdeck/nightly-login-fix",
+        values: { target: "login page", strict: true },
+      });
+      expect("otherRepos" in header).toBe(false);
+      expect(text).not.toContain("Other repos:");
+    });
+
+    it("gives byte-identical output for the same repo states", () => {
+      const repoStates = { ...states, otherRepos: others };
+      const first = runDigest(digestInput(eventsOf(), { repoStates }));
+      const second = runDigest(
+        digestInput(eventsOf(), { repoStates: structuredClone(repoStates) }),
+      );
+
+      expect(second).toEqual(first);
+      expect(second.text).toBe(first.text);
+    });
   });
 
   describe("what each Agent stage was asked, reported and did", () => {
@@ -632,6 +721,37 @@ describe("runDigest", () => {
 
       expect(text.length).toBeLessThanOrEqual(digestCap);
       expect(text.startsWith("Blueprint: Fix and verify, version 3\n")).toBe(true);
+    });
+
+    it("stays under the cap with the longest before, after and other repos lines", () => {
+      const longFailure = `verify failed: ${"the suite crashed on a fixture. ".repeat(600)}`;
+      const events = eventsOf({ retry: false }).map((event) =>
+        event.kind === "failed"
+          ? ({ ...event, payload: { message: longFailure } } as StoredEvent)
+          : event,
+      );
+      const long = "x".repeat(500);
+      const state = {
+        kind: "read" as const,
+        branch: long,
+        head: long,
+        upstream: { name: long, ahead: 999_999, behind: 999_999 },
+        staged: 999_999,
+        unstaged: 999_999,
+        untracked: 999_999,
+      };
+      const otherRepos = Array.from({ length: 50 }, (_, index) => ({
+        path: `/${long}/${index}`,
+        branch: long,
+      }));
+
+      const { text } = runDigest(
+        digestInput(events, { repoStates: { before: state, after: state, otherRepos } }),
+      );
+
+      expect(text.length).toBeLessThanOrEqual(digestCap);
+      expect(text).toContain(`Before: ${repoStateText(state)}\n`);
+      expect(text).toContain(`Other repos: ${otherReposText(otherRepos)}\n`);
     });
 
     const report = (length: number) =>

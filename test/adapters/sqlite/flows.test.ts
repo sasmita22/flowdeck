@@ -858,6 +858,7 @@ describe("SqliteFlowStore", () => {
       { name: "017_run_stories.sql" },
       { name: "018_runs_deleted_at.sql" },
       { name: "019_runs_own_their_build.sql" },
+      { name: "020_run_repo_states_and_step_texts.sql" },
     ]);
   });
 });

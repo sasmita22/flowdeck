@@ -16,7 +16,8 @@ import type {
 } from "../../../core/run/build-progress.js";
 import { selectPipeline, type BuildProgressState } from "../build-progress-store.js";
 import { formatCost, formatDuration, formatWhen } from "../format.js";
-import { entryText } from "../inspector/store.js";
+import { ActivityList } from "../inspector/activity-feed.js";
+import type { RunLabels } from "../inspector/inspector.js";
 import type { LibraryState } from "../library-store.js";
 import type { NavState } from "../nav-store.js";
 import type { TerminalState } from "../terminal/store.js";
@@ -271,14 +272,18 @@ function LaneView({
   );
 }
 
+const logLabels: RunLabels = { sessionName: "", nodes: [] };
+
 function LogView({
   pendingId,
   lane,
   row,
+  ended,
 }: {
   pendingId: string;
   lane: PipelineLane | undefined;
   row: PipelineRow | undefined;
+  ended: boolean;
 }) {
   const entries: readonly ActivityEntry[] = row?.log ?? lane?.log ?? [];
   const notes =
@@ -302,11 +307,17 @@ function LogView({
             {note}
           </div>
         ))}
-        {entries.map((entry) => (
-          <div key={entry.id}>
-            {entry.nodeId} <span className="fd-muted">{entryText(entry)}</span>
+        {entries.length > 0 && (
+          <div>
+            <ActivityList
+              entries={entries}
+              labels={logLabels}
+              onSelectNode={() => undefined}
+              withSteps
+              stepsEnded={ended}
+            />
           </div>
-        ))}
+        )}
         {notes.length === 0 && entries.length === 0 && (
           <span className="fd-muted">No activity yet</span>
         )}
@@ -533,7 +544,7 @@ export function BuildPipelinePage({
           {showTerminal ? (
             <BuildTerminal terminal={terminal} />
           ) : (
-            <LogView pendingId={pendingId} lane={lane} row={row} />
+            <LogView pendingId={pendingId} lane={lane} row={row} ended={!open} />
           )}
         </div>
       </div>

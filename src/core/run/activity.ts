@@ -3,6 +3,7 @@ import { agentCallOf } from "./agent-calls.js";
 import { attribute, type NodeWindow } from "./attribution.js";
 import { plainReason } from "./failure.js";
 import type { RunEvent } from "./run-events.js";
+import type { StepTextField } from "./store.js";
 
 const base = { id: z.number().int(), nodeId: z.string(), at: z.number(), summary: z.string() };
 
@@ -59,15 +60,43 @@ export const feedOf = (entries: readonly ActivityEntry[]): ActivityFeed => ({
   entries: [...entries],
 });
 
-export type FoldResult = { feed: ActivityFeed; changed: readonly ActivityEntry[] };
+export const firstAtOrAfter = (entries: readonly ActivityEntry[], id: number): number => {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((entries[middle]?.id ?? id) < id) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
+export type CutText = { entryId: number; field: StepTextField; text: string };
+
+export type FoldResult = {
+  feed: ActivityFeed;
+  changed: readonly ActivityEntry[];
+  cut: readonly CutText[];
+};
 
 const summaryLimit = 80;
 const previewCap = 2_000;
+const cutMarker = /\n… cut, \d+ more characters$/;
 
 export const previewOf = (text: string): string =>
   text.length > previewCap
     ? `${text.slice(0, previewCap)}\n… cut, ${text.length - previewCap} more characters`
     : text;
+
+export const isCut = (text: string): boolean => cutMarker.test(text);
+
+const cutOf = (entryId: number, field: StepTextField, text: string | undefined): CutText[] =>
+  text !== undefined && text.length > previewCap ? [{ entryId, field, text }] : [];
+
+const keeping = (result: FoldResult, cut: readonly CutText[]): FoldResult => ({
+  ...result,
+  cut: [...result.cut, ...cut],
+});
 const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const pullRequestUrl = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const defaultAgentType = "general-purpose";
@@ -89,7 +118,7 @@ const firstString = (input: Record<string, unknown>, keys: readonly string[]): s
 type SubagentEntry = Extract<ActivityEntry, { kind: "subagent" }>;
 type ToolEntry = Extract<ActivityEntry, { kind: "tool" }>;
 
-const unchangedFeed = (feed: ActivityFeed): FoldResult => ({ feed, changed: [] });
+const unchangedFeed = (feed: ActivityFeed): FoldResult => ({ feed, changed: [], cut: [] });
 
 export type WorkingPlace = { cwd: string; home?: string };
 
@@ -172,12 +201,17 @@ function recredit(feed: ActivityFeed, agentId: string, nodeId: string): FoldResu
   return {
     feed: { ...feed, entries },
     changed: entries.filter((entry, index) => entry !== feed.entries[index]),
+    cut: [],
   };
 }
 
 const followedBy = (first: FoldResult, next: (feed: ActivityFeed) => FoldResult): FoldResult => {
   const second = next(first.feed);
-  return { feed: second.feed, changed: [...first.changed, ...second.changed] };
+  return {
+    feed: second.feed,
+    changed: [...first.changed, ...second.changed],
+    cut: [...first.cut, ...second.cut],
+  };
 };
 
 function addEntry(
@@ -212,7 +246,7 @@ function addEntry(
   }
   const inputText = JSON.stringify(payload["tool_input"]) as string | undefined;
   const toolUseId = payload["tool_use_id"];
-  return added(feed, {
+  const step = added(feed, {
     ...common,
     kind: "tool",
     tool,
@@ -226,11 +260,13 @@ function addEntry(
     ...(inSubagent ? { agentId } : {}),
     ...(typeof toolUseId === "string" ? { toolUseId } : {}),
   });
+  return keeping(step, cutOf(common.id, "input", inputText));
 }
 
 const added = (feed: ActivityFeed, changed: ActivityEntry): FoldResult => ({
   feed: { ...feed, nextId: feed.nextId + 1, entries: [...feed.entries, changed] },
   changed: [changed],
+  cut: [],
 });
 
 function addPullRequest(
@@ -255,6 +291,7 @@ function addPullRequest(
 const replaced = (feed: ActivityFeed, old: ActivityEntry, changed: ActivityEntry): FoldResult => ({
   feed: { ...feed, entries: feed.entries.map((entry) => (entry === old ? changed : entry)) },
   changed: [changed],
+  cut: [],
 });
 
 const runningWhere = (feed: ActivityFeed, matches: (entry: SubagentEntry) => boolean) =>
@@ -263,7 +300,7 @@ const runningWhere = (feed: ActivityFeed, matches: (entry: SubagentEntry) => boo
       entry.kind === "subagent" && entry.state === "running" && matches(entry),
   );
 
-const reportOf = (payload: Record<string, unknown>): string | undefined => {
+export const reportOf = (payload: Record<string, unknown>): string | undefined => {
   const content = recordOf(payload["tool_response"])["content"];
   const texts = (Array.isArray(content) ? (content as unknown[]) : []).flatMap((part) => {
     const text = recordOf(part)["text"];
@@ -289,7 +326,7 @@ function finishCall(feed: ActivityFeed, payload: Record<string, unknown>): FoldR
     ...(report === undefined ? {} : { report: previewOf(report) }),
   };
   const { agentId } = call;
-  const done = replaced(feed, running, finished);
+  const done = keeping(replaced(feed, running, finished), cutOf(running.id, "report", report));
   return agentId === undefined
     ? done
     : followedBy(done, (next) => recredit(next, agentId, finished.nodeId));
@@ -359,13 +396,17 @@ function endStep(
       : typeof stamp === "number"
         ? stamp - step.at
         : undefined;
-  const ended = replaced(feed, step, {
+  const replacedStep = replaced(feed, step, {
     ...step,
     ...(typeof output === "string" ? { output: previewOf(output) } : {}),
     result: failed ? "error" : "ok",
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(childAgentId === undefined ? {} : { childAgentId }),
   });
+  const ended = keeping(
+    replacedStep,
+    cutOf(step.id, "output", typeof output === "string" ? output : undefined),
+  );
   return childAgentId === undefined
     ? ended
     : followedBy(ended, (next) => recredit(next, childAgentId, step.nodeId));

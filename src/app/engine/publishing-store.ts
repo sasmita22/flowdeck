@@ -57,6 +57,11 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     activity: (id) => store.activity(id),
     appendRunStory: (story) => store.appendRunStory(story),
     latestRunStory: (id) => store.latestRunStory(id),
+    appendRepoState: (id, phase, state, otherRepos) =>
+      store.appendRepoState(id, phase, state, otherRepos),
+    repoStates: (id) => store.repoStates(id),
+    appendStepText: (id, entryId, field, text) => store.appendStepText(id, entryId, field, text),
+    stepTexts: (id, entryId) => store.stepTexts(id, entryId),
     append(id, nodeId, event) {
       store.append(id, nodeId, event);
       publishFor(id);

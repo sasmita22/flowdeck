@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { activityEntrySchema } from "./activity.js";
 import { stageSourcesSchema } from "./manifest.js";
+import { otherRepoSchema } from "./repo-state.js";
 import { runSnapshotSchema, snapshotStatusSchema } from "./snapshot.js";
 
 const sourceSchema = z.object({ flowId: z.string(), version: z.number().int() });
@@ -32,6 +33,7 @@ const runHeaderSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable().optional(),
   values: z.record(z.string(), z.union([z.string(), z.boolean()])).nullable(),
+  otherRepos: z.array(otherRepoSchema).optional(),
 });
 
 const runStorySchema = z.object({

@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { BuildAnswer } from "../../core/compiler/build-report.js";
-import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
+import {
+  activityEntrySchema,
+  firstAtOrAfter,
+  type ActivityEntry,
+} from "../../core/run/activity.js";
 import { buildPipelineOf, type BuildPipeline } from "../../core/run/build-pipeline.js";
 import {
   buildingCardOf,
@@ -25,8 +29,13 @@ export type BuildProgressBridge = Pick<
 
 const activityPushSchema = z.object({ pendingId: z.string(), entry: activityEntrySchema });
 
-const withEntry = (entries: readonly ActivityEntry[], entry: ActivityEntry): ActivityEntry[] =>
-  [...entries.filter((kept) => kept.id !== entry.id), entry].sort((a, b) => a.id - b.id);
+const withEntry = (entries: readonly ActivityEntry[], entry: ActivityEntry): ActivityEntry[] => {
+  const last = entries.at(-1);
+  if (last === undefined || last.id < entry.id) return [...entries, entry];
+  const position = firstAtOrAfter(entries, entry.id);
+  const replaces = entries[position]?.id === entry.id;
+  return entries.toSpliced(position, replaces ? 1 : 0, entry);
+};
 
 export type BuildProgressState = {
   entries: Record<string, BuildProgressEntry>;
