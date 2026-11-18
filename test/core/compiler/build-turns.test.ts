@@ -5,7 +5,7 @@ import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
 import { auditTurn, writeTurn } from "../../../src/core/compiler/build-turns.js";
 import type { BuildCheckFailure } from "../../../src/core/compiler/check-build.js";
 import type { Manifest, ManifestNode } from "../../../src/core/compiler/lower.js";
-import { agent, flow } from "../../fixtures/flow-builders.js";
+import { agent } from "../../fixtures/flow-builders.js";
 
 const kitDir = join(import.meta.dirname, "../../../kit");
 const kitAgents = readdirSync(join(kitDir, "agents")).map((file) => file.replace(/\.md$/, ""));
@@ -26,14 +26,12 @@ const node = (
 const targetRepo = "/repos/carousell-web";
 
 const manifest = (): Manifest => {
-  const { session: base } = flow([], []);
-  const session = { ...base, buildConfig: { ...base.buildConfig, repo: targetRepo } };
   return {
     version: 1,
     prefix: "ship-it",
     kitVersion: "1",
     layout: "workspace",
-    session,
+    session: { name: "main", buildConfig: { repo: targetRepo, base: "main" }, model: "sonnet" },
     nodes: [
       node(agent("p1"), { file: "plugin/agents/draft-spec.md", piece: "draft-spec" }),
       node(agent("a1"), { file: "plugin/agents/review.md", piece: "review" }),

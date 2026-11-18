@@ -6,15 +6,15 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
-  buildConfigTestIds,
   buildDialogTestIds,
+  containerTestIds,
   controlTestIds,
   dialogTestIds,
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
 import { modelChoices } from "../src/core/flow/choices.js";
-import type { Flow } from "../src/core/flow/schema.js";
-import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import type { Flow, FlowContainer } from "../src/core/flow/schema.js";
+import { agent, gate, onMainFlow, thenWire, withSession } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -93,11 +93,13 @@ const blueprint = (): Flow => {
     ],
     [thenWire("p1", "g1"), thenWire("g1", "s2")],
   );
-  return {
-    ...built,
-    nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
-    session: { ...built.session, buildConfig: {} },
-  };
+  return withSession(
+    {
+      ...built,
+      nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
+    },
+    { repo: "", branch: "" },
+  );
 };
 
 const launch = async () => {
@@ -359,22 +361,25 @@ test("The Build dialog picks repo, branch and build model with the settings' fie
     expect(JSON.parse(pending?.origin_json ?? "{}")).toMatchObject({
       request: { repo: repo.path, base: "dev", buildModel: "haiku" },
     });
-    const sessions = rows<{ session: string }>(
-      "SELECT session FROM flow_versions WHERE flow_id = ?",
+    const sessions = rows<{ containers: string }>(
+      "SELECT containers FROM flow_versions WHERE flow_id = ?",
       flowId,
-    ).map(({ session }) => JSON.parse(session) as { buildConfig: object });
+    ).flatMap(({ containers }) =>
+      (JSON.parse(containers) as FlowContainer[]).filter(({ kind }) => kind === "session"),
+    );
     expect(sessions.length).toBeGreaterThan(0);
     for (const session of sessions) {
-      expect(session.buildConfig).not.toHaveProperty("repo");
-      expect(session.buildConfig).not.toHaveProperty("base");
+      expect(session).toMatchObject({ repo: "", branch: "" });
     }
 
     await toMenu(window);
     await window.getByTestId("menu-blueprints").click();
     await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
-    await window.getByTestId(controlTestIds.sessionSettings).click();
-    await expect(window.getByTestId(buildConfigTestIds.repo)).toHaveValue("");
-    await expect(window.getByTestId(buildConfigTestIds.base)).toBeDisabled();
+    await window
+      .getByTestId(containerTestIds.frame("session-1"))
+      .click({ position: { x: 6, y: 6 } });
+    await expect(window.getByTestId(containerTestIds.field("session-1", "repo"))).toHaveValue("");
+    await expect(window.getByTestId(containerTestIds.field("session-1", "branch"))).toBeDisabled();
   } finally {
     await other.cleanup();
   }

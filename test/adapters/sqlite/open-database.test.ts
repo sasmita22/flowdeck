@@ -58,6 +58,7 @@ const allMigrations = [
   { name: "020_run_repo_states_and_step_texts.sql" },
   { name: "021_complete_deletes_and_build_texts.sql" },
   { name: "022_clean_start.sql" },
+  { name: "023_containers_clean_start.sql" },
 ];
 
 const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");
@@ -867,80 +868,85 @@ describe("openDatabase", () => {
     );
   });
 
+  const everyTable = [
+    "flows",
+    "flow_versions",
+    "nodes",
+    "ports",
+    "wires",
+    "builds",
+    "build_files",
+    "build_nodes",
+    "build_manifests",
+    "build_snapshots",
+    "pending_builds",
+    "build_events",
+    "build_activity",
+    "build_step_texts",
+    "runs",
+    "run_sessions",
+    "run_nodes",
+    "events",
+    "activity",
+    "run_stories",
+    "run_repo_states",
+    "step_texts",
+    "run_number_counters",
+  ];
+
+  const count = (db: Database.Database, table: string) =>
+    db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
+
+  const seedEveryTableBefore = async (migration: string) => {
+    const before = openDatabase({
+      path,
+      migrationsDir: await stage(`before-${migration}`, migration),
+    });
+    before.exec(`
+      BEGIN;
+      INSERT INTO flows (id, name, created_at) VALUES ('f1', 'old', 't');
+      INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
+        VALUES ('f1', 1, 0, 'p1', 'agent', 'Plan', 0, 0, NULL, '{}');
+      INSERT INTO ports (flow_id, version, node_id, ordinal, name, direction, kind)
+        VALUES ('f1', 1, 'p1', 0, 'in', 'in', 'then');
+      INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
+        VALUES ('f1', 1, 0, 'then', 'p1', 'out', 'p1', 'in', NULL);
+      INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('f1', 1, '{}', 't');
+      INSERT INTO build_files (build_id, path, sha256) VALUES ('b1', 'manifest.json', 'sha');
+      INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file)
+        VALUES ('b1', 0, 'p1', 'agent', '{}', 'manifest.json');
+      INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version, branch, branch_created)
+        VALUES ('b1', 'h1', 'fix-login', '/repo', 'main', '{}', '/fd/workspaces/b1', 1, 'f1', 1, 'flowdeck/fix-login', 1);
+      INSERT INTO build_manifests (build_id, manifest_json) VALUES ('b1', '{}');
+      INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome)
+        VALUES ('pb1', 'f1', 1, 'fix-login', '{}', 0, 1, 'built');
+      INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
+        VALUES ('pb1', 'b1', 'old', 1, '<svg/>', 0);
+      INSERT INTO build_events (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
+      INSERT INTO build_activity (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
+      INSERT INTO build_step_texts (pending_id, entry_id, field, text, at)
+        VALUES ('pb1', 1, 'output', 'full', 1);
+      INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
+        VALUES ('r1', '/fd/workspaces/b1', '{}', 'done', 't', 'b1');
+      INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status, parent)
+        VALUES (1, 'r1', 'fd-run-a', '/repo', 'c1', 'closed', NULL);
+      INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r1', 'p1', 1);
+      INSERT INTO events (run_id, node_id, kind, time) VALUES ('r1', 'p1', 'sent', 't');
+      INSERT INTO activity (run_id, id, node_id, entry) VALUES ('r1', 1, 'p1', '{}');
+      INSERT INTO run_stories (run_id, at, run_status, text, cost)
+        VALUES ('r1', 't', 'done', 'It worked.', 0.01);
+      INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at)
+        VALUES ('r1', 'before', '{}', '[]', 1);
+      INSERT INTO step_texts (run_id, entry_id, field, text, at) VALUES ('r1', 1, 'output', 'kept', 1);
+      INSERT INTO run_number_counters (build_id, last) VALUES ('b1', 1);
+      COMMIT;
+    `);
+    for (const table of everyTable) expect(count(before, table), table).toBe(1);
+    before.close();
+  };
+
   describe("migrating a database made by 001 to 021 to 022", () => {
-    const everyTable = [
-      "flows",
-      "flow_versions",
-      "nodes",
-      "ports",
-      "wires",
-      "builds",
-      "build_files",
-      "build_nodes",
-      "build_manifests",
-      "build_snapshots",
-      "pending_builds",
-      "build_events",
-      "build_activity",
-      "build_step_texts",
-      "runs",
-      "run_sessions",
-      "run_nodes",
-      "events",
-      "activity",
-      "run_stories",
-      "run_repo_states",
-      "step_texts",
-      "run_number_counters",
-    ];
-
-    const count = (db: Database.Database, table: string) =>
-      db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
-
-    const seedBefore022 = async () => {
-      const before = openDatabase({ path, migrationsDir: await stage("to-021", "022") });
-      before.exec(`
-        BEGIN;
-        INSERT INTO flows (id, name, created_at) VALUES ('f1', 'old', 't');
-        INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
-          VALUES ('f1', 1, 0, 'p1', 'agent', 'Plan', 0, 0, NULL, '{}');
-        INSERT INTO ports (flow_id, version, node_id, ordinal, name, direction, kind)
-          VALUES ('f1', 1, 'p1', 0, 'in', 'in', 'then');
-        INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
-          VALUES ('f1', 1, 0, 'then', 'p1', 'out', 'p1', 'in', NULL);
-        INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('f1', 1, '{}', 't');
-        INSERT INTO build_files (build_id, path, sha256) VALUES ('b1', 'manifest.json', 'sha');
-        INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file)
-          VALUES ('b1', 0, 'p1', 'agent', '{}', 'manifest.json');
-        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, flow_id, version, branch, branch_created)
-          VALUES ('b1', 'h1', 'fix-login', '/repo', 'main', '{}', '/fd/workspaces/b1', 1, 'f1', 1, 'flowdeck/fix-login', 1);
-        INSERT INTO build_manifests (build_id, manifest_json) VALUES ('b1', '{}');
-        INSERT INTO pending_builds (id, flow_id, version, name, origin_json, started_at, ended_at, outcome)
-          VALUES ('pb1', 'f1', 1, 'fix-login', '{}', 0, 1, 'built');
-        INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
-          VALUES ('pb1', 'b1', 'old', 1, '<svg/>', 0);
-        INSERT INTO build_events (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
-        INSERT INTO build_activity (pending_id, seq, at, body_json) VALUES ('pb1', 1, 1, '{}');
-        INSERT INTO build_step_texts (pending_id, entry_id, field, text, at)
-          VALUES ('pb1', 1, 'output', 'full', 1);
-        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
-          VALUES ('r1', '/fd/workspaces/b1', '{}', 'done', 't', 'b1');
-        INSERT INTO run_sessions (id, run_id, tmux_name, cwd, claude_session_id, status, parent)
-          VALUES (1, 'r1', 'fd-run-a', '/repo', 'c1', 'closed', NULL);
-        INSERT INTO run_nodes (run_id, node_id, session_id) VALUES ('r1', 'p1', 1);
-        INSERT INTO events (run_id, node_id, kind, time) VALUES ('r1', 'p1', 'sent', 't');
-        INSERT INTO activity (run_id, id, node_id, entry) VALUES ('r1', 1, 'p1', '{}');
-        INSERT INTO run_stories (run_id, at, run_status, text, cost)
-          VALUES ('r1', 't', 'done', 'It worked.', 0.01);
-        INSERT INTO run_repo_states (run_id, phase, state_json, other_repos_json, at)
-          VALUES ('r1', 'before', '{}', '[]', 1);
-        INSERT INTO step_texts (run_id, entry_id, field, text, at) VALUES ('r1', 1, 'output', 'kept', 1);
-        INSERT INTO run_number_counters (build_id, last) VALUES ('b1', 1);
-        COMMIT;
-      `);
-      for (const table of everyTable) expect(count(before, table), table).toBe(1);
-      before.close();
-    };
+    const seedBefore022 = () => seedEveryTableBefore("022");
 
     it("deletes every blueprint, build and run, leaving no broken foreign key", async () => {
       await seedBefore022();
@@ -955,7 +961,7 @@ describe("openDatabase", () => {
     it("reports 022 as applied in this open, on a database that existed before it", async () => {
       await seedBefore022();
 
-      const { reports } = openReporting();
+      const { reports } = openReporting(await stage("to-022", "023"));
 
       expect(reports).toEqual([{ applied: ["022_clean_start"], existedBefore: true }]);
     });
@@ -977,6 +983,62 @@ describe("openDatabase", () => {
       expect(
         db.prepare("SELECT name FROM pragma_table_info('flow_versions')").pluck().all(),
       ).toContain("settings");
+    });
+  });
+
+  describe("migrating a database made by 001 to 022 to 023", () => {
+    const seedBefore023 = () => seedEveryTableBefore("023");
+
+    it("deletes every blueprint, build and run, leaving no broken foreign key", async () => {
+      await seedBefore023();
+
+      const db = open();
+
+      for (const table of everyTable) expect(count(db, table), table).toBe(0);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(migrations(db)).toEqual(allMigrations);
+    });
+
+    it("reports 023 as applied in this open, on a database that existed before it", async () => {
+      await seedBefore023();
+
+      const { reports } = openReporting();
+
+      expect(reports).toEqual([{ applied: ["023_containers_clean_start"], existedBefore: true }]);
+    });
+
+    it("gives saved blueprint versions a containers column that defaults to an empty list", async () => {
+      await seedBefore023();
+
+      const db = open();
+
+      expect(
+        db
+          .prepare(
+            "SELECT \"notnull\" AS required, dflt_value AS fallback FROM pragma_table_info('flow_versions') WHERE name = 'containers'",
+          )
+          .get(),
+      ).toEqual({ required: 1, fallback: "'[]'" });
+    });
+
+    it("keeps saved blueprint versions locked against deletes", async () => {
+      await seedBefore023();
+      const db = open();
+      db.exec(`
+        INSERT INTO flows (id, name, created_at) VALUES ('f2', 'new', 't');
+        INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('f2', 1, '{}', 't');
+      `);
+
+      for (const table of ["flow_versions", "nodes", "ports", "wires"]) {
+        expect(
+          db
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+            .pluck()
+            .get(`${table}_no_delete`),
+          table,
+        ).toBe(`${table}_no_delete`);
+      }
+      expect(() => db.exec("DELETE FROM flow_versions")).toThrow("saved flow versions are locked");
     });
   });
 

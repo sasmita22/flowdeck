@@ -2,7 +2,13 @@ import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
-import type { Flow } from "../flow/schema.js";
+import type { BuildConfig, Flow, SessionContainer } from "../flow/schema.js";
+import {
+  flowContainerMembers,
+  isWorkflow,
+  libraryBuildReason,
+  sessionBuildConfig,
+} from "../flow/structure.js";
 import { foundVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
 import type { AgentCall } from "../run/agent-calls.js";
@@ -237,19 +243,46 @@ export type BuildOrigin = {
 const requestBase = ({ base, branch }: BuildRequest): string | undefined =>
   branch?.mode === "new" ? branch.base : base;
 
+const isSession = (container: Flow["containers"][number]): container is SessionContainer =>
+  container.kind === "session";
+
+const bridgeProblem = (flow: Flow): string | undefined => {
+  if (!isWorkflow(flow)) {
+    return libraryBuildReason;
+  }
+  const sessions = flow.containers.filter(isSession).length;
+  if (sessions === 0) {
+    return "A workflow needs a session to build; building the workspace alone comes with multi-session builds.";
+  }
+  if (sessions > 1) {
+    return "A workflow builds one session for now; building several comes with multi-session builds.";
+  }
+  const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
+  const workspace = flow.containers.find((container) => container.kind === "workspace");
+  const holdsMore = flowContainerMembers(flow, workspace?.id ?? "").some(
+    (id) => types.get(id) !== "trigger" && types.get(id) !== "output",
+  );
+  return holdsMore
+    ? "The workspace holds only its Start and Stop for now; steps in the workspace come with multi-session builds."
+    : undefined;
+};
+
+const buildConfigOf = (flow: Flow): BuildConfig => sessionBuildConfig(flow) ?? {};
+
 const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
   const { repo, buildModel } = request;
   const base = requestBase(request);
   return {
     ...flow,
-    session: {
-      ...flow.session,
-      buildConfig: {
-        ...flow.session.buildConfig,
-        ...(repo === undefined ? {} : { repo }),
-        ...(base === undefined ? {} : { base }),
-      },
-    },
+    containers: flow.containers.map((container) =>
+      isSession(container)
+        ? {
+            ...container,
+            ...(repo === undefined ? {} : { repo }),
+            ...(base === undefined ? {} : { branch: base }),
+          }
+        : container,
+    ),
     settings: { ...flow.settings, ...(buildModel === undefined ? {} : { buildModel }) },
   };
 };
@@ -264,8 +297,11 @@ export async function startBuild(
   deps: BuildFlowDeps,
   origin?: BuildOrigin,
 ): Promise<StartBuildResult> {
+  const bridge = bridgeProblem(saved);
+  if (bridge !== undefined)
+    return { ok: false, errors: [{ rule: "build-bridge", message: bridge }] };
   const flow = mainFlowOnly(withRequestTarget(saved, request));
-  const { buildConfig } = flow.session;
+  const buildConfig = buildConfigOf(flow);
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
   const problems = await requestProblems(request, buildConfig.repo ?? "", flow, deps).catch(
@@ -390,7 +426,7 @@ export async function runBuild(
   resume?: BuildResume,
 ): Promise<BuildResult> {
   const flow = mainFlowOnly(withRequestTarget(saved, request));
-  const { buildConfig } = flow.session;
+  const buildConfig = buildConfigOf(flow);
   const repo = buildConfig.repo ?? "";
   let current: BuildStepNumber = resume === undefined ? 1 : 3;
   let report: unknown;

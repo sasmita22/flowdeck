@@ -7,7 +7,13 @@ import {
   selectWorkspaceLabel,
 } from "../../../src/app/renderer/workspace-store.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  sessionContainer,
+  workspaceContainer,
+} from "../../fixtures/flow-builders.js";
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -22,10 +28,11 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const shop = { repo: "/code/shop" };
 const blog = { repo: "/code/blog" };
 
-const atFolder = (buildConfig: Flow["session"]["buildConfig"]): Flow => {
-  const base = flow([agent("agent-1")], []);
-  return { ...base, session: { ...base.session, buildConfig } };
-};
+const atFolder = ({ repo }: { repo: string }): Flow =>
+  flow([agent("agent-1")], [], flowSettings, { session: { repo } });
+
+const moveTo = (canvas: ReturnType<typeof setup>["canvas"], { repo }: { repo: string }) =>
+  canvas.getState().updateFlowContainer("session-1", { repo });
 
 const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
   const saveBridge = {
@@ -82,7 +89,7 @@ describe("createWorkspaceStore", () => {
   it("asks for the loaded flow's repo and shows its folder name and base branch", async () => {
     const { bridge, label } = await loaded({ latest: atFolder(shop) });
 
-    expect(bridge.workspaceInfo).toHaveBeenCalledExactlyOnceWith(shop);
+    expect(bridge.workspaceInfo).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(shop));
     expect(label()).toEqual({
       folder: { name: "shop", title: "/code/shop" },
       branch: "main",
@@ -103,9 +110,9 @@ describe("createWorkspaceStore", () => {
     const answer = deferred<unknown>();
     bridge.workspaceInfo.mockReturnValueOnce(answer.promise);
 
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
+    moveTo(canvas, blog);
 
-    expect(bridge.workspaceInfo).toHaveBeenLastCalledWith(blog);
+    expect(bridge.workspaceInfo).toHaveBeenLastCalledWith(expect.objectContaining(blog));
     expect(label()).toEqual({ folder: { name: "blog", title: "/code/blog" }, branch: "" });
 
     answer.resolve({ state: { kind: "not-a-repo" }, base: null });
@@ -131,7 +138,7 @@ describe("createWorkspaceStore", () => {
     await settle();
 
     expect(bridge.workspaceInfo).toHaveBeenCalledTimes(2);
-    expect(bridge.workspaceInfo).toHaveBeenLastCalledWith(shop);
+    expect(bridge.workspaceInfo).toHaveBeenLastCalledWith(expect.objectContaining(shop));
   });
 
   it("does not ask again after a save that fails", async () => {
@@ -148,8 +155,8 @@ describe("createWorkspaceStore", () => {
     const { bridge, canvas, label } = await loaded({ latest: atFolder(shop) });
     const late = deferred<unknown>();
     bridge.workspaceInfo.mockReturnValueOnce(late.promise);
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: shop });
+    moveTo(canvas, blog);
+    moveTo(canvas, shop);
     await settle();
 
     late.resolve({ state: { kind: "missing" }, base: "stale" });
@@ -165,9 +172,24 @@ describe("createWorkspaceStore", () => {
     const { bridge, canvas, label } = await loaded({ latest: atFolder(shop) });
     bridge.workspaceInfo.mockImplementationOnce(answer);
 
-    canvas.getState().updateSession({ ...canvas.getState().flow.session, buildConfig: blog });
+    moveTo(canvas, blog);
     await settle();
 
     expect(label()).toEqual({ folder: { name: "blog", title: "/code/blog" }, branch: "" });
+  });
+
+  it("shows the first session container's repo when the workflow has two", async () => {
+    const { bridge, label } = await loaded({
+      latest: flow([agent("a"), agent("b")], [], flowSettings, {
+        containers: [
+          workspaceContainer([]),
+          sessionContainer(["a"], { repo: shop.repo }),
+          sessionContainer(["b"], { id: "session-2", name: "web", repo: blog.repo }),
+        ],
+      }),
+    });
+
+    expect(bridge.workspaceInfo).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(shop));
+    expect(label()?.folder).toEqual({ name: "shop", title: "/code/shop" });
   });
 });

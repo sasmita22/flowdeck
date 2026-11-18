@@ -37,7 +37,19 @@ const flow = (nodes: unknown[], wires: unknown[]): Flow =>
   parseFlow({
     nodes,
     wires,
-    session: { name: "main", buildConfig: {}, model: "sonnet" },
+    containers: [
+      {
+        id: "session-1",
+        kind: "session",
+        name: "main",
+        repo: "",
+        branch: "",
+        model: "sonnet",
+        nodes: (nodes as { id: string; parent?: string }[])
+          .filter((node) => node.parent === undefined)
+          .map((node) => node.id),
+      },
+    ],
     settings: { buildModel: "sonnet", permissionMode: "default" },
   });
 

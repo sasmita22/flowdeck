@@ -6,7 +6,13 @@ import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 
 type RawNode = { id: string; parent?: string } & Record<string, unknown>;
 type RawWire = { from: { node: string }; to: { node: string } } & Record<string, unknown>;
-type RawFlow = { nodes: RawNode[]; wires: RawWire[]; session: unknown; settings: unknown };
+type RawContainer = { id: string; nodes: string[] } & Record<string, unknown>;
+type RawFlow = {
+  nodes: RawNode[];
+  wires: RawWire[];
+  containers: RawContainer[];
+  settings: unknown;
+};
 
 const allTypes = (): RawFlow =>
   JSON.parse(readFileSync(new URL("../../examples/all-types.json", import.meta.url), "utf8"));
@@ -15,6 +21,7 @@ function cloned(copies: number): Flow {
   const base = allTypes();
   const nodes: RawNode[] = [];
   const wires: RawWire[] = [];
+  const containers: RawContainer[] = [];
   for (let k = 0; k < copies; k++) {
     for (const node of base.nodes) {
       nodes.push({
@@ -30,8 +37,15 @@ function cloned(copies: number): Flow {
         to: { ...wire.to, node: `${wire.to.node}-${k}` },
       });
     }
+    for (const container of base.containers) {
+      containers.push({
+        ...container,
+        id: `${container.id}-${k}`,
+        nodes: container.nodes.map((id) => `${id}-${k}`),
+      });
+    }
   }
-  return parseFlow({ nodes, wires, session: base.session, settings: base.settings });
+  return parseFlow({ nodes, wires, containers, settings: base.settings });
 }
 
 export function largeFlows(): { a: Flow; b: Flow } {

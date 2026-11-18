@@ -2,6 +2,7 @@ import { useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
+import { libraryBuildReason } from "../../../core/flow/structure.js";
 import type { Actions } from "../actions.js";
 import { selectFlowBuilding, type BuildProgressState } from "../build-progress-store.js";
 import { folderText, formatWhen } from "../format.js";
@@ -33,6 +34,7 @@ function BlueprintCard({
   const [draft, setDraft] = useState<string | null>(null);
   const busy = useStore(run, (state) => state.starting);
   const building = useStore(buildProgress, selectFlowBuilding(flow.flowId));
+  const isLibrary = flow.kind === "library";
 
   const commit = async () => {
     if (draft === null) return;
@@ -92,6 +94,7 @@ function BlueprintCard({
         <PinButton flow={flow} library={library} testId={pageTestIds.blueprintPin(flow.flowId)} />
       </div>
       <div className="fd-card-meta">
+        {isLibrary && <span data-testid={pageTestIds.blueprintKind(flow.flowId)}>Library</span>}
         <span>{flow.lastSavedAt === null ? "Never saved" : formatWhen(flow.lastSavedAt)}</span>
         <span>{versionsText(flow.versions)}</span>
         <span className="fd-card-place" title={folderText(flow.buildConfig)}>
@@ -99,12 +102,23 @@ function BlueprintCard({
           <span className="fd-ellipsis">{folderText(flow.buildConfig)}</span>
         </span>
       </div>
+      {isLibrary && (
+        <p className="fd-hint" data-testid={pageTestIds.blueprintBuildReason(flow.flowId)}>
+          {libraryBuildReason}
+        </p>
+      )}
       <div className="fd-card-actions">
         <button
           className="fd-btn"
           data-testid={pageTestIds.blueprintBuild(flow.flowId)}
-          disabled={flow.versions === 0 || busy}
-          title={flow.versions === 0 ? "Save it first, then build" : "Build the latest version"}
+          disabled={flow.versions === 0 || busy || isLibrary}
+          title={
+            isLibrary
+              ? libraryBuildReason
+              : flow.versions === 0
+                ? "Save it first, then build"
+                : "Build the latest version"
+          }
           onClick={() => void build()}
         >
           Build v{Math.max(flow.versions, 1)}

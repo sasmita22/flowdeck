@@ -23,6 +23,7 @@ import {
   sessionIdsIn,
   type LiveEngine,
 } from "../fixtures/live-engine.js";
+import { asWorkflow } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
@@ -59,38 +60,36 @@ type Step = {
 
 function liveFlow(steps: Step[]): Flow {
   const ids = ["t", ...steps.map((step) => step.id), "o"];
-  return parseFlow({
-    nodes: [
-      { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
-      ...steps.map((step, index) => ({
-        id: step.id,
-        label: step.label,
-        type: step.type,
-        position: at(index + 1),
-        settings: {
-          role: "",
-          instructions: step.instructions,
-          model: "haiku",
-          ...(step.given === undefined ? {} : { given: step.given }),
-          ...(step.writes === undefined ? {} : { writes: step.writes }),
+  return asWorkflow(
+    {
+      nodes: [
+        { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
+        ...steps.map((step, index) => ({
+          id: step.id,
+          label: step.label,
+          type: step.type,
+          position: at(index + 1),
+          settings: {
+            role: "",
+            instructions: step.instructions,
+            model: "haiku",
+            ...(step.given === undefined ? {} : { given: step.given }),
+            ...(step.writes === undefined ? {} : { writes: step.writes }),
+          },
+        })),
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(steps.length + 1),
+          settings: { name: "result", type: "text" },
         },
-      })),
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(steps.length + 1),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+      ],
+      wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
+      settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
     },
-    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
-  });
+    { model: "haiku" },
+  );
 }
 
 async function exampleOnHaiku(): Promise<Flow> {
@@ -100,7 +99,9 @@ async function exampleOnHaiku(): Promise<Flow> {
     nodes: flow.nodes.map((node) =>
       node.type === "agent" ? { ...node, settings: { ...node.settings, model: "haiku" } } : node,
     ),
-    session: { ...flow.session, model: "haiku" },
+    containers: flow.containers.map((container) =>
+      container.kind === "session" ? { ...container, model: "haiku" } : container,
+    ),
   });
 }
 

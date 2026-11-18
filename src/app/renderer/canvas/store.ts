@@ -5,16 +5,15 @@ import type { ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import { defaultPermissionMode } from "../../../core/flow/choices.js";
-import { bodyProblems } from "../../../core/flow/structure.js";
+import { bodyProblems, flowContainerName } from "../../../core/flow/structure.js";
 import {
   NodeType,
   parseFlow,
-  type BuildConfig,
   type CanvasNote,
   type Flow,
+  type FlowContainer,
   type FlowSettings,
   type Node,
-  type Session,
   type Wire,
 } from "../../../core/flow/schema.js";
 import { labelFor, nodeDefaults } from "../../../core/nodes/defaults.js";
@@ -25,6 +24,9 @@ import {
   centerOf,
   containerAt,
   containerMoves,
+  flowContainerAt,
+  flowContainerBounds,
+  FRAME_PADDING,
   followed,
   isContainer,
   widthOf,
@@ -35,14 +37,16 @@ import {
   addNode,
   addNote,
   addWire,
+  deleteFlowContainer,
   deleteNodes as deleteNodesCommand,
   deleteWires,
   moveNodes,
+  updateFlowContainer as updateFlowContainerCommand,
   updateNode as updateNodeCommand,
   updateNote,
-  updateSession,
   updateSettings,
   type Command,
+  type FlowContainerPatch,
   type Items,
   type Move,
 } from "./commands.js";
@@ -51,10 +55,15 @@ import { edgeId } from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
 
-export type CanvasItemType = NodeType | "note";
+export type FlowContainerKind = FlowContainer["kind"];
+
+export type CanvasItemType = NodeType | FlowContainerKind | "note";
+
+const isFlowContainerKind = (value: string): value is FlowContainerKind =>
+  value === "workspace" || value === "session";
 
 export const isCanvasItemType = (value: string): value is CanvasItemType =>
-  value === "note" || isNodeType(value);
+  value === "note" || isFlowContainerKind(value) || isNodeType(value);
 
 export { nodeDefaults };
 
@@ -85,7 +94,7 @@ export interface CanvasState {
   noteBoxes: Record<string, NoteBox>;
   message: string | null;
   menu: NodeMenu | null;
-  clipboard: Items | null;
+  clipboard: (Items & { opened: number }) | null;
   pastes: number;
   renaming: string | null;
   focus: Focus | null;
@@ -117,10 +126,8 @@ export interface CanvasState {
   highlight(id: string | null): void;
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
-  updateSession(next: Session): void;
+  updateFlowContainer(id: string, patch: FlowContainerPatch): void;
   updateSettings(next: FlowSettings): void;
-  setRepo(repo: string): void;
-  setBase(base: string): void;
   updateNode(next: Node): void;
   applyAgent(command: Command): boolean;
   endAgentGroup(): void;
@@ -134,18 +141,77 @@ export interface CanvasState {
   markSaved(flow: Flow): void;
 }
 
-export const newCanvasFlow = (): Flow => ({
-  nodes: [],
-  wires: [],
-  session: { name: "main", buildConfig: {}, model: "sonnet" },
-  settings: { buildModel: "sonnet", permissionMode: defaultPermissionMode },
-});
-
 export const nextNodeId = (type: NodeType, flow: Flow): string => {
   const used = new Set(flow.nodes.map((node) => node.id.toLowerCase()));
   let n = 1;
   while (used.has(`${type}-${n}`)) n += 1;
   return `${type}-${n}`;
+};
+
+const firstFree = (taken: ReadonlySet<string>, name: (n: number) => string): string => {
+  let n = 1;
+  while (taken.has(name(n))) n += 1;
+  return name(n);
+};
+
+const newFlowContainer = (kind: FlowContainerKind, flow: Flow, nodes: string[]): FlowContainer => {
+  const id = firstFree(
+    new Set([...flow.nodes, ...flow.containers].map((item) => item.id.toLowerCase())),
+    (n) => `${kind}-${n}`,
+  );
+  if (kind === "workspace") return { id, kind, model: "sonnet", nodes };
+  const names = new Set(
+    flow.containers.flatMap((container) => (container.kind === "session" ? [container.name] : [])),
+  );
+  const name = firstFree(names, (n) => (n === 1 ? "session" : `session-${n}`));
+  return { id, kind, name, repo: "", branch: "", model: "sonnet", nodes };
+};
+
+const startToStop = 200;
+
+const newStopSettings = { name: "result", type: "text" };
+
+export const flowContainerItems = (
+  kind: FlowContainerKind,
+  flow: Flow,
+  at: Position,
+  nextId: (type: NodeType, flow: Flow) => string = nextNodeId,
+): Items & { containers: FlowContainer[] } => {
+  const start = newNode("trigger", nextId("trigger", flow), at);
+  const withStart = { ...flow, nodes: [...flow.nodes, start] };
+  const stop = {
+    ...newNode("output", nextId("output", withStart), { x: at.x + startToStop, y: at.y }),
+    settings: { ...newStopSettings },
+  } as Node;
+  return {
+    nodes: [start, stop],
+    wires: [
+      { kind: "then", from: { node: start.id, port: "out" }, to: { node: stop.id, port: "in" } },
+    ],
+    notes: [],
+    containers: [newFlowContainer(kind, flow, [start.id, stop.id])],
+  };
+};
+
+const withItems = (flow: Flow, items: Items): Flow => addItems(items).do(flow);
+
+const seedGap = 160;
+
+export const newCanvasFlow = (): Flow => {
+  const empty: Flow = {
+    nodes: [],
+    wires: [],
+    containers: [],
+    settings: { buildModel: "sonnet", permissionMode: defaultPermissionMode },
+  };
+  const withWorkspace = withItems(empty, flowContainerItems("workspace", empty, firstPosition));
+  return withItems(
+    withWorkspace,
+    flowContainerItems("session", withWorkspace, {
+      x: firstPosition.x,
+      y: firstPosition.y + seedGap,
+    }),
+  );
 };
 
 export const nextNoteId = (flow: Flow): string => {
@@ -208,6 +274,15 @@ export const placeNode = (flow: Flow, type: NodeType, at: Position, parent?: str
   return position;
 };
 
+export const placeInContainer = (flow: Flow, type: NodeType, containerId: string): Position => {
+  const members = new Set(flow.containers.find(({ id }) => id === containerId)?.nodes ?? []);
+  const inside = topLevel(flow).filter((node) => members.has(node.id));
+  const start = inside.find((node) => node.type === "trigger") ?? inside[0];
+  if (start === undefined) return placeNode(flow, type, firstPosition);
+  const right = flowContainerBounds(flow, containerId).right - FRAME_PADDING;
+  return placeNode(flow, type, { x: right + gap, y: start.position.y });
+};
+
 const nextTo = (flow: Flow, selection: readonly string[]): Position => {
   const selected =
     selection.length === 1 ? flow.nodes.find((node) => node.id === selection[0]) : undefined;
@@ -264,17 +339,23 @@ export const selectFieldIssues = (flow: Flow, nodeId: string): Record<string, st
   return byNode[nodeId] ?? {};
 };
 
-const sessionIssuesByFlow = new WeakMap<Flow, Record<string, string>>();
+const containerIssuesByFlow = new WeakMap<Flow, Record<string, Record<string, string>>>();
 
-export const selectSessionIssues = (flow: Flow): Record<string, string> => {
-  const cached = sessionIssuesByFlow.get(flow);
-  if (cached !== undefined) return cached;
-  const issues: Record<string, string> = {};
-  for (const { node, field, message } of flowProblems(flow)) {
-    if (node === undefined && field !== undefined && !(field in issues)) issues[field] = message;
+export const selectFlowContainerIssues = (
+  flow: Flow,
+  containerId: string,
+): Record<string, string> => {
+  let byContainer = containerIssuesByFlow.get(flow);
+  if (byContainer === undefined) {
+    byContainer = {};
+    for (const { container, node, field, message } of flowProblems(flow)) {
+      if (container === undefined || node !== undefined || field === undefined) continue;
+      const fields = (byContainer[container] ??= {});
+      if (!(field in fields)) fields[field] = message;
+    }
+    containerIssuesByFlow.set(flow, byContainer);
   }
-  sessionIssuesByFlow.set(flow, issues);
-  return issues;
+  return byContainer[containerId] ?? {};
 };
 
 export const selectSelectedNode = (state: Pick<CanvasState, "flow" | "selection">): Node | null => {
@@ -299,7 +380,9 @@ const wrongWay =
 const alreadyJoined = "they are already joined.";
 
 const kept = (selection: readonly string[], flow: Flow) => {
-  const ids = new Set([...flow.nodes, ...(flow.notes ?? [])].map(({ id }) => id));
+  const ids = new Set(
+    [...flow.nodes, ...(flow.notes ?? []), ...flow.containers].map(({ id }) => id),
+  );
   return selection.filter((id) => ids.has(id));
 };
 
@@ -340,12 +423,6 @@ export function createCanvasStore(
 
   return createStore<CanvasState>()((set, get) => {
     const ready = () => get().ready;
-
-    const editBuildConfig = (edit: (config: BuildConfig) => BuildConfig) => {
-      if (!ready()) return;
-      const { session } = get().flow;
-      run(updateSession({ ...session, buildConfig: edit(session.buildConfig) }));
-    };
 
     let agentGroup: Command | null = null;
 
@@ -392,10 +469,34 @@ export function createCanvasStore(
       return places.length > 0 ? deleteWires(flow, places) : undefined;
     };
 
+    const deletion = (
+      flow: Flow,
+      ids: readonly string[],
+      edgeIds: readonly string[] = [],
+    ): Command | undefined => {
+      const containers = flow.containers.filter((container) => ids.includes(container.id));
+      const steps = [
+        ...containers.map(
+          (container) => (current: Flow) => deleteFlowContainer(current, container.id),
+        ),
+        (current: Flow) => nodeDeletion(current, ids),
+        (current: Flow) => wireDeletion(current, edgeIds),
+      ];
+      let current = flow;
+      let command: Command | undefined;
+      for (const step of steps) {
+        const next = step(current);
+        if (next === undefined) continue;
+        current = next.do(current);
+        command = command === undefined ? next : both(command, next);
+      }
+      return command;
+    };
+
     const deleteNodes = (ids: readonly string[]) => {
       if (!ready()) return;
       set({ menu: null });
-      const command = nodeDeletion(get().flow, ids);
+      const command = deletion(get().flow, ids);
       if (command !== undefined) run(command);
     };
 
@@ -403,11 +504,7 @@ export function createCanvasStore(
       if (!ready()) return;
       set({ menu: null });
       const { flow, selection, selectedWires } = get();
-      const nodes = nodeDeletion(flow, selection);
-      const afterNodes = nodes?.do(flow) ?? flow;
-      const wires = wireDeletion(afterNodes, selectedWires);
-      const command =
-        nodes !== undefined && wires !== undefined ? both(nodes, wires) : (nodes ?? wires);
+      const command = deletion(flow, selection, selectedWires);
       if (command !== undefined) run(command);
     };
 
@@ -449,7 +546,14 @@ export function createCanvasStore(
       const wires = body
         ? flow.wires.filter((wire) => inside.has(wire.from.node) && inside.has(wire.to.node))
         : [];
-      return structuredClone({ nodes, wires, notes });
+      const members = Object.fromEntries(
+        nodes.flatMap((node) => {
+          if (node.parent !== undefined) return [];
+          const container = flow.containers.find(({ nodes: ids }) => ids.includes(node.id));
+          return container === undefined ? [] : [[node.id, container.id]];
+        }),
+      );
+      return structuredClone({ nodes, wires, notes, members });
     };
 
     const placed = (flow: Flow, items: Items, offset: Position): Items => {
@@ -491,7 +595,21 @@ export function createCanvasStore(
         withNotes = { ...withNotes, notes: [...(withNotes.notes ?? []), moved] };
         return moved;
       });
-      return { nodes, wires, notes };
+      const sourceOf = new Map([...renamed].map(([source, id]) => [id, source]));
+      const containerOf = (node: Node): string | undefined => {
+        const recorded = items.members?.[sourceOf.get(node.id) ?? ""];
+        return (
+          flowContainerAt(flow, centerOf(node)) ??
+          flow.containers.find((container) => container.id === recorded)?.id
+        );
+      };
+      const members = Object.fromEntries(
+        nodes.flatMap((node) => {
+          const container = node.parent === undefined ? containerOf(node) : undefined;
+          return container === undefined ? [] : [[node.id, container]];
+        }),
+      );
+      return { nodes, wires, notes, members };
     };
 
     const pasteItems = (items: Items, offset: Position): boolean => {
@@ -521,6 +639,25 @@ export function createCanvasStore(
         [...pasted.nodes, ...pasted.notes].map(({ id }) => id),
       );
       return true;
+    };
+
+    const dropFlowContainer = (kind: FlowContainerKind, position: Position) => {
+      const { flow } = get();
+      const label = kind === "workspace" ? "Workspace" : "Session";
+      const inside = flowContainerAt(flow, position) ?? containerAt(flow, position);
+      if (inside !== undefined) {
+        const host = flow.containers.find((container) => container.id === inside);
+        const where = host === undefined ? labelOf(flow, inside) : flowContainerName(host);
+        set({
+          message: `Can't drop ${label} into ${where}: a ${label} sits on the canvas, never inside another container.`,
+        });
+        return;
+      }
+      const items = flowContainerItems(kind, flow, position, nextId);
+      run(
+        addItems(items),
+        items.containers.map(({ id }) => id),
+      );
     };
 
     const start = newCanvasFlow();
@@ -554,10 +691,15 @@ export function createCanvasStore(
           run(addNote(newNote(id, position)), [id]);
           return;
         }
+        if (isFlowContainerKind(type)) {
+          dropFlowContainer(type, position);
+          return;
+        }
         const id = nextId(type, flow);
         const parent = isContainer({ type }) ? undefined : containerAt(flow, position);
         const at = placeNode(flow, type, position, parent);
-        const command = addNode(newNode(type, id, at, parent));
+        const member = parent === undefined ? flowContainerAt(flow, position) : undefined;
+        const command = addNode(newNode(type, id, at, parent), member);
         const [misplaced] = newProblems(flow, command.do(flow)).filter(
           (error) => error.rule === "body-nodes",
         );
@@ -626,14 +768,15 @@ export function createCanvasStore(
       copy: () => {
         if (!ready()) return;
         const items = copied(get().flow, get().selection);
-        if (items !== null) set({ clipboard: items, pastes: 0 });
+        if (items !== null) set({ clipboard: { ...items, opened: get().opened }, pastes: 0 });
       },
 
       paste: () => {
-        const { clipboard, pastes } = get();
+        const { clipboard, pastes, opened } = get();
         if (!ready() || clipboard === null) return;
+        const items = clipboard.opened === opened ? clipboard : { ...clipboard, members: {} };
         const step = (pastes + 1) * pasteGap;
-        if (pasteItems(clipboard, { x: step, y: step })) set({ pastes: pastes + 1 });
+        if (pasteItems(items, { x: step, y: step })) set({ pastes: pastes + 1 });
       },
 
       duplicate: () => {
@@ -706,12 +849,33 @@ export function createCanvasStore(
           const to = containerAt(framing, centerOf(node));
           return to === node.parent ? undefined : { from: node.parent, to };
         };
+        const carriedWhole = (container: FlowContainer) =>
+          container.nodes.every((id) => id in dragged);
+        const membershipOf = (node: Node, parent: Move["parent"]): Move["container"] => {
+          if (!(node.id in dragged)) return undefined;
+          const home = flow.containers.find((container) => container.nodes.includes(node.id));
+          const nested = parent === undefined ? node.parent : parent.to;
+          const to = nested === undefined ? flowContainerAt(flow, centerOf(node)) : undefined;
+          const frameFollows = home !== undefined && nested === undefined && carriedWhole(home);
+          if (to === home?.id || (frameFollows && to === undefined)) return undefined;
+          return { from: home?.id, to };
+        };
         const moves = Object.entries(targets).flatMap(([id, to]): Move[] => {
           const from = positionOf(flow, id);
           const node = moved.nodes.find((candidate) => candidate.id === id);
           const parent = node === undefined ? undefined : parentOf(node);
-          if (from === undefined || (samePosition(from, to) && parent === undefined)) return [];
-          return [{ id, from, to, ...(parent === undefined ? {} : { parent }) }];
+          const container = node === undefined ? undefined : membershipOf(node, parent);
+          const unchanged = parent === undefined && container === undefined;
+          if (from === undefined || (samePosition(from, to) && unchanged)) return [];
+          return [
+            {
+              id,
+              from,
+              to,
+              ...(parent === undefined ? {} : { parent }),
+              ...(container === undefined ? {} : { container }),
+            },
+          ];
         });
         set({ dragPositions: {} });
         if (moves.length === 0) return;
@@ -733,28 +897,13 @@ export function createCanvasStore(
         run(command);
       },
 
-      updateSession: (next) => {
-        if (ready()) run(updateSession(next));
+      updateFlowContainer: (id, patch) => {
+        if (ready()) run(updateFlowContainerCommand(id, patch));
       },
 
       updateSettings: (next) => {
         if (ready()) run(updateSettings(next));
       },
-
-      setRepo: (repo) =>
-        editBuildConfig(({ base, ...rest }) => ({
-          ...rest,
-          repo,
-          ...(base !== undefined && rest.repo === repo && { base }),
-        })),
-
-      setBase: (base) =>
-        editBuildConfig((config) => {
-          if (base !== "") return { ...config, base };
-          const { ...rest } = config;
-          delete rest.base;
-          return rest;
-        }),
 
       updateNode: (next) => {
         if (!ready()) return;

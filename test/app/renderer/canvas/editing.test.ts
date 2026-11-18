@@ -1,20 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   createCanvasStore,
-  newCanvasFlow,
   selectCanDelete,
   selectNodeIssues,
-  selectSessionIssues,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { edgeId } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
-  flow,
   forEach,
   fork,
   gate,
   hardstop,
+  inOneSession,
   loop,
   thenWire,
   trigger,
@@ -33,7 +31,7 @@ const nodeOf = (current: Flow, id: string) => current.nodes.find((node) => node.
 const ends = (current: Flow) => current.wires.map((wire) => `${wire.from.node}>${wire.to.node}`);
 
 const chain = () =>
-  flow(
+  inOneSession(
     [
       { ...at(agent("A"), 0, 0), label: "Plan" },
       { ...at(agent("B"), 200, 0), label: "Test" },
@@ -82,7 +80,7 @@ describe("selecting and deleting wires", () => {
   });
 
   it("forgets a selected wire that an undo takes away", () => {
-    const store = loaded(flow([agent("A"), agent("B")], []));
+    const store = loaded(inOneSession([agent("A"), agent("B")], []));
     store.getState().connect({ node: "A", port: "out" }, { node: "B", port: "in" });
     store.getState().selectWires([edgeId(wireAt(store.getState().flow, 0))]);
 
@@ -96,7 +94,7 @@ describe("selecting and deleting wires", () => {
 describe("refused connections", () => {
   it("names both nodes by their labels and says why, without ids or rule names", () => {
     const store = loaded(
-      flow(
+      inOneSession(
         [
           { ...fork("fork-1"), label: "Fork" },
           { ...gate("gate-1"), label: "Check" },
@@ -136,7 +134,7 @@ describe("refused connections", () => {
 
 describe("deleting a hard stop", () => {
   it("deletes a hard stop added by mistake, and undo brings it back", () => {
-    const store = loaded(flow([agent("P"), hardstop("H")], [thenWire("P", "H")]));
+    const store = loaded(inOneSession([agent("P"), hardstop("H")], [thenWire("P", "H")]));
     const before = store.getState().flow;
 
     store.getState().deleteNodes(["H"]);
@@ -150,7 +148,7 @@ describe("deleting a hard stop", () => {
 
   it("deletes a Loop together with the hard stop in its body, as one undo step", () => {
     const store = loaded(
-      flow([loop("L"), agent("P", { parent: "L" }), hardstop("H", { parent: "L" })], []),
+      inOneSession([loop("L"), agent("P", { parent: "L" }), hardstop("H", { parent: "L" })], []),
     );
     const before = store.getState().flow;
 
@@ -193,7 +191,9 @@ describe("copy, paste and duplicate", () => {
   });
 
   it("copies a Loop with its body, giving the body the new Loop as parent", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80)], []));
+    const store = loaded(
+      inOneSession([at(loop("L"), 0, 0), at(agent("P", { parent: "L" }), 0, 80)], []),
+    );
     store.getState().select(["L"]);
 
     store.getState().copy();
@@ -207,7 +207,7 @@ describe("copy, paste and duplicate", () => {
   });
 
   it("pastes into a selected Loop", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0), at(agent("P"), 400, 0)], []));
+    const store = loaded(inOneSession([at(loop("L"), 0, 0), at(agent("P"), 400, 0)], []));
     store.getState().select(["P"]);
     store.getState().copy();
 
@@ -218,7 +218,7 @@ describe("copy, paste and duplicate", () => {
   });
 
   it("refuses to paste a Trigger into a Loop and says why", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0), at(trigger("T"), 400, 0)], []));
+    const store = loaded(inOneSession([at(loop("L"), 0, 0), at(trigger("T"), 400, 0)], []));
     store.getState().select(["T"]);
     store.getState().copy();
     store.getState().select(["L"]);
@@ -230,7 +230,7 @@ describe("copy, paste and duplicate", () => {
   });
 
   it("duplicates an empty Loop, which then shows its missing body as an ordinary issue", () => {
-    const store = loaded(flow([at(loop("L"), 0, 0)], []));
+    const store = loaded(inOneSession([at(loop("L"), 0, 0)], []));
     store.getState().select(["L"]);
 
     store.getState().duplicate();
@@ -246,7 +246,7 @@ describe("copy, paste and duplicate", () => {
 
   it("refuses a Loop pasted inside another, naming no target when nothing is selected", () => {
     const store = loaded(
-      flow(
+      inOneSession(
         [
           at(loop("outer"), 0, 0),
           at(loop("inner", { parent: "outer" }), 0, 80),
@@ -267,7 +267,7 @@ describe("copy, paste and duplicate", () => {
 
   it("copies notes along with nodes, under new note ids", () => {
     const store = loaded({
-      ...flow([agent("A")], []),
+      ...inOneSession([agent("A")], []),
       notes: [
         { id: "n1", text: "why", position: { x: 5, y: 5 }, size: { width: 160, height: 90 } },
       ],
@@ -311,7 +311,7 @@ describe("copy, paste and duplicate", () => {
 
 describe("frame only", () => {
   const loopWithBody = () =>
-    flow(
+    inOneSession(
       [
         {
           ...at(loop("L", { settings: { cap: 5, condition: "tests pass" } }), 0, 0),
@@ -346,7 +346,7 @@ describe("frame only", () => {
 
   it("adds an empty For each, leaving out a frame nested in its body", () => {
     const store = loaded(
-      flow(
+      inOneSession(
         [
           at(forEach("F", { file: "units.md" }, "each unit"), 0, 0),
           at(agent("P", { parent: "F" }), 0, 80),
@@ -467,7 +467,7 @@ describe("focusing a node from a problem", () => {
 
 describe("selectNodeIssues", () => {
   it("lists every problem of a node, not only the first", () => {
-    const current = flow(
+    const current = inOneSession(
       [
         at(fork("F"), 0, 0),
         { ...agent("X", { settings: { instructions: "" } }), parent: "nowhere" },
@@ -479,24 +479,5 @@ describe("selectNodeIssues", () => {
       "Write what the agent should do.",
       expect.stringMatching(/nowhere/),
     ]);
-  });
-});
-
-describe("selectSessionIssues", () => {
-  it("maps each session field the validator names to its message", () => {
-    expect(selectSessionIssues(newCanvasFlow())).toEqual({
-      "buildConfig.repo":
-        "Choose the repository this blueprint builds from, in the session settings. Build is refused until one is set.",
-    });
-  });
-
-  it("is empty once the repository is set", () => {
-    const base = newCanvasFlow();
-    const set = {
-      ...base,
-      session: { ...base.session, buildConfig: { repo: "/w", variables: [] } },
-    };
-
-    expect(selectSessionIssues(set)).toEqual({});
   });
 });

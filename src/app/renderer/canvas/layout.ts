@@ -3,7 +3,7 @@ import type { Flow, Node } from "../../../core/flow/schema.js";
 import { parallelSections } from "../../../core/nodes/fork/execute.js";
 import { nodeLook } from "../nodes/look.js";
 import type { Move } from "./commands.js";
-import { FRAME_PADDING, isContainer, sideLabelSpan, widthOf } from "./frames.js";
+import { FRAME_PADDING, hasSideLabel, isContainer, sideLabelSpan, widthOf } from "./frames.js";
 
 type Position = { x: number; y: number };
 
@@ -39,6 +39,7 @@ const rootOptions: LayoutOptions = {
   "elk.direction": "RIGHT",
   "elk.edgeRouting": "ORTHOGONAL",
   "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+  "elk.padding": "[top=0,left=0,bottom=0,right=0]",
 };
 
 const chipGap = FRAME_PADDING;
@@ -59,7 +60,10 @@ const sectionOptions: LayoutOptions = {
   "elk.padding": "[top=0,left=0,bottom=0,right=0]",
 };
 
-const hasSideLabel = (node: Node): boolean => node.type === "trigger" || node.type === "output";
+const containerOptions: LayoutOptions = {
+  ...layerGap,
+  "elk.padding": `[top=${FRAME_PADDING},left=${FRAME_PADDING},bottom=${FRAME_PADDING},right=${FRAME_PADDING}]`,
+};
 
 const layoutWidthOf = (node: Node): number =>
   hasSideLabel(node) ? widthOf(node) + sideLabelSpan(node.label) : widthOf(node);
@@ -88,15 +92,43 @@ const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions
     const section: ElkNode = { id: `g${index}`, layoutOptions: sectionOptions, children: [] };
     for (const member of [fork, ...branches, join]) sectionOf.set(member, section);
   }
-  const children: ElkNode[] = [];
+  const frames: ElkNode[] = flow.containers.map((_, index) => ({
+    id: `c${index}`,
+    layoutOptions: { ...containerOptions, ...options },
+    children: [],
+  }));
+  const frameOf = new Map(
+    flow.containers.flatMap(({ nodes }, index) => nodes.map((id) => [id, frames[index]] as const)),
+  );
+  const parentOf = new Map(flow.nodes.map((node) => [node.id, node.parent]));
+  const topOf = (id: string): string => {
+    const parent = parentOf.get(id);
+    return parent === undefined ? id : topOf(parent);
+  };
+  const links = flow.wires
+    .filter(({ kind }) => kind === "then")
+    .map(({ from, to }) => [topOf(from.node), topOf(to.node)] as const);
+  for (let joined = true; joined;) {
+    joined = false;
+    for (const [a, b] of links) {
+      const [held, loose] = frameOf.has(a) ? [a, b] : [b, a];
+      const frame = frameOf.get(held);
+      if (frame === undefined || frameOf.has(loose)) continue;
+      frameOf.set(loose, frame);
+      joined = true;
+    }
+  }
+  const root: ElkNode[] = [];
+  const holderOf = (id: string): ElkNode[] => frameOf.get(id)?.children ?? root;
   for (const node of childrenOf.get(undefined) ?? []) {
     const section = sectionOf.get(node.id);
-    if (section === undefined) children.push(elkNode(node));
+    if (section === undefined) holderOf(node.id).push(elkNode(node));
     else {
-      if (section.children?.length === 0) children.push(section);
+      if (section.children?.length === 0) holderOf(node.id).push(section);
       section.children?.push(elkNode(node));
     }
   }
+  const children = [...frames.filter((frame) => frame.children?.length !== 0), ...root];
   const edges: ElkExtendedEdge[] = flow.wires.flatMap(({ kind, from, to }, index) => {
     const source = elkIds.get(from.node);
     const target = elkIds.get(to.node);

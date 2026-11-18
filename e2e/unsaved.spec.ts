@@ -52,11 +52,14 @@ const closeWindow = (launched: LaunchedApp) =>
     BrowserWindow.getAllWindows()[0]?.close();
   });
 
+const seededTypes = ["trigger", "output", "trigger", "output"];
+
 const edit = async ({ window }: LaunchedApp) => {
+  expect((await readout(window)).nodes.map((node) => node.type)).toEqual(seededTypes);
   await playwrightPage(window).drag("palette-agent", "canvas", { x: 200, y: 150 });
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
   const edited = await readout(window);
-  expect(edited.nodes.map((node) => node.type)).toEqual(["agent"]);
+  expect(edited.nodes.map((node) => node.type)).toEqual([...seededTypes, "agent"]);
   return edited;
 };
 
@@ -96,14 +99,14 @@ test("Save writes the edit, closes the app, and a relaunch reopens it clean", as
   await expect(second.window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 
-test("Don't save closes the app without writing, and a relaunch opens an empty flow", async () => {
+test("Don't save closes the app without writing, and a relaunch opens a new blueprint", async () => {
   const first = await open();
   await editThenClose(first);
 
   await clickToQuit(first, "close-discard");
 
   const second = await open();
-  expect((await readout(second.window)).nodes).toEqual([]);
+  expect((await readout(second.window)).nodes.map((node) => node.type)).toEqual(seededTypes);
   await expect(second.window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 
@@ -183,7 +186,11 @@ const savedThenEdited = async (launched: LaunchedApp) => {
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
   await playwrightPage(window).drag(paletteTestId("gate"), "canvas", { x: 420, y: 150 });
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
-  expect((await readout(window)).nodes.map((node) => node.type)).toEqual(["agent", "gate"]);
+  expect((await readout(window)).nodes.map((node) => node.type)).toEqual([
+    ...seededTypes,
+    "agent",
+    "gate",
+  ]);
 };
 
 const onBlueprints = (window: Page) =>
@@ -222,7 +229,7 @@ test("Cancel keeps the editor and the edit", async () => {
   await expect(window.getByTestId(pageTestIds.leaveSave)).toHaveCount(0);
   await expect(window.getByTestId(controlTestIds.save)).toBeVisible();
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
-  expect(await nodeTypes(window)).toEqual(["agent", "gate"]);
+  expect(await nodeTypes(window)).toEqual([...seededTypes, "agent", "gate"]);
 });
 
 test("Save writes a new version then shows Blueprints", async () => {
@@ -236,7 +243,7 @@ test("Save writes a new version then shows Blueprints", async () => {
   await onBlueprints(window);
   await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("2 versions");
   await reopen(window);
-  expect(await nodeTypes(window)).toEqual(["agent", "gate"]);
+  expect(await nodeTypes(window)).toEqual([...seededTypes, "agent", "gate"]);
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 
@@ -251,7 +258,7 @@ test("Don't save shows Blueprints and a reopen has no edit", async () => {
   await onBlueprints(window);
   await expect(window.locator('[data-testid^="blueprint-card-"]')).toContainText("1 version");
   await reopen(window);
-  expect(await nodeTypes(window)).toEqual(["agent"]);
+  expect(await nodeTypes(window)).toEqual([...seededTypes, "agent"]);
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
 });
 

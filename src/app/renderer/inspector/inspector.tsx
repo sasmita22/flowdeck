@@ -19,7 +19,8 @@ import { Ask } from "./ask.js";
 import { CostTab } from "./cost-tab.js";
 import { FilesTab } from "./files-tab.js";
 import { NodeSettingsSection } from "./node-settings.js";
-import { SessionSettingsSection } from "./session-settings.js";
+import { BlueprintSettingsSection } from "./blueprint-settings.js";
+import { ContainerSettings } from "./container-settings.js";
 import type { InspectorState } from "./store.js";
 import { TerminalTab } from "./terminal-tab.js";
 import type { WaitState } from "./wait-store.js";
@@ -217,6 +218,9 @@ function RunTabs({
   );
 }
 
+const selectedFlowContainer = ({ flow, selection }: Pick<CanvasState, "flow" | "selection">) =>
+  selection.length === 1 ? flow.containers.find(({ id }) => id === selection[0]) : undefined;
+
 function CanvasSettings({
   canvas,
   shell,
@@ -230,11 +234,20 @@ function CanvasSettings({
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
   const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
+  const container = useStore(canvas, selectedFlowContainer);
   if (sessionSettingsOpen) {
     return (
       <>
-        <h2 style={headingStyle}>Session settings</h2>
-        <SessionSettingsSection canvas={canvas} branches={branches} />
+        <h2 style={headingStyle}>Blueprint settings</h2>
+        <BlueprintSettingsSection canvas={canvas} />
+      </>
+    );
+  }
+  if (container !== undefined) {
+    return (
+      <>
+        <h2 style={headingStyle}>{container.kind === "workspace" ? "Workspace" : "Session"}</h2>
+        <ContainerSettings canvas={canvas} containerId={container.id} branches={branches} />
       </>
     );
   }

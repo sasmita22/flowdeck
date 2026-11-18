@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BranchState } from "../../../../src/app/renderer/branch-store.js";
 import { branchSelect, withCurrent } from "../../../../src/app/renderer/fields/field-options.js";
-
-const branchState = (state: Pick<BranchState, "repo" | "branches" | "error">): BranchState => ({
-  ...state,
-  load: async () => {},
-  browse: async () => {},
-});
 
 const labels = (options: readonly { label: string }[]) => options.map(({ label }) => label);
 
@@ -15,7 +8,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "",
       value: "",
-      branches: branchState({ repo: null, branches: null, error: null }),
+      branches: { repo: null, branches: null, error: null },
     });
 
     expect(select.disabled).toBe(true);
@@ -27,7 +20,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/repo",
       value: "main",
-      branches: branchState({ repo: "/repo", branches: null, error: null }),
+      branches: { repo: "/repo", branches: null, error: null },
     });
 
     expect(select.disabled).toBe(true);
@@ -39,11 +32,11 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/tmp/plain",
       value: "",
-      branches: branchState({
+      branches: {
         repo: "/tmp/plain",
         branches: null,
         error: "/tmp/plain is not a git repository",
-      }),
+      },
     });
 
     expect(select.disabled).toBe(true);
@@ -56,7 +49,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/repo",
       value: "",
-      branches: branchState({ repo: "/repo", branches: ["main", "dev"], error: null }),
+      branches: { repo: "/repo", branches: ["main", "dev"], error: null },
     });
 
     expect(select.disabled).toBe(false);
@@ -72,7 +65,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/repo",
       value: "dev",
-      branches: branchState({ repo: "/repo", branches: ["main", "dev"], error: null }),
+      branches: { repo: "/repo", branches: ["main", "dev"], error: null },
     });
 
     expect(select.options).toEqual([
@@ -85,7 +78,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/repo",
       value: "gone",
-      branches: branchState({ repo: "/repo", branches: ["main"], error: null }),
+      branches: { repo: "/repo", branches: ["main"], error: null },
     });
 
     expect(select.disabled).toBe(false);
@@ -99,7 +92,7 @@ describe("branchSelect", () => {
     const select = branchSelect({
       repo: "/b",
       value: "",
-      branches: branchState({ repo: "/a", branches: ["only-in-a"], error: null }),
+      branches: { repo: "/a", branches: ["only-in-a"], error: null },
     });
 
     expect(select.disabled).toBe(true);

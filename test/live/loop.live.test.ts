@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { defaultPermissionMode } from "../../src/core/flow/choices.js";
-import { parseFlow } from "../../src/core/flow/schema.js";
+import { asWorkflow } from "../fixtures/flow-builders.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
@@ -42,64 +42,62 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow() {
-  return parseFlow({
-    nodes: [
-      {
-        id: "t",
-        label: "Start",
-        type: "trigger",
-        position: at(0),
-        settings: {},
-      },
-      {
-        id: "l1",
-        label: "Until fixed",
-        type: "loop",
-        position: at(1),
-        settings: { condition, cap: 3, onCap: "fail" },
-      },
-      {
-        id: "review",
-        label: "Review",
-        type: "agent",
-        position: at(2),
-        parent: "l1",
-        settings: {
-          role: "",
-          instructions: reviewText,
-          model: "haiku",
-          writes: ["review.md"],
+  return asWorkflow(
+    {
+      nodes: [
+        {
+          id: "t",
+          label: "Start",
+          type: "trigger",
+          position: at(0),
+          settings: {},
         },
-      },
-      {
-        id: "fix",
-        label: "Fix",
-        type: "agent",
-        position: at(3),
-        parent: "l1",
-        settings: {
-          role: "",
-          instructions: fixText,
-          model: "haiku",
-          given: ["review.md"],
+        {
+          id: "l1",
+          label: "Until fixed",
+          type: "loop",
+          position: at(1),
+          settings: { condition, cap: 3, onCap: "fail" },
         },
-      },
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(4),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+        {
+          id: "review",
+          label: "Review",
+          type: "agent",
+          position: at(2),
+          parent: "l1",
+          settings: {
+            role: "",
+            instructions: reviewText,
+            model: "haiku",
+            writes: ["review.md"],
+          },
+        },
+        {
+          id: "fix",
+          label: "Fix",
+          type: "agent",
+          position: at(3),
+          parent: "l1",
+          settings: {
+            role: "",
+            instructions: fixText,
+            model: "haiku",
+            given: ["review.md"],
+          },
+        },
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(4),
+          settings: { name: "result", type: "text" },
+        },
+      ],
+      wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
+      settings: { buildModel: "haiku", permissionMode: defaultPermissionMode },
     },
-    settings: { buildModel: "haiku", permissionMode: defaultPermissionMode },
-  });
+    { model: "haiku" },
+  );
 }
 
 async function nodeIn(cwd: string, ...args: string[]): Promise<{ code: number; stderr: string }> {

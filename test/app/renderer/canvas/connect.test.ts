@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCanvasStore } from "../../../../src/app/renderer/canvas/store.js";
 import type { Flow } from "../../../../src/core/flow/schema.js";
-import { agent, flow, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, inOneSession, thenWire } from "../../../fixtures/flow-builders.js";
 
 const end = (node: string, port: string) => ({ node, port });
 
@@ -13,12 +13,15 @@ const loaded = (current: Flow) => {
 
 const planned = () =>
   loaded(
-    flow([{ ...agent("plan"), label: "Planner" }, agent("build")], [thenWire("plan", "build")]),
+    inOneSession(
+      [{ ...agent("plan"), label: "Planner" }, agent("build")],
+      [thenWire("plan", "build")],
+    ),
   );
 
 describe("drawing a wire", () => {
   it("makes a Then wire between two nodes, as one undoable step", () => {
-    const store = loaded(flow([agent("plan"), agent("build")], []));
+    const store = loaded(inOneSession([agent("plan"), agent("build")], []));
 
     expect(store.getState().connect(end("plan", "out"), end("build", "in"))).toBe(true);
 

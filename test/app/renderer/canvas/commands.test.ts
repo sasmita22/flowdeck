@@ -2,17 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
   addNode,
   addWire,
+  deleteFlowContainer,
   deleteNodes,
   moveNodes,
+  updateFlowContainer,
   updateNode,
-  updateSession,
   addItems,
   deleteWires,
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
-import type { Flow, Node, Session, Wire } from "../../../../src/core/flow/schema.js";
-import { agent, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
+import type { Flow, Node, Wire } from "../../../../src/core/flow/schema.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  inOneSession,
+  loop,
+  output,
+  sessionContainer,
+  thenWire,
+  trigger,
+  workspaceContainer,
+} from "../../../fixtures/flow-builders.js";
 
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null) {
@@ -38,7 +50,7 @@ const ids = (source: Flow) => source.nodes.map((node) => node.id);
 const ends = (source: Flow) => source.wires.map((wire) => `${wire.from.node}>${wire.to.node}`);
 
 const fourNodes = () =>
-  flow(
+  inOneSession(
     [agent("A"), agent("B"), agent("C"), agent("D")],
     [thenWire("A", "B"), thenWire("A", "D"), thenWire("C", "B"), thenWire("B", "D")],
   );
@@ -57,7 +69,7 @@ describe("addNode", () => {
 
     expect(after.nodes).toEqual([...before.nodes, node]);
     expect(after.wires).toEqual(before.wires);
-    expect(after.session).toEqual(before.session);
+    expect(after.containers).toEqual(before.containers);
     expect(restored).toEqual(before);
   });
 });
@@ -104,7 +116,7 @@ describe("deleteNodes", () => {
   });
 
   it("removes a node with no wires and leaves the wires alone", () => {
-    const before = flow([agent("A"), agent("B"), agent("C")], [thenWire("A", "B")]);
+    const before = inOneSession([agent("A"), agent("B"), agent("C")], [thenWire("A", "B")]);
 
     const { after, restored } = roundTrip(deleteNodes(before, ["C"]), before);
 
@@ -114,7 +126,7 @@ describe("deleteNodes", () => {
   });
 
   it("removes the wires both into and out of a node in the middle of a chain", () => {
-    const before = flow(
+    const before = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
@@ -129,7 +141,7 @@ describe("deleteNodes", () => {
 
 describe("moveNodes", () => {
   it("sets each moved node to its new position and undo sets it back, leaving others alone", () => {
-    const before = flow([agent("A"), agent("B"), agent("C")], []);
+    const before = inOneSession([agent("A"), agent("B"), agent("C")], []);
     const command = moveNodes([
       { id: "A", from: { x: 0, y: 0 }, to: { x: 10, y: 20 } },
       { id: "C", from: { x: 0, y: 0 }, to: { x: -5, y: 7.5 } },
@@ -173,11 +185,6 @@ describe("moveNodes", () => {
   });
 });
 
-const framed = (source: Flow, nodes: string[]): Flow => ({
-  ...source,
-  session: { ...source.session, frame: { nodes } },
-});
-
 describe("deleteWires", () => {
   it("removes only the wires at the given places and undo puts them back where they were", () => {
     const before = fourNodes();
@@ -199,7 +206,7 @@ describe("deleteWires", () => {
 describe("addItems", () => {
   it("adds nodes, wires and notes as one step and undo takes exactly them away", () => {
     const before = fourNodes();
-    const pasted = flow([agent("E"), agent("F")], [thenWire("E", "F")]);
+    const pasted = inOneSession([agent("E"), agent("F")], [thenWire("E", "F")]);
     const note = {
       id: "n9",
       text: "copied",
@@ -217,33 +224,6 @@ describe("addItems", () => {
     expect(after.notes).toEqual([note]);
     expect(restored).toEqual(before);
     expect(Object.hasOwn(restored, "notes")).toBe(false);
-  });
-});
-
-describe("updateSession", () => {
-  const edited = (source: Flow): Session => ({
-    name: source.session.name,
-    buildConfig: { repo: "/r", base: "dev" },
-    model: "haiku",
-  });
-
-  it("sets the session to the one given and changes nothing else", () => {
-    const before = fourNodes();
-    const next = edited(before);
-
-    const after = updateSession(next).do(before);
-
-    expect(after).toEqual({ ...before, session: next });
-  });
-
-  it("undo restores the previous session exactly, frame included", () => {
-    const before = framed(fourNodes(), ["A", "B"]);
-
-    const { after, restored } = roundTrip(updateSession(edited(before)), before);
-
-    expect(Object.hasOwn(after.session, "frame")).toBe(false);
-    expect(restored.session).toEqual(before.session);
-    expect(flowsEqual(restored, before)).toBe(true);
   });
 });
 
@@ -285,9 +265,19 @@ describe("commands", () => {
       "addItems",
       () => addItems({ nodes: [onlyNode(flow([agent("E")], []))], wires: [], notes: [] }),
     ],
+    ["updateFlowContainer", () => updateFlowContainer("session-1", { repo: "/r", model: "haiku" })],
+    ["deleteFlowContainer", (before) => deleteFlowContainer(before, "session-1")],
     [
-      "updateSession",
-      (before) => updateSession({ ...before.session, model: "haiku", buildConfig: { repo: "/r" } }),
+      "moveNodes into a container",
+      () =>
+        moveNodes([
+          {
+            id: "A",
+            from: { x: 0, y: 0 },
+            to: { x: 3, y: 4 },
+            container: { from: "session-1", to: "workspace-1" },
+          },
+        ]),
     ],
     ["updateNode", (before) => updateNode({ ...onlyNode(before), label: "Renamed" })],
   ];
@@ -302,5 +292,269 @@ describe("commands", () => {
 
     expect(before).toEqual(snapshot);
     expect(restored).toEqual(snapshot);
+  });
+});
+
+const containerOf = (source: Flow, id: string) =>
+  source.containers.find((container) => container.id === id);
+
+const twoSessions = () =>
+  flow(
+    [
+      trigger("w-start"),
+      output("w-stop"),
+      trigger("s"),
+      loop("L"),
+      agent("P", { parent: "L" }),
+      output("t"),
+      trigger("u"),
+      agent("v"),
+      output("x"),
+    ],
+    [
+      thenWire("w-start", "w-stop"),
+      thenWire("s", "L"),
+      thenWire("L", "t"),
+      thenWire("v", "x"),
+      thenWire("u", "v"),
+      thenWire("P", "v"),
+    ],
+    flowSettings,
+    {
+      containers: [
+        workspaceContainer(["w-start", "w-stop"]),
+        sessionContainer(["s", "L", "t"]),
+        sessionContainer(["u", "v", "x"], { id: "session-2", name: "web" }),
+      ],
+    },
+  );
+
+describe("addItems with a container", () => {
+  it("adds the container with its Start, Stop and wire, and undo takes all of them away", () => {
+    const before = twoSessions();
+    const pasted = flow([trigger("s3"), output("t3")], [thenWire("s3", "t3")], flowSettings, {
+      containers: [sessionContainer(["s3", "t3"], { id: "session-3", name: "api" })],
+    });
+
+    const { after, restored } = roundTrip(
+      addItems({
+        nodes: pasted.nodes,
+        wires: pasted.wires,
+        notes: [],
+        containers: pasted.containers,
+      }),
+      before,
+    );
+
+    expect(after.containers).toEqual([...before.containers, ...pasted.containers]);
+    expect(ids(after)).toEqual([...ids(before), "s3", "t3"]);
+    expect(ends(after)).toEqual([...ends(before), "s3>t3"]);
+    expect(restored).toEqual(before);
+  });
+});
+
+describe("deleteFlowContainer", () => {
+  it("removes the container, its members, their body nodes and every wire on them as one command", () => {
+    const before = twoSessions();
+
+    const after = deleteFlowContainer(before, "session-1").do(before);
+
+    expect(after.containers.map(({ id }) => id)).toEqual(["workspace-1", "session-2"]);
+    expect(ids(after)).toEqual(["w-start", "w-stop", "u", "v", "x"]);
+    expect(ends(after)).toEqual(["w-start>w-stop", "v>x", "u>v"]);
+  });
+
+  it("undo restores the flow exactly", () => {
+    const before = twoSessions();
+
+    const { restored } = roundTrip(deleteFlowContainer(before, "session-1"), before);
+
+    expect(restored).toEqual(before);
+    expect(flowsEqual(restored, before)).toBe(true);
+  });
+
+  it("leaves the flow alone for an id that names no container", () => {
+    const before = twoSessions();
+
+    expect(deleteFlowContainer(before, "session-9").do(before)).toEqual(before);
+  });
+});
+
+describe("deleteNodes and container members", () => {
+  it("takes a deleted Start off its container's members and keeps the container", () => {
+    const before = twoSessions();
+
+    const { after, restored } = roundTrip(deleteNodes(before, ["s"]), before);
+
+    expect(containerOf(after, "session-1")?.nodes).toEqual(["L", "t"]);
+    expect(containerOf(after, "session-2")?.nodes).toEqual(["u", "v", "x"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("removes a container whose last member is deleted, and undo brings it back in its place", () => {
+    const before = twoSessions();
+
+    const { after, restored } = roundTrip(deleteNodes(before, ["s", "L", "P", "t"]), before);
+
+    expect(after.containers.map(({ id }) => id)).toEqual(["workspace-1", "session-2"]);
+    expect(restored).toEqual(before);
+    expect(restored.containers.map(({ id }) => id)).toEqual([
+      "workspace-1",
+      "session-1",
+      "session-2",
+    ]);
+  });
+
+  it("leaves the member lists alone when a body node is deleted", () => {
+    const before = twoSessions();
+
+    const after = deleteNodes(before, ["P"]).do(before);
+
+    expect(after.containers).toEqual(before.containers);
+  });
+});
+
+describe("updateFlowContainer", () => {
+  it("changes only the named container's settings", () => {
+    const before = twoSessions();
+
+    const after = updateFlowContainer("session-2", { repo: "/r", branch: "dev" }).do(before);
+
+    expect(containerOf(after, "session-2")).toEqual({
+      ...containerOf(before, "session-2"),
+      repo: "/r",
+      branch: "dev",
+    });
+    expect(after).toEqual({
+      ...before,
+      containers: before.containers.map((container) =>
+        container.id === "session-2" ? { ...container, repo: "/r", branch: "dev" } : container,
+      ),
+    });
+  });
+
+  it("sets the workspace's model", () => {
+    const before = twoSessions();
+
+    const after = updateFlowContainer("workspace-1", { model: "haiku" }).do(before);
+
+    expect(containerOf(after, "workspace-1")).toEqual({
+      ...containerOf(before, "workspace-1"),
+      model: "haiku",
+    });
+  });
+
+  it("undo restores the previous settings exactly", () => {
+    const before = twoSessions();
+
+    const { restored } = roundTrip(
+      updateFlowContainer("session-1", { name: "api", repo: "/r", branch: "dev", model: "opus" }),
+      before,
+    );
+
+    expect(restored).toEqual(before);
+  });
+
+  it("leaves the flow alone for an id that names no container", () => {
+    const before = twoSessions();
+
+    expect(updateFlowContainer("session-9", { repo: "/r" }).do(before)).toEqual(before);
+  });
+
+  it("clears the branch when the repo changes, and undo brings the branch back", () => {
+    const before = twoSessions();
+
+    const { after, restored } = roundTrip(
+      updateFlowContainer("session-1", { repo: "/other" }),
+      before,
+    );
+
+    expect(containerOf(after, "session-1")).toMatchObject({ repo: "/other", branch: "" });
+    expect(restored).toEqual(before);
+  });
+
+  it("keeps the branch when the repo is set to the one it already has", () => {
+    const before = twoSessions();
+
+    const after = updateFlowContainer("session-1", { repo: "/work/repo" }).do(before);
+
+    expect(containerOf(after, "session-1")).toMatchObject({ branch: "main" });
+  });
+});
+
+describe("moveNodes across container frames", () => {
+  const at = { x: 0, y: 0 };
+
+  it("moves a member from one container to another in the same command, and undo puts it back in its place", () => {
+    const before = twoSessions();
+    const command = moveNodes([
+      {
+        id: "L",
+        from: at,
+        to: { x: 900, y: 0 },
+        container: { from: "session-1", to: "session-2" },
+      },
+    ]);
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(containerOf(after, "session-1")?.nodes).toEqual(["s", "t"]);
+    expect(containerOf(after, "session-2")?.nodes).toEqual(["u", "v", "x", "L"]);
+    expect(after.nodes.find(({ id }) => id === "L")?.position).toEqual({ x: 900, y: 0 });
+    expect(restored).toEqual(before);
+  });
+
+  it("adds a node carried into a container from outside every container", () => {
+    const loose = flow([agent("y")], [], flowSettings, {
+      containers: [sessionContainer(["s", "t"])],
+    });
+    const before = { ...twoSessions(), nodes: [...twoSessions().nodes, ...loose.nodes] };
+    const command = moveNodes([
+      { id: "y", from: at, to: { x: 10, y: 10 }, container: { from: undefined, to: "session-1" } },
+    ]);
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(containerOf(after, "session-1")?.nodes).toEqual(["s", "L", "t", "y"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("takes a node carried out of every container off its members", () => {
+    const before = twoSessions();
+    const command = moveNodes([
+      { id: "v", from: at, to: { x: 2000, y: 0 }, container: { from: "session-2", to: undefined } },
+    ]);
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(containerOf(after, "session-2")?.nodes).toEqual(["u", "x"]);
+    expect(after.containers.flatMap(({ nodes }) => nodes)).not.toContain("v");
+    expect(restored).toEqual(before);
+  });
+
+  it("removes a container whose last member is carried out of its frame, and undo brings it back in its place", () => {
+    const before = twoSessions();
+    const command = moveNodes(
+      ["u", "v", "x"].map((id) => ({
+        id,
+        from: at,
+        to: { x: 2000, y: 0 },
+        container: { from: "session-2", to: "session-1" },
+      })),
+    );
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(after.containers.map(({ id }) => id)).toEqual(["workspace-1", "session-1"]);
+    expect(containerOf(after, "session-1")?.nodes).toEqual(["s", "L", "t", "u", "v", "x"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("leaves membership alone for a move with no container change", () => {
+    const before = twoSessions();
+
+    const after = moveNodes([{ id: "v", from: at, to: { x: 5, y: 5 } }]).do(before);
+
+    expect(after.containers).toEqual(before.containers);
   });
 });

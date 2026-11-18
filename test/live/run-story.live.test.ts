@@ -83,7 +83,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude 
           builders.thenWire("g1", "stop"),
         ],
       );
-      const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };
+      const flow = builders.withSession(parsed, { model: "haiku" });
       const { buildId } = await live.saveAndBuild(flow, { name: "live-run-story" });
 
       const runId = await live.runBuild(buildId);

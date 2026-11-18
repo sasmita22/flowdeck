@@ -76,7 +76,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a turn that errors, with rea
         [builders.agent("p1", { settings: { instructions: "Say hi." } })],
         [],
       );
-      const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };
+      const flow = builders.withSession(parsed, { model: "haiku" });
       const live = liveEngine({ home, repo: repo.path, sessionName });
       engine = live;
       const { buildId } = await live.saveAndBuild(flow, { name: buildName });

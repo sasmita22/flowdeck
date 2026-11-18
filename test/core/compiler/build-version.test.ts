@@ -46,17 +46,32 @@ import {
   flowSettings,
   onMainFlow,
   output,
+  sessionContainer,
   thenWire,
   trigger,
   wire,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
 const repo = "/work/carousell-web";
 const ticketConfig: BuildConfig = { repo, base: "main" };
 
-const withConfig = (base: Flow, buildConfig: BuildConfig): Flow => ({
+const withConfig = (base: Flow, { repo = "", base: branch = "" }: BuildConfig): Flow => ({
   ...base,
-  session: { ...base.session, buildConfig },
+  containers: base.containers.map((container) =>
+    container.kind === "session" ? { ...container, repo, branch } : container,
+  ),
+});
+
+const intoSession = (base: Flow, nodes: Flow["nodes"], wires: Flow["wires"] = []): Flow => ({
+  ...base,
+  nodes: [...base.nodes, ...nodes],
+  wires: [...base.wires, ...wires],
+  containers: base.containers.map((container) =>
+    container.kind === "session"
+      ? { ...container, nodes: [...container.nodes, ...nodes.map((node) => node.id)] }
+      : container,
+  ),
 });
 
 const withBuildModel = (base: Flow, buildModel: string): Flow => ({
@@ -530,7 +545,7 @@ describe("buildVersion", () => {
       const { store, deps } = setup();
       const withConnector = {
         ...ticketFlow(),
-        session: { ...ticketFlow().session, connectors: ["jira"] },
+        session: { connectors: ["jira"] },
       } as Flow;
 
       const result = await startBuild(withConnector, request, deps);
@@ -1332,10 +1347,8 @@ describe("buildVersion", () => {
       ]);
     });
 
-    const withLoose = (source: Flow): Flow => ({
-      ...source,
-      nodes: [...source.nodes, ...flow([agent("loose")], []).nodes],
-    });
+    const withLoose = (source: Flow): Flow =>
+      intoSession(source, [agent("loose")] as Flow["nodes"]);
 
     const builtManifest = async (t: ReturnType<typeof traced>) =>
       JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
@@ -1351,9 +1364,7 @@ describe("buildVersion", () => {
       const sprawling = await rebuilt(withLoose(agentsFlow()));
       const alone = await rebuilt(agentsFlow());
 
-      expect(sprawling.nodes.map((node) => node.id)).toEqual(
-        agentsFlow().nodes.map((node) => node.id),
-      );
+      expect(sprawling.nodes.map((node) => node.id)).toEqual(["start", "p1", "a", "b", "stop"]);
       expect(sprawling).toEqual(alone);
     });
 
@@ -1365,9 +1376,7 @@ describe("buildVersion", () => {
 
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       const manifest = await builtManifest(t);
-      expect(manifest.nodes.map((node) => node.id)).toEqual(
-        agentsFlow().nodes.map((node) => node.id),
-      );
+      expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "p1", "a", "b", "stop"]);
       expect(writeTurns(t.fake).flatMap((turn) => piecesNamed(turn.text))).not.toContainEqual(
         expect.stringContaining("loose"),
       );
@@ -2069,7 +2078,7 @@ describe("buildVersion", () => {
         expect.objectContaining({ repo, base: "main", path: `${result.dir}/carousell-web` }),
       ]);
       expect(store.builds()[0]).toEqual(expect.objectContaining({ repo, base: "main" }));
-      expect(flows.load(v1)?.flow.session.buildConfig).toEqual(unset);
+      expect(flows.load(v1)?.flow.containers).toEqual(ticketFlow(unset).containers);
     });
   });
 
@@ -2109,8 +2118,8 @@ describe("buildVersion", () => {
       );
     });
 
-    it("is the repo's default branch when neither gives one", async () => {
-      expect(await baseOf({ repo }, undefined, "trunk")).toBe("trunk");
+    it("is refused on the session's branch when neither gives one", async () => {
+      await expect(baseOf({ repo }, undefined, "trunk")).rejects.toThrow(/needs a branch/);
     });
 
     it("is recorded with the build", async () => {
@@ -2562,15 +2571,14 @@ describe("buildVersion", () => {
     const request = { name: "fix-login", repo, base: "main", values: { ticket: "FD-1" } };
 
     const withExtras = (base: Flow, nodes: Flow["nodes"], wires: Flow["wires"] = []): Flow =>
-      withConfig(
-        { ...base, nodes: [...base.nodes, ...nodes], wires: [...base.wires, ...wires] },
-        ticketConfig,
-      );
+      withConfig(intoSession(base, nodes, wires), ticketConfig);
 
-    const sprawling = () => {
-      const loose = flow([agent("b"), agent("c"), agent("d")], [thenWire("c", "d")]);
-      return withExtras(onMainFlow([agent("a")], []), loose.nodes, loose.wires);
-    };
+    const sprawling = () =>
+      withExtras(
+        onMainFlow([agent("a")], []),
+        [agent("b"), agent("c"), agent("d")] as Flow["nodes"],
+        [thenWire("c", "d")] as Flow["wires"],
+      );
 
     const ignored = ["b", "c", "d"];
 
@@ -2665,6 +2673,95 @@ describe("buildVersion", () => {
         errors: expect.arrayContaining([expect.objectContaining({ rule })]),
       });
       expect(store.listPendingBuilds()).toEqual([]);
+    });
+  });
+
+  describe("the build bridge", () => {
+    const request = { name: "fix-login", repo, base: "main", values: {} };
+
+    const sessionPart = (id: string) => ({
+      nodes: [trigger(`${id}-start`), agent(`${id}-a`), output(`${id}-stop`)],
+      wires: [thenWire(`${id}-start`, `${id}-a`), thenWire(`${id}-a`, `${id}-stop`)],
+      container: sessionContainer([`${id}-start`, `${id}-a`, `${id}-stop`], {
+        id,
+        name: id,
+        repo,
+      }),
+    });
+
+    const workspacePart = (extra: string[] = []) => ({
+      nodes: [
+        trigger("workspace-start"),
+        ...extra.map((id) => agent(id)),
+        output("workspace-stop"),
+      ],
+      wires: [thenWire("workspace-start", "workspace-stop")],
+      container: workspaceContainer(["workspace-start", ...extra, "workspace-stop"]),
+    });
+
+    type Part = { nodes: unknown[]; wires: unknown[]; container: unknown };
+
+    const shaped = (...parts: Part[]): Flow =>
+      flow(
+        parts.flatMap((part) => part.nodes),
+        parts.flatMap((part) => part.wires),
+        flowSettings,
+        { containers: parts.map((part) => part.container) },
+      );
+
+    const refusedWith = async (source: Flow) => {
+      const { store, fs, worktree, gitState, deps } = setup();
+      const result = await startBuild(source, request, deps);
+      expect(result).toEqual({ ok: false, errors: [expect.anything()] });
+      expect(store.listPendingBuilds()).toEqual([]);
+      expect(gitState.reads).toEqual([]);
+      expectNothingDone(store, fs, worktree);
+      return errorMessages(result)[0] ?? "";
+    };
+
+    it("refuses a library, saying a library cannot be built", async () => {
+      const message = await refusedWith(shaped(sessionPart("session-1")));
+
+      expect(message).toMatch(/library/i);
+      expect(message).toMatch(/cannot be built/i);
+    });
+
+    it("refuses one workspace with two sessions, one with none, and a workspace holding more than its Start and Stop, each with its own reason that it comes with multi-session builds", async () => {
+      const messages = [
+        await refusedWith(
+          shaped(workspacePart(), sessionPart("session-1"), sessionPart("session-2")),
+        ),
+        await refusedWith(shaped(workspacePart())),
+        await refusedWith(shaped(workspacePart(["workspace-a"]), sessionPart("session-1"))),
+      ];
+
+      for (const message of messages) expect(message).toMatch(/multi-session builds/i);
+      expect(new Set(messages).size).toBe(3);
+    });
+
+    it("builds one workspace and one session from the repo and base the request gives, written onto the session container", async () => {
+      const unset = {
+        ...sessionPart("session-1"),
+        container: sessionContainer(["session-1-start", "session-1-a", "session-1-stop"], {
+          name: "session-1",
+          repo: "",
+          branch: "",
+        }),
+      };
+      const saved = shaped(workspacePart(), unset);
+      const kept = structuredClone(saved);
+      const { fs, worktree, gitState, deps } = setup();
+
+      const started = await startBuild(saved, request, deps);
+      if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
+      const result = await runBuild(started, saved, request, deps);
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      expect(gitState.reads).toEqual([repo]);
+      expect(worktree.calls).toEqual([expect.objectContaining({ repo, base: "main" })]);
+      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      expect(manifest.session.buildConfig).toStrictEqual({ repo, base: "main" });
+      expect(saved).toStrictEqual(kept);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
+import { parseFlow, type Flow, type SessionContainer } from "../../src/core/flow/schema.js";
 
 const at = { x: 0, y: 0 };
 const withParent = (parent?: string) => (parent === undefined ? {} : { parent });
@@ -57,21 +57,84 @@ export const fileWire = (from: string, to: string, file: string) => ({
 
 export const flowSettings = { buildModel: "sonnet", permissionMode: "default" };
 
+type SessionOptions = {
+  id?: string;
+  name?: string;
+  repo?: string;
+  branch?: string;
+  model?: string;
+};
+
+export const workspaceContainer = (
+  nodes: string[],
+  options: { id?: string; model?: string } = {},
+) => ({ id: "workspace-1", kind: "workspace", model: "sonnet", ...options, nodes });
+
+export const sessionContainer = (nodes: string[], options: SessionOptions = {}) => ({
+  id: "session-1",
+  kind: "session",
+  name: "main",
+  repo: "/work/repo",
+  branch: "main",
+  model: "sonnet",
+  ...options,
+  nodes,
+});
+
+export const withSession = (
+  flow: Flow,
+  patch: Partial<Pick<SessionContainer, "name" | "repo" | "branch" | "model">>,
+): Flow => ({
+  ...flow,
+  containers: flow.containers.map((container) =>
+    container.kind === "session" ? { ...container, ...patch } : container,
+  ),
+});
+
+const workspaceStart = "workspace-1-start";
+const workspaceStop = "workspace-1-stop";
+
+const topLevelIds = (nodes: unknown[]) =>
+  (nodes as { id: string; parent?: string }[])
+    .filter((node) => node.parent === undefined)
+    .map((node) => node.id);
+
+export const inOneSession = (nodes: unknown[], wires: unknown[]): Flow =>
+  parseFlow({
+    nodes,
+    wires,
+    settings: flowSettings,
+    containers: [sessionContainer(topLevelIds(nodes))],
+  });
+
 export const flow = (
   nodes: unknown[],
   wires: unknown[],
   settings: Record<string, unknown> = flowSettings,
-): Flow =>
-  parseFlow({
-    nodes,
-    wires,
+  options: { session?: Omit<SessionOptions, "id">; containers?: unknown[] } = {},
+): Flow => {
+  if (options.containers !== undefined) {
+    return parseFlow({ nodes, wires, settings, containers: options.containers });
+  }
+  const topLevel = topLevelIds(nodes);
+  return parseFlow({
+    nodes: [...nodes, trigger(workspaceStart), output(workspaceStop)],
+    wires: [...wires, thenWire(workspaceStart, workspaceStop)],
     settings,
-    session: {
-      name: "main",
-      buildConfig: { repo: "/work/repo", base: "main" },
-      model: "sonnet",
-    },
+    containers: [
+      workspaceContainer([workspaceStart, workspaceStop]),
+      sessionContainer(topLevel, options.session),
+    ],
   });
+};
+
+export const bareFlow = (nodes: unknown[] = [], wires: unknown[] = []): Flow =>
+  flow(nodes, wires, flowSettings, { containers: [] });
+
+export const asWorkflow = (
+  literal: { nodes: unknown[]; wires: unknown[]; settings: Record<string, unknown> },
+  session: Omit<SessionOptions, "id"> = {},
+): Flow => flow(literal.nodes, literal.wires, literal.settings, { session });
 
 type Placed = { id: string; type: string; parent?: string };
 type Linked = { kind: string; from: { node: string }; to: { node: string } };

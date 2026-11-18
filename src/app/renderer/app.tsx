@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import type { FlowContainer } from "../../core/flow/schema.js";
 import type { Actions } from "./actions.js";
 import { AppMenu } from "./app-menu.js";
 import { BuildDialog } from "./build-dialog.js";
@@ -57,6 +58,12 @@ export type AppStores = {
   actions: Actions;
 };
 
+const containerLabel = (containers: readonly FlowContainer[], id: string): string => {
+  const container = containers.find((candidate) => candidate.id === id);
+  if (container === undefined) return id;
+  return container.kind === "workspace" ? "Workspace" : container.name || "Session";
+};
+
 function Problems({
   canvas,
   run,
@@ -65,14 +72,17 @@ function Problems({
 }: Pick<AppStores, "canvas" | "run" | "shell" | "nav">) {
   const problems = useStore(run, (state) => state.problems);
   const nodes = useStore(canvas, (state) => state.flow.nodes);
+  const containers = useStore(canvas, (state) => state.flow.containers);
   if (problems === null) return null;
-  const open = (node: string | undefined) => {
+  const open = (node: string | undefined, container: string | undefined) => {
     nav.getState().go({ name: "editor" });
-    if (node === undefined) shell.getState().openSessionSettings();
+    if (node !== undefined) canvas.getState().focusNode(node);
+    else if (container !== undefined) canvas.getState().select([container]);
     else {
-      canvas.getState().focusNode(node);
-      shell.getState().showInspector();
+      shell.getState().openSessionSettings();
+      return;
     }
+    shell.getState().showInspector();
   };
   const count = problems.length === 1 ? "1 problem" : `${problems.length} problems`;
   return (
@@ -88,17 +98,28 @@ function Problems({
         </button>
       </div>
       <ul className="fd-problems-list">
-        {problems.map(({ node, text }, index) => (
-          <li key={`${node ?? "session"}-${index}`}>
+        {problems.map(({ node, container, text }, index) => (
+          <li key={`${node ?? container ?? "blueprint"}-${index}`}>
             <button
               className="fd-problem"
               data-testid={`build-problem-${index}`}
               data-node={node}
-              title={node === undefined ? "Open the session settings" : "Select this node"}
-              onClick={() => open(node)}
+              data-container={container}
+              title={
+                node !== undefined
+                  ? "Select this node"
+                  : container !== undefined
+                    ? "Select this container"
+                    : "Open the blueprint settings"
+              }
+              onClick={() => open(node, container)}
             >
               <span className="fd-problem-where">
-                {node === undefined ? "Session" : nodeLabel(nodes, node)}
+                {node !== undefined
+                  ? nodeLabel(nodes, node)
+                  : container !== undefined
+                    ? containerLabel(containers, container)
+                    : "Blueprint"}
               </span>
               <span>{text}</span>
             </button>

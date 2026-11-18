@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Flow } from "../../src/core/flow/schema.js";
-import { agent, flow, thenWire } from "../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  sessionContainer,
+  thenWire,
+} from "../fixtures/flow-builders.js";
 import { FakeFlowStore } from "./fake-flow-store.js";
 
 const nth = <T>(list: T[], index: number): T => {
@@ -173,5 +179,26 @@ describe("FakeFlowStore", () => {
     store.pin("flow-b", false);
 
     expect(store.list()).toEqual(unpinned);
+  });
+
+  it("lists a saved blueprint's kind and the first session container's repo and branch", () => {
+    const store = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
+    store.save(
+      flow([agent("p1")], [], flowSettings, { session: { repo: "/r/shop", branch: "dev" } }),
+      { name: "Workflow" },
+    );
+    store.save(
+      flow([agent("p1")], [], flowSettings, {
+        containers: [sessionContainer(["p1"], { repo: "/r/lib", branch: "main" })],
+      }),
+      { name: "Library" },
+    );
+
+    expect(
+      store.list().map(({ name, kind, buildConfig }) => ({ name, kind, buildConfig })),
+    ).toEqual([
+      { name: "Library", kind: "library", buildConfig: { repo: "/r/lib", base: "main" } },
+      { name: "Workflow", kind: "workflow", buildConfig: { repo: "/r/shop", base: "dev" } },
+    ]);
   });
 });

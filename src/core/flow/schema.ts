@@ -50,8 +50,26 @@ export const Session = z.object({
   name: z.string(),
   buildConfig: BuildConfig,
   model: z.string(),
-  frame: z.object({ nodes: z.array(z.string()) }).optional(),
 });
+
+export const WorkspaceContainer = z.object({
+  id: z.string().min(1),
+  kind: z.literal("workspace"),
+  model: z.string(),
+  nodes: z.array(z.string()),
+});
+
+export const SessionContainer = z.object({
+  id: z.string().min(1),
+  kind: z.literal("session"),
+  name: z.string(),
+  repo: z.string(),
+  branch: z.string(),
+  model: z.string(),
+  nodes: z.array(z.string()),
+});
+
+export const FlowContainer = z.discriminatedUnion("kind", [WorkspaceContainer, SessionContainer]);
 
 export const FlowSettings = z.object({
   buildModel: z.string(),
@@ -89,7 +107,7 @@ export const CanvasNote = z.object({
 export const Flow = z.object({
   nodes: z.array(Node),
   wires: z.array(Wire),
-  session: Session,
+  containers: z.array(FlowContainer),
   settings: FlowSettings,
   notes: z.array(CanvasNote).optional(),
 });
@@ -100,6 +118,9 @@ export type Port = z.infer<typeof Port>;
 export type Wire = z.infer<typeof Wire>;
 export type BuildConfig = z.infer<typeof BuildConfig>;
 export type Session = z.infer<typeof Session>;
+export type WorkspaceContainer = z.infer<typeof WorkspaceContainer>;
+export type SessionContainer = z.infer<typeof SessionContainer>;
+export type FlowContainer = z.infer<typeof FlowContainer>;
 export type FlowSettings = z.infer<typeof FlowSettings>;
 export type Node = z.infer<typeof Node>;
 export type CanvasNote = z.infer<typeof CanvasNote>;

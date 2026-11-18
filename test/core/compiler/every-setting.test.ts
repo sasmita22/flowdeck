@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { emit } from "../../../src/core/compiler/emit.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
-import { FlowSettings, parseFlow, Session, type NodeType } from "../../../src/core/flow/schema.js";
+import {
+  FlowSettings,
+  parseFlow,
+  SessionContainer,
+  type NodeType,
+} from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
 
 type Landing =
   | { file: string; shows: string }
   | { manifest: "node"; value: unknown }
-  | { manifest: "session"; value: unknown }
+  | { manifest: "session"; at: string[]; value: unknown }
   | { manifest: "settings"; value: unknown }
   | { manifest: "outputs"; value: unknown };
 
@@ -66,14 +71,16 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
   },
 };
 
+const inSession = (at: string[], value: unknown): Landing => ({ manifest: "session", at, value });
+
 const session: Record<string, [unknown, Landing]> = {
-  name: ["M-session-name", { manifest: "session", value: "M-session-name" }],
-  buildConfig: [
-    { repo: "/M-session-repo", base: "M-session-base" },
-    { manifest: "session", value: { repo: "/M-session-repo", base: "M-session-base" } },
-  ],
-  model: ["M-session-model", { manifest: "session", value: "M-session-model" }],
+  name: ["M-session-name", inSession(["name"], "M-session-name")],
+  repo: ["/M-session-repo", inSession(["buildConfig", "repo"], "/M-session-repo")],
+  branch: ["M-session-branch", inSession(["buildConfig", "base"], "M-session-branch")],
+  model: ["M-session-model", inSession(["model"], "M-session-model")],
 };
+
+const containerKeys = ["id", "kind", "nodes"];
 
 const blueprintSettings: Record<string, [unknown, Landing]> = {
   buildModel: ["M-build-model", { manifest: "settings", value: "M-build-model" }],
@@ -107,7 +114,15 @@ const everyNode = () =>
       settings: valuesOf(fields),
     })),
     wires: [],
-    session: valuesOf(session),
+    containers: [
+      { id: "workspace-1", kind: "workspace", model: "sonnet", nodes: [] },
+      {
+        id: "session-1",
+        kind: "session",
+        ...valuesOf(session),
+        nodes: Object.values(idOf),
+      },
+    ],
     settings: valuesOf(blueprintSettings),
   });
 
@@ -155,11 +170,14 @@ const landed = (
       );
       return;
     }
-    case "session":
-      expect((manifest.session as Record<string, unknown>)[field], `session.${field}`).toEqual(
-        landing.value,
+    case "session": {
+      const value = landing.at.reduce<unknown>(
+        (inside, key) => (inside as Record<string, unknown> | undefined)?.[key],
+        manifest.session,
       );
+      expect(value, `session.${field}`).toEqual(landing.value);
       return;
+    }
     case "settings":
       expect(
         (manifest as unknown as { settings?: Record<string, unknown> }).settings?.[field],
@@ -175,15 +193,15 @@ const landed = (
 };
 
 describe("every setting lands in the build", () => {
-  it("covers every field of every node type, of the session and of the blueprint's settings", () => {
+  it("covers every field of every node type, of the session container and of the blueprint's settings", () => {
     for (const type of Object.keys(registry) as NodeType[]) {
       expect(Object.keys(settings[type]).sort(), type).toEqual(
         fieldsOf(registry[type].settings).sort(),
       );
     }
     expect(Object.keys(session).sort()).toEqual(
-      fieldsOf(Session)
-        .filter((field) => field !== "frame")
+      fieldsOf(SessionContainer)
+        .filter((field) => !containerKeys.includes(field))
         .sort(),
     );
     expect(Object.keys(blueprintSettings).sort()).toEqual(fieldsOf(FlowSettings).sort());

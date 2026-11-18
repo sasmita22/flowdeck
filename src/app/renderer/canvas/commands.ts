@@ -1,11 +1,13 @@
 import type {
   CanvasNote,
   Flow,
+  FlowContainer,
   FlowSettings,
   Node,
-  Session,
+  SessionContainer,
   Wire,
 } from "../../../core/flow/schema.js";
+import { flowContainerMembers } from "../../../core/flow/structure.js";
 
 export interface Command {
   do(flow: Flow): Flow;
@@ -39,9 +41,31 @@ const withNotes = (flow: Flow, notes: readonly CanvasNote[]): Flow => {
 
 const notesOf = (flow: Flow): readonly CanvasNote[] => flow.notes ?? [];
 
-export const addNode = (node: Node): Command => ({
-  do: (flow) => ({ ...flow, nodes: [...flow.nodes, node] }),
-  undo: (flow) => ({ ...flow, nodes: flow.nodes.slice(0, -1) }),
+const withMember = (flow: Flow, containerId: string | undefined, id: string, join: boolean) =>
+  containerId === undefined
+    ? flow.containers
+    : flow.containers.map((container) =>
+        container.id !== containerId
+          ? container
+          : {
+              ...container,
+              nodes: join
+                ? [...container.nodes, id]
+                : container.nodes.filter((member) => member !== id),
+            },
+      );
+
+export const addNode = (node: Node, container?: string): Command => ({
+  do: (flow) => ({
+    ...flow,
+    nodes: [...flow.nodes, node],
+    containers: withMember(flow, container, node.id, true),
+  }),
+  undo: (flow) => ({
+    ...flow,
+    nodes: flow.nodes.slice(0, -1),
+    containers: withMember(flow, container, node.id, false),
+  }),
 });
 
 export const addWire = (wire: Wire): Command => ({
@@ -72,7 +96,49 @@ export const updateNote = (next: CanvasNote): Command => {
   };
 };
 
-export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => {
+type ContainerRemoval = {
+  containers: Indexed<FlowContainer>[];
+  members: Map<string, Indexed<string>[]>;
+};
+
+const containerRemoval = (
+  containers: readonly FlowContainer[],
+  doomed: ReadonlySet<string>,
+  dropped: ReadonlySet<string> = new Set(),
+): ContainerRemoval => {
+  const emptied = (container: FlowContainer) =>
+    dropped.has(container.id) ||
+    (container.nodes.length > 0 && container.nodes.every((id) => doomed.has(id)));
+  return {
+    containers: indexed(containers, emptied),
+    members: new Map(
+      containers.map((container) => [
+        container.id,
+        indexed(container.nodes, (id) => doomed.has(id)),
+      ]),
+    ),
+  };
+};
+
+const membersOf = (removal: ContainerRemoval, container: FlowContainer) =>
+  removal.members.get(container.id) ?? [];
+
+const removeContainers = (containers: readonly FlowContainer[], removal: ContainerRemoval) =>
+  without(containers, removal.containers).map((container) => ({
+    ...container,
+    nodes: without(container.nodes, membersOf(removal, container)),
+  }));
+
+const restoreContainers = (containers: readonly FlowContainer[], removal: ContainerRemoval) =>
+  reinsert(
+    containers.map((container) => ({
+      ...container,
+      nodes: reinsert(container.nodes, membersOf(removal, container)),
+    })),
+    removal.containers,
+  );
+
+const deleting = (flow: Flow, ids: readonly string[], dropped?: ReadonlySet<string>): Command => {
   const doomed = new Set(ids);
   const nodes = indexed(flow.nodes, (node) => doomed.has(node.id));
   const notes = indexed(notesOf(flow), (note) => doomed.has(note.id));
@@ -80,10 +146,16 @@ export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => {
     flow.wires,
     (wire) => doomed.has(wire.from.node) || doomed.has(wire.to.node),
   );
+  const containers = containerRemoval(flow.containers, doomed, dropped);
   return {
     do: (current) =>
       withNotes(
-        { ...current, nodes: without(current.nodes, nodes), wires: without(current.wires, wires) },
+        {
+          ...current,
+          nodes: without(current.nodes, nodes),
+          wires: without(current.wires, wires),
+          containers: removeContainers(current.containers, containers),
+        },
         without(notesOf(current), notes),
       ),
     undo: (current) =>
@@ -92,11 +164,19 @@ export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => {
           ...current,
           nodes: reinsert(current.nodes, nodes),
           wires: reinsert(current.wires, wires),
+          containers: restoreContainers(current.containers, containers),
         },
         reinsert(notesOf(current), notes),
       ),
   };
 };
+
+export const deleteNodes = (flow: Flow, ids: readonly string[]): Command => deleting(flow, ids);
+
+export const deleteFlowContainer = (flow: Flow, id: string): Command =>
+  flow.containers.some((container) => container.id === id)
+    ? deleting(flow, flowContainerMembers(flow, id), new Set([id]))
+    : { do: (current) => current, undo: (current) => current };
 
 export const deleteWires = (flow: Flow, indexes: readonly number[]): Command => {
   const places = new Set(indexes);
@@ -111,34 +191,59 @@ export type Items = {
   nodes: readonly Node[];
   wires: readonly Wire[];
   notes: readonly CanvasNote[];
+  containers?: readonly FlowContainer[];
+  members?: Readonly<Record<string, string>>;
 };
 
-export const addItems = (items: Items): Command => ({
-  do: (flow) =>
-    withNotes(
-      {
-        ...flow,
-        nodes: [...flow.nodes, ...items.nodes],
-        wires: [...flow.wires, ...items.wires],
-      },
-      [...notesOf(flow), ...items.notes],
-    ),
-  undo: (flow) =>
-    withNotes(
-      {
-        ...flow,
-        nodes: flow.nodes.slice(0, flow.nodes.length - items.nodes.length),
-        wires: flow.wires.slice(0, flow.wires.length - items.wires.length),
-      },
-      notesOf(flow).slice(0, notesOf(flow).length - items.notes.length),
-    ),
-});
+const withMembers = (flow: Flow, members: Readonly<Record<string, string>>, join: boolean) =>
+  Object.entries(members).reduce(
+    (current, [id, container]) => ({
+      ...current,
+      containers: withMember(current, container, id, join),
+    }),
+    flow,
+  ).containers;
+
+export const addItems = (items: Items): Command => {
+  const containers = items.containers ?? [];
+  const members = items.members ?? {};
+  return {
+    do: (flow) =>
+      withNotes(
+        {
+          ...flow,
+          nodes: [...flow.nodes, ...items.nodes],
+          wires: [...flow.wires, ...items.wires],
+          containers: withMembers(
+            { ...flow, containers: [...flow.containers, ...containers] },
+            members,
+            true,
+          ),
+        },
+        [...notesOf(flow), ...items.notes],
+      ),
+    undo: (flow) =>
+      withNotes(
+        {
+          ...flow,
+          nodes: flow.nodes.slice(0, flow.nodes.length - items.nodes.length),
+          wires: flow.wires.slice(0, flow.wires.length - items.wires.length),
+          containers: withMembers(flow, members, false).slice(
+            0,
+            flow.containers.length - containers.length,
+          ),
+        },
+        notesOf(flow).slice(0, notesOf(flow).length - items.notes.length),
+      ),
+  };
+};
 
 export type Move = {
   id: string;
   from: Position;
   to: Position;
   parent?: { from: string | undefined; to: string | undefined };
+  container?: { from: string | undefined; to: string | undefined };
 };
 
 const withParent = (node: Node, parent: string | undefined): Node => {
@@ -166,21 +271,69 @@ const placeAt =
     );
   };
 
-export const moveNodes = (moves: readonly Move[]): Command => ({
-  do: placeAt(moves, "to"),
-  undo: placeAt(moves, "from"),
-});
+const rehome = (containers: readonly FlowContainer[], moves: readonly Move[]): FlowContainer[] => {
+  const carried = moves.flatMap(({ id, container }) =>
+    container === undefined || container.from === container.to ? [] : [{ id, ...container }],
+  );
+  const leaving = new Set(carried.map(({ id }) => id));
+  const joining = (containerId: string) =>
+    carried.filter(({ to }) => to === containerId).map(({ id }) => id);
+  return containers.flatMap((container) => {
+    const kept = container.nodes.filter((id) => !leaving.has(id));
+    const nodes = [...kept, ...joining(container.id)];
+    return nodes.length === 0 && container.nodes.length > 0 ? [] : [{ ...container, nodes }];
+  });
+};
 
-const withSession = (flow: Flow, session: Session): Flow => ({ ...flow, session });
-
-export const updateSession = (next: Session): Command => {
-  let previous: Session | undefined;
+export const moveNodes = (moves: readonly Move[]): Command => {
+  let previous: readonly FlowContainer[] | undefined;
   return {
     do: (flow) => {
-      previous = flow.session;
-      return withSession(flow, next);
+      previous = flow.containers;
+      return { ...placeAt(moves, "to")(flow), containers: rehome(flow.containers, moves) };
     },
-    undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
+    undo: (flow) => ({
+      ...placeAt(moves, "from")(flow),
+      containers: [...(previous ?? flow.containers)],
+    }),
+  };
+};
+
+export type FlowContainerPatch = Partial<
+  Pick<SessionContainer, "name" | "repo" | "branch" | "model">
+>;
+
+const patched = (container: FlowContainer, patch: FlowContainerPatch): FlowContainer => {
+  if (container.kind === "workspace") {
+    return patch.model === undefined ? container : { ...container, model: patch.model };
+  }
+  const movedRepo = patch.repo !== undefined && patch.repo !== container.repo;
+  return {
+    ...container,
+    ...patch,
+    ...(movedRepo && patch.branch === undefined ? { branch: "" } : {}),
+  };
+};
+
+export const updateFlowContainer = (id: string, patch: FlowContainerPatch): Command => {
+  let previous: FlowContainer | undefined;
+  const replace = (flow: Flow, next: (container: FlowContainer) => FlowContainer): Flow => ({
+    ...flow,
+    containers: flow.containers.map((container) =>
+      container.id === id ? next(container) : container,
+    ),
+  });
+  return {
+    do: (flow) => {
+      previous = flow.containers.find((container) => container.id === id);
+      return previous === undefined
+        ? flow
+        : replace(flow, (container) => patched(container, patch));
+    },
+    undo: (flow) => {
+      const restored = previous;
+      return restored === undefined ? flow : replace(flow, () => restored);
+    },
   };
 };
 

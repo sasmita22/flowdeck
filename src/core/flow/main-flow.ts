@@ -1,16 +1,22 @@
-import type { Flow, Node } from "./schema.js";
+import type { Flow, FlowContainer, Node } from "./schema.js";
+import { flowContainerMembers, flowContainerNodesOfType } from "./structure.js";
 
 export type MainFlow = { reached: ReadonlySet<string>; ignored: readonly Node[] };
 
 const frameTypes = new Set(["loop", "foreach"]);
 
-export function mainFlow(flow: Flow): MainFlow | undefined {
-  const [start, ...otherStarts] = flow.nodes.filter((node) => node.type === "trigger");
-  if (start === undefined || otherStarts.length > 0) return undefined;
+const soleStart = (flow: Flow, container: FlowContainer): string | undefined => {
+  const [start, ...otherStarts] = flowContainerNodesOfType(flow, container, "trigger");
+  return otherStarts.length > 0 ? undefined : start;
+};
 
+export function mainFlow(flow: Flow): MainFlow | undefined {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
+  const starts = flow.containers.flatMap((container) => soleStart(flow, container) ?? []);
+  if (starts.length === 0) return undefined;
+
   const reached = new Set<string>();
-  const queue = [start.id];
+  const queue = [...starts];
 
   const neighbours = (id: string): string[] => {
     const node = byId.get(id);
@@ -37,10 +43,15 @@ export function mainFlow(flow: Flow): MainFlow | undefined {
 export function mainFlowOnly(flow: Flow): Flow {
   const found = mainFlow(flow);
   if (found === undefined) return flow;
-  const { reached } = found;
+  const kept = new Set([
+    ...found.reached,
+    ...flow.containers
+      .filter((container) => soleStart(flow, container) === undefined)
+      .flatMap((container) => flowContainerMembers(flow, container.id)),
+  ]);
   return {
     ...flow,
-    nodes: flow.nodes.filter((node) => reached.has(node.id)),
-    wires: flow.wires.filter((wire) => reached.has(wire.from.node) && reached.has(wire.to.node)),
+    nodes: flow.nodes.filter((node) => kept.has(node.id)),
+    wires: flow.wires.filter((wire) => kept.has(wire.from.node) && kept.has(wire.to.node)),
   };
 }

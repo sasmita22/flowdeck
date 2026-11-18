@@ -26,10 +26,13 @@ import {
   agent,
   branch,
   flow,
+  flowSettings,
   onMainFlow,
   output,
+  sessionContainer,
   thenWire,
   trigger,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
 type RunBridge = Pick<
@@ -79,7 +82,11 @@ const configured = (buildConfig: BuildConfig, buildModel = "sonnet"): Flow => {
   );
   return {
     ...base,
-    session: { ...base.session, buildConfig },
+    containers: base.containers.map((container) =>
+      container.kind === "session"
+        ? { ...container, repo: buildConfig.repo ?? "", branch: buildConfig.base ?? "" }
+        : container,
+    ),
     settings: { ...base.settings, buildModel },
   };
 };
@@ -198,7 +205,12 @@ const setup = async (
       flowId,
       name: "Untitled",
       version: 4,
-      flow: options.built ?? options.latest ?? flow([agent("agent-1")], []),
+      flow:
+        options.built ??
+        options.latest ??
+        flow([agent("agent-1")], [], flowSettings, {
+          containers: [sessionContainer(["agent-1"])],
+        }),
     })),
   } satisfies RunBridge;
 
@@ -693,6 +705,59 @@ describe("the Build dialog's confirm step", () => {
   });
 });
 
+describe("the Build dialog on a workflow with two session containers", () => {
+  const twoSessions = (): Flow =>
+    flow(
+      [
+        trigger("w-start"),
+        output("w-stop"),
+        trigger("s"),
+        agent("a"),
+        output("t"),
+        trigger("u"),
+        agent("b"),
+        output("v"),
+        { ...agent("loose"), label: "Loose" },
+      ],
+      [
+        thenWire("w-start", "w-stop"),
+        thenWire("s", "a"),
+        thenWire("a", "t"),
+        thenWire("u", "b"),
+        thenWire("b", "v"),
+      ],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["s", "a", "t"], { repo: "/code/shop", branch: "dev" }),
+          sessionContainer(["u", "b", "v", "loose"], {
+            id: "session-2",
+            name: "web",
+            repo: "/code/blog",
+            branch: "main",
+          }),
+        ],
+      },
+    );
+
+  it("takes the repo and base from the first session container", async () => {
+    const { run } = await setup({ latest: twoSessions() });
+
+    await run.getState().openBuild();
+
+    expect(run.getState().buildDialog).toMatchObject({ repo: "/code/shop", base: "dev" });
+  });
+
+  it("lists as ignored only what no container's own Start reaches", async () => {
+    const { run } = await setup({ built: twoSessions() });
+
+    await run.getState().openBuild(fromCard);
+
+    expect(run.getState().buildDialog?.ignored).toEqual([{ id: "loose", label: "Loose" }]);
+  });
+});
+
 describe("the Build dialog's repository", () => {
   const settle = () => new Promise((done) => setTimeout(done, 0));
 
@@ -989,9 +1054,17 @@ describe("the Build dialog's branch", () => {
 });
 
 describe("needsSessionSetup", () => {
-  it("is true when a problem is about the session's Build configuration", () => {
+  it("is true when a problem is about a container's setting", () => {
+    expect(
+      needsSessionSetup([
+        { container: "session-1", field: "repo", text: "Choose the repository." },
+      ]),
+    ).toBe(true);
+  });
+
+  it("is false for a field problem that names no container", () => {
     expect(needsSessionSetup([{ field: "buildConfig.repo", text: "Choose the repository." }])).toBe(
-      true,
+      false,
     );
   });
 

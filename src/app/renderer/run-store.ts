@@ -31,6 +31,7 @@ import type { FlowdeckBridge } from "../preload/bridge.js";
 import { selectDirty, type CanvasState } from "./canvas/store.js";
 import { labelFor } from "../../core/nodes/defaults.js";
 import type { SaveState } from "./save-store.js";
+import { sessionFolder } from "./workspace-store.js";
 
 export type RunBridge = Pick<
   FlowdeckBridge,
@@ -282,7 +283,10 @@ export const selectLiveBadge = (snapshot: RunSnapshot | null): string | null => 
 };
 
 export const needsSessionSetup = (problems: readonly Problem[] | null): boolean =>
-  problems?.some(({ node, field }) => node === undefined && field !== undefined) ?? false;
+  problems?.some(
+    ({ container, node, field }) =>
+      container !== undefined && node === undefined && field !== undefined,
+  ) ?? false;
 
 const branchKeptBecause = {
   commits: "holds commits, so it was kept.",
@@ -361,7 +365,7 @@ export const createRunStore = ({
       return {
         flowId,
         version,
-        buildConfig: flow.session.buildConfig,
+        buildConfig: sessionFolder(flow),
         variables: foundVariables(flow),
       };
     };

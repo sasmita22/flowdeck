@@ -8,11 +8,17 @@ import {
 } from "../../../src/core/flow/schema.js";
 import { agent, fileWire, forEach, thenWire } from "../../fixtures/flow-builders.js";
 
-const sessionBase = { name: "main", model: "sonnet" };
+const workspace = { id: "workspace-1", kind: "workspace", model: "sonnet", nodes: [] };
 
-const session = (buildConfig: Record<string, unknown> = { base: "main" }) => ({
-  ...sessionBase,
-  buildConfig,
+const sessionContainer = (overrides: Record<string, unknown> = {}) => ({
+  id: "session-1",
+  kind: "session",
+  name: "main",
+  repo: "/tmp/repo",
+  branch: "main",
+  model: "sonnet",
+  nodes: ["p"],
+  ...overrides,
 });
 
 const settings = { buildModel: "opus", permissionMode: "acceptEdits" };
@@ -44,7 +50,7 @@ const branchNode = (settings: Record<string, unknown>) => ({
 const flowWith = (overrides: Record<string, unknown>) => ({
   nodes: [agentNode],
   wires: [],
-  session: session(),
+  containers: [workspace, sessionContainer()],
   settings,
   ...overrides,
 });
@@ -60,8 +66,8 @@ function parseError(input: unknown): FlowParseError {
 }
 
 describe("parseFlow", () => {
-  it("parses a minimal flow with a Build configuration", () => {
-    const flow = flowWith({ session: session({ repo: "/tmp/repo", base: "main" }) });
+  it("parses a minimal flow with a workspace and a session container", () => {
+    const flow = flowWith({});
 
     expect(parseFlow(flow)).toEqual(flow);
   });
@@ -79,49 +85,44 @@ describe("parseFlow", () => {
     ).toContainEqual(["settings"]);
   });
 
-  it("keeps the repository, branch and model on the session and nothing removed", () => {
-    const parsed = parseFlow(
-      flowWith({
-        session: {
-          ...sessionBase,
-          buildConfig: { repo: "/r", base: "dev", variables: [], buildModel: "haiku" },
-          allowedTools: ["Bash"],
-          connectors: ["github"],
-          budget: 1,
-          permissionMode: "plan",
-        },
+  it("keeps one workspace and two session containers with every field", () => {
+    const containers = [
+      { ...workspace, model: "opus", nodes: ["workspace-1-start", "workspace-1-stop"] },
+      sessionContainer({ nodes: ["p", "q"] }),
+      sessionContainer({
+        id: "session-2",
+        name: "review",
+        repo: "/r/shop",
+        branch: "dev",
+        model: "haiku",
+        nodes: ["r"],
       }),
-    );
+    ];
 
-    expect(parsed.session).toEqual({
-      name: "main",
-      model: "sonnet",
-      buildConfig: { repo: "/r", base: "dev" },
+    expect(parseFlow(flowWith({ containers })).containers).toEqual(containers);
+  });
+
+  it("parses a session container with no repo, leaving the empty repo to validation", () => {
+    const containers = [sessionContainer({ repo: "" })];
+
+    expect(parseFlow(flowWith({ containers })).containers).toEqual(containers);
+  });
+
+  it("refuses a flow with a session and no containers", () => {
+    const old = flowWith({
+      containers: undefined,
+      session: { name: "main", buildConfig: { repo: "/r", base: "main" }, model: "sonnet" },
     });
+
+    expect(parseError(old).issues.map((issue) => issue.path)).toContainEqual(["containers"]);
   });
 
-  it("keeps the session frame's members", () => {
-    const flow = flowWith({ session: { ...session(), frame: { nodes: ["a", "b"] } } });
+  it("refuses a container of an unknown kind at its path", () => {
+    const containers = [{ ...workspace, kind: "group" }];
 
-    expect(parseFlow(flow).session.frame).toEqual({ nodes: ["a", "b"] });
-  });
-
-  it.each(["/r", ""])("keeps a Build configuration's repo %j", (repo) => {
-    const flow = flowWith({ session: session({ repo, base: "main" }) });
-
-    expect(parseFlow(flow).session.buildConfig).toEqual({ repo, base: "main" });
-  });
-
-  it("parses a Build configuration with no repo and no base, adding neither key", () => {
-    const { buildConfig } = parseFlow(flowWith({ session: session({}) })).session;
-
-    expect(buildConfig).toEqual({});
-    expect(buildConfig).not.toHaveProperty("repo");
-    expect(buildConfig).not.toHaveProperty("base");
-  });
-
-  it("adds no frame key to a session that has none", () => {
-    expect(parseFlow(flowWith({})).session).not.toHaveProperty("frame");
+    expect(
+      parseError(flowWith({ containers })).issues.map((issue) => issue.path.slice(0, 2)),
+    ).toContainEqual(["containers", 0]);
   });
 
   it("parses a Trigger with no inputs or flags", () => {
@@ -251,7 +252,7 @@ describe("parseFlow on a blueprint in the current shape", () => {
         agent("build", { settings: { given: ["plan.md"] } }),
       ],
       wires: [thenWire("plan", "build")],
-      session: session(),
+      containers: [workspace, sessionContainer({ nodes: ["start", "b", "plan", "build"] })],
       settings,
     };
 
@@ -270,15 +271,6 @@ describe("parseFlow on a blueprint in an old shape", () => {
     });
 
     expect(refusedAt(old)).toContainEqual(["wires", 1]);
-  });
-
-  it("refuses a session with a working folder instead of moving it to a Build configuration", () => {
-    const old = flowWith({
-      nodes: [triggerNode({})],
-      session: { ...sessionBase, workingFolder: { kind: "worktree", branch: "dev" } },
-    });
-
-    expect(refusedAt(old)).toContainEqual(["session", "buildConfig"]);
   });
 });
 

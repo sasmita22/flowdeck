@@ -65,6 +65,13 @@ const unreadableFlows = (): FlowStore => ({
   load: unreadable,
 });
 
+const inRepo = (input: Flow, repo: string): Flow => ({
+  ...input,
+  containers: input.containers.map((container) =>
+    container.kind === "session" ? { ...container, repo } : container,
+  ),
+});
+
 const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\"]+)/;
 
 describe("an app restart", () => {
@@ -173,10 +180,7 @@ describe("an app restart", () => {
   };
 
   const start = async (handler: EngineHandler, input: Flow) => {
-    const { flowId, version } = flows.save({
-      ...input,
-      session: { ...input.session, buildConfig: { repo: repo.path } },
-    });
+    const { flowId, version } = flows.save(inRepo(input, repo.path));
     const name = `build-${++names}`;
     const answered = (await call(handler, "build-version", {
       flowId,
@@ -522,10 +526,7 @@ describe("an app restart", () => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
       const blueprint = onMainFlow([agent("p1")], []);
-      const { flowId, version } = flows.save({
-        ...blueprint,
-        session: { ...blueprint.session, buildConfig: { repo: repoPath } },
-      });
+      const { flowId, version } = flows.save(inRepo(blueprint, repoPath));
       const name = "left-going";
       const answered = (await call(first, "build-version", {
         flowId,
@@ -773,10 +774,7 @@ describe("an app restart", () => {
         }),
       });
       const blueprint = onMainFlow([agent("p1")], []);
-      const { flowId, version } = flows.save({
-        ...blueprint,
-        session: { ...blueprint.session, buildConfig: { repo: repo.path } },
-      });
+      const { flowId, version } = flows.save(inRepo(blueprint, repo.path));
       const asked = (await call(asking, "build-version", {
         flowId,
         version,

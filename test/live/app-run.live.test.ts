@@ -35,7 +35,14 @@ import { displayStatus, type DisplayStatus } from "../../src/core/run/display.js
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
-import { agent, flow as buildFlow, output, thenWire, trigger } from "../fixtures/flow-builders.js";
+import {
+  agent,
+  flow as buildFlow,
+  output,
+  thenWire,
+  trigger,
+  withSession,
+} from "../fixtures/flow-builders.js";
 import { expectPaneToShow } from "../fixtures/pane-text.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
@@ -232,10 +239,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
     publish: (push: EnginePush) => void,
     beforeRun?: (workFolder: string) => Promise<void>,
   ): Promise<{ runId: string; runs: SqliteStore }> {
-    const flow: Flow = {
-      ...fixture,
-      session: { ...fixture.session, buildConfig: { repo: repo.path } },
-    };
+    const flow: Flow = withSession(fixture, { repo: repo.path });
 
     const db = openDatabase({ path: join(home, "flowdeck.db") });
     closeDb = () => db.close();
@@ -471,7 +475,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       [thenWire("start", "p1"), thenWire("p1", "done")],
     );
     const { runId, runs } = await startSavedFlow(
-      { ...oneReply, session: { ...oneReply.session, model: "haiku" } },
+      withSession(oneReply, { model: "haiku" }),
       (push) => {
         if (push.push === "run-state") snapshots.push(push.value);
       },

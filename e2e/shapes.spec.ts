@@ -5,8 +5,8 @@ import { join } from "node:path";
 import {
   agent,
   ask,
+  bareFlow,
   branch,
-  flow,
   forEach,
   fork,
   gate,
@@ -28,7 +28,7 @@ let launched: LaunchedApp | undefined;
 const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, position: { x, y } });
 
 const everyShape = () => {
-  const seeded = flow(
+  const seeded = bareFlow(
     [
       at(agent("agent"), 10, 80),
       at(gate("gate"), 10, 150),
@@ -44,7 +44,7 @@ const everyShape = () => {
 };
 
 const parallelShapes = () =>
-  flow(
+  bareFlow(
     [
       at(fork("fork"), 10, 10),
       at(agent("b1"), 70, 10),
@@ -63,7 +63,7 @@ const parallelShapes = () =>
   );
 
 const forEachShapes = () =>
-  flow(
+  bareFlow(
     [
       at(forEach("each"), 40, 40),
       at(agent("first", { parent: "each" }), 40, 130),
@@ -73,7 +73,7 @@ const forEachShapes = () =>
   );
 
 const branchShapes = () =>
-  flow(
+  bareFlow(
     [
       at(trigger("trigger"), 10, 10),
       at({ ...branch("branch", "e2e"), label: "E2E?" }, 220, 10),
@@ -156,7 +156,7 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
 
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Start draws as a circle with its label beside it in the ${colorScheme} theme`, async () => {
-    seedFlow(home, flow([at(trigger("trigger"), 10, 10)], []));
+    seedFlow(home, bareFlow([at(trigger("trigger"), 10, 10)], []));
     launched = await launchOnCanvas({
       home,
       logPath: test.info().outputPath("app.log"),
@@ -277,7 +277,7 @@ const intersects = (a: Box, b: Box) =>
 test("A parallel start and end show their full tag inside the bar and their label above it, clear of every node", async () => {
   seedFlow(
     home,
-    flow(
+    bareFlow(
       [
         at(trigger("trigger"), 80, 120),
         { ...at(fork("fork"), 298, 40), label: "Split the review" },
@@ -336,7 +336,7 @@ test("Hovering a node says what it is and what it does", async () => {
 });
 
 const directParallel = () =>
-  flow([at(fork("fork"), 100, 60), at(joinNode("join"), 400, 60)], [thenWire("fork", "join")]);
+  bareFlow([at(fork("fork"), 100, 60), at(joinNode("join"), 400, 60)], [thenWire("fork", "join")]);
 
 const storedY = async (window: Page) => {
   const saved = JSON.parse((await window.getByTestId("canvas-flow").textContent()) ?? "") as {

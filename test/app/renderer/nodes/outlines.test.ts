@@ -49,6 +49,8 @@ const shaped = paletteItems
   .filter(
     (type): type is Exclude<NodeType, "fork" | "join"> =>
       type !== "note" &&
+      type !== "workspace" &&
+      type !== "session" &&
       !(bars as readonly string[]).includes(type) &&
       !(frames as readonly string[]).includes(type),
   );

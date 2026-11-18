@@ -5,7 +5,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseTranscriptTurns } from "../../src/adapters/claude/transcript-turns.js";
 import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { TurnEndEvent, TurnEvents } from "../../src/core/run/turns.js";
-import { agent, flow, forEach, output, thenWire, trigger } from "../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  forEach,
+  output,
+  thenWire,
+  trigger,
+  withSession,
+} from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -35,7 +43,7 @@ function forEachFlow() {
     ],
     [thenWire("t", "p1"), thenWire("p1", "o")],
   );
-  return { ...parsed, session: { ...parsed.session, model: "haiku" } };
+  return withSession(parsed, { model: "haiku" });
 }
 
 const describeHook = ({ sessionId, payload }: TurnEndEvent) =>

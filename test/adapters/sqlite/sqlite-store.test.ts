@@ -173,9 +173,10 @@ describe("SqliteStore", () => {
       { name: "020_run_repo_states_and_step_texts.sql" },
       { name: "021_complete_deletes_and_build_texts.sql" },
       { name: "022_clean_start.sql" },
+      { name: "023_containers_clean_start.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 22]);
+    expect(before).toEqual([1, 1, 3, 1, 23]);
   });
 
   it("writes one run, one session and one row per node", () => {

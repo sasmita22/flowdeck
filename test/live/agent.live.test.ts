@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
 import { EventLog } from "../../src/adapters/jsonl/event-log.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
-import { parseFlow } from "../../src/core/flow/schema.js";
+import { asWorkflow } from "../fixtures/flow-builders.js";
 import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
@@ -33,68 +33,66 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow(secret: string) {
-  return parseFlow({
-    nodes: [
-      {
-        id: "t",
-        label: "Start",
-        type: "trigger",
-        position: at(0),
-        settings: {},
-      },
-      {
-        id: "p1",
-        label: "Tell",
-        type: "agent",
-        position: at(1),
-        settings: {
-          role: "",
-          instructions: `The secret word is ${secret}. Write it to secret.md, then reply with only the secret word.`,
-          model: "haiku",
-          writes: ["secret.md"],
+  return asWorkflow(
+    {
+      nodes: [
+        {
+          id: "t",
+          label: "Start",
+          type: "trigger",
+          position: at(0),
+          settings: {},
         },
-      },
-      {
-        id: "a1",
-        label: "Notes",
-        type: "agent",
-        position: at(2),
-        settings: {
-          role: "",
-          instructions:
-            "Write a file notes.md whose only content is the secret word you were told. If you were not told one, write UNKNOWN.",
-          model: "haiku",
+        {
+          id: "p1",
+          label: "Tell",
+          type: "agent",
+          position: at(1),
+          settings: {
+            role: "",
+            instructions: `The secret word is ${secret}. Write it to secret.md, then reply with only the secret word.`,
+            model: "haiku",
+            writes: ["secret.md"],
+          },
         },
-      },
-      {
-        id: "p2",
-        label: "Control",
-        type: "agent",
-        position: at(3),
-        settings: {
-          role: "",
-          instructions:
-            "Write a file control.md whose only content is the secret word in secret.md.",
-          model: "haiku",
-          given: ["secret.md"],
+        {
+          id: "a1",
+          label: "Notes",
+          type: "agent",
+          position: at(2),
+          settings: {
+            role: "",
+            instructions:
+              "Write a file notes.md whose only content is the secret word you were told. If you were not told one, write UNKNOWN.",
+            model: "haiku",
+          },
         },
-      },
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(4),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+        {
+          id: "p2",
+          label: "Control",
+          type: "agent",
+          position: at(3),
+          settings: {
+            role: "",
+            instructions:
+              "Write a file control.md whose only content is the secret word in secret.md.",
+            model: "haiku",
+            given: ["secret.md"],
+          },
+        },
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(4),
+          settings: { name: "result", type: "text" },
+        },
+      ],
+      wires: [then("t", "p1"), then("p1", "a1"), then("a1", "p2"), then("p2", "o")],
+      settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
     },
-    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
-  });
+    { model: "haiku" },
+  );
 }
 
 async function readOrMissing(path: string): Promise<string | undefined> {

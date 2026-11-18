@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import type { Flow, FlowContainer } from "../../../src/core/flow/schema.js";
 import { agent, flow, flowSettings, thenWire } from "../../fixtures/flow-builders.js";
 
 const nth = <T>(list: T[], index: number): T => {
@@ -40,6 +40,17 @@ const reverseKeys = (value: unknown): unknown => {
   return value;
 };
 
+const containerOf = <Kind extends FlowContainer["kind"]>(
+  flow: Flow,
+  kind: Kind,
+): Extract<FlowContainer, { kind: Kind }> => {
+  const found = flow.containers.find(
+    (container): container is Extract<FlowContainer, { kind: Kind }> => container.kind === kind,
+  );
+  if (found === undefined) throw new Error(`no ${kind} container`);
+  return found;
+};
+
 const edited = (edit: (flow: Flow) => void): Flow => {
   const copy = structuredClone(base());
   edit(copy);
@@ -73,10 +84,12 @@ describe("flowsEqual", () => {
     ],
     ["a wire end", (f) => (nth(f.wires, 0).to = { node: "s1", port: "in" })],
     ["a removed wire", (f) => f.wires.pop()],
-    ["a session value", (f) => (f.session.model = "haiku")],
-    ["a session working folder", (f) => (f.session.buildConfig = { repo: "/x" })],
-    ["a session frame", (f) => (f.session.frame = { nodes: ["p1"] })],
-    ["a worktree repo", (f) => (f.session.buildConfig = { repo: "/r", base: "main" })],
+    ["a session model", (f) => (containerOf(f, "session").model = "haiku")],
+    ["a session repo", (f) => (containerOf(f, "session").repo = "/x")],
+    ["a session branch", (f) => (containerOf(f, "session").branch = "dev")],
+    ["a session name", (f) => (containerOf(f, "session").name = "review")],
+    ["a workspace model", (f) => (containerOf(f, "workspace").model = "opus")],
+    ["a removed container", (f) => f.containers.pop()],
   ])("tells flows apart by %s", (_, edit) => {
     const other = edited(edit);
 
@@ -97,9 +110,9 @@ describe("flowsEqual", () => {
     expect(flowsEqual(base(settings), base({ ...settings }))).toBe(true);
   });
 
-  it("tells flows apart by the members of their session frames", () => {
-    const framed = edited((f) => (f.session.frame = { nodes: ["p1", "a1"] }));
-    const fewer = edited((f) => (f.session.frame = { nodes: ["p1"] }));
+  it("tells flows apart by the members of their containers", () => {
+    const framed = edited((f) => (containerOf(f, "session").nodes = ["p1", "s1"]));
+    const fewer = edited((f) => (containerOf(f, "session").nodes = ["p1"]));
 
     expect(flowsEqual(framed, fewer)).toBe(false);
     expect(flowsEqual(fewer, framed)).toBe(false);

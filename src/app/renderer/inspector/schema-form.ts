@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { modelChoices, permissionModes, type Choice } from "../../../core/flow/choices.js";
-import { FlowSettings, Session, type Node } from "../../../core/flow/schema.js";
+import {
+  FlowSettings,
+  SessionContainer,
+  WorkspaceContainer,
+  type FlowContainer,
+  type Node,
+} from "../../../core/flow/schema.js";
 import { producedName } from "../../../core/nodes/agent/settings.js";
 
 type Path = readonly string[];
@@ -28,12 +34,6 @@ export type FieldDescription =
 
 type AnyObject = z.ZodObject<z.ZodRawShape>;
 
-export const sessionSettingsSchema = Session.pick({
-  name: true,
-  buildConfig: true,
-  model: true,
-});
-
 export type Form = {
   prefix: string;
   labels: Readonly<Record<string, string>>;
@@ -45,18 +45,21 @@ export type Form = {
   fallbacks?: Readonly<Record<string, string>>;
 };
 
-const sessionLabels: Record<string, string> = {
-  name: "Session name",
-  "buildConfig.repo": "Repository",
-  "buildConfig.base": "Start from branch",
-  model: "Model",
-};
-
-const sessionForm: Form = {
-  prefix: "session",
-  labels: sessionLabels,
+const containerForm = (container: FlowContainer): Form => ({
+  prefix: `container-${container.id}`,
+  labels: {
+    name: "Session name",
+    repo: "Repository",
+    branch: "Start from branch",
+    model: "Model",
+  },
   optionLabels: {},
   choices: { model: modelChoices },
+});
+
+const containerSettings = {
+  workspace: WorkspaceContainer.pick({ model: true }),
+  session: SessionContainer.pick({ name: true, repo: true, branch: true, model: true }),
 };
 
 const settingsForm: Form = {
@@ -185,7 +188,7 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   return [];
 };
 
-export const describeFields = (schema: AnyObject, form: Form = sessionForm): FieldDescription[] =>
+export const describeFields = (schema: AnyObject, form: Form): FieldDescription[] =>
   objectFields(form, [], schema);
 
 const picked = (field: FieldDescription, choices: readonly Choice[]): FieldDescription => ({
@@ -223,7 +226,19 @@ const asChoices = (values: readonly string[]): Choice[] =>
 export const producedChoices = (nodes: readonly Pick<Node, "settings">[]): Choice[] =>
   asChoices([...new Set(nodes.flatMap(({ settings }) => producedName(settings) ?? []))]);
 
-export const sessionFields = (): FieldDescription[] => describeFields(sessionSettingsSchema);
+export const containerFields = (container: FlowContainer): FieldDescription[] =>
+  describeFields(containerSettings[container.kind], containerForm(container));
+
+export type SharedField = "model" | "repo" | "branch";
+
+const sharedFields: Readonly<Record<string, SharedField>> = {
+  model: "model",
+  buildModel: "model",
+  repo: "repo",
+  branch: "branch",
+};
+
+export const sharedFieldFor = (path: Path): SharedField | undefined => sharedFields[path.join(".")];
 
 export const settingsFields = (): FieldDescription[] => describeFields(FlowSettings, settingsForm);
 
@@ -283,6 +298,3 @@ const childOf = (schema: AnyObject, key: string): z.ZodType => {
   if (child === undefined) throw new Error(`No field ${key}`);
   return child as z.ZodType;
 };
-
-export const applyField = (session: Session, path: Path, value: string): Session =>
-  assignField(Session, session, path, value) as Session;

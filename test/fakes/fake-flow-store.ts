@@ -1,4 +1,5 @@
-import type { Flow } from "../../src/core/flow/schema.js";
+import type { BuildConfig, Flow } from "../../src/core/flow/schema.js";
+import { flowKind, sessionBuildConfig } from "../../src/core/flow/structure.js";
 import { foundVariables } from "../../src/core/flow/variables.js";
 import type {
   FlowStore,
@@ -7,6 +8,8 @@ import type {
   NewBlueprint,
   SavedFlowRef,
 } from "../../src/ports/flow-store.js";
+
+const buildConfigOf = (flow: Flow): BuildConfig | null => sessionBuildConfig(flow) ?? null;
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -145,9 +148,10 @@ export class FakeFlowStore implements FlowStore {
       createdAt: blueprint.createdAt,
       versions: saved.length,
       lastSavedAt: latest === undefined ? null : blueprint.createdAt,
-      buildConfig: latest?.flow.session.buildConfig ?? null,
+      buildConfig: latest === undefined ? null : buildConfigOf(latest.flow),
       variables: latest === undefined ? [] : foundVariables(latest.flow),
       pinned: blueprint.pinned,
+      kind: latest === undefined ? "library" : flowKind(latest.flow),
     };
   }
 }

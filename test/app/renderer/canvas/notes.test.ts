@@ -9,9 +9,15 @@ import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import { noteLook } from "../../../../src/app/renderer/nodes/note-look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parseFlow, type CanvasNote, type Flow } from "../../../../src/core/flow/schema.js";
-import { agent, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, inOneSession, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
-const unfinished = new Set(["required-settings", "repo-required", "one-start", "stop-required"]);
+const unfinished = new Set([
+  "required-settings",
+  "session-settings",
+  "outside-container",
+  "one-start",
+  "stop-required",
+]);
 
 type Store = ReturnType<typeof createCanvasStore>;
 
@@ -38,9 +44,11 @@ const loaded = (input: Flow) => {
   return store;
 };
 
+const emptyCanvas = () => loaded(inOneSession([], []));
+
 const promptAndNote = () =>
   loaded({
-    ...flow([{ ...agent("agent-1"), position: { x: 300, y: 0 } }], []),
+    ...inOneSession([{ ...agent("agent-1"), position: { x: 300, y: 0 } }], []),
     notes: [note("n1", { text: "Why", position: { x: 0, y: 0 } })],
   });
 
@@ -53,12 +61,12 @@ describe("noteLook", () => {
 
 describe("nextNoteId", () => {
   it("numbers from n1 on a flow without notes", () => {
-    expect(nextNoteId(flow([], []))).toBe("n1");
+    expect(nextNoteId(inOneSession([], []))).toBe("n1");
   });
 
   it("takes the lowest number no note or node uses, ignoring case", () => {
     const current = {
-      ...flow([agent("N2")], []),
+      ...inOneSession([agent("N2")], []),
       notes: [note("n1"), note("n4")],
     };
     expect(nextNoteId(current)).toBe("n3");
@@ -67,7 +75,7 @@ describe("nextNoteId", () => {
 
 describe("adding a note", () => {
   it("drops an empty note of the default size at the drop point, selected alone", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 400, y: 0 }));
 
     act(store, (s) => s.drop("note", { x: 12, y: 34 }));
@@ -79,7 +87,7 @@ describe("adding a note", () => {
   });
 
   it("drops a note where it is dropped even over a node", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
 
     act(store, (s) => s.drop("note", { x: 10, y: 10 }));
@@ -88,7 +96,7 @@ describe("adding a note", () => {
   });
 
   it("adds a note at (80, 80) on an empty canvas", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     act(store, (s) => s.addNext("note"));
 
@@ -96,7 +104,7 @@ describe("adding a note", () => {
   });
 
   it("undo removes the note and leaves the canvas clean with no notes key; redo puts it back", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const start = store.getState().flow;
     act(store, (s) => s.drop("note", { x: 0, y: 0 }));
     const added = store.getState().flow;
@@ -251,7 +259,7 @@ describe("resizing a note", () => {
 describe("deleting a note", () => {
   it("deletes a selected note; undo puts it back in its place and redo deletes it again", () => {
     const store = loaded({
-      ...flow([agent("agent-1")], []),
+      ...inOneSession([agent("agent-1")], []),
       notes: [note("n1"), note("n2", { text: "middle" }), note("n3")],
     });
     const before = store.getState().flow;
@@ -324,7 +332,7 @@ describe("selecting all", () => {
 
 describe("toViewNodes with notes", () => {
   const noted = (): Flow => ({
-    ...flow(
+    ...inOneSession(
       [
         { ...agent("a"), position: { x: 0, y: 0 } },
         { ...agent("b"), position: { x: 300, y: 0 } },
@@ -362,11 +370,12 @@ describe("toViewNodes with notes", () => {
 
   it("puts notes after the frames and before the nodes, so nodes draw over them", () => {
     const looped: Flow = {
-      ...flow([loop("L"), agent("a", { parent: "L" })], []),
+      ...inOneSession([loop("L"), agent("a", { parent: "L" })], []),
       notes: noted().notes ?? [],
     };
 
     expect(toViewNodes(looped, [], {}, null).map(({ id }) => id)).toEqual([
+      "container-frame-session-1",
       "loop-frame-L",
       "n1",
       "L",

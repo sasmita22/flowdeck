@@ -47,6 +47,16 @@ const objectBranches = (schema: JsonSchema): JsonSchema[] => {
 const inputBranches = (name: string) => objectBranches(definition(name).inputSchema as JsonSchema);
 
 describe("blueprintToolDefinitions", () => {
+  it("tells the model add_node's parent can be a Loop, a For each or a container", () => {
+    const tool = definition("add_node");
+    const [input] = inputBranches("add_node");
+    const parent = input?.properties?.["parent"] as { description?: string } | undefined;
+
+    expect(tool.description).toMatch(/container/i);
+    expect(parent?.description).toMatch(/container/i);
+    expect(parent?.description).toMatch(/loop/i);
+  });
+
   it("offers exactly the ten blueprint tools and nothing that builds, runs or deletes a build", () => {
     const names = blueprintToolDefinitions().map((tool) => tool.name);
 
@@ -145,6 +155,13 @@ describe("blueprintToolDefinitions", () => {
 
   it("says read_blueprint of a deleted blueprint answers that it was deleted", () => {
     expect(definition("read_blueprint").description).toMatch(/deleted.*answers.*was deleted/i);
+  });
+
+  it("says read_blueprint reads the blueprint's containers, not a single session", () => {
+    const { description } = definition("read_blueprint");
+
+    expect(description).toMatch(/containers/i);
+    expect(description).not.toMatch(/\bsession\b(?! containers?)/i);
   });
 
   it("lets read_blueprint name a blueprint, optionally", () => {

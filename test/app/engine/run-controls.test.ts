@@ -53,7 +53,9 @@ describe("run controls", () => {
 
   const atRepo = (input: Flow): Flow => ({
     ...input,
-    session: { ...input.session, buildConfig: { ...input.session.buildConfig, repo: repo.path } },
+    containers: input.containers.map((container) =>
+      container.kind === "session" ? { ...container, repo: repo.path } : container,
+    ),
   });
 
   const runEnvironment = (overrides: Partial<EngineHandlerOptions["run"]> = {}) => {
@@ -193,22 +195,11 @@ describe("run controls", () => {
         [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
 
-    const branchOn = (variable: string) => {
-      const base = onMainFlow(
+    const branchOn = (variable: string) =>
+      onMainFlow(
         [branch("b", variable), agent("yes"), agent("no")],
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
-      return {
-        ...base,
-        session: {
-          ...base.session,
-          buildConfig: {
-            ...base.session.buildConfig,
-            variables: [{ name: variable, kind: "yesno" as const, default: true }],
-          },
-        },
-      };
-    };
 
     it("lets a run choose only automatic mode, and only for a build with a skippable gate", async () => {
       expect(await call("run-options", { buildId: await builtId(skippableGate()) })).toEqual({

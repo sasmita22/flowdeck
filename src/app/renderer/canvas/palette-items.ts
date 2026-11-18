@@ -2,7 +2,9 @@ import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
 import { paletteTestId } from "../test-ids.js";
-import { nodeDefaults, type CanvasItemType } from "./store.js";
+import { nodeDefaults, type CanvasItemType, type FlowContainerKind } from "./store.js";
+
+export { flowContainerItems } from "./store.js";
 
 export const paletteGroups = [
   "",
@@ -48,6 +50,33 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["ask", "People and safety", "Puts a question to you in the app and waits for the answer."],
 ];
 
+const containerItem = (
+  type: FlowContainerKind,
+  label: string,
+  description: string,
+): PaletteItem => ({
+  type,
+  testId: paletteTestId(type),
+  label,
+  tag: label.toUpperCase(),
+  color: "var(--c-io)",
+  group: "Composition",
+  description,
+});
+
+const containerItems: readonly PaletteItem[] = [
+  containerItem(
+    "workspace",
+    "Workspace",
+    "The one place a workflow starts and ends, with its own Start, Stop and model.",
+  ),
+  containerItem(
+    "session",
+    "Session",
+    "One Claude Code session on a repository and branch, with its own Start, Stop and model.",
+  ),
+];
+
 const noteItem: PaletteItem = {
   type: "note",
   testId: paletteTestId("note"),
@@ -68,6 +97,7 @@ export const paletteItems: readonly PaletteItem[] = [
     group,
     description,
   })),
+  ...containerItems,
   noteItem,
 ];
 

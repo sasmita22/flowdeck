@@ -1,0 +1,160 @@
+{
+  "nodes": [
+    {
+      "id": "workspace-1-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": -240
+      },
+      "settings": {}
+    },
+    {
+      "id": "workspace-1-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 240,
+        "y": -240
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    },
+    {
+      "id": "workspace-2-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": -480
+      },
+      "settings": {}
+    },
+    {
+      "id": "workspace-2-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 240,
+        "y": -480
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    },
+    {
+      "id": "session-1-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "settings": {}
+    },
+    {
+      "id": "session-1-review",
+      "label": "Review",
+      "type": "agent",
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "role": "reviewer",
+        "instructions": "Review the change.",
+        "model": "sonnet"
+      }
+    },
+    {
+      "id": "session-1-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-1-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-1-stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-2-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-2-stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "session-1-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "session-1-review",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "session-1-review",
+        "port": "out"
+      },
+      "to": {
+        "node": "session-1-stop",
+        "port": "in"
+      }
+    }
+  ],
+  "containers": [
+    {
+      "id": "workspace-1",
+      "kind": "workspace",
+      "model": "sonnet",
+      "nodes": ["workspace-1-start", "workspace-1-stop"]
+    },
+    {
+      "id": "workspace-2",
+      "kind": "workspace",
+      "model": "sonnet",
+      "nodes": ["workspace-2-start", "workspace-2-stop"]
+    },
+    {
+      "id": "session-1",
+      "kind": "session",
+      "name": "main",
+      "repo": "/work/repo",
+      "branch": "main",
+      "model": "sonnet",
+      "nodes": ["session-1-start", "session-1-review", "session-1-stop"]
+    }
+  ],
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
+  }
+}

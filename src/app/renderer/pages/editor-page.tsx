@@ -6,6 +6,7 @@ import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
 import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
+import { flowKind, libraryBuildReason } from "../../../core/flow/structure.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
@@ -16,7 +17,7 @@ import type { SaveState } from "../save-store.js";
 import { SessionSettingsButton } from "../session-settings-button.js";
 import type { ShellState } from "../shell-store.js";
 import type { TerminalState } from "../terminal/store.js";
-import { controlTestIds } from "../test-ids.js";
+import { controlTestIds, pageTestIds } from "../test-ids.js";
 
 const idle: StoreApi<RunView> = createStore<RunView>()(() => ({ snapshot: null }));
 
@@ -97,6 +98,7 @@ function EditorTitleRow({
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
   const starting = useStore(run, (state) => state.starting);
+  const library = useStore(canvas, (state) => flowKind(state.flow) === "library");
   return (
     <header className="fd-title-row">
       <nav className="fd-crumbs" aria-label="Breadcrumb">
@@ -127,12 +129,21 @@ function EditorTitleRow({
             Save
           </button>
         )}
+        {ready && library && (
+          <span className="fd-hint" data-testid={pageTestIds.buildDisabledReason} role="status">
+            {libraryBuildReason}
+          </span>
+        )}
         {ready && (
           <button
             className="fd-btn"
             data-testid={controlTestIds.build}
-            disabled={saving || starting}
-            title="Save if needed, then build a locked copy of this version under a name"
+            disabled={saving || starting || library}
+            title={
+              library
+                ? libraryBuildReason
+                : "Save if needed, then build a locked copy of this version under a name"
+            }
             onClick={() => void run.getState().openBuild()}
           >
             Build
@@ -172,7 +183,10 @@ export function EditorPage({
   const ready = useStore(canvas, (state) => state.ready);
   const agentVisible = useStore(assistant, (state) => state.visible);
   const onSave = useCallback(() => void save.getState().save(), [save]);
-  const sessionName = useStore(canvas, (state) => state.flow.session.name);
+  const sessionName = useStore(canvas, (state) => {
+    const session = state.flow.containers.find((container) => container.kind === "session");
+    return session?.kind === "session" ? session.name : "";
+  });
   const nodes = useStore(canvas, (state) => state.flow.nodes);
   const labels = useMemo(
     () => ({

@@ -11,8 +11,10 @@ import {
   flowSettings,
   loop,
   output,
+  sessionContainer,
   thenWire,
   trigger,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
 const sample = (): Flow =>
@@ -140,38 +142,75 @@ describe("lower", () => {
     expect(lower(sample(), workspace).manifest).not.toHaveProperty("kitVersion");
   });
 
-  it("carries version 1, the session and the wires, and no hash", () => {
-    const input = sample();
-    const { manifest } = lower(input, workspace);
+  it("carries version 1 and the session's wires, and no hash", () => {
+    const { manifest } = lower(sample(), workspace);
 
     expect(manifest.version).toBe(1);
-    expect(manifest.session).toStrictEqual(input.session);
-    expect(manifest.wires).toStrictEqual(input.wires);
+    expect(manifest.wires).toStrictEqual([
+      thenWire("start", "p"),
+      thenWire("p", "a"),
+      thenWire("a", "x"),
+      thenWire("x", "done"),
+    ]);
     expect(manifest).not.toHaveProperty("hash");
   });
 
-  it("leaves the session frame out of the manifest", () => {
-    const input = sample();
-    const unframed = structuredClone(input.session);
-    input.session.frame = { nodes: ["p", "a"] };
+  describe("the session container", () => {
+    const bridged = () =>
+      flow(
+        [
+          trigger("workspace-start"),
+          output("workspace-stop"),
+          trigger("start"),
+          agent("p"),
+          loop("L"),
+          agent("x", { parent: "L" }),
+          output("done"),
+        ],
+        [
+          thenWire("workspace-start", "workspace-stop"),
+          thenWire("start", "p"),
+          thenWire("p", "L"),
+          thenWire("L", "done"),
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["workspace-start", "workspace-stop"]),
+            sessionContainer(["start", "p", "L", "done"], {
+              name: "review",
+              repo: "/r",
+              branch: "release",
+              model: "opus",
+            }),
+          ],
+        },
+      );
 
-    expect(lower(input, workspace).manifest.session).toStrictEqual(unframed);
-  });
+    it("becomes the manifest's session: its name, repo and branch as the Build configuration, and its model", () => {
+      expect(lower(bridged(), workspace).manifest.session).toStrictEqual({
+        name: "review",
+        buildConfig: { repo: "/r", base: "release" },
+        model: "opus",
+      });
+    });
 
-  it("lowers flows that differ only in their session frame to the same manifest", () => {
-    const framed = sample();
-    framed.session.frame = { nodes: ["p"] };
+    it("compiles only its members and their body nodes, leaving the workspace's Start and Stop out", () => {
+      expect(lower(bridged(), workspace).manifest.nodes.map((node) => node.id)).toEqual([
+        "start",
+        "p",
+        "L",
+        "x",
+        "done",
+      ]);
+    });
 
-    expect(lower(framed, workspace)).toStrictEqual(lower(sample(), workspace));
-  });
-
-  it("keeps the blueprint's Build configuration in the manifest", () => {
-    const input = sample();
-    input.session.buildConfig = { repo: "/r", base: "main" };
-
-    expect(lower(input, workspace).manifest.session.buildConfig).toStrictEqual({
-      repo: "/r",
-      base: "main",
+    it("gives the build its own Start as the one trigger", () => {
+      expect(
+        lower(bridged(), workspace)
+          .manifest.nodes.filter((node) => node.type === "trigger")
+          .map((node) => node.id),
+      ).toEqual(["start"]);
     });
   });
 

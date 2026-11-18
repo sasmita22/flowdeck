@@ -3,7 +3,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CostReport } from "../../src/core/run/cost.js";
-import { parseFlow } from "../../src/core/flow/schema.js";
+import { asWorkflow } from "../fixtures/flow-builders.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -19,40 +19,38 @@ const then = (from: string, to: string) => ({
 });
 
 function twoRoundLoop() {
-  return parseFlow({
-    nodes: [
-      { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
-      {
-        id: "l1",
-        label: "Twice",
-        type: "loop",
-        position: at(1),
-        settings: { condition: "1 equals 2", cap: 2, onCap: "ask" },
-      },
-      {
-        id: "a",
-        label: "Say ok",
-        type: "agent",
-        position: at(2),
-        parent: "l1",
-        settings: { role: "", instructions: "Reply ok.", model: "haiku" },
-      },
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(3),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: [then("t", "l1"), then("l1", "o")],
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+  return asWorkflow(
+    {
+      nodes: [
+        { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
+        {
+          id: "l1",
+          label: "Twice",
+          type: "loop",
+          position: at(1),
+          settings: { condition: "1 equals 2", cap: 2, onCap: "ask" },
+        },
+        {
+          id: "a",
+          label: "Say ok",
+          type: "agent",
+          position: at(2),
+          parent: "l1",
+          settings: { role: "", instructions: "Reply ok.", model: "haiku" },
+        },
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(3),
+          settings: { name: "result", type: "text" },
+        },
+      ],
+      wires: [then("t", "l1"), then("l1", "o")],
+      settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
     },
-    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
-  });
+    { model: "haiku" },
+  );
 }
 
 const listing = (dir: string) => readdir(dir, { recursive: true }).catch(() => [] as string[]);

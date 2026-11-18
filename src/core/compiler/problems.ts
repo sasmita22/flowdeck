@@ -1,7 +1,12 @@
 import { NodeType } from "../flow/schema.js";
 import type { ValidationError } from "./validate.js";
 
-export type Problem = { node?: string | undefined; field?: string | undefined; text: string };
+export type Problem = {
+  node?: string | undefined;
+  container?: string | undefined;
+  field?: string | undefined;
+  text: string;
+};
 
 const typeTags = new RegExp(` \\((?:${NodeType.options.join("|")})\\)`, "g");
 
@@ -24,8 +29,9 @@ export const reasonNaming = (
 };
 
 export const plainProblems = (errors: readonly ValidationError[]): Problem[] =>
-  errors.map(({ node, field, message }) => ({
+  errors.map(({ node, container, field, message }) => ({
     ...(node === undefined ? {} : { node }),
+    ...(container === undefined ? {} : { container }),
     ...(field === undefined ? {} : { field }),
     text: plainReason(node, message),
   }));

@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
-  buildConfigTestIds,
+  containerTestIds,
   controlTestIds,
   pageTestIds,
   paletteTestId,
@@ -17,11 +17,13 @@ import { panelWidthLimits } from "../src/app/renderer/shell-store.js";
 import { NodeType, parseFlow } from "../src/core/flow/schema.js";
 import {
   agent,
+  bareFlow,
   flow,
   fork,
   gate,
   join as joinNode,
   thenWire,
+  withSession,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -114,7 +116,6 @@ const titleAndCanvasControls = [
   controlTestIds.undo,
   controlTestIds.redo,
   controlTestIds.delete,
-  controlTestIds.sessionChip,
   controlTestIds.zoomIn,
   controlTestIds.zoomOut,
   controlTestIds.fit,
@@ -134,7 +135,6 @@ const canvasControls = [
   controlTestIds.undo,
   controlTestIds.redo,
   controlTestIds.delete,
-  controlTestIds.sessionChip,
   controlTestIds.zoomIn,
   controlTestIds.zoomOut,
   controlTestIds.fit,
@@ -169,7 +169,9 @@ test("Looks like the design", async () => {
   const target = await launch();
   const { window } = target;
   await showDark(target);
-  await expect(window.getByTestId("canvas-empty-hint")).toBeVisible();
+  await expect(window.getByTestId(containerTestIds.frame("workspace-1"))).toBeVisible();
+  await expect(window.getByTestId(containerTestIds.frame("session-1"))).toBeVisible();
+  await expect(window.getByTestId("canvas-empty-hint")).toHaveCount(0);
 
   await expect(window).toHaveScreenshot("shell-sidebar-open.png", shot.threshold);
 
@@ -296,6 +298,7 @@ test("Every node type drops", async () => {
 });
 
 test("Sidebar search and toggle", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
 
   await window.getByTestId(controlTestIds.search).fill("loop");
@@ -461,6 +464,7 @@ test("Menu keyboard", async () => {
 });
 
 test("Invalid node shows its reason", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
   const reason = "Has 0 branches; a parallel start needs two or more.";
 
@@ -485,6 +489,7 @@ test("Invalid node shows its reason", async () => {
 });
 
 test("Left to right, no overlap", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
 
   await drop(window, paletteTestId("agent"), 200, 150);
@@ -526,9 +531,15 @@ test("Wires around a parallel section keep their arrowheads", async () => {
   );
   const { window } = await launch();
 
-  const edges = window.locator(".react-flow__edge-path");
-  await expect(edges).toHaveCount(4);
-  for (const edge of await edges.all()) {
+  for (const [from, to] of [
+    ["fork", "b1"],
+    ["fork", "b2"],
+    ["b1", "join"],
+    ["b2", "join"],
+  ]) {
+    const edge = window
+      .getByTestId(`rf__edge-${from}:out->${to}:in`)
+      .locator(".react-flow__edge-path");
     await expect(edge).toHaveAttribute("marker-end", /url\(/);
   }
 });
@@ -610,11 +621,7 @@ test("Run status and inspector", async () => {
 test("Branch shown", async () => {
   await git(repo.path, "checkout", "--quiet", "-b", "fd-demo");
   await git(repo.path, "branch", "fd-next");
-  const seeded = parseFlow(twoAgents());
-  seedFlow(home, {
-    ...seeded,
-    session: { ...seeded.session, buildConfig: { repo: repo.path } },
-  });
+  seedFlow(home, withSession(parseFlow(twoAgents()), { repo: repo.path, branch: "" }));
   const { window } = await launch();
 
   await expect(window.getByTestId("workspace-folder")).toHaveText(basename(repo.path));
@@ -622,8 +629,8 @@ test("Branch shown", async () => {
   await expect(window.getByTestId("workspace-branch")).toHaveText("fd-demo");
   await expect(window.getByTestId("workspace-branch")).toHaveAttribute("title", "fd-demo");
 
-  await window.getByTestId(controlTestIds.sessionSettings).click();
-  const base = window.getByTestId(buildConfigTestIds.base);
+  await window.getByTestId(containerTestIds.frame("session-1")).click({ position: { x: 6, y: 6 } });
+  const base = window.getByTestId(containerTestIds.field("session-1", "branch"));
   await expect(base.locator("option", { hasText: "fd-next" })).toHaveCount(1);
   await base.selectOption("fd-next");
 

@@ -1,11 +1,11 @@
 ---
 name: blueprint
-description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, the one-session rule, build configuration, settings and variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
+description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, workspace and session containers, container and blueprint settings, variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
 ---
 
 # Blueprints
 
-You are working beside the user's Flowdeck canvas. A blueprint is a drawing of multi-step Claude Code work: nodes joined by wires, with one session's settings. Flowdeck builds it into a Claude Code plugin and runs it turn by turn. You change it only through the `flowdeck` tools; Bash and the database are closed to you.
+You are working beside the user's Flowdeck canvas. A blueprint is a drawing of multi-step Claude Code work: nodes joined by wires, grouped in containers. Flowdeck builds it into a Claude Code plugin and runs it turn by turn. You change it only through the `flowdeck` tools; Bash and the database are closed to you.
 
 ## How to work
 
@@ -18,17 +18,24 @@ You are working beside the user's Flowdeck canvas. A blueprint is a drawing of m
 7. Edits land on the open canvas unsaved. The user saves them, and one Undo takes back everything from one ask.
 8. Load the `check-blueprint` skill before telling the user the blueprint is done. The ask is done only when that check passes; until then, fix what it finds or ask the user.
 
-## The one-session rule
+## Containers
 
-A blueprint is one session: every node on the canvas runs inside one Claude Code session, one turn after another. The session's settings hold its `model` and the build configuration, beside the blueprint's settings. Nodes do not get their own session; an Agent node runs as a subagent inside it and can use every tool the session has. The tools cannot change any of these settings: for the model, build model, permission mode, repository or base, tell the user to open the session settings on the canvas. Connectors are not set in the blueprint: the session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
+Nodes sit in containers, drawn as frames on the canvas:
+
+- The workspace container: at most one per blueprint, with a `model`.
+- Session containers: any number, each one Claude Code session with a `name` no other session uses, a `repo`, a `branch` and a `model`. Its nodes run inside that session, one turn after another; an Agent node runs as a subagent inside it and can use every tool the session has.
+
+Each container holds exactly one Start and one Stop, and its Start reaches its Stop. A blueprint with a workspace is a workflow: every node in it sits in the workspace or a session. A blueprint with no workspace is a library, and a library cannot be built. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
+
+The tools cannot add, delete or change a container. For a container's settings, the build model or the permission mode, tell the user to set them on the canvas: a container's settings by selecting its frame, the blueprint settings from the gear. Connectors are not set in the blueprint: each session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
 
 ## Nodes
 
-Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent`, and settings for its type. Settings you leave out when adding a node take the type's defaults.
+Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent` (the Loop or For each whose body holds it), and settings for its type. Settings you leave out when adding a node take the type's defaults.
 
 | Type       | What it does                                                                                                                                                                                 | Settings (default)                                                                                                                                 | Ports                               |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `trigger`  | Start: where the blueprint starts                                                                                                                                                            | none                                                                                                                                               | out `out` (then)                    |
+| `trigger`  | Start: where its container starts                                                                                                                                                            | none                                                                                                                                               | out `out` (then)                    |
 | `agent`    | A subagent the session calls                                                                                                                                                                 | `role` (""), `instructions` (""), `model` ("sonnet"), `given` and `writes` (optional lists of files), `produces` (optional name of a yes/no value) | in `in`, out `out` (then)           |
 | `gate`     | Stops for the user to look before going on                                                                                                                                                   | `shown` (""), `skippable` (false)                                                                                                                  | in `in`, out `out` (then)           |
 | `ask`      | Asks the user a question                                                                                                                                                                     | `question` (""), `options` ([])                                                                                                                    | in `in`, out `out` (then)           |
@@ -38,15 +45,15 @@ Every node has an `id` (Flowdeck picks it when you add one), a `label`, a positi
 | `fork`     | Parallel start                                                                                                                                                                               | none                                                                                                                                               | in `in`, out `out` (then)           |
 | `join`     | Parallel end                                                                                                                                                                                 | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                             | in `in`, out `out` (then)           |
 | `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                              | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                        | in `in`; out `yes`, out `no` (then) |
-| `output`   | Stop: where the main flow ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
+| `output`   | Stop: where its container ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
 
 A Loop or For each holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
 
-Start and Stop are drawn as circles, Stop with a heavy ring. A blueprint has exactly one Start, and at least one Stop on its main flow.
+Start and Stop are drawn as circles, Stop with a heavy ring. Each container has exactly one Start and one Stop, and its Start reaches its Stop.
 
 ## Main flow
 
-The main flow is every node reached from Start along `then` wires. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
+The main flow is every node reached along `then` wires from the Start of its own container. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
 
 ## Wires
 
@@ -59,19 +66,23 @@ A wire goes from an output port of one node to an input port of another, and bot
 
 Agents name their files in settings, not on wires: `given` lists the files an Agent reads, `writes` the files it leaves. A hand-off is one Agent's `writes` matching another Agent's `given`. A given file no Agent writes is a file already in the repo. The writer must run before the reader on every path to it, never beside it in a parallel section. A file name is a path inside the working folder (no leading `/` or `~`, no `..`, commas or control characters).
 
-## Build configuration, settings and variables
+## Container settings, blueprint settings and variables
 
-The session's build configuration holds:
+A session container's settings hold:
 
-- `repo`: the repository the blueprint builds from. A build is refused until it is set.
-- `base`: the branch or commit builds start from.
+- `name`: the session's name, unique among the sessions.
+- `repo`: the repository the session builds from.
+- `branch`: the branch builds start from.
+- `model`: the model the session runs on.
+
+The workspace's settings hold its `model`. A build is refused until every one of these is set.
 
 The blueprint's settings hold:
 
 - `buildModel`: the model the build agents use.
 - `permissionMode`: the permission mode the run session starts in.
 
-The user sets all four in the session settings.
+The user sets a container's settings by selecting its frame, and the blueprint's settings from the gear.
 
 Variables are found, never declared. A Branch decided by a variable makes the name in its `variable` a yes/no variable, and `{{name}}` in an Agent's `instructions` makes `name` a text variable. The user gives a value for each when building. A Branch is decided by a yes/no variable, or, with `decidedBy` "value", by the yes/no value named in its `value` that an earlier Agent `produces`. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and one name is either yes/no or text, never both.
 
@@ -95,26 +106,32 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 - `handoffs`: a hand-off file is inside the working folder, and an Agent that writes it runs before every Agent given it, on every path and never beside it.
 - `variable-kind`: a variable is either a yes/no a Branch decides on or text an Agent uses, never both.
 - `variable-names`: variable names use only letters, digits, dashes and underscores.
-- `repo-required`: the blueprint names the repository it builds from.
-- `one-start`: the blueprint has exactly one Start.
-- `stop-required`: the blueprint has a Stop on its main flow.
+- `workspace-count`: a blueprint has at most one workspace.
+- `one-start`: each container has exactly one Start.
+- `stop-required`: each container has a Stop its Start reaches.
+- `one-stop`: each container has at most one Stop.
+- `session-settings`: each session has a `repo`, a `branch` and a `model`, and the workspace a `model`.
+- `session-names`: each session has a name no other session uses.
+- `outside-container`: in a workflow, every node sits in the workspace or a session.
 
 ## Tools
 
 Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved blueprint; leave it out for the open one. Reading a deleted blueprint answers that it was deleted. Edits apply only to the blueprint you were opened on, and only while it is open in the editor; an edit at any other time is refused. When asked to change another blueprint, reply that you can edit only the open one, and that the user can open that blueprint's own Agent pane.
 
-| Tool                | Does                                                                                            | Input                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                           | none                                            |
-| `search_blueprints` | Finds blueprints whose name or any node label contains the query                                | `query`                                         |
-| `read_blueprint`    | Reads nodes, wires, session, whether there are unsaved changes, and current problems            | `blueprint`                                     |
-| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId`   | `type`, `label`, `parent`, `settings`           |
-| `change_node`       | Changes a node's label or some of its settings; settings given are merged over the current ones | `nodeId`, `label`, `settings`                   |
-| `wire`              | Connects an output port to an input port                                                        | `kind`, `from` and `to` (each `{ node, port }`) |
-| `delete_node`       | Deletes a node and its wires                                                                    | `nodeId`                                        |
-| `tidy_layout`       | Lays out the open blueprint; the last edit of an ask that added nodes or wires                  | none                                            |
-| `list_builds`       | Lists the builds made from blueprints                                                           | none                                            |
-| `read_build`        | Reads one build                                                                                 | `id`                                            |
+| Tool                | Does                                                                                          | Input                                 |
+| ------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                         | none                                  |
+| `search_blueprints` | Finds blueprints whose name or any node label contains the query                              | `query`                               |
+| `read_blueprint`    | Reads nodes, wires, containers, whether there are unsaved changes, and current problems       | `blueprint`                           |
+| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId` | `type`, `label`, `parent`, `settings` |
+
+`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`.
+| `change_node` | Changes a node's label or some of its settings; settings given are merged over the current ones | `nodeId`, `label`, `settings` |
+| `wire` | Connects an output port to an input port | `kind`, `from` and `to` (each `{ node, port }`) |
+| `delete_node` | Deletes a node and its wires | `nodeId` |
+| `tidy_layout` | Lays out the open blueprint; the last edit of an ask that added nodes or wires | none |
+| `list_builds` | Lists the builds made from blueprints | none |
+| `read_build` | Reads one build | `id` |
 
 The build tools only read. There is no tool to build, run or delete; tell the user where to do that in the app.
 
@@ -122,7 +139,7 @@ The build tools only read. There is no tool to build, run or delete; tell the us
 
 Ask: "add a step that runs npm test after the planner".
 
-1. `read_blueprint`. Find the node labelled planner and what its `out` wire leads to.
-2. `add_node` with `type` `agent`, `label` "npm test", `settings` `{ "role": "Test runner for the change", "instructions": "Run npm test.\nExpected output: a reply listing each failing test, or that all pass." }`.
+1. `read_blueprint`. Find the node labelled planner, the container that lists it, and what its `out` wire leads to.
+2. `add_node` with `type` `agent`, `label` "npm test", `parent` the planner's container id, `settings` `{ "role": "Test runner for the change", "instructions": "Run npm test.\nExpected output: a reply listing each failing test, or that all pass." }`.
 3. `wire` a `then` wire from the planner's `out` to the new node's `in`.
 4. If the planner already led somewhere, and the ask does not say where the test goes, ask the user whether the test should sit between them instead of guessing.

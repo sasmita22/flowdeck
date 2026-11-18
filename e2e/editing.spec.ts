@@ -7,25 +7,29 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
   branchVariableTestId,
-  buildConfigTestIds,
   buildDialogTestIds,
+  containerTestIds,
   controlTestIds,
   pageTestIds,
   paletteTestId,
   readoutTestIds,
+  type ContainerField,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import {
   agent,
   branch,
+  bareFlow,
   flow,
   fork,
   gate,
+  inOneSession,
   loop,
   onMainFlow,
   output,
   thenWire,
   trigger,
+  withSession,
 } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -105,8 +109,21 @@ const reviewShot = async (window: Page, name: string) => {
   await test.info().attach(`${name}.png`, { path, contentType: "image/png" });
 };
 
+const sessionField = (field: ContainerField) => containerTestIds.field("session-1", field);
+
+const selectSession = async (window: Page) => {
+  await window.getByTestId(containerTestIds.frame("session-1")).click({ position: { x: 6, y: 6 } });
+  await expect(window.getByTestId(sessionField("model"))).toBeVisible();
+};
+
+const sessionOf = async (window: Page) =>
+  (await readout(window)).containers.find(({ id }) => id === "session-1");
+
 const twoScripts = () =>
-  flow([at(agent("s1"), 80, 120, "One"), at(agent("s2"), 380, 120, "Two")], [thenWire("s1", "s2")]);
+  inOneSession(
+    [at(agent("s1"), 80, 120, "One"), at(agent("s2"), 380, 120, "Two")],
+    [thenWire("s1", "s2")],
+  );
 
 const tempRepo = async () => {
   const repo: TmpRepo = await createTmpRepo({ commit: true });
@@ -140,7 +157,10 @@ test("A wire can be selected, deleted with Delete, and brought back with Undo", 
 });
 
 test("Wiring a Fork to a Gate is refused with a plain reason", async () => {
-  seedFlow(home, flow([at(fork("f1"), 80, 120, "Split"), at(gate("p1"), 300, 120, "Draft")], []));
+  seedFlow(
+    home,
+    inOneSession([at(fork("f1"), 80, 120, "Split"), at(gate("p1"), 300, 120, "Draft")], []),
+  );
   const window = await launch();
 
   await connectPorts(window, window.getByTestId("port-f1-out"), window.getByTestId("port-p1-in"));
@@ -233,6 +253,7 @@ test("A Branch takes a typed variable name, and its wires say yes and no", async
 });
 
 test("A dropped Agent shows an issue until its task is written", async () => {
+  seedFlow(home, bareFlow());
   const window = await launch();
   await window.getByTestId(paletteTestId("agent")).dragTo(window.getByTestId("canvas"), {
     targetPosition: { x: 300, y: 200 },
@@ -251,7 +272,10 @@ test("A dropped Agent shows an issue until its task is written", async () => {
 });
 
 const copyable = () =>
-  flow([at(agent("a"), 80, 120, "Plan"), at(agent("b"), 380, 120, "Test")], [thenWire("a", "b")]);
+  inOneSession(
+    [at(agent("a"), 80, 120, "Plan"), at(agent("b"), 380, 120, "Test")],
+    [thenWire("a", "b")],
+  );
 
 test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicates", async () => {
   seedFlow(home, copyable());
@@ -286,7 +310,7 @@ test("Cmd+C and Cmd+V paste a copy with new ids and its wire, and Cmd+D duplicat
 });
 
 const loopWithBody = () =>
-  flow(
+  inOneSession(
     [
       at(loop("L", { settings: { cap: 5 } }), 80, 120, "Retry"),
       at(agent("p", { parent: "L" }), 100, 200, "Fix"),
@@ -382,7 +406,7 @@ test("A node is renamed in place by double-click or Enter, and Escape keeps the 
 test("An Agent's files are set in the inspector, the wire stays a Then wire, and Undo takes them back", async () => {
   seedFlow(
     home,
-    flow(
+    inOneSession(
       [at(agent("plan"), 80, 160, "Planner"), at(agent("build"), 420, 160, "Builder")],
       [thenWire("plan", "build")],
     ),
@@ -441,33 +465,39 @@ test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", asyn
 test("A new blueprint with one Agent asks for its repository at Build, then runs", async () => {
   const repo = await tempRepo();
   const window = await launch();
+  const startOut = await boxOf(window.getByTestId("port-trigger-2-out"));
+  const stopIn = await boxOf(window.getByTestId("port-output-2-in"));
+  await window.mouse.click((startOut.x + stopIn.x) / 2, startOut.y + startOut.height / 2);
+  await window.keyboard.press("Delete");
+  await expect
+    .poll(async () => (await readout(window)).wires.map(({ from }) => from.node))
+    .toEqual(["trigger-1"]);
+  const canvas = await boxOf(window.getByTestId("canvas"));
+  const session = await boxOf(window.getByTestId(containerTestIds.frame("session-1")));
   await window.getByTestId(paletteTestId("agent")).dragTo(window.getByTestId("canvas"), {
-    targetPosition: { x: 300, y: 200 },
+    targetPosition: {
+      x: session.x - canvas.x + session.width / 2,
+      y: session.y - canvas.y + session.height / 2,
+    },
   });
-  await window.getByTestId(paletteTestId("trigger")).dragTo(window.getByTestId("canvas"), {
-    targetPosition: { x: 60, y: 200 },
-  });
-  await window.getByTestId(paletteTestId("output")).dragTo(window.getByTestId("canvas"), {
-    targetPosition: { x: 560, y: 200 },
-  });
+  await expect
+    .poll(
+      async () => (await readout(window)).containers.find(({ id }) => id === "session-1")?.nodes,
+    )
+    .toEqual(["trigger-2", "output-2", "agent-1"]);
   await connectPorts(
     window,
-    window.getByTestId("port-trigger-1-out"),
+    window.getByTestId("port-trigger-2-out"),
     window.getByTestId("port-agent-1-in"),
   );
   await connectPorts(
     window,
     window.getByTestId("port-agent-1-out"),
-    window.getByTestId("port-output-1-in"),
+    window.getByTestId("port-output-2-in"),
   );
   await window.getByTestId("node-agent-1").click();
   await window.getByTestId("node-setting-instructions").fill("Print the working folder.");
   await window.getByTestId("node-setting-instructions").blur();
-  await window.getByTestId("node-output-1").click();
-  await window.getByTestId("node-setting-name").fill("result");
-  await window.getByTestId("node-setting-name").blur();
-  await window.getByTestId("node-setting-type").fill("text");
-  await window.getByTestId("node-setting-type").blur();
 
   await window.getByTestId(controlTestIds.build).click();
 
@@ -475,10 +505,11 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
   await window.getByTestId(buildDialogTestIds.name).fill("pwd");
   await expect(window.getByTestId(buildDialogTestIds.confirm)).toBeDisabled();
   await window.getByTestId(buildDialogTestIds.cancel).click();
-  await window.getByTestId(controlTestIds.sessionChip).click();
-  await expect(window.getByTestId("session-settings")).toBeVisible();
-  await window.getByTestId(buildConfigTestIds.repo).fill(repo.path);
-  await window.getByTestId(buildConfigTestIds.repo).press("Enter");
+  await selectSession(window);
+  await window.getByTestId(sessionField("repo")).fill(repo.path);
+  await window.getByTestId(sessionField("repo")).press("Enter");
+  await expect(window.getByTestId(sessionField("branch"))).toBeEnabled();
+  await window.getByTestId(sessionField("branch")).selectOption("main");
 
   const buildId = await buildAndRun(window, home, "pwd");
   const runId = await runIdOf(home, buildId);
@@ -496,8 +527,8 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
     expect(db.prepare("SELECT node_id, finished_at FROM run_nodes ORDER BY node_id").all()).toEqual(
       [
         { node_id: "agent-1", finished_at: expect.any(String) },
-        { node_id: "output-1", finished_at: expect.any(String) },
-        { node_id: "trigger-1", finished_at: expect.any(String) },
+        { node_id: "output-2", finished_at: expect.any(String) },
+        { node_id: "trigger-2", finished_at: expect.any(String) },
       ],
     );
     const [session] = db.prepare("SELECT cwd FROM run_sessions").all() as { cwd: string }[];
@@ -509,20 +540,24 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
   }
 });
 
-test("The gear picks the model, permission mode and the repository's base branch", async () => {
+test("The session frame picks the model and the repository's base branch, and the gear the permission mode", async () => {
   const repo = await tempRepo();
   await git(repo.path, "branch", "dev");
   seedFlow(home, flow([at(agent("s1"), 80, 120)], []), repo.path);
   const window = await launch("dark");
 
-  await window.getByTestId(controlTestIds.sessionChip).click();
-  await expect(window.getByTestId("session-settings")).toBeVisible();
-  await expect(window.getByTestId("session-name")).toHaveValue("main");
-  const basePick = window.getByTestId(buildConfigTestIds.base);
+  await selectSession(window);
+  await expect(window.getByTestId(sessionField("name"))).toHaveValue("main");
+  const basePick = window.getByTestId(sessionField("branch"));
   await expect(basePick.locator("option")).toHaveText(["dev", "main"]);
-  await expect(window.getByTestId("session-model").locator("option").first()).toHaveText(
+  await expect(window.getByTestId(sessionField("model")).locator("option").first()).toHaveText(
     "Sonnet (latest)",
   );
+  await basePick.selectOption("dev");
+  await window.getByTestId(sessionField("model")).selectOption("haiku");
+
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(window.getByTestId(controlTestIds.blueprintSettings)).toBeVisible();
   await expect(window.getByTestId("settings-permission-mode").locator("option")).toHaveText([
     "Ask before risky actions",
     "Accept file edits without asking",
@@ -530,25 +565,28 @@ test("The gear picks the model, permission mode and the repository's base branch
     "Never ask (skip all checks)",
   ]);
   await reviewShot(window, "gear");
-
-  await basePick.selectOption("dev");
-  await window.getByTestId("session-model").selectOption("haiku");
   await window.getByTestId("settings-permission-mode").selectOption("acceptEdits");
   await expect
     .poll(async () => readout(window))
     .toMatchObject({
-      session: { model: "haiku", buildConfig: { repo: repo.path, base: "dev" } },
+      containers: expect.arrayContaining([
+        expect.objectContaining({
+          id: "session-1",
+          model: "haiku",
+          repo: repo.path,
+          branch: "dev",
+        }),
+      ]),
       settings: { permissionMode: "acceptEdits" },
     });
-  await expect(window.getByTestId("session-chip")).toContainText("Haiku (latest)");
 });
 
 test("A blueprint made with New blueprint never asks for permission, and the gear says so", async () => {
   const window = await launch();
   await expect(window.getByTestId(controlTestIds.title)).toHaveValue("Untitled");
 
-  await window.getByTestId(controlTestIds.sessionChip).click();
-  await expect(window.getByTestId("session-settings")).toBeVisible();
+  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(window.getByTestId(controlTestIds.blueprintSettings)).toBeVisible();
 
   await expect(window.getByTestId("settings-permission-mode").locator("option:checked")).toHaveText(
     "Never ask (skip all checks)",
@@ -600,10 +638,7 @@ test("A run that wrote a file leaves it in its build's worktree, not the repo, a
 const worktreeNote =
   "Every build makes its own git worktree from this branch. Flowdeck never works in the repository's own checkout.";
 
-const withoutRepo = (drawn: Flow): Flow => ({
-  ...drawn,
-  session: { ...drawn.session, buildConfig: {} },
-});
+const withoutRepo = (drawn: Flow): Flow => withSession(drawn, { repo: "", branch: "" });
 
 const plainFolder = async () => {
   const path = await realpath(await mkdtemp(join(tmpdir(), "fd-plain-")));
@@ -633,14 +668,14 @@ test("Start from branch lists the repository's branches once one is set, and say
   const plain = await plainFolder();
   seedFlow(home, withoutRepo(flow([at(agent("s1"), 80, 120)], [])));
   const window = await launch();
-  await window.getByTestId(controlTestIds.sessionChip).click();
-  await expect(window.getByTestId("session-settings")).toBeVisible();
-  const repoField = window.getByTestId(buildConfigTestIds.repo);
-  const basePick = window.getByTestId(buildConfigTestIds.base);
+  await selectSession(window);
+  const repoField = window.getByTestId(sessionField("repo"));
+  const basePick = window.getByTestId(sessionField("branch"));
+  const branchesError = window.getByTestId(`${sessionField("branch")}-error`);
 
   await expect(basePick).toBeDisabled();
   await expect(basePick.locator("option")).toHaveText(["Choose a repository first"]);
-  await expect(window.getByTestId(buildConfigTestIds.branchesError)).toHaveCount(0);
+  await expect(branchesError).toHaveCount(0);
 
   await repoField.fill(repo.path);
   await repoField.press("Enter");
@@ -648,26 +683,22 @@ test("Start from branch lists the repository's branches once one is set, and say
   await expect(basePick.locator("option")).toHaveText(["Choose…", "dev", "main"]);
   await basePick.selectOption("dev");
   await expect
-    .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: repo.path, base: "dev" });
+    .poll(async () => sessionOf(window))
+    .toMatchObject({ repo: repo.path, branch: "dev" });
   await window.getByTestId(controlTestIds.sessionSettings).click();
-  await expect(window.getByTestId("session-settings")).toHaveCount(0);
-  await window.getByTestId(controlTestIds.sessionSettings).click();
+  await expect(basePick).toHaveCount(0);
+  await selectSession(window);
   await expect(basePick).toHaveValue("dev");
 
   await repoField.fill(plain);
   await repoField.press("Enter");
-  await expect(window.getByTestId(buildConfigTestIds.branchesError)).toHaveText(
-    `${plain} is not a git repository`,
-  );
+  await expect(branchesError).toHaveText(`${plain} is not a git repository`);
   await expect(basePick).toBeDisabled();
   await expect(basePick.locator("option")).toHaveText(["No branches"]);
-  await expect
-    .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: plain });
-  await expect(window.locator("input[data-testid*='base']")).toHaveCount(0);
+  await expect.poll(async () => sessionOf(window)).toMatchObject({ repo: plain, branch: "" });
+  await expect(window.locator("input[data-testid*='branch']")).toHaveCount(0);
 
-  const info = window.getByTestId(buildConfigTestIds.baseInfo);
+  const info = window.getByTestId(`${sessionField("branch")}-info`);
   await expect(info).toHaveAttribute("title", worktreeNote);
   await expect(window.getByRole("img", { name: worktreeNote })).toBeVisible();
 });
@@ -677,10 +708,10 @@ test("Browse fills Repository from the folder picker and loads its branches; can
   await git(repo.path, "branch", "dev");
   seedFlow(home, withoutRepo(flow([at(agent("s1"), 80, 120)], [])));
   const window = await launch();
-  await window.getByTestId(controlTestIds.sessionChip).click();
-  const repoField = window.getByTestId(buildConfigTestIds.repo);
-  const basePick = window.getByTestId(buildConfigTestIds.base);
-  const browse = window.getByTestId(buildConfigTestIds.repoBrowse);
+  await selectSession(window);
+  const repoField = window.getByTestId(sessionField("repo"));
+  const basePick = window.getByTestId(sessionField("branch"));
+  const browse = window.getByTestId(`${sessionField("repo")}-browse`);
   await expect(browse).toHaveAccessibleName("Browse for a folder");
 
   await stubFolderPicker(null);
@@ -688,14 +719,12 @@ test("Browse fills Repository from the folder picker and loads its branches; can
   await expect.poll(folderPicks).toEqual([{ properties: ["openDirectory"] }]);
   await expect(repoField).toHaveValue("");
   await expect(basePick).toBeDisabled();
-  expect((await readout(window)).session.buildConfig).toEqual({});
+  expect(await sessionOf(window)).toMatchObject({ repo: "", branch: "" });
 
   await stubFolderPicker(repo.path);
   await browse.click();
   await expect(repoField).toHaveValue(repo.path);
   await expect(basePick).toBeEnabled();
   await expect(basePick.locator("option")).toHaveText(["Choose…", "dev", "main"]);
-  await expect
-    .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: repo.path });
+  await expect.poll(async () => sessionOf(window)).toMatchObject({ repo: repo.path, branch: "" });
 });

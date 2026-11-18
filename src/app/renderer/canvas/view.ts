@@ -6,6 +6,7 @@ import {
   bodyFrameBounds,
   boundsOf,
   containerMoves,
+  flowContainerBounds,
   followed,
   nodeSub,
   withPositions,
@@ -27,6 +28,7 @@ export interface ViewNode {
   selectable?: boolean;
   draggable?: boolean;
   deletable?: boolean;
+  zIndex?: number;
   data: {
     label?: string;
     highlighted?: boolean;
@@ -34,6 +36,7 @@ export interface ViewNode {
     name?: string;
     loopId?: string;
     forEachId?: string;
+    containerId?: string;
     text?: string;
     ignored?: boolean;
   };
@@ -139,6 +142,25 @@ const toForEachFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =
       }),
     );
 
+const behindSelectedNodes = -1000;
+
+const toFlowContainerFrameViewNodes = (flow: Flow, selection: readonly string[]): ViewNode[] =>
+  flow.containers
+    .filter((container) => container.nodes.length > 0)
+    .map((container) => ({
+      ...frameView(
+        `container-frame-${container.id}`,
+        "container-frame",
+        flowContainerBounds(flow, container.id),
+        {
+          containerId: container.id,
+          label: container.kind === "workspace" ? "Workspace" : container.name,
+        },
+      ),
+      selected: selection.includes(container.id),
+      zIndex: behindSelectedNodes,
+    }));
+
 const placed = (flow: Flow, node: Node, position: Position) => {
   if (!isBar(node)) return { position };
   const bar = barBounds(flow, node, position.x);
@@ -178,6 +200,7 @@ export const toViewNodes = (
   const framing = withPositions(flow, containerMoves(flow, dragPositions));
   const isIgnored = ignoredIn(flow);
   return [
+    ...toFlowContainerFrameViewNodes(framing, selection),
     ...toLoopFrameViewNodes(framing, isIgnored),
     ...toForEachFrameViewNodes(framing, isIgnored),
     ...(flow.notes ?? []).map((note) =>

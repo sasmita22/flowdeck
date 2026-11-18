@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -7,13 +7,22 @@ const renderer = fileURLToPath(new URL("../../../../src/app/renderer/", import.m
 const fieldsDir = resolve(renderer, "fields");
 
 const sites = [
-  ["Blueprint settings", "inspector/session-settings.tsx"],
+  ["Container settings", "inspector/container-settings.tsx"],
   ["the Build dialog", "build-dialog.tsx"],
 ] as const;
 
 const sharedFields = ["RepoField", "BranchField", "ModelField"];
 
-const sourceOf = (file: string) => readFileSync(resolve(renderer, file), "utf8");
+const sourceOf = (file: string) => {
+  const path = resolve(renderer, file);
+  return existsSync(path) ? readFileSync(path, "utf8") : "";
+};
+
+const blueprintSettingsFiles = () =>
+  readdirSync(resolve(renderer, "inspector"))
+    .filter((file) => file.endsWith(".tsx"))
+    .map((file) => `inspector/${file}`)
+    .filter((file) => /\bsettingsFields\(/.test(sourceOf(file)));
 
 const fieldsImportedFromSharedModule = (file: string) =>
   [...sourceOf(file).matchAll(/import\s*\{(?<names>[^}]*)\}\s*from\s*"(?<from>[^"]+)"/g)]
@@ -62,9 +71,11 @@ describe("same setting, same field", () => {
   );
 
   it("Blueprint settings draws the build model with the same model field as the Build dialog, under its own test id", () => {
-    const settings = sourceOf("inspector/session-settings.tsx");
+    const files = blueprintSettingsFiles();
+    expect(files).toHaveLength(1);
+    const settings = sourceOf(files[0] ?? "");
 
-    expect(settings.match(/<ModelField\b/g)).toHaveLength(2);
+    expect(settings).toMatch(/<ModelField\b/);
     expect(settings).not.toMatch(/controlTestIds\.buildModel|"build-model"/);
     expect(sourceOf("build-dialog.tsx")).toMatch(
       /<ModelField\b[^>]*testId=\{controlTestIds\.buildModel\}/,

@@ -1,8 +1,15 @@
 import { useId } from "react";
 import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeLook } from "./look.js";
-import { barPreview, framePreview, previewOf, previewViewBox, type Preview } from "./outlines.js";
-import { Extras, TagChip } from "./shape.js";
+import {
+  barPreview,
+  frameLook,
+  framePreview,
+  previewOf,
+  previewViewBox,
+  type Preview,
+} from "./outlines.js";
+import { Extras, TagChip, tagTextStyle } from "./shape.js";
 
 type Of<Kind extends Preview["kind"]> = Extract<Preview, { kind: Kind }>;
 
@@ -141,6 +148,48 @@ export function NodePreview({ type }: { type: NodeType | "note" }) {
   return (
     <svg viewBox={previewViewBox(type)} aria-hidden="true" className="fd-preview">
       <PreviewBody preview={previewOf(type)} />
+    </svg>
+  );
+}
+
+const containerTags = { workspace: "WORKSPACE", session: "SESSION" } as const;
+
+export function ContainerPreview({ kind }: { kind: keyof typeof containerTags }) {
+  const { width, height } = framePreview;
+  const { rx, fillOpacity, strokeOpacity, strokeWidth } = frameLook;
+  const tag = containerTags[kind];
+  const pad = 4;
+  const row = 38;
+  return (
+    <svg
+      viewBox={`${-pad} ${-pad} ${width + 2 * pad} ${height + 2 * pad}`}
+      aria-hidden="true"
+      className="fd-preview"
+    >
+      <rect
+        width={width}
+        height={height}
+        rx={rx}
+        fill="var(--c-io)"
+        fillOpacity={fillOpacity}
+        stroke="var(--c-io)"
+        strokeOpacity={strokeOpacity}
+        strokeWidth={strokeWidth}
+      />
+      <TagChip x={10} tag={tag} fill="var(--c-io)" />
+      <text x={15} y={19} fill="var(--c-io)" style={tagTextStyle}>
+        {tag}
+      </text>
+      <path d={`M36,${row} H${width - 36}`} fill="none" stroke="var(--muted)" strokeWidth={1.4} />
+      <circle cx={26} cy={row} r={8} fill="var(--panel)" stroke="var(--c-io)" strokeWidth={1.4} />
+      <circle
+        cx={width - 26}
+        cy={row}
+        r={8}
+        fill="var(--panel)"
+        stroke="var(--c-io)"
+        strokeWidth={3}
+      />
     </svg>
   );
 }

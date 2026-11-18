@@ -10,9 +10,12 @@ import {
   selectCanvasEmpty,
   selectDirty,
   selectFieldIssues,
+  selectFlowContainerIssues,
   selectNodeIssues,
   selectSelectedNode,
 } from "../../../../src/app/renderer/canvas/store.js";
+import { flowProblems } from "../../../../src/core/compiler/flow-problems.js";
+import { flowsEqual } from "../../../../src/core/flow/equal.js";
 import { nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
@@ -25,16 +28,11 @@ vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) 
   return { ...actual, tidyMoves: vi.fn(actual.tidyMoves) };
 });
 import { defaultPermissionMode, modelChoices } from "../../../../src/core/flow/choices.js";
-import {
-  NodeType,
-  parseFlow,
-  type Flow,
-  type Node,
-  type Session,
-} from "../../../../src/core/flow/schema.js";
+import { NodeType, parseFlow, type Flow, type Node } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
+  flowSettings,
   forEach,
   fork,
   hardstop,
@@ -42,13 +40,29 @@ import {
   loop,
   onMainFlow,
   output,
+  sessionContainer,
   thenWire,
   trigger,
+  workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
 
-const unfinished = new Set(["required-settings", "repo-required", "one-start", "stop-required"]);
+const unfinished = new Set([
+  "required-settings",
+  "session-settings",
+  "outside-container",
+  "one-start",
+  "stop-required",
+]);
 
 type Store = ReturnType<typeof createCanvasStore>;
+
+const emptyFlow = (): Flow => ({ ...newCanvasFlow(), nodes: [], wires: [], containers: [] });
+
+const emptyCanvas = () => {
+  const store = createCanvasStore();
+  store.getState().load(emptyFlow());
+  return store;
+};
 
 const nodeIdRule = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
@@ -86,7 +100,7 @@ const dropFour = (store: Store) => {
 };
 
 const buildAt3 = () => {
-  const store = createCanvasStore();
+  const store = emptyCanvas();
   const { a, b, c, d } = dropFour(store);
   for (const [from, to] of [
     [a, b],
@@ -100,11 +114,10 @@ const buildAt3 = () => {
 };
 
 describe("createCanvasStore", () => {
-  it("starts with an empty flow, no selection and empty stacks", () => {
+  it("starts with a new blueprint's flow, no selection and empty stacks", () => {
     const state = createCanvasStore().getState();
 
     expect(state.flow).toEqual(newCanvasFlow());
-    expect(state.flow.nodes).toEqual([]);
     expect(state.selection).toEqual([]);
     expect(state.undoStack).toEqual([]);
     expect(state.redoStack).toEqual([]);
@@ -123,7 +136,7 @@ describe("createCanvasStore", () => {
 
 describe("drop", () => {
   it("adds one Agent at the drop position with core defaults, selected alone", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     act(store, (s) => s.drop("agent", { x: 120, y: 80 }));
 
@@ -143,7 +156,7 @@ describe("drop", () => {
   });
 
   it("adds one Gate at the drop position with core defaults, selected alone", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     act(store, (s) => s.drop("gate", { x: 40, y: 300 }));
 
@@ -161,7 +174,7 @@ describe("drop", () => {
   });
 
   it("replaces the selection with the node dropped second", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("agent", { x: 50, y: 50 }));
@@ -173,7 +186,7 @@ describe("drop", () => {
 
 describe("connect", () => {
   const twoNodes = () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
     return store;
@@ -190,7 +203,7 @@ describe("connect", () => {
   });
 
   it("wires Start to a Stop freshly dropped with its empty output", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("trigger", { x: 0, y: 0 }));
     act(store, (s) => s.drop("output", { x: 200, y: 0 }));
     const [start, stop] = store.getState().flow.nodes;
@@ -306,6 +319,8 @@ const guarded = () => {
       flow(
         [trigger("T"), agent("P"), hardstop("H"), output("O")],
         [thenWire("T", "P"), thenWire("P", "H"), thenWire("H", "O")],
+        flowSettings,
+        { containers: [sessionContainer(["T", "P", "H", "O"])] },
       ),
     );
   return store;
@@ -316,7 +331,7 @@ const refuseSelfLoop = (s: ReturnType<Store["getState"]>) =>
 
 describe("deleting a hard stop", () => {
   it("starts with no message", () => {
-    expect(createCanvasStore().getState().message).toBeNull();
+    expect(emptyCanvas().getState().message).toBeNull();
   });
 
   it("deletes a hard stop by id with its wires, as one undoable step and no message", () => {
@@ -370,7 +385,7 @@ describe("deleting a hard stop", () => {
 
 describe("node menu", () => {
   it("starts closed", () => {
-    expect(createCanvasStore().getState().menu).toBeNull();
+    expect(emptyCanvas().getState().menu).toBeNull();
   });
 
   it("opens on a node at a point and closes again", () => {
@@ -426,7 +441,7 @@ describe("node menu", () => {
 
 describe("move", () => {
   it("keeps live drag positions out of the flow and records one move on drag end", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const before = store.getState().flow;
 
@@ -447,7 +462,7 @@ describe("move", () => {
   });
 
   it("records one move for nodes dragged together and leaves undragged ids alone", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("gate", { x: 0, y: 100 }));
     act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
@@ -470,7 +485,7 @@ describe("move", () => {
   });
 
   it("records nothing when the drag ends where it started", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 10, y: 10 }));
 
     act(store, (s) => s.endDrag(["agent-1"]));
@@ -484,7 +499,7 @@ describe("move", () => {
 
 describe("undo and redo", () => {
   it("redo puts the same command back and replays it with the same ids", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const command = store.getState().undoStack.at(-1);
     const after = store.getState().flow;
@@ -503,7 +518,7 @@ describe("undo and redo", () => {
   });
 
   it("undoes several commands newest first and redoes them oldest first", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const flows = [store.getState().flow];
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     flows.push(store.getState().flow);
@@ -534,7 +549,7 @@ describe("undo and redo", () => {
   });
 
   it("clears the redo stack when a new command runs after an undo", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.undo());
 
@@ -544,7 +559,7 @@ describe("undo and redo", () => {
   });
 
   it("leaves the state untouched when there is nothing to undo or redo", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const before = store.getState();
 
     act(store, (s) => s.undo());
@@ -555,7 +570,7 @@ describe("undo and redo", () => {
   });
 
   it("drops ids from the selection that an undo removes", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
     act(store, (s) => s.select(["agent-1", "agent-2"]));
@@ -566,7 +581,7 @@ describe("undo and redo", () => {
   });
 
   it("drops ids from the selection that a redo removes", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
     act(store, (s) => s.deleteNodes(["agent-2"]));
@@ -583,6 +598,7 @@ describe("node ids", () => {
   it("drops with the injected id source", () => {
     const nextId = vi.fn((type: NodeType) => `${type}-custom`);
     const store = createCanvasStore({ nextId });
+    store.getState().load(emptyFlow());
     const empty = store.getState().flow;
 
     act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
@@ -607,7 +623,7 @@ describe("node ids", () => {
   });
 
   it("generates ids the node-ids rule accepts", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     dropFour(store);
 
     for (const node of store.getState().flow.nodes) expect(node.id).toMatch(nodeIdRule);
@@ -621,6 +637,8 @@ const savedFlow = () =>
       { ...agent("gate-1"), position: { x: 300, y: 20 } },
     ],
     [thenWire("agent-1", "gate-1")],
+    flowSettings,
+    { containers: [sessionContainer(["agent-1", "gate-1"])] },
   );
 
 describe("edit gate", () => {
@@ -634,7 +652,7 @@ describe("edit gate", () => {
     ["deleteNodes", (s) => s.deleteNodes(["agent-1"])],
     ["dragTo", (s) => s.dragTo("agent-1", { x: 50, y: 50 })],
     ["endDrag", (s) => s.endDrag(["agent-1"])],
-    ["updateSession", (s) => s.updateSession({ ...s.flow.session, model: "haiku" })],
+    ["updateFlowContainer", (s) => s.updateFlowContainer("session-1", { model: "haiku" })],
     [
       "updateNode",
       (s) =>
@@ -647,7 +665,7 @@ describe("edit gate", () => {
   ];
 
   const seededNotReady = () => {
-    const source = createCanvasStore();
+    const source = emptyCanvas();
     act(source, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(source, (s) => s.drop("gate", { x: 200, y: 0 }));
     act(source, (s) => s.drop("agent", { x: 400, y: 0 }));
@@ -720,7 +738,7 @@ describe("load", () => {
   });
 
   it("clears undo, redo, selection and drag positions", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     act(store, (s) => s.drop("agent", { x: 100, y: 0 }));
     act(store, (s) => s.undo());
@@ -794,7 +812,7 @@ describe("selectDirty", () => {
 
 describe("markSaved", () => {
   it("sets the saved flow, so the current flow reads clean", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const snapshot = store.getState().flow;
     expect(selectDirty(store.getState())).toBe(true);
@@ -806,7 +824,7 @@ describe("markSaved", () => {
   });
 
   it("stays dirty when an edit happened after the snapshot was taken", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("agent", { x: 0, y: 0 }));
     const snapshot = store.getState().flow;
     act(store, (s) => s.drop("gate", { x: 200, y: 0 }));
@@ -818,37 +836,9 @@ describe("markSaved", () => {
   });
 });
 
-describe("updateSession", () => {
-  const edited: Session = {
-    name: "main",
-    buildConfig: { repo: "/tmp/x" },
-    model: "haiku",
-  };
-
-  it("replaces the session as an undoable edit that makes the canvas dirty", () => {
-    const store = createCanvasStore();
-    const start = store.getState().flow.session;
-
-    act(store, (s) => s.updateSession(edited));
-
-    expect(store.getState().flow.session).toEqual(edited);
-    expect(store.getState().undoStack).toHaveLength(1);
-    expect(selectDirty(store.getState())).toBe(true);
-
-    act(store, (s) => s.undo());
-
-    expect(store.getState().flow.session).toEqual(start);
-    expect(selectDirty(store.getState())).toBe(false);
-
-    act(store, (s) => s.redo());
-
-    expect(store.getState().flow.session).toEqual(edited);
-  });
-});
-
 describe("updateSettings", () => {
   it("changes the permission mode as an undoable edit", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const start = store.getState().flow.settings;
     const edited = { ...start, permissionMode: "acceptEdits" };
 
@@ -865,21 +855,52 @@ describe("updateSettings", () => {
 });
 
 describe("newCanvasFlow", () => {
-  it("names no repository yet, and has no frame", () => {
-    const { session } = newCanvasFlow();
+  const containerOf = (current: Flow, id: string) =>
+    current.containers.find((container) => container.id === id);
 
-    expect(session.buildConfig).toEqual({});
-    expect(Object.hasOwn(session, "frame")).toBe(false);
+  const typesOf = (current: Flow, ids: readonly string[]) =>
+    ids.map((id) => current.nodes.find((node) => node.id === id)?.type);
+
+  it("seeds a workspace and a session container on sonnet, the session unnamed to a repository", () => {
+    const { containers } = newCanvasFlow();
+
+    expect(containers.map(({ id, kind }) => [id, kind])).toEqual([
+      ["workspace-1", "workspace"],
+      ["session-1", "session"],
+    ]);
+    expect(containerOf(newCanvasFlow(), "workspace-1")).toMatchObject({ model: "sonnet" });
+    expect(containerOf(newCanvasFlow(), "session-1")).toMatchObject({
+      name: "session",
+      repo: "",
+      branch: "",
+      model: "sonnet",
+    });
   });
 
-  it("is refused at build for its repository, its Start and its Stop", () => {
-    expect(validate(newCanvasFlow()).map(({ rule }) => rule)).toEqual(
-      expect.arrayContaining(["repo-required", "one-start", "stop-required"]),
-    );
-    expect(validate(newCanvasFlow())).toHaveLength(3);
-    expect(validate(newCanvasFlow())).toContainEqual(
-      expect.objectContaining({ rule: "repo-required", field: "buildConfig.repo" }),
-    );
+  it.each(["workspace-1", "session-1"])("gives %s its own Start wired to its own Stop", (id) => {
+    const current = newCanvasFlow();
+    const members = containerOf(current, id)?.nodes ?? [];
+
+    expect(typesOf(current, members)).toEqual(["trigger", "output"]);
+    const [start, stop] = members;
+    expect(current.wires).toContainEqual({
+      kind: "then",
+      from: { node: start, port: "out" },
+      to: { node: stop, port: "in" },
+    });
+  });
+
+  it("reports only the session's empty repository and branch", () => {
+    expect(
+      flowProblems(newCanvasFlow()).map(({ rule, container, field }) => ({
+        rule,
+        container,
+        field,
+      })),
+    ).toEqual([
+      { rule: "session-settings", container: "session-1", field: "repo" },
+      { rule: "session-settings", container: "session-1", field: "branch" },
+    ]);
   });
 
   it("starts with default settings: a build model to pick from, and never asking for permission", () => {
@@ -902,85 +923,6 @@ describe("newCanvasFlow", () => {
   });
 });
 
-describe("the Build configuration", () => {
-  const configOf = (store: Store) => store.getState().flow.session.buildConfig;
-
-  const undoable = (store: Store, edit: (state: ReturnType<Store["getState"]>) => void) => {
-    const before = configOf(store);
-    act(store, edit);
-    const after = configOf(store);
-    expect(after).not.toEqual(before);
-    expect(store.getState().undoStack).toHaveLength(1);
-    expect(selectDirty(store.getState())).toBe(true);
-    act(store, (s) => s.undo());
-    expect(configOf(store)).toEqual(before);
-    act(store, (s) => s.redo());
-    expect(configOf(store)).toEqual(after);
-    return after;
-  };
-
-  it("sets the repository as one undoable edit", () => {
-    expect(undoable(createCanvasStore(), (s) => s.setRepo("/code/shop"))).toEqual({
-      repo: "/code/shop",
-    });
-  });
-
-  const withConfig = () => {
-    const store = createCanvasStore();
-    const start = newCanvasFlow();
-    store.getState().load({
-      ...start,
-      session: {
-        ...start.session,
-        buildConfig: { repo: "/a", base: "dev" },
-      },
-    });
-    return store;
-  };
-
-  it("drops the base when the repository changes", () => {
-    const store = withConfig();
-
-    expect(undoable(store, (s) => s.setRepo("/b"))).toEqual({ repo: "/b" });
-  });
-
-  it("keeps the base when the same repository is set again", () => {
-    const store = withConfig();
-
-    act(store, (s) => s.setRepo("/a"));
-
-    expect(configOf(store)).toMatchObject({ repo: "/a", base: "dev" });
-  });
-
-  it("sets the base branch as one undoable edit, and an empty base leaves it to the repository", () => {
-    const store = createCanvasStore();
-
-    expect(undoable(store, (s) => s.setBase("dev"))).toEqual({ base: "dev" });
-
-    act(store, (s) => s.setBase(""));
-    expect(configOf(store)).toEqual({});
-  });
-
-  it("changes only the base branch, keeping the repository", () => {
-    const store = withConfig();
-
-    expect(undoable(store, (s) => s.setBase("main"))).toEqual({ repo: "/a", base: "main" });
-  });
-
-  it("clears the base branch, keeping the repository", () => {
-    const store = withConfig();
-
-    expect(undoable(store, (s) => s.setBase(""))).toEqual({ repo: "/a" });
-  });
-
-  it.each(["addVariable", "updateVariable", "removeVariable", "variableCommand"])(
-    "has no %s command, since variables are found, not declared",
-    (command) => {
-      expect(createCanvasStore().getState()).not.toHaveProperty(command);
-    },
-  );
-});
-
 describe("highlight", () => {
   const loadedStore = () => {
     const store = createCanvasStore({ ready: false });
@@ -989,7 +931,7 @@ describe("highlight", () => {
   };
 
   it("starts with nothing highlighted", () => {
-    expect(createCanvasStore().getState().highlighted).toBeNull();
+    expect(emptyCanvas().getState().highlighted).toBeNull();
   });
 
   it("highlights a node without selecting it, recording a command or making the canvas dirty", () => {
@@ -1029,7 +971,7 @@ describe("every node type", () => {
   });
 
   it.each(everyType)("drops %s with its core defaults", (type) => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     store.getState().drop(type, { x: 40, y: 40 });
 
@@ -1049,7 +991,7 @@ describe("every node type", () => {
 
 describe("connect beside an invalid node", () => {
   const withLoneFork = () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().drop("agent", { x: 0, y: 0 });
     store.getState().drop("gate", { x: 300, y: 0 });
     store.getState().drop("fork", { x: 0, y: 300 });
@@ -1075,7 +1017,7 @@ describe("connect beside an invalid node", () => {
   it.each(["gate", "branch"] as const)(
     "connects Start to a freshly dropped %s that is not filled in yet",
     (type) => {
-      const store = createCanvasStore();
+      const store = emptyCanvas();
       store.getState().drop("trigger", { x: 0, y: 0 });
       store.getState().drop("output", { x: 400, y: 0 });
       store.getState().connect(end("trigger-1", "out"), end("output-1", "in"));
@@ -1087,7 +1029,7 @@ describe("connect beside an invalid node", () => {
   );
 
   it("wires a parallel section one wire at a time into a valid flow", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().drop("fork", { x: 0, y: 0 });
     store.getState().drop("agent", { x: 200, y: 0 });
     store.getState().drop("agent", { x: 200, y: 200 });
@@ -1104,7 +1046,7 @@ describe("connect beside an invalid node", () => {
 
 describe("selectCanvasEmpty", () => {
   it("is true for a new store and false after one drop", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     expect(selectCanvasEmpty(store.getState())).toBe(true);
 
     store.getState().drop("agent", { x: 0, y: 0 });
@@ -1113,7 +1055,7 @@ describe("selectCanvasEmpty", () => {
   });
 
   it("is false when the canvas holds only a note", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     store.getState().drop("note", { x: 0, y: 0 });
 
@@ -1129,7 +1071,7 @@ const overlaps = (a: ReturnType<typeof boxOf>, b: ReturnType<typeof boxOf>) =>
 
 describe("placeNode", () => {
   it("returns the request on an empty flow", () => {
-    expect(placeNode(newCanvasFlow(), "agent", { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
+    expect(placeNode(emptyFlow(), "agent", { x: 100, y: 100 })).toEqual({ x: 100, y: 100 });
   });
 
   it("moves a request that overlaps a node to that node's right edge plus 48", () => {
@@ -1157,7 +1099,7 @@ describe("placeNode", () => {
   });
 
   it("keeps two drops at the same point from overlapping", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     store.getState().drop("agent", { x: 50, y: 50 });
     store.getState().drop("agent", { x: 50, y: 50 });
@@ -1181,7 +1123,7 @@ describe("placement beside a wide node", () => {
   const wideRight = () => 100 + nodeWidth({ type: "agent", label: long });
 
   it("adds a node right of a 60-character Agent's width", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().load(wide());
     store.getState().select(["A"]);
 
@@ -1201,7 +1143,7 @@ describe("placement beside a wide node", () => {
   });
 
   it("moves no other node when a placed Agent is renamed to 60 characters", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().load(
       flow(
         [
@@ -1224,7 +1166,7 @@ describe("placement beside a wide node", () => {
 
 describe("addNext", () => {
   it("adds right of the one selected node at its y", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().drop("agent", { x: 100, y: 100 });
 
     store.getState().addNext("gate");
@@ -1237,7 +1179,7 @@ describe("addNext", () => {
   });
 
   it("adds right of the rightmost node when nothing is selected", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().drop("agent", { x: 100, y: 100 });
     store.getState().drop("agent", { x: 500, y: 40 });
     store.getState().select([]);
@@ -1251,7 +1193,7 @@ describe("addNext", () => {
   });
 
   it("adds at (80, 80) on an empty canvas, as one undoable command", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
 
     store.getState().addNext("agent");
 
@@ -1260,7 +1202,7 @@ describe("addNext", () => {
 
     store.getState().undo();
 
-    expect(store.getState().flow).toEqual(newCanvasFlow());
+    expect(store.getState().flow).toEqual(emptyFlow());
   });
 });
 
@@ -1323,7 +1265,7 @@ describe("selectNodeIssues", () => {
 
 describe("updateNode", () => {
   it("edits a node's settings as an undoable step the canvas sees", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     const [gateNode] = store.getState().flow.nodes;
     if (gateNode?.type !== "gate") throw new Error("expected a gate");
@@ -1347,7 +1289,7 @@ describe("updateNode", () => {
   });
 
   it("records nothing when the node is unchanged or gone", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     const [gateNode] = store.getState().flow.nodes;
     if (gateNode === undefined) throw new Error("expected a gate");
@@ -1413,7 +1355,7 @@ describe("a node's shown label", () => {
   });
 
   it("names an empty-labelled Agent in a connection refusal", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().load(flow([unnamedAgent], []));
 
     expect(store.getState().connect(end("A", "out"), end("A", "in"))).toBe(false);
@@ -1422,7 +1364,7 @@ describe("a node's shown label", () => {
   });
 
   it("names an empty-labelled Loop in a paste refusal", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().load(
       flow(
         [
@@ -1453,7 +1395,7 @@ describe("agent edits", () => {
   const ids = (store: Store) => store.getState().flow.nodes.map(({ id }) => id);
 
   it("amends one undo entry per ask, and one undo reverts every edit in it", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const before = store.getState().flow;
 
     expect(agentAdds(store, "a")).toBe(true);
@@ -1469,7 +1411,7 @@ describe("agent edits", () => {
   });
 
   it("starts a new entry for the next agent edit after the group ends", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     agentAdds(store, "a");
     agentAdds(store, "b");
 
@@ -1482,7 +1424,7 @@ describe("agent edits", () => {
   });
 
   it("keeps a user edit between agent edits as its own entry, and closes the group", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     agentAdds(store, "a");
 
     act(store, (s) => s.updateNode({ ...agentNode("a"), label: "Renamed" }));
@@ -1497,7 +1439,7 @@ describe("agent edits", () => {
   });
 
   it("closes the group on undo", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     agentAdds(store, "a");
 
@@ -1510,7 +1452,7 @@ describe("agent edits", () => {
   });
 
   it("closes the group on redo", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     agentAdds(store, "a");
     store.setState({ redoStack: [addNode(agentNode("redone"))] });
 
@@ -1523,7 +1465,7 @@ describe("agent edits", () => {
   });
 
   it("closes the group on markSaved", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     agentAdds(store, "a");
 
     store.getState().markSaved(store.getState().flow);
@@ -1535,7 +1477,7 @@ describe("agent edits", () => {
   });
 
   it("closes the group on load", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     const loaded = flow([agent("p")], []);
     agentAdds(store, "a");
 
@@ -1549,7 +1491,7 @@ describe("agent edits", () => {
   });
 
   it("clears the redo stack", () => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
     act(store, (s) => s.undo());
     expect(store.getState().redoStack).toHaveLength(1);
@@ -1607,7 +1549,7 @@ describe("tidy", () => {
   };
 
   const loaded = (source: Flow) => {
-    const store = createCanvasStore();
+    const store = emptyCanvas();
     store.getState().load(source);
     return store;
   };
@@ -1767,5 +1709,398 @@ describe("tidy", () => {
       expect(store.getState().undoStack).toBe(before.undoStack);
       expect(store.getState().fitSeq).toBe(before.fitSeq);
     });
+  });
+});
+
+const placedAt = <N extends object>(node: N, x: number, y: number) => ({
+  ...node,
+  position: { x, y },
+});
+
+const containerIn = (current: Flow, id: string) =>
+  current.containers.find((container) => container.id === id);
+
+const twoSessionsOnCanvas = (): Flow =>
+  flow(
+    [
+      placedAt(trigger("w-start"), 0, 0),
+      placedAt(output("w-stop"), 600, 0),
+      placedAt(trigger("s"), 0, 400),
+      placedAt(agent("A"), 200, 400),
+      placedAt(output("t"), 600, 400),
+      placedAt(trigger("u"), 0, 800),
+      placedAt(output("v"), 600, 800),
+      placedAt(agent("X"), 2000, 2000),
+    ],
+    [thenWire("w-start", "w-stop"), thenWire("s", "A"), thenWire("A", "t"), thenWire("u", "v")],
+    flowSettings,
+    {
+      containers: [
+        workspaceContainer(["w-start", "w-stop"]),
+        sessionContainer(["s", "A", "t"]),
+        sessionContainer(["u", "v"], { id: "session-2", name: "web" }),
+      ],
+    },
+  );
+
+const loadedCanvas = (current: Flow) => {
+  const store = createCanvasStore();
+  store.getState().load(current);
+  return store;
+};
+
+describe("adding a session container (AT-5)", () => {
+  it("adds it with its Start, Stop and wire as one step; undo leaves the flow equal, redo brings it back", () => {
+    const store = createCanvasStore();
+    const before = store.getState().flow;
+
+    store.getState().drop("session", { x: 3000, y: 3000 });
+
+    const added = store.getState().flow;
+    const container = containerIn(added, "session-2");
+    expect(container).toMatchObject({ kind: "session", name: "session-2" });
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(flowsEqual(before, store.getState().flow)).toBe(true);
+
+    store.getState().redo();
+    const redone = store.getState().flow;
+    expect(containerIn(redone, "session-2")).toEqual(container);
+    const [start, stop] = container?.nodes ?? [];
+    expect([start, stop].map((id) => redone.nodes.find((node) => node.id === id)?.type)).toEqual([
+      "trigger",
+      "output",
+    ]);
+    expect(redone.wires).toContainEqual({
+      kind: "then",
+      from: { node: start, port: "out" },
+      to: { node: stop, port: "in" },
+    });
+    expect(flowsEqual(redone, added)).toBe(true);
+  });
+
+  it("adds a workspace container the same way", () => {
+    const store = loadedCanvas(flow([], [], flowSettings, { containers: [] }));
+
+    store.getState().drop("workspace", { x: 100, y: 100 });
+
+    expect(containerIn(store.getState().flow, "workspace-1")).toMatchObject({
+      kind: "workspace",
+      model: "sonnet",
+    });
+    store.getState().undo();
+    expect(store.getState().flow.containers).toEqual([]);
+    expect(store.getState().flow.nodes).toEqual([]);
+  });
+});
+
+describe("selecting a container", () => {
+  it("keeps a selected container across a command", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().select(["session-1"]);
+
+    store.getState().deleteNodes(["X"]);
+
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(store.getState().selection).toEqual(["session-1"]);
+  });
+
+  it("keeps a selected container across undo and redo", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().drop("gate", { x: 3000, y: 0 });
+    store.getState().select(["session-2"]);
+
+    store.getState().undo();
+    store.getState().redo();
+
+    expect(store.getState().selection).toEqual(["session-2"]);
+  });
+});
+
+describe("selectFlowContainerIssues", () => {
+  it("gives each field problem of the named container", () => {
+    const issues = selectFlowContainerIssues(newCanvasFlow(), "session-1");
+
+    expect(Object.keys(issues)).toEqual(["repo", "branch"]);
+    expect(Object.values(issues).every((text) => text.trim() !== "")).toBe(true);
+  });
+
+  it("gives nothing for a container with no problem", () => {
+    expect(selectFlowContainerIssues(newCanvasFlow(), "workspace-1")).toEqual({});
+  });
+
+  it("gives a missing model to the workspace only", () => {
+    const current = twoSessionsOnCanvas();
+    const noModel: Flow = {
+      ...current,
+      containers: current.containers.map((container) =>
+        container.kind === "workspace" ? { ...container, model: "" } : container,
+      ),
+    };
+
+    expect(Object.keys(selectFlowContainerIssues(noModel, "workspace-1"))).toEqual(["model"]);
+    expect(selectFlowContainerIssues(noModel, "session-1")).toEqual({});
+  });
+});
+
+describe("deleting with a container selected", () => {
+  it("deletes the container with every member and their wires, and one undo brings all back", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    const before = store.getState().flow;
+    store.getState().select(["session-1"]);
+
+    store.getState().deleteSelection();
+
+    const after = store.getState().flow;
+    expect(after.containers.map(({ id }) => id)).toEqual(["workspace-1", "session-2"]);
+    expect(after.nodes.map(({ id }) => id)).toEqual(["w-start", "w-stop", "u", "v", "X"]);
+    expect(after.wires.map(({ from, to }) => `${from.node}>${to.node}`)).toEqual([
+      "w-start>w-stop",
+      "u>v",
+    ]);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(store.getState().selection).toEqual([]);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("deletes a container whose last members are deleted, in the same undoable step", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    const before = store.getState().flow;
+    store.getState().select(["u", "v"]);
+
+    store.getState().deleteSelection();
+
+    expect(store.getState().flow.containers.map(({ id }) => id)).toEqual([
+      "workspace-1",
+      "session-1",
+    ]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("keeps the container when only its Start is deleted", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    store.getState().deleteNodes(["s"]);
+
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["A", "t"]);
+  });
+});
+
+describe("container membership on the canvas", () => {
+  const drag = (store: Store, moves: Record<string, { x: number; y: number }>) => {
+    for (const [id, position] of Object.entries(moves)) store.getState().dragTo(id, position);
+    store.getState().endDrag(Object.keys(moves));
+  };
+
+  it("adds a node dropped inside a container's frame to that container, as one undoable step", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    const before = store.getState().flow;
+
+    store.getState().drop("agent", { x: 200, y: 820 });
+
+    expect(containerIn(store.getState().flow, "session-2")?.nodes).toEqual(["u", "v", "agent-1"]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("adds a node dropped outside every frame to no container", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    store.getState().drop("agent", { x: 3000, y: 3000 });
+
+    expect(store.getState().flow.containers).toEqual(twoSessionsOnCanvas().containers);
+  });
+
+  it("takes a node dragged out of its container's frame off its members, and undo puts it back", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    const before = store.getState().flow;
+
+    drag(store, { A: { x: 3000, y: 400 } });
+
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["s", "t"]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("adds a node dragged into a frame to that container", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    drag(store, { X: { x: 200, y: 820 } });
+
+    expect(containerIn(store.getState().flow, "session-2")?.nodes).toEqual(["u", "v", "X"]);
+  });
+
+  it("moves a node dragged from one frame into another between the two containers", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    drag(store, { A: { x: 200, y: 820 } });
+
+    const after = store.getState().flow;
+    expect(containerIn(after, "session-1")?.nodes).toEqual(["s", "t"]);
+    expect(containerIn(after, "session-2")?.nodes).toEqual(["u", "v", "A"]);
+  });
+
+  it("keeps every member of a container dragged together, so its frame moves with them", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    drag(store, { u: { x: 3000, y: 3000 }, v: { x: 3600, y: 3000 } });
+
+    expect(store.getState().flow.containers).toEqual(twoSessionsOnCanvas().containers);
+  });
+
+  it("removes a container whose last member is dragged into another frame, in the same undoable step", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().deleteNodes(["u"]);
+    const before = store.getState().flow;
+
+    drag(store, { v: { x: 420, y: 420 } });
+
+    expect(store.getState().flow.containers.map(({ id }) => id)).toEqual([
+      "workspace-1",
+      "session-1",
+    ]);
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["s", "A", "t", "v"]);
+    expect(store.getState().undoStack).toHaveLength(2);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  const added = (store: Store, before: Flow) => {
+    const known = new Set(before.nodes.map(({ id }) => id));
+    return store
+      .getState()
+      .flow.nodes.filter(({ id }) => !known.has(id))
+      .map(({ id }) => id);
+  };
+
+  it("adds a duplicated member to the container under its copy, and undo takes it off again", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    const before = store.getState().flow;
+    store.getState().select(["A"]);
+
+    store.getState().duplicate();
+
+    const [copy] = added(store, before);
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["s", "A", "t", copy]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("adds a pasted node to the frame under its new centre, over its source's container", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().select(["A"]);
+    store.getState().copy();
+    drag(store, { s: { x: 0, y: 3000 }, A: { x: 200, y: 3000 }, t: { x: 600, y: 3000 } });
+    drag(store, { u: { x: 0, y: 400 }, v: { x: 600, y: 400 } });
+    const before = store.getState().flow;
+
+    store.getState().paste();
+
+    const [copy] = added(store, before);
+    expect(containerIn(store.getState().flow, "session-2")?.nodes).toEqual(["u", "v", copy]);
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["s", "A", "t"]);
+  });
+
+  it("adds a pasted node under no frame to its source's container", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().select(["A"]);
+    store.getState().copy();
+    drag(store, { s: { x: 0, y: 3000 }, A: { x: 200, y: 3000 }, t: { x: 600, y: 3000 } });
+    const before = store.getState().flow;
+
+    store.getState().paste();
+
+    const [copy] = added(store, before);
+    expect(containerIn(store.getState().flow, "session-1")?.nodes).toEqual(["s", "A", "t", copy]);
+  });
+
+  it("adds a node pasted into another blueprint under no frame to no container, even where its id is a member there", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().select(["A"]);
+    store.getState().copy();
+    const other = flow(
+      [
+        placedAt(trigger("u"), 0, 3000),
+        placedAt(agent("A"), 200, 3000),
+        placedAt(output("v"), 600, 3000),
+      ],
+      [thenWire("u", "A"), thenWire("A", "v")],
+      flowSettings,
+      { containers: [sessionContainer(["u", "A", "v"], { name: "web" })] },
+    );
+    store.getState().load(other);
+
+    store.getState().paste();
+
+    expect(store.getState().flow.nodes).toHaveLength(4);
+    expect(store.getState().flow.containers).toEqual(other.containers);
+  });
+
+  it("adds a pasted node with no container and no frame under it to no container", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().select(["X"]);
+
+    store.getState().duplicate();
+
+    expect(store.getState().flow.containers).toEqual(twoSessionsOnCanvas().containers);
+  });
+
+  it("leaves membership alone for a node moved within its frame", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    drag(store, { A: { x: 260, y: 410 } });
+
+    expect(store.getState().flow.containers).toEqual(twoSessionsOnCanvas().containers);
+  });
+});
+
+describe("updateFlowContainer", () => {
+  it("sets a session's repository as one undoable edit that makes the canvas dirty", () => {
+    const store = createCanvasStore();
+
+    store.getState().updateFlowContainer("session-1", { repo: "/code/shop" });
+
+    expect(containerIn(store.getState().flow, "session-1")).toMatchObject({ repo: "/code/shop" });
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(selectDirty(store.getState())).toBe(true);
+
+    store.getState().undo();
+    expect(containerIn(store.getState().flow, "session-1")).toMatchObject({ repo: "" });
+    expect(selectDirty(store.getState())).toBe(false);
+
+    store.getState().redo();
+    expect(containerIn(store.getState().flow, "session-1")).toMatchObject({ repo: "/code/shop" });
+  });
+
+  it("sets a session's branch, keeping its repository", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+
+    store.getState().updateFlowContainer("session-2", { branch: "dev" });
+
+    expect(containerIn(store.getState().flow, "session-2")).toMatchObject({
+      repo: "/work/repo",
+      branch: "dev",
+    });
+  });
+
+  it("sets the workspace's model", () => {
+    const store = createCanvasStore();
+
+    store.getState().updateFlowContainer("workspace-1", { model: "haiku" });
+
+    expect(containerIn(store.getState().flow, "workspace-1")).toMatchObject({ model: "haiku" });
   });
 });

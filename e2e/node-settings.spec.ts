@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   branchVariableTestId,
-  buildConfigTestIds,
+  containerTestIds,
   controlTestIds,
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
+import { bareFlow } from "../test/fixtures/flow-builders.js";
+import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
+
+const sessionRepo = containerTestIds.field("session-1", "repo");
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -232,22 +236,22 @@ test("With nothing selected the inspector shows the run, not the session setting
   await expect(window.getByTestId("node-settings")).toHaveCount(0);
   await expect(window.getByTestId("inspector-session")).toBeVisible();
   await expect(window.getByTestId("inspector-node-gate-1")).toBeVisible();
-  await expect(window.getByTestId("session-settings")).toHaveCount(0);
+  await expect(window.getByTestId(controlTestIds.blueprintSettings)).toHaveCount(0);
 });
 
-test("Session settings open from the gear and never mix with a node's settings", async () => {
+test("Blueprint settings open from the gear and never mix with a node's or a container's settings", async () => {
   const target = await launch();
   const { window } = target;
   const gear = window.getByTestId(controlTestIds.sessionSettings);
-  const sessionFields = window.getByTestId("session-settings");
+  const blueprintFields = window.getByTestId(controlTestIds.blueprintSettings);
   await drop(window, "gate", 200);
   await expect(window.getByTestId("inspector")).toHaveCount(0);
 
   await window.getByTestId("node-gate-1").click();
   await expect(window.getByTestId("node-setting-shown")).toBeVisible();
-  await expect(sessionFields).toHaveCount(0);
-  await expect(window.getByTestId(buildConfigTestIds.repo)).toHaveCount(0);
-  await expect(window.getByTestId("session-model")).toHaveCount(0);
+  await expect(blueprintFields).toHaveCount(0);
+  await expect(window.getByTestId(sessionRepo)).toHaveCount(0);
+  await expect(window.getByTestId("settings-build-model")).toHaveCount(0);
   await expect(gear).toHaveAttribute("aria-pressed", "false");
   await showAt1280(target);
   await reviewShot(window, test.info(), "gate-selected");
@@ -255,46 +259,48 @@ test("Session settings open from the gear and never mix with a node's settings",
   await gear.click();
   await expect(gear).toHaveAttribute("aria-pressed", "true");
   await expect(window.getByTestId("node-settings")).toHaveCount(0);
-  await expect(sessionFields).toBeVisible();
-  await expect(window.getByTestId(buildConfigTestIds.repo)).toBeVisible();
+  await expect(blueprintFields).toBeVisible();
+  await expect(window.getByTestId("settings-build-model")).toBeVisible();
+  await expect(window.getByTestId(sessionRepo)).toHaveCount(0);
   await expect(window.locator(".react-flow__node.selected")).toHaveCount(0);
   await window.mouse.move(1, 1);
   await reviewShot(window, test.info(), "session-settings-open");
 
-  await window.getByTestId("session-model").selectOption("claude-haiku-4-5");
+  await window.getByTestId("settings-build-model").selectOption("claude-haiku-4-5");
   await expect
     .poll(async () => {
       const flow = JSON.parse(
         (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "",
-      ) as { session: { model: string } };
-      return flow.session.model;
+      ) as { settings: { buildModel: string } };
+      return flow.settings.buildModel;
     })
     .toBe("claude-haiku-4-5");
 
   await window.getByTestId("node-gate-1").click();
   await expect(window.getByTestId("node-setting-shown")).toBeVisible();
-  await expect(sessionFields).toHaveCount(0);
+  await expect(blueprintFields).toHaveCount(0);
   await expect(gear).toHaveAttribute("aria-pressed", "false");
 
   await gear.click();
-  await expect(sessionFields).toBeVisible();
+  await expect(blueprintFields).toBeVisible();
   await gear.click();
-  await expect(sessionFields).toHaveCount(0);
+  await expect(blueprintFields).toHaveCount(0);
   await expect(window.getByTestId("inspector-session")).toBeVisible();
 
   await gear.click();
   await window.getByTestId("canvas").click({ position: { x: 40, y: 400 } });
-  await expect(sessionFields).toHaveCount(0);
+  await expect(blueprintFields).toHaveCount(0);
   await expect(gear).toHaveAttribute("aria-pressed", "false");
 
   await window.getByTestId(controlTestIds.save).click();
   await expect(window.getByTestId("flow-unsaved")).toHaveCount(0);
   const reopened = (await relaunch()).window;
   await reopened.getByTestId(controlTestIds.sessionSettings).click();
-  await expect(reopened.getByTestId("session-model")).toHaveValue("claude-haiku-4-5");
+  await expect(reopened.getByTestId("settings-build-model")).toHaveValue("claude-haiku-4-5");
 });
 
 test("A Branch's variable is the name typed into it, with no list to pick from", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
   await drop(window, "trigger", 120);
   await drop(window, "branch", 420);
@@ -358,6 +364,7 @@ test("A Hard stop has no switch to turn it off", async () => {
 });
 
 test("Undo reverts a settings edit, and a field shows the validator's reason", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
   await drop(window, "agent", 200);
   await window.getByTestId("node-agent-1").click();

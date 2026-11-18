@@ -38,7 +38,11 @@ describe("examples", () => {
       ],
     ],
   ])("orders %s", (name, expected) => {
-    expect(order(parseFlow(readExample(name)))).toEqual(expected);
+    expect(order(parseFlow(readExample(name)))).toEqual([
+      ...expected,
+      "workspace-1-start",
+      "workspace-1-stop",
+    ]);
   });
 
   it("uses every node type in all-types.json", () => {
@@ -92,7 +96,7 @@ const storedFlows = flowFolders.flatMap((folder) => {
       name: name.replace(/\.json$/, ""),
       raw: JSON.parse(readFileSync(new URL(name, url), "utf8")) as unknown,
     }))
-    .filter(({ raw }) => typeof raw === "object" && raw !== null && "session" in raw);
+    .filter(({ raw }) => typeof raw === "object" && raw !== null && "containers" in raw);
 });
 
 const brokenFolder = "test/fixtures/broken/";

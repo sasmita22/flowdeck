@@ -29,13 +29,14 @@ export function BranchField({
   onChange(base: string): void;
 }) {
   const id = useId();
-  const loadedRepo = useStore(branches, (state) => state.repo);
-  const listed = useStore(branches, (state) => state.branches);
-  const failed = useStore(branches, (state) => state.error);
+  const loaded = useStore(branches, (state) => state.byRepo[repo.trim()]);
   const { disabled, options, error } = branchSelect({
     repo,
     value,
-    branches: { repo: loadedRepo, branches: listed, error: failed },
+    branches:
+      loaded === undefined
+        ? { repo: null, branches: null, error: null }
+        : { repo: repo.trim(), ...loaded },
   });
   return (
     <div style={fieldStyle}>

@@ -6,6 +6,7 @@ import {
   branchVariableTestId,
   buildConfigTestIds,
   buildDialogTestIds,
+  containerTestIds,
   controlTestIds,
   dialogTestIds,
   pageTestIds,
@@ -51,7 +52,6 @@ describe("test ids", () => {
       "canvas-undo",
       "canvas-redo",
       "canvas-delete",
-      "session-chip",
       "canvas-zoom-in",
       "canvas-zoom-out",
       "canvas-fit",
@@ -64,6 +64,7 @@ describe("test ids", () => {
       "blueprint-terminal-minimize",
       "blueprint-terminal-close",
       "canvas-tidy",
+      "blueprint-settings",
     ]);
     expect(controlTestIds).not.toHaveProperty("fileWireName");
     expect(controlTestIds).not.toHaveProperty("built");
@@ -343,6 +344,14 @@ describe("test ids", () => {
       buildDialogTestIds,
       buildConfigTestIds,
       { branchVariableTestId, branchDecidedByTestId, branchValueTestId, agentProducesTestId },
+      {
+        containerFrame: containerTestIds.frame,
+        nameField: (id: string) => containerTestIds.field(id, "name"),
+        modelField: (id: string) => containerTestIds.field(id, "model"),
+        repoField: (id: string) => containerTestIds.field(id, "repo"),
+        branchField: (id: string) => containerTestIds.field(id, "branch"),
+      },
+      [paletteTestId("workspace"), paletteTestId("session")],
     ];
     const ids = groups.flatMap((group) =>
       Object.values(group).flatMap((id: string | ((value: string) => string)) =>
@@ -351,5 +360,36 @@ describe("test ids", () => {
     );
 
     expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([]);
+  });
+
+  it.each(["workspace", "session"] as const)(
+    "names the %s palette entry palette-<type>",
+    (type) => {
+      expect(paletteTestId(type)).toBe(`palette-${type}`);
+    },
+  );
+
+  it("names a container's frame by the container", () => {
+    expect(containerTestIds.frame("session-2")).toBe("container-frame-session-2");
+    expect(containerTestIds.frame("workspace-1")).toBe("container-frame-workspace-1");
+  });
+
+  it.each(["name", "model", "repo", "branch"] as const)(
+    "names a container's %s field by the container and the field",
+    (field) => {
+      expect(containerTestIds.field("session-2", field)).toBe(`container-session-2-${field}`);
+    },
+  );
+
+  it("names a blueprint card's workflow-or-library mark by the blueprint", () => {
+    expect(pageTestIds.blueprintKind("flow-a")).toBe("blueprint-kind-flow-a");
+  });
+
+  it("names the reason Build is disabled", () => {
+    expect(pageTestIds.buildDisabledReason).toBe("build-disabled-reason");
+  });
+
+  it("names a blueprint card's reason its Build is disabled by the blueprint", () => {
+    expect(pageTestIds.blueprintBuildReason("flow-a")).toBe("blueprint-build-reason-flow-a");
   });
 });

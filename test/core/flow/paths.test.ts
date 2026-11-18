@@ -3,11 +3,17 @@ import { coveredOnEveryPath, reachableFrom } from "../../../src/core/flow/paths.
 import {
   agent,
   branch,
+  flow,
+  flowSettings,
   forEach,
   loop,
   onMainFlow,
+  output,
+  sessionContainer,
   thenWire,
+  trigger,
   wire,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 
@@ -80,5 +86,34 @@ describe("coveredOnEveryPath", () => {
 
   it("is true for a source earlier in the same Loop body", () => {
     expect(coveredOnEveryPath(loopBody, "r", ["w"])).toBe(true);
+  });
+
+  it("follows only the Start of the target's own container", () => {
+    const input = flow(
+      [
+        trigger("ws-start"),
+        output("ws-stop"),
+        trigger("start"),
+        agent("w"),
+        agent("r"),
+        output("stop"),
+      ],
+      [
+        thenWire("ws-start", "ws-stop"),
+        thenWire("ws-start", "r"),
+        thenWire("start", "w"),
+        thenWire("w", "r"),
+        thenWire("r", "stop"),
+      ],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["ws-start", "ws-stop"]),
+          sessionContainer(["start", "w", "r", "stop"]),
+        ],
+      },
+    );
+
+    expect(coveredOnEveryPath(input, "r", ["w"])).toBe(true);
   });
 });

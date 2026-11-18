@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { flowProblems } from "../../../src/core/compiler/flow-problems.js";
-import { agent, flow, output, thenWire, trigger, wire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  output,
+  sessionContainer,
+  thenWire,
+  trigger,
+  wire,
+  workspaceContainer,
+} from "../../fixtures/flow-builders.js";
 
 const blankAgent = agent("blank", { settings: { instructions: "" } });
 const ruleAndNode = (problems: ReturnType<typeof flowProblems>) =>
@@ -28,7 +38,14 @@ describe("flowProblems", () => {
   });
 
   it("raises every problem in the flow when it has no Start", () => {
-    const noStart = flow([agent("a"), output("stop"), blankAgent], [thenWire("a", "stop")]);
+    const noStart = flow(
+      [agent("a"), output("stop"), blankAgent],
+      [thenWire("a", "stop")],
+      flowSettings,
+      {
+        containers: [sessionContainer(["a", "stop", "blank"])],
+      },
+    );
 
     expect(ruleAndNode(flowProblems(noStart))).toEqual(
       expect.arrayContaining([
@@ -54,6 +71,41 @@ describe("flowProblems", () => {
     );
 
     expect(flowProblems(looseStop).map(({ rule }) => rule)).toContain("stop-required");
+  });
+
+  describe("a workspace and a session, each Start wired to its Stop", () => {
+    const seeded = (sessionNodes: string[]) =>
+      flow(
+        [
+          trigger("workspace-start"),
+          output("workspace-stop"),
+          trigger("start"),
+          agent("a"),
+          ...(sessionNodes.includes("stop") ? [output("stop")] : []),
+        ],
+        [
+          thenWire("workspace-start", "workspace-stop"),
+          thenWire("start", "a"),
+          ...(sessionNodes.includes("stop") ? [thenWire("a", "stop")] : []),
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["workspace-start", "workspace-stop"]),
+            sessionContainer(sessionNodes),
+          ],
+        },
+      );
+
+    it("raises nothing with every setting set", () => {
+      expect(flowProblems(seeded(["start", "a", "stop"]))).toEqual([]);
+    });
+
+    it("raises stop-required naming the session once its Stop is removed", () => {
+      expect(
+        flowProblems(seeded(["start", "a"])).map(({ rule, container }) => ({ rule, container })),
+      ).toEqual([{ rule: "stop-required", container: "session-1" }]);
+    });
   });
 
   it("numbers a problem's wire by its place in the whole flow, loose wires included", () => {
