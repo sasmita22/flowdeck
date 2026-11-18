@@ -6,15 +6,14 @@ import { parseFlow } from "../../src/core/flow/schema.js";
 
 const inRepo = (flow: unknown, repo: string | undefined) => {
   const parsed = parseFlow(flow);
-  return repo === undefined
-    ? parsed
-    : {
-        ...parsed,
-        session: {
-          ...parsed.session,
-          buildConfig: { ...parsed.session.buildConfig, repo },
-        },
-      };
+  if (repo === undefined) return parsed;
+  const first = parsed.containers.findIndex((container) => container.kind === "session");
+  return {
+    ...parsed,
+    containers: parsed.containers.map((container, index) =>
+      index === first ? { ...container, repo } : container,
+    ),
+  };
 };
 
 const withStore = <T>(home: string, use: (store: SqliteFlowStore) => T): T => {

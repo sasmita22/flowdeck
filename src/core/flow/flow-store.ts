@@ -27,6 +27,7 @@ export const flowSummarySchema = z.object({
   buildConfig: BuildConfig.nullable(),
   variables: z.array(FoundVariable),
   pinned: z.boolean(),
+  kind: z.enum(["workflow", "library"]),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;

@@ -2,7 +2,20 @@ import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "vitest";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, forEach, fork, join, loop, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  forEach,
+  fork,
+  join,
+  loop,
+  output,
+  sessionContainer,
+  thenWire,
+  trigger,
+  workspaceContainer,
+} from "../../fixtures/flow-builders.js";
 
 type Box = { left: number; top: number; right: number; bottom: number };
 
@@ -61,11 +74,6 @@ const encloses = (outer: Box, inner: Box): boolean =>
   outer.right >= inner.right &&
   outer.bottom >= inner.bottom;
 
-const withSessionFrame = (base: Flow, nodes: string[]): Flow => ({
-  ...base,
-  session: { ...base.session, frame: { nodes } },
-});
-
 const loopWithBody = (): Flow => {
   const built = flow(
     [
@@ -110,8 +118,9 @@ describe("flowSvg", () => {
     const nodes = drawn(svg, "node");
     const frames = drawn(svg, "frame");
 
-    expect(nodes).toHaveLength(4);
+    expect(nodes).toHaveLength(6);
     expect(drawn(svg, "wire").map((wire) => wire.localName)).toEqual([
+      "path",
       "path",
       "path",
       "path",
@@ -147,14 +156,81 @@ describe("flowSvg", () => {
     expect(encloses(inner, outer)).toBe(false);
   });
 
-  it("draws the session frame around its nodes only when the session names one", () => {
-    const base = flow([at(agent("a"), 0, 0), at(agent("b"), 300, 200)], [thenWire("a", "b")]);
-    expect(drawn(flowSvg(base), "session-frame")).toHaveLength(0);
+  describe("flow containers", () => {
+    const containers = (): Flow =>
+      flow(
+        [
+          at(trigger("ws-start"), 0, -400),
+          at(output("ws-stop"), 200, -400),
+          at(trigger("s-start"), 0, 0),
+          at(agent("a"), 200, 0),
+          at(loop("rounds"), 500, 0),
+          at(agent("write"), 500, 160, "rounds"),
+          at(output("s-stop"), 900, 0),
+        ],
+        [
+          thenWire("ws-start", "ws-stop"),
+          thenWire("s-start", "a"),
+          thenWire("a", "rounds"),
+          thenWire("rounds", "s-stop"),
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["ws-start", "ws-stop"]),
+            sessionContainer(["s-start", "a", "rounds", "s-stop"], { name: "review" }),
+          ],
+        },
+      );
 
-    const svg = flowSvg(withSessionFrame(base, ["a", "b"]));
-    const frame = boxOf(single(drawn(svg, "session-frame")));
-    const nodes = drawn(svg, "node");
-    for (const id of ["a", "b"]) expect(encloses(frame, boxOf(byId(nodes, id)))).toBe(true);
+    const strictlyEncloses = (outer: Box, inner: Box): boolean =>
+      outer.left < inner.left &&
+      outer.top < inner.top &&
+      outer.right > inner.right &&
+      outer.bottom > inner.bottom;
+
+    it("draws one frame per container, and no session frame", () => {
+      const svg = flowSvg(containers());
+      const frames = drawn(svg, "container-frame");
+
+      expect(frames.map((frame) => frame.getAttribute("data-id"))).toEqual([
+        "workspace-1",
+        "session-1",
+      ]);
+      expect(drawn(svg, "session-frame")).toHaveLength(0);
+    });
+
+    it.each([
+      ["workspace-1", ["ws-start", "ws-stop"], ["s-start", "a", "rounds", "write", "s-stop"]],
+      ["session-1", ["s-start", "a", "rounds", "write", "s-stop"], ["ws-start", "ws-stop"]],
+    ])("pads %s's frame around its members and their body nodes only", (id, inside, outside) => {
+      const svg = flowSvg(containers());
+      const frame = boxOf(byId(drawn(svg, "container-frame"), id));
+      const nodes = drawn(svg, "node");
+
+      for (const member of inside)
+        expect(strictlyEncloses(frame, boxOf(byId(nodes, member))), member).toBe(true);
+      for (const other of outside)
+        expect(encloses(frame, boxOf(byId(nodes, other))), other).toBe(false);
+    });
+
+    it.each([
+      ["workspace-1", /workspace/i],
+      ["session-1", /review/],
+    ])("labels %s's frame with its name", (id, label) => {
+      const frame = byId(drawn(flowSvg(containers()), "container-frame"), id);
+
+      expect(frame.textContent).toMatch(label);
+    });
+
+    it("keeps every container frame inside the picture", () => {
+      const svg = flowSvg(containers());
+      const background = boxOf(single(drawn(svg, "background")));
+      const frames = drawn(svg, "container-frame");
+
+      expect(frames).toHaveLength(2);
+      for (const frame of frames) expect(encloses(background, boxOf(frame))).toBe(true);
+    });
   });
 
   it.each([
@@ -165,7 +241,11 @@ describe("flowSvg", () => {
   });
 
   it("draws no wire for a flow with no wires", () => {
-    const svg = flowSvg(flow([at(agent("a"), 0, 0), at(agent("b"), 300, 0)], []));
+    const svg = flowSvg(
+      flow([at(agent("a"), 0, 0), at(agent("b"), 300, 0)], [], flowSettings, {
+        containers: [sessionContainer(["a", "b"])],
+      }),
+    );
     expect(drawn(svg, "wire")).toHaveLength(0);
   });
 

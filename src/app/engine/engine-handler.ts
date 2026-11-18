@@ -149,7 +149,7 @@ export type EngineStores = {
   migrations?: { applied: readonly string[]; existedBefore: boolean };
 };
 
-const cleanStartMigration = "022_clean_start";
+const isCleanStart = (migration: string): boolean => migration.endsWith("clean_start");
 
 const cleanStartFolders = ["workspaces", "runs", "build-sessions", "worktrees"];
 
@@ -1292,7 +1292,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (result.kind === "error") return;
     const { migrations } = result.stores;
     if (migrations?.existedBefore !== true) return;
-    if (!migrations.applied.includes(cleanStartMigration)) return;
+    if (!migrations.applied.some(isCleanStart)) return;
     if (!(await holdsHome())) return;
     await Promise.all(
       cleanStartFolders.map((folder) => options.fs.removeTree(join(options.home, folder))),

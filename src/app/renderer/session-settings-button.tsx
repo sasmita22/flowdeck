@@ -3,7 +3,7 @@ import type { StoreApi } from "zustand/vanilla";
 import type { ShellState } from "./shell-store.js";
 import { controlTestIds } from "./test-ids.js";
 
-const label = "Session settings";
+const label = "Blueprint settings";
 
 const teeth = 8;
 const gearOutline = Array.from({ length: teeth * 4 }, (_, index) => {

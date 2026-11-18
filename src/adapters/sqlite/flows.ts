@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { parseFlow, type Flow } from "../../core/flow/schema.js";
+import { parseFlow, type BuildConfig, type Flow } from "../../core/flow/schema.js";
+import { flowKind, sessionBuildConfig } from "../../core/flow/structure.js";
 import { foundVariables } from "../../core/flow/variables.js";
 import { registry } from "../../core/nodes/registry.js";
 import type {
@@ -21,7 +22,7 @@ type CurrentRow = {
   flow_id: string;
   name: string;
   version: number;
-  session: string;
+  containers: string;
   settings: string;
   notes: string;
 };
@@ -54,6 +55,8 @@ type WireRow = {
   to_port: string;
   file: string | null;
 };
+
+const buildConfigOf = (flow: Flow): BuildConfig | null => sessionBuildConfig(flow) ?? null;
 
 const cleanName = (name: string): string => {
   const trimmed = name.trim();
@@ -186,13 +189,13 @@ export class SqliteFlowStore implements FlowStore {
 
       this.db
         .prepare(
-          `INSERT INTO flow_versions (flow_id, version, session, settings, notes, saved_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO flow_versions (flow_id, version, session, containers, settings, notes, saved_at)
+           VALUES (?, ?, '{}', ?, ?, ?, ?)`,
         )
         .run(
           flowId,
           version,
-          JSON.stringify(flow.session),
+          JSON.stringify(flow.containers),
           JSON.stringify(flow.settings),
           JSON.stringify(flow.notes ?? []),
           time,
@@ -217,7 +220,7 @@ export class SqliteFlowStore implements FlowStore {
   load({ flowId, version }: SavedFlowRef): LoadedFlow | null {
     const current = this.db
       .prepare(
-        `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.session,
+        `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.containers,
                 flow_versions.settings, flow_versions.notes
            FROM flow_versions JOIN flows ON flows.id = flow_versions.flow_id
           WHERE flow_versions.flow_id = ? AND flow_versions.version = ?`,
@@ -264,7 +267,7 @@ export class SqliteFlowStore implements FlowStore {
       flow: parseFlow({
         nodes,
         wires,
-        session: JSON.parse(current.session) as unknown,
+        containers: JSON.parse(current.containers) as unknown,
         settings: JSON.parse(current.settings) as unknown,
         ...(notes.length === 0 ? {} : { notes }),
       }),
@@ -280,9 +283,10 @@ export class SqliteFlowStore implements FlowStore {
       createdAt: row.created_at,
       versions: row.versions,
       lastSavedAt: row.last_saved_at,
-      buildConfig: latest?.flow.session.buildConfig ?? null,
+      buildConfig: latest === null ? null : buildConfigOf(latest.flow),
       variables: latest === null ? [] : foundVariables(latest.flow),
       pinned: row.pinned === 1,
+      kind: latest === null ? "library" : flowKind(latest.flow),
     };
   }
 

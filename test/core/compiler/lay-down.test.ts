@@ -180,7 +180,7 @@ describe("layDown", () => {
     it("lays down a flow whose stored session still names a connector, resolving nothing", async () => {
       const stale = {
         ...sample(),
-        session: { ...sample().session, connectors: ["jira"] },
+        session: { connectors: ["jira"] },
       } as Flow;
 
       const result = await layDown(stale, depsOf(alpha));

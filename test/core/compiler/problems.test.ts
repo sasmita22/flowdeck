@@ -64,17 +64,20 @@ describe("plainProblems", () => {
     }
   });
 
-  it("keeps a problem with no node, such as the missing repository", () => {
+  it("keeps a problem with no node, such as the missing repository, and names its container", () => {
     const base = onMainFlow([agent("p")], []);
     const current = {
       ...base,
-      session: { ...base.session, buildConfig: { ...base.session.buildConfig, repo: "" } },
+      containers: base.containers.map((container) =>
+        container.kind === "session" ? { ...container, repo: "" } : container,
+      ),
     };
 
     expect(plainProblems(validate(current))).toEqual([
       {
-        field: "buildConfig.repo",
-        text: "Choose the repository this blueprint builds from, in the session settings. Build is refused until one is set.",
+        container: "session-1",
+        field: "repo",
+        text: 'Session "main" needs a repository. Build is refused until one is set.',
       },
     ]);
   });

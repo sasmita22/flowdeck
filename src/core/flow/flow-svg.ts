@@ -1,4 +1,5 @@
-import type { CanvasNote, Flow, Node, NodeType } from "./schema.js";
+import type { CanvasNote, Flow, FlowContainer, Node, NodeType } from "./schema.js";
+import { flowContainerMembers } from "./structure.js";
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
 
@@ -88,6 +89,9 @@ const depthOf = (flow: Flow, node: Node): number => {
   return depth;
 };
 
+const containerLabel = (container: FlowContainer): string =>
+  container.kind === "workspace" ? "Workspace" : container.name;
+
 const round = Math.round;
 
 const rect = (box: Bounds, attributes: string): string =>
@@ -131,20 +135,20 @@ export function flowSvg(flow: Flow): string {
     }))
     .sort((a, b) => a.depth - b.depth);
 
-  const sessionNodes = (flow.session.frame?.nodes ?? []).flatMap((id) => {
-    const node = byId.get(id);
-    return node === undefined ? [] : [node];
+  const containerFrames = flow.containers.flatMap((container) => {
+    const members = new Set(flowContainerMembers(flow, container.id));
+    const boxes = [
+      ...flow.nodes.filter((node) => members.has(node.id)).map(boundsOf),
+      ...frames.filter((frame) => members.has(frame.container.id)).map(({ box }) => box),
+    ];
+    return boxes.length === 0 ? [] : [{ container, box: padded(boxes) }];
   });
-  const sessionBox =
-    flow.session.frame === undefined || sessionNodes.length === 0
-      ? undefined
-      : padded(sessionNodes.map(boundsOf));
 
   const everything = [
     ...flow.nodes.map(boundsOf),
     ...notes.map(noteBounds),
     ...frames.map(({ box }) => box),
-    ...(sessionBox === undefined ? [] : [sessionBox]),
+    ...containerFrames.map(({ box }) => box),
   ];
   const view =
     everything.length === 0 ? { left: 0, top: 0, right: 0, bottom: 0 } : grown(everything, MARGIN);
@@ -156,12 +160,12 @@ export function flowSvg(flow: Flow): string {
     rect(view, `data-kind="background" fill="${palette.background}"`),
   ];
 
-  if (sessionBox !== undefined)
+  for (const { container, box } of containerFrames)
     parts.push(
-      rect(
-        sessionBox,
-        `data-kind="session-frame" fill="none" stroke="${palette.session}" stroke-width="2" rx="10"`,
-      ),
+      `<g data-kind="container-frame" data-id="${escape(container.id)}">`,
+      rect(box, `fill="none" stroke="${palette.session}" stroke-width="2" rx="10"`),
+      textAt(box.left + 10, box.top + 16, palette.session, containerLabel(container)),
+      "</g>",
     );
 
   for (const { container, box } of frames)

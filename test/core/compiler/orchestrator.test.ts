@@ -108,10 +108,10 @@ describe("orchestratorSkill", () => {
     expect(String(fields.description).startsWith(scopeLine(scope))).toBe(true);
   });
 
-  it("lists every manifest node once, in the order the runner uses, each with its node marker", () => {
+  it("lists every node of the session once, in the order the runner uses, each with its node marker", () => {
     const ids = stepLines(skill().content).map((line) => /NODE (\S+) /.exec(line)?.[1]);
 
-    expect(ids).toEqual(order(sample()));
+    expect(ids).toEqual(order(sample()).filter((id) => !id.startsWith("workspace-")));
     expect(ids).toEqual(manifestOf(sample()).nodes.map((node) => node.id));
   });
 

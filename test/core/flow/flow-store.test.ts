@@ -31,6 +31,7 @@ describe("flowSummarySchema", () => {
     lastSavedAt: "2026-01-02T00:00:00.000Z",
     pinned: false,
     variables: [],
+    kind: "workflow",
   };
 
   it("keeps the latest version's Build configuration and the variables it finds", () => {
@@ -64,5 +65,20 @@ describe("flowSummarySchema", () => {
     });
 
     expect(parsed).not.toHaveProperty("workingFolder");
+  });
+
+  it("keeps a library's kind", () => {
+    const library = { ...summary, kind: "library", buildConfig: null };
+
+    expect(flowSummarySchema.parse(library)).toEqual(library);
+  });
+
+  it.each([
+    ["no kind", undefined],
+    ["an unknown kind", "group"],
+  ])("rejects a summary with %s", (_, kind) => {
+    expect(flowSummarySchema.safeParse({ ...summary, buildConfig: null, kind }).success).toBe(
+      false,
+    );
   });
 });

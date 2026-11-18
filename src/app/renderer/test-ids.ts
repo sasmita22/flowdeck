@@ -1,6 +1,7 @@
-import type { NodeType } from "../../core/flow/schema.js";
+import type { FlowContainer, NodeType } from "../../core/flow/schema.js";
 
-export const paletteTestId = (type: NodeType | "note") => `palette-${type}` as const;
+export const paletteTestId = (type: NodeType | FlowContainer["kind"] | "note") =>
+  `palette-${type}` as const;
 
 export const controlTestIds = {
   save: "canvas-save",
@@ -21,7 +22,6 @@ export const controlTestIds = {
   undo: "canvas-undo",
   redo: "canvas-redo",
   delete: "canvas-delete",
-  sessionChip: "session-chip",
   zoomIn: "canvas-zoom-in",
   zoomOut: "canvas-zoom-out",
   fit: "canvas-fit",
@@ -34,6 +34,14 @@ export const controlTestIds = {
   blueprintTerminalMinimize: "blueprint-terminal-minimize",
   blueprintTerminalClose: "blueprint-terminal-close",
   tidy: "canvas-tidy",
+  blueprintSettings: "blueprint-settings",
+} as const;
+
+export type ContainerField = "name" | "model" | "repo" | "branch";
+
+export const containerTestIds = {
+  frame: (id: string) => `container-frame-${id}`,
+  field: (id: string, field: ContainerField) => `container-${id}-${field}`,
 } as const;
 
 export const blueprintTerminalTestId = "blueprint-terminal";
@@ -65,6 +73,9 @@ export const pageTestIds = {
   blueprintDeleteCancel: "blueprint-delete-cancel",
   blueprintNameInput: (flowId: string) => `blueprint-name-input-${flowId}`,
   blueprintBuild: (flowId: string) => `blueprint-build-${flowId}`,
+  blueprintKind: (flowId: string) => `blueprint-kind-${flowId}`,
+  blueprintBuildReason: (flowId: string) => `blueprint-build-reason-${flowId}`,
+  buildDisabledReason: "build-disabled-reason",
   buildCard: (buildId: string) => `build-card-${buildId}`,
   buildOpen: (buildId: string) => `build-open-${buildId}`,
   buildRun: (buildId: string) => `build-run-${buildId}`,

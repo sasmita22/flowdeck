@@ -1,5 +1,6 @@
 import { order } from "../flow/order.js";
-import type { Flow, FlowSettings, Node, Session, Wire } from "../flow/schema.js";
+import type { Flow, FlowSettings, Node, Session, SessionContainer, Wire } from "../flow/schema.js";
+import { flowContainerMembers } from "../flow/structure.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
@@ -28,7 +29,7 @@ export type Manifest = {
   values?: VariableValues;
   source?: BuildSource;
   outputs?: ManifestOutput[];
-  session: Omit<Session, "frame">;
+  session: Session;
   settings?: FlowSettings;
   nodes: ManifestNode[];
   wires: Wire[];
@@ -76,11 +77,30 @@ const declaredOutputs = (nodes: readonly Node[]): ManifestOutput[] =>
       : [],
   );
 
+const sessionOf = (flow: Flow): SessionContainer => {
+  const session = flow.containers.find(
+    (container): container is SessionContainer => container.kind === "session",
+  );
+  if (session === undefined) throw new Error("A build needs a session container.");
+  return session;
+};
+
+const sessionPart = (flow: Flow, session: SessionContainer): Flow => {
+  const members = new Set(flowContainerMembers(flow, session.id));
+  return {
+    ...flow,
+    nodes: flow.nodes.filter((node) => members.has(node.id)),
+    wires: flow.wires.filter((wire) => members.has(wire.from.node) && members.has(wire.to.node)),
+  };
+};
+
 export function lower(
-  flow: Flow,
+  whole: Flow,
   inputs: LowerInputs,
   source?: BuildSource,
 ): { manifest: LoweredManifest; nodeFiles: BuildFile[] } {
+  const session = sessionOf(whole);
+  const flow = sessionPart(whole, session);
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
   const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
   const pieces = pieceNames(flow);
@@ -88,8 +108,6 @@ export function lower(
     const piece = pieces.get(node.id);
     return { node, piece, file: compile(node, piece, inputs) };
   });
-  const session = { ...flow.session };
-  delete session.frame;
   const outputs = declaredOutputs(nodes);
   return {
     manifest: {
@@ -100,7 +118,11 @@ export function lower(
       values: inputs.values,
       ...(source === undefined ? {} : { source }),
       ...(outputs.length === 0 ? {} : { outputs }),
-      session,
+      session: {
+        name: session.name,
+        buildConfig: { repo: session.repo, base: session.branch },
+        model: session.model,
+      },
       settings: flow.settings,
       nodes: compiled.map(({ node, piece, file }) => ({
         id: node.id,

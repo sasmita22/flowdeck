@@ -7,7 +7,7 @@ import {
   toViewEdges,
   toViewNodes,
 } from "../../../../src/app/renderer/canvas/view.js";
-import { containerText } from "../../../../src/app/renderer/canvas/frames.js";
+import { containerText, sideLabelSpan } from "../../../../src/app/renderer/canvas/frames.js";
 import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import type { Flow, NodeType, Wire } from "../../../../src/core/flow/schema.js";
 import {
@@ -15,6 +15,8 @@ import {
   ask,
   branch,
   flow,
+  flowSettings,
+  inOneSession,
   forEach,
   fork,
   gate,
@@ -22,13 +24,18 @@ import {
   join,
   loop,
   output,
+  sessionContainer,
   thenWire,
   trigger,
   wire,
+  workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
 
+const nodeViews = (...args: Parameters<typeof toViewNodes>) =>
+  toViewNodes(...args).filter((node) => node.type !== "container-frame");
+
 const twoNodes = () =>
-  flow(
+  inOneSession(
     [
       { ...agent("agent-1"), label: "Plan", position: { x: 120, y: 80 } },
       { ...gate("gate-1"), label: "Check", position: { x: 300, y: 40 } },
@@ -44,7 +51,7 @@ const thenBetween = (from: string, fromPort: string, to: string, toPort: string)
 
 describe("toViewNodes", () => {
   it("maps each node to id, type, position, selected and label, in flow order", () => {
-    expect(toViewNodes(twoNodes(), [], {}, null)).toEqual([
+    expect(nodeViews(twoNodes(), [], {}, null)).toEqual([
       {
         id: "agent-1",
         type: "agent",
@@ -63,7 +70,7 @@ describe("toViewNodes", () => {
   });
 
   it("marks selected only the nodes whose ids are in the selection", () => {
-    const view = toViewNodes(twoNodes(), ["gate-1"], {}, null);
+    const view = nodeViews(twoNodes(), ["gate-1"], {}, null);
 
     expect(view.map((node) => [node.id, node.selected])).toEqual([
       ["agent-1", false],
@@ -72,13 +79,13 @@ describe("toViewNodes", () => {
   });
 
   it("ignores selection ids that are not in the flow", () => {
-    const view = toViewNodes(twoNodes(), ["gone-1"], {}, null);
+    const view = nodeViews(twoNodes(), ["gone-1"], {}, null);
 
     expect(view.map((node) => node.selected)).toEqual([false, false]);
   });
 
   it("takes the drag position when one is held, else the flow position", () => {
-    const view = toViewNodes(twoNodes(), [], { "agent-1": { x: 500, y: 600 } }, null);
+    const view = nodeViews(twoNodes(), [], { "agent-1": { x: 500, y: 600 } }, null);
 
     expect(view.map((node) => [node.id, node.position])).toEqual([
       ["agent-1", { x: 500, y: 600 }],
@@ -87,7 +94,7 @@ describe("toViewNodes", () => {
   });
 
   it("marks highlighted only the node whose id is given, without selecting any node", () => {
-    const view = toViewNodes(twoNodes(), [], {}, "gate-1");
+    const view = nodeViews(twoNodes(), [], {}, "gate-1");
 
     expect(view.map((node) => [node.id, node.data.highlighted, node.selected])).toEqual([
       ["agent-1", false, false],
@@ -96,22 +103,22 @@ describe("toViewNodes", () => {
   });
 
   it("highlights no node when given null", () => {
-    const view = toViewNodes(twoNodes(), [], {}, null);
+    const view = nodeViews(twoNodes(), [], {}, null);
 
     expect(view.map((node) => node.data.highlighted)).toEqual([false, false]);
   });
 
   it("returns no entries for an empty flow", () => {
-    expect(toViewNodes(flow([], []), [], {}, null)).toEqual([]);
+    expect(nodeViews(inOneSession([], []), [], {}, null)).toEqual([]);
   });
 });
 
 const ignoredOf = (source: Flow) =>
-  toViewNodes(source, [], {}, null).map((node) => [node.id, node.data.ignored]);
+  nodeViews(source, [], {}, null).map((node) => [node.id, node.data.ignored]);
 
 describe("toViewNodes and the main flow", () => {
   it("marks ignored the nodes off the main flow, and only those", () => {
-    const source = flow(
+    const source = inOneSession(
       [trigger("start"), agent("a"), output("stop"), agent("b"), agent("c"), agent("d")],
       [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
     );
@@ -127,7 +134,7 @@ describe("toViewNodes and the main flow", () => {
   });
 
   it("marks ignored a loose Loop's frame and its body, and keeps a wired For each", () => {
-    const source = flow(
+    const source = inOneSession(
       [
         trigger("start"),
         forEach("E"),
@@ -152,7 +159,7 @@ describe("toViewNodes and the main flow", () => {
   });
 
   it("marks ignored a loose For each frame and a loose Fork bar", () => {
-    const source = flow(
+    const source = inOneSession(
       [
         trigger("start"),
         output("stop"),
@@ -176,7 +183,7 @@ describe("toViewNodes and the main flow", () => {
   });
 
   it("marks nothing ignored when there is no Start", () => {
-    const source = flow(
+    const source = inOneSession(
       [agent("a"), output("stop"), loop("L"), agent("y", { parent: "L" })],
       [thenWire("a", "stop")],
     );
@@ -191,7 +198,7 @@ describe("toViewNodes and the main flow", () => {
   });
 
   it("marks nothing ignored when there are two Starts", () => {
-    const source = flow(
+    const source = inOneSession(
       [trigger("one"), trigger("two"), agent("a"), output("stop")],
       [thenWire("one", "a"), thenWire("a", "stop")],
     );
@@ -199,21 +206,6 @@ describe("toViewNodes and the main flow", () => {
     expect(ignoredOf(source).map(([, ignored]) => ignored)).toEqual([false, false, false, false]);
   });
 });
-
-const framed = (source: Flow, nodes: string[]): Flow => ({
-  ...source,
-  session: { ...source.session, name: "build", frame: { nodes } },
-});
-
-const threeApart = () =>
-  flow(
-    [
-      { ...agent("A"), position: { x: 100, y: 50 } },
-      { ...agent("B"), position: { x: 400, y: 300 } },
-      { ...agent("C"), position: { x: 900, y: 900 } },
-    ],
-    [],
-  );
 
 type Rect = { position: { x: number; y: number }; width: number; height: number };
 
@@ -230,26 +222,133 @@ const grown = (rects: Rect[]): Rect => {
   return { position: { x: left, y: top }, width: right - left, height: bottom - top };
 };
 
-const enclosing = (boxes: { type: NodeType; x: number; y: number }[]) =>
-  grown(boxes.map(({ type, x, y }) => boxOf(type, x, y)));
+const labelled = (type: NodeType, x: number, y: number, label: string): Rect => {
+  const rect = boxOf(type, x, y);
+  const sideLabel = type === "trigger" || type === "output" ? sideLabelSpan(label) : 0;
+  return { ...rect, width: rect.width + sideLabel };
+};
 
-describe("toViewNodes and the session", () => {
-  it("draws no session frame, even for a blueprint saved with one", () => {
-    const source = framed(threeApart(), ["A", "B"]);
+const enclosing = (boxes: { type: NodeType; x: number; y: number; label?: string }[]) =>
+  grown(boxes.map(({ type, x, y, label = "" }) => labelled(type, x, y, label)));
 
-    expect(toViewNodes(source, [], {}, null).map((node) => node.id)).toEqual(["A", "B", "C"]);
+const placedAt = <N extends object>(node: N, x: number, y: number) => ({
+  ...node,
+  position: { x, y },
+});
+
+const containersOnCanvas = (): Flow =>
+  flow(
+    [
+      placedAt(trigger("w-start"), 0, 0),
+      placedAt(output("w-stop"), 300, 0),
+      placedAt(trigger("s"), 0, 400),
+      placedAt(agent("a"), 200, 400),
+      placedAt(output("t"), 500, 400),
+      placedAt(trigger("u"), 0, 800),
+      placedAt(agent("b"), 200, 800),
+      placedAt(output("v"), 500, 800),
+      placedAt(agent("loose"), 200, 1000),
+    ],
+    [
+      thenWire("w-start", "w-stop"),
+      thenWire("s", "a"),
+      thenWire("a", "t"),
+      thenWire("u", "b"),
+      thenWire("b", "v"),
+    ],
+    flowSettings,
+    {
+      containers: [
+        workspaceContainer(["w-start", "w-stop"]),
+        sessionContainer(["s", "a", "t"]),
+        sessionContainer(["u", "b", "v", "loose"], { id: "session-2", name: "web" }),
+      ],
+    },
+  );
+
+describe("toViewNodes and flow containers", () => {
+  const frameOf = (view: ReturnType<typeof toViewNodes>, id: string) =>
+    view.find((node) => node.id === `container-frame-${id}`);
+
+  it.each([
+    [
+      "workspace-1",
+      [
+        { type: "trigger" as const, x: 0, y: 0, label: "w-start" },
+        { type: "output" as const, x: 300, y: 0, label: "w-stop" },
+      ],
+    ],
+    [
+      "session-1",
+      [
+        { type: "trigger" as const, x: 0, y: 400, label: "s" },
+        { type: "agent" as const, x: 200, y: 400, label: "a" },
+        { type: "output" as const, x: 500, y: 400, label: "t" },
+      ],
+    ],
+  ])("draws %s as a frame fitted round its members", (id, members) => {
+    const frame = frameOf(toViewNodes(containersOnCanvas(), [], {}, null), id);
+
+    expect(frame).toMatchObject({
+      type: "container-frame",
+      ...enclosing(members),
+      data: expect.objectContaining({ containerId: id }),
+    });
+  });
+
+  it("draws each container's frame behind its members", () => {
+    const view = toViewNodes(containersOnCanvas(), [], {}, null);
+    const indexOf = (id: string) => view.findIndex((node) => node.id === id);
+
+    for (const container of containersOnCanvas().containers) {
+      const frame = indexOf(`container-frame-${container.id}`);
+      expect(frame).toBeGreaterThanOrEqual(0);
+      for (const member of container.nodes) expect(frame).toBeLessThan(indexOf(member));
+    }
+  });
+
+  it("draws a container's frame behind a Loop frame inside it", () => {
+    const source = flow(
+      [
+        placedAt(trigger("s"), 0, 0),
+        placedAt(loop("L"), 200, 0),
+        placedAt(agent("p", { parent: "L" }), 200, 100),
+        placedAt(output("t"), 600, 0),
+      ],
+      [],
+      flowSettings,
+      { containers: [sessionContainer(["s", "L", "t"])] },
+    );
+    const ids = toViewNodes(source, [], {}, null).map((node) => node.id);
+
+    expect(ids.indexOf("container-frame-session-1")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("container-frame-session-1")).toBeLessThan(ids.indexOf("loop-frame-L"));
+  });
+
+  it("marks a selected container's frame selected, and only that one", () => {
+    const view = toViewNodes(containersOnCanvas(), ["session-2"], {}, null);
+
+    expect(
+      ["workspace-1", "session-1", "session-2"].map((id) => frameOf(view, id)?.selected),
+    ).toEqual([false, false, true]);
+  });
+
+  it("greys only what no container's own Start reaches", () => {
+    expect(ignoredOf(containersOnCanvas()).filter(([, ignored]) => ignored === true)).toEqual([
+      ["loose", true],
+    ]);
   });
 });
 
 describe("toViewNodes delete lock", () => {
   it("lets a hard stop be deleted like any node", () => {
-    const [node] = toViewNodes(flow([hardstop("H")], []), [], {}, null);
+    const [node] = nodeViews(inOneSession([hardstop("H")], []), [], {}, null);
 
     expect(node).not.toHaveProperty("deletable");
   });
 
   it("adds no deletable field to any other type", () => {
-    const source = flow(
+    const source = inOneSession(
       [
         trigger("T"),
         agent("P"),
@@ -263,7 +362,7 @@ describe("toViewNodes delete lock", () => {
       [],
     );
 
-    const nodes = toViewNodes(source, [], {}, null).filter((node) => node.type !== "loop-frame");
+    const nodes = nodeViews(source, [], {}, null).filter((node) => node.type !== "loop-frame");
 
     expect(nodes.map((node) => node.id)).toEqual(["T", "P", "S", "G", "K", "Q", "L", "O"]);
     for (const node of nodes) expect(node).not.toHaveProperty("deletable");
@@ -272,11 +371,11 @@ describe("toViewNodes delete lock", () => {
 
 describe("toViewNodes with a branch", () => {
   const branchData = () => {
-    const source = flow(
+    const source = inOneSession(
       [{ ...branch("B", "e2e"), settings: { variable: "e2e" }, label: "E2E?" }],
       [],
     );
-    return toViewNodes(source, [], {}, null).find((node) => node.id === "B")?.data;
+    return nodeViews(source, [], {}, null).find((node) => node.id === "B")?.data;
   };
 
   it("sub-lines the branch with the yes/no variable it follows", () => {
@@ -289,7 +388,7 @@ describe("toViewNodes with a branch", () => {
   });
 
   it("adds no sub to any other type", () => {
-    const source = flow(
+    const source = inOneSession(
       [
         trigger("T"),
         agent("P"),
@@ -304,7 +403,7 @@ describe("toViewNodes with a branch", () => {
       [],
     );
 
-    const others = toViewNodes(source, [], {}, null).filter((node) => node.id !== "B");
+    const others = nodeViews(source, [], {}, null).filter((node) => node.id !== "B");
 
     expect(others.map((node) => node.id)).toEqual(["T", "P", "S", "G", "K", "Q", "H", "O"]);
     for (const node of others) expect(node.data).not.toHaveProperty("sub");
@@ -326,7 +425,7 @@ describe("toViewEdges", () => {
   });
 
   it("keeps one entry per wire in flow order", () => {
-    const source = flow(
+    const source = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C"), thenWire("A", "C")],
     );
@@ -339,11 +438,11 @@ describe("toViewEdges", () => {
   });
 
   it("returns no entries for a flow without wires", () => {
-    expect(toViewEdges(flow([agent("A")], []))).toEqual([]);
+    expect(toViewEdges(inOneSession([agent("A")], []))).toEqual([]);
   });
 
   it("ends every wire in a closed arrowhead", () => {
-    const source = flow(
+    const source = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
@@ -357,7 +456,7 @@ describe("toViewEdges", () => {
 
 describe("toViewEdges selection", () => {
   it("marks the selected wires selected and leaves the rest alone", () => {
-    const source = flow(
+    const source = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
@@ -371,7 +470,7 @@ describe("toViewEdges selection", () => {
 
 describe("toViewEdges selected arrowhead", () => {
   it("draws the selected wire's arrowhead in the selection colour and leaves the rest plain", () => {
-    const source = flow(
+    const source = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [thenWire("A", "B"), thenWire("B", "C")],
     );
@@ -385,7 +484,7 @@ describe("toViewEdges selected arrowhead", () => {
 
 describe("toViewEdges from a Branch", () => {
   it("labels the wires leaving yes and no with their port", () => {
-    const source = flow(
+    const source = inOneSession(
       [
         trigger("T", { settings: { flags: { e2e: true } } }),
         branch("B", "e2e"),
@@ -409,7 +508,7 @@ describe("edgeId", () => {
   });
 
   it("gives different wires different ids", () => {
-    const wires = flow(
+    const wires = inOneSession(
       [agent("A"), agent("B"), agent("C")],
       [
         thenWire("A", "B"),
@@ -425,7 +524,7 @@ describe("edgeId", () => {
 });
 
 const parallelSection = () =>
-  flow(
+  inOneSession(
     [
       { ...trigger("T"), position: { x: -200, y: 10 } },
       { ...fork("F"), position: { x: 10, y: 10 } },
@@ -452,7 +551,7 @@ const viewOf = (view: ReturnType<typeof toViewNodes>, id: string) =>
 
 describe("toViewNodes with a parallel section", () => {
   it("stretches the fork and join bars over every branch they span", () => {
-    const view = toViewNodes(parallelSection(), [], {}, null);
+    const view = nodeViews(parallelSection(), [], {}, null);
 
     expect(viewOf(view, "F")).toMatchObject({
       position: { x: 10, y: 10 },
@@ -467,14 +566,14 @@ describe("toViewNodes with a parallel section", () => {
   });
 
   it("takes the bar's x from its drag position and its y from its branches", () => {
-    const view = toViewNodes(parallelSection(), [], { F: { x: 40, y: 500 } }, null);
+    const view = nodeViews(parallelSection(), [], { F: { x: 40, y: 500 } }, null);
 
     expect(viewOf(view, "F")).toMatchObject({ position: { x: 40, y: 10 }, height: 208 });
   });
 
   it("gives a fork with no wires its look box at its stored position", () => {
-    const [node] = toViewNodes(
-      flow([{ ...fork("F"), position: { x: 30, y: 60 } }], []),
+    const [node] = nodeViews(
+      inOneSession([{ ...fork("F"), position: { x: 30, y: 60 } }], []),
       [],
       {},
       null,
@@ -489,14 +588,14 @@ describe("toViewNodes with a parallel section", () => {
   });
 
   it("gives a join with no wires its look box", () => {
-    const [node] = toViewNodes(flow([join("J")], []), [], {}, null);
+    const [node] = nodeViews(inOneSession([join("J")], []), [], {}, null);
 
     expect(node).toMatchObject({ id: "J", width: 28, height: BAR_MIN_HEIGHT });
   });
 
   it("keeps a bar over branches shorter than its tag at the minimum height", () => {
-    const view = toViewNodes(
-      flow(
+    const view = nodeViews(
+      inOneSession(
         [
           { ...fork("F"), position: { x: 10, y: 10 } },
           { ...agent("b1"), position: { x: 70, y: 30 } },
@@ -519,7 +618,7 @@ describe("toViewNodes with a parallel section", () => {
 });
 
 const directWire = (joinY = 300) =>
-  flow(
+  inOneSession(
     [
       { ...fork("F"), position: { x: 10, y: 10 } },
       { ...join("J"), position: { x: 270, y: joinY } },
@@ -528,7 +627,7 @@ const directWire = (joinY = 300) =>
   );
 
 const directWireAndBox = () =>
-  flow(
+  inOneSession(
     [
       { ...fork("F"), position: { x: 10, y: 10 } },
       { ...agent("b1"), position: { x: 70, y: 90 } },
@@ -539,7 +638,7 @@ const directWireAndBox = () =>
 
 describe("toViewNodes with a fork wired straight to a join", () => {
   it("draws each bar at its own stored position with its own look box", () => {
-    const view = toViewNodes(directWire(), [], {}, null);
+    const view = nodeViews(directWire(), [], {}, null);
 
     expect(viewOf(view, "F")).toMatchObject({
       position: { x: 10, y: 10 },
@@ -552,21 +651,21 @@ describe("toViewNodes with a fork wired straight to a join", () => {
   });
 
   it("draws the dragged bar at its drag position and leaves the other bar where it is", () => {
-    const view = toViewNodes(directWire(), [], { F: { x: 40, y: 500 } }, null);
+    const view = nodeViews(directWire(), [], { F: { x: 40, y: 500 } }, null);
 
     expect(viewOf(view, "F")).toMatchObject({ position: { x: 40, y: 500 } });
     expect(viewOf(view, "J")).toMatchObject({ position: { x: 270, y: 300 } });
   });
 
   it("follows a dragged join the same way", () => {
-    const view = toViewNodes(directWire(), [], { J: { x: 270, y: -150 } }, null);
+    const view = nodeViews(directWire(), [], { J: { x: 270, y: -150 } }, null);
 
     expect(viewOf(view, "J")).toMatchObject({ position: { x: 270, y: -150 } });
     expect(viewOf(view, "F")).toMatchObject({ position: { x: 10, y: 10 } });
   });
 
   it("still stretches a fork over a box it is also wired to", () => {
-    const view = toViewNodes(directWireAndBox(), [], {}, null);
+    const view = nodeViews(directWireAndBox(), [], {}, null);
 
     expect(viewOf(view, "F")).toMatchObject({
       position: { x: 10, y: 90 },
@@ -632,7 +731,8 @@ describe("alignedEnds", () => {
 
 describe("toViewNodes for a blank label", () => {
   const labelOf = (node: ReturnType<typeof agent>) =>
-    toViewNodes(flow([node], []), [], {}, null).find((view) => view.id === node.id)?.data.label;
+    nodeViews(inOneSession([node], []), [], {}, null).find((view) => view.id === node.id)?.data
+      .label;
 
   it.each([
     ["agent", "", "Agent"],
@@ -651,12 +751,12 @@ describe("toViewNodes for a blank label", () => {
 
 describe("toViewNodes for Loop and For each labels", () => {
   it("gives a Loop its cap and a For each its list file as a sub-line", () => {
-    const source = flow(
+    const source = inOneSession(
       [loop("L", { settings: { cap: 5 } }), forEach("E", { file: "plan.md" }), agent("A")],
       [],
     );
     const data = Object.fromEntries(
-      toViewNodes(source, [], {}, null).map((node) => [node.id, node.data]),
+      nodeViews(source, [], {}, null).map((node) => [node.id, node.data]),
     );
 
     expect(data["L"]?.sub).toBe("max 5");
@@ -666,7 +766,7 @@ describe("toViewNodes for Loop and For each labels", () => {
 
   it("widens a frame so a long Loop label stays inside it", () => {
     const frameWidth = (label: string) =>
-      toViewNodes(flow([{ ...loop("L"), label }], []), [], {}, null).find(
+      nodeViews(inOneSession([{ ...loop("L"), label }], []), [], {}, null).find(
         (node) => node.id === "loop-frame-L",
       )?.width ?? 0;
 
@@ -681,8 +781,8 @@ describe("toViewNodes with a wide node", () => {
   it("widens a Loop frame around a body Agent with a 60-character label", () => {
     const frameWidth = (label: string) =>
       viewOf(
-        toViewNodes(
-          flow(
+        nodeViews(
+          inOneSession(
             [
               { ...loop("L"), position: { x: 0, y: 0 } },
               { ...agent("A", { parent: "L" }), label, position: { x: 0, y: 90 } },
@@ -705,7 +805,7 @@ describe("toViewNodes with a wide node", () => {
       ...source,
       nodes: source.nodes.map((node) => (node.id === "b1" ? { ...node, label: long } : node)),
     };
-    const view = toViewNodes(wide, [], {}, null);
+    const view = nodeViews(wide, [], {}, null);
 
     expect(viewOf(view, "F")?.width).toBe(28);
     expect(viewOf(view, "J")?.width).toBe(28);
@@ -714,7 +814,7 @@ describe("toViewNodes with a wide node", () => {
 
 describe("toViewNodes while a container is dragged", () => {
   const dragged = () =>
-    flow(
+    inOneSession(
       [
         { ...loop("L"), position: { x: 0, y: 0 } },
         { ...agent("X", { parent: "L" }), position: { x: 0, y: 100 } },
@@ -724,7 +824,7 @@ describe("toViewNodes while a container is dragged", () => {
     );
 
   it("moves the body and the frame with the container's live drag", () => {
-    const nodes = toViewNodes(dragged(), [], { L: { x: 50, y: 20 } }, null);
+    const nodes = nodeViews(dragged(), [], { L: { x: 50, y: 20 } }, null);
     const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
 
     expect(byId["X"]?.position).toEqual({ x: 50, y: 120 });
@@ -738,7 +838,7 @@ describe("toViewNodes while a container is dragged", () => {
   });
 
   it("follows a body node's own drag position over its container's", () => {
-    const nodes = toViewNodes(dragged(), [], { L: { x: 50, y: 20 }, X: { x: 300, y: 300 } }, null);
+    const nodes = nodeViews(dragged(), [], { L: { x: 50, y: 20 }, X: { x: 300, y: 300 } }, null);
 
     expect(nodes.find((node) => node.id === "X")?.position).toEqual({ x: 300, y: 300 });
   });

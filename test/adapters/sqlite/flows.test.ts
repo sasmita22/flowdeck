@@ -13,10 +13,13 @@ import {
   agent,
   branch,
   flow,
+  flowSettings,
   onMainFlow,
   output,
+  sessionContainer,
   thenWire,
   trigger,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 import { roundTripFlow } from "../../fixtures/round-trip-flow.js";
 
@@ -152,6 +155,63 @@ describe("SqliteFlowStore", () => {
 
       expect(loaded?.settings).toEqual({ buildModel: "opus", permissionMode: "acceptEdits" });
       expect(loaded !== undefined && flowsEqual(saved, loaded)).toBe(true);
+    });
+
+    it("reopens a workspace and two session containers with every setting and member, in order", () => {
+      const saved = flow(
+        [
+          trigger("ws-start"),
+          output("ws-stop"),
+          trigger("s1-start"),
+          agent("plan"),
+          output("s1-stop"),
+          trigger("s2-start"),
+          agent("review"),
+          output("s2-stop"),
+        ],
+        [
+          thenWire("ws-start", "ws-stop"),
+          thenWire("s1-start", "plan"),
+          thenWire("plan", "s1-stop"),
+          thenWire("s2-start", "review"),
+          thenWire("review", "s2-stop"),
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["ws-start", "ws-stop"], { model: "opus" }),
+            sessionContainer(["s1-start", "plan", "s1-stop"], {
+              name: "build",
+              repo: "/work/app",
+              branch: "dev",
+              model: "sonnet",
+            }),
+            sessionContainer(["s2-start", "review", "s2-stop"], {
+              id: "session-2",
+              name: "review",
+              repo: "",
+              branch: "",
+              model: "haiku",
+            }),
+          ],
+        },
+      );
+      open().save(saved);
+
+      expect(open().loadLatest()?.flow.containers).toEqual(saved.containers);
+    });
+
+    it("stores the containers in their own column and an empty object in the old session column", () => {
+      const saved = roundTripFlow();
+      open().save(saved);
+
+      const row = raw().prepare("SELECT session, containers FROM flow_versions").get() as {
+        session: string;
+        containers: string;
+      };
+
+      expect(row.session).toBe("{}");
+      expect(JSON.parse(row.containers)).toEqual(saved.containers);
     });
 
     it("keeps node order and wire order", () => {
@@ -320,6 +380,7 @@ describe("SqliteFlowStore", () => {
     const lockedTables = [
       ["flow_versions", "session = '{}'"],
       ["flow_versions", "notes = '[]'"],
+      ["flow_versions", "containers = '[]'"],
       ["nodes", "label = 'changed'"],
       ["ports", "name = 'changed'"],
       ["wires", "to_port = 'changed'"],
@@ -426,6 +487,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
+          kind: "library",
           buildConfig: null,
           variables: [],
           pinned: false,
@@ -436,6 +498,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 0,
           lastSavedAt: null,
+          kind: "library",
           buildConfig: null,
           variables: [],
           pinned: false,
@@ -484,7 +547,14 @@ describe("SqliteFlowStore", () => {
       );
       store.save(onMainFlow([agent("plan")], []), "flow-a");
       store.save(
-        { ...asking, session: { ...asking.session, buildConfig: { repo: "/repo", base: "dev" } } },
+        {
+          ...asking,
+          containers: asking.containers.map((container) =>
+            container.kind === "session"
+              ? { ...container, repo: "/repo", branch: "dev" }
+              : container,
+          ),
+        },
         "flow-a",
       );
 
@@ -495,6 +565,7 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 2,
           lastSavedAt: times[3],
+          kind: "workflow",
           buildConfig: { repo: "/repo", base: "dev" },
           variables: [
             { name: "ship", kind: "yes-no", nodeIds: ["decide"] },
@@ -508,10 +579,60 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
+          kind: "library",
           buildConfig: null,
           variables: [],
           pinned: false,
         },
+      ]);
+    });
+
+    it("lists a library as a library, its Build configuration from its first session container", () => {
+      const store = open(ids("flow-a"));
+      const library = flow(
+        [trigger("a-start"), output("a-stop"), trigger("b-start"), output("b-stop")],
+        [thenWire("a-start", "a-stop"), thenWire("b-start", "b-stop")],
+        flowSettings,
+        {
+          containers: [
+            sessionContainer(["a-start", "a-stop"], { repo: "/first", branch: "one" }),
+            sessionContainer(["b-start", "b-stop"], {
+              id: "session-2",
+              name: "second",
+              repo: "/second",
+              branch: "two",
+            }),
+          ],
+        },
+      );
+      store.save(library, { name: "Parts" });
+
+      expect(store.list()).toEqual([
+        expect.objectContaining({ kind: "library", buildConfig: { repo: "/first", base: "one" } }),
+      ]);
+    });
+
+    it("leaves an unset repository and branch out of the Build configuration", () => {
+      const store = open(ids("flow-a"));
+      store.save(flow([agent("p1")], [], flowSettings, { session: { repo: "", branch: "" } }), {
+        name: "Fresh",
+      });
+
+      expect(store.list()).toEqual([expect.objectContaining({ buildConfig: {} })]);
+    });
+
+    it("lists a workflow with no session container as a workflow with no Build configuration", () => {
+      const store = open(ids("flow-a"));
+      const workspaceOnly = flow(
+        [trigger("ws-start"), output("ws-stop")],
+        [thenWire("ws-start", "ws-stop")],
+        flowSettings,
+        { containers: [workspaceContainer(["ws-start", "ws-stop"])] },
+      );
+      store.save(workspaceOnly, { name: "Shell" });
+
+      expect(store.list()).toEqual([
+        expect.objectContaining({ kind: "workflow", buildConfig: null }),
       ]);
     });
 
@@ -706,6 +827,7 @@ describe("SqliteFlowStore", () => {
       { name: "020_run_repo_states_and_step_texts.sql" },
       { name: "021_complete_deletes_and_build_texts.sql" },
       { name: "022_clean_start.sql" },
+      { name: "023_containers_clean_start.sql" },
     ]);
   });
 });

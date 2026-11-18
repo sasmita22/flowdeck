@@ -27,7 +27,7 @@ describe("validate", () => {
     expect(new Set(ruleIds)).toEqual(new Set([name.replace(/\.json$/, "")]));
   });
 
-  it("runs the variable and repository rules in place of branch-flag and session-folder", () => {
+  it("runs the variable and container rules in place of branch-flag, session-folder and repo-required", () => {
     const ids = rules.map((rule) => rule.id);
 
     expect(ids).toEqual(
@@ -35,9 +35,15 @@ describe("validate", () => {
         "variable-kind",
         "variable-names",
         "branch-variable",
-        "repo-required",
+        "workspace-count",
+        "one-stop",
+        "session-settings",
+        "session-names",
+        "outside-container",
       ]),
     );
+    expect(ids).not.toContain("repo-required");
+    expect(brokenFixtures).not.toContain("repo-required.json");
     expect(ids).not.toContain("agent-tools");
     expect(ids).not.toContain("undeclared-variable");
     expect(ids).not.toContain("branch-flag");
@@ -46,15 +52,23 @@ describe("validate", () => {
     expect(brokenFixtures).not.toContain("session-folder.json");
   });
 
-  it.each(["variable-names", "branch-variable", "branch-value", "repo-required"])(
-    "reports exactly %s for its broken fixture",
-    (ruleId) => {
-      const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
+  it.each([
+    "variable-names",
+    "branch-variable",
+    "branch-value",
+    "workspace-count",
+    "one-start",
+    "stop-required",
+    "one-stop",
+    "session-settings",
+    "session-names",
+    "outside-container",
+  ])("reports exactly %s for its broken fixture", (ruleId) => {
+    const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
 
-      expect(errors.length).toBeGreaterThan(0);
-      expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
-    },
-  );
+    expect(errors.length).toBeGreaterThan(0);
+    expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));
+  });
 
   it("has one broken fixture per rule", () => {
     const fixtureIds = brokenFixtures.map((name) => name.replace(/\.json$/, ""));
@@ -100,11 +114,15 @@ describe("validate", () => {
   });
 
   it.each(["all-types.json", "loop-review.json", "three-agents.json"])(
-    "reports only the missing repository for examples/%s",
+    "reports only the missing repository for examples/%s, on its session container",
     (name) => {
-      expect(validate(parseFlow(readJson(examplesDir, name))).map(({ rule }) => rule)).toEqual([
-        "repo-required",
-      ]);
+      expect(
+        validate(parseFlow(readJson(examplesDir, name))).map(({ rule, container, field }) => ({
+          rule,
+          container,
+          field,
+        })),
+      ).toEqual([{ rule: "session-settings", container: "session-1", field: "repo" }]);
     },
   );
 

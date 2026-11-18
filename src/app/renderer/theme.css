@@ -1255,39 +1255,6 @@ body,
   left: 8px;
 }
 
-.fd-session-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--c-hub) 45%, var(--line));
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--c-hub) 10%, var(--panel));
-  color: var(--fg);
-  font: var(--fs-sm) var(--f-body);
-  cursor: pointer;
-}
-
-.fd-session-chip:hover {
-  background: color-mix(in srgb, var(--c-hub) 18%, var(--panel));
-}
-
-.fd-session-chip:focus-visible {
-  outline: 2px solid var(--c-flow);
-  outline-offset: 2px;
-}
-
-.fd-session-chip-tag {
-  color: var(--c-hub);
-  font: 600 var(--fs-2xs) var(--f-mono);
-  letter-spacing: 0.04em;
-}
-
-.fd-session-chip-model {
-  color: var(--muted);
-  font: var(--fs-xs) var(--f-mono);
-}
-
 .fd-rename {
   position: absolute;
   z-index: 10;

@@ -4,13 +4,24 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
+  containerTestIds,
   controlTestIds,
   pageTestIds,
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { agent, flow, loop, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  bareFlow,
+  flow,
+  inOneSession,
+  loop,
+  onMainFlow,
+  output,
+  thenWire,
+  trigger,
+} from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -99,6 +110,7 @@ const relaunch = async () => {
 type Readout = {
   nodes: { id: string; parent?: string; settings: object }[];
   wires: { kind: string; from: { node: string }; to: { node: string } }[];
+  containers: { id: string; nodes: string[] }[];
 };
 
 const readout = async (window: Page): Promise<Readout> =>
@@ -277,7 +289,7 @@ test("Clicking inside a Loop frame selects the Loop and opens its settings", asy
 
 test("Deleting a Loop deletes its body with it, orphaning nothing, and undo brings both back", async () => {
   seed(
-    flow(
+    inOneSession(
       [
         at(agent("A"), 0, 120),
         at(loop("L"), 260, 120),
@@ -306,7 +318,7 @@ test("Deleting a Loop deletes its body with it, orphaning nothing, and undo brin
 });
 
 test("A fresh Loop says on the canvas that its body needs an Agent", async () => {
-  seed(flow([], []));
+  seed(bareFlow());
   const window = await launch();
 
   await dropOn(window, "loop", 500, 300);
@@ -322,7 +334,7 @@ test("A fresh Loop says on the canvas that its body needs an Agent", async () =>
 
 test("Planner writes plan.md and Builder is given it, set in the inspector, and it survives a reload", async () => {
   seed(
-    flow(
+    inOneSession(
       [at(named("plan", "Planner"), 80, 160), at(named("build", "Builder"), 420, 160)],
       [thenWire("plan", "build")],
     ),
@@ -389,10 +401,17 @@ test("A run holds the reader until the file it is given is written", async () =>
 
 for (const container of ["loop", "foreach"] as const) {
   test(`A ${container === "loop" ? "Loop" : "For each"} drawn in the app runs to done from its build`, async () => {
-    seed(flow([], []));
+    seed(flow([at(trigger("start"), 0, 120), at(output("stop"), 900, 120)], []));
     const window = await launch();
-    await dropOn(window, container, 420, 260);
+    const session = await boxOf(window.getByTestId(containerTestIds.frame("session-1")));
+    await dropOn(window, container, session.x + session.width / 2, session.y + session.height / 2);
     const id = `${container}-1`;
+    await expect
+      .poll(
+        async () =>
+          (await readout(window)).containers.find((found) => found.id === "session-1")?.nodes,
+      )
+      .toEqual(["start", "stop", id]);
     await dropInFrame(window, "agent", window.getByTestId(`${container}-frame-${id}`));
     await expect.poll(() => parentIn(window, "agent-1")).toBe(id);
     if (container === "loop") {
@@ -403,27 +422,18 @@ for (const container of ["loop", "foreach"] as const) {
     await window.getByTestId("node-agent-1").click();
     await window.getByTestId("node-setting-instructions").fill("Say done.");
     await window.getByTestId("node-setting-instructions").blur();
-    await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
-    await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
-    const canvas = await boxOf(window.getByTestId("canvas"));
-    const frame = await boxOf(window.getByTestId(`${container}-frame-${id}`));
-    await dropOn(window, "trigger", canvas.x + 20, frame.y);
-    await dropOn(window, "output", frame.x + frame.width + 60, frame.y);
     await connectPorts(
       window,
-      window.getByTestId("port-trigger-1-out"),
+      window.getByTestId("port-start-out"),
       window.getByTestId(`port-${id}-in`),
     );
     await connectPorts(
       window,
       window.getByTestId(`port-${id}-out`),
-      window.getByTestId("port-output-1-in"),
+      window.getByTestId("port-stop-in"),
     );
-    await window.getByTestId("node-output-1").click();
-    await window.getByTestId("node-setting-name").fill("result");
-    await window.getByTestId("node-setting-name").blur();
-    await window.getByTestId("node-setting-type").fill("text");
-    await window.getByTestId("node-setting-type").blur();
+    await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
+    await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
 
     const buildId = await buildOnCanvas(window, home, container);
     await writeFile(join(workFolder(buildId), "items.txt"), "- alpha\n- bravo\n");

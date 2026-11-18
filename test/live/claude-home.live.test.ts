@@ -49,7 +49,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a live run and the user's Cl
         ],
         [builders.thenWire("t", "p1"), builders.thenWire("p1", "stop")],
       );
-      const flow = { ...parsed, session: { ...parsed.session, model: "haiku" } };
+      const flow = builders.withSession(parsed, { model: "haiku" });
       const built = await engine.saveAndBuild(flow, { name: "live-claude-home" });
       claudeTmp = join(
         "/private/tmp",

@@ -26,9 +26,11 @@ const then = (from: string, to: string) => ({
 
 function newBlueprint(): Flow {
   const flow = newCanvasFlow();
+  const session = new Set(flow.containers.find(({ kind }) => kind === "session")?.nodes);
   return {
     ...flow,
     nodes: [
+      ...flow.nodes.filter(({ id }) => !session.has(id)),
       { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
       {
         id: "p1",
@@ -49,8 +51,16 @@ function newBlueprint(): Flow {
         settings: { name: "result", type: "text" },
       },
     ],
-    wires: [then("t", "p1"), then("p1", "o")],
-    session: { ...flow.session, model: "haiku" },
+    wires: [
+      ...flow.wires.filter(({ from }) => !session.has(from.node)),
+      then("t", "p1"),
+      then("p1", "o"),
+    ],
+    containers: flow.containers.map((container) =>
+      container.kind === "session"
+        ? { ...container, model: "haiku", nodes: ["t", "p1", "o"] }
+        : container,
+    ),
   };
 }
 

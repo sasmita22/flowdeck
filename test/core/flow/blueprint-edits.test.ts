@@ -13,6 +13,9 @@ import {
   thenWire,
   trigger,
   wire,
+  workspaceContainer,
+  sessionContainer,
+  flowSettings,
 } from "../../fixtures/flow-builders.js";
 
 const zodMessage = (schema: z.ZodType, value: unknown) => {
@@ -153,25 +156,23 @@ describe("newProblems", () => {
     thenWire("a1", "merge"),
     thenWire("a2", "merge"),
   ];
-  const strayBranch = (before: ReturnType<typeof flow>) =>
-    flow([...before.nodes, agent("a3")], [...before.wires, wire("split", "out", "a3", "in")]);
+  const strayBranch = (nodes: unknown[]) =>
+    flow([...nodes, agent("a3")], [...parallelWires, wire("split", "out", "a3", "in")]);
 
   it("reports the problem an edit leaves when an agent branch is not wired onward", () => {
     const before = flow(parallelNodes, parallelWires);
 
-    expect(newProblems(before, strayBranch(before))).toEqual([
+    expect(newProblems(before, strayBranch(parallelNodes))).toEqual([
       expect.objectContaining({ rule: "parallel-section", node: "split" }),
     ]);
   });
 
   it("does not repeat problems the blueprint already had", () => {
     const blankAgent = agent("a1", { settings: { instructions: "" } });
-    const before = flow(
-      [parallelNodes[0], parallelNodes[1], blankAgent, ...parallelNodes.slice(3)],
-      parallelWires,
-    );
+    const nodes = [parallelNodes[0], parallelNodes[1], blankAgent, ...parallelNodes.slice(3)];
+    const before = flow(nodes, parallelWires);
 
-    expect(newProblems(before, strayBranch(before))).toEqual([
+    expect(newProblems(before, strayBranch(nodes))).toEqual([
       expect.objectContaining({ rule: "parallel-section", node: "split" }),
     ]);
   });
@@ -179,8 +180,8 @@ describe("newProblems", () => {
   it("reports nothing for an edit that adds no problem", () => {
     const before = flow(parallelNodes, parallelWires);
     const after = flow(
-      before.nodes.map((node) => (node.id === "a1" ? { ...node, label: "Renamed" } : node)),
-      before.wires,
+      parallelNodes.map((node) => (node.id === "a1" ? { ...node, label: "Renamed" } : node)),
+      parallelWires,
     );
 
     expect(newProblems(before, after)).toEqual([]);
@@ -196,20 +197,19 @@ describe("newProblems", () => {
 
   describe("reads only the main flow", () => {
     const blankAgent = agent("blank", { settings: { instructions: "" } });
-    const before = flow(
-      [trigger("start"), agent("a"), output("stop")],
-      [thenWire("start", "a"), thenWire("a", "stop")],
-    );
+    const mainNodes = [trigger("start"), agent("a"), output("stop")];
+    const mainWires = [thenWire("start", "a"), thenWire("a", "stop")];
+    const before = flow(mainNodes, mainWires);
 
     it("reports nothing for a blank Agent added off the main flow", () => {
-      const after = flow([...before.nodes, blankAgent], before.wires);
+      const after = flow([...mainNodes, blankAgent], mainWires);
 
       expect(newProblems(before, after)).toEqual([]);
     });
 
     it("reports the blank Agent's settings once it is added on the main flow", () => {
       const after = flow(
-        [...before.nodes, blankAgent],
+        [...mainNodes, blankAgent],
         [thenWire("start", "a"), thenWire("a", "blank"), thenWire("blank", "stop")],
       );
 
@@ -246,12 +246,61 @@ describe("newProblems", () => {
       const nodes = [trigger("start"), output("stop"), agent("a"), agent("b")];
       const mainFlow = [thenWire("start", "stop"), thenWire("a", "b")];
       const looseCycle = flow(nodes, [...mainFlow, thenWire("b", "a")]);
-      const wiredIn = flow(nodes, [...looseCycle.wires, thenWire("start", "a")]);
+      const wiredIn = flow(nodes, [...mainFlow, thenWire("b", "a"), thenWire("start", "a")]);
 
       expect(newProblems(flow(nodes, mainFlow), looseCycle)).toEqual([]);
       expect(newProblems(looseCycle, wiredIn)).toEqual(
         expect.arrayContaining([expect.objectContaining({ rule: "no-cycle" })]),
       );
+    });
+  });
+
+  describe("with a Start in every container", () => {
+    const blank = agent("blank", { settings: { instructions: "" } });
+    const baseNodes = [
+      trigger("ws-start"),
+      output("ws-stop"),
+      trigger("s1-start"),
+      agent("a"),
+      output("s1-stop"),
+      trigger("s2-start"),
+      agent("b"),
+      output("s2-stop"),
+    ];
+    const baseWires = [
+      thenWire("ws-start", "ws-stop"),
+      thenWire("s1-start", "a"),
+      thenWire("a", "s1-stop"),
+      thenWire("s2-start", "b"),
+    ];
+    const threeContainers = (extra: unknown[], wires: unknown[]) =>
+      flow([...baseNodes, ...extra], [...baseWires, ...wires], flowSettings, {
+        containers: [
+          workspaceContainer(["ws-start", "ws-stop"]),
+          sessionContainer(["s1-start", "a", "s1-stop"]),
+          sessionContainer(["s2-start", "b", "s2-stop", ...(extra.length > 0 ? ["blank"] : [])], {
+            id: "session-2",
+            name: "review",
+          }),
+        ],
+      });
+    const before = threeContainers([], [thenWire("b", "s2-stop")]);
+
+    it("reports a blank Agent added on the second session's main flow", () => {
+      const after = threeContainers(
+        [blank],
+        [thenWire("b", "blank"), thenWire("blank", "s2-stop")],
+      );
+
+      expect(newProblems(before, after)).toEqual([
+        expect.objectContaining({ rule: "required-settings", node: "blank" }),
+      ]);
+    });
+
+    it("reports nothing for a blank Agent added off every container's main flow", () => {
+      const after = threeContainers([blank], [thenWire("b", "s2-stop")]);
+
+      expect(newProblems(before, after)).toEqual([]);
     });
   });
 

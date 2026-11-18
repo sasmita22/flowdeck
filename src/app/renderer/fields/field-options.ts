@@ -1,5 +1,5 @@
 import type { Choice } from "../../../core/flow/choices.js";
-import type { BranchState } from "../branch-store.js";
+import type { RepoBranches } from "../branch-store.js";
 
 export type BranchSelect = {
   disabled: boolean;
@@ -25,7 +25,7 @@ export const branchSelect = ({
 }: {
   repo: string;
   value: string;
-  branches: Pick<BranchState, "repo" | "branches" | "error">;
+  branches: RepoBranches & { repo: string | null };
 }): BranchSelect => {
   const wanted = repo.trim();
   if (wanted === "") return hint("Choose a repository first");

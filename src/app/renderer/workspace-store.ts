@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { BuildConfig } from "../../core/flow/schema.js";
+import type { BuildConfig, Flow } from "../../core/flow/schema.js";
 import {
   folderStateSchema,
   type FolderState,
   type WorkspaceLabel,
 } from "../../core/flow/workspace-info.js";
+import { sessionBuildConfig } from "../../core/flow/structure.js";
 import { repoFolder } from "../../core/run/workspace.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 import type { CanvasState } from "./canvas/store.js";
@@ -30,6 +31,8 @@ export const selectWorkspaceLabel = ({ folder, info }: WorkspaceState): Workspac
   };
 };
 
+export const sessionFolder = (flow: Flow): BuildConfig => sessionBuildConfig(flow) ?? {};
+
 const folderKey = (folder: BuildConfig | null): string | null =>
   folder === null ? null : JSON.stringify([folder.repo ?? null, folder.base ?? null]);
 
@@ -50,7 +53,7 @@ export const createWorkspaceStore = ({
   const refresh = async () => {
     const { ready, flow } = canvas.getState();
     if (!ready) return;
-    const folder = flow.session.buildConfig;
+    const folder = sessionFolder(flow);
     const asked = ++latest;
     const current = store.getState();
     store.setState({
@@ -70,8 +73,7 @@ export const createWorkspaceStore = ({
 
   canvas.subscribe((next, previous) => {
     if (!next.ready) return;
-    const moved =
-      folderKey(next.flow.session.buildConfig) !== folderKey(previous.flow.session.buildConfig);
+    const moved = folderKey(sessionFolder(next.flow)) !== folderKey(sessionFolder(previous.flow));
     if (!previous.ready || moved) void refresh();
   });
   save.subscribe((next, previous) => {

@@ -121,6 +121,31 @@ export const containerAt = (flow: Flow, point: Position): string | undefined =>
       contains(bodyFrameBounds(flow, node), point),
   )?.id;
 
+export const hasSideLabel = (node: Node): boolean =>
+  node.type === "trigger" || node.type === "output";
+
+const labelledBounds = (node: Node): Bounds => {
+  const bounds = boundsOf(node);
+  return hasSideLabel(node)
+    ? { ...bounds, right: bounds.right + sideLabelSpan(node.label) }
+    : bounds;
+};
+
+const memberBounds = (flow: Flow, node: Node): Bounds =>
+  isContainer(node) ? bodyFrameBounds(flow, node) : labelledBounds(node);
+
+export const flowContainerBounds = (flow: Flow, containerId: string): Bounds => {
+  const members = new Set(
+    flow.containers.find((container) => container.id === containerId)?.nodes ?? [],
+  );
+  return padded(
+    flow.nodes.filter((node) => members.has(node.id)).map((node) => memberBounds(flow, node)),
+  );
+};
+
+export const flowContainerAt = (flow: Flow, point: Position): string | undefined =>
+  flow.containers.find((container) => contains(flowContainerBounds(flow, container.id), point))?.id;
+
 export const centerOf = (node: Node): Position => ({
   x: node.position.x + widthOf(node) / 2,
   y: node.position.y + nodeLook(node.type).box.height / 2,

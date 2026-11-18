@@ -50,6 +50,29 @@
         "name": "result",
         "type": "text"
       }
+    },
+    {
+      "id": "workspace-1-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": -240,
+        "y": -240
+      },
+      "settings": {}
+    },
+    {
+      "id": "workspace-1-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 0,
+        "y": -240
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
     }
   ],
   "wires": [
@@ -85,16 +108,36 @@
         "node": "stop",
         "port": "in"
       }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-1-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-1-stop",
+        "port": "in"
+      }
     }
   ],
-  "session": {
-    "name": "main",
-    "buildConfig": {
-      "repo": "/work/repo",
-      "base": "main"
+  "containers": [
+    {
+      "id": "workspace-1",
+      "kind": "workspace",
+      "model": "sonnet",
+      "nodes": ["workspace-1-start", "workspace-1-stop"]
     },
-    "model": "haiku"
-  },
+    {
+      "id": "session-1",
+      "kind": "session",
+      "name": "main",
+      "repo": "/work/repo",
+      "branch": "main",
+      "model": "haiku",
+      "nodes": ["start", "s1", "s2", "stop"]
+    }
+  ],
   "settings": {
     "buildModel": "sonnet",
     "permissionMode": "default"

@@ -4,10 +4,10 @@ import type { FlowdeckBridge } from "../preload/bridge.js";
 
 export type BranchBridge = Pick<FlowdeckBridge, "listBranches" | "pickFolder">;
 
+export type RepoBranches = { branches: string[] | null; error: string | null };
+
 export type BranchState = {
-  repo: string | null;
-  branches: string[] | null;
-  error: string | null;
+  byRepo: Readonly<Record<string, RepoBranches>>;
   load(repo: string): Promise<void>;
   browse(commit: (repo: string) => void): Promise<void>;
 };
@@ -23,26 +23,22 @@ const messageOf = (error: unknown) =>
 
 export const createBranchStore = ({ bridge }: { bridge: BranchBridge }): StoreApi<BranchState> =>
   createStore<BranchState>()((set, get) => {
-    let latest = 0;
+    const file = (repo: string, entry: RepoBranches) =>
+      set(({ byRepo }) => ({ byRepo: { ...byRepo, [repo]: entry } }));
     return {
-      repo: null,
-      branches: null,
-      error: null,
+      byRepo: {},
       load: async (repo) => {
         const wanted = repo.trim();
-        if (wanted === "") {
-          latest += 1;
-          set({ repo: null, branches: null, error: null });
-          return;
-        }
-        if (wanted === get().repo) return;
-        const asked = ++latest;
-        set({ repo: wanted, branches: null, error: null });
+        const known = get().byRepo[wanted];
+        if (wanted === "" || (known !== undefined && known.error === null)) return;
+        file(wanted, { branches: null, error: null });
         try {
-          const reply = branchesSchema.parse(await bridge.listBranches({ repo: wanted }));
-          if (asked === latest) set({ branches: reply });
+          file(wanted, {
+            branches: branchesSchema.parse(await bridge.listBranches({ repo: wanted })),
+            error: null,
+          });
         } catch (error) {
-          if (asked === latest) set({ error: messageOf(error) });
+          file(wanted, { branches: null, error: messageOf(error) });
         }
       },
       browse: async (commit) => {

@@ -41,6 +41,7 @@ import type {
   BuildAgentsOpenSpec,
   BuildTurnResult,
 } from "../../../src/ports/build-agents.js";
+import type { FileSystem } from "../../../src/ports/file-system.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
 import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
@@ -1632,6 +1633,29 @@ describe("createEngineHandler", async () => {
       expect(await present(fs, kept)).toEqual(kept);
     });
 
+    it.each([
+      [["023_containers_clean_start"]],
+      [["022_clean_start", "023_containers_clean_start"]],
+    ])("removes them too when this open applied %j", async (applied) => {
+      const fs = homeWith(...leftBehind, ...kept);
+
+      await startedWith(fs, { applied, existedBefore: true });
+
+      expect(await present(fs, leftBehind)).toEqual([]);
+      expect(await present(fs, kept)).toEqual(kept);
+    });
+
+    it("removes nothing when this open applied migrations but no clean start", async () => {
+      const fs = homeWith(...leftBehind);
+
+      await startedWith(fs, {
+        applied: ["021_complete_deletes_and_build_texts"],
+        existedBefore: true,
+      });
+
+      expect(await present(fs, leftBehind)).toEqual(leftBehind);
+    });
+
     it("removes nothing on a database this open created", async () => {
       const fs = homeWith(...leftBehind);
 
@@ -1712,9 +1736,13 @@ describe("createEngineHandler", async () => {
     let nextId: number;
     let names: number;
 
-    const inFolder = (input: Flow, buildConfig: Flow["session"]["buildConfig"]): Flow => ({
+    const inFolder = (input: Flow, { repo, base }: { repo?: string; base?: string }): Flow => ({
       ...input,
-      session: { ...input.session, buildConfig },
+      containers: input.containers.map((container) =>
+        container.kind === "session"
+          ? { ...container, repo: repo ?? "", branch: base ?? container.branch }
+          : container,
+      ),
     });
 
     const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path });
@@ -2591,9 +2619,16 @@ describe("createEngineHandler", async () => {
 
       it("leaves a loose node out of the workspace manifest and out of the run", async () => {
         const main = twoAgents();
-        const loose = flow([agent("loose")], []);
-        flows.save({ ...main, nodes: [...main.nodes, ...loose.nodes] });
-        const mainIds = main.nodes.map((node) => node.id);
+        const session = main.containers.find((container) => container.kind === "session");
+        if (session === undefined) throw new Error("twoAgents has no session container");
+        flows.save({
+          ...main,
+          nodes: [...main.nodes, agent("loose")] as Flow["nodes"],
+          containers: main.containers.map((container) =>
+            container === session ? { ...session, nodes: [...session.nodes, "loose"] } : container,
+          ),
+        });
+        const mainIds = session.nodes;
 
         const buildId = await builtId();
         const manifest = JSON.parse(
@@ -3040,15 +3075,19 @@ describe("createEngineHandler", async () => {
           release = resolve;
         });
         const asked: string[] = [];
-        const gitState = gitAt(repo.path);
-        gitState.defaultBranch = async (repoPath: string) => {
-          asked.push(repoPath);
-          await gate;
-          return "main";
-        };
+        const writes = new NodeFileSystem();
+        const fs: FileSystem = Object.assign(Object.create(writes) as NodeFileSystem, {
+          writeFile: async (path: string, content: string) => {
+            if (path.startsWith(join(home, "workspaces"))) {
+              asked.push(path);
+              await gate;
+            }
+            await writes.writeFile(path, content);
+          },
+        });
         handler = handlerWith({
           buildAgents: agents,
-          gitState,
+          fs,
           run: { ...runEnvironment(new NodeFileSystem()), usage },
         });
         const pendingId = await startedPendingId();
@@ -3056,13 +3095,13 @@ describe("createEngineHandler", async () => {
           expect(asked).toHaveLength(1);
         });
 
-        const stopped = await handler.handle({
+        const stopping = handler.handle({
           id: nextId++,
           type: "build-stop",
           payload: { pendingId },
         });
-        expect(stopped).toMatchObject({ ok: true });
         release();
+        expect(await stopping).toMatchObject({ ok: true });
         await new Promise((resolve) => setTimeout(resolve, 100));
 
         expect(runs.buildEvents(pendingId).some((entry) => entry.type === "session")).toBe(false);
@@ -3591,15 +3630,19 @@ describe("createEngineHandler", async () => {
           release = resolve;
         });
         const asked: string[] = [];
-        const gitState = gitAt(repo.path);
-        gitState.defaultBranch = async (repoPath: string) => {
-          asked.push(repoPath);
-          await gate;
-          return "main";
-        };
+        const writes = new NodeFileSystem();
+        const fs: FileSystem = Object.assign(Object.create(writes) as NodeFileSystem, {
+          writeFile: async (path: string, content: string) => {
+            if (path.startsWith(join(home, "workspaces"))) {
+              asked.push(path);
+              await gate;
+            }
+            await writes.writeFile(path, content);
+          },
+        });
         handler = handlerWith({
           buildAgents: agents,
-          gitState,
+          fs,
           run: { ...runEnvironment(new NodeFileSystem()), usage },
         });
         const pendingId = await startedPendingId("no-events-after-stop");
@@ -5790,7 +5833,7 @@ describe("createEngineHandler", async () => {
 
     const namingJira = (): Flow => {
       const base = promptFlow();
-      return { ...base, session: { ...base.session, connectors: ["jira"] } as Flow["session"] };
+      return { ...base, session: { connectors: ["jira"] } } as Flow;
     };
 
     it("starts and resumes a run's session with this machine's hook paths and no MCP config, though the build names an installed connector", async () => {

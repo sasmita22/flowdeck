@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noteTitle } from "../src/app/renderer/canvas/palette-items.js";
 import { controlTestIds, paletteTestId, readoutTestIds } from "../src/app/renderer/test-ids.js";
-import { agent, flow, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, bareFlow, flow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 
@@ -207,11 +207,12 @@ test("Cmd+A on the empty canvas selects every node and every note", async () => 
     .poll(async () =>
       JSON.parse((await window.getByTestId(readoutTestIds.selection).textContent()) ?? ""),
     )
-    .toEqual(["plan", "n1"]);
-  await expect(window.locator(".react-flow__node.selected")).toHaveCount(2);
+    .toEqual(["plan", "workspace-1-start", "workspace-1-stop", "n1"]);
+  await expect(window.locator(".react-flow__node.selected")).toHaveCount(4);
 });
 
 test("A canvas holding only a note shows no start hint", async () => {
+  seedFlow(home, bareFlow());
   const { window } = await launch();
   const hint = window.getByTestId("canvas-empty-hint");
   await expect(hint).toBeVisible();

@@ -3,6 +3,7 @@ import { moveNodes, type Move } from "../../../../src/app/renderer/canvas/comman
 import {
   bodyFrameBounds,
   boundsOf,
+  flowContainerBounds,
   sideLabelSpan,
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
@@ -14,6 +15,7 @@ import {
   flow,
   forEach,
   fork,
+  inOneSession,
   join,
   loop,
   onMainFlow,
@@ -28,7 +30,7 @@ const tidied = async (source: Flow, size = canvas): Promise<Flow> =>
 const steps = (count: number) => Array.from({ length: count }, (_, index) => `s${index + 1}`);
 
 const chain = (ids: readonly string[]): Flow =>
-  flow(
+  inOneSession(
     ids.map((id) => agent(id)),
     ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
   );
@@ -164,6 +166,18 @@ const nestedFrames = () =>
     [thenWire("a", "e1"), thenWire("e1", "l1"), thenWire("l1", "l2"), thenWire("l2", "b")],
   );
 
+const sessionOnly = (source: Flow): Flow => {
+  const workspace = new Set(
+    source.containers.flatMap((container) =>
+      container.kind === "workspace" ? container.nodes : [],
+    ),
+  );
+  return inOneSession(
+    source.nodes.filter((node) => !workspace.has(node.id)),
+    source.wires.filter((wire) => !workspace.has(wire.from.node) && !workspace.has(wire.to.node)),
+  );
+};
+
 const sectioned = (forkAfter: readonly number[], branchCount: number) => {
   const nodes: unknown[] = [];
   const wires: unknown[] = [];
@@ -190,7 +204,7 @@ const sectioned = (forkAfter: readonly number[], branchCount: number) => {
     }
     previous = joinId;
   }
-  return onMainFlow(nodes, wires);
+  return sessionOnly(onMainFlow(nodes, wires));
 };
 
 describe("tidyMoves", () => {
@@ -275,7 +289,7 @@ describe("tidyMoves", () => {
       "agent-2": "Tests",
       "agent-3": "Docs",
     };
-    const source = flow(
+    const source = inOneSession(
       ids.map((id) => ({ ...agent(id), label: labels[id] ?? id })),
       ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
     );
@@ -283,6 +297,25 @@ describe("tidyMoves", () => {
     const after = await tidied(source, { width: 1180, height: 840 });
 
     expect(rowsOf(after, ids)).toBe(1);
+  });
+
+  it("keeps nodes added outside every container, wired after a member, in flow order on one row", async () => {
+    const ids = ["p1", "agent-1", "agent-2", "agent-3"];
+    const seeded = flow([agent("p1")], []);
+    const source: Flow = {
+      ...seeded,
+      nodes: [...seeded.nodes, ...ids.slice(1).map((id) => agent(id) as Node)],
+      wires: [
+        ...seeded.wires,
+        ...ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id) as Flow["wires"][number]),
+      ],
+    };
+
+    const after = await tidied(source, { width: 1180, height: 840 });
+
+    expect(rowsOf(after, ids)).toBe(1);
+    for (const [index, id] of ids.slice(1).entries())
+      expect(positionOf(after, id).x).toBeGreaterThan(positionOf(after, ids[index] ?? "").x);
   });
 
   it("wraps a 30-step chain into several rows that fit a 1600 x 1000 canvas", async () => {
@@ -296,7 +329,7 @@ describe("tidyMoves", () => {
 
   it("wraps a chain made only of empty Loop frames into several rows", async () => {
     const ids = steps(6);
-    const source = flow(
+    const source = inOneSession(
       ids.map((id) => loop(id)),
       ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
     );
@@ -318,7 +351,7 @@ describe("tidyMoves", () => {
     const before = steps(12);
     const after = steps(24).slice(12);
     const source = chain([...before, ...after]);
-    const withParallel = flow(
+    const withParallel = inOneSession(
       [...source.nodes, fork("F"), agent("p1"), agent("p2"), join("J")],
       [
         ...source.wires.filter((wire) => wire.from.node !== "s12"),
@@ -380,6 +413,24 @@ describe("tidyMoves", () => {
     }
   });
 
+  it("leaves no two container frames overlapping", async () => {
+    const source = parallelAndLoop();
+    const frames = (current: Flow) =>
+      current.containers.map(({ id }) => [id, flowContainerBounds(current, id)] as const);
+    const clashes = (current: Flow) =>
+      frames(current).flatMap(([id, bounds], index) =>
+        frames(current)
+          .slice(index + 1)
+          .filter(([, other]) => overlaps(bounds, other))
+          .map(([otherId]) => `${id}/${otherId}`),
+      );
+    expect(clashes(source)).not.toEqual([]);
+
+    const after = await tidied(source);
+
+    expect(clashes(after)).toEqual([]);
+  });
+
   it("never moves a note and never sets a parent", async () => {
     const source: Flow = {
       ...parallelAndLoop(),
@@ -402,7 +453,7 @@ describe("tidyMoves", () => {
   });
 
   it("returns no moves for an empty flow", async () => {
-    expect(await tidyMoves(flow([], []), canvas)).toEqual([]);
+    expect(await tidyMoves(inOneSession([], []), canvas)).toEqual([]);
   });
 
   it("lays out 300 nodes in under 500 ms", async () => {

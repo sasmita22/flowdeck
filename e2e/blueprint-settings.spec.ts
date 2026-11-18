@@ -26,7 +26,7 @@ test("Blueprint settings show the build model and permission mode, and no budget
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await window.getByTestId(controlTestIds.sessionSettings).click();
-  const settings = window.getByTestId("session-settings");
+  const settings = window.getByTestId(controlTestIds.blueprintSettings);
   await expect(settings).toBeVisible();
 
   await expect(settings.getByTestId("settings-build-model")).toBeVisible();

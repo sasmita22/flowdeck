@@ -3,7 +3,7 @@ import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseFlow } from "../../src/core/flow/schema.js";
+import { asWorkflow } from "../fixtures/flow-builders.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { transcriptTail } from "../fixtures/live-evidence.js";
 import {
@@ -29,38 +29,36 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow(instructions: string) {
-  return parseFlow({
-    nodes: [
-      {
-        id: "t",
-        label: "Start",
-        type: "trigger",
-        position: at(0),
-        settings: {},
-      },
-      {
-        id: "p1",
-        label: "Run",
-        type: "agent",
-        position: at(1),
-        settings: { role: "", instructions, model: "haiku" },
-      },
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(2),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: [then("t", "p1"), then("p1", "o")],
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+  return asWorkflow(
+    {
+      nodes: [
+        {
+          id: "t",
+          label: "Start",
+          type: "trigger",
+          position: at(0),
+          settings: {},
+        },
+        {
+          id: "p1",
+          label: "Run",
+          type: "agent",
+          position: at(1),
+          settings: { role: "", instructions, model: "haiku" },
+        },
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(2),
+          settings: { name: "result", type: "text" },
+        },
+      ],
+      wires: [then("t", "p1"), then("p1", "o")],
+      settings: { buildModel: "haiku", permissionMode: "default" },
     },
-    settings: { buildModel: "haiku", permissionMode: "default" },
-  });
+    { model: "haiku" },
+  );
 }
 
 async function transcriptEntries(path: string | undefined): Promise<TranscriptEntry[]> {

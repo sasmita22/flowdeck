@@ -5,13 +5,28 @@ import {
   centerOf,
   containerLabelWidth,
   containerText,
+  flowContainerAt,
+  flowContainerBounds,
   FRAME_PADDING,
   nodeWidth,
+  padded,
+  sideLabelSpan,
   textWidth,
+  type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { nodeOutline } from "../../../../src/app/renderer/nodes/outlines.js";
-import { agent, flow, loop } from "../../../fixtures/flow-builders.js";
+import type { Flow } from "../../../../src/core/flow/schema.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  loop,
+  output,
+  sessionContainer,
+  trigger,
+  workspaceContainer,
+} from "../../../fixtures/flow-builders.js";
 
 const long = "Review every changed file against the plan and list each gap";
 
@@ -83,5 +98,97 @@ describe("frame geometry of a wide node", () => {
 
   it("reaches a Loop's frame past its wide body node by the frame padding", () => {
     expect(bodyFrameBounds(wide, theLoop).right).toBe(40 + width() + FRAME_PADDING);
+  });
+});
+
+describe("flow container frames", () => {
+  const placed = <N extends object>(node: N, x: number, y: number) => ({
+    ...node,
+    position: { x, y },
+  });
+
+  const framed = (): Flow =>
+    flow(
+      [
+        placed(trigger("w-start"), 0, 0),
+        placed(output("w-stop"), 300, 0),
+        placed(trigger("s"), 0, 400),
+        placed(agent("A"), 200, 420),
+        placed(loop("L"), 600, 400),
+        placed(agent("P", { parent: "L" }), 600, 500),
+        placed(output("t"), 1000, 400),
+      ],
+      [],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["s", "A", "L", "t"]),
+        ],
+      },
+    );
+
+  const node = (source: Flow, id: string) => {
+    const found = source.nodes.find((candidate) => candidate.id === id);
+    if (found === undefined) throw new Error(`no node ${id}`);
+    return found;
+  };
+
+  const labelled = (source: Flow, id: string): Bounds => {
+    const bounds = boundsOf(node(source, id));
+    return { ...bounds, right: bounds.right + sideLabelSpan(node(source, id).label) };
+  };
+
+  it("fits a container round its members with the Loop frame's padding", () => {
+    const source = framed();
+
+    expect(flowContainerBounds(source, "workspace-1")).toEqual(
+      padded([labelled(source, "w-start"), labelled(source, "w-stop")]),
+    );
+  });
+
+  it("fits a container round a member Loop's whole frame, body included", () => {
+    const source = framed();
+
+    expect(flowContainerBounds(source, "session-1")).toEqual(
+      padded([
+        labelled(source, "s"),
+        boundsOf(node(source, "A")),
+        bodyFrameBounds(source, node(source, "L")),
+        labelled(source, "t"),
+      ]),
+    );
+  });
+
+  it("follows a member when it moves", () => {
+    const source = framed();
+    const moved: Flow = {
+      ...source,
+      nodes: source.nodes.map((candidate) =>
+        candidate.id === "w-stop" ? { ...candidate, position: { x: 900, y: 0 } } : candidate,
+      ),
+    };
+
+    expect(flowContainerBounds(moved, "workspace-1").right).toBe(
+      labelled(moved, "w-stop").right + FRAME_PADDING,
+    );
+  });
+
+  it("reaches past a Stop's side label, so the frame never cuts it", () => {
+    const source = framed();
+    const stop = node(source, "w-stop");
+
+    expect(flowContainerBounds(source, "workspace-1").right).toBe(
+      boundsOf(stop).right + sideLabelSpan(stop.label) + FRAME_PADDING,
+    );
+  });
+
+  it("finds the container under a point, and none outside every frame", () => {
+    const source = framed();
+
+    expect(flowContainerAt(source, { x: 150, y: 10 })).toBe("workspace-1");
+    expect(flowContainerAt(source, { x: 250, y: 430 })).toBe("session-1");
+    expect(flowContainerAt(source, { x: 650, y: 510 })).toBe("session-1");
+    expect(flowContainerAt(source, { x: 3000, y: 3000 })).toBeUndefined();
   });
 });

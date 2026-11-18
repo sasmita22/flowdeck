@@ -1,9 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agent,
+  bareFlow,
   flow,
   fork,
   gate,
@@ -20,6 +22,7 @@ import {
 } from "../scripts/drive.js";
 import { CANVAS_MIN } from "../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../src/app/renderer/test-ids.js";
+import type { FlowContainer } from "../src/core/flow/schema.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -70,11 +73,40 @@ const positions = (window: Page) =>
       ),
     );
 
-const overlapping = async (window: Page) => {
-  const boxes = await Promise.all(
-    (await window.locator(".react-flow__node").all()).map((node) => boxOf(node)),
+const savedMembers = (): Map<string, Set<string>> => {
+  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
+  try {
+    const row = db
+      .prepare("SELECT containers FROM flow_versions ORDER BY rowid DESC LIMIT 1")
+      .get() as { containers: string } | undefined;
+    const containers = row === undefined ? [] : (JSON.parse(row.containers) as FlowContainer[]);
+    return new Map(containers.map(({ id, nodes }) => [`container-frame-${id}`, new Set(nodes)]));
+  } finally {
+    db.close();
+  }
+};
+
+const drawnBoxes = async (window: Page, selector: string) =>
+  Promise.all(
+    (await window.locator(selector).all()).map(async (node) => ({
+      id: (await node.getAttribute("data-id")) ?? "",
+      box: await boxOf(node),
+    })),
   );
-  return boxes.some((box, index) => boxes.slice(index + 1).some((other) => intersects(box, other)));
+
+const overlapping = async (window: Page) => {
+  const members = savedMembers();
+  const ownFrame = (a: string, b: string) =>
+    members.get(a)?.has(b) === true || members.get(b)?.has(a) === true;
+  const boxes = await drawnBoxes(window, ".react-flow__node");
+  return boxes.some((a, index) =>
+    boxes.slice(index + 1).some((b) => !ownFrame(a.id, b.id) && intersects(a.box, b.box)),
+  );
+};
+
+const framesOverlapping = async (window: Page) => {
+  const frames = await drawnBoxes(window, '.react-flow__node[data-id^="container-frame-"]');
+  return frames.some((a, index) => frames.slice(index + 1).some((b) => intersects(a.box, b.box)));
 };
 
 const launch = async (colorScheme?: ColorScheme) => {
@@ -127,7 +159,7 @@ test("Tidy moves overlapping nodes and marks the blueprint unsaved, and one Undo
   for (let added = 0; added < 3; added++) {
     await page.drag("palette-agent", "canvas", { x: 200, y: 150 });
   }
-  const nodes = window.locator(".react-flow__node");
+  const nodes = window.locator(".react-flow__node-agent");
   await expect(nodes).toHaveCount(3);
   const first = await boxOf(nodes.nth(0));
   const last = await boxOf(nodes.nth(2));
@@ -146,6 +178,7 @@ test("Tidy moves overlapping nodes and marks the blueprint unsaved, and one Undo
 
   await expect.poll(() => positions(window)).not.toEqual(before);
   expect(await overlapping(window)).toBe(false);
+  expect(await framesOverlapping(window)).toBe(false);
   await expect(window.getByTestId("flow-unsaved")).toBeVisible();
 
   await window.getByTestId(controlTestIds.undo).click();
@@ -301,6 +334,7 @@ test("On the narrowest canvas the toast stays readable and clear of the Tidy but
 });
 
 test("On an empty canvas the Tidy button is disabled and clear of the empty-canvas hint", async () => {
+  seedFlow(home, bareFlow());
   const window = await launch();
   const button = tidyButton(window);
   const hint = window.getByTestId("canvas-empty-hint");

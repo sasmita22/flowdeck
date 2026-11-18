@@ -9,9 +9,10 @@ import { rules, validate } from "../../src/core/compiler/validate.js";
 import { checkEdit } from "../../src/core/flow/blueprint-edits.js";
 import { toolNames } from "../../src/core/flow/blueprint-tools.js";
 import {
-  BuildConfig,
   FlowSettings,
+  SessionContainer,
   WireKind,
+  WorkspaceContainer,
   type Port,
   type Wire,
 } from "../../src/core/flow/schema.js";
@@ -328,16 +329,44 @@ describe("the blueprint kit", () => {
     for (const kind of WireKind.options) expect(content, kind).toContain(`\`${kind}\``);
   });
 
-  it("states the one-session rule", () => {
-    expect(skill()).toMatch(/one session/i);
-  });
-
-  it("names the build configuration fields and the blueprint settings fields", () => {
+  it("describes workspace and session containers, and no one-session rule", () => {
     const content = skill();
 
-    for (const field of [...Object.keys(BuildConfig.shape), ...Object.keys(FlowSettings.shape)]) {
+    expect(content).not.toMatch(/one[- ]session/i);
+    expect(content).toMatch(/workspace container/i);
+    expect(content).toMatch(/session containers?/i);
+    expect(content).toMatch(/each container[^.\n]*\bStart\b[^.\n]*\bStop\b/i);
+  });
+
+  it("says a blueprint with a workspace is a workflow and one without is a library", () => {
+    const content = skill();
+
+    expect(content).toMatch(/\bworkflow\b/i);
+    expect(content).toMatch(/\blibrary\b/i);
+  });
+
+  it("names every container setting and the blueprint settings fields", () => {
+    const content = skill();
+    const containerSettings = [
+      ...Object.keys(WorkspaceContainer.shape),
+      ...Object.keys(SessionContainer.shape),
+    ].filter((key) => !["id", "kind", "nodes"].includes(key));
+
+    expect([...new Set(containerSettings)].sort()).toEqual(["branch", "model", "name", "repo"]);
+    for (const field of [...containerSettings, ...Object.keys(FlowSettings.shape)]) {
       expect(content, field).toContain(`\`${field}\``);
     }
+  });
+
+  it("says add_node's parent can name a container", () => {
+    expect(skill()).toMatch(/`parent`[^.\n]*\bcontainer/i);
+  });
+
+  it("names the removed repo-required rule in no file", () => {
+    const files = kitFiles();
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((file) => readKit(file).includes("repo-required"))).toEqual([]);
   });
 
   it("says variables are found in Branch nodes and Agent instructions, never declared", () => {
@@ -362,7 +391,15 @@ describe("the blueprint kit", () => {
     for (const rule of rules) expect(content, rule.id).toContain(`\`${rule.id}\``);
   });
 
-  it.each(["one-start", "stop-required"])("names the %s rule", (id) => {
+  it.each([
+    "one-start",
+    "stop-required",
+    "workspace-count",
+    "one-stop",
+    "session-settings",
+    "session-names",
+    "outside-container",
+  ])("names the %s rule", (id) => {
     expect(skill()).toContain(`\`${id}\``);
   });
 

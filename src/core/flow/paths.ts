@@ -1,4 +1,5 @@
 import type { Flow } from "./schema.js";
+import { flowContainerMembers, flowContainerOf } from "./structure.js";
 
 const frameTypes = new Set(["loop", "foreach"]);
 
@@ -60,6 +61,10 @@ export const coveredOnEveryPath = (
   target: string,
   sourceIds: readonly string[],
 ): boolean => {
-  const starts = flow.nodes.filter((node) => node.type === "trigger").map((node) => node.id);
+  const container = flowContainerOf(flow, target);
+  const members = container === undefined ? undefined : flowContainerMembers(flow, container.id);
+  const starts = flow.nodes
+    .filter((node) => node.type === "trigger" && (members?.includes(node.id) ?? true))
+    .map((node) => node.id);
   return !search(flow, starts, new Set(sourceIds)).has(target);
 };

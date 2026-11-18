@@ -18,7 +18,12 @@ export const toolInputs = {
   add_node: z.strictObject({
     type: NodeType,
     label: z.string(),
-    parent: z.string().optional(),
+    parent: z
+      .string()
+      .optional()
+      .describe(
+        "Where the node goes: a Loop or For each id puts it in that body; a workspace or session container id puts it in that container. Leave it out for neither.",
+      ),
     settings: partialSettings.default({}),
   }),
   change_node: z.strictObject({
@@ -40,9 +45,9 @@ const descriptions: Record<ToolName, string> = {
   search_blueprints:
     "Find blueprints whose name or any node label contains the query. Deleted blueprints are left out.",
   read_blueprint:
-    "Read a blueprint's nodes, wires, session and current problems. Reading a deleted blueprint answers that it was deleted.",
+    "Read a blueprint's nodes, wires, containers (the workspace and session containers with their settings) and current problems. Reading a deleted blueprint answers that it was deleted.",
   add_node:
-    "Add a node to a blueprint. The settings given are merged over the node type's defaults.",
+    "Add a node to a blueprint, inside a Loop or For each body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults.",
   change_node: "Change a node's label or some of its settings.",
   wire: "Connect an output port of one node to an input port of another.",
   delete_node: "Delete a node and its wires.",

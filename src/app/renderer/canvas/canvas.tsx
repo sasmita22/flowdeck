@@ -29,7 +29,6 @@ import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
 import { RenameField } from "./rename-field.js";
-import { SessionChip } from "./session-chip.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
@@ -39,12 +38,18 @@ const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
 const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge };
 
-const containerOfFrame = (node: ViewNode): string | undefined =>
-  node.type === "loop-frame"
-    ? node.data.loopId
-    : node.type === "foreach-frame"
-      ? node.data.forEachId
-      : undefined;
+const containerOfFrame = (node: ViewNode): string | undefined => {
+  switch (node.type) {
+    case "loop-frame":
+      return node.data.loopId;
+    case "foreach-frame":
+      return node.data.forEachId;
+    case "container-frame":
+      return node.data.containerId;
+    default:
+      return undefined;
+  }
+};
 const viewing = {
   deleteKeyCode: null,
   nodesDraggable: false,
@@ -54,7 +59,7 @@ const viewing = {
   fitViewOptions: { maxZoom: 1 },
 } satisfies Partial<ReactFlowProps>;
 
-function Toolbar({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreApi<ShellState> }) {
+function Toolbar({ store }: { store: StoreApi<CanvasState> }) {
   const canUndo = useStore(store, (state) => state.undoStack.length > 0);
   const canRedo = useStore(store, (state) => state.redoStack.length > 0);
   const canDelete = useStore(store, selectCanDelete);
@@ -85,7 +90,6 @@ function Toolbar({ store, shell }: { store: StoreApi<CanvasState>; shell: StoreA
       >
         Delete
       </button>
-      <SessionChip canvas={store} shell={shell} />
     </div>
   );
 }
@@ -436,7 +440,7 @@ function Board({
       <PanelShowButtons
         shell={shell}
         run={run}
-        toolbar={readOnly ? null : <Toolbar store={store} shell={shell} />}
+        toolbar={readOnly ? null : <Toolbar store={store} />}
         readOnly={readOnly}
       />
       {!readOnly && <EmptyHint store={store} shell={shell} />}

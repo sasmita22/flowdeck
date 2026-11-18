@@ -8,7 +8,14 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { agent, flow, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  gate,
+  inOneSession,
+  onMainFlow,
+  thenWire,
+} from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, type LaunchedApp } from "../scripts/drive.js";
@@ -32,7 +39,7 @@ let repo: TmpRepo | undefined;
 let launched: LaunchedApp | undefined;
 
 const laidOut = (nodes: unknown[], wires: unknown[]): Flow =>
-  flow(
+  inOneSession(
     nodes.map((node, index) => ({
       ...(node as object),
       position: { x: index * 240, y: (index % 2) * 120 },

@@ -4,11 +4,14 @@ import type { Flow } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
+  flowSettings,
   forEach,
   gate,
   loop,
   output,
+  sessionContainer,
   thenWire,
+  trigger,
 } from "../../../fixtures/flow-builders.js";
 
 const at = <N extends object>(node: N, x: number, y: number) => ({ ...node, position: { x, y } });
@@ -241,6 +244,8 @@ describe("deleting a container", () => {
           at(agent("B"), 600, 0),
         ],
         [thenWire("A", "P"), thenWire("P", "Q"), thenWire("L", "B")],
+        flowSettings,
+        { containers: [sessionContainer(["A", "L", "B"])] },
       ),
     );
     const before = store.getState().flow;
@@ -258,5 +263,78 @@ describe("deleting a container", () => {
 
     store.getState().redo();
     expect(store.getState().flow).toEqual(after);
+  });
+});
+
+describe("containers never nest", () => {
+  const sessionAt = () =>
+    flow(
+      [at(trigger("s"), 0, 0), at(output("t"), 600, 0), at(loop("L"), 0, 600)],
+      [thenWire("s", "t")],
+      flowSettings,
+      { containers: [sessionContainer(["s", "t"])] },
+    );
+
+  const membersOf = (current: Flow, id: string) =>
+    current.containers.find((container) => container.id === id)?.nodes;
+
+  it.each(["session", "workspace"] as const)(
+    "refuses a %s dropped inside a session container, and says why",
+    (type) => {
+      const store = loaded(sessionAt());
+      const before = store.getState().flow;
+
+      store.getState().drop(type, { x: 200, y: 10 });
+
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toEqual([]);
+      expect(store.getState().message).toMatch(/^Can't drop /);
+    },
+  );
+
+  it.each(["session", "workspace"] as const)(
+    "refuses a %s dropped inside a Loop's frame, and says why",
+    (type) => {
+      const store = loaded(sessionAt());
+      const before = store.getState().flow;
+
+      store.getState().drop(type, { x: 100, y: 660 });
+
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toEqual([]);
+      expect(store.getState().message).toMatch(/^Can't drop /);
+    },
+  );
+
+  it("puts a Loop dropped inside a session container in that container, not in a body", () => {
+    const store = loaded(sessionAt());
+
+    store.getState().drop("loop", { x: 200, y: 10 });
+
+    const after = store.getState().flow;
+    expect(membersOf(after, "session-1")).toEqual(["s", "t", "loop-1"]);
+    expect(nodeOf(after, "loop-1")).not.toHaveProperty("parent");
+  });
+
+  it("puts a Loop dragged into a session container in it, its body following through the Loop", () => {
+    const store = loaded(
+      flow(
+        [
+          at(trigger("s"), 0, 0),
+          at(output("t"), 600, 0),
+          at(loop("L"), 0, 600),
+          at(agent("P", { parent: "L" }), 0, 680),
+        ],
+        [thenWire("s", "t")],
+        flowSettings,
+        { containers: [sessionContainer(["s", "t"])] },
+      ),
+    );
+
+    drag(store, { L: { x: 200, y: 10 } });
+
+    const after = store.getState().flow;
+    expect(membersOf(after, "session-1")).toEqual(["s", "t", "L"]);
+    expect(parentOf(after, "P")).toBe("L");
   });
 });

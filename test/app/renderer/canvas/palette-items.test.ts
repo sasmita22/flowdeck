@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   filterPalette,
+  flowContainerItems,
   groupPalette,
   nodeTitle,
   noteTitle,
   paletteGroups,
   paletteItems,
 } from "../../../../src/app/renderer/canvas/palette-items.js";
-import { nodeDefaults } from "../../../../src/app/renderer/canvas/store.js";
+import {
+  isCanvasItemType,
+  newCanvasFlow,
+  nodeDefaults,
+  type CanvasItemType,
+} from "../../../../src/app/renderer/canvas/store.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { paletteTestId } from "../../../../src/app/renderer/test-ids.js";
-import { NodeType } from "../../../../src/core/flow/schema.js";
+import { NodeType, type Flow } from "../../../../src/core/flow/schema.js";
+import { agent, flow, flowSettings, sessionContainer } from "../../../fixtures/flow-builders.js";
 
-const itemOf = (type: NodeType | "note") => {
+const itemOf = (type: CanvasItemType) => {
   const item = paletteItems.find((entry) => entry.type === type);
   if (item === undefined) throw new Error(`no palette item for ${type}`);
   return item;
@@ -26,9 +33,9 @@ describe("nodeTitle", () => {
 });
 
 describe("paletteItems", () => {
-  it("has one entry per node type, and the note", () => {
+  it("has one entry per node type, the two containers, and the note", () => {
     expect(paletteItems.map((item) => item.type).sort()).toEqual(
-      [...NodeType.options, "note"].sort(),
+      [...NodeType.options, "workspace", "session", "note"].sort(),
     );
   });
 
@@ -197,5 +204,116 @@ describe("Start and Stop on top", () => {
 
   it("keeps Start and Stop first when searching for s", () => {
     expect(typesOf("s").slice(0, 2)).toEqual(["trigger", "output"]);
+  });
+});
+
+describe("the Composition group", () => {
+  it("holds Workspace then Session, each with its palette id", () => {
+    expect(
+      paletteItems
+        .filter((item) => item.group === "Composition")
+        .map(({ type, testId, label }) => ({ type, testId, label })),
+    ).toEqual([
+      { type: "workspace", testId: "palette-workspace", label: "Workspace" },
+      { type: "session", testId: "palette-session", label: "Session" },
+    ]);
+  });
+
+  it.each(["workspace", "session"])("counts %s as a canvas item type", (type) => {
+    expect(isCanvasItemType(type)).toBe(true);
+  });
+
+  it.each(["workspace", "session"] as const)("describes %s in one non-empty line", (type) => {
+    const { description } = itemOf(type);
+    expect(description.trim()).not.toBe("");
+    expect(description).not.toMatch(/\n/);
+  });
+});
+
+describe("flowContainerItems", () => {
+  const at = { x: 400, y: 300 };
+
+  const onlyContainer = (items: ReturnType<typeof flowContainerItems>) => {
+    const [container, ...more] = items.containers ?? [];
+    if (container === undefined || more.length > 0) throw new Error("expected one container");
+    return container;
+  };
+
+  const wiredStartAndStop = (source: Flow, items: ReturnType<typeof flowContainerItems>) => {
+    const container = onlyContainer(items);
+    const [start, stop, ...rest] = items.nodes;
+    expect(rest).toEqual([]);
+    expect(start?.type).toBe("trigger");
+    expect(stop?.type).toBe("output");
+    expect(container.nodes).toEqual([start?.id, stop?.id]);
+    expect(items.nodes.some((node) => node.parent !== undefined)).toBe(false);
+    const taken = new Set([
+      ...source.nodes.map(({ id }) => id),
+      ...source.containers.map(({ id }) => id),
+    ]);
+    expect(items.nodes.filter(({ id }) => taken.has(id) || id === container.id)).toEqual([]);
+    expect(items.wires).toEqual([
+      {
+        kind: "then",
+        from: { node: start?.id, port: "out" },
+        to: { node: stop?.id, port: "in" },
+      },
+    ]);
+    expect(items.notes).toEqual([]);
+  };
+
+  it("makes a Session a session container with the next free id and name, holding a wired Start and Stop", () => {
+    const source = newCanvasFlow();
+
+    const items = flowContainerItems("session", source, at);
+
+    expect(onlyContainer(items)).toMatchObject({
+      id: "session-2",
+      kind: "session",
+      name: "session-2",
+      repo: "",
+      branch: "",
+      model: "sonnet",
+    });
+    wiredStartAndStop(source, items);
+  });
+
+  it("names a Session after the names already taken", () => {
+    const source = flow([agent("a"), agent("b")], [], flowSettings, {
+      containers: [
+        sessionContainer(["a"], { name: "session" }),
+        sessionContainer(["b"], { id: "session-2", name: "session-2" }),
+      ],
+    });
+
+    expect(onlyContainer(flowContainerItems("session", source, at))).toMatchObject({
+      id: "session-3",
+      name: "session-3",
+    });
+  });
+
+  it("names the first Session session, as session-1", () => {
+    const source = flow([], [], flowSettings, { containers: [] });
+
+    expect(onlyContainer(flowContainerItems("session", source, at))).toMatchObject({
+      id: "session-1",
+      name: "session",
+    });
+  });
+
+  it("makes a Workspace a workspace container on sonnet, holding a wired Start and Stop", () => {
+    const source = flow([agent("a")], [], flowSettings, {
+      containers: [sessionContainer(["a"])],
+    });
+
+    const items = flowContainerItems("workspace", source, at);
+
+    expect(onlyContainer(items)).toEqual({
+      id: "workspace-1",
+      kind: "workspace",
+      model: "sonnet",
+      nodes: onlyContainer(items).nodes,
+    });
+    wiredStartAndStop(source, items);
   });
 });

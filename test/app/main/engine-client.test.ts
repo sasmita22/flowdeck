@@ -57,7 +57,7 @@ describe("EngineClient", () => {
   });
 
   it("posts the payload with the request and resolves with the matching reply", async () => {
-    const flow = { nodes: [], wires: [], session: { name: "main" } };
+    const flow = { nodes: [], wires: [], containers: [] };
     const saved = client.request("save-flow", flow);
 
     expect(port.posted).toEqual([{ id: expect.any(Number), type: "save-flow", payload: flow }]);

@@ -1,21 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyField,
-  sessionFields,
+  containerFields,
   settingsFields,
+  sharedFieldFor,
   type FieldDescription,
 } from "../../../../src/app/renderer/inspector/schema-form.js";
 import { controlTestIds } from "../../../../src/app/renderer/test-ids.js";
 import { modelChoices, permissionModes } from "../../../../src/core/flow/choices.js";
-import { Session } from "../../../../src/core/flow/schema.js";
-
-const deepFreeze = <T>(value: T): T => {
-  if (typeof value === "object" && value !== null) {
-    for (const child of Object.values(value)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value;
-};
+import type { SessionContainer, WorkspaceContainer } from "../../../../src/core/flow/schema.js";
 
 const summary = (field: FieldDescription) => ({
   control: field.control,
@@ -24,38 +16,24 @@ const summary = (field: FieldDescription) => ({
   ...(field.control === "select" ? { options: field.options } : {}),
 });
 
-const worktreeSession = (): Session =>
-  deepFreeze({
-    name: "build",
-    buildConfig: { repo: "/r", base: "main" },
-    model: "sonnet",
-    frame: { nodes: ["A", "B"] },
-  });
+const workspace: WorkspaceContainer = {
+  id: "workspace-1",
+  kind: "workspace",
+  model: "sonnet",
+  nodes: [],
+};
 
-describe("sessionFields", () => {
-  it("describes the session name, repository, base branch and model in schema order", () => {
-    expect(sessionFields().map(summary)).toEqual([
-      { control: "text", path: ["name"], testId: "session-name" },
-      { control: "text", path: ["buildConfig", "repo"], testId: "session-build-config-repo" },
-      { control: "text", path: ["buildConfig", "base"], testId: "session-build-config-base" },
-      {
-        control: "select",
-        path: ["model"],
-        testId: "session-model",
-        options: modelChoices.map(({ value }) => value),
-      },
-    ]);
-  });
+const session: SessionContainer = {
+  id: "session-2",
+  kind: "session",
+  name: "web",
+  repo: "/code/blog",
+  branch: "main",
+  model: "sonnet",
+  nodes: [],
+};
 
-  it("labels every field in plain words", () => {
-    expect(sessionFields().map((field) => [field.testId, field.label])).toEqual([
-      ["session-name", "Session name"],
-      ["session-build-config-repo", "Repository"],
-      ["session-build-config-base", "Start from branch"],
-      ["session-model", "Model"],
-    ]);
-  });
-});
+const modelOptions = modelChoices.map(({ value }) => value);
 
 describe("settingsFields", () => {
   it("describes the build model and the permission mode, in schema order", () => {
@@ -94,42 +72,63 @@ describe("settingsFields", () => {
 });
 
 describe("the Blueprint settings form", () => {
-  const ids = () => [...sessionFields(), ...settingsFields()].map(({ testId }) => testId);
+  it("keeps only the build model and the permission mode", () => {
+    expect(settingsFields().map(({ path }) => path.join("."))).toEqual([
+      "buildModel",
+      "permissionMode",
+    ]);
+  });
 
   it.each(["budget", "allowed-tools", "connectors", "variables"])("has no %s field", (removed) => {
-    expect(ids().filter((id) => id.includes(removed))).toEqual([]);
+    const ids = [...settingsFields(), ...containerFields(workspace), ...containerFields(session)];
+
+    expect(ids.map(({ testId }) => testId).filter((id) => id.includes(removed))).toEqual([]);
   });
 });
 
-describe("applyField", () => {
-  const expectSession = (result: Session) => expect(Session.parse(result)).toEqual(result);
-
-  it("sets the model and keeps every other key", () => {
-    const before = worktreeSession();
-
-    const after = applyField(before, ["model"], "haiku");
-
-    expect(after).toEqual({ ...before, model: "haiku" });
-    expect(after).not.toBe(before);
-    expectSession(after);
+describe("containerFields", () => {
+  it("describes a workspace by its model alone, named by the container", () => {
+    expect(containerFields(workspace).map(summary)).toEqual([
+      {
+        control: "select",
+        path: ["model"],
+        testId: "container-workspace-1-model",
+        options: modelOptions,
+      },
+    ]);
   });
 
-  it("sets a string inside the current working folder variant", () => {
-    const before = worktreeSession();
-
-    const after = applyField(before, ["buildConfig", "repo"], "/other");
-
-    expect(after.buildConfig).toEqual({ repo: "/other", base: "main" });
-    expect(after.frame).toEqual(before.frame);
-    expectSession(after);
+  it("describes a session by its name, repository, branch and model, named by the container", () => {
+    expect(containerFields(session).map(summary)).toEqual([
+      { control: "text", path: ["name"], testId: "container-session-2-name" },
+      { control: "text", path: ["repo"], testId: "container-session-2-repo" },
+      { control: "text", path: ["branch"], testId: "container-session-2-branch" },
+      {
+        control: "select",
+        path: ["model"],
+        testId: "container-session-2-model",
+        options: modelOptions,
+      },
+    ]);
   });
 
-  it("sets the base branch and keeps the repository", () => {
-    const before = deepFreeze({ ...worktreeSession(), buildConfig: { repo: "/r" } });
+  it("labels every field in plain words", () => {
+    expect(containerFields(session).every(({ label }) => label.trim() !== "")).toBe(true);
+  });
+});
 
-    const after = applyField(before, ["buildConfig", "base"], "dev");
+describe("sharedFieldFor", () => {
+  it("routes a container's model, repository and branch to the shared fields", () => {
+    expect(containerFields(session).map(({ path }) => sharedFieldFor(path))).toEqual([
+      undefined,
+      "repo",
+      "branch",
+      "model",
+    ]);
+    expect(containerFields(workspace).map(({ path }) => sharedFieldFor(path))).toEqual(["model"]);
+  });
 
-    expect(after.buildConfig).toEqual({ repo: "/r", base: "dev" });
-    expectSession(after);
+  it("routes the blueprint's build model to the shared model field", () => {
+    expect(settingsFields().map(({ path }) => sharedFieldFor(path))).toEqual(["model", undefined]);
   });
 });

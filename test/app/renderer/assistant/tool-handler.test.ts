@@ -15,7 +15,17 @@ import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
 import type { Flow } from "../../../../src/core/flow/schema.js";
-import { agent, flow, output, thenWire, trigger } from "../../../fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  flowSettings,
+  output,
+  sessionContainer,
+  thenWire,
+  trigger,
+  workspaceContainer,
+} from "../../../fixtures/flow-builders.js";
+import { boundsOf, flowContainerBounds } from "../../../../src/app/renderer/canvas/frames.js";
 
 vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) => {
   const actual =
@@ -48,6 +58,7 @@ const summary = ({ flowId, name }: Saved) => ({
   buildConfig: null,
   variables: [],
   pinned: false,
+  kind: "workflow",
 });
 
 const openBlueprint = (): Saved => ({
@@ -204,8 +215,15 @@ describe("tool handler edits", () => {
 
     expect(result).toMatchObject({ ok: true });
     const after = canvas.getState().flow;
-    expect(after.nodes.map(({ id }) => id)).toEqual(["start", "agent-1"]);
-    expect(after.wires).toEqual([]);
+    expect(after.nodes.map(({ id }) => id)).toEqual([
+      "start",
+      "agent-1",
+      "workspace-1-start",
+      "workspace-1-stop",
+    ]);
+    expect(after.wires.map(({ from, to }) => `${from.node}>${to.node}`)).toEqual([
+      "workspace-1-start>workspace-1-stop",
+    ]);
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
 
@@ -253,6 +271,8 @@ describe("tool handler edits", () => {
       "start",
       "p1",
       "agent-1",
+      "workspace-1-start",
+      "workspace-1-stop",
       "One",
       "Two",
       "Three",
@@ -390,6 +410,110 @@ describe("tool handler reads", () => {
     expect(result).toMatchObject({ ok: true });
     const found = result["blueprints"] as { flowId: string }[];
     expect(found.map(({ flowId }) => flowId).sort()).toEqual(["flow-2", "flow-3"]);
+  });
+});
+
+describe("tool handler and session containers", () => {
+  const containerIn = (current: Flow, id: string) =>
+    current.containers.find((container) => container.id === id);
+
+  it("read_blueprint answers each session container by id, with its name, repo, branch and model", async () => {
+    const { call, canvas } = await setup();
+
+    const result = await call("read_blueprint", {});
+
+    expect((result["flow"] as Flow).containers).toEqual(canvas.getState().flow.containers);
+    expect(containerIn(result["flow"] as Flow, "session-1")).toEqual({
+      id: "session-1",
+      kind: "session",
+      name: "main",
+      repo: "/work/repo",
+      branch: "main",
+      model: "sonnet",
+      nodes: ["start", "p1", "agent-1"],
+    });
+  });
+
+  it("delete_node takes the node off its session container's members only", async () => {
+    const { call, canvas } = await setup();
+    const workspace = containerIn(canvas.getState().flow, "workspace-1");
+
+    await call("delete_node", { nodeId: "p1" });
+
+    const after = canvas.getState().flow;
+    expect(containerIn(after, "session-1")?.nodes).toEqual(["start", "agent-1"]);
+    expect(containerIn(after, "workspace-1")).toEqual(workspace);
+  });
+
+  it("add_node with a container as its parent adds the node to that container, with no parent", async () => {
+    const { call, canvas } = await setup();
+    const before = canvas.getState().flow;
+
+    const result = await call("add_node", { type: "agent", label: "Four", parent: "session-1" });
+
+    expect(result).toMatchObject({ ok: true, nodeId: "agent-2" });
+    const after = canvas.getState().flow;
+    expect(containerIn(after, "session-1")?.nodes).toEqual(["start", "p1", "agent-1", "agent-2"]);
+    expect(after.nodes.find(({ id }) => id === "agent-2")).not.toHaveProperty("parent");
+
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+  });
+
+  it("add_node into a container places the node beside that container's members, clear of every other frame", async () => {
+    const { call, canvas } = await setup();
+    const at = <N extends object>(node: N, x: number, y: number) => ({
+      ...node,
+      position: { x, y },
+    });
+    canvas.getState().load(
+      flow(
+        [
+          at(trigger("w-start"), 0, 60),
+          at(output("w-stop"), 300, 60),
+          at(trigger("start"), 0, 400),
+          at(agent("p1"), 200, 400),
+          at(output("stop"), 500, 400),
+        ],
+        [thenWire("w-start", "w-stop"), thenWire("start", "p1"), thenWire("p1", "stop")],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["w-start", "w-stop"]),
+            sessionContainer(["start", "p1", "stop"]),
+          ],
+        },
+      ),
+    );
+
+    await call("add_node", { type: "agent", label: "Four", parent: "session-1" });
+
+    const after = canvas.getState().flow;
+    const added = after.nodes.find(({ id }) => id === "agent-1");
+    if (added === undefined) return expect.fail("agent-1 was not added");
+    const bounds = boundsOf(added);
+    const workspace = flowContainerBounds(after, "workspace-1");
+    expect(
+      bounds.left < workspace.right &&
+        workspace.left < bounds.right &&
+        bounds.top < workspace.bottom &&
+        workspace.top < bounds.bottom,
+    ).toBe(false);
+    expect(added.position.y).toBe(400);
+  });
+
+  it("delete_node of a container's last member removes the container, in the ask's one undo step", async () => {
+    const { call, canvas } = await setup();
+    const before = canvas.getState().flow;
+
+    await call("delete_node", { nodeId: "workspace-1-start" });
+    await call("delete_node", { nodeId: "workspace-1-stop" });
+
+    expect(canvas.getState().flow.containers.map(({ id }) => id)).toEqual(["session-1"]);
+    expect(canvas.getState().undoStack).toHaveLength(1);
+
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
   });
 });
 

@@ -18,10 +18,10 @@ import { hookCommand, shellQuote } from "../../src/core/compiler/hook-settings.j
 import type { Manifest, ManifestNode } from "../../src/core/compiler/lower.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { scopeLine, scopeOf } from "../../src/core/compiler/scope-line.js";
-import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
+import type { Flow } from "../../src/core/flow/schema.js";
 import type { Handoff } from "../../src/core/flow/handoff.js";
 import { agentPrompt } from "../../src/core/nodes/agent/execute.js";
-import { agent, onMainFlow } from "../fixtures/flow-builders.js";
+import { agent, asWorkflow, onMainFlow } from "../fixtures/flow-builders.js";
 import { killTmuxServer, removeClaudeSessions, sleep } from "../fixtures/live-claude.js";
 import {
   draftsOnly,
@@ -148,38 +148,36 @@ const then = (from: string, to: string) => ({
 
 function liveFlow(steps: AgentSpec[]): Flow {
   const ids = ["t", ...steps.map((step) => step.id), "o"];
-  return parseFlow({
-    nodes: [
-      { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
-      ...steps.map((step, index) => ({
-        id: step.id,
-        label: step.label,
-        type: "agent",
-        position: at(index + 1),
-        settings: {
-          role: "",
-          instructions: step.instructions,
-          model: "haiku",
-          ...(step.given === undefined ? {} : { given: step.given }),
-          ...(step.writes === undefined ? {} : { writes: step.writes }),
+  return asWorkflow(
+    {
+      nodes: [
+        { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },
+        ...steps.map((step, index) => ({
+          id: step.id,
+          label: step.label,
+          type: "agent",
+          position: at(index + 1),
+          settings: {
+            role: "",
+            instructions: step.instructions,
+            model: "haiku",
+            ...(step.given === undefined ? {} : { given: step.given }),
+            ...(step.writes === undefined ? {} : { writes: step.writes }),
+          },
+        })),
+        {
+          id: "o",
+          label: "Done",
+          type: "output",
+          position: at(steps.length + 1),
+          settings: { name: "result", type: "text" },
         },
-      })),
-      {
-        id: "o",
-        label: "Done",
-        type: "output",
-        position: at(steps.length + 1),
-        settings: { name: "result", type: "text" },
-      },
-    ],
-    wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
-    session: {
-      name: "main",
-      buildConfig: { base: "main" },
-      model: "haiku",
+      ],
+      wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
+      settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
     },
-    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
-  });
+    { model: "haiku" },
+  );
 }
 
 const agentFile = (flow: Flow, nodeId: string) =>

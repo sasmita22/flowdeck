@@ -1,4 +1,5 @@
 import type { NodeTypes } from "@xyflow/react";
+import { ContainerFrame } from "../canvas/container-frame.js";
 import { ForEachFrame } from "../canvas/foreach-frame.js";
 import { LoopFrame } from "../canvas/loop-frame.js";
 import { AgentNode } from "./agent.js";
@@ -28,5 +29,6 @@ export const nodeTypes: NodeTypes = {
   output: OutputNode,
   "loop-frame": LoopFrame,
   "foreach-frame": ForEachFrame,
+  "container-frame": ContainerFrame,
   note: NoteNode,
 };

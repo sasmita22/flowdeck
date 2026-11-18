@@ -1,7 +1,7 @@
 import { Fragment, useState, type DragEvent, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import { NodePreview } from "../nodes/preview.js";
+import { ContainerPreview, NodePreview } from "../nodes/preview.js";
 import { PanelToggle } from "../panel-toggle.js";
 import { ResizeHandle, useShownWidth } from "../resize-handle.js";
 import type { RunView } from "../run-store.js";
@@ -34,7 +34,11 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemTyp
       onKeyDown={onKeyDown}
     >
       <span className="fd-palette-preview">
-        <NodePreview type={item.type} />
+        {item.type === "workspace" || item.type === "session" ? (
+          <ContainerPreview kind={item.type} />
+        ) : (
+          <NodePreview type={item.type} />
+        )}
       </span>
       <span className="fd-palette-text">
         <span className="fd-palette-head">

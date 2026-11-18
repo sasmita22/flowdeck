@@ -13,7 +13,7 @@ import { applyShared, sharedPath } from "../../../src/core/compiler/shared.js";
 import type { BuildReport } from "../../../src/core/compiler/build-report.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -387,8 +387,9 @@ describe("checkBuild", () => {
 
     it("asks no template for a hand-off file that is not markdown", async () => {
       const base = sample();
-      const plain = flow(
-        base.nodes.map((node) =>
+      const plain: Flow = {
+        ...base,
+        nodes: base.nodes.map((node) =>
           node.type === "agent" && (node.id === "p" || node.id === "a")
             ? {
                 ...node,
@@ -399,8 +400,7 @@ describe("checkBuild", () => {
               }
             : node,
         ),
-        base.wires,
-      );
+      };
       const inputs = await workspace(plain);
       const readBack = inputs.readBack.filter(
         (file) => file.path !== "plugin/templates/greeting.txt",

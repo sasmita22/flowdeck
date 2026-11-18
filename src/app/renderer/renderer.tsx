@@ -91,9 +91,13 @@ function renderApp(root: HTMLElement) {
     }
   });
   run.subscribe((next, previous) => {
-    if (next.problems !== previous.problems && needsSessionSetup(next.problems)) {
-      shell.getState().openSessionSettings();
-    }
+    if (next.problems === previous.problems || !needsSessionSetup(next.problems)) return;
+    const unset = next.problems?.find(
+      ({ container, node }) => container !== undefined && node === undefined,
+    );
+    if (unset?.container === undefined) return;
+    canvas.getState().select([unset.container]);
+    shell.getState().showInspector();
   });
   const branches = createBranchStore({ bridge: window.flowdeck });
   const buildBranches = createBranchStore({ bridge: window.flowdeck });

@@ -9,10 +9,13 @@ import {
   agent,
   branch,
   flow,
+  flowSettings,
   onMainFlow,
   output,
   thenWire,
   trigger,
+  sessionContainer,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
 const instructed = (id: string, instructions: string) => agent(id, { settings: { instructions } });
@@ -80,6 +83,47 @@ describe("foundVariables", () => {
     );
 
     expect(found.map(({ name }) => name)).toEqual(["ticket"]);
+  });
+
+  it("finds the variables of every container's main flow, and none off them", () => {
+    const found = foundVariables(
+      flow(
+        [
+          trigger("ws-start"),
+          output("ws-stop"),
+          trigger("s1-start"),
+          branch("decide", "ship"),
+          output("s1-stop"),
+          trigger("s2-start"),
+          instructed("plan", "Plan {{ticket}}."),
+          output("s2-stop"),
+          instructed("stray", "Use {{ghost}}."),
+        ],
+        [
+          thenWire("ws-start", "ws-stop"),
+          thenWire("s1-start", "decide"),
+          thenWire("decide", "s1-stop"),
+          thenWire("s2-start", "plan"),
+          thenWire("plan", "s2-stop"),
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["ws-start", "ws-stop"]),
+            sessionContainer(["s1-start", "decide", "s1-stop"]),
+            sessionContainer(["s2-start", "plan", "s2-stop", "stray"], {
+              id: "session-2",
+              name: "review",
+            }),
+          ],
+        },
+      ),
+    );
+
+    expect(found).toEqual([
+      { name: "ship", kind: "yes-no", nodeIds: ["decide"] },
+      { name: "ticket", kind: "text", nodeIds: ["plan"] },
+    ]);
   });
 
   it("finds nothing in a flow with no Branch and no {{name}}", () => {

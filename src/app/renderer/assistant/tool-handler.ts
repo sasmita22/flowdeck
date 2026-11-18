@@ -24,6 +24,7 @@ import { tidyMoves } from "../canvas/layout.js";
 import {
   defaultCanvasSize,
   nextNodeId,
+  placeInContainer,
   placeNode,
   selectDirty,
   type CanvasState,
@@ -103,11 +104,19 @@ export function createToolHandler({
     switch (edit.tool) {
       case "add_node": {
         const nodeId = nextNodeId(edit.type, flow);
-        const position = placeNode(flow, edit.type, firstPosition, edit.parent);
         const { type, label, parent, settings } = edit;
+        const container = flow.containers.find(({ id }) => id === parent)?.id;
+        const body = container === undefined ? parent : undefined;
+        const position =
+          container === undefined
+            ? placeNode(flow, type, firstPosition, body)
+            : placeInContainer(flow, type, container);
         const node = { id: nodeId, type, label, position, settings };
         return {
-          command: addNode((parent === undefined ? node : { ...node, parent }) as Node),
+          command: addNode(
+            (body === undefined ? node : { ...node, parent: body }) as Node,
+            container,
+          ),
           nodeId,
         };
       }

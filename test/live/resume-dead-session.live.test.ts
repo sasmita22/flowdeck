@@ -27,7 +27,7 @@ import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { agentType } from "../../src/core/nodes/agent/execute.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakePullRequests } from "../fakes/fake-pull-requests.js";
-import { gate, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
+import { gate, onMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
 import { readLines, tokenResults, type TranscriptEntry } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
@@ -144,14 +144,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         [reply("p1", "ALPHA"), gate("g1"), reply("p2", "BRAVO")],
         [thenWire("p1", "g1"), thenWire("g1", "p2")],
       );
-      const saved: Flow = {
-        ...base,
-        session: {
-          ...base.session,
-          model: "haiku",
-          buildConfig: { repo: repo.path },
-        },
-      };
+      const saved: Flow = withSession(base, { model: "haiku", repo: repo.path });
       const db = openDatabase({ path: join(home, "flowdeck.db") });
       closeDb = () => db.close();
       const stores = { runs: new SqliteStore({ db }), flows: new SqliteFlowStore({ db }) };

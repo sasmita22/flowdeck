@@ -23,7 +23,7 @@ import type { Flow } from "../../src/core/flow/schema.js";
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { PendingWait } from "../../src/core/run/wait.js";
-import { agent, ask, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
+import { agent, ask, onMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakePullRequests } from "../fakes/fake-pull-requests.js";
@@ -188,14 +188,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         ],
         [thenWire("q", "p")],
       );
-      const saved: Flow = {
-        ...built,
-        session: {
-          ...built.session,
-          model: "haiku",
-          buildConfig: { repo: repo.path },
-        },
-      };
+      const saved: Flow = withSession(built, { model: "haiku", repo: repo.path });
 
       const db = openDatabase({ path: join(home, "flowdeck.db") });
       closeDb = () => db.close();

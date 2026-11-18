@@ -20,6 +20,7 @@ import {
   output,
   thenWire,
   trigger,
+  withSession,
 } from "../fixtures/flow-builders.js";
 import { liveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo } from "../fixtures/tmp-repo.js";
@@ -66,11 +67,7 @@ function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
     ],
   );
   return {
-    ...parsed,
-    session: {
-      ...parsed.session,
-      model: "haiku",
-    },
+    ...withSession(parsed, { model: "haiku" }),
     settings: { buildModel: "haiku", permissionMode: "acceptEdits" as const },
   };
 }
@@ -92,11 +89,7 @@ function missingReadThenEchoFlow(): Flow {
     [thenWire("t", "a"), thenWire("a", "o")],
   );
   return {
-    ...parsed,
-    session: {
-      ...parsed.session,
-      model: "haiku",
-    },
+    ...withSession(parsed, { model: "haiku" }),
     settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   };
 }
