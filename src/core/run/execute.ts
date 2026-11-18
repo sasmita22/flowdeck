@@ -219,6 +219,11 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     recordCost: (id, totalCost) => store.recordCost(id, totalCost),
     appendRunStory: (story) => store.appendRunStory(story),
     latestRunStory: (id) => store.latestRunStory(id),
+    appendRepoState: (id, phase, state, otherRepos) =>
+      store.appendRepoState(id, phase, state, otherRepos),
+    repoStates: (id) => store.repoStates(id),
+    appendStepText: (id, entryId, field, text) => store.appendStepText(id, entryId, field, text),
+    stepTexts: (id, entryId) => store.stepTexts(id, entryId),
     recordBuild: (build) => store.recordBuild(build),
     stopRun: (id) => store.stopRun(id),
     findBuild: (id) => store.findBuild(id),

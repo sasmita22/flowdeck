@@ -7,6 +7,7 @@ import {
 } from "../../src/core/run/store.js";
 import type { ActivityEntry } from "../../src/core/run/activity.js";
 import type { BuildEvent } from "../../src/core/run/build-progress.js";
+import type { RepoState } from "../../src/core/run/repo-state.js";
 import type { NewBuild, NewPendingBuild, NewRun } from "../../src/ports/store.js";
 import { agent, flow } from "../fixtures/flow-builders.js";
 import { FakeStore } from "./fake-store.js";
@@ -581,6 +582,56 @@ describe("FakeStore", () => {
       store.listRuns().find((run) => run.id === done.id),
     );
     expect(store.findRunSummary("nope")).toBeUndefined();
+  });
+
+  describe("repo states", () => {
+    const state = (head: string): RepoState => ({
+      kind: "read",
+      branch: "flowdeck/fix-login",
+      head,
+      upstream: null,
+      staged: 0,
+      unstaged: 0,
+      untracked: 0,
+    });
+
+    it("reads the first before, the latest after and that after's other repos", () => {
+      const store = new FakeStore();
+      const { id } = store.createRun(newRun(["p1"]));
+
+      store.appendRepoState(id, "before", state("b1"), []);
+      store.appendRepoState(id, "after", state("a1"), [{ path: "/x/web", branch: "dev" }]);
+      store.appendRepoState(id, "before", state("b2"), []);
+      store.appendRepoState(id, "after", state("a2"), [{ path: "/x/ios", branch: "develop" }]);
+      store.appendRepoState("other", "after", state("o1"), []);
+
+      expect(store.repoStates(id)).toEqual({
+        before: state("b1"),
+        after: state("a2"),
+        otherRepos: [{ path: "/x/ios", branch: "develop" }],
+      });
+      expect(store.repoStates("nope")).toEqual({ before: null, after: null, otherRepos: [] });
+    });
+  });
+
+  describe("step texts", () => {
+    it("reads the latest text per field of one entry, and nothing for an unknown run or entry", () => {
+      const store = new FakeStore();
+      const { id } = store.createRun(newRun(["p1"]));
+
+      store.appendStepText(id, 1, "input", "old input");
+      store.appendStepText(id, 1, "output", "output");
+      store.appendStepText(id, 1, "input", "new input");
+      store.appendStepText(id, 2, "report", "another entry");
+
+      expect(store.stepTexts(id, 1)).toEqual([
+        { field: "input", text: "new input" },
+        { field: "output", text: "output" },
+      ]);
+      expect(store.stepTexts(id, 2)).toEqual([{ field: "report", text: "another entry" }]);
+      expect(store.stepTexts("nope", 1)).toEqual([]);
+      expect(store.stepTexts(id, 9)).toEqual([]);
+    });
   });
 
   describe("run stories", () => {

@@ -62,4 +62,42 @@ describe("FakeGitState", () => {
       new FakeGitState({}, { failWith: "git not found" }).defaultBranch("/r"),
     ).rejects.toThrow("git not found");
   });
+  it("answers each folder with its configured repo state, recording the asks in order", async () => {
+    const git = new FakeGitState();
+    const dev = {
+      kind: "read" as const,
+      branch: "dev",
+      head: "abc1234",
+      upstream: null,
+      staged: 0,
+      unstaged: 0,
+      untracked: 0,
+    };
+    git.repoStates.set("/a", dev);
+
+    expect(await git.repoState("/a")).toEqual(dev);
+    expect(await git.repoState("/b")).toEqual({ kind: "unreadable" });
+    expect(git.repoStateCalls).toEqual(["/a", "/b"]);
+    expect(git.reads).toEqual([]);
+  });
+
+  it("answers a path's top level by exact path, then by the longest folder holding it", async () => {
+    const git = new FakeGitState();
+    git.tops.set("/x", "/x");
+    git.tops.set("/x/inner", "/x/inner");
+    git.tops.set("/x/file.ts", "/elsewhere");
+
+    expect(await git.topLevel("/x/file.ts")).toBe("/elsewhere");
+    expect(await git.topLevel("/x/inner/src/a.ts")).toBe("/x/inner");
+    expect(await git.topLevel("/x/other/a.ts")).toBe("/x");
+    expect(await git.topLevel("/xy/a.ts")).toBeNull();
+    expect(git.reads).toEqual([]);
+  });
+
+  it("never throws on a repo state or top level even when scripted to fail", async () => {
+    const git = new FakeGitState({}, { failWith: "git not found" });
+
+    expect(await git.repoState("/a")).toEqual({ kind: "unreadable" });
+    expect(await git.topLevel("/a")).toBeNull();
+  });
 });

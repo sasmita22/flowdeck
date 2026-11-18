@@ -4,6 +4,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Actions } from "../actions.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 import { InspectorPanel } from "../inspector-panel.js";
+import type { FullTextStore } from "../inspector/full-text-store.js";
 import type { RunLabels } from "../inspector/inspector.js";
 import type { InspectorState } from "../inspector/store.js";
 import type { WaitState } from "../inspector/wait-store.js";
@@ -80,6 +81,7 @@ function StoryPanel({
   const writing = useStore(run, (state) => state.writingStory[runId] === true);
   const writeError = useStore(run, (state) => state.storyErrors[runId]);
   const variables = variablesText(header.values);
+  const otherRepos = header.otherRepos ?? [];
   const [digestOpen, setDigestOpen] = useState(false);
   return (
     <section className="fd-card fd-run-story" data-testid={pageTestIds.runStory}>
@@ -94,6 +96,18 @@ function StoryPanel({
         {header.repo !== null && <code className="fd-hash">{header.repo}</code>}
         {header.branch != null && <code className="fd-hash">{header.branch}</code>}
         {variables !== "" && <span>{variables}</span>}
+        {otherRepos.length > 0 && (
+          <div className="fd-run-story-other-repos">
+            <span>Other repos</span>
+            <ul data-testid={pageTestIds.runStoryOtherRepos}>
+              {otherRepos.map((other) => (
+                <li key={other.path}>
+                  <code className="fd-hash">{`${other.path} · ${other.branch}`}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       {story.written !== null && <StoryAccount text={story.written.text} />}
       {ended && story.written === null && (
@@ -138,6 +152,7 @@ export function RunPage({
   wait,
   terminal,
   actions,
+  fullText,
 }: {
   runId: string;
   nav: StoreApi<NavState>;
@@ -148,6 +163,7 @@ export function RunPage({
   wait: StoreApi<WaitState>;
   terminal: StoreApi<TerminalState>;
   actions: Actions;
+  fullText: FullTextStore;
 }) {
   const loaded = useStore(library, (state) =>
     state.viewedRun?.run.id === runId ? state.viewedRun : null,
@@ -339,6 +355,7 @@ export function RunPage({
               inspector={inspector}
               labels={labels}
               canRetry={canRetry}
+              fullText={{ runId, store: fullText }}
             />
           )}
         </div>

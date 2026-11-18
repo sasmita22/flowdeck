@@ -232,6 +232,117 @@ describe("selectActivity with stored entries", () => {
   });
 });
 
+const counting = <K extends "sort" | "set">(
+  target: { [key in K]: (...args: never[]) => unknown },
+  key: K,
+) => {
+  const original = target[key];
+  let calls = 0;
+  target[key] = function (this: unknown, ...args: never[]) {
+    calls += 1;
+    return Reflect.apply(original, this, args);
+  } as (typeof target)[K];
+  return {
+    calls: () => calls,
+    restore: () => {
+      target[key] = original;
+    },
+  };
+};
+
+const runningIds = Array.from({ length: 100 }, (_, index) => (index + 1) * 2);
+const toolIds = Array.from({ length: 4_900 }, (_, index) => (index + 101) * 2);
+const lateId = 4_001;
+
+const pushLongRun = (push: (value: unknown) => void) => {
+  for (const id of runningIds) push(update(subagent(id, "running")));
+  for (const id of toolIds) push(update(tool(id)));
+  for (const id of runningIds) push(update(subagent(id, "finished")));
+  push(update(tool(lateId)));
+};
+
+const longRunPushes = runningIds.length + toolIds.length + runningIds.length + 1;
+
+describe("merging a long run", () => {
+  it("never sorts, sets the index map a bounded number of times, and reuses the selected list", async () => {
+    const { push, inspector } = await connected();
+    const stored = [tool(1)];
+    const sorts = counting(Array.prototype, "sort");
+    const sets = counting(Map.prototype, "set");
+    let first: ActivityEntry[];
+    let repeats: ActivityEntry[][];
+    try {
+      pushLongRun(push);
+      first = selectActivity(inspector.getState(), "run-1", stored);
+      repeats = Array.from({ length: 50 }, () =>
+        selectActivity(inspector.getState(), "run-1", stored),
+      );
+    } finally {
+      sorts.restore();
+      sets.restore();
+    }
+
+    expect.soft(sorts.calls()).toBe(0);
+    expect.soft(sets.calls()).toBeLessThanOrEqual(4 * longRunPushes);
+    expect.soft(repeats.every((repeat) => repeat === first)).toBe(true);
+  });
+
+  it("orders the feed by id without duplicates, finish rows in place of start rows", async () => {
+    const { push, activity } = await connected();
+
+    pushLongRun(push);
+
+    const ids = activity("run-1").map((entry) => entry.id);
+    const expected = [...runningIds, ...toolIds, lateId].sort((a, b) => b - a);
+    expect(ids).toEqual(expected);
+    expect(new Set(ids).size).toBe(ids.length);
+    const finished = activity("run-1").filter((entry) => entry.kind === "subagent");
+    expect(finished).toHaveLength(runningIds.length);
+    expect(finished.every((entry) => entry.kind === "subagent" && entry.state === "finished")).toBe(
+      true,
+    );
+  });
+
+  it("grows the live entries by one per new id and keeps the length on a replace", async () => {
+    const { push, inspector } = await connected();
+    const length = () => inspector.getState().feed?.entries.length ?? 0;
+
+    push(update(subagent(2, "running")));
+    push(update(tool(4)));
+    expect(length()).toBe(2);
+
+    push(update(subagent(2, "finished")));
+    expect(length()).toBe(2);
+
+    push(update(tool(3)));
+    expect(length()).toBe(3);
+
+    push(update(tool(3)));
+    expect(length()).toBe(3);
+  });
+
+  it("merges stored entries with live ones, a live entry winning over a stored one with its id", async () => {
+    const { push, inspector } = await connected();
+    const stored = [tool(1), subagent(2, "running"), tool(5), subagent(7, "running")];
+
+    push(update(subagent(2, "finished")));
+    push(update(tool(3)));
+    push(update(tool(6)));
+    push(update(subagent(7, "finished")));
+    push(update(tool(8)));
+
+    expect(selectActivity(inspector.getState(), "run-1", stored)).toEqual([
+      tool(8),
+      subagent(7, "finished"),
+      tool(6),
+      tool(5),
+      tool(3),
+      subagent(2, "finished"),
+      tool(1),
+    ]);
+  });
+});
+
 describe("entryText", () => {
   const base = { id: 1, nodeId: "p1", at: 1 };
 

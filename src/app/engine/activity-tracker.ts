@@ -1,6 +1,7 @@
 import {
   feedOf,
   foldHookEvent,
+  previewOf,
   foldNodeEvent,
   type ActivityEntry,
   type ActivityFeed,
@@ -11,6 +12,7 @@ import {
 import type { AgentCall } from "../../core/run/agent-calls.js";
 import { trackWindow, type NodeWindow } from "../../core/run/attribution.js";
 import type { TurnEvents } from "../../core/run/turns.js";
+import type { BuildStepEvent } from "../../ports/build-agents.js";
 import type { EventEntry, Store } from "../../ports/store.js";
 import type { EnginePush } from "./protocol.js";
 
@@ -19,7 +21,7 @@ export type ActivityTrackerOptions = {
   now: () => number;
   publish: (push: EnginePush) => void;
   log: (line: string) => void;
-  activity: Pick<Store, "recordActivity" | "activity">;
+  activity: Pick<Store, "recordActivity" | "activity" | "appendStepText">;
   turnNodes: ReadonlySet<string>;
   place: WorkingPlace;
 };
@@ -41,6 +43,9 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       for (const entry of folded.changed) {
         activity.recordActivity(runId, entry);
         publish({ push: "activity", value: { runId, entry } });
+      }
+      for (const { entryId, field, text } of folded.cut) {
+        activity.appendStepText(runId, entryId, field, text);
       }
     } catch (error) {
       log(error instanceof Error ? error.message : String(error));
@@ -74,6 +79,11 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       recordCost: (id, totalCost) => inner.recordCost(id, totalCost),
       appendRunStory: (story) => inner.appendRunStory(story),
       latestRunStory: (id) => inner.latestRunStory(id),
+      appendRepoState: (id, phase, state, otherRepos) =>
+        inner.appendRepoState(id, phase, state, otherRepos),
+      repoStates: (id) => inner.repoStates(id),
+      appendStepText: (id, entryId, field, text) => inner.appendStepText(id, entryId, field, text),
+      stepTexts: (id, entryId) => inner.stepTexts(id, entryId),
       recordBuild: (build) => inner.recordBuild(build),
       findBuild: (id) => inner.findBuild(id),
       findBuildByName: (name) => inner.findBuildByName(name),
@@ -127,23 +137,63 @@ export type BuildActivityOptions = {
   publish: (push: EnginePush) => void;
 };
 
+export type BuildActivity = {
+  (call: AgentCall, report?: string): void;
+  step(event: BuildStepEvent): void;
+};
+
+type SubagentEntry = Extract<ActivityEntry, { kind: "subagent" }>;
+
+const latestById = (entries: readonly ActivityEntry[]): ActivityEntry[] => [
+  ...new Map(entries.map((entry) => [entry.id, entry])).values(),
+];
+
 export function createBuildActivity({
   pendingId,
   now,
   activity,
   publish,
-}: BuildActivityOptions): (call: AgentCall) => void {
-  let { nextId } = feedOf(activity.buildActivity(pendingId));
+}: BuildActivityOptions): BuildActivity {
+  let feed = feedOf(latestById(activity.buildActivity(pendingId)));
   const running = new Map<string, number>();
-  return (call) => {
+  const held = new Map<string, BuildStepEvent[]>();
+
+  const save = (entries: readonly ActivityEntry[]) => {
+    for (const entry of entries) {
+      activity.appendBuildActivity(pendingId, entry);
+      publish({ push: "build-activity", pendingId, entry });
+    }
+  };
+  const put = (entry: ActivityEntry) => {
+    const known = feed.entries.some((existing) => existing.id === entry.id);
+    feed = {
+      nextId: Math.max(feed.nextId, entry.id + 1),
+      entries: known
+        ? feed.entries.map((existing) => (existing.id === entry.id ? entry : existing))
+        : [...feed.entries, entry],
+    };
+    save([entry]);
+  };
+  const fold = (event: BuildStepEvent) => {
+    const folded = foldHookEvent(feed, [], event);
+    feed = folded.feed;
+    save(folded.changed);
+  };
+  const pieces = (matches: (entry: SubagentEntry) => boolean) =>
+    feed.entries.filter(
+      (entry): entry is SubagentEntry => entry.kind === "subagent" && matches(entry),
+    );
+
+  const record = (call: AgentCall, report?: string): void => {
     const { piece } = call;
     if (piece === undefined) return;
     const key = call.toolUseId ?? piece;
     const started = call.status === undefined;
-    const id = (started ? undefined : running.get(key)) ?? nextId++;
+    const id = (started ? undefined : running.get(key)) ?? feed.nextId;
     if (started) running.set(key, id);
     else running.delete(key);
-    const entry: ActivityEntry = {
+    const agentId = call.agentId ?? pieces((entry) => entry.id === id)[0]?.agentId;
+    put({
       id,
       nodeId: piece,
       at: now(),
@@ -152,8 +202,38 @@ export function createBuildActivity({
       agentType: call.agentType ?? "general-purpose",
       state: started ? "running" : "finished",
       ...(call.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
-    };
-    activity.appendBuildActivity(pendingId, entry);
-    publish({ push: "build-activity", pendingId, entry });
+      ...(agentId === undefined ? {} : { agentId }),
+      ...(report === undefined ? {} : { report: previewOf(report) }),
+    });
+    if (started || agentId === undefined) return;
+    const waiting = held.get(agentId) ?? [];
+    held.delete(agentId);
+    for (const event of waiting) fold(event);
   };
+
+  const step = (event: BuildStepEvent): void => {
+    const agentId = event.payload["agent_id"];
+    if (typeof agentId !== "string") return;
+    if (pieces((entry) => entry.agentId === agentId).length > 0) return fold(event);
+    const waiting = held.get(agentId);
+    if (waiting !== undefined) {
+      waiting.push(event);
+      return;
+    }
+    const agentType = event.payload["agent_type"];
+    const candidates = pieces(
+      (entry) =>
+        entry.state === "running" && entry.agentId === undefined && entry.agentType === agentType,
+    );
+    const [only, ...others] = candidates;
+    if (only === undefined) return;
+    if (others.length > 0) {
+      held.set(agentId, [event]);
+      return;
+    }
+    put({ ...only, agentId });
+    fold(event);
+  };
+
+  return Object.assign(record, { step });
 }

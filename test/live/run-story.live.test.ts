@@ -13,6 +13,8 @@ import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const digest = [
   "Run of blueprint Fix and verify, version 3.",
+  "Before: on dev at abc1234, 1 behind and 0 ahead of origin/dev as of the last fetch; 0 staged, 0 unstaged, 0 untracked",
+  "After: on dev at def5678, 0 behind and 0 ahead of origin/dev as of the last fetch; 0 staged, 0 unstaged, 0 untracked",
   "Stage 1, Fix the login bug: done.",
   "Stage 2, Run the test suite: failed. Reason: tests did not pass in CI.",
 ].join("\n");
@@ -32,18 +34,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude 
     await rm(home, { recursive: true, force: true });
   });
 
-  it("narrator: writes Context, Goal and Result, the Goal naming the test stage, reports a cost, and runs with no tools", async () => {
+  it("narrator: writes Context from Before:, Goal naming the test stage, Result from After:, with no tools", async () => {
     const { text, cost } = await new ClaudeNarrator({ home }).narrate(
       digest,
       new AbortController().signal,
     );
     const told = JSON.stringify({ text, cost });
     const parts = storyPartsOf(text);
+    process.stderr.write(`narrator cost $${cost}\n`);
 
-    expect(parts, told).toBeDefined();
-    expect(parts?.goal, told).toMatch(/run the test suite/i);
     expect(Number.isFinite(cost)).toBe(true);
     expect(cost).toBeGreaterThanOrEqual(0);
+    expect(parts, told).toBeDefined();
+    expect(parts?.context, told).toMatch(/abc1234|behind/i);
+    expect(parts?.goal, told).toMatch(/run the test suite/i);
+    expect(parts?.result, told).toMatch(/def5678|0 behind/i);
   }, 150_000);
 
   it(

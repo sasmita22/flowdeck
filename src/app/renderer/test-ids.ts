@@ -136,6 +136,7 @@ export const pageTestIds = {
   runStoryWrite: "run-story-write",
   runStoryWriteError: "run-story-write-error",
   runStoryHeader: "run-story-header",
+  runStoryOtherRepos: "run-story-other-repos",
   runStoryAccount: "run-story-account",
   runStoryContext: "story-context",
   runStoryGoal: "story-goal",

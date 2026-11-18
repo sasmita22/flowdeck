@@ -288,6 +288,7 @@ void app.whenReady().then(async () => {
     },
   });
   client.onPush(activity.onPush);
+  client.onPush(activity.onRunState);
   const buildProgress = createBuildProgressRelay({
     send: (update) => {
       if (!window.isDestroyed()) window.webContents.send(bridgeChannels.buildProgress, update);

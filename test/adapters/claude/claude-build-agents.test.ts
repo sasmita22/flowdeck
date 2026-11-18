@@ -324,6 +324,102 @@ describe("ClaudeBuildAgents", () => {
       expect(expected.every((call) => call?.piece === "agents/a.md")).toBe(true);
       expect(calls).toEqual(expected);
     });
+
+    describe("a build agent's own steps", () => {
+      const agentPre = {
+        tool_name: "Agent",
+        tool_use_id: "tu-1",
+        tool_input: { prompt: "PIECE agents/a.md\nKIND agent", subagent_type: "x" },
+      };
+      const fullReport = `Wrote agents/a.md. ${"r".repeat(3_000)}`;
+      const agentPost = {
+        ...agentPre,
+        tool_response: {
+          agentType: "flowdeck-build:piece-auditor",
+          agentId: "ag-1",
+          status: "completed",
+          content: [{ type: "text", text: fullReport }],
+        },
+      };
+      const inner = { agent_id: "ag-1", agent_type: "flowdeck-build:piece-auditor" };
+      const read = {
+        ...inner,
+        tool_name: "Read",
+        tool_use_id: "r-1",
+        tool_input: { file_path: "/x" },
+      };
+      const readDone = { ...read, tool_response: { type: "text" }, duration_ms: 3 };
+      const check = {
+        ...inner,
+        tool_name: "Bash",
+        tool_use_id: "b-1",
+        tool_input: { command: "x" },
+      };
+      const checkFailed = { ...check, error: "exit 1" };
+      const publishAll = (t: ReturnType<typeof harness>) => {
+        t.publish("PreToolUse", agentPre);
+        t.publish("PreToolUse", read);
+        t.publish("PreToolUse", { tool_name: "Read", tool_input: { file_path: "/top" } });
+        t.publish("PostToolUse", readDone);
+        t.publish("PreToolUse", check);
+        t.publish("PostToolUseFailure", checkFailed);
+        t.publish("PostToolUseFailure", { tool_name: "Bash", error: "top level" });
+        t.publish("PostToolUse", agentPost);
+        t.publish("Stop");
+      };
+
+      it("passes every step that carries an agent id to onStep, unchanged and in order", async () => {
+        const t = harness();
+        await t.agents.open(spec);
+        t.afterSubmit(() => publishAll(t));
+        const steps: unknown[] = [];
+
+        await t.agents.turn(
+          name,
+          "PIECE agents/a.md",
+          () => undefined,
+          (event) => steps.push(event),
+        );
+
+        expect(steps).toEqual([
+          { kind: "PreToolUse", payload: read },
+          { kind: "PostToolUse", payload: readDone },
+          { kind: "PreToolUse", payload: check },
+          { kind: "PostToolUseFailure", payload: checkFailed },
+        ]);
+      });
+
+      it("gives the finish call the agent's full report, with the call agentCallOf makes", async () => {
+        const t = harness();
+        await t.agents.open(spec);
+        t.afterSubmit(() => publishAll(t));
+        const calls: unknown[][] = [];
+
+        await t.agents.turn(
+          name,
+          "PIECE agents/a.md",
+          (...args) => calls.push(args),
+          () => undefined,
+        );
+
+        expect(calls).toEqual([
+          [agentCallOf({ kind: "PreToolUse", payload: agentPre })],
+          [agentCallOf({ kind: "PostToolUse", payload: agentPost }), fullReport],
+        ]);
+      });
+
+      it("ends the turn as before when no one listens for steps", async () => {
+        const t = harness();
+        await t.agents.open(spec);
+        t.afterSubmit(() => publishAll(t));
+        const calls: AgentCall[] = [];
+
+        const result = await t.agents.turn(name, "PIECE agents/a.md", (call) => calls.push(call));
+
+        expect(result).toEqual({ kind: "stopped" });
+        expect(calls.map((call) => call.status)).toEqual([undefined, "completed"]);
+      });
+    });
   });
 
   describe("attach", () => {

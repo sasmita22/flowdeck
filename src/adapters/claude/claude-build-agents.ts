@@ -1,10 +1,12 @@
 import { join } from "node:path";
+import { reportOf } from "../../core/run/activity.js";
 import { agentCallOf, type AgentCall } from "../../core/run/agent-calls.js";
 import { runSocketPath } from "../../core/run/execute.js";
 import { turnFailure } from "../../core/run/turns.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
+  BuildStepEvent,
   BuildTurnResult,
 } from "../../ports/build-agents.js";
 import type { EventSource } from "../../ports/event-source.js";
@@ -108,7 +110,8 @@ export class ClaudeBuildAgents implements BuildAgents {
   async turn(
     sessionName: string,
     text: string,
-    onCall: (call: AgentCall) => void,
+    onCall: (call: AgentCall, report?: string) => void,
+    onStep?: (event: BuildStepEvent) => void,
   ): Promise<BuildTurnResult> {
     const session = this.opened.get(sessionName);
     if (session === undefined) {
@@ -133,11 +136,15 @@ export class ClaudeBuildAgents implements BuildAgents {
         ),
       );
     });
-    for (const kind of ["PreToolUse", "PostToolUse"] as const) {
+    for (const kind of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] as const) {
       unsubscribe.push(
-        hooks.events.subscribe(kind, sessionId, (event) => {
-          const call = agentCallOf(event);
-          if (call !== undefined) onCall(call);
+        hooks.events.subscribe(kind, sessionId, ({ payload }) => {
+          if (typeof payload["agent_id"] === "string") onStep?.({ kind, payload });
+          const call = agentCallOf({ kind, payload });
+          if (call === undefined) return;
+          const report = kind === "PostToolUse" ? reportOf(payload) : undefined;
+          if (report === undefined) onCall(call);
+          else onCall(call, report);
         }),
       );
     }

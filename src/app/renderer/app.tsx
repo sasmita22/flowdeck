@@ -10,6 +10,7 @@ import type { BranchState } from "./branch-store.js";
 import type { BuildProgressState } from "./build-progress-store.js";
 import { nodeLabel, type CanvasState } from "./canvas/store.js";
 import { ClosePrompt } from "./close-prompt.js";
+import type { FullTextStore } from "./inspector/full-text-store.js";
 import type { InspectorState } from "./inspector/store.js";
 import type { WaitState } from "./inspector/wait-store.js";
 import { LeavePrompt } from "./leave-prompt.js";
@@ -42,6 +43,7 @@ export type AppStores = {
   terminal: StoreApi<TerminalState>;
   inspector: StoreApi<InspectorState>;
   wait: StoreApi<WaitState>;
+  fullText: FullTextStore;
   shell: StoreApi<ShellState>;
   workspace: StoreApi<WorkspaceState>;
   nav: StoreApi<NavState>;
@@ -278,6 +280,7 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         wait={stores.wait}
         terminal={stores.terminal}
         actions={stores.actions}
+        fullText={stores.fullText}
       />
     );
   }

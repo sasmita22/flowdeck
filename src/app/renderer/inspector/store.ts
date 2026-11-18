@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   activityFeedSchema,
   activityUpdateSchema,
+  firstAtOrAfter,
   type ActivityEntry,
 } from "../../../core/run/activity.js";
 import type { DisplayStatus } from "../../../core/run/display.js";
@@ -19,19 +20,64 @@ export type InspectorState = {
   view(runId: string): Promise<void>;
 };
 
+const none: readonly ActivityEntry[] = [];
+
 const merge = (older: readonly ActivityEntry[], newer: readonly ActivityEntry[]) => {
-  const byId = new Map(older.map((entry) => [entry.id, entry]));
-  for (const entry of newer) byId.set(entry.id, entry);
-  return [...byId.values()];
+  const merged: ActivityEntry[] = [];
+  let o = 0;
+  let n = 0;
+  while (o < older.length || n < newer.length) {
+    const left = older[o];
+    const right = newer[n];
+    if (right === undefined || (left !== undefined && left.id < right.id)) {
+      merged.push(left as ActivityEntry);
+      o += 1;
+    } else {
+      if (left?.id === right.id) o += 1;
+      merged.push(right);
+      n += 1;
+    }
+  }
+  return merged;
 };
+
+const placed = (
+  entries: readonly ActivityEntry[],
+  positions: Map<number, number>,
+  entry: ActivityEntry,
+): ActivityEntry[] => {
+  const existing = positions.get(entry.id);
+  if (existing !== undefined) return entries.map((kept, at) => (at === existing ? entry : kept));
+  const position = firstAtOrAfter(entries, entry.id);
+  const next = [...entries.slice(0, position), entry, ...entries.slice(position)];
+  for (let at = position; at < next.length; at += 1)
+    positions.set((next[at] as ActivityEntry).id, at);
+  return next;
+};
+
+const selected = new WeakMap<
+  readonly ActivityEntry[],
+  WeakMap<readonly ActivityEntry[], ActivityEntry[]>
+>();
 
 export const selectActivity = (
   state: Pick<InspectorState, "feed">,
   runId: string | undefined,
-  stored: readonly ActivityEntry[] = [],
+  stored: readonly ActivityEntry[] = none,
 ): ActivityEntry[] => {
-  const live = state.feed === null || state.feed.runId !== runId ? [] : state.feed.entries;
-  return merge(stored, live).sort((a, b) => b.id - a.id);
+  const feedEntries = state.feed === null || state.feed.runId !== runId ? none : state.feed.entries;
+  const live = feedEntries.length === 0 ? none : feedEntries;
+  const older = stored.length === 0 ? none : stored;
+  let byStored = selected.get(live);
+  if (byStored === undefined) {
+    byStored = new WeakMap();
+    selected.set(live, byStored);
+  }
+  const cached = byStored.get(older);
+  if (cached !== undefined) return cached;
+  const newestFirst = merge(older, live).reverse();
+  byStored.set(older, newestFirst);
+  return newestFirst;
 };
 
 const endedOnItsOwn = (status: SnapshotStatus | DisplayStatus | undefined) =>
@@ -108,28 +154,43 @@ export const createInspectorStore = ({
 }: {
   bridge: InspectorBridge;
 }): StoreApi<InspectorState> =>
-  createStore<InspectorState>()((set, get) => ({
-    runId: null,
-    feed: null,
+  createStore<InspectorState>()((set, get) => {
+    let indexed = none;
+    let positions = new Map<number, number>();
 
-    connect: async () => {
-      bridge.onActivity((value) => {
-        const parsed = activityUpdateSchema.safeParse(value);
-        if (!parsed.success || parsed.data.runId !== get().runId) return;
-        const { runId, entry } = parsed.data;
+    const positionsOf = (entries: readonly ActivityEntry[]) => {
+      if (entries !== indexed) {
+        positions = new Map(entries.map((entry, at) => [entry.id, at]));
+        indexed = entries;
+      }
+      return positions;
+    };
+
+    return {
+      runId: null,
+      feed: null,
+
+      connect: async () => {
+        bridge.onActivity((value) => {
+          const parsed = activityUpdateSchema.safeParse(value);
+          if (!parsed.success || parsed.data.runId !== get().runId) return;
+          const { runId, entry } = parsed.data;
+          const { feed } = get();
+          const kept = feed?.runId === runId ? feed.entries : none;
+          const entries = placed(kept, positionsOf(kept), entry);
+          indexed = entries;
+          set({ feed: { runId, entries } });
+        });
+      },
+
+      view: async (runId) => {
+        set({ runId, feed: null });
+        const fetched = activityFeedSchema.safeParse(await bridge.getActivity(runId));
+        if (!fetched.success || get().runId !== runId) return;
         const { feed } = get();
-        const kept = feed?.runId === runId ? feed.entries : [];
-        set({ feed: { runId, entries: merge(kept, [entry]) } });
-      });
-    },
-
-    view: async (runId) => {
-      set({ runId, feed: null });
-      const fetched = activityFeedSchema.safeParse(await bridge.getActivity(runId));
-      if (!fetched.success || get().runId !== runId) return;
-      const { feed } = get();
-      if (feed === null) set({ feed: fetched.data });
-      else if (feed.runId === fetched.data.runId)
-        set({ feed: { runId: feed.runId, entries: merge(fetched.data.entries, feed.entries) } });
-    },
-  }));
+        if (feed === null) set({ feed: fetched.data });
+        else if (feed.runId === fetched.data.runId)
+          set({ feed: { runId: feed.runId, entries: merge(fetched.data.entries, feed.entries) } });
+      },
+    };
+  });

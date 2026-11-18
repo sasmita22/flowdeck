@@ -35,6 +35,7 @@ import type { Flow } from "../../../src/core/flow/schema.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
+import type { RepoState } from "../../../src/core/run/repo-state.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
@@ -1142,6 +1143,81 @@ describe("createEngineHandler", async () => {
         }),
       });
       expect(runs.findRun(stale)?.status).toBe("running");
+    });
+
+    describe("step-full-text", () => {
+      const handlerOn = (runs: FakeStore) =>
+        createEngineHandler(options({ openStores: () => ({ runs, flows: unreadableFlows() }) }));
+
+      const fullTextOf = (runs: FakeStore, payload: unknown) =>
+        handlerOn(runs).handle({ id: 7, type: "step-full-text", payload });
+
+      it("answers the kept full text of a cut step, the latest one per field", async () => {
+        const { runs, runId } = seededRun();
+        runs.appendStepText(runId, 3, "output", "first full output");
+        runs.appendStepText(runId, 3, "output", `${"x".repeat(5000)}END-OF-FULL-OUTPUT`);
+        runs.appendStepText(runId, 3, "input", "full input");
+        runs.appendStepText(runId, 4, "report", "another step's report");
+
+        expect(await fullTextOf(runs, { runId, entryId: 3 })).toEqual({
+          id: 7,
+          ok: true,
+          value: {
+            kept: true,
+            texts: { input: "full input", output: `${"x".repeat(5000)}END-OF-FULL-OUTPUT` },
+          },
+        });
+      });
+
+      it("answers that the full text was not kept for a step with no stored text", async () => {
+        const { runs, runId } = seededRun();
+        runs.appendStepText(runId, 3, "output", "kept");
+
+        expect(await fullTextOf(runs, { runId, entryId: 4 })).toEqual({
+          id: 7,
+          ok: true,
+          value: { kept: false },
+        });
+      });
+
+      it.each([
+        ["no entry id", {}],
+        ["an entry id that is not a whole number", { entryId: 1.5 }],
+        ["an entry id that is text", { entryId: "3" }],
+        ["no run id", { runId: undefined, entryId: 3 }],
+      ])("refuses a payload with %s", async (_label, fields) => {
+        const { runs, runId } = seededRun();
+        runs.appendStepText(runId, 3, "output", "kept");
+
+        expect(await fullTextOf(runs, { runId, ...fields })).toEqual({
+          id: 7,
+          ok: false,
+          error: expect.stringContaining("invalid_type"),
+        });
+      });
+
+      it("answers a deleted run and an unknown run the way loading them does", async () => {
+        const { runs, runId } = seededRun();
+        runs.appendStepText(runId, 3, "output", "kept");
+        runs.deleteRun(runId);
+
+        expect(
+          await handlerOn(runs).handle({ id: 6, type: "load-run", payload: { runId } }),
+        ).toMatchObject({ ok: true });
+        expect(await fullTextOf(runs, { runId, entryId: 3 })).toEqual({
+          id: 7,
+          ok: true,
+          value: { kept: true, texts: { output: "kept" } },
+        });
+        expect(
+          await handlerOn(runs).handle({ id: 6, type: "load-run", payload: { runId: "nope" } }),
+        ).toEqual({ id: 6, ok: false, error: "No run nope" });
+        expect(await fullTextOf(runs, { runId: "nope", entryId: 3 })).toEqual({
+          id: 7,
+          ok: false,
+          error: "No run nope",
+        });
+      });
     });
   });
 
@@ -2626,10 +2702,10 @@ describe("createEngineHandler", async () => {
           return this.fake.open(spec);
         };
 
-        readonly turn: BuildAgents["turn"] = async (sessionName, text, onCall) => {
+        readonly turn: BuildAgents["turn"] = async (sessionName, text, onCall, onStep) => {
           this.turnsStarted += 1;
           if (this.held) return new Promise<BuildTurnResult>(() => undefined);
-          return this.fake.turn(sessionName, text, onCall);
+          return this.fake.turn(sessionName, text, onCall, onStep);
         };
 
         readonly alive: BuildAgents["alive"] = (sessionName) => this.fake.alive(sessionName);
@@ -2840,6 +2916,61 @@ describe("createEngineHandler", async () => {
         const activity = runs.buildActivity(pendingId);
         const ownerById = new Map(activity.map((entry) => [entry.id, entry.nodeId]));
         expect([...ownerById.values()].sort()).toEqual([...pieces].sort());
+      });
+
+      it("folds a build agent's own steps and report into its piece's Activity, and none into another piece", async () => {
+        const writePiece = "plugin/agents/write.md";
+        const checkPiece = "plugin/agents/check.md";
+        const read = {
+          agent_id: "ag-write",
+          agent_type: "general-purpose",
+          tool_name: "Read",
+          tool_use_id: "read-write",
+          tool_input: { file_path: "/work/plugin/agents/write.md" },
+          flowdeck_hook_at: 20,
+        };
+        agents = new WatchedBuildAgents(() => undefined, {
+          steps: {
+            [writePiece]: [
+              { kind: "PreToolUse", payload: read },
+              {
+                kind: "PostToolUse",
+                payload: { ...read, tool_response: "body", duration_ms: 3 },
+              },
+            ],
+          },
+          reports: { [writePiece]: "Wrote the write piece." },
+        });
+        handler = handlerWith({
+          buildAgents: agents,
+          run: { ...runEnvironment(new NodeFileSystem()), usage },
+        });
+        const pendingId = await startedPendingId();
+        await endPush(pendingId);
+
+        expect(piecesTurned()).toEqual(expect.arrayContaining([writePiece, checkPiece]));
+        const latest = [
+          ...new Map(runs.buildActivity(pendingId).map((entry) => [entry.id, entry])).values(),
+        ];
+        const stepsOf = (piece: string) =>
+          latest.flatMap((entry) =>
+            entry.kind === "tool" && entry.nodeId === piece
+              ? [[entry.toolUseId, entry.result, entry.durationMs]]
+              : [],
+          );
+        expect(stepsOf(writePiece)).toEqual([["read-write", "ok", 3]]);
+        expect(stepsOf(checkPiece)).toEqual([]);
+        const finishes = latest.flatMap((entry) =>
+          entry.kind === "subagent" && entry.state === "finished"
+            ? [[entry.nodeId, entry.report]]
+            : [],
+        );
+        expect(finishes).toEqual(
+          expect.arrayContaining([
+            [writePiece, "Wrote the write piece."],
+            [checkPiece, undefined],
+          ]),
+        );
       });
 
       it("pushes each build activity entry under its pending id, and answers build-activity with them", async () => {
@@ -4802,6 +4933,252 @@ describe("createEngineHandler", async () => {
           expect(pushes).not.toContainEqual({ push: "story", runId });
         });
       });
+
+      describe("repo states", () => {
+        let gitState: FakeGitState;
+        let phases: MockInstance<FakeStore["appendRepoState"]>;
+
+        const readState = (head: string, behind = 0, branch: string | null = "flowdeck/x") => ({
+          kind: "read" as const,
+          branch,
+          head,
+          upstream: { name: "origin/main", ahead: 0, behind },
+          staged: 0,
+          unstaged: 0,
+          untracked: 0,
+        });
+
+        const recordedPhases = () => phases.mock.calls.map(([, phase]) => phase);
+
+        const repoHandler = (
+          turn: FakeTurnHandler = napsForever,
+          overrides: Partial<EngineHandlerOptions> = {},
+        ) =>
+          handlerWith({
+            narrator,
+            gitState,
+            run: runEnvironment(new NodeFileSystem(), Date.now, turn),
+            ...overrides,
+          });
+
+        const latestRunId = () => {
+          const id = runs.runs.at(-1)?.id;
+          if (id === undefined) throw new Error("no run yet");
+          return id;
+        };
+
+        const toolStep = (id: number, tool: string, input: object) => ({
+          id,
+          nodeId: "write",
+          at: 1,
+          summary: tool,
+          kind: "tool" as const,
+          tool,
+          input: JSON.stringify(input),
+        });
+
+        beforeEach(() => {
+          gitState = gitAt(repo.path);
+          phases = vi.spyOn(runs, "appendRepoState");
+        });
+
+        it.each(["done", "failed"] as const)(
+          "records the worktree before the first step and after a %s ending, before the story is told",
+          async (ending) => {
+            let beforeAtFirstStep: unknown;
+            handler = repoHandler((nodeId, opening) => {
+              if (nodeId === "write") {
+                beforeAtFirstStep = runs.repoStates(latestRunId()).before;
+                gitState.repoStates.set(opening.cwd, readState("def5678"));
+              }
+              return ending === "failed" && nodeId === "check" ? "fail" : "done";
+            });
+            flows.save(twoAgents());
+            const buildId = await builtId();
+            gitState.repoStates.set(worktreeOf(buildId), readState("abc1234", 1));
+            const runId = await startedOn(buildId);
+            await untilFinished(runId);
+            await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+            expect(runs.findRun(runId)?.status).toBe(ending);
+            expect(gitState.repoStateCalls[0]).toBe(worktreeOf(buildId));
+            expect(runs.findRun(runId)?.session.cwd).toBe(worktreeOf(buildId));
+            expect(beforeAtFirstStep).toEqual(readState("abc1234", 1));
+            expect(recordedPhases()).toEqual(["before", "after"]);
+            expect(narrator.calls[0]).toContain(
+              "Before: on flowdeck/x at abc1234, 1 behind and 0 ahead of origin/main as of the last fetch",
+            );
+            expect(narrator.calls[0]).toContain("After: on flowdeck/x at def5678");
+          },
+        );
+
+        it("answers Run before the worktree is read, and starts no turn until the read lands", async () => {
+          const turns: string[] = [];
+          handler = repoHandler((nodeId) => {
+            turns.push(nodeId);
+            return "done";
+          });
+          flows.save(twoAgents());
+          const buildId = await builtId();
+          let release: (state: RepoState) => void = () => undefined;
+          vi.spyOn(gitState, "repoState").mockImplementationOnce(
+            () => new Promise<RepoState>((resolve) => (release = resolve)),
+          );
+
+          const runId = await startedOn(buildId);
+          await settle();
+
+          expect(turns).toEqual([]);
+          expect(runs.repoStates(runId).before).toBeNull();
+
+          release(readState("abc1234"));
+          await untilFinished(runId);
+
+          expect(turns.length).toBeGreaterThan(0);
+          expect(runs.repoStates(runId).before).toEqual(readState("abc1234"));
+        });
+
+        it("records the after state of a run stopped while no run of it is going, then tells its story", async () => {
+          handler = repoHandler();
+          flows.save(sleeper());
+          const runId = leftRunning(await builtId());
+          gitState.repoStates.set(repo.path, readState("fee1234"));
+
+          expect(await stopRunRequest(runId)).toMatchObject({ ok: true, value: { stopped: true } });
+
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+          expect(recordedPhases()).toEqual(["after"]);
+          expect(narrator.calls[0]).toContain("Before: not recorded");
+          expect(narrator.calls[0]).toContain("After: on flowdeck/x at fee1234");
+        });
+
+        it("keeps the first before and the latest after across a resume", async () => {
+          let naps = 0;
+          handler = repoHandler((nodeId) => (nodeId === "nap" && ++naps === 1 ? "hold" : "done"));
+          flows.save(sleeper());
+          const buildId = await builtId();
+          const worktree = worktreeOf(buildId);
+          gitState.repoStates.set(worktree, readState("aaa1111"));
+          const runId = await startedOn(buildId);
+          await napSent(runId);
+          gitState.repoStates.set(worktree, readState("bbb2222"));
+          await stopRunRequest(runId);
+          await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+          gitState.repoStates.set(worktree, readState("ccc3333"));
+
+          expect(
+            await handler.handle({ id: nextId++, type: "resume-run", payload: { runId } }),
+          ).toMatchObject({ ok: true, value: { kind: "started", runId } });
+          await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
+          await vi.waitFor(() => expect(narrator.calls).toHaveLength(2));
+
+          expect(recordedPhases()).toEqual(["before", "after", "after"]);
+          expect(narrator.calls[0]).toContain("After: on flowdeck/x at bbb2222");
+          expect(narrator.calls[1]).toContain("Before: on flowdeck/x at aaa1111");
+          expect(narrator.calls[1]).toContain("After: on flowdeck/x at ccc3333");
+        });
+
+        it("ends the run normally and says not recorded when the worktree cannot be read", async () => {
+          vi.spyOn(gitState, "repoState").mockRejectedValue(new Error("git is gone"));
+          handler = repoHandler(() => "done");
+          flows.save(twoAgents());
+          const runId = await startedRunId();
+          await untilFinished(runId);
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+          expect(runs.findRun(runId)?.status).toBe("done");
+          expect(recordedPhases()).toEqual(["before", "after"]);
+          expect(narrator.calls[0]).toContain("Before: not recorded");
+          expect(narrator.calls[0]).toContain("After: not recorded");
+        });
+
+        it("adds no run events, so the story is kept", async () => {
+          let eventsAtAfter: number | undefined;
+          phases.mockImplementation((runId, phase, state, otherRepos) => {
+            if (phase === "after") eventsAtAfter = runs.events(runId).length;
+            FakeStore.prototype.appendRepoState.call(runs, runId, phase, state, otherRepos);
+          });
+          handler = repoHandler(() => "done");
+          flows.save(twoAgents());
+          const runId = await startedRunId();
+          await untilFinished(runId);
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+          expect(eventsAtAfter).toBe(runs.events(runId).length);
+          expect(appended()[0]).toMatchObject({ runId, runStatus: "done" });
+        });
+
+        it("lists the other repos the run's steps touched, with their branches, sorted", async () => {
+          handler = repoHandler(
+            (nodeId, opening) => {
+              if (nodeId === "write") {
+                for (const step of [
+                  toolStep(901, "Bash", { command: "cd ~/web && git pull" }),
+                  toolStep(902, "Write", { file_path: "/x/ios/a.ts", content: "x" }),
+                  toolStep(903, "Edit", { file_path: `${opening.cwd}/src/a.ts` }),
+                  toolStep(904, "Read", { file_path: `${repo.path}/b.ts` }),
+                  toolStep(905, "Read", { file_path: "/nowhere/c.ts" }),
+                  toolStep(906, "Bash", { command: "git -C /x/det status" }),
+                ]) {
+                  runs.recordActivity(latestRunId(), step);
+                }
+                gitState.tops.set(opening.cwd, opening.cwd);
+                gitState.repoStates.set(opening.cwd, readState("4444444"));
+              }
+              return "done";
+            },
+            { userHome: "/u" },
+          );
+          gitState.tops.set("/u/web", "/u/web");
+          gitState.tops.set("/x/ios", "/x/ios");
+          gitState.tops.set("/x/det", "/x/det");
+          gitState.tops.set(repo.path, repo.path);
+          gitState.repoStates.set(repo.path, readState("5555555", 0, "main"));
+          gitState.repoStates.set("/u/web", readState("1111111", 0, "master"));
+          gitState.repoStates.set("/x/ios", readState("2222222", 0, "develop"));
+          gitState.repoStates.set("/x/det", readState("3333333", 0, null));
+          flows.save(twoAgents());
+          const runId = await startedRunId();
+          await untilFinished(runId);
+          await vi.waitFor(() => expect(appended()).toHaveLength(1));
+
+          const otherRepos = [
+            { path: "/u/web", branch: "master" },
+            { path: "/x/det", branch: "detached 3333333" },
+            { path: "/x/ios", branch: "develop" },
+          ];
+          expect(phases.mock.calls.at(-1)?.[3]).toEqual(otherRepos);
+          expect(narrator.calls[0]).toContain(
+            "Other repos: /u/web (master); /x/det (detached 3333333); /x/ios (develop)",
+          );
+          expect(await loadedStory(runId)).toMatchObject({ header: { otherRepos } });
+        });
+
+        it("loads a run from before repo states were kept with no other repos and not recorded", async () => {
+          handler = repoHandler();
+          flows.save(sleeper());
+          const runId = leftRunning(await builtId());
+          runs.finishRun(runId, "stopped");
+
+          const story = (await loadedStory(runId)) as { header: object; digest: string };
+
+          expect(story.header).not.toHaveProperty("otherRepos");
+          expect(story.digest).toContain("Before: not recorded");
+          expect(story.digest).toContain("After: not recorded");
+        });
+
+        it("records no after state when Flowdeck detaches from a running run", async () => {
+          handler = repoHandler();
+          flows.save(sleeper());
+          const runId = await startedRunId();
+          await napSent(runId);
+
+          await handler.detach();
+          await settle();
+
+          expect(recordedPhases()).toEqual(["before"]);
+        });
+      });
     });
 
     it("returns the open error when the stores fail to open", async () => {
@@ -5232,6 +5609,63 @@ describe("createEngineHandler", async () => {
       hook("PreToolUse", claudeSessionId, 1200);
 
       expect(activityPushes()).toHaveLength(2);
+    });
+
+    it("keeps no full text of a cut step folded while Flowdeck detaches", async () => {
+      const source = new FakeEventSource();
+      let releasePrompt: (() => void) | undefined;
+      let claudeSessionId = "";
+      const longCall = {
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+        tool_use_id: "toolu-long",
+      };
+      const hook = (kind: "PreToolUse" | "PostToolUse", payload: Record<string, unknown>) =>
+        source.publish({
+          kind,
+          sessionId: claudeSessionId,
+          payload: {
+            hook_event_name: kind,
+            session_id: claudeSessionId,
+            flowdeck_hook_at: 1200,
+            ...payload,
+          },
+        });
+      const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      handler = handlerWith({
+        newSessionName: () => "fd-run-test",
+        run: {
+          ...runEnvironment(new NodeFileSystem(), () => 1000),
+          startEvents: async () => ({ events: source, stop: async () => undefined }),
+          openSession: async (opening) => {
+            claudeSessionId = opening.claudeSessionId;
+            return {
+              sessionId: claudeSessionId,
+              session: { ensureStarted: async () => undefined },
+              prompts: {
+                interrupt: async () => undefined,
+                sendPrompt: () => new Promise<void>((resolve) => (releasePrompt = resolve)),
+              },
+              stop: async () => undefined,
+            };
+          },
+        },
+      });
+      flows.save(promptFlow());
+      const runId = await startedRunId();
+      await vi.waitFor(() => expect(releasePrompt).toBeDefined());
+
+      const detaching = handler.detach();
+      await vi.waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("detach waits up to")),
+      );
+      hook("PreToolUse", longCall);
+      hook("PostToolUse", { ...longCall, tool_response: "x".repeat(5000) });
+      releasePrompt?.();
+      await detaching;
+
+      expect(runs.activity(runId)).toEqual([]);
+      expect(runs.stepTexts(runId, 1)).toEqual([]);
     });
 
     it("asks the run's waiter about a permission request from the run's Claude session", async () => {

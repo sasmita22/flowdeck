@@ -93,6 +93,7 @@ describe("preload run-state wiring", () => {
     ["checkedOutBranches", "flowdeck:checked-out-branches", { repo: "/code/shop" }],
     ["listRuns", "flowdeck:list-runs", undefined],
     ["loadRun", "flowdeck:load-run", { runId: "run-1" }],
+    ["stepFullText", "flowdeck:step-full-text", { runId: "run-1", entryId: 3 }],
     ["runPipeline", "flowdeck:run-pipeline", { runId: "run-1" }],
     ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
     ["listBuildProgress", "flowdeck:build-progress-list", undefined],
@@ -142,6 +143,7 @@ describe("preload run-state wiring", () => {
     ["build-activity", "getBuildActivity"],
     ["build-rebuild", "buildRebuild"],
     ["run-pipeline", "runPipeline"],
+    ["step-full-text", "stepFullText"],
     ["build-picture", "buildPicture"],
     ["build-tree", "buildTree"],
     ["build-project", "buildProject"],
@@ -207,6 +209,10 @@ describe("preload run-state wiring", () => {
       buildId: string;
     }>();
     expectTypeOf<Parameters<EngineCalls["writeStory"]>[0]>().toEqualTypeOf<{ runId: string }>();
+    expectTypeOf<Parameters<EngineCalls["stepFullText"]>[0]>().toEqualTypeOf<{
+      runId: string;
+      entryId: number;
+    }>();
     expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
     expectTypeOf<Parameters<EngineCalls["listBuildProgress"]>>().toEqualTypeOf<[]>();

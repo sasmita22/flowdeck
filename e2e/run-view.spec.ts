@@ -433,6 +433,55 @@ test("An Agent stage lists its subagent's step with the time to the second, and 
   );
 });
 
+test("A step cut short shows its full text on request; a short step has no such control", async () => {
+  seedFlow(home, laidOut([named("s1", "Plan")], []), repo.path);
+  launched = await launchWithFakeClaude({
+    home,
+    logPath: test.info().outputPath("app.log"),
+    stepOutputChars: 5000,
+  });
+  const window = launched.window;
+  await expect(window.getByTestId(controlTestIds.build)).toBeVisible();
+
+  const buildId = await buildAndRun(window, home, "long");
+  const runId = await runIdOf(home, buildId);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+
+  const entries = rows<{ id: number; entry: string }>(
+    `SELECT id, entry FROM activity AS latest
+      WHERE run_id = ? AND node_id = 's1'
+        AND seq = (SELECT MAX(seq) FROM activity WHERE run_id = latest.run_id AND id = latest.id)`,
+    runId,
+  ).map((row) => ({ id: row.id, ...(JSON.parse(row.entry) as { kind: string; tool?: string }) }));
+  const longStep = entries.find((entry) => entry.kind === "tool" && entry.tool === "Bash")?.id;
+  const shortStep = entries.find((entry) => entry.kind === "subagent")?.id;
+  expect(longStep).toEqual(expect.any(Number));
+  expect(shortStep).toEqual(expect.any(Number));
+
+  await window.getByTestId(pageTestIds.runStage(runId, "s1")).click();
+  const detail = window.getByTestId(pageTestIds.runStageDetail(runId, "s1"));
+  await detail.getByTestId(`activity-entry-${longStep}-summary`).click();
+  await detail.getByTestId(`activity-entry-${shortStep}-summary`).click();
+
+  const output = detail.getByTestId(`activity-entry-${longStep}-output`);
+  await expect(output).toContainText("… cut,");
+  await expect(output).not.toContainText("END-OF-FULL-OUTPUT");
+  const fullText = detail.getByTestId(`activity-entry-${longStep}-full-text`);
+  await expect(fullText).toHaveAttribute("data-node-id", "s1");
+  await expect(detail.getByTestId(`activity-entry-${shortStep}-output`)).toBeVisible();
+  await expect(detail.getByTestId(`activity-entry-${shortStep}-full-text`)).toHaveCount(0);
+  await expect(
+    detail.locator('[data-testid^="activity-entry-"]:not([data-node-id="s1"])'),
+  ).toHaveCount(0);
+
+  await fullText.click();
+
+  await expect(output).toContainText("END-OF-FULL-OUTPUT");
+  await expect(output).not.toContainText("… cut,");
+});
+
 test("Stop ends a long agent turn and marks the run stopped, and Resume skips the finished nodes", async () => {
   seedFlow(
     home,

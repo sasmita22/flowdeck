@@ -5,7 +5,14 @@ import type {
   StoredBuildEvent,
 } from "../../src/core/run/build-progress.js";
 import { stateMovingKinds, type RunEvent } from "../../src/core/run/run-events.js";
-import { BuildRunningError, type RunBuildCopy } from "../../src/core/run/store.js";
+import type { OtherRepo, RepoState, RunRepoStates } from "../../src/core/run/repo-state.js";
+import {
+  BuildRunningError,
+  type RepoStatePhase,
+  type RunBuildCopy,
+  type StepText,
+  type StepTextField,
+} from "../../src/core/run/store.js";
 import type {
   BuildFileRecord,
   BuildRecord,
@@ -67,6 +74,18 @@ export class FakeStore implements Store {
   private readonly costs = new Map<string, number>();
   private readonly activityByRun = new Map<string, Map<number, ActivityEntry>>();
   private readonly stories: RunStory[] = [];
+  private readonly repoStateRows: {
+    runId: string;
+    phase: RepoStatePhase;
+    state: RepoState;
+    otherRepos: OtherRepo[];
+  }[] = [];
+  private readonly stepTextRows: {
+    runId: string;
+    entryId: number;
+    field: StepTextField;
+    text: string;
+  }[] = [];
   private readonly now: () => Date;
   private readonly pendingBuilds: PendingBuild[] = [];
   private readonly buildEventLog: { pendingId: string; event: StoredBuildEvent }[] = [];
@@ -430,6 +449,41 @@ export class FakeStore implements Store {
   latestRunStory(runId: string): RunStory | undefined {
     const story = this.stories.findLast((told) => told.runId === runId);
     return story && copy(story);
+  }
+
+  appendRepoState(
+    runId: string,
+    phase: RepoStatePhase,
+    state: RepoState,
+    otherRepos: OtherRepo[],
+  ): void {
+    this.repoStateRows.push(copy({ runId, phase, state, otherRepos }));
+  }
+
+  repoStates(runId: string): RunRepoStates {
+    const before = this.repoStateRows.find((row) => row.runId === runId && row.phase === "before");
+    const after = this.repoStateRows.findLast(
+      (row) => row.runId === runId && row.phase === "after",
+    );
+    return copy({
+      before: before?.state ?? null,
+      after: after?.state ?? null,
+      otherRepos: after?.otherRepos ?? [],
+    });
+  }
+
+  appendStepText(runId: string, entryId: number, field: StepTextField, text: string): void {
+    this.stepTextRows.push({ runId, entryId, field, text });
+  }
+
+  stepTexts(runId: string, entryId: number): StepText[] {
+    const latest = new Map<StepTextField, string>();
+    for (const row of this.stepTextRows) {
+      if (row.runId === runId && row.entryId === entryId) latest.set(row.field, row.text);
+    }
+    return [...latest]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([field, text]) => ({ field, text }));
   }
 
   activity(runId: string): ActivityEntry[] {

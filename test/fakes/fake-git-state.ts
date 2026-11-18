@@ -1,7 +1,10 @@
-import type { FolderState, GitState } from "../../src/ports/git-state.js";
+import type { FolderState, GitState, RepoState } from "../../src/ports/git-state.js";
 
 export class FakeGitState implements GitState {
   readonly reads: string[] = [];
+  readonly repoStates = new Map<string, RepoState>();
+  readonly tops = new Map<string, string>();
+  readonly repoStateCalls: string[] = [];
 
   constructor(
     private readonly states: Record<string, FolderState> = {},
@@ -32,5 +35,19 @@ export class FakeGitState implements GitState {
   async checkedOutBranches(repo: string): Promise<Record<string, string>> {
     if (this.options.failWith !== undefined) throw new Error(this.options.failWith);
     return this.options.checkedOut?.[repo] ?? {};
+  }
+
+  async repoState(folder: string): Promise<RepoState> {
+    this.repoStateCalls.push(folder);
+    return this.repoStates.get(folder) ?? { kind: "unreadable" };
+  }
+
+  async topLevel(path: string): Promise<string | null> {
+    const exact = this.tops.get(path);
+    if (exact !== undefined) return exact;
+    const holder = [...this.tops.keys()]
+      .filter((folder) => path.startsWith(`${folder}/`))
+      .sort((a, b) => b.length - a.length)[0];
+    return holder === undefined ? null : (this.tops.get(holder) ?? null);
   }
 }

@@ -25,6 +25,7 @@ const bridge = (
   runBuild: vi.fn(),
   listRuns: vi.fn(),
   loadRun: vi.fn(),
+  stepFullText: vi.fn(),
   doctor: vi.fn(),
   runOptions: vi.fn(),
   stopRun: vi.fn(),

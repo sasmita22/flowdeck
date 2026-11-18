@@ -14,7 +14,7 @@ import type { HumanDecision } from "../../../core/run/wait.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 import { statusBadge } from "../canvas/status-look.js";
 import { formatCost, formatDuration, formatTokens, formatWhen } from "../format.js";
-import { ActivityList } from "../inspector/activity-feed.js";
+import { ActivityList, type FullTextSource } from "../inspector/activity-feed.js";
 import type { RunLabels } from "../inspector/inspector.js";
 import { stepsEndedOf, type InspectorState } from "../inspector/store.js";
 import {
@@ -217,6 +217,7 @@ function StageDetail({
   labels,
   canRetry,
   onSelectNode,
+  fullText,
 }: {
   runId: string;
   placed: Placed;
@@ -226,6 +227,7 @@ function StageDetail({
   labels: RunLabels;
   canRetry: boolean;
   onSelectNode: (nodeId: string) => void;
+  fullText: FullTextSource;
 }) {
   const { stage, round } = placed;
   const shown = displayStatus(state, runStatus);
@@ -292,6 +294,7 @@ function StageDetail({
         onSelectNode={onSelectNode}
         withSteps
         stepsEnded={stepsEndedOf(runStatus, shown)}
+        fullText={fullText}
       />
     </section>
   );
@@ -305,6 +308,7 @@ export function RunPipeline({
   inspector,
   labels,
   canRetry,
+  fullText,
 }: {
   runId: string;
   recorded: boolean;
@@ -313,6 +317,7 @@ export function RunPipeline({
   inspector: StoreApi<InspectorState>;
   labels: RunLabels;
   canRetry: boolean;
+  fullText: FullTextSource;
 }) {
   const pipeline = useStore(run, (state) => state.pipelines[runId]);
   const selection = useStore(run, (state) => state.selectedStage[runId]);
@@ -366,6 +371,7 @@ export function RunPipeline({
             labels={labels}
             canRetry={canRetry}
             onSelectNode={(nodeId) => onSelect({ nodeId })}
+            fullText={fullText}
           />
         )}
       </div>

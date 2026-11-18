@@ -215,7 +215,7 @@ test("While a build's run is going its ⋯ Delete is disabled; after Stop, Delet
     runId,
   );
   const tmuxName = session?.tmux_name ?? "";
-  expect(await tmuxAlive(tmuxName)).toBe(true);
+  await expect.poll(() => tmuxAlive(tmuxName)).toBe(true);
   const worktree = worktreeOf(buildId);
   await writeFile(join(worktree, "scratch.txt"), "uncommitted\n");
 

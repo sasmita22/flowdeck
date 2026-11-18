@@ -6,6 +6,7 @@ import type { CostReport } from "./cost.js";
 import { displayStatus } from "./display.js";
 import type { StageNode, StageSources } from "./manifest.js";
 import { pipelineOf, type PipelineItem, type PipelineStage } from "./pipeline.js";
+import { otherReposText, repoStateText, type OtherRepo, type RunRepoStates } from "./repo-state.js";
 import type { BuildRecord, RunStatus, StoredEvent } from "./store.js";
 import type { HumanDecision } from "./wait.js";
 
@@ -14,7 +15,7 @@ export const digestCap = 12_000;
 export type RunHeader = Pick<
   BuildRecord,
   "name" | "blueprintName" | "blueprintVersion" | "repo" | "branch" | "values"
->;
+> & { otherRepos?: OtherRepo[] };
 
 export type RunDigest = { header: RunHeader; text: string };
 
@@ -32,6 +33,7 @@ export type DigestInput = {
   endedAt: string | null;
   status: RunStatus;
   questions: Readonly<Record<string, string>>;
+  repoStates?: RunRepoStates;
 };
 
 type Limits = {
@@ -226,6 +228,7 @@ function itemLines(
 
 export function runDigest(input: DigestInput): RunDigest {
   const { build } = input;
+  const otherRepos = input.repoStates?.otherRepos ?? [];
   const header: RunHeader = {
     name: build.name,
     blueprintName: build.blueprintName,
@@ -233,6 +236,7 @@ export function runDigest(input: DigestInput): RunDigest {
     repo: build.repo,
     branch: build.branch,
     values: build.values,
+    ...(otherRepos.length === 0 ? {} : { otherRepos }),
   };
   const nodes = input.stages?.nodes ?? nodesFromEvents(input.events);
   const items = pipelineOf(
@@ -253,6 +257,9 @@ export function runDigest(input: DigestInput): RunDigest {
     ...(input.stages === null ? [] : [`Session: ${input.stages.session.name}`]),
     `Repo: ${build.repo ?? "none"}`,
     `Branch: ${build.branch ?? "none"}`,
+    `Before: ${repoStateText(input.repoStates?.before ?? null)}`,
+    `After: ${repoStateText(input.repoStates?.after ?? null)}`,
+    ...(otherRepos.length === 0 ? [] : [`Other repos: ${otherReposText(otherRepos)}`]),
     `Variables: ${variablesLine(build.values)}`,
     `Run status: ${input.status}`,
     `Started: ${input.createdAt}`,

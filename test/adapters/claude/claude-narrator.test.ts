@@ -369,6 +369,15 @@ describe("narratorPrompt", () => {
     expect(narratorPrompt).toMatch(/not recorded/i);
   });
 
+  it("has Context state the Before: line and Result state the After: line", () => {
+    expect(promptLinesAbout("Context:")).toContain("Before:");
+    expect(promptLinesAbout("Result:")).toContain("After:");
+  });
+
+  it("names another repo only when an Other repos: line shows it", () => {
+    expect(promptLinesAbout("other repo")).toContain("Other repos:");
+  });
+
   it("no longer promises a first line shown alone in the list of runs", () => {
     expect(narratorPrompt).not.toMatch(/shown alone/i);
     expect(narratorPrompt).not.toMatch(/list of runs/i);

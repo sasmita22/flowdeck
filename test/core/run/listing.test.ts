@@ -78,6 +78,25 @@ describe("loadedRunSchema", () => {
     expect(loadedRunSchema.parse(run)).toEqual(run);
   });
 
+  it("keeps the other repos in a story's header", () => {
+    const otherRepos = [
+      { path: "/u/web", branch: "master" },
+      { path: "/x/ios", branch: "develop" },
+    ];
+    const run = { ...loaded, story: { header: { ...header, otherRepos }, digest, written } };
+
+    expect(loadedRunSchema.parse(run)).toEqual(run);
+  });
+
+  it("rejects a story header with a malformed other repo", () => {
+    const run = {
+      ...loaded,
+      story: { header: { ...header, otherRepos: [{ path: "/u/web" }] }, digest, written },
+    };
+
+    expect(() => loadedRunSchema.parse(run)).toThrow();
+  });
+
   it("rejects a story missing its header or its digest", () => {
     expect(() => loadedRunSchema.parse({ ...loaded, story: { digest, written } })).toThrow();
     expect(() => loadedRunSchema.parse({ ...loaded, story: { header, written } })).toThrow();

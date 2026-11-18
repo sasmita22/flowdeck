@@ -152,7 +152,7 @@ test("Deleting a going run from its page stops it, lands on Runs without it, and
     runId,
   );
   const tmuxName = session?.tmux_name ?? "";
-  expect(await tmuxAlive(tmuxName)).toBe(true);
+  await expect.poll(() => tmuxAlive(tmuxName)).toBe(true);
 
   await window.getByTestId(pageTestIds.runPageMenu).click();
   await window.getByTestId(pageTestIds.runPageDelete).click();
