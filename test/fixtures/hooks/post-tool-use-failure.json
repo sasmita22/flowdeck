@@ -1,0 +1,21 @@
+{
+  "session_id": "f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c",
+  "transcript_path": "/tmp/fd-fixture/.claude/projects/-tmp-fd-fixture/f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c.jsonl",
+  "cwd": "/tmp/fd-fixture",
+  "prompt_id": "a3b4c5d6-e7f8-4a9b-8c0d-1e2f3a4b5c6d",
+  "permission_mode": "acceptEdits",
+  "agent_id": "agent-fixture-1",
+  "agent_type": "reader",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/tmp/fd-fixture/missing.txt"
+  },
+  "tool_use_id": "toolu_01FixturePostToolUseFailure",
+  "error": "File does not exist. Note: your current working directory is /tmp/fd-fixture.",
+  "is_interrupt": false,
+  "duration_ms": 4
+}

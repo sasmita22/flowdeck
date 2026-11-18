@@ -4,6 +4,7 @@ import {
   createBuildActivity,
 } from "../../../src/app/engine/activity-tracker.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
+import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import type { Store } from "../../../src/ports/store.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
@@ -16,13 +17,14 @@ describe("createActivityTracker", () => {
   let logs: string[];
   let publish: (push: EnginePush) => void;
   let inner: FakeStore;
+  let rows: ActivityEntry[];
   let runId: string;
   let store: Store;
   let source: FakeEventSource;
   let unwatch: () => void;
 
   const hook = (
-    kind: "PreToolUse" | "PostToolUse" | "SubagentStop",
+    kind: "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "SubagentStop",
     at: number,
     fields: Record<string, unknown> = {},
     sessionId = session,
@@ -59,6 +61,7 @@ describe("createActivityTracker", () => {
     logs = [];
     publish = (push) => pushes.push(push);
     inner = new FakeStore();
+    rows = [];
     runId = inner.createRun({
       buildDir: "/fd-home/builds/b1",
       inputs: {},
@@ -71,7 +74,13 @@ describe("createActivityTracker", () => {
       now: () => clock,
       publish: (push) => publish(push),
       log: (line) => logs.push(line),
-      activity: inner,
+      activity: {
+        recordActivity: (id, entry) => {
+          rows.push(entry);
+          inner.recordActivity(id, entry);
+        },
+        activity: (id) => inner.activity(id),
+      },
       turnNodes: new Set(["p2"]),
       place: { cwd: "/repo", home: "/Users/me" },
     });
@@ -135,7 +144,15 @@ describe("createActivityTracker", () => {
         push: "activity",
         value: {
           runId,
-          entry: { id: 1, nodeId: "p2", at: 350, kind: "tool", tool: "Bash", summary: "ls" },
+          entry: {
+            id: 1,
+            nodeId: "p2",
+            at: 350,
+            kind: "tool",
+            tool: "Bash",
+            summary: "ls",
+            input: '{"command":"ls"}',
+          },
         },
       },
     ]);
@@ -270,6 +287,95 @@ describe("createActivityTracker", () => {
     expect(activity().map((push) => push.value.entry)).toMatchObject([
       { id: 1, nodeId: "p2", kind: "pr", url: "https://github.com/acme/app/pull/7" },
     ]);
+  });
+
+  it("stores and pushes a subagent's step on the node of the Agent call that runs it", () => {
+    agent(350);
+    hook("PreToolUse", 360, {
+      agent_id: "agent-1",
+      tool_name: "Read",
+      tool_input: { file_path: "/repo/a.ts" },
+      tool_use_id: "toolu_s1",
+    });
+
+    const step = { id: 2, nodeId: "p2", kind: "tool", tool: "Read", agentId: "agent-1" };
+    expect(rows).toMatchObject([{ id: 1, kind: "subagent" }, step]);
+    expect(activity().map((push) => push.value.entry)).toMatchObject([
+      { id: 1, kind: "subagent" },
+      step,
+    ]);
+  });
+
+  it("stores and pushes one same-id row per step a finished Agent call moves to its node", () => {
+    clock = 310;
+    store.append(runId, "p1", { kind: "sent" });
+    const call = (nodeId: string, at: number) =>
+      hook("PreToolUse", at, {
+        tool_name: "Agent",
+        tool_input: { description: `Run ${nodeId}`, prompt: `NODE ${nodeId}\nGo` },
+        tool_use_id: `toolu_${nodeId}`,
+      });
+    const step = (toolUseId: string, at: number) =>
+      hook("PreToolUse", at, {
+        agent_id: "agent-x",
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+        tool_use_id: toolUseId,
+      });
+    call("p1", 350);
+    call("p2", 351);
+    step("toolu_x1", 360);
+    step("toolu_x2", 370);
+    const before = { rows: rows.length, pushes: activity().length };
+
+    hook("PostToolUse", 380, {
+      tool_name: "Agent",
+      tool_input: { description: "Run p1", prompt: "NODE p1\nGo" },
+      tool_use_id: "toolu_p1",
+      tool_response: { status: "completed", agentId: "agent-x", agentType: "general-purpose" },
+    });
+
+    const moved = (entries: readonly ActivityEntry[]) =>
+      entries.filter((entry) => entry.kind === "tool");
+    expect(rows.slice(0, before.rows).filter((entry) => entry.kind === "tool")).toMatchObject([
+      { id: 3, nodeId: "p2" },
+      { id: 4, nodeId: "p2" },
+    ]);
+    expect(moved(rows.slice(before.rows))).toMatchObject([
+      { id: 3, nodeId: "p1", agentId: "agent-x" },
+      { id: 4, nodeId: "p1", agentId: "agent-x" },
+    ]);
+    expect(
+      moved(
+        activity()
+          .slice(before.pushes)
+          .map((push) => push.value.entry),
+      ),
+    ).toMatchObject([
+      { id: 3, nodeId: "p1" },
+      { id: 4, nodeId: "p1" },
+    ]);
+  });
+
+  it("folds a failed tool call of the run's session onto its step", () => {
+    hook("PreToolUse", 350, {
+      tool_name: "Read",
+      tool_input: { file_path: "/repo/missing.txt" },
+      tool_use_id: "toolu_r1",
+    });
+    hook("PostToolUseFailure", 355, {
+      tool_name: "Read",
+      tool_input: { file_path: "/repo/missing.txt" },
+      tool_use_id: "toolu_r1",
+      error: "File does not exist.",
+      duration_ms: 4,
+    });
+
+    expect(activity().map((push) => push.value.entry)).toMatchObject([
+      { id: 1, kind: "tool", tool: "Read" },
+      { id: 1, kind: "tool", result: "error", output: "File does not exist.", durationMs: 4 },
+    ]);
+    expect(inner.activity(runId)).toMatchObject([{ id: 1, result: "error" }]);
   });
 
   it("numbers new entries after the run's stored ones", () => {

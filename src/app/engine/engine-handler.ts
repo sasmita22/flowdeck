@@ -87,6 +87,7 @@ import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/run/manifest.js";
 import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
+import { settings as agentSettings } from "../../core/nodes/agent/settings.js";
 import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
 import type {
@@ -1421,6 +1422,28 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return undefined;
   };
 
+  const instructionsOf = (node: ParsedManifest["nodes"][number]): string | undefined =>
+    node.type === "agent"
+      ? agentSettings.pick({ instructions: true }).safeParse(node.settings).data?.instructions
+      : undefined;
+
+  const digestStagesOf = (manifest: ParsedManifest) => {
+    const stages = stageSourcesOf(manifest);
+    const instructions = new Map(
+      manifest.nodes.flatMap((node) => {
+        const text = instructionsOf(node);
+        return text === undefined ? [] : [[node.id, text] as const];
+      }),
+    );
+    return {
+      ...stages,
+      nodes: stages.nodes.map((stage) => {
+        const text = instructions.get(stage.id);
+        return text === undefined ? stage : { ...stage, instructions: text };
+      }),
+    };
+  };
+
   const questionsOf = (manifest: ParsedManifest): Record<string, string> =>
     Object.fromEntries(
       manifest.nodes.flatMap((node) => {
@@ -1445,9 +1468,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         blueprintName: record.blueprintName,
         blueprintVersion: record.source?.version ?? null,
         repo: record.repo,
+        branch: record.branch,
         values: record.buildValues,
       },
-      stages: manifest === undefined ? null : stageSourcesOf(manifest),
+      stages: manifest === undefined ? null : digestStagesOf(manifest),
       events,
       activity: runs.activity(runId),
       cost: costReport({ nodeIds: record.nodeIds, events, pending: [], now }),

@@ -30,6 +30,7 @@ const runHeaderSchema = z.object({
   blueprintName: z.string().nullable(),
   blueprintVersion: z.number().int().nullable(),
   repo: z.string().nullable(),
+  branch: z.string().nullable().optional(),
   values: z.record(z.string(), z.union([z.string(), z.boolean()])).nullable(),
 });
 

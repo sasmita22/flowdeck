@@ -1,4 +1,5 @@
-export type HookEventKind = "Stop" | "PreToolUse" | "PostToolUse" | "SubagentStop" | "StopFailure";
+export type HookEventKind =
+  "Stop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "SubagentStop" | "StopFailure";
 
 export type HookEvent = {
   kind: HookEventKind;

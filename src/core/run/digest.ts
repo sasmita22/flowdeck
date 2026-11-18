@@ -13,14 +13,18 @@ export const digestCap = 12_000;
 
 export type RunHeader = Pick<
   BuildRecord,
-  "name" | "blueprintName" | "blueprintVersion" | "repo" | "values"
+  "name" | "blueprintName" | "blueprintVersion" | "repo" | "branch" | "values"
 >;
 
 export type RunDigest = { header: RunHeader; text: string };
 
+type DigestStageNode = StageNode & { instructions?: string };
+
+type DigestStages = Omit<StageSources, "nodes"> & { nodes: DigestStageNode[] };
+
 export type DigestInput = {
   build: RunHeader & Pick<BuildRecord, "hash">;
-  stages: StageSources | null;
+  stages: DigestStages | null;
   events: readonly StoredEvent[];
   activity: readonly ActivityEntry[];
   cost: CostReport;
@@ -30,28 +34,58 @@ export type DigestInput = {
   questions: Readonly<Record<string, string>>;
 };
 
-type Limits = { reply: number; files: number; decision: number };
+type Limits = {
+  steps: number;
+  report: number;
+  reply: number;
+  files: number;
+  decision: number;
+  instructions: number;
+};
 
 const whole = Number.POSITIVE_INFINITY;
 
-const attempts: Limits[] = [
-  { reply: whole, files: whole, decision: whole },
-  { reply: 2000, files: whole, decision: whole },
-  { reply: 500, files: whole, decision: whole },
-  { reply: 100, files: whole, decision: whole },
-  { reply: 100, files: 100, decision: whole },
-  { reply: 100, files: 30, decision: whole },
-  { reply: 100, files: 10, decision: whole },
-  { reply: 100, files: 0, decision: whole },
-  { reply: 100, files: 0, decision: 500 },
+const untouched: Limits = {
+  steps: whole,
+  report: whole,
+  reply: whole,
+  files: whole,
+  decision: whole,
+  instructions: whole,
+};
+
+const cuts: Partial<Limits>[] = [
+  { steps: 100 },
+  { steps: 20 },
+  { steps: 0 },
+  { report: 2000 },
+  { report: 500 },
+  { report: 100 },
+  { reply: 2000 },
+  { reply: 500 },
+  { reply: 100 },
+  { files: 100 },
+  { files: 30 },
+  { files: 10 },
+  { files: 0 },
+  { decision: 500 },
+  { decision: 100 },
+  { instructions: 2000 },
+  { instructions: 500 },
+  { instructions: 100 },
 ];
 
-const tightest: Limits = { reply: 100, files: 0, decision: 100 };
+const attempts: Limits[] = cuts.reduce<Limits[]>(
+  (ladder, cut) => [...ladder, { ...(ladder.at(-1) ?? untouched), ...cut }],
+  [untouched],
+);
+
+const tightest = attempts.at(-1) ?? untouched;
 
 const shortened = (text: string, limit: number) =>
   text.length <= limit ? text : `${text.slice(0, limit).trimEnd()}…`;
 
-const nodesFromEvents = (events: readonly StoredEvent[]): StageNode[] =>
+const nodesFromEvents = (events: readonly StoredEvent[]): DigestStageNode[] =>
   [...new Set([...events].sort((a, b) => a.seq - b.seq).map((event) => event.nodeId))].map(
     (id) => ({ id, type: "agent", label: id }),
   );
@@ -92,12 +126,52 @@ const filesLine = (paths: readonly string[], limit: number) => {
   return [...kept, ...(rest > 0 ? [`…and ${rest} more`] : [])].join(", ");
 };
 
-function stageLines(
-  stage: PipelineStage,
-  number: string,
-  limits: Limits,
-  run: Pick<DigestInput, "questions" | "status">,
-): string[] {
+type ToolEntry = Extract<ActivityEntry, { kind: "tool" }>;
+
+const stepLine = (entry: ToolEntry, runEnded: boolean) =>
+  `     - ${[entry.tool, entry.summary].filter((part) => part !== "").join(" ")} → ${
+    entry.result ?? (runEnded ? "not recorded" : "running")
+  }`;
+
+const stepsLines = (activity: readonly ActivityEntry[], limit: number, runEnded: boolean) => {
+  const steps = activity.filter((entry): entry is ToolEntry => entry.kind === "tool");
+  if (steps.length === 0) return [];
+  const kept = steps.slice(0, limit);
+  const rest = steps.length - kept.length;
+  return [
+    "   Steps:",
+    ...kept.map((entry) => stepLine(entry, runEnded)),
+    ...(rest > 0 ? [`     …and ${rest} more`] : []),
+  ];
+};
+
+const reportOf = (activity: readonly ActivityEntry[]) =>
+  activity.findLast(
+    (entry): entry is Extract<ActivityEntry, { kind: "subagent" }> =>
+      entry.kind === "subagent" && entry.report !== undefined,
+  )?.report;
+
+type StageRun = Pick<DigestInput, "questions" | "status"> & {
+  instructions: ReadonlyMap<string, string>;
+};
+
+const agentLines = (stage: PipelineStage, limits: Limits, run: StageRun) => {
+  if (stage.type !== "agent") return { asked: [], reported: [] };
+  const instructions = run.instructions.get(stage.nodeId);
+  const report = reportOf(stage.activity);
+  return {
+    asked: [
+      `   Instructions: ${
+        instructions === undefined ? "not recorded" : shortened(instructions, limits.instructions)
+      }`,
+    ],
+    reported: [
+      `   Report: ${report === undefined ? "not recorded" : shortened(report, limits.report)}`,
+    ],
+  };
+};
+
+function stageLines(stage: PipelineStage, number: string, limits: Limits, run: StageRun): string[] {
   const facts = [
     displayStatus(stage.status, run.status),
     ...(stage.retries > 0 ? [`${stage.retries} ${stage.retries === 1 ? "retry" : "retries"}`] : []),
@@ -106,8 +180,10 @@ function stageLines(
   const compactions = stage.timeline.filter((event) => event.kind === "compacted").length;
   const files = writtenPaths(stage.activity);
   const question = run.questions[stage.nodeId] ?? "";
+  const { asked, reported } = agentLines(stage, limits, run);
   return [
     `${number}. ${labelFor(stage)} (${stage.type}): ${facts.join(", ")}`,
+    ...asked,
     ...(question === "" ? [] : [`   Asked: ${shortened(question, limits.decision)}`]),
     ...(stage.reason === undefined ? [] : [`   Reason: ${stage.reason}`]),
     ...stage.decisions.map((decision) => `   Decision: ${decisionLine(decision, limits.decision)}`),
@@ -116,6 +192,8 @@ function stageLines(
     ),
     ...(compactions === 0 ? [] : [`   Context compacted ${compactions}×`]),
     ...(files.length === 0 ? [] : [`   Files written: ${filesLine(files, limits.files)}`]),
+    ...stepsLines(stage.activity, limits.steps, run.status === "done" || run.status === "failed"),
+    ...reported,
     ...(stage.reply === undefined
       ? []
       : [`   Final reply: ${shortened(stage.reply, limits.reply)}`]),
@@ -126,7 +204,7 @@ function itemLines(
   items: readonly PipelineItem[],
   prefix: string,
   limits: Limits,
-  run: Pick<DigestInput, "questions" | "status">,
+  run: StageRun,
 ): string[] {
   return items.flatMap((item, index) => {
     const number = `${prefix}${index + 1}`;
@@ -153,6 +231,7 @@ export function runDigest(input: DigestInput): RunDigest {
     blueprintName: build.blueprintName,
     blueprintVersion: build.blueprintVersion,
     repo: build.repo,
+    branch: build.branch,
     values: build.values,
   };
   const nodes = input.stages?.nodes ?? nodesFromEvents(input.events);
@@ -173,6 +252,7 @@ export function runDigest(input: DigestInput): RunDigest {
     `Build: ${build.name ?? build.hash}`,
     ...(input.stages === null ? [] : [`Session: ${input.stages.session.name}`]),
     `Repo: ${build.repo ?? "none"}`,
+    `Branch: ${build.branch ?? "none"}`,
     `Variables: ${variablesLine(build.values)}`,
     `Run status: ${input.status}`,
     `Started: ${input.createdAt}`,
@@ -180,10 +260,19 @@ export function runDigest(input: DigestInput): RunDigest {
     `Total cost: ${usd(input.cost.total.cost)}`,
     ...(pullRequests.length === 0 ? [] : [`Pull requests: ${pullRequests.join(", ")}`]),
   ];
+  const run: StageRun = {
+    questions: input.questions,
+    status: input.status,
+    instructions: new Map(
+      nodes.flatMap((node) =>
+        node.instructions === undefined ? [] : [[node.id, node.instructions] as const],
+      ),
+    ),
+  };
   const textWith = (limits: Limits) =>
-    [...facts, "Stages, in order:", ...itemLines(items, "", limits, input)].join("\n");
+    [...facts, "Stages, in order:", ...itemLines(items, "", limits, run)].join("\n");
 
-  for (const limits of [...attempts, tightest]) {
+  for (const limits of attempts) {
     const text = textWith(limits);
     if (text.length <= digestCap) return { header, text };
   }

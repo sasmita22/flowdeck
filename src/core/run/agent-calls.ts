@@ -9,7 +9,8 @@ export type AgentCall = {
 };
 
 export type AgentCallEvent = {
-  kind: "PreToolUse" | "PostToolUse" | "SubagentStop" | "Stop" | "StopFailure";
+  kind:
+    "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "SubagentStop" | "Stop" | "StopFailure";
   payload: Record<string, unknown>;
 };
 

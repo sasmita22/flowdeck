@@ -394,6 +394,45 @@ test("Selecting a stage shows only that stage's activity and its final reply", a
   }
 });
 
+test("An Agent stage lists its subagent's step with the time to the second, and its detail shows the input and output", async () => {
+  seedFlow(home, laidOut([named("s1", "Plan")], []), repo.path);
+  const window = await launch();
+
+  const buildId = await buildAndRun(window, home, "traced");
+  const runId = await runIdOf(home, buildId);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 20_000,
+  });
+
+  const steps = rows<{ id: number; node_id: string; entry: string }>(
+    `SELECT id, node_id, entry FROM activity AS latest
+      WHERE run_id = ?
+        AND seq = (SELECT MAX(seq) FROM activity WHERE run_id = latest.run_id AND id = latest.id)`,
+    runId,
+  ).filter((row) => {
+    const entry = JSON.parse(row.entry) as { kind: string; tool?: string; summary: string };
+    return entry.kind === "tool" && entry.tool === "Bash" && entry.summary === "echo traced";
+  });
+  expect(steps.map((row) => row.node_id)).toEqual(["s1"]);
+  const stepId = steps[0]?.id ?? -1;
+
+  await window.getByTestId(pageTestIds.runStage(runId, "s1")).click();
+  const detail = window.getByTestId(pageTestIds.runStageDetail(runId, "s1"));
+  await expect(detail.getByTestId(`activity-entry-${stepId}`)).toHaveAttribute(
+    "data-node-id",
+    "s1",
+  );
+  await expect(detail.getByTestId(`activity-entry-${stepId}-time`)).toHaveText(
+    /^\d{2}:\d{2}:\d{2}$/,
+  );
+  const stepDetail = detail.getByTestId(`activity-entry-${stepId}-detail`);
+  await stepDetail.locator("summary").click();
+  await expect(detail.getByTestId(`activity-entry-${stepId}-input`)).toContainText("echo traced");
+  await expect(detail.getByTestId(`activity-entry-${stepId}-output`)).toContainText(
+    '"stdout":"traced',
+  );
+});
+
 test("Stop ends a long agent turn and marks the run stopped, and Resume skips the finished nodes", async () => {
   seedFlow(
     home,

@@ -16,7 +16,7 @@ import { statusBadge } from "../canvas/status-look.js";
 import { formatCost, formatDuration, formatTokens, formatWhen } from "../format.js";
 import { ActivityList } from "../inspector/activity-feed.js";
 import type { RunLabels } from "../inspector/inspector.js";
-import type { InspectorState } from "../inspector/store.js";
+import { stepsEndedOf, type InspectorState } from "../inspector/store.js";
 import {
   selectRunSnapshot,
   type RunState,
@@ -290,6 +290,8 @@ function StageDetail({
         entries={[...stage.activity].sort((a, b) => b.id - a.id)}
         labels={labels}
         onSelectNode={onSelectNode}
+        withSteps
+        stepsEnded={stepsEndedOf(runStatus, shown)}
       />
     </section>
   );

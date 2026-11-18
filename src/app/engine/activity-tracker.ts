@@ -38,9 +38,10 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
     try {
       const folded = fold(feed);
       feed = folded.feed;
-      if (folded.changed === undefined) return;
-      activity.recordActivity(runId, folded.changed);
-      publish({ push: "activity", value: { runId, entry: folded.changed } });
+      for (const entry of folded.changed) {
+        activity.recordActivity(runId, entry);
+        publish({ push: "activity", value: { runId, entry } });
+      }
     } catch (error) {
       log(error instanceof Error ? error.message : String(error));
     }
@@ -109,9 +110,9 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
       },
     }),
     watch(events, sessionId) {
-      const unsubscribes = (["PreToolUse", "PostToolUse", "SubagentStop"] as const).map((kind) =>
-        events.subscribe(kind, sessionId, handlerFor(kind)),
-      );
+      const unsubscribes = (
+        ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStop"] as const
+      ).map((kind) => events.subscribe(kind, sessionId, handlerFor(kind)));
       return () => {
         for (const unsubscribe of unsubscribes) unsubscribe();
       };

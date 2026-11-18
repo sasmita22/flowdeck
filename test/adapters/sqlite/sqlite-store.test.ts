@@ -580,6 +580,28 @@ describe("SqliteStore", () => {
       expect(listed.get(untold.id)).not.toHaveProperty("storyLine");
       expect(store.findRunSummary(untold.id)).not.toHaveProperty("storyLine");
     });
+
+    it("lists a run whose story has Context, Goal and Result with the first line of its Result", () => {
+      const store = open();
+      const { id } = store.createRun(newRun(["p1"]));
+      store.finishRun(id, "failed");
+      store.appendRunStory(
+        story(
+          id,
+          [
+            "Context: Repo shop on branch main; the tests were failing before.",
+            "Goal: Fix the login bug and run the test suite.",
+            "Result: The run failed at Test.",
+            "The suite did not pass.",
+          ].join("\n"),
+        ),
+      );
+
+      expect(store.listRuns().find((run) => run.id === id)?.storyLine).toBe(
+        "The run failed at Test.",
+      );
+      expect(store.findRunSummary(id)?.storyLine).toBe("The run failed at Test.");
+    });
   });
 
   it("stamps a build from now", () => {

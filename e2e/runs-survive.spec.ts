@@ -330,9 +330,12 @@ test("Runs lists every run numbered within its build, filters by build, and keep
     "data-status",
     "done",
   );
-  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText("Fake story", {
-    timeout: 20_000,
-  });
+  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText(
+    "The fake run ended.",
+    {
+      timeout: 20_000,
+    },
+  );
   await window.getByTestId("run-tab-cost").click();
   await expect(window.getByTestId("cost-node-p1")).toBeVisible();
   await expect(window.getByTestId("cost-total")).toContainText("Session");

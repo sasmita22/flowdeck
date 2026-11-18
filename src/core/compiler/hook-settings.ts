@@ -10,6 +10,7 @@ export type HookSettings = {
     Stop: HookEntry;
     PreToolUse: HookEntry;
     PostToolUse: HookEntry;
+    PostToolUseFailure: HookEntry;
     SubagentStop: HookEntry;
     StopFailure: HookEntry;
     PermissionRequest: HookEntry;
@@ -63,6 +64,7 @@ export function hookSettings(command: string): HookSettings {
       Stop: entry,
       PreToolUse: [...entry, guard("Bash", noForcePushPath.replace(/^plugin\//, ""))],
       PostToolUse: entry,
+      PostToolUseFailure: entry,
       SubagentStop: entry,
       StopFailure: entry,
       PermissionRequest: permission,

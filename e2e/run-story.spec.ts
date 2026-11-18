@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,7 +13,8 @@ import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildOnCanvas, runFromDetail, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
-const fakeStory = "Fake story: the run ended.";
+const fakeResult = "The fake run ended.";
+const storyParts = ["story-context", "story-goal", "story-result"];
 
 let home: string;
 let repo: TmpRepo;
@@ -65,6 +67,17 @@ const startRun = async (env: Record<string, string>, skippable: boolean) => {
   return { window, runId, logPath };
 };
 
+const branchOf = (runId: string) => {
+  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
+  try {
+    const row = db.prepare("SELECT branch FROM runs WHERE id = ?").get(runId) as
+      { branch: string | null } | undefined;
+    return row?.branch ?? null;
+  } finally {
+    db.close();
+  }
+};
+
 const runToTheEnd = async (env: Record<string, string> = {}) => {
   const started = await startRun(env, true);
   await expect(started.window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
@@ -83,6 +96,18 @@ const storyOrder = (window: Page) =>
           .map((element) => element.getAttribute("data-testid"))
           .filter((id) => id !== null && parts.includes(id)),
       [pageTestIds.runStoryHeader, pageTestIds.runStoryAccount, pageTestIds.runStoryDigest],
+    );
+
+const partsOrder = (window: Page) =>
+  window
+    .getByTestId(pageTestIds.runStory)
+    .locator("[data-testid]")
+    .evaluateAll(
+      (elements, parts: string[]) =>
+        elements
+          .map((element) => element.getAttribute("data-testid"))
+          .filter((id) => id !== null && parts.includes(id)),
+      storyParts,
     );
 
 const openDigest = async (window: Page) => {
@@ -105,13 +130,20 @@ const expectHeaderAndDigest = async (window: Page) => {
   );
 };
 
-test("A run that ends shows its Story while the page stays open: header, the written account, then the digest behind a collapsed toggle, and the account's first line on its Runs row", async () => {
+test("A run that ends shows its Story while the page stays open: header with repo and branch, the account in Context, Goal and Result parts, then the digest behind a collapsed toggle, and the Result on its Runs row", async () => {
   const { window, runId } = await runToTheEnd();
+  const branch = branchOf(runId);
+  expect(branch).toEqual(expect.any(String));
 
   await expectHeaderAndDigest(window);
-  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeStory, {
+  await expect(window.getByTestId(pageTestIds.runStoryHeader)).toContainText(branch ?? "");
+  await expect(window.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeResult, {
     timeout: 20_000,
   });
+  await expect(window.getByTestId("story-context")).toHaveText(/The fake repo sat on its branch\./);
+  await expect(window.getByTestId("story-goal")).toHaveText(/The fake run was meant to end\./);
+  await expect(window.getByTestId("story-result")).toHaveText(/The fake run ended\./);
+  expect(await partsOrder(window)).toEqual(storyParts);
   expect(await storyOrder(window)).toEqual([
     pageTestIds.runStoryHeader,
     pageTestIds.runStoryAccount,
@@ -122,7 +154,7 @@ test("A run that ends shows its Story while the page stays open: header, the wri
   await window.getByTestId(pageTestIds.runBack).click();
   await expect(
     window.getByTestId(pageTestIds.runCard(runId)).getByTestId(pageTestIds.runRowStoryLine),
-  ).toHaveText(fakeStory);
+  ).toHaveText(fakeResult);
 });
 
 test("When the narrator fails, the Story still shows header and digest, with no account, and the Runs row has no story line", async () => {
@@ -151,6 +183,9 @@ test("A run approved at its gate while its page stays open: the digest says runn
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
   await openDigest(window);
   await expect(digest).toContainText("Run status: running");
+  const branch = branchOf(runId);
+  expect(branch).toEqual(expect.any(String));
+  await expect(digest).toContainText(`Branch: ${branch ?? ""}`);
   await window.getByTestId("wait-approve").click();
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
@@ -190,7 +225,7 @@ test("An ended run with no story offers Write story: it shows the narrator's err
 
   await reopened.getByTestId(pageTestIds.runStoryWrite).click();
 
-  await expect(reopened.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeStory, {
+  await expect(reopened.getByTestId(pageTestIds.runStoryAccount)).toContainText(fakeResult, {
     timeout: 20_000,
   });
   await expect(reopened.getByTestId(pageTestIds.runStoryWrite)).toHaveCount(0);

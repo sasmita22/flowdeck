@@ -17,6 +17,7 @@ const fixtures = [
   "stop",
   "pre-tool-use",
   "post-tool-use",
+  "post-tool-use-failure",
   "subagent-stop",
   "stop-failure",
 ] as const;

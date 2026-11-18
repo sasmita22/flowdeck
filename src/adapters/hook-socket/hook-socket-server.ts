@@ -11,6 +11,7 @@ const hookEventKinds: Record<HookEventKind, true> = {
   Stop: true,
   PreToolUse: true,
   PostToolUse: true,
+  PostToolUseFailure: true,
   SubagentStop: true,
   StopFailure: true,
 };
