@@ -19,13 +19,12 @@ export function compileAgent(
   content: string;
 } {
   const { piece, scope, values = {} } = inputs;
-  const { role, instructions, model, tools } = node.settings;
+  const { role, instructions, model } = node.settings;
   const { given, writes } = declaredHandoff(node.settings);
   const draft = role === "" ? node.label : role;
   const fields: [string, string | undefined][] = [
     ["name", piece],
     ["description", `${scopeLine(scope)} ${draft}`],
-    ["tools", tools.length > 0 ? tools.join(", ") : undefined],
     ["model", model === "" ? undefined : model],
   ];
   const frontmatter = fields

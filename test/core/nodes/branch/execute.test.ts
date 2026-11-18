@@ -1,12 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ManifestNode } from "../../../../src/core/compiler/lower.js";
-import {
-  branchDecision,
-  branchSkips,
-  branchTakes,
-  triggerFlags,
-} from "../../../../src/core/nodes/branch/execute.js";
+import { branchDecision, branchSkips, portOf } from "../../../../src/core/nodes/branch/execute.js";
 import { parseFlow } from "../../../../src/core/flow/schema.js";
 import {
   agent,
@@ -50,82 +45,11 @@ const skipsOf = (
   });
 };
 
-describe("branchTakes", () => {
-  it("takes yes when a flag defaults to true and nothing overrides it", () => {
-    expect(branchTakes("e2e", { e2e: true }, {})).toBe("yes");
-  });
-
-  it("takes no when the run turns a true flag off", () => {
-    expect(branchTakes("e2e", { e2e: true }, { e2e: false })).toBe("no");
-  });
-
-  it("takes yes when the run turns a false flag on", () => {
-    expect(branchTakes("e2e", { e2e: false }, { e2e: true })).toBe("yes");
-  });
-
-  it("takes no when a flag defaults to false and nothing overrides it", () => {
-    expect(branchTakes("e2e", { e2e: false }, {})).toBe("no");
-  });
-
-  it("throws naming a flag nobody declares", () => {
-    expect(() => branchTakes("e2e", { other: true }, {})).toThrow(
-      new Error('Branch variable "e2e" is not a yes/no variable on the blueprint.'),
-    );
-  });
-});
-
 const oldTrigger = (id: string, flags: Record<string, unknown>): ManifestNode => ({
   id,
   type: "trigger",
   label: id,
   settings: { inputs: [], flags } as unknown as ManifestNode["settings"],
-});
-
-const oldNode = (id: string, type: "agent" | "gate"): ManifestNode => ({
-  id,
-  type,
-  label: id,
-  settings: (type === "agent"
-    ? { role: "", instructions: "Go.", model: "sonnet", tools: [] }
-    : { shown: "Check", skippable: false }) as ManifestNode["settings"],
-});
-
-describe("triggerFlags", () => {
-  it("returns the trigger's boolean flags", () => {
-    expect(triggerFlags([oldTrigger("start", { e2e: true, manual: false })])).toEqual({
-      e2e: true,
-      manual: false,
-    });
-  });
-
-  it("drops flags whose default is not a boolean", () => {
-    expect(triggerFlags([oldTrigger("start", { e2e: true, ticket: "FD-1", count: 2 })])).toEqual({
-      e2e: true,
-    });
-  });
-
-  it("ignores nodes that are not triggers", () => {
-    expect(
-      triggerFlags([
-        oldNode("p", "agent"),
-        oldTrigger("start", { e2e: true }),
-        oldNode("s", "gate"),
-      ]),
-    ).toEqual({ e2e: true });
-  });
-
-  it("returns no flags for a flow without a trigger", () => {
-    expect(triggerFlags(flow([agent("p")], []).nodes)).toEqual({});
-  });
-
-  it("keeps the first trigger's default for a repeated flag", () => {
-    expect(
-      triggerFlags([
-        oldTrigger("first", { e2e: false }),
-        oldTrigger("second", { e2e: true, manual: true }),
-      ]),
-    ).toEqual({ e2e: false, manual: true });
-  });
 });
 
 describe("branchDecision", () => {
@@ -138,23 +62,19 @@ describe("branchDecision", () => {
 
   it("takes yes when the build's value for the Branch's variable is true", () => {
     expect(
-      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }, {}),
+      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }),
     ).toBe("yes");
   });
 
   it("takes no when the build's value for the Branch's variable is false", () => {
     expect(
-      branchDecision(workspaceManifest({ "proceed-e2e": false }), { variable: "proceed-e2e" }, {}),
+      branchDecision(workspaceManifest({ "proceed-e2e": false }), { variable: "proceed-e2e" }),
     ).toBe("no");
   });
 
   it("keeps the value written into the build over any run flag of the same name", () => {
     expect(
-      branchDecision(
-        workspaceManifest({ "proceed-e2e": true }),
-        { variable: "proceed-e2e" },
-        { "proceed-e2e": false },
-      ),
+      branchDecision(workspaceManifest({ "proceed-e2e": true }), { variable: "proceed-e2e" }),
     ).toBe("yes");
   });
 
@@ -162,33 +82,29 @@ describe("branchDecision", () => {
     ["has no value", {}],
     ["holds text", { "proceed-e2e": "yes" }],
   ])("throws naming the variable when the build %s for it", (_, values) => {
+    expect(() => branchDecision(workspaceManifest(values), { variable: "proceed-e2e" })).toThrow(
+      /proceed-e2e/,
+    );
+  });
+
+  it("throws for a manifest that carries no values, reading no Trigger flag", () => {
+    const valueless = {
+      nodes: [oldTrigger("start", { "proceed-e2e": true }), ...workspaceManifest({}).nodes],
+    };
+
     expect(() =>
-      branchDecision(workspaceManifest(values), { variable: "proceed-e2e" }, {}),
+      branchDecision(valueless as unknown as Parameters<typeof branchDecision>[0], {
+        variable: "proceed-e2e",
+      }),
     ).toThrow(/proceed-e2e/);
   });
 
-  describe("in an old build's manifest, with no prefix", () => {
-    const oldManifest = (e2e: boolean) => ({
-      nodes: [
-        oldTrigger("start", { e2e }),
-        {
-          id: "b",
-          type: "branch",
-          label: "b",
-          settings: { flag: "e2e" },
-        } as unknown as ManifestNode,
-      ],
-    });
-
-    it("takes the Trigger flag's default", () => {
-      expect(branchDecision(oldManifest(true), { flag: "e2e" }, {})).toBe("yes");
-      expect(branchDecision(oldManifest(false), { flag: "e2e" }, {})).toBe("no");
-    });
-
-    it("takes the run's stored flag over the Trigger default", () => {
-      expect(branchDecision(oldManifest(true), { flag: "e2e" }, { e2e: false })).toBe("no");
-      expect(branchDecision(oldManifest(false), { flag: "e2e" }, { e2e: true })).toBe("yes");
-    });
+  it("decides by the variable name only, never an old flag key", () => {
+    expect(() =>
+      branchDecision(workspaceManifest({ e2e: true }), { flag: "e2e" } as unknown as Parameters<
+        typeof branchDecision
+      >[1]),
+    ).toThrow();
   });
 });
 
@@ -756,7 +672,7 @@ describe("branchSkips with several Branches", () => {
       (each) =>
         each.kind === "then" &&
         (!branches.has(each.from.node) ||
-          each.from.port === branchTakes(each.from.node, flags, {})),
+          each.from.port === portOf(flags[each.from.node] === true)),
     );
     const membersOf = (id: string): string[] => [
       id,
@@ -790,7 +706,7 @@ describe("branchSkips with several Branches", () => {
     const decisions = new Map<string, "yes" | "no">();
     for (const node of parsed.nodes) {
       if (node.type !== "branch" || skipped.has(node.id)) continue;
-      decisions.set(node.id, branchTakes(node.id, flags, {}));
+      decisions.set(node.id, portOf(flags[node.id] === true));
       const eligible = new Set(ids.filter((id) => !skipped.has(id)));
       for (const id of skipsWith(parsed, node.id, decisions, eligible)) skipped.add(id);
     }

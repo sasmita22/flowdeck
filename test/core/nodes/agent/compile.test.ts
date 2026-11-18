@@ -12,7 +12,6 @@ const agentNode = (
     role: string;
     instructions: string;
     model: string;
-    tools: string[];
     given: string[];
     writes: string[];
   }> = {},
@@ -25,7 +24,6 @@ const agentNode = (
     role: "Checks the diff",
     instructions: "Review it.",
     model: "haiku",
-    tools: ["Read", "Grep"],
     ...settings,
   },
 });
@@ -64,15 +62,21 @@ describe("compileAgent", () => {
     );
   });
 
-  it("keeps the tools and the model", () => {
+  it("keeps the agent's own model and writes no tools line", () => {
     const fields = frontmatter(compiled().content);
 
-    expect(fields.tools).toBe("Read, Grep");
     expect(fields.model).toBe("haiku");
+    expect(fields).not.toHaveProperty("tools");
   });
 
-  it("leaves the tools line out when the list is empty and the model line out when it is empty", () => {
-    expect(frontmatter(compiled(agentNode({ tools: [] })).content)).not.toHaveProperty("tools");
+  it("writes no tools line even for a node that still carries a tools list", () => {
+    const node = agentNode();
+    const stale = { ...node, settings: { ...node.settings, tools: ["Read", "Grep"] } };
+
+    expect(compiled(stale).content).not.toMatch(/^tools:/m);
+  });
+
+  it("leaves the model line out when it is empty", () => {
     expect(frontmatter(compiled(agentNode({ model: "" })).content)).not.toHaveProperty("model");
   });
 

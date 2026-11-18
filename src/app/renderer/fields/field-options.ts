@@ -1,4 +1,4 @@
-import { modelChoices, type Choice } from "../../../core/flow/choices.js";
+import type { Choice } from "../../../core/flow/choices.js";
 import type { BranchState } from "../branch-store.js";
 
 export type BranchSelect = {
@@ -40,8 +40,3 @@ export const branchSelect = ({
     error: null,
   };
 };
-
-export const buildModelChoices: readonly Choice[] = [
-  { value: "", label: "The session's default" },
-  ...modelChoices,
-];

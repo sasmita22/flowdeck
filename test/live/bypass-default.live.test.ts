@@ -39,7 +39,6 @@ function newBlueprint(): Flow {
           role: "",
           instructions: `Create the file ${fileName} containing ok.`,
           model: "haiku",
-          tools: [],
         },
       },
       {

@@ -12,9 +12,9 @@ import {
   type BuildConfig,
   type CanvasNote,
   type Flow,
+  type FlowSettings,
   type Node,
   type Session,
-  type Variable,
   type Wire,
 } from "../../../core/flow/schema.js";
 import { labelFor, nodeDefaults } from "../../../core/nodes/defaults.js";
@@ -41,6 +41,7 @@ import {
   updateNode as updateNodeCommand,
   updateNote,
   updateSession,
+  updateSettings,
   type Command,
   type Items,
   type Move,
@@ -117,11 +118,9 @@ export interface CanvasState {
   dragTo(id: string, position: Position): void;
   endDrag(ids: readonly string[]): void;
   updateSession(next: Session): void;
+  updateSettings(next: FlowSettings): void;
   setRepo(repo: string): void;
   setBase(base: string): void;
-  addVariable(): void;
-  updateVariable(index: number, variable: Variable): void;
-  removeVariable(index: number): void;
   updateNode(next: Node): void;
   applyAgent(command: Command): boolean;
   endAgentGroup(): void;
@@ -129,31 +128,17 @@ export interface CanvasState {
   tidy(): Promise<void>;
   tidyFailed(error: unknown): void;
   foldIntoTop(expected: Command, snapshot: Flow, moves: Move[]): boolean;
-  variableCommand(variable: Variable): Command;
   undo(): void;
   redo(): void;
   load(input: unknown): void;
   markSaved(flow: Flow): void;
 }
 
-const freeVariableName = ({ variables }: BuildConfig) => {
-  const taken = new Set(variables.map(({ name }) => name));
-  let name = "variable";
-  for (let n = 2; taken.has(name); n += 1) name = `variable-${n}`;
-  return name;
-};
-
 export const newCanvasFlow = (): Flow => ({
   nodes: [],
   wires: [],
-  session: {
-    name: "main",
-    buildConfig: { variables: [] },
-    model: "sonnet",
-    allowedTools: [],
-    permissionMode: defaultPermissionMode,
-    connectors: [],
-  },
+  session: { name: "main", buildConfig: {}, model: "sonnet" },
+  settings: { buildModel: "sonnet", permissionMode: defaultPermissionMode },
 });
 
 export const nextNodeId = (type: NodeType, flow: Flow): string => {
@@ -356,13 +341,10 @@ export function createCanvasStore(
   return createStore<CanvasState>()((set, get) => {
     const ready = () => get().ready;
 
-    const buildConfigCommand = (edit: (config: BuildConfig) => BuildConfig) => {
-      const { session } = get().flow;
-      return updateSession({ ...session, buildConfig: edit(session.buildConfig) });
-    };
-
     const editBuildConfig = (edit: (config: BuildConfig) => BuildConfig) => {
-      if (ready()) run(buildConfigCommand(edit));
+      if (!ready()) return;
+      const { session } = get().flow;
+      run(updateSession({ ...session, buildConfig: edit(session.buildConfig) }));
     };
 
     let agentGroup: Command | null = null;
@@ -755,6 +737,10 @@ export function createCanvasStore(
         if (ready()) run(updateSession(next));
       },
 
+      updateSettings: (next) => {
+        if (ready()) run(updateSettings(next));
+      },
+
       setRepo: (repo) =>
         editBuildConfig(({ base, ...rest }) => ({
           ...rest,
@@ -769,24 +755,6 @@ export function createCanvasStore(
           delete rest.base;
           return rest;
         }),
-
-      addVariable: () =>
-        editBuildConfig((config) => ({
-          ...config,
-          variables: [...config.variables, { name: freeVariableName(config), kind: "text" }],
-        })),
-
-      updateVariable: (index, variable) =>
-        editBuildConfig((config) => ({
-          ...config,
-          variables: config.variables.map((current, at) => (at === index ? variable : current)),
-        })),
-
-      removeVariable: (index) =>
-        editBuildConfig((config) => ({
-          ...config,
-          variables: config.variables.filter((_variable, at) => at !== index),
-        })),
 
       updateNode: (next) => {
         if (!ready()) return;
@@ -842,16 +810,6 @@ export function createCanvasStore(
         set({ fitSeq: get().fitSeq + 1 });
         return true;
       },
-
-      variableCommand: (variable) =>
-        buildConfigCommand((config) => ({
-          ...config,
-          variables: config.variables.some(({ name }) => name === variable.name)
-            ? config.variables.map((current) =>
-                current.name === variable.name ? variable : current,
-              )
-            : [...config.variables, variable],
-        })),
 
       undo: () => {
         if (!ready()) return;

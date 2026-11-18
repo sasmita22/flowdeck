@@ -18,17 +18,10 @@ const parseJson = (text: string): { ok: true; value: unknown } | { ok: false; wh
 };
 
 export class ClaudeUserConnectors implements ConnectorSource {
-  readonly configPath: string;
+  private readonly configPath: string;
 
   constructor(options: { configPath?: string } = {}) {
     this.configPath = options.configPath ?? join(homedir(), ".claude.json");
-  }
-
-  async find(name: string): Promise<McpServer | undefined> {
-    const servers = (await this.config())["mcpServers"];
-    if (!isRecord(servers) || !Object.hasOwn(servers, name)) return undefined;
-    const server = servers[name];
-    return isRecord(server) ? server : undefined;
   }
 
   async list(): Promise<Record<string, McpServer>> {

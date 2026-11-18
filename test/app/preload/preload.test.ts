@@ -97,7 +97,7 @@ describe("preload run-state wiring", () => {
     ["stepFullText", "flowdeck:step-full-text", { runId: "run-1", entryId: 3 }],
     ["buildStepFullText", "flowdeck:build-step-full-text", { pendingId: "pending-1", entryId: 3 }],
     ["runPipeline", "flowdeck:run-pipeline", { runId: "run-1" }],
-    ["doctor", "flowdeck:doctor", { connectors: ["slack"] }],
+    ["doctor", "flowdeck:doctor", undefined],
     ["listBuildProgress", "flowdeck:build-progress-list", undefined],
     ["stopBuild", "flowdeck:build-stop", { pendingId: "pending-1" }],
     ["getBuildActivity", "flowdeck:build-activity", { pendingId: "pending-1" }],
@@ -225,6 +225,7 @@ describe("preload run-state wiring", () => {
       entryId: number;
     }>();
     expectTypeOf<Parameters<EngineCalls["doctorWorktrees"]>>().toEqualTypeOf<[]>();
+    expectTypeOf<Parameters<EngineCalls["doctor"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["defaultBranch"]>[0]>().toEqualTypeOf<{ repo: string }>();
     expectTypeOf<Parameters<EngineCalls["listBuildProgress"]>>().toEqualTypeOf<[]>();
     expectTypeOf<Parameters<EngineCalls["stopBuild"]>[0]>().toEqualTypeOf<{ pendingId: string }>();

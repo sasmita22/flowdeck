@@ -1,11 +1,7 @@
 import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { doctorReportSchema, type DoctorReport } from "../../core/doctor/connectors.js";
-import {
-  flowSummarySchema,
-  openedFlowSchema,
-  type FlowSummary,
-} from "../../core/flow/flow-store.js";
+import { flowSummarySchema, type FlowSummary } from "../../core/flow/flow-store.js";
 import {
   buildEntriesSchema,
   buildFileContentSchema,
@@ -39,7 +35,6 @@ export type LibraryBridge = Pick<
   | "buildProject"
   | "buildEntries"
   | "pendingBuildTree"
-  | "openFlow"
   | "doctor"
   | "loadRun"
   | "doctorWorktrees"
@@ -84,7 +79,7 @@ export type LibraryState = {
   expandProjectFolder(path: string): Promise<void>;
   loadPendingTree(pendingId: string): Promise<void>;
   loadPicture(key: SnapshotKey): Promise<void>;
-  diagnose(flowId: string | null, openConnectors: readonly string[]): Promise<void>;
+  diagnose(): Promise<void>;
   listWorktrees(): Promise<void>;
 };
 
@@ -315,14 +310,9 @@ export const createLibraryStore = ({ bridge }: { bridge: LibraryBridge }): Store
       if (files !== null) set({ files: { ...files, selected: path } });
     },
 
-    diagnose: async (flowId, openConnectors) => {
+    diagnose: async () => {
       try {
-        const connectors =
-          flowId === null
-            ? [...openConnectors]
-            : (openedFlowSchema.parse(await bridge.openFlow({ flowId })).flow?.session.connectors ??
-              []);
-        set({ doctor: doctorReportSchema.parse(await bridge.doctor({ connectors })), error: null });
+        set({ doctor: doctorReportSchema.parse(await bridge.doctor()), error: null });
       } catch (error) {
         set({ error: messageOf(error) });
       }

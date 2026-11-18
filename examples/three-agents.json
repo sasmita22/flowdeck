@@ -22,7 +22,6 @@
         "role": "",
         "instructions": "Write a plan for the ticket.",
         "model": "sonnet",
-        "tools": [],
         "writes": ["plan.md"]
       }
     },
@@ -38,7 +37,6 @@
         "role": "",
         "instructions": "Implement the plan.",
         "model": "sonnet",
-        "tools": [],
         "given": ["plan.md"],
         "writes": ["changes.md"]
       }
@@ -55,7 +53,6 @@
         "role": "",
         "instructions": "Summarise what changed.",
         "model": "sonnet",
-        "tools": [],
         "given": ["changes.md"]
       }
     },
@@ -122,17 +119,12 @@
   "session": {
     "name": "main",
     "buildConfig": {
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

@@ -31,8 +31,7 @@
       "settings": {
         "role": "reviewer",
         "instructions": "Review the change.",
-        "model": "sonnet",
-        "tools": ["Read"]
+        "model": "sonnet"
       }
     },
     {
@@ -111,17 +110,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": ["Read"],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

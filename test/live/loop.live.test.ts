@@ -68,7 +68,6 @@ function liveFlow() {
           role: "",
           instructions: reviewText,
           model: "haiku",
-          tools: [],
           writes: ["review.md"],
         },
       },
@@ -82,7 +81,6 @@ function liveFlow() {
           role: "",
           instructions: fixText,
           model: "haiku",
-          tools: ["Read", "Edit"],
           given: ["review.md"],
         },
       },
@@ -97,12 +95,10 @@ function liveFlow() {
     wires: [then("t", "review"), then("review", "fix"), then("fix", "review"), then("fix", "o")],
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: ["Read", "Edit"],
-      permissionMode: defaultPermissionMode,
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: defaultPermissionMode },
   });
 }
 

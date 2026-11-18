@@ -14,11 +14,10 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 
 ## Inputs
 
-- The prompt: `PIECE <path>`, then `KIND <kind>`, then `REPO <path>`, the target repo's absolute path. From the second round it also lists failures, each as a line `FAILED <file> <rule>: <detail>`. In the first round of a build the user started with answers, it also carries each answered question about the piece's nodes as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again. In the rewrite after step 4, an agent's block may carry lines `SHARED <prefix>:<name>`, where `<prefix>` is the build name: the agent must run each such shared piece as `<prefix>:<name>` and keep `Skill` in its `tools:` line when it has one.
+- The prompt: `PIECE <path>`, then `KIND <kind>`, then `REPO <path>`, the target repo's absolute path. From the second round it also lists failures, each as a line `FAILED <file> <rule>: <detail>`. In the first round of a build the user started with answers, it also carries each answered question about the piece's nodes as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again. In the rewrite after step 4, an agent's block may carry lines `SHARED <prefix>:<name>`, where `<prefix>` is the build name: the agent must run each such shared piece as `<prefix>:<name>`.
 - Your working folder is the build's workspace:
   - `manifest.json`: every node (`id`, `type`, `label`, `settings`, `file`, `piece`), every wire and `outputs`. Read only. `outputs` holds one `{ "node", "name", "type" }` per Stop node: what the run hands back to the user when it ends. It is not a file, so no node writes it and it never needs a writer.
   - `CLAUDE.md`: the build summary (build name, repository folder, the branch and whether it is new from a base or existing, variables) and the standard rules.
-  - `settings.json`: `permissions.allow`, the only tools a built agent may list. Read only.
   - The target repo at the `REPO <path>` path. Read only: Read, Grep and Glob.
 - The kit skills for the kind, read by path from `${CLAUDE_PLUGIN_ROOT}/skills/<name>/SKILL.md` before anything else:
 
@@ -56,7 +55,7 @@ Fix exactly the failures listed, by rule:
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `frontmatter`, `scope-line`                    | Restore `name`, and the scope line at the start of `description`, exactly as the draft had them.                |
 | `description`                                  | After the scope line, say what the piece does and when to use it: at least 60 characters, never the node label. |
-| `tools`                                        | List only tools in `settings.json` `permissions.allow`, and `Skill` when the agent runs a shared piece.         |
+| `tools`                                        | Delete the `tools:` line: every agent uses every tool.                                                          |
 | `shared`                                       | Run the shared piece the detail names, as `<prefix>:<name>` with the Skill tool, in a step.                     |
 | `body`                                         | Write real content; the draft's text alone does not pass.                                                       |
 | `unfilled`                                     | Delete the draft marker line.                                                                                   |

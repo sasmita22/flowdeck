@@ -19,7 +19,6 @@ export const agent = node("agent", {
   role: "implementer",
   instructions: "Implement the plan.",
   model: "sonnet",
-  tools: [],
 });
 export const gate = node("gate", { shown: "Check the plan", skippable: false });
 export const ask = node("ask", { question: "Pick a colour", options: ["red", "blue", "green"] });
@@ -36,8 +35,8 @@ export const forEach = (
   settings: Record<string, unknown> = { file: "plan.md" },
   label = "each plan unit",
 ) => ({ id, label, position: at, type: "foreach", settings });
-export const branch = (id: string, flag: string, options: { parent?: string } = {}) =>
-  node("branch", { flag })(id, options);
+export const branch = (id: string, variable: string, options: { parent?: string } = {}) =>
+  node("branch", { variable })(id, options);
 export const fork = node("fork", {});
 export const join = node("join", { wait: "all" });
 
@@ -56,17 +55,21 @@ export const fileWire = (from: string, to: string, file: string) => ({
   file,
 });
 
-export const flow = (nodes: unknown[], wires: unknown[]): Flow =>
+export const flowSettings = { buildModel: "sonnet", permissionMode: "default" };
+
+export const flow = (
+  nodes: unknown[],
+  wires: unknown[],
+  settings: Record<string, unknown> = flowSettings,
+): Flow =>
   parseFlow({
     nodes,
     wires,
+    settings,
     session: {
       name: "main",
-      buildConfig: { repo: "/work/repo", base: "main", variables: [] },
+      buildConfig: { repo: "/work/repo", base: "main" },
       model: "sonnet",
-      allowedTools: [],
-      permissionMode: "default",
-      connectors: [],
     },
   });
 

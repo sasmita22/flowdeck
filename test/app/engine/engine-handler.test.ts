@@ -1593,8 +1593,78 @@ describe("createEngineHandler", async () => {
     });
   });
 
+  describe("a clean start after the upgrade that wiped every build and run", () => {
+    const home = "/fd-home";
+    const wiped = { applied: ["022_clean_start"], existedBefore: true };
+    const leftBehind = [
+      `${home}/workspaces/b1/manifest.json`,
+      `${home}/runs/r1/mcp.json`,
+      `${home}/build-sessions/fd-build-a/settings.json`,
+      `${home}/worktrees/fix-login/README.md`,
+    ];
+    const kept = [`${home}/bp-sessions/flow-1/settings.json`, `${home}/hooks/flowdeck-hook.cjs`];
+
+    const homeWith = (...paths: string[]) =>
+      new FakeFileSystem(Object.fromEntries(paths.map((path) => [path, "x"])));
+
+    const startedWith = async (
+      fs: FakeFileSystem,
+      migrations: { applied: string[]; existedBefore: boolean },
+      overrides: Partial<EngineHandlerOptions> = {},
+    ) => {
+      const handler = createEngineHandler(
+        options({ home, fs, openStores: () => ({ ...stores(), migrations }), ...overrides }),
+      );
+      await handler.startUp();
+    };
+
+    const present = async (fs: FakeFileSystem, paths: string[]) =>
+      (
+        await Promise.all(paths.map(async (path) => ((await fs.exists(path)) ? [path] : [])))
+      ).flat();
+
+    it("removes the build and run folders under the home when this open applied it to an existing database", async () => {
+      const fs = homeWith(...leftBehind, ...kept);
+
+      await startedWith(fs, wiped);
+
+      expect(await present(fs, leftBehind)).toEqual([]);
+      expect(await present(fs, kept)).toEqual(kept);
+    });
+
+    it("removes nothing on a database this open created", async () => {
+      const fs = homeWith(...leftBehind);
+
+      await startedWith(fs, {
+        applied: ["021_complete_deletes_and_build_texts", "022_clean_start"],
+        existedBefore: false,
+      });
+
+      expect(await present(fs, leftBehind)).toEqual(leftBehind);
+    });
+
+    it("removes nothing on the start after the one that applied it", async () => {
+      const fs = homeWith(...leftBehind);
+      await startedWith(fs, wiped);
+      const madeSince = `${home}/workspaces/b2/manifest.json`;
+      await fs.writeFile(madeSince, "x");
+
+      await startedWith(fs, { applied: [], existedBefore: true });
+
+      expect(await fs.exists(madeSince)).toBe(true);
+    });
+
+    it("removes nothing while another Flowdeck holds the home", async () => {
+      const fs = homeWith(...leftBehind);
+
+      await startedWith(fs, wiped, { homeLock: { acquire: async () => false } });
+
+      expect(await present(fs, leftBehind)).toEqual(leftBehind);
+    });
+  });
+
   describe("doctor", () => {
-    it("reports installed connectors and the needed ones by name, without any setting's value", async () => {
+    it("reports the installed connectors from a request with no payload, without any setting's value", async () => {
       const handler = createEngineHandler(
         options({
           connectors: new FakeConnectorSource({
@@ -1604,11 +1674,7 @@ describe("createEngineHandler", async () => {
         }),
       );
 
-      const answer = await handler.handle({
-        id: 1,
-        type: "doctor",
-        payload: { connectors: ["slack", "linear"] },
-      });
+      const answer = await handler.handle({ id: 1, type: "doctor" });
 
       expect(answer).toEqual({
         id: 1,
@@ -1618,41 +1684,9 @@ describe("createEngineHandler", async () => {
             { name: "jira", status: "ok", settings: [] },
             { name: "slack", status: "ok", settings: [{ name: "SLACK_TOKEN", set: true }] },
           ],
-          needed: [
-            expect.objectContaining({ name: "slack", status: "ok" }),
-            expect.objectContaining({ name: "linear", status: "missing" }),
-          ],
         },
       });
       expect(JSON.stringify(answer)).not.toContain("xoxb-secret");
-    });
-
-    it("names the file the connector source read in the fix for an empty setting", async () => {
-      const handler = createEngineHandler(
-        options({
-          connectors: new FakeConnectorSource(
-            {
-              jira: {
-                type: "http",
-                url: "https://mcp.example.com/jira",
-                headers: { Authorization: "" },
-              },
-            },
-            "/drive-home/.claude/.claude.json",
-          ),
-        }),
-      );
-
-      const answer = await handler.handle({
-        id: 1,
-        type: "doctor",
-        payload: { connectors: ["jira"] },
-      });
-
-      if (!answer.ok) throw new Error(answer.error);
-      const fix = (answer.value as { needed: { fix: string | null }[] }).needed[0]?.fix;
-      expect(fix).toContain("/drive-home/.claude/.claude.json");
-      expect(fix).not.toContain("~/.claude.json");
     });
 
     it("answers a connector source that cannot be read as an error", async () => {
@@ -1660,7 +1694,7 @@ describe("createEngineHandler", async () => {
       connectors.list = () => Promise.reject(new Error("~/.claude.json is not valid JSON"));
       const handler = createEngineHandler(options({ connectors }));
 
-      expect(await handler.handle({ id: 1, type: "doctor", payload: { connectors: [] } })).toEqual({
+      expect(await handler.handle({ id: 1, type: "doctor" })).toEqual({
         id: 1,
         ok: false,
         error: "~/.claude.json is not valid JSON",
@@ -1683,7 +1717,7 @@ describe("createEngineHandler", async () => {
       session: { ...input.session, buildConfig },
     });
 
-    const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path, variables: [] });
+    const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path });
 
     const twoAgents = () =>
       atRepo(onMainFlow([agent("write"), agent("check")], [thenWire("write", "check")]));
@@ -2140,7 +2174,6 @@ describe("createEngineHandler", async () => {
           {
             repo: source.path,
             base: "main",
-            variables: [],
           },
         );
 
@@ -2148,7 +2181,6 @@ describe("createEngineHandler", async () => {
         inFolder(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]), {
           repo: source.path,
           base: "main",
-          variables: [],
         });
 
       const writesMade =
@@ -2878,7 +2910,10 @@ describe("createEngineHandler", async () => {
       let agents: WatchedBuildAgents;
       let usage: FakeUsageSource;
 
-      const startedPendingId = async (name = "fix-login", extra: { buildModel?: string } = {}) => {
+      const startedPendingId = async (
+        name = "fix-login",
+        extra: { buildModel?: string; version?: number } = {},
+      ) => {
         const answered = await handler.handle({
           id: nextId++,
           type: "build-version",
@@ -2945,11 +2980,17 @@ describe("createEngineHandler", async () => {
         ).toEqual([expect.objectContaining({ model: "haiku" })]);
       });
 
-      it("opens the build session with the blueprint's own model when the request names none", async () => {
-        const pendingId = await startedPendingId();
+      it("opens the build session with the blueprint's own build model when the request names none", async () => {
+        const blueprint = twoAgents();
+        const { version } = flows.save(
+          { ...blueprint, settings: { ...blueprint.settings, buildModel: "opus" } },
+          "flow-1",
+        );
+
+        const pendingId = await startedPendingId("fix-login", { version });
         await endPush(pendingId);
 
-        expect(agents.fake.opened.map((spec) => spec.model)).toEqual([undefined]);
+        expect(agents.fake.opened.map((spec) => spec.model)).toEqual(["opus"]);
       });
 
       it("announces the build session under the pending id", async () => {
@@ -3203,7 +3244,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main" }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -3265,7 +3306,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main" }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -3334,7 +3375,7 @@ describe("createEngineHandler", async () => {
           },
         });
         const saved = flows.save(
-          inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }),
+          inFolder(twoAgents(), { repo: source.path, base: "main" }),
           "flow-1",
         );
         const answered = await handler.handle({
@@ -4391,7 +4432,7 @@ describe("createEngineHandler", async () => {
         const source = await createTmpRepo({ commit: true });
         try {
           handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
-          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }));
+          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main" }));
           const buildId = await builtId();
           const preview = () =>
             handler.handle({ id: nextId++, type: "delete-preview", payload: { buildId } });
@@ -4525,7 +4566,7 @@ describe("createEngineHandler", async () => {
         const source = await createTmpRepo({ commit: true });
         try {
           handler = handlerWith({ worktree: new GitWorktree(), gitState: gitAt(source.path) });
-          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main", variables: [] }));
+          flows.save(inFolder(twoAgents(), { repo: source.path, base: "main" }));
           const buildId = await builtId();
           const worktree = worktreeOf(buildId, source.path);
           await writeFile(join(worktree, "work.txt"), "kept\n");
@@ -5747,12 +5788,16 @@ describe("createEngineHandler", async () => {
       expectOnlyBuildSessionsBesides(runId);
     });
 
-    it("gives the session the hook paths of this machine and the run's own private MCP config", async () => {
+    const namingJira = (): Flow => {
+      const base = promptFlow();
+      return { ...base, session: { ...base.session, connectors: ["jira"] } as Flow["session"] };
+    };
+
+    it("starts and resumes a run's session with this machine's hook paths and no MCP config, though the build names an installed connector", async () => {
       const opened: OpenSessionOptions[] = [];
-      const secretJira = { ...jira, headers: { Authorization: "Bearer s3cret" } };
       handler = handlerWith({
         newSessionName: () => "fd-run-test",
-        connectors: new FakeConnectorSource({ jira: secretJira }),
+        connectors: new FakeConnectorSource({ jira }),
         run: {
           ...runEnvironment(new NodeFileSystem()),
           openSession: async (opening) => {
@@ -5761,58 +5806,39 @@ describe("createEngineHandler", async () => {
           },
         },
       });
-      const base = promptFlow();
-      flows.save({ ...base, session: { ...base.session, connectors: ["jira"] } });
-
+      flows.save(namingJira());
       const runId = await startedRunId();
-      await vi.waitFor(() => expect(opened).toHaveLength(1));
+      await vi.waitFor(() =>
+        expect(runs.events(runId).map((event) => event.kind)).toContain("sent"),
+      );
+      await handler.handle({ id: nextId++, type: "stop-run", payload: { runId } });
+      await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("stopped"));
 
-      const runtimePath = `${home}/runs/${runId}/mcp.json`;
+      expect(
+        await handler.handle({ id: nextId++, type: "resume-run", payload: { runId } }),
+      ).toMatchObject({ ok: true, value: { kind: "started", runId } });
+      await vi.waitFor(() => expect(opened).toHaveLength(2));
+
       expect(opened[0]).toMatchObject({
         hooks: { nodePath: process.execPath, hookScriptPath: `${home}/hooks/flowdeck-hook.cjs` },
-        mcpConfigPath: runtimePath,
       });
-      expect((await stat(runtimePath)).mode & 0o777).toBe(0o600);
-      expect(JSON.parse(await new NodeFileSystem().readFile(runtimePath))).toEqual({
-        mcpServers: { jira: secretJira },
-      });
-      const [built] = runs.listBuilds();
-      const files = await handler.handle({
-        id: 90,
-        type: "build-files",
-        payload: { buildId: built?.id },
-      });
-      const listed = (files as { value: { path: string; content: string }[] }).value;
-      expect(listed.map((file) => file.path)).not.toContain("mcp.json");
-      expect(listed.filter((file) => file.content.includes("s3cret"))).toEqual([]);
+      expect(opened[1]).toMatchObject({ resume: true });
+      for (const opening of opened) expect(opening).not.toHaveProperty("mcpConfigPath");
+      expect(await new NodeFileSystem().exists(`${home}/runs/${runId}/mcp.json`)).toBe(false);
     });
 
-    it("refuses to run a build whose connector Claude Code no longer has, starting nothing", async () => {
-      const opened: OpenSessionOptions[] = [];
-      const base = promptFlow();
-      flows.save({ ...base, session: { ...base.session, connectors: ["jira"] } });
+    it("runs a build that names a connector Claude Code does not have", async () => {
+      flows.save(namingJira());
       const buildId = await builtId();
       handler = handlerWith({
         connectors: new FakeConnectorSource(),
         run: {
           ...runEnvironment(new NodeFileSystem()),
-          openSession: async (opening) => {
-            opened.push(opening);
-            return claudeSession(async () => undefined);
-          },
+          openSession: async () => claudeSession(async () => undefined),
         },
       });
 
-      expect(await handler.handle({ id: 2, type: "run-build", payload: { buildId } })).toEqual({
-        id: 2,
-        ok: true,
-        value: {
-          kind: "error",
-          message: expect.stringMatching(/^Connector "jira" is not set up in Claude Code/),
-        },
-      });
-      expect(runs.runs).toEqual([]);
-      expect(opened).toEqual([]);
+      expect(await runBuild(buildId)).toMatchObject({ kind: "started" });
     });
 
     it("opens one build's sessions from its folder whatever node and hook paths this machine has", async () => {
@@ -6286,7 +6312,7 @@ describe("workspace-info", () => {
       { defaultBranches: { "/code/shop": "dev" } },
     );
 
-    expect(await ask(gitState, { buildConfig: { repo: "/code/shop", variables: [] } })).toEqual({
+    expect(await ask(gitState, { buildConfig: { repo: "/code/shop" } })).toEqual({
       id: 9,
       ok: true,
       value: { state: { kind: "branch", name: "fd-demo" }, base: "dev" },
@@ -6300,9 +6326,7 @@ describe("workspace-info", () => {
       { defaultBranches: { "/code/shop": "dev" } },
     );
 
-    expect(
-      await ask(gitState, { buildConfig: { repo: "/code/shop", base: "main", variables: [] } }),
-    ).toEqual({
+    expect(await ask(gitState, { buildConfig: { repo: "/code/shop", base: "main" } })).toEqual({
       id: 9,
       ok: true,
       value: { state: { kind: "branch", name: "fd-demo" }, base: "main" },
@@ -6312,7 +6336,7 @@ describe("workspace-info", () => {
   it("answers no repository with no state and reads no git", async () => {
     const gitState = new FakeGitState();
 
-    expect(await ask(gitState, { buildConfig: { variables: [] } })).toEqual({
+    expect(await ask(gitState, { buildConfig: {} })).toEqual({
       id: 9,
       ok: true,
       value: null,
@@ -6333,7 +6357,7 @@ describe("workspace-info", () => {
   it("answers a git failure as an error instead of throwing", async () => {
     const gitState = new FakeGitState({}, { failWith: "spawn git ENOENT" });
 
-    expect(await ask(gitState, { buildConfig: { repo: "/code/shop", variables: [] } })).toEqual({
+    expect(await ask(gitState, { buildConfig: { repo: "/code/shop" } })).toEqual({
       id: 9,
       ok: false,
       error: "spawn git ENOENT",

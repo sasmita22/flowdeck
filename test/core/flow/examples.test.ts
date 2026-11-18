@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { order } from "../../../src/core/flow/order.js";
 import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
-import { upgradeFlow } from "../../../src/core/flow/upgrade.js";
+import { validate } from "../../../src/core/compiler/validate.js";
 
 const readExample = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
@@ -76,7 +76,12 @@ describe("example hand-offs", () => {
   );
 });
 
-const flowFolders = ["examples/", "test/fixtures/", "test/fixtures/broken/"];
+const flowFolders = [
+  "examples/",
+  "test/fixtures/",
+  "test/fixtures/broken/",
+  "e2e/fixtures/copy-flow/",
+];
 
 const storedFlows = flowFolders.flatMap((folder) => {
   const url = new URL(`../../../${folder}`, import.meta.url);
@@ -84,23 +89,39 @@ const storedFlows = flowFolders.flatMap((folder) => {
     .filter((name) => name.endsWith(".json"))
     .map((name) => ({
       file: `${folder}${name}`,
+      name: name.replace(/\.json$/, ""),
       raw: JSON.parse(readFileSync(new URL(name, url), "utf8")) as unknown,
     }))
     .filter(({ raw }) => typeof raw === "object" && raw !== null && "session" in raw);
 });
 
+const brokenFolder = "test/fixtures/broken/";
+const workingFlows = storedFlows.filter(({ file }) => !file.startsWith(brokenFolder));
+const brokenFlows = storedFlows.filter(({ file }) => file.startsWith(brokenFolder));
+
 describe("stored flows", () => {
-  it("finds the example and fixture flows", () => {
+  it("finds the example, fixture and e2e flows", () => {
     expect(storedFlows.map(({ file }) => file)).toEqual(
       expect.arrayContaining([
         "examples/all-types.json",
         "test/fixtures/agent-then-ask.json",
         "test/fixtures/broken/no-cycle.json",
+        "e2e/fixtures/copy-flow/expected-blueprint.json",
       ]),
     );
   });
 
-  it.each(storedFlows)("$file is already in the current shape", ({ raw }) => {
-    expect(upgradeFlow(structuredClone(raw))).toEqual(raw);
+  it.each(workingFlows)("$file parses with the current schema and loses no field", ({ raw }) => {
+    expect(parseFlow(structuredClone(raw))).toMatchObject(raw as object);
   });
+
+  it.each(brokenFlows)(
+    "$file parses with the current schema, loses no field and fails only its named rule",
+    ({ raw, name }) => {
+      const parsed = parseFlow(structuredClone(raw));
+
+      expect(parsed).toMatchObject(raw as object);
+      expect(new Set(validate(parsed).map((error) => error.rule))).toEqual(new Set([name]));
+    },
+  );
 });

@@ -199,7 +199,7 @@ test("A refused Build lists every problem in plain words, and a click selects it
   expect(node.width).toBeGreaterThan(0);
 });
 
-test("A Branch picks a yes/no variable, and its wires say yes and no", async () => {
+test("A Branch takes a typed variable name, and its wires say yes and no", async () => {
   const seeded = flow(
     [
       at(trigger("t"), 40, 120),
@@ -213,19 +213,7 @@ test("A Branch picks a yes/no variable, and its wires say yes and no", async () 
       { kind: "then", from: { node: "b", port: "no" }, to: { node: "n", port: "in" } },
     ],
   );
-  seedFlow(home, {
-    ...seeded,
-    session: {
-      ...seeded.session,
-      buildConfig: {
-        variables: [
-          { name: "e2e", kind: "yesno", default: true },
-          { name: "ticket", kind: "text" },
-          { name: "docs", kind: "yesno", default: false },
-        ],
-      },
-    },
-  });
+  seedFlow(home, seeded);
   const window = await launch();
 
   await expect(window.getByTestId("port-label-b-yes")).toHaveText("yes");
@@ -235,8 +223,9 @@ test("A Branch picks a yes/no variable, and its wires say yes and no", async () 
 
   await window.getByTestId("node-b").click();
   const variable = window.getByTestId(branchVariableTestId);
-  await expect(variable.locator("option")).toHaveText(["e2e", "docs"]);
-  await variable.selectOption("docs");
+  await expect(variable).toHaveValue("e2e");
+  await variable.fill("docs");
+  await variable.press("Enter");
   await expect
     .poll(async () => (await readout(window)).nodes.find((node) => node.id === "b")?.settings)
     .toEqual({ variable: "docs" });
@@ -534,7 +523,7 @@ test("The gear picks the model, permission mode and the repository's base branch
   await expect(window.getByTestId("session-model").locator("option").first()).toHaveText(
     "Sonnet (latest)",
   );
-  await expect(window.getByTestId("session-permission-mode").locator("option")).toHaveText([
+  await expect(window.getByTestId("settings-permission-mode").locator("option")).toHaveText([
     "Ask before risky actions",
     "Accept file edits without asking",
     "Plan only, change nothing",
@@ -544,13 +533,12 @@ test("The gear picks the model, permission mode and the repository's base branch
 
   await basePick.selectOption("dev");
   await window.getByTestId("session-model").selectOption("haiku");
-  await window.getByTestId("session-permission-mode").selectOption("acceptEdits");
+  await window.getByTestId("settings-permission-mode").selectOption("acceptEdits");
   await expect
-    .poll(async () => (await readout(window)).session)
+    .poll(async () => readout(window))
     .toMatchObject({
-      model: "haiku",
-      permissionMode: "acceptEdits",
-      buildConfig: { repo: repo.path, base: "dev" },
+      session: { model: "haiku", buildConfig: { repo: repo.path, base: "dev" } },
+      settings: { permissionMode: "acceptEdits" },
     });
   await expect(window.getByTestId("session-chip")).toContainText("Haiku (latest)");
 });
@@ -562,11 +550,11 @@ test("A blueprint made with New blueprint never asks for permission, and the gea
   await window.getByTestId(controlTestIds.sessionChip).click();
   await expect(window.getByTestId("session-settings")).toBeVisible();
 
-  await expect(window.getByTestId("session-permission-mode").locator("option:checked")).toHaveText(
+  await expect(window.getByTestId("settings-permission-mode").locator("option:checked")).toHaveText(
     "Never ask (skip all checks)",
   );
   await expect
-    .poll(async () => (await readout(window)).session)
+    .poll(async () => (await readout(window)).settings)
     .toMatchObject({ permissionMode: "bypassPermissions" });
 });
 
@@ -614,7 +602,7 @@ const worktreeNote =
 
 const withoutRepo = (drawn: Flow): Flow => ({
   ...drawn,
-  session: { ...drawn.session, buildConfig: { variables: [] } },
+  session: { ...drawn.session, buildConfig: {} },
 });
 
 const plainFolder = async () => {
@@ -661,7 +649,7 @@ test("Start from branch lists the repository's branches once one is set, and say
   await basePick.selectOption("dev");
   await expect
     .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: repo.path, base: "dev", variables: [] });
+    .toEqual({ repo: repo.path, base: "dev" });
   await window.getByTestId(controlTestIds.sessionSettings).click();
   await expect(window.getByTestId("session-settings")).toHaveCount(0);
   await window.getByTestId(controlTestIds.sessionSettings).click();
@@ -676,7 +664,7 @@ test("Start from branch lists the repository's branches once one is set, and say
   await expect(basePick.locator("option")).toHaveText(["No branches"]);
   await expect
     .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: plain, variables: [] });
+    .toEqual({ repo: plain });
   await expect(window.locator("input[data-testid*='base']")).toHaveCount(0);
 
   const info = window.getByTestId(buildConfigTestIds.baseInfo);
@@ -700,7 +688,7 @@ test("Browse fills Repository from the folder picker and loads its branches; can
   await expect.poll(folderPicks).toEqual([{ properties: ["openDirectory"] }]);
   await expect(repoField).toHaveValue("");
   await expect(basePick).toBeDisabled();
-  expect((await readout(window)).session.buildConfig).toEqual({ variables: [] });
+  expect((await readout(window)).session.buildConfig).toEqual({});
 
   await stubFolderPicker(repo.path);
   await browse.click();
@@ -709,5 +697,5 @@ test("Browse fills Repository from the folder picker and loads its branches; can
   await expect(basePick.locator("option")).toHaveText(["Choose…", "dev", "main"]);
   await expect
     .poll(async () => (await readout(window)).session.buildConfig)
-    .toEqual({ repo: repo.path, variables: [] });
+    .toEqual({ repo: repo.path });
 });

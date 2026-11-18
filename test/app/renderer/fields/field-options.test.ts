@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { modelChoices } from "../../../../src/core/flow/choices.js";
 import type { BranchState } from "../../../../src/app/renderer/branch-store.js";
-import {
-  branchSelect,
-  buildModelChoices,
-  withCurrent,
-} from "../../../../src/app/renderer/fields/field-options.js";
+import { branchSelect, withCurrent } from "../../../../src/app/renderer/fields/field-options.js";
 
 const branchState = (state: Pick<BranchState, "repo" | "branches" | "error">): BranchState => ({
   ...state,
@@ -131,14 +126,5 @@ describe("withCurrent", () => {
 
   it("adds nothing for an empty value", () => {
     expect(withCurrent(choices, "")).toEqual(choices);
-  });
-});
-
-describe("buildModelChoices", () => {
-  it("offers the session's default first, then every model", () => {
-    expect(buildModelChoices).toEqual([
-      { value: "", label: "The session's default" },
-      ...modelChoices,
-    ]);
   });
 });

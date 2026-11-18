@@ -21,8 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Reply with the single word ONE.",
-        "model": "haiku",
-        "tools": []
+        "model": "haiku"
       }
     },
     {
@@ -36,8 +35,7 @@
       "settings": {
         "role": "",
         "instructions": "Reply with the single word TWO.",
-        "model": "haiku",
-        "tools": []
+        "model": "haiku"
       }
     },
     {
@@ -51,8 +49,7 @@
       "settings": {
         "role": "",
         "instructions": "Use the Write tool to create {{repo}}/ok.txt containing exactly: ok",
-        "model": "haiku",
-        "tools": []
+        "model": "haiku"
       }
     },
     {
@@ -119,17 +116,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "haiku",
-    "allowedTools": [],
-    "permissionMode": "acceptEdits",
-    "connectors": []
+    "model": "haiku"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "acceptEdits"
   }
 }

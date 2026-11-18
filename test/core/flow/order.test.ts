@@ -37,14 +37,8 @@ const flow = (nodes: unknown[], wires: unknown[]): Flow =>
   parseFlow({
     nodes,
     wires,
-    session: {
-      name: "main",
-      workingFolder: { kind: "worktree", branch: "main" },
-      model: "sonnet",
-      allowedTools: [],
-      permissionMode: "default",
-      connectors: [],
-    },
+    session: { name: "main", buildConfig: {}, model: "sonnet" },
+    settings: { buildModel: "sonnet", permissionMode: "default" },
   });
 
 function cycleError(input: Flow): FlowCycleError {

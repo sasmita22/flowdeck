@@ -47,7 +47,7 @@ function liveFlow() {
         label: "Write",
         type: "agent",
         position: at(2),
-        settings: { role: "", instructions: promptText, model: "haiku", tools: ["Write"] },
+        settings: { role: "", instructions: promptText, model: "haiku" },
       },
       {
         id: "o",
@@ -60,12 +60,10 @@ function liveFlow() {
     wires: [then("t", "q1"), then("q1", "p1"), then("p1", "o")],
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: ["Write"],
-      permissionMode: "acceptEdits",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   });
 }
 

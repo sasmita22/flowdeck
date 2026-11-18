@@ -14,7 +14,6 @@ import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { buildVersion } from "../src/core/compiler/build-version.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { FakeConnectorSource } from "../test/fakes/fake-connector-source.js";
 import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
 import {
   agent,
@@ -571,20 +570,7 @@ test("A build whose yes/no value is no takes Branch's no path", async () => {
       ],
     ),
   );
-  seedFlow(
-    home,
-    {
-      ...branched,
-      session: {
-        ...branched.session,
-        buildConfig: {
-          ...branched.session.buildConfig,
-          variables: [{ name: "deep", kind: "yesno", default: true }],
-        },
-      },
-    },
-    repo.path,
-  );
+  seedFlow(home, branched, repo.path);
   const window = await launch();
 
   const buildId = await buildAndRun(window, home, "quick", { deep: false });
@@ -674,7 +660,6 @@ test("The Cost tab shows each node's tokens, cost and time, and a session line t
         store: runs,
         fs,
         home,
-        connectors: new FakeConnectorSource(),
         gitState: new GitFolderState(),
         worktree: new GitWorktree(),
         newId: () => "0f3a9c2e-0000-4000-8000-000000000000",

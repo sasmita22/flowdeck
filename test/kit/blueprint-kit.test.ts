@@ -10,7 +10,7 @@ import { checkEdit } from "../../src/core/flow/blueprint-edits.js";
 import { toolNames } from "../../src/core/flow/blueprint-tools.js";
 import {
   BuildConfig,
-  Variable,
+  FlowSettings,
   WireKind,
   type Port,
   type Wire,
@@ -36,8 +36,6 @@ const kitFiles = (dir = kitDir): string[] => {
 };
 
 const skill = () => readKit("skills/blueprint/SKILL.md");
-
-const variableKinds = Variable.options.map((option) => option.shape.kind.value);
 
 const sectionOf = (content: string, heading: string): string => {
   const start = content.indexOf(`\n${heading}\n`);
@@ -215,6 +213,18 @@ describe("the blueprint kit", () => {
       expect(sectionOf(writeNode(), "## Agent node")).toContain("`produces`");
     });
 
+    it("write-node gives an Agent no tools setting and no allowed tools", () => {
+      const content = writeNode();
+
+      expect(content).not.toContain("`tools`");
+      expect(content).not.toContain("allowed tools");
+      expect(content).not.toContain("agent-tools");
+    });
+
+    it("write-node uses {{name}} for a variable the build asks for, not one the blueprint declares", () => {
+      expect(writeNode()).not.toContain("variable the blueprint declares");
+    });
+
     it("copy-flow makes every work step an Agent", () => {
       expect(copyFlow()).toMatch(/every work step[^.\n]*an `agent`/i);
     });
@@ -290,12 +300,13 @@ describe("the blueprint kit", () => {
     expect(fields.get("description") ?? "").not.toBe("");
   });
 
-  it("names all eleven tools, each with a row in its tools table", () => {
+  it("names all ten tools, each with a row in its tools table, and no set_variable", () => {
     const content = skill();
 
-    expect(toolNames).toHaveLength(11);
+    expect(toolNames).toHaveLength(10);
     expect(toolsIn(content)).toEqual(expect.arrayContaining([...toolNames]));
-    expect(frontmatterOf(content).get("description")).toContain("eleven tools");
+    expect(frontmatterOf(content).get("description")).toContain("ten tools");
+    expect(content).not.toContain("set_variable");
   });
 
   it("no longer forbids tidying the layout", () => {
@@ -321,13 +332,28 @@ describe("the blueprint kit", () => {
     expect(skill()).toMatch(/one session/i);
   });
 
-  it("names the build configuration fields and the variable kinds", () => {
+  it("names the build configuration fields and the blueprint settings fields", () => {
     const content = skill();
 
-    for (const field of Object.keys(BuildConfig.shape)) {
+    for (const field of [...Object.keys(BuildConfig.shape), ...Object.keys(FlowSettings.shape)]) {
       expect(content, field).toContain(`\`${field}\``);
     }
-    for (const kind of variableKinds) expect(content, kind).toContain(`\`${kind}\``);
+  });
+
+  it("says variables are found in Branch nodes and Agent instructions, never declared", () => {
+    const content = skill();
+
+    expect(content).toMatch(/variables are found/i);
+    expect(content).toContain("`{{name}}`");
+    expect(content).not.toContain("`variables`");
+    expect(content).not.toMatch(/declared once|that is declared|a declared variable/i);
+  });
+
+  it("names no allowed tools for the session or an Agent", () => {
+    const content = skill();
+
+    expect(content).not.toContain("allowed tools");
+    expect(content).not.toContain("agent-tools");
   });
 
   it("names every validator rule", () => {

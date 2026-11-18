@@ -14,7 +14,7 @@ import type { NavState, Page } from "../../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
-import type { Flow, Variable } from "../../../../src/core/flow/schema.js";
+import type { Flow } from "../../../../src/core/flow/schema.js";
 import { agent, flow, output, thenWire, trigger } from "../../../fixtures/flow-builders.js";
 
 vi.mock("../../../../src/app/renderer/canvas/layout.js", async (importOriginal) => {
@@ -46,6 +46,7 @@ const summary = ({ flowId, name }: Saved) => ({
   versions: 1,
   lastSavedAt: "2026-11-01T00:00:00.000Z",
   buildConfig: null,
+  variables: [],
   pinned: false,
 });
 
@@ -208,17 +209,15 @@ describe("tool handler edits", () => {
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
 
-  it("set_variable applies through the variable command", async () => {
+  it("refuses set_variable, since variables are found, not declared", async () => {
     const { call, canvas } = await setup();
-    const variable: Variable = { kind: "text", name: "ticket", default: "FD-1" };
-    const expected = canvas.getState().variableCommand(variable).do(canvas.getState().flow);
+    const before = canvas.getState().flow;
 
-    const result = await call("set_variable", variable);
+    const result = await call("set_variable", { kind: "text", name: "ticket" });
 
-    expect(result).toMatchObject({ ok: true });
-    expect(canvas.getState().flow).toEqual(expected);
-    expect(canvas.getState().flow.session.buildConfig.variables).toEqual([variable]);
-    expect(canvas.getState().undoStack).toHaveLength(1);
+    expect(result).toEqual({ ok: false, reason: expect.stringMatching(/\S/) });
+    expect(canvas.getState().flow).toBe(before);
+    expect(canvas.getState().undoStack).toEqual([]);
   });
 
   it("refuses a schema-failing edit, leaving the flow and the undo stack alone", async () => {
@@ -267,7 +266,6 @@ describe("tool handler edits", () => {
     await call("add_node", { type: "agent", label: "One" });
     await call("wire", selfWire);
     await call("change_node", { nodeId: "p1", label: "Planner" });
-    await call("set_variable", { kind: "yesno", name: "dry" });
     await call("delete_node", { nodeId: "agent-1" });
     await call("read_blueprint", {});
 
@@ -626,7 +624,6 @@ describe("tool handler tidy", () => {
   it("moves nothing at the turn end of an ask that added no nodes or wires", async () => {
     const { call, endTurn, canvas } = await setup();
     await call("change_node", { nodeId: "p1", label: "Planner" });
-    await call("set_variable", { kind: "yesno", name: "dry" });
     const edited = canvas.getState().flow;
     expect(await tidied(edited)).not.toEqual(edited);
 

@@ -85,7 +85,6 @@ describe("permissionDecision", () => {
     { decision: "continue" },
     { decision: "stop", reason: "no" },
     { decision: "answer", answer: "yes" },
-    { decision: "raise", budget: 2 },
   ])("denies on a $decision reply", (reply) => {
     expect(permissionDecision(reply)).toMatchObject({ behavior: "deny" });
   });

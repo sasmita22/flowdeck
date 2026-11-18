@@ -12,6 +12,7 @@ import {
   dialogTestIds,
   pageTestIds,
 } from "../src/app/renderer/test-ids.js";
+import { modelChoices } from "../src/core/flow/choices.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
@@ -92,16 +93,10 @@ const blueprint = (): Flow => {
     ],
     [thenWire("p1", "g1"), thenWire("g1", "s2")],
   );
-  const laidOut = {
+  return {
     ...built,
     nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),
-  };
-  return {
-    ...laidOut,
-    session: {
-      ...laidOut.session,
-      buildConfig: { variables: [{ name: "ticket", kind: "text" }] },
-    },
+    session: { ...built.session, buildConfig: {} },
   };
 };
 
@@ -329,8 +324,8 @@ test("The Build dialog picks repo, branch and build model with the settings' fie
     await expect(basePick).toBeDisabled();
     await expect(basePick.locator("option")).toHaveText(["Choose a repository first"]);
     expect(await modelPick.evaluate((element) => element.tagName)).toBe("SELECT");
-    await expect(modelPick.locator("option").first()).toHaveText("The session's default");
-    await expect(modelPick).toHaveValue("");
+    await expect(modelPick.locator("option")).toHaveText(modelChoices.map(({ label }) => label));
+    await expect(modelPick).toHaveValue("sonnet");
 
     await stubFolderPicker(other.path);
     await window.getByTestId(buildDialogTestIds.repoBrowse).click();
@@ -367,12 +362,11 @@ test("The Build dialog picks repo, branch and build model with the settings' fie
     const sessions = rows<{ session: string }>(
       "SELECT session FROM flow_versions WHERE flow_id = ?",
       flowId,
-    ).map(({ session }) => JSON.parse(session) as { buildConfig: object; budget?: number });
+    ).map(({ session }) => JSON.parse(session) as { buildConfig: object });
     expect(sessions.length).toBeGreaterThan(0);
     for (const session of sessions) {
       expect(session.buildConfig).not.toHaveProperty("repo");
       expect(session.buildConfig).not.toHaveProperty("base");
-      expect(session).not.toHaveProperty("budget");
     }
 
     await toMenu(window);

@@ -12,7 +12,7 @@ const agent = (
   label: id.charAt(0).toUpperCase() + id.slice(1),
   position: at,
   type: "agent",
-  settings: { role: "", instructions: id, model: "sonnet", tools: [], ...files },
+  settings: { role: "", instructions: id, model: "sonnet", ...files },
 });
 
 const forEach = (id: string, file: string): Node => ({

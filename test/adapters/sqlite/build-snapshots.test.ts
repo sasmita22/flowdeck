@@ -212,7 +212,7 @@ describe("build snapshots", () => {
         )
         .run();
       old.close();
-      const db = openDatabase({ path });
+      const db = openDatabase({ path, migrationsDir: await stage("to-021", "022") });
       opened.push(db);
       return db;
     };

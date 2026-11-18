@@ -111,23 +111,6 @@ describe("openClaudeSession", () => {
     expect(await sessions.list()).toEqual([]);
   });
 
-  it("passes the run's MCP config to Claude, alone, when it has one", async () => {
-    const sessions = new SlowStartHost();
-    const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
-    const opened = await openClaudeSession(
-      { ...options, mcpConfigPath: "/fd/runs/r1/mcp.json" },
-      { sessions, claude, sessionId: "s1" },
-    );
-    sessions.finishStart();
-
-    await opened.session.ensureStarted();
-
-    expect(sessions.get("fd-run")?.command).toMatch(
-      / --plugin-dir '\/fd\/builds\/abc' --mcp-config '\/fd\/runs\/r1\/mcp\.json' --strict-mcp-config$/,
-    );
-    await opened.stop();
-  });
-
   it("passes no MCP config when the run has none", async () => {
     const sessions = new SlowStartHost();
     const opened = await open(sessions);
@@ -174,7 +157,7 @@ describe("openClaudeSession", () => {
     const sessions = new SlowStartHost();
     const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
     const opened = await openClaudeSession(
-      { ...options, mcpConfigPath: "/fd/runs/r1/mcp.json", resume: true },
+      { ...options, resume: true },
       { sessions, claude, sessionId: "s1" },
     );
     sessions.finishStart();
@@ -184,9 +167,7 @@ describe("openClaudeSession", () => {
     const command = sessions.get("fd-run")?.command ?? "";
     expect(command).toContain(" claude --resume s1 --model 'haiku'");
     expect(command).toContain(" --settings '/fd/builds/abc/settings.json'");
-    expect(command).toMatch(
-      / --plugin-dir '\/fd\/builds\/abc' --mcp-config '\/fd\/runs\/r1\/mcp\.json' --strict-mcp-config$/,
-    );
+    expect(command).toMatch(/ --plugin-dir '\/fd\/builds\/abc'$/);
     expect(sessions.get("fd-run")?.env?.["FLOWDECK_SOCK"]).toBe("/fd/sockets/fd-run.sock");
     await opened.stop();
   });

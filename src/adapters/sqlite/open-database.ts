@@ -8,7 +8,10 @@ export type OpenDatabaseOptions = {
   migrationsDir?: string;
   now?: () => Date;
   pause?: (ms: number) => void;
+  onMigrated?: (report: MigrationReport) => void;
 };
+
+export type MigrationReport = { applied: string[]; existedBefore: boolean };
 
 const busyTimeoutMs = 30_000;
 const walRetryMs = 10;
@@ -19,11 +22,12 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
   switchToWal(db, options.pause ?? sleep);
   db.pragma(`busy_timeout = ${busyTimeoutMs}`);
   db.pragma("foreign_keys = ON");
-  migrate(
+  const report = migrate(
     db,
     options.migrationsDir ?? fileURLToPath(new URL("./migrations/", import.meta.url)),
     options.now ?? (() => new Date()),
   );
+  options.onMigrated?.(report);
   return db;
 }
 
@@ -45,7 +49,7 @@ const isBusy = (error: unknown) =>
 
 const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function migrate(db: Database.Database, migrationsDir: string, now: () => Date): void {
+function migrate(db: Database.Database, migrationsDir: string, now: () => Date): MigrationReport {
   db.exec(
     "CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
   );
@@ -56,32 +60,44 @@ function migrate(db: Database.Database, migrationsDir: string, now: () => Date):
   const pending = readdirSync(migrationsDir)
     .filter((name) => name.endsWith(".sql") && !applied.has(name))
     .sort();
+  const appliedNow: string[] = [];
   for (const name of pending) {
     const sql = readFileSync(join(migrationsDir, name), "utf8");
     const apply = () => {
-      if (isApplied.get(name) !== undefined) return;
+      if (isApplied.get(name) !== undefined) return false;
       db.exec(sql);
       db.prepare("INSERT INTO migrations (name, applied_at) VALUES (?, ?)").run(
         name,
         now().toISOString(),
       );
+      return true;
     };
-    if (sql.startsWith(noTransactionMarker)) applyWithForeignKeysOff(db, name, apply);
-    else db.transaction(apply).immediate();
+    const ran = sql.startsWith(noTransactionMarker)
+      ? applyWithForeignKeysOff(db, name, apply)
+      : db.transaction(apply).immediate();
+    if (ran) appliedNow.push(name.replace(/\.sql$/, ""));
   }
+  return { applied: appliedNow, existedBefore: applied.size > 0 };
 }
 
 const noTransactionMarker = "-- flowdeck:no-transaction";
 
-function applyWithForeignKeysOff(db: Database.Database, name: string, apply: () => void): void {
+function applyWithForeignKeysOff(
+  db: Database.Database,
+  name: string,
+  apply: () => boolean,
+): boolean {
   db.pragma("foreign_keys = OFF");
   try {
-    db.transaction(() => {
-      apply();
-      if ((db.pragma("foreign_key_check") as unknown[]).length > 0) {
-        throw new Error(`migration ${name} leaves a broken foreign key`);
-      }
-    }).immediate();
+    return db
+      .transaction(() => {
+        const ran = apply();
+        if ((db.pragma("foreign_key_check") as unknown[]).length > 0) {
+          throw new Error(`migration ${name} leaves a broken foreign key`);
+        }
+        return ran;
+      })
+      .immediate();
   } finally {
     db.pragma("foreign_keys = ON");
   }

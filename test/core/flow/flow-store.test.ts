@@ -30,18 +30,17 @@ describe("flowSummarySchema", () => {
     versions: 2,
     lastSavedAt: "2026-01-02T00:00:00.000Z",
     pinned: false,
+    variables: [],
   };
 
-  it("keeps the repo, base and variables of the latest version's Build configuration", () => {
-    const buildConfig = {
-      repo: "/r/shop",
-      base: "dev",
-      variables: [{ name: "ticket", kind: "text" }],
-    };
+  it("keeps the latest version's Build configuration and the variables it finds", () => {
+    const buildConfig = { repo: "/r/shop", base: "dev" };
+    const variables = [{ name: "ticket", kind: "text", nodeIds: ["a1"] }];
 
-    expect(flowSummarySchema.parse({ ...summary, buildConfig })).toEqual({
+    expect(flowSummarySchema.parse({ ...summary, buildConfig, variables })).toEqual({
       ...summary,
       buildConfig,
+      variables,
     });
   });
 
@@ -60,7 +59,7 @@ describe("flowSummarySchema", () => {
   it("carries no working folder", () => {
     const parsed = flowSummarySchema.parse({
       ...summary,
-      buildConfig: { base: "main", variables: [] },
+      buildConfig: { base: "main" },
       workingFolder: { kind: "worktree", branch: "main" },
     });
 

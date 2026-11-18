@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { copyFile, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,15 @@ import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
 import type { CanvasNote, Flow } from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
+import {
+  agent,
+  branch,
+  flow,
+  onMainFlow,
+  output,
+  thenWire,
+  trigger,
+} from "../../fixtures/flow-builders.js";
 import { roundTripFlow } from "../../fixtures/round-trip-flow.js";
 
 const notes: CanvasNote[] = [
@@ -22,8 +31,6 @@ const notes: CanvasNote[] = [
 ];
 
 const withNotes = (): Flow => ({ ...roundTripFlow(), notes });
-
-const migrationsDir = new URL("../../../src/adapters/sqlite/migrations/", import.meta.url);
 
 const relabelled = (label: string): Flow => {
   const flow = roundTripFlow();
@@ -133,28 +140,18 @@ describe("SqliteFlowStore", () => {
       ]);
     });
 
-    it("loads a version saved before notes existed with no notes", async () => {
-      const before = join(folder, "migrations-before-notes");
-      await mkdir(before);
-      for (const name of await readdir(migrationsDir)) {
-        if (name < "005") await copyFile(new URL(name, migrationsDir), join(before, name));
-      }
-      const old = openDatabase({ path, migrationsDir: before });
-      opened.push(old);
-      const session = roundTripFlow().session;
-      old
-        .prepare("INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Untitled', 't')")
-        .run();
-      old
-        .prepare(
-          "INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('flow-1', 1, ?, 't')",
-        )
-        .run(JSON.stringify(session));
+    it("reopens a flow's settings exactly, and the reopened flow equals the saved one", () => {
+      const saved = flow(
+        [trigger("start"), agent("plan"), output("stop")],
+        [thenWire("start", "plan"), thenWire("plan", "stop")],
+        { buildModel: "opus", permissionMode: "acceptEdits" },
+      );
+      open().save(saved);
 
-      const loaded = open().loadLatest();
+      const loaded = open().loadLatest()?.flow;
 
-      expect(loaded?.version).toBe(1);
-      expect(loaded?.flow).toEqual({ nodes: [], wires: [], session });
+      expect(loaded?.settings).toEqual({ buildModel: "opus", permissionMode: "acceptEdits" });
+      expect(loaded !== undefined && flowsEqual(saved, loaded)).toBe(true);
     });
 
     it("keeps node order and wire order", () => {
@@ -430,6 +427,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          variables: [],
           pinned: false,
         },
         {
@@ -439,6 +437,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          variables: [],
           pinned: false,
         },
       ]);
@@ -464,7 +463,7 @@ describe("SqliteFlowStore", () => {
       expect(store.loadLatest()?.flowId).toBe("flow-a");
     });
 
-    it("lists the version count, last save and Build configuration of each, last saved first", () => {
+    it("lists the version count, last save, Build configuration and found variables of each, last saved first", () => {
       const times = [
         "2026-01-01T00:00:00.000Z",
         "2026-01-02T00:00:00.000Z",
@@ -479,19 +478,15 @@ describe("SqliteFlowStore", () => {
       });
       store.create("A");
       store.create("B");
-      const inRepo: Flow = {
-        ...relabelled("a2"),
-        session: {
-          ...roundTripFlow().session,
-          buildConfig: {
-            repo: "/repo",
-            base: "dev",
-            variables: [{ name: "ticket", kind: "text" }],
-          },
-        },
-      };
-      store.save(relabelled("a1"), "flow-a");
-      store.save(inRepo, "flow-a");
+      const asking = onMainFlow(
+        [branch("decide", "ship"), agent("say", { settings: { instructions: "Say {{ticket}}" } })],
+        [thenWire("decide", "say")],
+      );
+      store.save(onMainFlow([agent("plan")], []), "flow-a");
+      store.save(
+        { ...asking, session: { ...asking.session, buildConfig: { repo: "/repo", base: "dev" } } },
+        "flow-a",
+      );
 
       expect(store.list()).toEqual([
         {
@@ -500,11 +495,11 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 2,
           lastSavedAt: times[3],
-          buildConfig: {
-            repo: "/repo",
-            base: "dev",
-            variables: [{ name: "ticket", kind: "text" }],
-          },
+          buildConfig: { repo: "/repo", base: "dev" },
+          variables: [
+            { name: "ship", kind: "yes-no", nodeIds: ["decide"] },
+            { name: "ticket", kind: "text", nodeIds: ["say"] },
+          ],
           pinned: false,
         },
         {
@@ -514,6 +509,7 @@ describe("SqliteFlowStore", () => {
           versions: 0,
           lastSavedAt: null,
           buildConfig: null,
+          variables: [],
           pinned: false,
         },
       ]);
@@ -574,21 +570,6 @@ describe("SqliteFlowStore", () => {
       const queue = [...list];
       return () => queue.shift() ?? "spare";
     };
-
-    it("lists a blueprint created before pinning existed as not pinned", async () => {
-      const before = join(folder, "migrations-before-pinned");
-      await mkdir(before);
-      for (const name of await readdir(migrationsDir)) {
-        if (name < "010") await copyFile(new URL(name, migrationsDir), join(before, name));
-      }
-      const old = openDatabase({ path, migrationsDir: before });
-      old.prepare("INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Old', 't')").run();
-      old.close();
-
-      expect(open().list()).toEqual([
-        expect.objectContaining({ flowId: "flow-1", name: "Old", pinned: false }),
-      ]);
-    });
 
     it("pins and unpins a blueprint, keeping its save time and the last-saved order", () => {
       const times = [
@@ -671,142 +652,6 @@ describe("SqliteFlowStore", () => {
     });
   });
 
-  describe("a version saved with a File wire", () => {
-    const agentSettings = {
-      role: "implementer",
-      instructions: "Implement the plan.",
-      model: "sonnet",
-      tools: [],
-    };
-
-    const storeFileWireVersion = () => {
-      open();
-      const db = raw();
-      db.transaction(() => {
-        db.prepare(
-          "INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Plan and build', 't')",
-        ).run();
-        const insertNode = db.prepare(
-          `INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
-           VALUES ('flow-1', 1, ?, ?, 'agent', ?, 0, 0, NULL, ?)`,
-        );
-        insertNode.run(0, "plan", "Plan", JSON.stringify(agentSettings));
-        insertNode.run(1, "build", "Build", JSON.stringify(agentSettings));
-        const insertWire = db.prepare(
-          `INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
-           VALUES ('flow-1', 1, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        insertWire.run(0, "then", "plan", "out", "build", "in", null);
-        insertWire.run(1, "file", "plan", "file-out", "build", "file-in", "plan.md");
-        db.prepare(
-          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES ('flow-1', 1, ?, '[]', 't')",
-        ).run(
-          JSON.stringify({
-            name: "main",
-            buildConfig: { base: "main", variables: [] },
-            model: "sonnet",
-            allowedTools: [],
-            permissionMode: "default",
-            connectors: [],
-          }),
-        );
-      })();
-    };
-
-    it("loads with the file in Plan writes and Build given, and only the Then wire", () => {
-      storeFileWireVersion();
-
-      const flow = open().load({ flowId: "flow-1", version: 1 })?.flow;
-
-      expect(flow?.nodes.map((node) => [node.id, node.settings])).toEqual([
-        ["plan", { ...agentSettings, writes: ["plan.md"] }],
-        ["build", { ...agentSettings, given: ["plan.md"] }],
-      ]);
-      expect(flow?.wires).toEqual([
-        { kind: "then", from: { node: "plan", port: "out" }, to: { node: "build", port: "in" } },
-      ]);
-    });
-  });
-
-  describe("a version saved before Build configurations", () => {
-    const oldSession = {
-      name: "main",
-      workingFolder: { kind: "worktree", branch: "dev", repo: "/r/shop" },
-      model: "sonnet",
-      allowedTools: [],
-      permissionMode: "default",
-      connectors: [],
-    };
-    const movedConfig = {
-      repo: "/r/shop",
-      base: "dev",
-      variables: [
-        { name: "ticket", kind: "text" },
-        { name: "e2e", kind: "yesno", default: true },
-      ],
-    };
-
-    const storeOldVersion = () => {
-      open();
-      const db = raw();
-      db.transaction(() => {
-        db.prepare(
-          "INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Bugfix', 't')",
-        ).run();
-        const insertNode = db.prepare(
-          `INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
-           VALUES ('flow-1', 1, ?, ?, ?, ?, 0, 0, NULL, ?)`,
-        );
-        insertNode.run(
-          0,
-          "start",
-          "trigger",
-          "Start",
-          JSON.stringify({ inputs: ["ticket"], flags: { e2e: true } }),
-        );
-        insertNode.run(1, "ife2e", "branch", "E2E?", JSON.stringify({ flag: "e2e" }));
-        db.prepare(
-          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES ('flow-1', 1, ?, '[]', 't')",
-        ).run(JSON.stringify(oldSession));
-      })();
-    };
-
-    const expectMovedConfig = (buildConfig: unknown) => {
-      expect(buildConfig).toEqual({
-        ...movedConfig,
-        variables: expect.arrayContaining(movedConfig.variables) as unknown,
-      });
-      expect((buildConfig as { variables: unknown[] }).variables).toHaveLength(2);
-    };
-
-    const expectMoved = (flow: Flow | undefined) => {
-      expectMovedConfig(flow?.session.buildConfig);
-      expect(flow?.session).not.toHaveProperty("workingFolder");
-      expect(flow?.nodes.map((node) => node.settings)).toEqual([{}, { variable: "e2e" }]);
-    };
-
-    it("comes back moved from load", () => {
-      storeOldVersion();
-
-      expectMoved(open().load({ flowId: "flow-1", version: 1 })?.flow);
-    });
-
-    it("comes back moved from loadLatest", () => {
-      storeOldVersion();
-
-      expectMoved(open().loadLatest("flow-1")?.flow);
-    });
-
-    it("is listed with its moved Build configuration", () => {
-      storeOldVersion();
-
-      const [summary] = open().list();
-
-      expectMovedConfig(summary?.buildConfig);
-      expect(summary).not.toHaveProperty("workingFolder");
-    });
-  });
-
   it("shares one migrated connection with SqliteStore", () => {
     const db = connect();
     const runs = new SqliteStore({ db });
@@ -860,6 +705,7 @@ describe("SqliteFlowStore", () => {
       { name: "019_runs_own_their_build.sql" },
       { name: "020_run_repo_states_and_step_texts.sql" },
       { name: "021_complete_deletes_and_build_texts.sql" },
+      { name: "022_clean_start.sql" },
     ]);
   });
 });

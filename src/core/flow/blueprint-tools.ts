@@ -1,11 +1,10 @@
 import { z } from "zod";
 import type { LoadedFlow } from "./flow-store.js";
-import { NodeType, Variable, Wire, WireKind } from "./schema.js";
+import { NodeType, Wire, WireKind } from "./schema.js";
 
 const partialSettings = z.record(z.string(), z.unknown());
 
 const [{ shape: wireShape }] = Wire.options;
-const [textVariable, yesnoVariable] = Variable.options;
 
 export const toolInputs = {
   list_blueprints: z.object({}),
@@ -29,14 +28,6 @@ export const toolInputs = {
   }),
   wire: z.strictObject({ ...wireShape, kind: WireKind }),
   delete_node: z.strictObject({ nodeId: z.string() }),
-  set_variable: textVariable
-    .extend({
-      kind: z.enum([textVariable.shape.kind.value, yesnoVariable.shape.kind.value]),
-      default: z
-        .union([textVariable.shape.default.unwrap(), yesnoVariable.shape.default.unwrap()])
-        .optional(),
-    })
-    .strict(),
   list_builds: z.object({}),
   read_build: z.object({ id: z.string() }),
   tidy_layout: z.strictObject({}),
@@ -55,7 +46,6 @@ const descriptions: Record<ToolName, string> = {
   change_node: "Change a node's label or some of its settings.",
   wire: "Connect an output port of one node to an input port of another.",
   delete_node: "Delete a node and its wires.",
-  set_variable: "Add a build variable, or change the one with the same name.",
   list_builds: "List the builds made from blueprints.",
   read_build: "Read one build.",
   tidy_layout:

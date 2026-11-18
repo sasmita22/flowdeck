@@ -10,23 +10,18 @@ import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import { newCanvasFlow } from "../../../src/app/renderer/canvas/store.js";
-import type { Session } from "../../../src/core/flow/schema.js";
-import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, flowSettings, thenWire } from "../../fixtures/flow-builders.js";
 import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
 
-const sample = (permissionMode: Session["permissionMode"] = "acceptEdits") => {
-  const base = flow(
+const sample = (permissionMode = "acceptEdits") =>
+  flow(
     [
       agent("p", { settings: { writes: ["plan.md"] } }),
-      agent("a", { settings: { tools: ["Grep"], given: ["plan.md"] } }),
+      agent("a", { settings: { given: ["plan.md"] } }),
     ],
     [thenWire("p", "a")],
+    { ...flowSettings, permissionMode },
   );
-  return {
-    ...base,
-    session: { ...base.session, allowedTools: ["Read", "Edit"], permissionMode },
-  };
-};
 
 const fixLogin = {
   name: "fix-login",
@@ -164,13 +159,11 @@ describe("emit", () => {
     );
   });
 
-  it("allows only the session's tools and sets its permission mode", () => {
+  it("sets the blueprint's permission mode, turns on the project's MCP servers and allows no tool list", () => {
     const settings = JSON.parse(fileAt(emitted(), "settings.json"));
 
-    expect(settings.permissions).toStrictEqual({
-      allow: ["Read", "Edit"],
-      defaultMode: "acceptEdits",
-    });
+    expect(settings.permissions).toStrictEqual({ defaultMode: "acceptEdits" });
+    expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
   it("turns background tasks off for every session started on the workspace settings, as run sessions do", () => {
@@ -178,12 +171,13 @@ describe("emit", () => {
 
     expect(settings).toStrictEqual({
       env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-      permissions: { allow: ["Read", "Edit"], defaultMode: "acceptEdits" },
+      permissions: { defaultMode: "acceptEdits" },
+      enableAllProjectMcpServers: true,
     });
   });
 
-  describe("consent to never asking", () => {
-    const settingsFor = (permissionMode: Session["permissionMode"]) =>
+  describe("permission mode", () => {
+    const settingsFor = (permissionMode: string) =>
       JSON.parse(
         fileAt(
           emit(lower(sample(permissionMode), { name: "fix-login", values: {} }), {
@@ -196,23 +190,34 @@ describe("emit", () => {
         ),
       );
 
-    it("gives a new blueprint's session the never-ask mode and its consent, in the session's own settings", () => {
-      const settings = settingsFor(newCanvasFlow().session.permissionMode);
+    it.each(["default", "acceptEdits", "plan", "bypassPermissions"])(
+      "sets defaultMode to the blueprint's %s and lists no allowed tools",
+      (permissionMode) => {
+        const { permissions } = settingsFor(permissionMode);
+
+        expect(permissions).toStrictEqual({ defaultMode: permissionMode });
+        expect(permissions).not.toHaveProperty("allow");
+      },
+    );
+
+    it("gives a new blueprint the never-ask mode and its consent, in the session's own settings", () => {
+      const settings = settingsFor(newCanvasFlow().settings.permissionMode);
 
       expect(settings.permissions.defaultMode).toBe("bypassPermissions");
       expect(settings.skipDangerousModePermissionPrompt).toBe(true);
     });
 
-    it("consents for a session set to never ask", () => {
+    it("consents for a blueprint set to never ask", () => {
       expect(settingsFor("bypassPermissions")).toStrictEqual({
         env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-        permissions: { allow: ["Read", "Edit"], defaultMode: "bypassPermissions" },
+        permissions: { defaultMode: "bypassPermissions" },
+        enableAllProjectMcpServers: true,
         skipDangerousModePermissionPrompt: true,
       });
     });
 
-    it.each(["default", "acceptEdits", "plan"] as const)(
-      "gives no consent to a session in %s mode",
+    it.each(["default", "acceptEdits", "plan"])(
+      "gives no consent to a blueprint in %s mode",
       (permissionMode) => {
         expect(settingsFor(permissionMode)).not.toHaveProperty("skipDangerousModePermissionPrompt");
       },

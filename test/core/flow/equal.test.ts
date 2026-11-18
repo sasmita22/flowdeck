@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, flow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, flow, flowSettings, thenWire } from "../../fixtures/flow-builders.js";
 
 const nth = <T>(list: T[], index: number): T => {
   const item = list[index];
@@ -9,7 +9,7 @@ const nth = <T>(list: T[], index: number): T => {
   return item;
 };
 
-const base = (): Flow =>
+const base = (settings: Record<string, unknown> = flowSettings): Flow =>
   flow(
     [
       agent("p1"),
@@ -17,6 +17,7 @@ const base = (): Flow =>
       agent("s1", { settings: { tools: ["Bash"] } }),
     ],
     [thenWire("p1", "a1"), thenWire("a1", "s1")],
+    settings,
   );
 
 const agentSettings = (extra: { instructions?: string; tools?: string[]; writes?: string[] }) => ({
@@ -73,18 +74,27 @@ describe("flowsEqual", () => {
     ["a wire end", (f) => (nth(f.wires, 0).to = { node: "s1", port: "in" })],
     ["a removed wire", (f) => f.wires.pop()],
     ["a session value", (f) => (f.session.model = "haiku")],
-    ["a session working folder", (f) => (f.session.buildConfig = { repo: "/x", variables: [] })],
-    ["a session allowed tool", (f) => (f.session.allowedTools = ["Bash(npm test)"])],
+    ["a session working folder", (f) => (f.session.buildConfig = { repo: "/x" })],
     ["a session frame", (f) => (f.session.frame = { nodes: ["p1"] })],
-    [
-      "a worktree repo",
-      (f) => (f.session.buildConfig = { repo: "/r", base: "main", variables: [] }),
-    ],
+    ["a worktree repo", (f) => (f.session.buildConfig = { repo: "/r", base: "main" })],
   ])("tells flows apart by %s", (_, edit) => {
     const other = edited(edit);
 
     expect(flowsEqual(base(), other)).toBe(false);
     expect(flowsEqual(other, base())).toBe(false);
+  });
+
+  it("tells flows apart by their permission mode", () => {
+    const planOnly = base({ ...flowSettings, permissionMode: "plan" });
+
+    expect(flowsEqual(base(), planOnly)).toBe(false);
+    expect(flowsEqual(planOnly, base())).toBe(false);
+  });
+
+  it("treats flows with the same settings as equal", () => {
+    const settings = { buildModel: "opus", permissionMode: "plan" };
+
+    expect(flowsEqual(base(settings), base({ ...settings }))).toBe(true);
   });
 
   it("tells flows apart by the members of their session frames", () => {

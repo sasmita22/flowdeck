@@ -71,7 +71,6 @@ function liveFlow(steps: Step[]): Flow {
           role: "",
           instructions: step.instructions,
           model: "haiku",
-          tools: ["Read", "Write"],
           ...(step.given === undefined ? {} : { given: step.given }),
           ...(step.writes === undefined ? {} : { writes: step.writes }),
         },
@@ -87,12 +86,10 @@ function liveFlow(steps: Step[]): Flow {
     wires: ids.slice(1).map((id, index) => then(ids[index] ?? "", id)),
     session: {
       name: "main",
-      buildConfig: { base: "main", variables: [], buildModel: "haiku" },
+      buildConfig: { base: "main" },
       model: "haiku",
-      allowedTools: ["Read", "Write"],
-      permissionMode: "acceptEdits",
-      connectors: [],
     },
+    settings: { buildModel: "haiku", permissionMode: "acceptEdits" },
   });
 }
 

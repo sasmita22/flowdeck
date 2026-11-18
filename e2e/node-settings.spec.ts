@@ -294,7 +294,7 @@ test("Session settings open from the gear and never mix with a node's settings",
   await expect(reopened.getByTestId("session-model")).toHaveValue("claude-haiku-4-5");
 });
 
-test("A Branch's variable comes from the session's yes/no variables", async () => {
+test("A Branch's variable is the name typed into it, with no list to pick from", async () => {
   const { window } = await launch();
   await drop(window, "trigger", 120);
   await drop(window, "branch", 420);
@@ -306,22 +306,11 @@ test("A Branch's variable comes from the session's yes/no variables", async () =
   const branchIssue = window.getByTestId("node-issue-branch-1");
   await expect(branchIssue).toBeVisible();
   await window.getByTestId("node-branch-1").click();
-  await expect(window.getByTestId("branch-no-variables")).toBeVisible();
-
-  await window.getByTestId(controlTestIds.sessionSettings).click();
-  await window.getByTestId(buildConfigTestIds.addVariable).click();
-  await setText(window.getByTestId(buildConfigTestIds.variableName(0)), "deep");
-  await window.getByTestId(buildConfigTestIds.variableKind(0)).selectOption("yesno");
-  await window.getByTestId(buildConfigTestIds.variableDefault(0)).selectOption("yes");
-  await window.getByTestId(buildConfigTestIds.addVariable).click();
-  await setText(window.getByTestId(buildConfigTestIds.variableName(1)), "ticket");
-  await expect(branchIssue).toBeVisible();
-
-  await window.getByTestId("node-branch-1").click();
   await expect(window.getByTestId("branch-no-variables")).toHaveCount(0);
+
   const variable = window.getByTestId(branchVariableTestId);
-  await expect(variable.locator("option:not([disabled])")).toHaveText(["deep"]);
-  await variable.selectOption("deep");
+  expect(await variable.evaluate((element) => element.tagName)).toBe("INPUT");
+  await setText(variable, "deep");
 
   await expect(branchIssue).toHaveCount(0);
   await expect
@@ -429,59 +418,4 @@ test("A refused value's reason goes once Undo changes the field", async () => {
 
   await expect(file).toHaveValue("items.txt");
   await expect(reason).toHaveCount(0);
-});
-
-test("At the inspector's narrowest a variable's fields and Remove fit inside it, and Remove deletes it", async () => {
-  const target = await launch();
-  const { window } = target;
-  await showAt1280(target);
-  await window.getByTestId(controlTestIds.sessionSettings).click();
-  await expect(window.getByTestId("session-settings")).toBeVisible();
-  const inspector = window.getByTestId("inspector");
-  const handle = await window.getByTestId(controlTestIds.inspectorResize).boundingBox();
-  if (handle === null) throw new Error("the inspector has no resize handle");
-  await window.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
-  await window.mouse.down();
-  await window.mouse.move(handle.x + 600, handle.y + handle.height / 2, { steps: 10 });
-  await window.mouse.up();
-  await expect.poll(async () => (await inspector.boundingBox())?.width).toBe(240);
-
-  await window.getByTestId(buildConfigTestIds.addVariable).click();
-  await setText(window.getByTestId(buildConfigTestIds.variableName(0)), "topic");
-  const row = [
-    buildConfigTestIds.variableName(0),
-    buildConfigTestIds.variableKind(0),
-    buildConfigTestIds.variableDefault(0),
-    buildConfigTestIds.variableRemove(0),
-  ].map((id) => window.getByTestId(id));
-  const panel = await inspector.boundingBox();
-  if (panel === null) throw new Error("the inspector has no box");
-  expect(await inspector.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
-  for (const field of row) {
-    await expect(field).toBeVisible();
-    const box = await field.boundingBox();
-    expect(box?.x).toBeGreaterThanOrEqual(panel.x);
-    expect((box?.x ?? Infinity) + (box?.width ?? 0)).toBeLessThanOrEqual(panel.x + panel.width);
-  }
-  await expect
-    .poll(async () => {
-      const flow = JSON.parse(
-        (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "",
-      ) as { session: { buildConfig: { variables: { name: string }[] } } };
-      return flow.session.buildConfig.variables.map(({ name }) => name);
-    })
-    .toEqual(["topic"]);
-  await window.mouse.move(1, 1);
-  await reviewShot(window, test.info(), "variable-at-min-width");
-
-  await window.getByTestId(buildConfigTestIds.variableRemove(0)).click();
-  await expect(window.getByTestId(buildConfigTestIds.variableName(0))).toHaveCount(0);
-  await expect
-    .poll(async () => {
-      const flow = JSON.parse(
-        (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "",
-      ) as { session: { buildConfig: { variables: unknown[] } } };
-      return flow.session.buildConfig.variables;
-    })
-    .toEqual([]);
 });

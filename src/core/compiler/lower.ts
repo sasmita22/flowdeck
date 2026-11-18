@@ -1,5 +1,5 @@
 import { order } from "../flow/order.js";
-import type { Flow, Node, Session, Wire } from "../flow/schema.js";
+import type { Flow, FlowSettings, Node, Session, Wire } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
@@ -27,9 +27,9 @@ export type Manifest = {
   layout?: "workspace";
   values?: VariableValues;
   source?: BuildSource;
-  inputs?: string[];
   outputs?: ManifestOutput[];
   session: Omit<Session, "frame">;
+  settings?: FlowSettings;
   nodes: ManifestNode[];
   wires: Wire[];
   files: Record<string, string>;
@@ -44,7 +44,7 @@ export type LowerInputs = {
 };
 
 export type LoweredManifest = Omit<Manifest, "files"> &
-  Required<Pick<Manifest, "prefix" | "layout" | "values">>;
+  Required<Pick<Manifest, "prefix" | "layout" | "values" | "settings">>;
 
 const compile = (
   node: Node,
@@ -101,6 +101,7 @@ export function lower(
       ...(source === undefined ? {} : { source }),
       ...(outputs.length === 0 ? {} : { outputs }),
       session,
+      settings: flow.settings,
       nodes: compiled.map(({ node, piece, file }) => ({
         id: node.id,
         type: node.type,

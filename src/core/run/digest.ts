@@ -189,9 +189,6 @@ function stageLines(stage: PipelineStage, number: string, limits: Limits, run: S
     ...(question === "" ? [] : [`   Asked: ${shortened(question, limits.decision)}`]),
     ...(stage.reason === undefined ? [] : [`   Reason: ${stage.reason}`]),
     ...stage.decisions.map((decision) => `   Decision: ${decisionLine(decision, limits.decision)}`),
-    ...stage.budgetPauses.map(
-      (pause) => `   Paused at its budget: ${usd(pause.spend)} spent of ${usd(pause.budget)}`,
-    ),
     ...(compactions === 0 ? [] : [`   Context compacted ${compactions}×`]),
     ...(files.length === 0 ? [] : [`   Files written: ${filesLine(files, limits.files)}`]),
     ...stepsLines(stage.activity, limits.steps, run.status === "done" || run.status === "failed"),

@@ -120,8 +120,6 @@ export function createToolHandler({
       }
       case "delete_node":
         return { command: deleteNodes(flow, [edit.nodeId]) };
-      case "set_variable":
-        return { command: canvas.getState().variableCommand(edit.variable) };
     }
   };
 

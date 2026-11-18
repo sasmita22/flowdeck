@@ -4,46 +4,72 @@
       "id": "start",
       "label": "Start",
       "type": "trigger",
-      "position": { "x": 0, "y": 0 },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
       "settings": {}
     },
     {
       "id": "ife2e",
       "label": "E2E?",
       "type": "branch",
-      "position": { "x": 240, "y": 0 },
-      "settings": { "variable": "e2e" }
+      "position": {
+        "x": 240,
+        "y": 0
+      },
+      "settings": {
+        "variable": ""
+      }
     },
     {
       "id": "done",
       "label": "Done",
       "type": "output",
-      "position": { "x": 480, "y": 0 },
-      "settings": { "name": "result", "type": "text" }
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
     }
   ],
   "wires": [
     {
       "kind": "then",
-      "from": { "node": "start", "port": "out" },
-      "to": { "node": "ife2e", "port": "in" }
+      "from": {
+        "node": "start",
+        "port": "out"
+      },
+      "to": {
+        "node": "ife2e",
+        "port": "in"
+      }
     },
     {
       "kind": "then",
-      "from": { "node": "ife2e", "port": "yes" },
-      "to": { "node": "done", "port": "in" }
+      "from": {
+        "node": "ife2e",
+        "port": "yes"
+      },
+      "to": {
+        "node": "done",
+        "port": "in"
+      }
     }
   ],
   "session": {
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "base": "main",
-      "variables": [{ "name": "ticket", "kind": "text" }]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

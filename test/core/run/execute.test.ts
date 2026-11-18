@@ -11,7 +11,6 @@ import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { buildRecord } from "../../../src/core/compiler/record.js";
-import { handoffPairs } from "../../../src/core/flow/handoff.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { costOf } from "../../../src/core/run/budget.js";
@@ -255,37 +254,6 @@ describe("the core run path", () => {
       expect(result.build.prefix).toBe(hash);
       expect(result.build.layout).toBe("legacy");
       expect(result.build.worktree).toBeUndefined();
-    });
-
-    it("runs an old build's File wire as a hand-off pair, leaving its verified manifest as it was", async () => {
-      const agentNode = (id: string) => ({
-        id,
-        type: "agent",
-        label: id,
-        settings: { instructions: `Do ${id}.` },
-      });
-      const { hash, legacyDir } = await legacyBuild(
-        [agentNode("plan"), agentNode("build")],
-        [
-          { kind: "then", from: { node: "plan", port: "out" }, to: { node: "build", port: "in" } },
-          {
-            kind: "file",
-            from: { node: "plan", port: "file-out" },
-            to: { node: "build", port: "file-in" },
-            file: "plan.md",
-          },
-        ],
-      );
-      const onDisk = await readFile(join(legacyDir, "manifest.json"), "utf8");
-
-      const result = await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) });
-
-      if (result.kind !== "loaded") throw new Error(`build not loaded: ${result.message}`);
-      expect(handoffPairs(result.build.nodes)).toEqual([
-        { file: "plan.md", reader: "build", writers: ["plan"] },
-      ]);
-      expect(result.build.wires.map((wire) => wire.kind)).toEqual(["then"]);
-      expect(await readFile(join(legacyDir, "manifest.json"), "utf8")).toBe(onDisk);
     });
 
     it("still names any file an old build did not write, anywhere in its folder", async () => {
@@ -652,16 +620,16 @@ describe("execute wiring", () => {
     expect(store.findRun(id)?.status).toBe("stopped");
   });
 
-  it("pauses at the manifest's budget before sending the first agent", async () => {
+  it("never pauses for a budget a stored manifest still carries", async () => {
     const usage = new FakeUsageSource();
     usage.setEntries(claudeSessionId, twoDollars);
-    const waiter = new FakeWaiter([{ decision: "stop", reason: "over" }]);
+    const waiter = new FakeWaiter([]);
 
     const { code, sends } = await executeWith({ manifest: agentBuild(1), waiter, usage });
 
-    expect(waiter.calls).toEqual([{ nodeId: "n1", kind: "budget", spend: 2, budget: 1 }]);
-    expect(sends).toEqual([]);
-    expect(code).toBe(1);
+    expect(waiter.calls).toEqual([]);
+    expect(sends).toEqual([agentTurnText("fix-login", "n1", { id: "n1", given: [], writes: [] })]);
+    expect(code).toBe(0);
   });
 
   it("compacts a full context before the next turn when it is given a compaction reader", async () => {
@@ -707,7 +675,7 @@ describe("execute wiring", () => {
     expect(code).toBe(0);
   });
 
-  it("reads usage only once, after the run, for a manifest without a budget", async () => {
+  it("reads usage only once, after the run", async () => {
     const usage = new FakeUsageSource();
     usage.setEntries(claudeSessionId, twoDollars);
     let readsDuringTurn = -1;

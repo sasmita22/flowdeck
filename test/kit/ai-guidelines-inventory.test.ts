@@ -92,14 +92,6 @@ describe("the AI guidelines inventory", () => {
     expect(notModelFacingPaths.filter((path) => inventorySet.has(path))).toEqual([]);
   });
 
-  it("quotes the connector refusal in the connectors row", () => {
-    const row = notModelFacing.find((cells) =>
-      pathsIn(cells[0] ?? "").includes("src/core/compiler/connectors.ts"),
-    );
-
-    expect(row?.[1]).toContain("is not set up in Claude Code");
-  });
-
   it("gives a reason for every file that holds no model-facing text", () => {
     expect(notModelFacing.length).toBeGreaterThan(0);
     expect(notModelFacing.filter((row) => (row[1] ?? "") === "")).toEqual([]);

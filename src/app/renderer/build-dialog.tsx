@@ -1,15 +1,16 @@
 import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { Variable } from "../../core/flow/schema.js";
+import { modelChoices } from "../../core/flow/choices.js";
+import type { FoundVariable } from "../../core/flow/variables.js";
 import type { BranchState } from "./branch-store.js";
 import { BranchField } from "./fields/branch-field.js";
-import { buildModelChoices } from "./fields/field-options.js";
 import { ModelField } from "./fields/model-field.js";
 import { RepoField } from "./fields/repo-field.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
 import {
+  selectBuildRefusal,
   selectCanBuild,
   selectExistingBranches,
   type BranchMode,
@@ -27,41 +28,42 @@ const fieldStyle: CSSProperties = {
 
 const errorStyle: CSSProperties = { margin: 0, color: "var(--warn)", fontSize: "var(--fs-sm)" };
 
-const yesNo = (value: string | boolean | undefined) =>
-  value === true ? "yes" : value === false ? "no" : "";
+const switchStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: "var(--fs-sm)",
+};
 
 function VariableField({
   variable,
   value,
   onChange,
 }: {
-  variable: Variable;
+  variable: FoundVariable;
   value: string | boolean | undefined;
   onChange(value: string | boolean): void;
 }) {
   const testId = buildDialogTestIds.variable(variable.name);
-  return (
+  return variable.kind === "yes-no" ? (
+    <label style={switchStyle}>
+      <input
+        type="checkbox"
+        role="switch"
+        data-testid={testId}
+        checked={value === true}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {variable.name}
+    </label>
+  ) : (
     <label style={fieldStyle}>
       {variable.name}
-      {variable.kind === "text" ? (
-        <input
-          data-testid={testId}
-          value={typeof value === "string" ? value : ""}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      ) : (
-        <select
-          data-testid={testId}
-          value={yesNo(value)}
-          onChange={(event) => onChange(event.target.value === "yes")}
-        >
-          <option value="" disabled>
-            Choose
-          </option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
-        </select>
-      )}
+      <input
+        data-testid={testId}
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }
@@ -186,12 +188,14 @@ function BranchChoice({
 function BuildForm({
   dialog,
   canBuild,
+  refusal,
   run,
   branches,
   onBuild,
 }: {
   dialog: Dialog;
   canBuild: boolean;
+  refusal: string | null;
   run: StoreApi<RunState>;
   branches: StoreApi<BranchState>;
   onBuild(): void;
@@ -229,7 +233,7 @@ function BuildForm({
       <ModelField
         label="Build model"
         value={dialog.buildModel}
-        choices={buildModelChoices}
+        choices={modelChoices}
         testId={controlTestIds.buildModel}
         onChange={(buildModel) => edit({ buildModel })}
       />
@@ -241,6 +245,11 @@ function BuildForm({
           onChange={(value) => run.getState().setValue(variable.name, value)}
         />
       ))}
+      {refusal !== null && (
+        <p data-testid={buildDialogTestIds.refusal} role="status" style={errorStyle}>
+          {refusal}
+        </p>
+      )}
       {dialog.error !== null && (
         <p data-testid={buildDialogTestIds.error} role="alert" style={errorStyle}>
           {dialog.error}
@@ -331,6 +340,7 @@ export function BuildDialog({
   const dialog = useStore(run, (state) => state.buildDialog);
   const starting = useStore(run, (state) => state.starting);
   const canBuild = useStore(run, (state) => selectCanBuild(state) && !state.starting);
+  const refusal = useStore(run, selectBuildRefusal);
   const repo = dialog?.repo ?? "";
 
   useEffect(() => {
@@ -359,6 +369,7 @@ export function BuildDialog({
           <BuildForm
             dialog={dialog}
             canBuild={canBuild}
+            refusal={refusal}
             run={run}
             branches={branches}
             onBuild={() => void build()}

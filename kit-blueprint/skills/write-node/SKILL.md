@@ -9,7 +9,7 @@ A node is one step of the user's work. Write it so the build agents can turn it 
 
 ## Choose the type
 
-Every work step is an `agent`: a subagent with its own role, model and tools, which sees only the files it is given. That holds for a step that runs a command too: the Agent's instructions say which command to run and what to report. The other types are not work:
+Every work step is an `agent`: a subagent with its own role and model, which sees only the files it is given. That holds for a step that runs a command too: the Agent's instructions say which command to run and what to report. The other types are not work:
 
 - The user looking before the work goes on is a `gate`; the user choosing an answer is an `ask`; a stop that must never be skipped is a `hardstop`.
 - Repeating, parallel work and picking a path are `loop`, `foreach`, `fork` and `join`, and `branch`, around Agents.
@@ -25,7 +25,6 @@ If what the user said fits more than one type, ask which they mean instead of pi
 | Expected output | The last line of `instructions`, starting `Expected output:` | The file it writes and what that file holds, or the reply it ends with                        |
 | Files           | `given` and `writes` (see below)                             | The files it reads and the files it leaves                                                    |
 | Produces        | `produces` (optional)                                        | The name of a yes/no value it answers at the end of its turn, for a later Branch to decide on |
-| Tools           | `tools`                                                      | Only tools in the session's allowed tools (`agent-tools`)                                     |
 
 The Agent settings have no expected output field, which is why it is a line in `instructions`. Leave `model` at its default unless the user names one.
 
@@ -41,7 +40,7 @@ Name the file for what it holds, with the extension of its format, for example `
 
 ## Write only what was asked
 
-Put in each node what the user asked for that step, in their words where they gave them. Add no check, retry, limit, tool or extra node the user did not ask for. Use `{{name}}` only for a variable the blueprint declares.
+Put in each node what the user asked for that step, in their words where they gave them. Add no check, retry, limit, tool or extra node the user did not ask for. Use `{{name}}` only for a value the user gives when building.
 
 ## Done
 

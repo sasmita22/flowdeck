@@ -1,4 +1,5 @@
 import type { Flow } from "../../src/core/flow/schema.js";
+import { foundVariables } from "../../src/core/flow/variables.js";
 import type {
   FlowStore,
   FlowSummary,
@@ -145,6 +146,7 @@ export class FakeFlowStore implements FlowStore {
       versions: saved.length,
       lastSavedAt: latest === undefined ? null : blueprint.createdAt,
       buildConfig: latest?.flow.session.buildConfig ?? null,
+      variables: latest === undefined ? [] : foundVariables(latest.flow),
       pinned: blueprint.pinned,
     };
   }

@@ -10,7 +10,6 @@ import { settings as join } from "../nodes/join/settings.js";
 import { settings as loop } from "../nodes/loop/settings.js";
 import { settings as output } from "../nodes/output/settings.js";
 import { settings as trigger } from "../nodes/trigger/settings.js";
-import { upgradeFlow } from "./upgrade.js";
 
 export const NodeType = z.enum([
   "agent",
@@ -42,27 +41,21 @@ export const Wire = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("event"), ...wireEnds }),
 ]);
 
-export const Variable = z.discriminatedUnion("kind", [
-  z.object({ name: z.string(), kind: z.literal("text"), default: z.string().optional() }),
-  z.object({ name: z.string(), kind: z.literal("yesno"), default: z.boolean().optional() }),
-]);
-
 export const BuildConfig = z.object({
   repo: z.string().optional(),
   base: z.string().optional(),
-  variables: z.array(Variable).default([]),
-  buildModel: z.string().optional(),
 });
 
 export const Session = z.object({
   name: z.string(),
   buildConfig: BuildConfig,
   model: z.string(),
-  allowedTools: z.array(z.string()),
-  permissionMode: z.string(),
-  connectors: z.array(z.string()),
   frame: z.object({ nodes: z.array(z.string()) }).optional(),
-  budget: z.number().positive().optional(),
+});
+
+export const FlowSettings = z.object({
+  buildModel: z.string(),
+  permissionMode: z.string(),
 });
 
 const NodeBase = z.object({
@@ -97,6 +90,7 @@ export const Flow = z.object({
   nodes: z.array(Node),
   wires: z.array(Wire),
   session: Session,
+  settings: FlowSettings,
   notes: z.array(CanvasNote).optional(),
 });
 
@@ -104,9 +98,9 @@ export type NodeType = z.infer<typeof NodeType>;
 export type WireKind = z.infer<typeof WireKind>;
 export type Port = z.infer<typeof Port>;
 export type Wire = z.infer<typeof Wire>;
-export type Variable = z.infer<typeof Variable>;
 export type BuildConfig = z.infer<typeof BuildConfig>;
 export type Session = z.infer<typeof Session>;
+export type FlowSettings = z.infer<typeof FlowSettings>;
 export type Node = z.infer<typeof Node>;
 export type CanvasNote = z.infer<typeof CanvasNote>;
 export type Flow = z.infer<typeof Flow>;
@@ -122,7 +116,7 @@ export class FlowParseError extends Error {
 }
 
 export function parseFlow(input: unknown): Flow {
-  const result = Flow.safeParse(upgradeFlow(input));
+  const result = Flow.safeParse(input);
   if (!result.success) throw new FlowParseError(result.error);
   return result.data;
 }

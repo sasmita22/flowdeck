@@ -50,9 +50,13 @@ describe("checkEdit refuses", () => {
     refused("add_node", { type, label: "Old", settings: {} });
   });
 
+  it("a variable declaration, which no edit applies", () => {
+    expect(refused("set_variable", { name: "ticket", kind: "text" })).toContain("set_variable");
+  });
+
   it("add_node settings that fail the type's settings schema", () => {
     expect(
-      refused("add_node", { type: "agent", label: "Planner", settings: { tools: "Read" } }),
+      refused("add_node", { type: "agent", label: "Planner", settings: { writes: "notes.md" } }),
     ).toContain(expectedArray);
   });
 
@@ -128,7 +132,6 @@ describe("checkEdit accepts", () => {
     ["change_node", { nodeId: "a1", label: "Builder", settings: { model: "haiku" } }],
     ["delete_node", { nodeId: "p1" }],
     ["wire", wire("a1", "out", "p1", "in")],
-    ["set_variable", { name: "ticket", kind: "text", default: "FD-1" }],
   ])("a well-formed %s", (name, input) => {
     expect(checkEdit(blueprint(), name, input)).toMatchObject({ ok: true });
   });

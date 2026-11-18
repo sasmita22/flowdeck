@@ -48,11 +48,9 @@ describe("format", () => {
   });
 
   it("names the repository by its last part, built into a new worktree", () => {
-    expect(folderText({ repo: "/code/shop/", variables: [] })).toBe("shop · new worktree");
-    expect(folderText({ repo: "/code/shop", base: "main", variables: [] })).toBe(
-      "shop · new worktree",
-    );
-    expect(folderText({ base: "main", variables: [] })).toBe("New worktree");
+    expect(folderText({ repo: "/code/shop/" })).toBe("shop · new worktree");
+    expect(folderText({ repo: "/code/shop", base: "main" })).toBe("shop · new worktree");
+    expect(folderText({ base: "main" })).toBe("New worktree");
     expect(folderText(null)).toBe("No folder yet");
   });
 });

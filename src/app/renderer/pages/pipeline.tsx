@@ -3,12 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
 import { displayStatus, type DisplayStatus } from "../../../core/run/display.js";
-import type {
-  BudgetPause,
-  PipelineItem,
-  PipelineStage,
-  TimelineEvent,
-} from "../../../core/run/pipeline.js";
+import type { PipelineItem, PipelineStage, TimelineEvent } from "../../../core/run/pipeline.js";
 import type { SnapshotStatus } from "../../../core/run/snapshot.js";
 import type { NodeState } from "../../../core/run/state.js";
 import type { HumanDecision } from "../../../core/run/wait.js";
@@ -81,7 +76,6 @@ const eventNames: Record<TimelineEvent["kind"], string> = {
   round: "New round",
   usage: "Used",
   compacted: "Compacted",
-  budget: "Budget",
 };
 
 const eventText = (event: TimelineEvent) =>
@@ -99,9 +93,6 @@ const decisionText = (decision: HumanDecision) => {
       ? "Skipped"
       : "Continued";
 };
-
-const pauseText = (pause: BudgetPause) =>
-  `Paused at ${formatCost(pause.spend)} of a ${formatCost(pause.budget)} budget${pause.unconfirmed === true ? " (spend not confirmed)" : ""}`;
 
 const stageName = (stage: PipelineStage, round: number | undefined) =>
   `${labelFor(stage)}${round === undefined ? "" : ` · round ${round}`}`;
@@ -285,9 +276,6 @@ function StageDetail({
         ))}
         {stage.decisions.map((decision, index) => (
           <li key={`decision-${index}`}>{decisionText(decision)}</li>
-        ))}
-        {stage.budgetPauses.map((pause, index) => (
-          <li key={`pause-${index}`}>{pauseText(pause)}</li>
         ))}
         {stage.timeline.length === 0 && <li className="fd-muted">Not started</li>}
       </ol>

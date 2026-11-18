@@ -2,13 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import { createWaitStore } from "../../../../src/app/renderer/inspector/wait-store.js";
 import type { WaitAnswer } from "../../../../src/core/run/wait.js";
-import {
-  askWait,
-  budget,
-  gateWait,
-  permission,
-  unconfirmedBudget,
-} from "../../../fixtures/waits.js";
+import { askWait, gateWait, permission } from "../../../fixtures/waits.js";
 
 type WaitBridge = Pick<FlowdeckBridge, "getWait" | "onWait" | "answerWait">;
 
@@ -152,17 +146,14 @@ describe("wait pushes", () => {
     expect(pending()).toBeNull();
   });
 
-  it.each([permission, budget, unconfirmedBudget])(
-    "stores a pushed $kind wait",
-    async (request) => {
-      const { push, pending } = await connected();
-      const pushed = { waitId: "wait-3", request };
+  it.each([permission])("stores a pushed $kind wait", async (request) => {
+    const { push, pending } = await connected();
+    const pushed = { waitId: "wait-3", request };
 
-      push(pushed);
+    push(pushed);
 
-      expect(pending()).toEqual(pushed);
-    },
-  );
+    expect(pending()).toEqual(pushed);
+  });
 
   it("ignores pushes that fail the pending wait schema", async () => {
     const { push, pending } = await connected();

@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { emit } from "../../../src/core/compiler/emit.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
-import { parseFlow, Session, type NodeType } from "../../../src/core/flow/schema.js";
+import { FlowSettings, parseFlow, Session, type NodeType } from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
 
 type Landing =
   | { file: string; shows: string }
   | { manifest: "node"; value: unknown }
   | { manifest: "session"; value: unknown }
+  | { manifest: "settings"; value: unknown }
   | { manifest: "outputs"; value: unknown };
 
 const inFile = (file: string, shows: string): Landing => ({ file, shows });
@@ -22,7 +23,6 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
       inFile("plugin/agents/label-agent.md", "M-agent-instructions"),
     ],
     model: ["M-agent-model", inFile("plugin/agents/label-agent.md", "M-agent-model")],
-    tools: [["M-agent-tool"], inFile("plugin/agents/label-agent.md", "M-agent-tool")],
     given: [["M-agent-given.md"], inFile("plugin/agents/label-agent.md", "M-agent-given.md")],
     writes: [["M-agent-writes.md"], inFile("plugin/agents/label-agent.md", "M-agent-writes.md")],
     produces: ["M-agent-produces", atRunTime("M-agent-produces")],
@@ -69,25 +69,15 @@ const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
 const session: Record<string, [unknown, Landing]> = {
   name: ["M-session-name", { manifest: "session", value: "M-session-name" }],
   buildConfig: [
-    {
-      repo: "/M-session-repo",
-      base: "M-session-base",
-      variables: [{ name: "M-variable", kind: "yesno", default: true }],
-    },
-    {
-      manifest: "session",
-      value: {
-        repo: "/M-session-repo",
-        base: "M-session-base",
-        variables: [{ name: "M-variable", kind: "yesno", default: true }],
-      },
-    },
+    { repo: "/M-session-repo", base: "M-session-base" },
+    { manifest: "session", value: { repo: "/M-session-repo", base: "M-session-base" } },
   ],
   model: ["M-session-model", { manifest: "session", value: "M-session-model" }],
-  allowedTools: [["M-session-tool"], inFile("settings.json", "M-session-tool")],
-  permissionMode: ["M-session-mode", inFile("settings.json", "M-session-mode")],
-  connectors: [["M-session-connector"], { manifest: "session", value: ["M-session-connector"] }],
-  budget: [74, { manifest: "session", value: 74 }],
+};
+
+const blueprintSettings: Record<string, [unknown, Landing]> = {
+  buildModel: ["M-build-model", { manifest: "settings", value: "M-build-model" }],
+  permissionMode: ["M-permission-mode", inFile("settings.json", "M-permission-mode")],
 };
 
 const idOf: Record<NodeType, string> = {
@@ -118,6 +108,7 @@ const everyNode = () =>
     })),
     wires: [],
     session: valuesOf(session),
+    settings: valuesOf(blueprintSettings),
   });
 
 const builtFiles = () => {
@@ -147,7 +138,7 @@ const fieldsOf = (schema: z.ZodType) => Object.keys((schema as z.ZodObject).shap
 const landed = (
   { byPath, manifest }: ReturnType<typeof builtFiles>,
   landing: Landing,
-  type: NodeType | "session",
+  type: NodeType | "session" | "settings",
   field: string,
 ) => {
   if ("file" in landing) {
@@ -169,6 +160,12 @@ const landed = (
         landing.value,
       );
       return;
+    case "settings":
+      expect(
+        (manifest as unknown as { settings?: Record<string, unknown> }).settings?.[field],
+        `settings.${field}`,
+      ).toEqual(landing.value);
+      return;
     case "outputs":
       expect(manifest.outputs, `${type}.${field}`).toEqual([
         { node: "o", name: "M-output-name", type: "M-output-type" },
@@ -178,7 +175,7 @@ const landed = (
 };
 
 describe("every setting lands in the build", () => {
-  it("covers every field of every node type and of the session", () => {
+  it("covers every field of every node type, of the session and of the blueprint's settings", () => {
     for (const type of Object.keys(registry) as NodeType[]) {
       expect(Object.keys(settings[type]).sort(), type).toEqual(
         fieldsOf(registry[type].settings).sort(),
@@ -189,6 +186,7 @@ describe("every setting lands in the build", () => {
         .filter((field) => field !== "frame")
         .sort(),
     );
+    expect(Object.keys(blueprintSettings).sort()).toEqual(fieldsOf(FlowSettings).sort());
   });
 
   it.each(
@@ -205,6 +203,12 @@ describe("every setting lands in the build", () => {
       landed(builtFiles(), landing, "session", field);
     },
   );
+
+  it.each(
+    Object.entries(blueprintSettings).map(([field, [, landing]]) => [field, landing] as const),
+  )("settings.%s", (field, landing) => {
+    landed(builtFiles(), landing, "settings", field);
+  });
 
   it("puts no agent text only in the manifest", () => {
     const { byPath } = builtFiles();

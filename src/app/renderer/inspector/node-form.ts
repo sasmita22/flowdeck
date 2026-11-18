@@ -9,7 +9,6 @@ import {
   describeFields,
   producedChoices,
   withChoices,
-  yesNoChoices,
   type FieldDescription,
   type FieldValue,
   type Form,
@@ -53,7 +52,6 @@ const forms: Record<NodeType, Form> = {
       role: "Role",
       instructions: "Instructions",
       model: "Model",
-      tools: "Allowed tools (one per line)",
       given: "Files it is given (one per line)",
       writes: "Files it writes (one per line)",
       produces: "Yes/no value it produces (optional)",
@@ -119,19 +117,17 @@ const schemaOf = (type: NodeType) => registry[type].settings as SettingsSchema;
 
 const branchFields = (
   fields: readonly FieldDescription[],
-  flow: Pick<Flow, "session" | "nodes"> | undefined,
+  flow: Pick<Flow, "nodes"> | undefined,
   settings: Readonly<Record<string, unknown>>,
 ): FieldDescription[] => {
   const byValue = decidedByValue(settings);
   const shown = fields.filter(({ path }) => path[0] !== (byValue ? "variable" : "value"));
-  return byValue
-    ? withChoices(shown, "value", producedChoices(flow?.nodes ?? []))
-    : withChoices(shown, "variable", yesNoChoices(flow?.session.buildConfig ?? { variables: [] }));
+  return byValue ? withChoices(shown, "value", producedChoices(flow?.nodes ?? [])) : shown;
 };
 
 export const describeNodeFields = (
   type: NodeType,
-  flow?: Pick<Flow, "session" | "nodes">,
+  flow?: Pick<Flow, "nodes">,
   settings: Readonly<Record<string, unknown>> = {},
 ): FieldDescription[] => {
   const fields = describeFields(schemaOf(type), forms[type]);
@@ -171,8 +167,3 @@ export const renameFlag = (flags: Flags, from: string, to: string): Flags => {
 
 export const removeFlag = (flags: Flags, name: string): Flags =>
   Object.fromEntries(Object.entries(flags).filter(([key]) => key !== name));
-
-export const missingYesNoVariable = (node: Node, flow: Flow): boolean =>
-  node.type === "branch" &&
-  !decidedByValue(node.settings) &&
-  !flow.session.buildConfig.variables.some(({ kind }) => kind === "yesno");

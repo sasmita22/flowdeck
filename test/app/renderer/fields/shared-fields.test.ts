@@ -60,4 +60,14 @@ describe("same setting, same field", () => {
       expect(ownControlsFor(file)).toEqual([]);
     },
   );
+
+  it("Blueprint settings draws the build model with the same model field as the Build dialog, under its own test id", () => {
+    const settings = sourceOf("inspector/session-settings.tsx");
+
+    expect(settings.match(/<ModelField\b/g)).toHaveLength(2);
+    expect(settings).not.toMatch(/controlTestIds\.buildModel|"build-model"/);
+    expect(sourceOf("build-dialog.tsx")).toMatch(
+      /<ModelField\b[^>]*testId=\{controlTestIds\.buildModel\}/,
+    );
+  });
 });

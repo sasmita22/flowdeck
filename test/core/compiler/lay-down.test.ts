@@ -11,20 +11,15 @@ import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
-const sample = (): Flow => {
-  const base = onMainFlow(
+const sample = (): Flow =>
+  onMainFlow(
     [
       labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
-      labelled(
-        agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }),
-        "Review the draft",
-      ),
+      labelled(agent("a", { settings: { given: ["spec.md"] } }), "Review the draft"),
       labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s")],
   );
-  return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
-};
 
 type Named = { id: string; name: string; repo: string; folder: string };
 
@@ -177,6 +172,34 @@ describe("layDown", () => {
             .replaceAll(`agents/${piece}.md`, "");
           expect(left, `${piece} in ${file.path}`).not.toContain(piece);
         }
+      }
+    });
+  });
+
+  describe("connectors", () => {
+    it("lays down a flow whose stored session still names a connector, resolving nothing", async () => {
+      const stale = {
+        ...sample(),
+        session: { ...sample().session, connectors: ["jira"] },
+      } as Flow;
+
+      const result = await layDown(stale, depsOf(alpha));
+
+      expect(result.ok ? [] : result.errors).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+
+    it("writes no tools line into any piece, even from an Agent stored with a tools list", async () => {
+      const stored = onMainFlow(
+        [labelled(agent("a", { settings: { tools: ["Grep"] } }), "Review the draft")],
+        [],
+      );
+      const result = await layDown(stored, depsOf(alpha));
+      const files = pieceFiles(result.ok ? result.files : []);
+
+      expect(files).not.toEqual([]);
+      for (const file of files) {
+        expect(file.content, file.path).not.toMatch(/^tools:/m);
       }
     });
   });

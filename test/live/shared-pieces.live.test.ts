@@ -20,23 +20,20 @@ import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 const buildTimeoutMs = 900_000;
-const tools = ["Bash", "Read", "Edit"];
-const withSkill = [...tools, "Skill"];
 const runTests = "Run the tests with `node --test` and report the failures.";
 
 type Built = CheckedBuild & { outcome: string; report: BuildReport; files: Map<string, string> };
 
-const threeAgents = (jobs: Record<string, string>, nodeTools = tools): Flow => {
+const threeAgents = (jobs: Record<string, string>): Flow => {
   const ids = Object.keys(jobs);
-  const blueprint = onMainFlow(
+  return onMainFlow(
     ids.map((id) =>
       agent(id, {
-        settings: { role: "", instructions: jobs[id], model: "haiku", tools: nodeTools },
+        settings: { role: "", instructions: jobs[id], model: "haiku" },
       }),
     ),
     ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
   );
-  return { ...blueprint, session: { ...blueprint.session, allowedTools: withSkill } };
 };
 
 async function build(flow: Flow, name: string): Promise<Built> {
@@ -81,14 +78,11 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a build's shared pieces", ()
   it("are one piece run by all three agents that each run the tests", timeout, async () => {
     const name = "shared-a";
     const built = await build(
-      threeAgents(
-        {
-          build: `Write a slugify(text) function in src/slugify.js. ${runTests}`,
-          lint: `List the unused variables in the files under src/. ${runTests}`,
-          docs: `Write a docs/usage.md page that shows how to call slugify. ${runTests}`,
-        },
-        withSkill,
-      ),
+      threeAgents({
+        build: `Write a slugify(text) function in src/slugify.js. ${runTests}`,
+        lint: `List the unused variables in the files under src/. ${runTests}`,
+        docs: `Write a docs/usage.md page that shows how to call slugify. ${runTests}`,
+      }),
       name,
     );
 
@@ -102,7 +96,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a build's shared pieces", ()
     for (const id of ["build", "lint", "docs"]) {
       const agentFile = built.files.get(`plugin/agents/${id}.md`) ?? "";
       expect(agentFile).toContain(`${name}:${entry.name}`);
-      expect(agentFile).toMatch(/^tools:.*\bSkill\b/m);
     }
   });
 

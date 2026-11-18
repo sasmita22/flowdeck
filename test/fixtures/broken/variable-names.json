@@ -20,9 +20,8 @@
       },
       "settings": {
         "role": "implementer",
-        "instructions": "Implement the ticket.",
-        "model": "sonnet",
-        "tools": []
+        "instructions": "Implement {{bad name}}.",
+        "model": "sonnet"
       }
     },
     {
@@ -66,21 +65,12 @@
   "session": {
     "name": "main",
     "buildConfig": {
-      "repo": "/work/repo",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        },
-        {
-          "name": "bad name",
-          "kind": "text"
-        }
-      ]
+      "repo": "/work/repo"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

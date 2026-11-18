@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { parseFlow, Session, type Flow } from "../../core/flow/schema.js";
-import { upgradeFlow } from "../../core/flow/upgrade.js";
+import { parseFlow, type Flow } from "../../core/flow/schema.js";
+import { foundVariables } from "../../core/flow/variables.js";
 import { registry } from "../../core/nodes/registry.js";
 import type {
   FlowStore,
@@ -22,6 +22,7 @@ type CurrentRow = {
   name: string;
   version: number;
   session: string;
+  settings: string;
   notes: string;
 };
 
@@ -32,7 +33,6 @@ type SummaryRow = {
   versions: number;
   last_saved_at: string | null;
   version: number | null;
-  session: string | null;
   pinned: number;
 };
 
@@ -83,7 +83,7 @@ export class SqliteFlowStore implements FlowStore {
       .prepare(
         `SELECT flows.id, flows.name, flows.created_at, flows.pinned,
                 (SELECT count(*) FROM flow_versions WHERE flow_id = flows.id) AS versions,
-                latest.saved_at AS last_saved_at, latest.version, latest.session
+                latest.saved_at AS last_saved_at, latest.version
            FROM flows
            LEFT JOIN flow_versions AS latest ON latest.flow_id = flows.id
             AND latest.version = (SELECT MAX(version) FROM flow_versions WHERE flow_id = flows.id)
@@ -186,9 +186,17 @@ export class SqliteFlowStore implements FlowStore {
 
       this.db
         .prepare(
-          "INSERT INTO flow_versions (flow_id, version, session, notes, saved_at) VALUES (?, ?, ?, ?, ?)",
+          `INSERT INTO flow_versions (flow_id, version, session, settings, notes, saved_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(flowId, version, JSON.stringify(flow.session), JSON.stringify(flow.notes ?? []), time);
+        .run(
+          flowId,
+          version,
+          JSON.stringify(flow.session),
+          JSON.stringify(flow.settings),
+          JSON.stringify(flow.notes ?? []),
+          time,
+        );
 
       return { flowId, version };
     });
@@ -210,7 +218,7 @@ export class SqliteFlowStore implements FlowStore {
     const current = this.db
       .prepare(
         `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.session,
-                flow_versions.notes
+                flow_versions.settings, flow_versions.notes
            FROM flow_versions JOIN flows ON flows.id = flow_versions.flow_id
           WHERE flow_versions.flow_id = ? AND flow_versions.version = ?`,
       )
@@ -257,39 +265,25 @@ export class SqliteFlowStore implements FlowStore {
         nodes,
         wires,
         session: JSON.parse(current.session) as unknown,
+        settings: JSON.parse(current.settings) as unknown,
         ...(notes.length === 0 ? {} : { notes }),
       }),
     };
   }
 
   private toSummary(row: SummaryRow): FlowSummary {
+    const latest =
+      row.version === null ? null : this.load({ flowId: row.id, version: row.version });
     return {
       flowId: row.id,
       name: row.name,
       createdAt: row.created_at,
       versions: row.versions,
       lastSavedAt: row.last_saved_at,
-      buildConfig:
-        row.session === null || row.version === null
-          ? null
-          : this.upgradedSession(row.id, row.version, row.session).buildConfig,
+      buildConfig: latest?.flow.session.buildConfig ?? null,
+      variables: latest === null ? [] : foundVariables(latest.flow),
       pinned: row.pinned === 1,
     };
-  }
-
-  private upgradedSession(flowId: string, version: number, session: string): Session {
-    const triggers = (
-      this.db
-        .prepare(
-          `SELECT type, settings FROM nodes
-            WHERE flow_id = ? AND version = ? AND type = 'trigger' ORDER BY ordinal`,
-        )
-        .all(flowId, version) as { type: string; settings: string }[]
-    ).map((row) => ({ type: row.type, settings: JSON.parse(row.settings) as unknown }));
-    const upgraded = upgradeFlow({ nodes: triggers, session: JSON.parse(session) as unknown }) as {
-      session: unknown;
-    };
-    return Session.parse(upgraded.session);
   }
 
   private currentFlowId(): string | undefined {

@@ -11,18 +11,29 @@
       "settings": {}
     },
     {
-      "id": "build",
-      "label": "Build",
-      "type": "agent",
+      "id": "decide",
+      "label": "Ship?",
+      "type": "branch",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "role": "implementer",
-        "instructions": "Implement {{ticket}} and {{title}}.",
-        "model": "sonnet",
-        "tools": []
+        "variable": "x"
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "type": "agent",
+      "position": {
+        "x": 480,
+        "y": 0
+      },
+      "settings": {
+        "role": "planner",
+        "instructions": "Plan {{x}}.",
+        "model": "sonnet"
       }
     },
     {
@@ -47,14 +58,25 @@
         "port": "out"
       },
       "to": {
-        "node": "build",
+        "node": "decide",
         "port": "in"
       }
     },
     {
       "kind": "then",
       "from": {
-        "node": "build",
+        "node": "decide",
+        "port": "yes"
+      },
+      "to": {
+        "node": "plan",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "plan",
         "port": "out"
       },
       "to": {
@@ -67,16 +89,12 @@
     "name": "main",
     "buildConfig": {
       "repo": "/work/repo",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

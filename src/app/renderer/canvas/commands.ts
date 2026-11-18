@@ -1,4 +1,11 @@
-import type { CanvasNote, Flow, Node, Session, Wire } from "../../../core/flow/schema.js";
+import type {
+  CanvasNote,
+  Flow,
+  FlowSettings,
+  Node,
+  Session,
+  Wire,
+} from "../../../core/flow/schema.js";
 
 export interface Command {
   do(flow: Flow): Flow;
@@ -174,6 +181,19 @@ export const updateSession = (next: Session): Command => {
       return withSession(flow, next);
     },
     undo: (flow) => (previous === undefined ? flow : withSession(flow, previous)),
+  };
+};
+
+const withSettings = (flow: Flow, settings: FlowSettings): Flow => ({ ...flow, settings });
+
+export const updateSettings = (next: FlowSettings): Command => {
+  let previous: FlowSettings | undefined;
+  return {
+    do: (flow) => {
+      previous = flow.settings;
+      return withSettings(flow, next);
+    },
+    undo: (flow) => (previous === undefined ? flow : withSettings(flow, previous)),
   };
 };
 

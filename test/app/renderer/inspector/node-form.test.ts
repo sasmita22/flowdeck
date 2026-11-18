@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { nodeDefaults } from "../../../../src/app/renderer/canvas/store.js";
+import * as nodeForm from "../../../../src/app/renderer/inspector/node-form.js";
 import {
   addFlag,
   applyNodeSetting,
   describeNodeFields,
-  missingYesNoVariable,
   removeFlag,
   renameFlag,
   setFlag,
@@ -43,7 +43,6 @@ describe("describeNodeFields", () => {
         ["text", "role", "node-setting-role"],
         ["multiline", "instructions", "node-setting-instructions"],
         ["select", "model", "node-setting-model"],
-        ["list", "tools", "node-setting-tools"],
         ["list", "given", "node-setting-given"],
         ["list", "writes", "node-setting-writes"],
         ["text", "produces", "node-setting-produces"],
@@ -99,7 +98,7 @@ describe("describeNodeFields", () => {
       "branch",
       [
         ["select", "decidedBy", "node-setting-decided-by"],
-        ["select", "variable", "node-setting-variable"],
+        ["text", "variable", "node-setting-variable"],
       ],
     ],
   ])("describes the %s settings", (type, expected) => {
@@ -156,37 +155,21 @@ describe("describeNodeFields", () => {
     ).toMatchObject({ placeholder: "Describe the agent's task." });
   });
 
-  it("picks a Branch variable from the flow's declared yes/no variables, in place of a flag", () => {
-    const base = flow([trigger("T"), branch("B", "deep")], []);
-    const current = {
-      ...base,
-      session: {
-        ...base.session,
-        buildConfig: {
-          variables: [
-            { name: "ticket", kind: "text" as const },
-            { name: "deep", kind: "yesno" as const, default: true },
-            { name: "docs", kind: "yesno" as const },
-          ],
-        },
-      },
-    };
+  it("lists no tools field for an Agent", () => {
+    const paths = describeNodeFields("agent").map((field) => field.path.join("."));
 
-    const fields = describeNodeFields("branch", current);
-
-    expect(fields).toHaveLength(2);
-    expect(fields[1]).toMatchObject({
-      control: "select",
-      path: ["variable"],
-      label: "Yes/no variable",
-      options: ["deep", "docs"],
-    });
+    expect(paths).not.toContain("tools");
   });
 
-  it("offers no variable to pick when none is yes/no", () => {
-    const [, variable] = describeNodeFields("branch", flow([branch("B", "deep")], []));
+  it("takes a Branch variable as a typed name, with nothing to pick from", () => {
+    const [, variable] = describeNodeFields("branch", flow([trigger("T"), branch("B", "")], []));
 
-    expect(variable).toMatchObject({ control: "select", options: [] });
+    expect(variable).toEqual({
+      control: "text",
+      path: ["variable"],
+      testId: "node-setting-variable",
+      label: "Yes/no variable",
+    });
   });
 
   describe("a Branch's Decided by", () => {
@@ -229,10 +212,10 @@ describe("describeNodeFields", () => {
     it.each<[string, Record<string, unknown>]>([
       ["with no Decided by, as old blueprints have", { variable: "deep" }],
       ["decided by a build variable", { decidedBy: "variable", variable: "deep" }],
-    ])("shows the variable picker for a Branch %s", (_, settings) => {
+    ])("shows the variable name field for a Branch %s", (_, settings) => {
       expect(describeNodeFields("branch", producers, settings).map(summary)).toEqual([
         ["select", "decidedBy", "node-setting-decided-by"],
-        ["select", "variable", "node-setting-variable"],
+        ["text", "variable", "node-setting-variable"],
       ]);
     });
 
@@ -262,7 +245,6 @@ describe("describeNodeFields", () => {
 describe("applyNodeSetting", () => {
   it.each<[NodeType, string[], Parameters<typeof applyNodeSetting>[2], Record<string, unknown>]>([
     ["agent", ["instructions"], "Line one\nLine two", { instructions: "Line one\nLine two" }],
-    ["agent", ["tools"], "Read\nBash", { tools: ["Read", "Bash"] }],
     ["gate", ["shown"], "Check the plan", { shown: "Check the plan", skippable: false }],
     ["gate", ["skippable"], true, { shown: "", skippable: true }],
     ["ask", ["options"], "yes\nno", { question: "", options: ["yes", "no"] }],
@@ -365,32 +347,8 @@ describe("trigger flags", () => {
   });
 });
 
-describe("missingYesNoVariable", () => {
-  const noVariables = flow([trigger("T")], []);
-  const branchNode = (settings: Record<string, unknown>) =>
-    ({ ...branch("B", ""), settings: { variable: "", ...settings } }) as Node;
-
-  it("is true for a Branch decided by a build variable when there is no yes/no variable", () => {
-    expect(missingYesNoVariable(branchNode({ decidedBy: "variable" }), noVariables)).toBe(true);
-  });
-
-  it("is false for a Branch decided by a value an earlier Agent produces", () => {
-    expect(missingYesNoVariable(branchNode({ decidedBy: "value" }), noVariables)).toBe(false);
-  });
-
-  it("is false once the session has a yes/no variable", () => {
-    const withYesNo = {
-      ...noVariables,
-      session: {
-        ...noVariables.session,
-        buildConfig: { variables: [{ name: "deep", kind: "yesno" as const }] },
-      },
-    };
-
-    expect(missingYesNoVariable(branchNode({ decidedBy: "variable" }), withYesNo)).toBe(false);
-  });
-
-  it("is false for a node that is not a Branch", () => {
-    expect(missingYesNoVariable(agent("A") as Node, noVariables)).toBe(false);
+describe("the Branch no-variables hint", () => {
+  it("is gone, since any typed name is a variable", () => {
+    expect(Object.keys(nodeForm)).not.toContain("missingYesNoVariable");
   });
 });

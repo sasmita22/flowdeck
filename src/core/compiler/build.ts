@@ -2,7 +2,6 @@ import type { Flow } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource, NewBuild } from "../run/store.js";
 import { canonicalJson } from "./canonical-json.js";
-import { resolveConnectors, type ConnectorSource } from "./connectors.js";
 import { emit, reportPath, type EmitTarget } from "./emit.js";
 import { hashBuild } from "./hash.js";
 import { lower, type BuildFile, type Manifest } from "./lower.js";
@@ -31,7 +30,6 @@ export type BuildDeps = {
   home: string;
   workspace: BuildWorkspace;
   source?: BuildSource;
-  connectors?: ConnectorSource;
 };
 
 export type LayDownDeps = Omit<BuildDeps, "fs"> & { kitVersion?: string };
@@ -44,8 +42,6 @@ export const workspaceDir = (home: string, id: string) => `${home}/workspaces/${
 export async function layDown(flow: Flow, deps: LayDownDeps): Promise<LayDownResult> {
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
-  const connectors = await resolveConnectors(flow.session.connectors, deps.connectors);
-  if (!connectors.ok) return connectors;
   const { id, name, values, ...target } = deps.workspace;
   const workspace = workspaceDir(deps.home, id);
   const kit = deps.kitVersion === undefined ? {} : { kitVersion: deps.kitVersion };

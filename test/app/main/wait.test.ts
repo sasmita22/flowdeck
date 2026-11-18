@@ -3,7 +3,7 @@ import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { answerWait, createWaitRelay } from "../../../src/app/main/wait.js";
 import type { PendingWait } from "../../../src/core/run/wait.js";
 import { tool } from "../../fixtures/activity-entries.js";
-import { askWait, budget, gateWait, permission, unconfirmedBudget } from "../../fixtures/waits.js";
+import { askWait, gateWait, permission } from "../../fixtures/waits.js";
 
 const wait = (value: PendingWait | null, runId = "run-1"): EnginePush => ({
   push: "wait",
@@ -35,7 +35,7 @@ describe("createWaitRelay", () => {
     expect(relay.latest("run-1")).toEqual(askWait);
   });
 
-  it.each([permission, budget, unconfirmedBudget])("sends a $kind wait unchanged", (request) => {
+  it.each([permission])("sends a $kind wait unchanged", (request) => {
     const { relay, sent } = setup();
     const pending: PendingWait = { waitId: "wait-3", request };
 
@@ -128,16 +128,9 @@ describe("answerWait", () => {
     },
   );
 
-  it("forwards a raise answer", async () => {
-    const engine = client(true);
-    const answer = { waitId: "wait-3", reply: { decision: "raise", budget: 2 } };
-
-    await expect(answerWait(engine, answer)).resolves.toBe(true);
-    expect(engine.request).toHaveBeenCalledWith("answer-wait", answer);
-  });
-
   it.each([
     ["a closed decision", { waitId: "wait-1", reply: { decision: "closed" } }],
+    ["a raise", { waitId: "wait-3", reply: { decision: "raise", budget: 2 } }],
     ["no wait id", { reply: { decision: "approve" } }],
     ["an unknown decision", { waitId: "wait-1", reply: { decision: "maybe" } }],
     ["a non-object", "approve"],

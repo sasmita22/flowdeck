@@ -96,7 +96,7 @@ export type EngineCalls = {
   loadRun(payload: { runId: string }): Promise<unknown>;
   stepFullText(payload: { runId: string; entryId: number }): Promise<unknown>;
   buildStepFullText(payload: { pendingId: string; entryId: number }): Promise<unknown>;
-  doctor(payload: { connectors: string[] }): Promise<unknown>;
+  doctor(): Promise<unknown>;
   runOptions(payload: { buildId: string }): Promise<unknown>;
   stopRun(payload: { runId: string }): Promise<unknown>;
   retryNode(payload: { runId: string; nodeId: string }): Promise<unknown>;

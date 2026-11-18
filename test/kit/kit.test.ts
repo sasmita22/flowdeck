@@ -245,11 +245,9 @@ describe("the build kit", () => {
     expect(readKit("agents/handoff-auditor.md")).not.toContain("only code or the user can change");
   });
 
-  it("skill write-agent writes with the allowed tools and invents no stop rule", () => {
+  it("skill write-agent invents no stop rule", () => {
     const content = skill("write-agent");
 
-    expect(content).toContain("write the piece with the allowed tools");
-    expect(content).not.toContain("the allow list lacks is a question");
     expect(content).toContain(
       "a stuck path or a retry cap only where the node's own text states one",
     );
@@ -337,11 +335,36 @@ describe("the build kit", () => {
     );
   });
 
-  it("agent piece-auditor references every SHARED line's piece and keeps the Skill tool", () => {
-    const content = readKit("agents/piece-auditor.md");
+  it("agent piece-auditor references every SHARED line's piece", () => {
+    expect(readKit("agents/piece-auditor.md")).toContain("`SHARED <prefix>:<name>`");
+  });
 
-    expect(content).toContain("`SHARED <prefix>:<name>`");
-    expect(content).toContain(`keep \`${SHARED_PIECE_TOOL}\` in its \`tools:\` line`);
+  it.each([
+    "skills/write-agent/SKILL.md",
+    "skills/extract-shared/SKILL.md",
+    "skills/analyze-job/SKILL.md",
+    "agents/piece-auditor.md",
+  ])("%s never has a built agent list its tools", (path) => {
+    const content = readKit(path);
+    const body = content
+      .replace(/^---\n[\s\S]*?\n---\n/, "")
+      .split("\n")
+      .filter((line) => !line.startsWith("| `tools`"))
+      .join("\n");
+
+    expect(body).not.toContain("`tools`");
+    expect(body).not.toContain("`tools:`");
+    expect(body).not.toContain("permissions.allow");
+    expect(content).not.toMatch(/fewest tools/i);
+  });
+
+  it("agent piece-auditor fixes a tools failure by deleting the tools line", () => {
+    const row = readKit("agents/piece-auditor.md")
+      .split("\n")
+      .find((line) => line.startsWith("| `tools`"));
+
+    expect(row).toMatch(/delete[^|]*`tools:` line/i);
+    expect(row).not.toMatch(/\blist\b/i);
   });
 
   it.each(["agents/piece-auditor.md", "agents/handoff-auditor.md"])(

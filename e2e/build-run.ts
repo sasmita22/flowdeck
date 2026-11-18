@@ -57,7 +57,7 @@ export async function buildOnCanvas(
   );
   for (const [variable, value] of Object.entries(values)) {
     const field = window.getByTestId(buildDialogTestIds.variable(variable));
-    if (typeof value === "boolean") await field.selectOption(value ? "yes" : "no");
+    if (typeof value === "boolean") await field.setChecked(value);
     else await field.fill(value);
   }
   await window.getByTestId(buildDialogTestIds.confirm).click();

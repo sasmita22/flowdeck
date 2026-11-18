@@ -149,10 +149,7 @@ export const pageTestIds = {
   runStop: "run-stop",
   runResume: "run-resume",
   doctorScopeBanner: "doctor-scope-banner",
-  doctorBlueprint: "doctor-blueprint",
   doctorRecheck: "doctor-recheck",
-  doctorNeeded: (name: string) => `doctor-needed-${name}`,
-  doctorFix: (name: string) => `doctor-fix-${name}`,
   doctorInstalled: (name: string) => `doctor-installed-${name}`,
   doctorWorktrees: "doctor-worktrees",
   leaveSave: "leave-save",
@@ -187,6 +184,7 @@ export const buildDialogTestIds = {
   branchName: "build-dialog-branch-name",
   existingBranch: (name: string) => `build-dialog-existing-branch-${name}`,
   variable: (name: string) => `build-dialog-variable-${name}`,
+  refusal: "build-dialog-refusal",
   confirm: "build-dialog-confirm",
   cancel: "build-dialog-cancel",
   error: "build-dialog-error",
@@ -202,12 +200,6 @@ export const buildConfigTestIds = {
   repoBrowse: "session-build-config-repo-browse",
   baseInfo: "session-build-config-base-info",
   branchesError: "session-branches-error",
-  addVariable: "build-config-add-variable",
-  variable: (name: string) => `build-config-variable-${name}`,
-  variableName: (index: number) => `build-config-variable-name-${index}`,
-  variableKind: (index: number) => `build-config-variable-kind-${index}`,
-  variableDefault: (index: number) => `build-config-variable-default-${index}`,
-  variableRemove: (index: number) => `build-config-variable-remove-${index}`,
 } as const;
 
 export const branchVariableTestId = "node-setting-variable";

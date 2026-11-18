@@ -20,13 +20,6 @@ export const waitRequestSchema = z.discriminatedUnion("kind", [
     tool: z.string(),
     input: z.string(),
   }),
-  z.object({
-    nodeId: z.string(),
-    kind: z.literal("budget"),
-    spend: z.number(),
-    budget: z.number(),
-    unconfirmed: z.literal(true).optional(),
-  }),
 ]);
 
 export type WaitRequest = z.infer<typeof waitRequestSchema>;
@@ -37,7 +30,6 @@ const answerableReplySchemas = [
   z.object({ decision: z.literal("continue") }),
   z.object({ decision: z.literal("stop"), reason: z.string() }),
   z.object({ decision: z.literal("answer"), answer: z.string() }),
-  z.object({ decision: z.literal("raise"), budget: z.number().positive() }),
 ] as const;
 
 export const waitReplySchema = z.discriminatedUnion("decision", [
@@ -69,10 +61,6 @@ export function replyFits(request: WaitRequest, reply: WaitReply): boolean {
       return (
         reply.decision === "answer" &&
         (request.options.length === 0 || request.options.includes(reply.answer))
-      );
-    case "budget":
-      return (
-        reply.decision === "stop" || (reply.decision === "raise" && reply.budget > request.spend)
       );
   }
 }

@@ -30,20 +30,15 @@ const deps: LayDownDeps = {
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
-const sample = (): Flow => {
-  const base = onMainFlow(
+const sample = (): Flow =>
+  onMainFlow(
     [
       labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
-      labelled(
-        agent("a", { settings: { tools: ["Grep"], given: ["spec.md"] } }),
-        "Review the draft",
-      ),
+      labelled(agent("a", { settings: { given: ["spec.md"] } }), "Review the draft"),
       labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s")],
   );
-  return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
-};
 
 const openSpec = {
   sessionName,

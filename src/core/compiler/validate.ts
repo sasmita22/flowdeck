@@ -1,5 +1,4 @@
 import type { Flow } from "../flow/schema.js";
-import { rule as agentTools } from "./rules/agent-tools.js";
 import { rule as bodyNodes } from "./rules/body-nodes.js";
 import { rule as branchValue } from "./rules/branch-value.js";
 import { rule as branchVariable } from "./rules/branch-variable.js";
@@ -17,7 +16,7 @@ import { rule as references } from "./rules/references.js";
 import { rule as repoRequired } from "./rules/repo-required.js";
 import { rule as requiredSettings } from "./rules/required-settings.js";
 import { rule as stopRequired } from "./rules/stop-required.js";
-import { rule as undeclaredVariable } from "./rules/undeclared-variable.js";
+import { rule as variableKind } from "./rules/variable-kind.js";
 import { rule as variableNames } from "./rules/variable-names.js";
 
 export type ValidationError = {
@@ -49,10 +48,9 @@ export const rules = [
   branchVariable,
   branchValue,
   handoffs,
-  undeclaredVariable,
+  variableKind,
   variableNames,
   repoRequired,
-  agentTools,
   oneStart,
   stopRequired,
 ] satisfies readonly Rule[];

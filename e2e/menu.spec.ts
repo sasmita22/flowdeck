@@ -36,21 +36,14 @@ const twoAgents = () =>
     readFileSync(new URL("../test/fixtures/app-run-two-agents.json", import.meta.url), "utf8"),
   ) as unknown;
 
-const withConnectors = (connectors: string[]) => {
-  const base = onMainFlow([agent("p1")], []);
-  return { ...base, session: { ...base.session, connectors } };
-};
-
-const handingOff = (connectors: string[]) => {
-  const base = onMainFlow(
+const handingOff = () =>
+  onMainFlow(
     [
       agent("p1", { settings: { writes: ["plan.md"] } }),
       agent("p2", { settings: { given: ["plan.md"] } }),
     ],
     [thenWire("p1", "p2")],
   );
-  return { ...base, session: { ...base.session, connectors } };
-};
 
 const launch = async () => {
   launched = await launchWithFakeClaude({
@@ -238,7 +231,7 @@ const confirmBuild = async (window: Page, name: string) => {
 
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
   const testInfo = test.info();
-  const planner = seedBlueprint(home, "Planner", handingOff(["slack"]), repo.path);
+  const planner = seedBlueprint(home, "Planner", handingOff(), repo.path);
   seedBlueprint(home, "Agents", twoAgents(), repo.path);
   const target = await launch();
   const { window } = target;
@@ -249,7 +242,6 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await confirmBuild(window, "plan-it");
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
-  await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText('"slack"');
   const agents = window.getByTestId(pageTestIds.buildFolder("plugin/agents"));
   const templates = window.getByTestId(pageTestIds.buildFolder("plugin/templates"));
   await expect(agents).toHaveText("Agents");
@@ -395,30 +387,23 @@ test("Run again on a finished run runs the same build, so Builds keeps one card 
   ]);
 });
 
-test("Doctor shows an installed connector and a missing one with its fix, and no secret", async () => {
+test("Doctor lists the installed connector with its settings, no secret, and no Needed by", async () => {
   const testInfo = test.info();
-  seedBlueprint(home, "Notifier", withConnectors(["slack", "linear"]), repo.path);
+  seedBlueprint(home, "Notifier", onMainFlow([agent("p1")], []), repo.path);
   const target = await launch();
   const { window } = target;
 
   await window.getByTestId(controlTestIds.back).click();
   await window.getByTestId("menu-doctor").click();
 
-  const slack = window.getByTestId(pageTestIds.doctorNeeded("slack"));
-  const linear = window.getByTestId(pageTestIds.doctorNeeded("linear"));
+  const slack = window.getByTestId(pageTestIds.doctorInstalled("slack"));
   await expect(slack).toHaveAttribute("data-status", "ok");
   await expect(slack).toContainText("Installed");
   await expect(slack).toContainText("SLACK_TOKEN: set");
-  await expect(linear).toHaveAttribute("data-status", "missing");
-  await expect(linear).toContainText("Not installed");
-  await expect(window.getByTestId(pageTestIds.doctorFix("linear"))).toHaveText(
-    "Add it for your user with claude mcp add --scope user linear …, then build again.",
-  );
-  await expect(window.getByTestId(pageTestIds.doctorFix("linear")).locator("code")).toHaveText(
-    "claude mcp add --scope user linear …",
-  );
-  await expect(window.getByTestId(pageTestIds.doctorInstalled("slack"))).toBeVisible();
   await expect(window.locator('[data-testid^="doctor-installed-"]')).toHaveCount(1);
+  await expect(window.getByRole("heading", { name: "Installed on this Mac" })).toBeVisible();
+  await expect(window.locator("body")).not.toContainText("Needed by");
+  await expect(window.locator('[data-testid^="doctor-needed-"]')).toHaveCount(0);
   await expect(window.locator("body")).not.toContainText(secret);
   await shot(target, testInfo, "doctor");
 });

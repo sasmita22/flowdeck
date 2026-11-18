@@ -29,7 +29,7 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import * as builders from "../../fixtures/flow-builders.js";
-import { budget as budgetWait, permission as permissionWait } from "../../fixtures/waits.js";
+import { permission as permissionWait } from "../../fixtures/waits.js";
 
 const hash = "abc123";
 const prefix = "fix-login";
@@ -64,11 +64,9 @@ function harness(
     stop?: StopTiming;
     waiter?: FakeWaiter;
     auto?: boolean;
-    flags?: Record<string, boolean>;
     replies?: (string | undefined)[];
     permissions?: FakePermissionSource;
     usage?: FakeUsageSource;
-    budget?: number;
     files?: FakeFileSystem;
   } = {},
 ) {
@@ -113,10 +111,8 @@ function harness(
     events,
     waiter: options.waiter ?? new FakeWaiter([]),
     ...(options.auto === undefined ? {} : { auto: options.auto }),
-    ...(options.flags === undefined ? {} : { flags: options.flags }),
     ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
     ...(options.usage === undefined ? {} : { usage: options.usage }),
-    ...(options.budget === undefined ? {} : { budget: options.budget }),
     files,
     onChange: (line) => lines.push(line),
     cwd,
@@ -2145,328 +2141,34 @@ describe("Runner permission requests", () => {
   });
 });
 
-describe("Runner budget", () => {
+describe("Runner spend", () => {
   const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
-  const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
-  const eventsOf = (store: FakeStore, nodeId: string) =>
-    store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
-  const kindsOf = (store: FakeStore, nodeId: string) =>
-    eventsOf(store, nodeId).map((event) => event.kind);
-  const spent = (outputTokens: number): UsageEntry[] => [
+  const hugeSpend: UsageEntry[] = [
     {
       messageId: "m1",
       model: "claude-opus-5-5",
       inputTokens: 0,
-      outputTokens,
+      outputTokens: 60_000_000,
       cacheWrite5mTokens: 0,
       cacheWrite1hTokens: 0,
       cacheReadTokens: 0,
     },
   ];
-  const dollars120 = 60_000;
-  const twoAgents = manifest(agent("n1"), agent("n2"));
-  const stop: WaitReply = { decision: "stop", reason: "too much" };
 
-  function spendAfterFirstSend(options: { waiter: FakeWaiter; budget?: number; tokens?: number }) {
-    const usage = new FakeUsageSource();
-    const h = harness({
-      waiter: options.waiter,
-      usage,
-      ...(options.budget === undefined ? {} : { budget: options.budget }),
-    });
-    const send = h.deps.prompts.sendPrompt;
-    h.deps.prompts = {
-      interrupt: async () => undefined,
-      sendPrompt: async (text) => {
-        await send(text);
-        usage.setEntries(sessionId, spent(options.tokens ?? dollars120));
-      },
-    };
-    return { ...h, usage };
-  }
-
-  it("asks with the spend before sending the next agent once spend passes the budget", async () => {
-    let resolve: (reply: WaitReply) => void = () => undefined;
-    const waiter = new FakeWaiter([new Promise<WaitReply>((r) => (resolve = r))]);
-    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
-
-    const running = runOn(deps, twoAgents);
-    await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
-
-    expect(waiter.calls).toEqual([budgetWait]);
-    expect(sends(calls)).toEqual([turnOf("n1")]);
-    expect(kindsOf(deps.store, "n2")).not.toContain("sent");
-    resolve(stop);
-    await running;
-  });
-
-  it("sends the paused node once after a raise, without restarting the run", async () => {
-    const waiter = new FakeWaiter([{ decision: "raise", budget: 2 }]);
-    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
-
-    const result = await runOn(deps, twoAgents);
-
-    expect(result.outcome).toBe("done");
-    expect(sends(calls)).toEqual([turnOf("n1"), turnOf("n2")]);
-    expect(kindsOf(deps.store, "n1").filter((kind) => kind === "sent")).toHaveLength(1);
-    expect(eventsOf(deps.store, "n2")).toMatchObject([
-      { kind: "budget", payload: { step: "paused", spend: 1.2, budget: 1 } },
-      { kind: "budget", payload: { step: "raised", budget: 2 } },
-      { kind: "sent" },
-      { kind: "done" },
-    ]);
-  });
-
-  it("pauses when the spend equals the budget", async () => {
-    const waiter = new FakeWaiter([stop]);
-    const { deps } = spendAfterFirstSend({ waiter, budget: 1, tokens: 50_000 });
-
-    await runOn(deps, twoAgents);
-
-    expect(waiter.calls).toEqual([{ ...budgetWait, spend: 1 }]);
-  });
-
-  it("does not wait while the spend is below the budget", async () => {
+  it("never pauses for spend, however large, and records no budget event", async () => {
     const waiter = new FakeWaiter([]);
-    const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1, tokens: 49_500 });
+    const usage = new FakeUsageSource();
+    usage.setEntries(sessionId, hugeSpend);
+    const { deps, calls } = harness({ waiter, usage });
+    const staleBudget = { ...deps, budget: 1 } as TestDeps;
 
-    const result = await runOn(deps, twoAgents);
+    const result = await runOn(staleBudget, manifest(agent("n1"), agent("n2")));
 
     expect(waiter.calls).toEqual([]);
     expect(result.outcome).toBe("done");
-    expect(sends(calls)).toHaveLength(2);
-  });
-
-  it("never reads usage without a budget", async () => {
-    const waiter = new FakeWaiter([]);
-    const { deps, usage } = spendAfterFirstSend({ waiter });
-
-    const result = await runOn(deps, twoAgents);
-
-    expect(usage.calls).toEqual([]);
-    expect(result.outcome).toBe("done");
-  });
-
-  it("checks a loop body agent before its send", async () => {
-    const waiter = new FakeWaiter([stop]);
-    const usage = new FakeUsageSource();
-    usage.setEntries(sessionId, spent(dollars120));
-    const { deps, calls } = harness({ waiter, usage, budget: 1 });
-    const loop = node("l1", "loop", { condition: "no issues left", cap: 3, onCap: "fail" });
-
-    const result = await runOn(deps, manifest(loop, { ...agent("r1"), parent: "l1" }));
-
-    expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "r1" }]);
-    expect(sends(calls)).toEqual([]);
-    expect(result.outcome).toBe("failed");
-  });
-
-  it("still waits under auto", async () => {
-    const waiter = new FakeWaiter([stop]);
-    const usage = new FakeUsageSource();
-    usage.setEntries(sessionId, spent(dollars120));
-    const { deps } = harness({ waiter, usage, budget: 1, auto: true });
-
-    await runOn(deps, manifest(agent("n1")));
-
-    expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "n1" }]);
-  });
-
-  it.each<WaitReply>([stop, { decision: "closed" }])(
-    "fails the run at the paused node on $decision, leaving it waiting",
-    async (reply) => {
-      const waiter = new FakeWaiter([reply]);
-      const { deps, calls } = spendAfterFirstSend({ waiter, budget: 1 });
-
-      const result = await runOn(deps, twoAgents);
-
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
-      expect(result.states).toEqual({ n1: "done", n2: "waiting" });
-      expect(sends(calls)).toEqual([turnOf("n1")]);
-      expect(eventsOf(deps.store, "n2").at(-1)).toMatchObject({
-        kind: "budget",
-        payload: { step: "stopped" },
-      });
-    },
-  );
-
-  describe("after a turn ends", () => {
-    const message = (messageId: string, outputTokens: number, text?: string): UsageEntry => ({
-      model: "claude-opus-5-5",
-      inputTokens: 0,
-      outputTokens,
-      cacheWrite5mTokens: 0,
-      cacheWrite1hTokens: 0,
-      cacheReadTokens: 0,
-      messageId,
-      ...(text === undefined ? {} : { text }),
-    });
-
-    function landingLate(options: {
-      before?: UsageEntry[];
-      stale: UsageEntry[];
-      landed: UsageEntry[];
-      settleMs?: number;
-      reply?: string;
-    }) {
-      const waiter = new FakeWaiter([stop]);
-      const usage = new FakeUsageSource();
-      usage.setEntries(sessionId, options.before ?? []);
-      const replies = [options.reply ?? "OK", "DONE."];
-      const h = harness({ waiter, usage, budget: 1, replies });
-      const send = h.deps.prompts.sendPrompt;
-      let sent = 0;
-      h.deps.prompts = {
-        interrupt: async () => undefined,
-        sendPrompt: async (text) => {
-          await send(text);
-          if (sent++ > 0) return;
-          usage.setEntries(sessionId, options.landed);
-          usage.queueReads(sessionId, options.stale);
-        },
-      };
-      if (options.settleMs !== undefined) h.deps.usageSettleMs = options.settleMs;
-      return { ...h, waiter };
-    }
-
-    it("waits for the finished turn's usage before checking the budget", async () => {
-      const { deps, calls, waiter } = landingLate({
-        stale: [],
-        landed: [message("m1", dollars120, "OK")],
-      });
-
-      await runOn(deps, twoAgents);
-
-      expect(waiter.calls).toEqual([budgetWait]);
-      expect(sends(calls)).toEqual([turnOf("n1")]);
-      expect(kindsOf(deps.store, "n2")).not.toContain("sent");
-    });
-
-    it.each([
-      { reply: "OK", text: "OK" },
-      { reply: "OK\n", text: " OK" },
-    ])(
-      "carries on once the Stop's message $reply lands below the budget as $text",
-      async ({ reply, text }) => {
-        const { deps, calls, waiter } = landingLate({
-          stale: [],
-          landed: [message("m1", 1_000, text)],
-          settleMs: 60_000,
-          reply,
-        });
-
-        const result = await runOn(deps, twoAgents);
-
-        expect(result.outcome).toBe("done");
-        expect(waiter.calls).toEqual([]);
-        expect(sends(calls)).toHaveLength(2);
-      },
-    );
-
-    it("waits for the message the Stop names, not an earlier one of the same turn", async () => {
-      const toolUse = message("m1", 0);
-      const { deps, waiter } = landingLate({
-        stale: [toolUse],
-        landed: [toolUse, message("m2", dollars120, "OK")],
-      });
-
-      await runOn(deps, twoAgents);
-
-      expect(waiter.calls).toEqual([budgetWait]);
-    });
-
-    it("does not take a matching message from before the send for the turn's", async () => {
-      const earlier = message("m0", 0, "OK");
-      const { deps, waiter } = landingLate({
-        before: [earlier],
-        stale: [earlier],
-        landed: [earlier, message("m1", dollars120, "OK")],
-      });
-
-      await runOn(deps, twoAgents);
-
-      expect(waiter.calls).toEqual([budgetWait]);
-    });
-
-    it("waits for the Stop's message after resuming into a turn sent before", async () => {
-      const waiter = new FakeWaiter([stop]);
-      const usage = new FakeUsageSource();
-      usage.setEntries(sessionId, [message("m1", dollars120, "OK")]);
-      usage.queueReads(sessionId, []);
-      const { deps, calls, events } = harness({ waiter, usage, budget: 1 });
-      const { id } = deps.store.createRun(newRun(twoAgents));
-      deps.store.append(id, "n1", { kind: "sent" });
-
-      const running = new Runner({ ...deps, runId: id }).run(twoAgents, {
-        actions: { n1: { kind: "wait" } },
-      });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      events.publish({ kind: "Stop", sessionId, payload: { last_assistant_message: "OK" } });
-      await running;
-
-      expect(waiter.calls).toEqual([budgetWait]);
-      expect(sends(calls)).toEqual([]);
-      expect(kindsOf(deps.store, "n2")).not.toContain("sent");
-    });
-
-    it("reports the budget reached when a read missing the Stop's message is already over it", async () => {
-      const toolUse = message("m1", dollars120);
-      const { deps, waiter, lines } = landingLate({
-        stale: [toolUse],
-        landed: [toolUse],
-        settleMs: 100,
-      });
-
-      await runOn(deps, twoAgents);
-
-      expect(waiter.calls).toEqual([budgetWait]);
-      expect(eventsOf(deps.store, "n2")[0]).toEqual(
-        expect.objectContaining({
-          kind: "budget",
-          payload: { step: "paused", spend: 1.2, budget: 1 },
-        }),
-      );
-      expect(lines).toContain("n2 failed: budget reached: spent $1.20 of $1.00");
-    });
-
-    it("pauses with the spend it read when the turn's usage never lands", async () => {
-      const { deps, calls, waiter, lines } = landingLate({
-        stale: [],
-        landed: [],
-        settleMs: 100,
-      });
-
-      await runOn(deps, twoAgents);
-
-      expect(waiter.calls).toEqual([{ ...budgetWait, spend: 0, unconfirmed: true }]);
-      expect(sends(calls)).toEqual([turnOf("n1")]);
-      expect(eventsOf(deps.store, "n2")[0]).toMatchObject({
-        kind: "budget",
-        payload: { step: "paused", spend: 0, budget: 1, unconfirmed: true },
-      });
-      expect(lines).toContain("n2 paused: spend not confirmed yet, last read $0.0000 of $1.00");
-      expect(lines).toContain(
-        "n2 failed: spend not confirmed: last read $0.0000 of $1.00 when the budget was checked",
-      );
-    });
-  });
-
-  it("pauses again on resume of a run paused at its budget", async () => {
-    const waiter = new FakeWaiter([stop]);
-    const usage = new FakeUsageSource();
-    usage.setEntries(sessionId, spent(dollars120));
-    const { deps, calls } = harness({ waiter, usage, budget: 1 });
-    const { id } = deps.store.createRun(newRun(twoAgents));
-    const paused = { kind: "budget", payload: { step: "paused", spend: 1.2, budget: 1 } };
-    deps.store.append(id, "n1", { kind: "sent" });
-    deps.store.append(id, "n1", { kind: "done" });
-    deps.store.append(id, "n2", paused as RunEvent);
-
-    const result = await new Runner({ ...deps, runId: id }).run(twoAgents, { actions: {} });
-
-    expect(waiter.calls).toEqual([budgetWait]);
-    expect(sends(calls)).toEqual([]);
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "n2" });
+    expect(sends(calls)).toEqual([turnOf("n1"), turnOf("n2")]);
+    const runId = deps.store.runs[0]?.id ?? "";
+    expect(deps.store.events(runId).map((event) => event.kind)).not.toContain("budget");
   });
 });
 
@@ -2538,7 +2240,6 @@ describe("Runner parallel section", () => {
       waiter?: FakeWaiter;
       permissions?: FakePermissionSource;
       usage?: FakeUsageSource;
-      budget?: number;
       turnTimeoutMs?: number;
     } = {},
   ) {
@@ -2595,7 +2296,6 @@ describe("Runner parallel section", () => {
       files: new FakeFileSystem(),
       ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
       ...(options.usage === undefined ? {} : { usage: options.usage }),
-      ...(options.budget === undefined ? {} : { budget: options.budget }),
       onChange: (line) => lines.push(line),
       cwd,
       sessionId,
@@ -3044,57 +2744,6 @@ describe("Runner parallel section", () => {
     expect(result.states).toMatchObject({ a1: "done", a2: "done", a3: "done", j: "done" });
   });
 
-  describe("budget", () => {
-    const overBudget = (): UsageEntry[] => [
-      {
-        messageId: "m1",
-        model: "claude-opus-5-5",
-        inputTokens: 0,
-        outputTokens: 60_000,
-        cacheWrite5mTokens: 0,
-        cacheWrite1hTokens: 0,
-        cacheReadTokens: 0,
-      },
-    ];
-
-    it("halts at the fork before anything is sent when the budget is reached", async () => {
-      const usage = new FakeUsageSource();
-      usage.setEntries(sessionId, overBudget());
-      const waiter = new FakeWaiter([{ decision: "stop", reason: "too much" }]);
-      const h = sectionHarness({ waiter, usage, budget: 1 });
-
-      const result = await runOn(h.deps, sectionManifest());
-
-      expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "f" }]);
-      expect(sends(h.calls)).toEqual([]);
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "f" });
-      for (const id of [...branchIds, "j"]) expect(kindsOf(h.deps.store, id)).toEqual([]);
-    });
-
-    it("checks the budget once, for the fork, and never for a branch", async () => {
-      const usage = new FakeUsageSource();
-      usage.setEntries(sessionId, overBudget());
-      const waiter = new FakeWaiter([{ decision: "raise", budget: 2 }]);
-      const h = sectionHarness({
-        waiter,
-        usage,
-        budget: 1,
-        onFork: (s) => {
-          for (const id of branchIds) s.launch(id);
-          for (const id of branchIds) s.subagentStop(id, `${id} reply`);
-          s.stop("All done.");
-        },
-      });
-
-      const result = await runOn(h.deps, sectionManifest({ after: false }));
-
-      expect(result.outcome).toBe("done");
-      expect(waiter.calls).toEqual([{ ...budgetWait, nodeId: "f" }]);
-      expect(usage.calls).toEqual([sessionId]);
-      for (const id of branchIds) expect(kindsOf(h.deps.store, id)).not.toContain("budget");
-    });
-  });
-
   describe("permission requests", () => {
     it("files a request while the branches run under the fork's id", async () => {
       const waiter = new FakeWaiter([approve]);
@@ -3411,8 +3060,7 @@ describe("Runner parallel section", () => {
         },
       ]);
       const waiter = new FakeWaiter([]);
-      const h = sectionHarness({ waiter, usage, budget: 100 });
-      h.deps.usageSettleMs = 50;
+      const h = sectionHarness({ waiter, usage });
       h.deps.compactions = usage;
       const send = h.deps.prompts.sendPrompt;
       h.deps.prompts = {
@@ -3551,8 +3199,7 @@ describe("Runner branch on a yes/no variable", () => {
   const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
   const ran = (calls: string[]) => sends(calls).map((call) => /NODE ([^\\"]+)/.exec(call)?.[1]);
   const step = (id: string) => builders.agent(id);
-  const start = (e2e: boolean) =>
-    builders.trigger("start", { settings: { inputs: [], flags: { e2e } } });
+  const start = () => builders.trigger("start");
   const yes = (to: string) => builders.wire("b", "yes", to, "in");
   const no = (to: string) => builders.wire("b", "no", to, "in");
   const toManifest = (
@@ -3561,15 +3208,7 @@ describe("Runner branch on a yes/no variable", () => {
     chosen: Record<string, boolean> = {},
   ): RunnableManifest => {
     const input = builders.flow(nodes, wires);
-    const defaults = Object.fromEntries(
-      input.session.buildConfig.variables.flatMap((variable) =>
-        variable.default === undefined ? [] : [[variable.name, variable.default]],
-      ),
-    );
-    const { manifest: lowered } = lower(input, {
-      name: prefix,
-      values: { ...defaults, ...chosen },
-    });
+    const { manifest: lowered } = lower(input, { name: prefix, values: chosen });
     return {
       hash,
       prefix: lowered.prefix,
@@ -3579,8 +3218,8 @@ describe("Runner branch on a yes/no variable", () => {
       wires: lowered.wires,
     };
   };
-  const twoPathNodes = (e2e = true) => [
-    start(e2e),
+  const twoPathNodes = () => [
+    start(),
     builders.branch("b", "e2e"),
     step("e2e"),
     step("quick"),
@@ -3629,20 +3268,11 @@ describe("Runner branch on a yes/no variable", () => {
     });
   });
 
-  it("keeps the build's value over a run flag of the same name", async () => {
-    const { deps, calls } = harness({ flags: { e2e: true } });
-
-    const result = await runOn(deps, twoPaths({ e2e: false }));
-
-    expect(ran(calls)).toEqual(["quick", "finish"]);
-    expect(result.states).toMatchObject({ b: "done", e2e: "skipped" });
-  });
-
   it("follows the build value for a Branch on proceed-e2e that names variable mode", async () => {
     const { deps, calls } = harness();
     const m = toManifest(
       [
-        start(true),
+        start(),
         {
           ...builders.branch("b", ""),
           settings: { decidedBy: "variable", variable: "proceed-e2e" },
@@ -3857,7 +3487,7 @@ describe("Runner branch on a yes/no variable", () => {
     const writtenOnOneArm = (e2e: boolean) =>
       toManifest(
         [
-          start(e2e),
+          start(),
           builders.branch("b", "e2e"),
           writer("w1", "First"),
           writer("w2", "Second"),
@@ -3870,11 +3500,12 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("w1", "w2"),
           builders.thenWire("w2", "build"),
         ],
+        { e2e },
       );
     const writtenOnEachArm = (e2e: boolean) =>
       toManifest(
         [
-          start(e2e),
+          start(),
           builders.branch("b", "e2e"),
           writer("w1", "First"),
           writer("w2", "Second"),
@@ -3887,6 +3518,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("w1", "build"),
           builders.thenWire("w2", "build"),
         ],
+        { e2e },
       );
 
     it("names both writers when neither ran on the path taken", async () => {
@@ -3922,39 +3554,6 @@ describe("Runner branch on a yes/no variable", () => {
     });
   });
 
-  describe("in a hash-named build, whose manifest has Trigger flags and no values", () => {
-    const oldManifest = (e2e: boolean): RunnableManifest => ({
-      hash,
-      prefix: hash,
-      nodes: [
-        node("start", "trigger", { inputs: [], flags: { e2e } }),
-        node("b", "branch", { flag: "e2e" }),
-        agent("e2e"),
-        agent("quick"),
-        agent("finish"),
-      ],
-      wires: twoPathWires as NonNullable<RunnableManifest["wires"]>,
-    });
-
-    it("takes the Trigger flag's default", async () => {
-      const { deps, calls } = harness();
-
-      const result = await runOn(deps, oldManifest(true));
-
-      expect(result.outcome).toBe("done");
-      expect(ran(calls)).toEqual(["e2e", "finish"]);
-    });
-
-    it("takes the run's flag over the Trigger default", async () => {
-      const { deps, calls } = harness({ flags: { e2e: false } });
-
-      const result = await runOn(deps, oldManifest(true));
-
-      expect(result.outcome).toBe("done");
-      expect(ran(calls)).toEqual(["quick", "finish"]);
-    });
-  });
-
   it("writes the Branch's running and done and every skip in one batch", async () => {
     const { deps } = harness();
     const spy = vi.spyOn(deps.store, "appendAll");
@@ -3962,13 +3561,14 @@ describe("Runner branch on a yes/no variable", () => {
     await runOn(
       deps,
       toManifest(
-        [start(true), builders.branch("b", "e2e"), step("e2e"), step("quick"), step("lint")],
+        [start(), builders.branch("b", "e2e"), step("e2e"), step("quick"), step("lint")],
         [
           builders.thenWire("start", "b"),
           yes("e2e"),
           no("quick"),
           builders.thenWire("quick", "lint"),
         ],
+        { e2e: true },
       ),
     );
 
@@ -3991,7 +3591,7 @@ describe("Runner branch on a yes/no variable", () => {
         deps,
         toManifest(
           [
-            start(true),
+            start(),
             builders.branch("b", "e2e"),
             step("e2e"),
             container,
@@ -4005,6 +3605,7 @@ describe("Runner branch on a yes/no variable", () => {
             builders.thenWire("e2e", "finish"),
             builders.thenWire("body", "finish"),
           ],
+          { e2e: true },
         ),
       );
 
@@ -4026,7 +3627,7 @@ describe("Runner branch on a yes/no variable", () => {
         deps,
         toManifest(
           [
-            start(true),
+            start(),
             builders.branch("b", "e2e"),
             step("e2e"),
             container,
@@ -4042,6 +3643,7 @@ describe("Runner branch on a yes/no variable", () => {
             builders.thenWire("e2e", "finish"),
             builders.thenWire("check", "finish"),
           ],
+          { e2e: true },
         ),
       );
 
@@ -4063,7 +3665,7 @@ describe("Runner branch on a yes/no variable", () => {
       deps,
       toManifest(
         [
-          start(true),
+          start(),
           builders.branch("b", "e2e"),
           step("e2e"),
           step("prep"),
@@ -4082,6 +3684,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("e2e", "finish"),
           builders.thenWire("check", "finish"),
         ],
+        { e2e: true },
       ),
     );
 
@@ -4103,7 +3706,7 @@ describe("Runner branch on a yes/no variable", () => {
       deps,
       toManifest(
         [
-          start(true),
+          start(),
           builders.branch("b", "e2e"),
           step("e2e"),
           builders.fork("f"),
@@ -4123,6 +3726,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("e2e", "finish"),
           builders.thenWire("j", "finish"),
         ],
+        { e2e: true },
       ),
     );
 
@@ -4144,7 +3748,7 @@ describe("Runner branch on a yes/no variable", () => {
       deps,
       toManifest(
         [
-          builders.trigger("start", { settings: { inputs: [], flags: { one: true, two: true } } }),
+          builders.trigger("start"),
           builders.branch("b1", "one"),
           builders.branch("b2", "two"),
           step("p"),
@@ -4162,6 +3766,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("q", "end"),
           builders.thenWire("X", "end"),
         ],
+        { one: true, two: true },
       ),
     );
 
@@ -4180,7 +3785,7 @@ describe("Runner branch on a yes/no variable", () => {
       deps,
       toManifest(
         [
-          start(true),
+          start(),
           builders.branch("b", "e2e"),
           step("y"),
           builders.loop("review", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
@@ -4195,6 +3800,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("fix", "check"),
           builders.thenWire("check", "z"),
         ],
+        { e2e: true },
       ),
     );
 
@@ -4207,7 +3813,7 @@ describe("Runner branch on a yes/no variable", () => {
     const meeting = () =>
       toManifest(
         [
-          builders.trigger("start", { settings: { inputs: [], flags: { one: true, two: true } } }),
+          builders.trigger("start"),
           builders.branch("b1", "one"),
           builders.branch("b2", "two"),
           step("q"),
@@ -4223,6 +3829,7 @@ describe("Runner branch on a yes/no variable", () => {
           builders.thenWire("q", "end"),
           builders.thenWire("Z", "end"),
         ],
+        { one: true, two: true },
       );
 
     it("skips the node both paths not taken lead to", async () => {

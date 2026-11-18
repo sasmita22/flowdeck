@@ -47,14 +47,14 @@ export function workspaceClaudeMd(
 export const reportPath = "build-report.json";
 
 export function emit(lowered: ReturnType<typeof lower>, target: EmitTarget): BuildFile[] {
-  const { session, prefix, values, nodes } = lowered.manifest;
+  const { prefix, values, nodes } = lowered.manifest;
+  const { permissionMode } = lowered.manifest.settings;
   const scope = { build: prefix, repo: repoFolder(target.repo), workspace: target.workspace ?? "" };
   const settings = {
     env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
-    permissions: { allow: session.allowedTools, defaultMode: session.permissionMode },
-    ...(session.permissionMode === "bypassPermissions"
-      ? { skipDangerousModePermissionPrompt: true }
-      : {}),
+    permissions: { defaultMode: permissionMode },
+    enableAllProjectMcpServers: true,
+    ...(permissionMode === "bypassPermissions" ? { skipDangerousModePermissionPrompt: true } : {}),
   };
   const files: BuildFile[] = [
     ...lowered.nodeFiles,

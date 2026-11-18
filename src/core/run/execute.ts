@@ -23,7 +23,6 @@ export type OpenSessionOptions = {
   layout: VerifyLayout;
   claudeSessionId: string;
   hooks: HookPaths;
-  mcpConfigPath?: string;
   attach?: boolean;
   resume?: boolean;
 };
@@ -66,7 +65,6 @@ export type Execution = {
   manifest: LoadedBuild;
   cwd: string;
   auto: boolean;
-  flags?: Record<string, boolean>;
   socketPath: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
@@ -123,9 +121,6 @@ export async function loadBuild(
     },
   };
 }
-
-export const runMcpConfigPath = (home: string, runId: string): string =>
-  `${home}/runs/${runId}/mcp.json`;
 
 const checksACondition = (node: LoadedBuild["nodes"][number]) =>
   node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
@@ -269,7 +264,7 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
-  const { store, runId, manifest, cwd, auto, flags = {}, socketPath } = execution;
+  const { store, runId, manifest, cwd, auto, socketPath } = execution;
   const events = await deps.startEvents(socketPath);
   let opened: OpenedSession | undefined;
   let stopping: Promise<void> | undefined;
@@ -325,7 +320,6 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       waiter: deps.waiter,
       files: deps.fs,
       auto,
-      flags,
       onChange: (line) => deps.onChange(line),
       cwd,
       sessionId: opened.sessionId,
@@ -335,7 +329,6 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       ...(events.permissions === undefined ? {} : { permissions: events.permissions }),
       ...(deps.usage === undefined ? {} : { usage: deps.usage }),
       ...(deps.compactions === undefined ? {} : { compactions: deps.compactions }),
-      ...(manifest.session.budget === undefined ? {} : { budget: manifest.session.budget }),
     })
       .run(manifest, { actions })
       .then((result) => (result.outcome === "done" ? 0 : 1));

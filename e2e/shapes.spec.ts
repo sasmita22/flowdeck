@@ -1,5 +1,4 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,8 +72,8 @@ const forEachShapes = () =>
     [thenWire("first", "second")],
   );
 
-const branchShapes = () => {
-  const drawn = flow(
+const branchShapes = () =>
+  flow(
     [
       at(trigger("trigger"), 10, 10),
       at({ ...branch("branch", "e2e"), label: "E2E?" }, 220, 10),
@@ -87,17 +86,6 @@ const branchShapes = () => {
       wire("branch", "no", "no", "in"),
     ],
   );
-  return {
-    ...drawn,
-    session: {
-      ...drawn.session,
-      buildConfig: {
-        ...drawn.session.buildConfig,
-        variables: [{ name: "e2e", kind: "yesno" as const, default: true }],
-      },
-    },
-  };
-};
 
 const pointsOf = async (polygon: Locator) =>
   ((await polygon.getAttribute("points")) ?? "")
@@ -181,34 +169,6 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
     await circleShot(window, "trigger", `${colorScheme}-trigger.png`);
   });
 }
-
-test("An old blueprint with Trigger and Output shows Start and Stop", async () => {
-  seedFlow(
-    home,
-    flow(
-      [at(trigger("trigger"), 40, 40), at(output("output"), 240, 40)],
-      [thenWire("trigger", "output")],
-    ),
-  );
-  const db = new Database(join(home, "flowdeck.db"));
-  try {
-    const { sql: lock } = db
-      .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'nodes_no_update'")
-      .get() as { sql: string };
-    db.exec("DROP TRIGGER nodes_no_update");
-    const relabel = db.prepare("UPDATE nodes SET label = ? WHERE type = ?");
-    expect(relabel.run("Trigger", "trigger").changes).toBe(1);
-    expect(relabel.run("Output", "output").changes).toBe(1);
-    db.exec(lock);
-  } finally {
-    db.close();
-  }
-  launched = await launchOnCanvas({ home, logPath: test.info().outputPath("app.log") });
-  const { window } = launched;
-
-  await expect(window.getByTestId("node-trigger")).toHaveText("Start");
-  await expect(window.getByTestId("node-output")).toHaveText("Stop");
-});
 
 for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
   test(`Parallel start and end draw as tall bars in the ${colorScheme} theme`, async () => {

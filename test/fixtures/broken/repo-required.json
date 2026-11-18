@@ -21,8 +21,7 @@
       "settings": {
         "role": "implementer",
         "instructions": "Implement the ticket.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -65,17 +64,11 @@
   ],
   "session": {
     "name": "main",
-    "buildConfig": {
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        }
-      ]
-    },
-    "model": "sonnet",
-    "allowedTools": [],
-    "permissionMode": "default",
-    "connectors": []
+    "buildConfig": {},
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

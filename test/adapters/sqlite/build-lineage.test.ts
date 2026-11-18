@@ -126,6 +126,8 @@ describe("build lineage", () => {
     return dir;
   };
 
+  const connectTo021 = async () => connect(await stage("to-021", "022"));
+
   beforeEach(async () => {
     folder = await mkdtemp(join(tmpdir(), "fd-lineage-"));
     path = join(folder, "flowdeck.db");
@@ -502,7 +504,7 @@ describe("build lineage", () => {
                    ('r-b', '/fd/builds/h1', '{}', 'running', 't2', 'h1');
         `);
         db.close();
-        return connect();
+        return connectTo021();
       };
 
       it("keeps both running after the migration", async () => {
@@ -662,7 +664,7 @@ describe("build lineage", () => {
       insertBuild(db, { id: "b1c2d3e4f5", name: "fix-login" });
       insertBuild(db, { id: "old", name: null, nodes: [] });
       db.close();
-      return connect();
+      return connectTo021();
     };
 
     const branchOf = (db: Database.Database, id: string) =>
@@ -711,8 +713,17 @@ describe("build lineage", () => {
   describe("migrating a database made before builds had lineage", () => {
     const seedOldDatabase = async () => {
       const db = connect(await stage("to-005", "006"));
-      new SqliteFlowStore({ db, newId: () => "flow-1" }).save(twoNodes(), { name: "Untitled" });
       db.exec(`
+        BEGIN;
+        INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'Untitled', 't');
+        INSERT INTO nodes (flow_id, version, ordinal, id, type, label, x, y, parent, settings)
+          VALUES ('flow-1', 1, 0, 'p1', 'agent', 'p1', 0, 0, NULL, '{}'),
+                 ('flow-1', 1, 1, 's1', 'agent', 's1', 0, 0, NULL, '{}');
+        INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
+          VALUES ('flow-1', 1, 0, 'then', 'p1', 'out', 's1', 'in', NULL);
+        INSERT INTO flow_versions (flow_id, version, session, notes, saved_at)
+          VALUES ('flow-1', 1, '{}', '[]', 't');
+        COMMIT;
         INSERT INTO builds (hash, dir, created_at) VALUES ('old', '/fd/builds/old', 5);
         INSERT INTO runs (id, build_dir, inputs, status, created_at, build_hash)
           VALUES ('r1', '/fd/builds/old', '{}', 'done', 't1', 'old'),
@@ -743,7 +754,7 @@ describe("build lineage", () => {
     it("keeps every old row, the old build with its hash as id and nothing else new, the old run with no build", async () => {
       const { tables, before } = await seedOldDatabase();
 
-      const db = connect();
+      const db = await connectTo021();
 
       for (const table of tables) {
         const columns =
@@ -783,7 +794,7 @@ describe("build lineage", () => {
 
     it("still reads the old run, and lets the old build be deleted", async () => {
       await seedOldDatabase();
-      const db = connect();
+      const db = await connectTo021();
       const runs = new SqliteStore({ db });
 
       expect(runs.findRun("r2")).toMatchObject({ id: "r2", status: "running" });
@@ -803,7 +814,7 @@ describe("build lineage", () => {
 
     it("runs a new run of the old build, which has no node rows", async () => {
       await seedOldDatabase();
-      const runs = new SqliteStore({ db: connect() });
+      const runs = new SqliteStore({ db: await connectTo021() });
 
       const run = runs.createRun(newRun({ buildId: "old", buildDir: "/fd/builds/old" }));
 

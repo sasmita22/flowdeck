@@ -1,40 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/variable-names.js";
-import type { BuildConfig } from "../../../../src/core/flow/schema.js";
-import { agent, flow } from "../../../fixtures/flow-builders.js";
+import { agent, branch, onMainFlow, thenWire } from "../../../fixtures/flow-builders.js";
 
-const check = (variables: BuildConfig["variables"]) => {
-  const base = flow([agent("p")], []);
-  return rule.check({ ...base, session: { ...base.session, buildConfig: { variables } } });
-};
+const instructed = (id: string, instructions: string) => agent(id, { settings: { instructions } });
 
 describe("variable-names", () => {
-  it("accepts unique names made of letters, digits, dashes and underscores", () => {
+  it("accepts found names made of letters, digits, dashes and underscores", () => {
     expect(
-      check([
-        { name: "ticket", kind: "text" },
-        { name: "proceed-e2e", kind: "yesno" },
-      ]),
+      rule.check(
+        onMainFlow(
+          [branch("decide", "proceed-e2e"), instructed("plan", "Plan {{ticket}} and {{step_2}}.")],
+          [thenWire("decide", "plan")],
+        ),
+      ),
     ).toEqual([]);
   });
 
-  it.each(["-x", "a b", ""])("reports the bad name %j, naming it", (name) => {
-    const errors = check([
-      { name: "ticket", kind: "text" },
-      { name, kind: "text" },
-    ]);
+  it.each(["a b", "-x", "a.b"])("reports the bad name {{%s}} in an Agent, naming it", (name) => {
+    const errors = rule.check(
+      onMainFlow([instructed("plan", `Plan {{ticket}} and {{${name}}}.`)], []),
+    );
 
     expect(errors.map(({ rule }) => rule)).toEqual(["variable-names"]);
     expect(errors[0]?.message).toContain(`"${name}"`);
   });
 
-  it("reports a name declared twice, naming it", () => {
-    const errors = check([
-      { name: "ticket", kind: "text" },
-      { name: "ticket", kind: "yesno" },
-    ]);
+  it.each(["a b", "-x", "a.b"])("reports the bad Branch variable name %j, naming it", (name) => {
+    const errors = rule.check(onMainFlow([branch("decide", name)], []));
 
     expect(errors.map(({ rule }) => rule)).toEqual(["variable-names"]);
-    expect(errors[0]?.message).toContain("ticket");
+    expect(errors[0]?.message).toContain(`"${name}"`);
   });
 });

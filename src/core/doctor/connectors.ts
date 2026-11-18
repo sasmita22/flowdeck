@@ -9,21 +9,12 @@ const installedSchema = z.object({
   settings: z.array(settingSchema),
 });
 
-const neededSchema = z.object({
-  name: z.string(),
-  status: z.enum(["ok", "missing", "missing-setting"]),
-  settings: z.array(settingSchema),
-  fix: z.string().nullable(),
-});
-
 export const doctorReportSchema = z.object({
   installed: z.array(installedSchema),
-  needed: z.array(neededSchema),
 });
 
 export type ConnectorSetting = z.infer<typeof settingSchema>;
 export type InstalledConnector = z.infer<typeof installedSchema>;
-export type NeededConnector = z.infer<typeof neededSchema>;
 export type DoctorReport = z.infer<typeof doctorReportSchema>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -53,36 +44,13 @@ const describeServer = (name: string, server: McpServer): InstalledConnector => 
   };
 };
 
-const fixFor = (connector: InstalledConnector, configPath: string): string | null => {
-  const empty = connector.settings.filter((setting) => !setting.set).map(({ name }) => name);
-  if (empty.length === 0) return null;
-  return `Fill in ${empty.join(", ")} for "${connector.name}" under "mcpServers" in ${configPath}, then build again.`;
-};
-
-export function diagnoseConnectors(
-  installed: Readonly<Record<string, McpServer>>,
-  needed: readonly string[],
-  configPath: string,
-): DoctorReport {
-  const described = Object.keys(installed)
-    .sort()
-    .flatMap((name) => {
-      const server = installed[name];
-      return server === undefined ? [] : [describeServer(name, server)];
-    });
+export function diagnoseConnectors(installed: Readonly<Record<string, McpServer>>): DoctorReport {
   return {
-    installed: described,
-    needed: needed.map((name): NeededConnector => {
-      const found = described.find((connector) => connector.name === name);
-      if (found === undefined) {
-        return {
-          name,
-          status: "missing",
-          settings: [],
-          fix: `Add it for your user with \`claude mcp add --scope user ${name} …\`, then build again.`,
-        };
-      }
-      return { ...found, fix: fixFor(found, configPath) };
-    }),
+    installed: Object.keys(installed)
+      .sort()
+      .flatMap((name) => {
+        const server = installed[name];
+        return server === undefined ? [] : [describeServer(name, server)];
+      }),
   };
 }

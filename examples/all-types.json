@@ -21,8 +21,7 @@
       "settings": {
         "role": "",
         "instructions": "Write a plan for the ticket.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -37,7 +36,6 @@
         "role": "implementer",
         "instructions": "Implement the plan.",
         "model": "sonnet",
-        "tools": ["Read", "Edit"],
         "given": ["plan.md"],
         "writes": ["implementation.md"]
       }
@@ -63,8 +61,7 @@
       "settings": {
         "role": "reviewer",
         "instructions": "Review the change for correctness.",
-        "model": "sonnet",
-        "tools": ["Read"]
+        "model": "sonnet"
       }
     },
     {
@@ -78,8 +75,7 @@
       "settings": {
         "role": "reviewer",
         "instructions": "Review the change for style.",
-        "model": "sonnet",
-        "tools": ["Read"]
+        "model": "sonnet"
       }
     },
     {
@@ -105,8 +101,7 @@
       "settings": {
         "role": "",
         "instructions": "Run `npm run lint` in the repo and report its exit code.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -188,8 +183,7 @@
       "settings": {
         "role": "",
         "instructions": "Make the tests pass.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -216,8 +210,7 @@
       "settings": {
         "role": "",
         "instructions": "Build this unit.",
-        "model": "sonnet",
-        "tools": []
+        "model": "sonnet"
       }
     },
     {
@@ -415,27 +408,12 @@
   "session": {
     "name": "main",
     "buildConfig": {
-      "base": "main",
-      "variables": [
-        {
-          "name": "ticket",
-          "kind": "text"
-        },
-        {
-          "name": "dryRun",
-          "kind": "yesno",
-          "default": false
-        },
-        {
-          "name": "e2e",
-          "kind": "yesno",
-          "default": true
-        }
-      ]
+      "base": "main"
     },
-    "model": "sonnet",
-    "allowedTools": ["Read", "Edit"],
-    "permissionMode": "default",
-    "connectors": []
+    "model": "sonnet"
+  },
+  "settings": {
+    "buildModel": "sonnet",
+    "permissionMode": "default"
   }
 }

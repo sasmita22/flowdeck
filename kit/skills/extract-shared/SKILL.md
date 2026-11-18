@@ -9,13 +9,12 @@ When several agents need the same procedure, it is written once, as a shared pie
 
 ## Request shared pieces
 
-1. Read `build-report.json` `needs`, `merges`, and `settings.json` `permissions.allow`.
+1. Read `build-report.json` `needs` and `merges`.
 2. Group the `Procedure:` items of every node by `name`. Two items with different names whose `"what"` lists the same steps are one procedure too. Inputs, outputs and tools are never shared.
 3. A procedure is shared when two or more agents need it. Count agents by piece: the nodes of one `merges` entry share a piece, so they count once, and only the first of them goes in `usedBy`.
-4. Leave out of `usedBy` an agent whose file in `plugin/agents/` has a `tools:` line while `permissions.allow` lacks `Skill`: it could not run the piece. If fewer than two agents remain, request nothing for that procedure.
-5. Choose the kind: a skill by default; a command only when the agents' instructions call the procedure a command a person also runs by name.
-6. Name it after the procedure: its `needs` name, in kebab-case. Never the name of a piece in `manifest.json`, and never `run`.
-7. Add one entry to `build-report.json` `shared`:
+4. Choose the kind: a skill by default; a command only when the agents' instructions call the procedure a command a person also runs by name.
+5. Name it after the procedure: its `needs` name, in kebab-case. Never the name of a piece in `manifest.json`, and never `run`.
+6. Add one entry to `build-report.json` `shared`:
 
    `{ "name": "<kebab-case name>", "kind": "skill" | "command", "usedBy": ["<node id>", "<node id>", ...] }`
 
@@ -42,6 +41,5 @@ An agent runs the piece with the `Skill` tool as `<prefix>:<name>`, a command to
 ## Checklist
 
 - [ ] Every `shared` entry is a procedure two or more agents' `needs` hold, with each agent once in `usedBy`.
-- [ ] No agent in `usedBy` lists tools without `Skill` while `permissions.allow` lacks it.
 - [ ] Each entry is a skill unless the instructions call the procedure a command a person runs by name.
 - [ ] A shared piece's steps come from its agents' `needs` items, and every file it names has a path from the repo root.

@@ -175,7 +175,7 @@ describe("an app restart", () => {
   const start = async (handler: EngineHandler, input: Flow) => {
     const { flowId, version } = flows.save({
       ...input,
-      session: { ...input.session, buildConfig: { repo: repo.path, variables: [] } },
+      session: { ...input.session, buildConfig: { repo: repo.path } },
     });
     const name = `build-${++names}`;
     const answered = (await call(handler, "build-version", {
@@ -524,7 +524,7 @@ describe("an app restart", () => {
       const blueprint = onMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
-        session: { ...blueprint.session, buildConfig: { repo: repoPath, variables: [] } },
+        session: { ...blueprint.session, buildConfig: { repo: repoPath } },
       });
       const name = "left-going";
       const answered = (await call(first, "build-version", {
@@ -775,7 +775,7 @@ describe("an app restart", () => {
       const blueprint = onMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save({
         ...blueprint,
-        session: { ...blueprint.session, buildConfig: { repo: repo.path, variables: [] } },
+        session: { ...blueprint.session, buildConfig: { repo: repo.path } },
       });
       const asked = (await call(asking, "build-version", {
         flowId,

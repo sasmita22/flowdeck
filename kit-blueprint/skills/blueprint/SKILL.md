@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, the one-session rule, build configuration and variables, validator rules, and the eleven tools. Read before answering any question about a blueprint or changing one.
+description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, the one-session rule, build configuration, settings and variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
 ---
 
 # Blueprints
@@ -20,25 +20,25 @@ You are working beside the user's Flowdeck canvas. A blueprint is a drawing of m
 
 ## The one-session rule
 
-A blueprint is one session: every node on the canvas runs inside one Claude Code session, one turn after another. The session's settings hold its `model`, its allowed tools, its permission mode and an optional budget, plus the build configuration. Nodes do not get their own session; an Agent node runs as a subagent inside it. The tools cannot change the session's settings except its variables: for the model, allowed tools, permission mode, repository or base, tell the user to open the session settings on the canvas. Connectors are not set in the blueprint: the session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
+A blueprint is one session: every node on the canvas runs inside one Claude Code session, one turn after another. The session's settings hold its `model` and the build configuration, beside the blueprint's settings. Nodes do not get their own session; an Agent node runs as a subagent inside it and can use every tool the session has. The tools cannot change any of these settings: for the model, build model, permission mode, repository or base, tell the user to open the session settings on the canvas. Connectors are not set in the blueprint: the session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
 
 ## Nodes
 
 Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent`, and settings for its type. Settings you leave out when adding a node take the type's defaults.
 
-| Type       | What it does                                                                                                                                                                                 | Settings (default)                                                                                                                                               | Ports                               |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `trigger`  | Start: where the blueprint starts                                                                                                                                                            | none                                                                                                                                                             | out `out` (then)                    |
-| `agent`    | A subagent the session calls                                                                                                                                                                 | `role` (""), `instructions` (""), `model` ("sonnet"), `tools` ([]), `given` and `writes` (optional lists of files), `produces` (optional name of a yes/no value) | in `in`, out `out` (then)           |
-| `gate`     | Stops for the user to look before going on                                                                                                                                                   | `shown` (""), `skippable` (false)                                                                                                                                | in `in`, out `out` (then)           |
-| `ask`      | Asks the user a question                                                                                                                                                                     | `question` (""), `options` ([])                                                                                                                                  | in `in`, out `out` (then)           |
-| `hardstop` | A stop that cannot be skipped                                                                                                                                                                | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                                                                | in `in`, out `out` (then)           |
-| `loop`     | Repeats its body until its condition holds                                                                                                                                                   | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                                                                          | in `in`, out `out` (then)           |
-| `foreach`  | Runs its body once per item of a list file                                                                                                                                                   | `file` ("items.txt"; relative to the session folder, no `..`)                                                                                                    | in `in`, out `out` (then)           |
-| `fork`     | Parallel start                                                                                                                                                                               | none                                                                                                                                                             | in `in`, out `out` (then)           |
-| `join`     | Parallel end                                                                                                                                                                                 | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                                           | in `in`, out `out` (then)           |
-| `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                              | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                                      | in `in`; out `yes`, out `no` (then) |
-| `output`   | Stop: where the main flow ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                                         | in `in` (then)                      |
+| Type       | What it does                                                                                                                                                                                 | Settings (default)                                                                                                                                 | Ports                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `trigger`  | Start: where the blueprint starts                                                                                                                                                            | none                                                                                                                                               | out `out` (then)                    |
+| `agent`    | A subagent the session calls                                                                                                                                                                 | `role` (""), `instructions` (""), `model` ("sonnet"), `given` and `writes` (optional lists of files), `produces` (optional name of a yes/no value) | in `in`, out `out` (then)           |
+| `gate`     | Stops for the user to look before going on                                                                                                                                                   | `shown` (""), `skippable` (false)                                                                                                                  | in `in`, out `out` (then)           |
+| `ask`      | Asks the user a question                                                                                                                                                                     | `question` (""), `options` ([])                                                                                                                    | in `in`, out `out` (then)           |
+| `hardstop` | A stop that cannot be skipped                                                                                                                                                                | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                                                  | in `in`, out `out` (then)           |
+| `loop`     | Repeats its body until its condition holds                                                                                                                                                   | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                                                            | in `in`, out `out` (then)           |
+| `foreach`  | Runs its body once per item of a list file                                                                                                                                                   | `file` ("items.txt"; relative to the session folder, no `..`)                                                                                      | in `in`, out `out` (then)           |
+| `fork`     | Parallel start                                                                                                                                                                               | none                                                                                                                                               | in `in`, out `out` (then)           |
+| `join`     | Parallel end                                                                                                                                                                                 | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                             | in `in`, out `out` (then)           |
+| `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                              | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                        | in `in`; out `yes`, out `no` (then) |
+| `output`   | Stop: where the main flow ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
 
 A Loop or For each holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
 
@@ -59,16 +59,21 @@ A wire goes from an output port of one node to an input port of another, and bot
 
 Agents name their files in settings, not on wires: `given` lists the files an Agent reads, `writes` the files it leaves. A hand-off is one Agent's `writes` matching another Agent's `given`. A given file no Agent writes is a file already in the repo. The writer must run before the reader on every path to it, never beside it in a parallel section. A file name is a path inside the working folder (no leading `/` or `~`, no `..`, commas or control characters).
 
-## Build configuration and variables
+## Build configuration, settings and variables
 
 The session's build configuration holds:
 
 - `repo`: the repository the blueprint builds from. A build is refused until it is set.
 - `base`: the branch or commit builds start from.
-- `buildModel`: the model the build agents use.
-- `variables`: values the user fills in for each build. Each has a `name` and a kind: `text` (with an optional text `default`) or `yesno` (with an optional true/false `default`).
 
-An Agent uses a variable by writing `{{name}}` in its instructions. A Branch is decided by a `yesno` variable, or, with `decidedBy` "value", by the yes/no value named in its `value` that an earlier Agent `produces`. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and each is declared once. `set_variable` adds a variable or changes the one with the same name; `repo`, `base` and `buildModel` are set by the user in the session settings.
+The blueprint's settings hold:
+
+- `buildModel`: the model the build agents use.
+- `permissionMode`: the permission mode the run session starts in.
+
+The user sets all four in the session settings.
+
+Variables are found, never declared. A Branch decided by a variable makes the name in its `variable` a yes/no variable, and `{{name}}` in an Agent's `instructions` makes `name` a text variable. The user gives a value for each when building. A Branch is decided by a yes/no variable, or, with `decidedBy` "value", by the yes/no value named in its `value` that an earlier Agent `produces`. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and one name is either yes/no or text, never both.
 
 ## Validator rules
 
@@ -85,13 +90,12 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 - `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop or For each.
 - `loop-body`: a Loop or For each needs an Agent in its body, cannot sit inside another, and only they hold a body.
 - `body-nodes`: a Start or Stop cannot sit inside a Loop or For each body.
-- `branch-variable`: a Branch decided by a variable picks a `yesno` variable that is declared, and no Branch sits inside a body.
+- `branch-variable`: a Branch decided by a variable names it, and no Branch sits inside a body.
 - `branch-value`: a Branch decided by a value reads one an Agent produces, and that Agent runs before it on every path.
 - `handoffs`: a hand-off file is inside the working folder, and an Agent that writes it runs before every Agent given it, on every path and never beside it.
-- `undeclared-variable`: every `{{name}}` in an Agent is a declared variable.
-- `variable-names`: variable names are unique and safe.
+- `variable-kind`: a variable is either a yes/no a Branch decides on or text an Agent uses, never both.
+- `variable-names`: variable names use only letters, digits, dashes and underscores.
 - `repo-required`: the blueprint names the repository it builds from.
-- `agent-tools`: an Agent asks only for tools in the session's allowed tools.
 - `one-start`: the blueprint has exactly one Start.
 - `stop-required`: the blueprint has a Stop on its main flow.
 
@@ -108,7 +112,6 @@ Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved bluepri
 | `change_node`       | Changes a node's label or some of its settings; settings given are merged over the current ones | `nodeId`, `label`, `settings`                   |
 | `wire`              | Connects an output port to an input port                                                        | `kind`, `from` and `to` (each `{ node, port }`) |
 | `delete_node`       | Deletes a node and its wires                                                                    | `nodeId`                                        |
-| `set_variable`      | Adds a build variable, or changes the one with the same name                                    | `name`, `kind`, `default`                       |
 | `tidy_layout`       | Lays out the open blueprint; the last edit of an ask that added nodes or wires                  | none                                            |
 | `list_builds`       | Lists the builds made from blueprints                                                           | none                                            |
 | `read_build`        | Reads one build                                                                                 | `id`                                            |

@@ -417,7 +417,6 @@ describe("pipelineOf", () => {
     const events = stored([
       ["a", 0, { kind: "sent" }],
       ["a", 5, { kind: "usage", payload: { messages: ["m1"] }, tokens: 1200, cost: 0.5 }],
-      ["a", 6, { kind: "budget", payload: { step: "paused", spend: 2, budget: 1 } }],
       ["a", 9, { kind: "done", payload: { stopMessage: "All green." } }],
       ["approve", 10, { kind: "needs-you" }],
       ["approve", 12, { kind: "decided", payload: { nodeId: "approve", decision: "approved" } }],
@@ -425,7 +424,7 @@ describe("pipelineOf", () => {
     ]);
     const activity = [tool(1, "a"), tool(2, "approve"), tool(3, "a")];
 
-    it("gives a stage its tokens and cost, budget pauses, final reply, timeline and own activity", () => {
+    it("gives a stage its tokens and cost, final reply, timeline and own activity, and no budget pauses", () => {
       const a = stageIn(pipeline(nodes, links, events, activity), "a");
 
       expect(a).toMatchObject({
@@ -435,14 +434,13 @@ describe("pipelineOf", () => {
         status: "done",
         tokens: 1200,
         cost: 0.5,
-        budgetPauses: [{ step: "paused", spend: 2, budget: 1 }],
         reply: "All green.",
         decisions: [],
       });
+      expect(a).not.toHaveProperty("budgetPauses");
       expect(a.timeline.map((event: { kind: string }) => event.kind)).toEqual([
         "sent",
         "usage",
-        "budget",
         "done",
       ]);
       expect(a.activity).toEqual([tool(1, "a"), tool(3, "a")]);

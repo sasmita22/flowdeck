@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetReached, costOf, usd, type UsageEntry } from "../../../src/core/run/budget.js";
+import { costOf, usd, type UsageEntry } from "../../../src/core/run/budget.js";
 
 const entry = (fields: Partial<UsageEntry>): UsageEntry => ({
   messageId: "m1",
@@ -116,16 +116,6 @@ describe("costOf", () => {
         10,
       );
     });
-  });
-});
-
-describe("budgetReached", () => {
-  it.each([
-    [1.2, 1, true],
-    [1, 1, true],
-    [0.99, 1, false],
-  ])("spend %s of budget %s is reached: %s", (spend, budget, reached) => {
-    expect(budgetReached(spend, budget)).toBe(reached);
   });
 });
 

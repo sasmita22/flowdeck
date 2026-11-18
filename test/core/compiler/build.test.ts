@@ -44,13 +44,8 @@ const workspace = (overrides: Partial<Workspace> = {}): Workspace => ({
   ...overrides,
 });
 
-const sample = (instructions = "Do the work."): Flow => {
-  const base = onMainFlow(
-    [agent("p", { settings: { instructions } }), agent("a", { settings: { tools: ["Grep"] } })],
-    [thenWire("p", "a")],
-  );
-  return { ...base, session: { ...base.session, allowedTools: ["Read", "Edit", "Grep"] } };
-};
+const sample = (instructions = "Do the work."): Flow =>
+  onMainFlow([agent("p", { settings: { instructions } }), agent("a")], [thenWire("p", "a")]);
 
 const run = (fs: FakeFileSystem, input: Flow = sample(), named: Workspace = workspace()) =>
   build(input, { fs, home, workspace: named });
@@ -80,7 +75,7 @@ describe("build", () => {
     expect(new NodeFileSystem() satisfies BuildFileSystem).toBeInstanceOf(NodeFileSystem);
   });
 
-  it("writes exactly the workspace files into workspaces/<build id>, allowing only the session's tools", async () => {
+  it("writes exactly the workspace files into workspaces/<build id>, listing no allowed tools and turning on the project's MCP servers", async () => {
     const fs = new FakeFileSystem();
 
     const result = succeeded(await run(fs));
@@ -88,7 +83,8 @@ describe("build", () => {
     expect(result.dir).toBe(`/fd-home/workspaces/${workspace().id}`);
     expect(await fs.list(result.dir)).toEqual(expectedFiles);
     const settings = JSON.parse(await fs.readFile(`${result.dir}/settings.json`));
-    expect(settings.permissions.allow).toEqual(["Read", "Edit", "Grep"]);
+    expect(settings.permissions).not.toHaveProperty("allow");
+    expect(settings.enableAllProjectMcpServers).toBe(true);
   });
 
   it("writes the manifest last, recording a hash the written files but the report reproduce", async () => {

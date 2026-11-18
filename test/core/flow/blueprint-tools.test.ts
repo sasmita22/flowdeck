@@ -26,20 +26,12 @@ const toolNames = [
   "change_node",
   "wire",
   "delete_node",
-  "set_variable",
   "list_builds",
   "read_build",
   "tidy_layout",
 ];
 
-const editToolNames = [
-  "add_node",
-  "change_node",
-  "wire",
-  "delete_node",
-  "set_variable",
-  "tidy_layout",
-];
+const editToolNames = ["add_node", "change_node", "wire", "delete_node", "tidy_layout"];
 
 const definition = (name: string) => {
   const found = blueprintToolDefinitions().find((tool) => tool.name === name);
@@ -55,10 +47,12 @@ const objectBranches = (schema: JsonSchema): JsonSchema[] => {
 const inputBranches = (name: string) => objectBranches(definition(name).inputSchema as JsonSchema);
 
 describe("blueprintToolDefinitions", () => {
-  it("offers exactly the eleven blueprint tools and nothing that builds, runs or deletes a build", () => {
+  it("offers exactly the ten blueprint tools and nothing that builds, runs or deletes a build", () => {
     const names = blueprintToolDefinitions().map((tool) => tool.name);
 
     expect([...names].sort()).toEqual([...toolNames].sort());
+    expect(names).toHaveLength(10);
+    expect(names).not.toContain("set_variable");
   });
 
   it("gives every tool a description and a JSON input schema", () => {
@@ -91,15 +85,6 @@ describe("blueprintToolDefinitions", () => {
     expect(inputBranches("read_build")[0]?.required).toContain("id");
     expect(inputBranches("delete_node")[0]?.required).toContain("nodeId");
     expect(inputBranches("change_node")[0]?.required).toContain("nodeId");
-  });
-
-  it("lets set_variable name and type a variable but never touch the repo or base branch", () => {
-    for (const branch of inputBranches("set_variable")) {
-      const fields = Object.keys(branch.properties ?? {});
-      expect(fields).toEqual(expect.arrayContaining(["name", "kind"]));
-      expect(fields).not.toContain("repo");
-      expect(fields).not.toContain("base");
-    }
   });
 
   it.each(editToolNames)("gives %s no blueprint argument and refuses extra keys", (name) => {

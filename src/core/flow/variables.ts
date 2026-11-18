@@ -1,4 +1,7 @@
-import type { BuildConfig } from "./schema.js";
+import { z } from "zod";
+import { decidedByValue } from "../nodes/branch/settings.js";
+import { mainFlowOnly } from "./main-flow.js";
+import type { Flow } from "./schema.js";
 
 export type VariableValues = Readonly<Record<string, string | boolean>>;
 
@@ -18,10 +21,30 @@ export const fillVariables = (text: string, values: VariableValues): string =>
     return value === undefined ? whole : String(value);
   });
 
-export const unsetVariables = (buildConfig: BuildConfig, values: VariableValues): string[] =>
-  buildConfig.variables
-    .filter((variable) => {
-      const value = values[variable.name] ?? variable.default;
-      return value === undefined || value === "";
-    })
-    .map((variable) => variable.name);
+export const FoundVariable = z.object({
+  name: z.string(),
+  kind: z.enum(["yes-no", "text"]),
+  nodeIds: z.tuple([z.string()]).rest(z.string()),
+});
+
+export type FoundVariable = z.infer<typeof FoundVariable>;
+
+export function foundVariables(flow: Flow): FoundVariable[] {
+  const found = new Map<string, FoundVariable>();
+  const add = (name: string, kind: FoundVariable["kind"], nodeId: string) => {
+    const key = JSON.stringify([name, kind]);
+    const entry = found.get(key);
+    if (entry === undefined) found.set(key, { name, kind, nodeIds: [nodeId] });
+    else if (!entry.nodeIds.includes(nodeId)) entry.nodeIds.push(nodeId);
+  };
+  for (const node of mainFlowOnly(flow).nodes) {
+    if (node.type === "branch" && !decidedByValue(node.settings) && node.settings.variable !== "") {
+      add(node.settings.variable, "yes-no", node.id);
+    }
+    if (node.type === "agent") {
+      for (const name of referencedVariables(node.settings.instructions))
+        add(name, "text", node.id);
+    }
+  }
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
