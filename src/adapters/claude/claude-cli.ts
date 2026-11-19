@@ -19,18 +19,33 @@ export const PARENT_SESSION_VARS = [
 
 const bypassDialog = /^\s*WARNING: Claude Code running in Bypass Permissions mode\s*$/m;
 
-type FolderDialog = { shows: RegExp; cursorOnYes: RegExp; cursorStuck: string };
+type FolderDialog = {
+  name: string;
+  shows: RegExp;
+  cursorOnYes: RegExp;
+  cursorStuck: string;
+  folder?: RegExp;
+};
 
 const trustDialog: FolderDialog = {
+  name: "trust",
   shows: /Quick safety check|Yes, I trust this folder/,
   cursorOnYes: /^\s*❯\s*(?:\d+\.\s*)?Yes, I trust this folder/m,
   cursorStuck: 'did not move the trust dialog cursor to "Yes, I trust this folder"',
 };
 const addDirDialog: FolderDialog = {
+  name: "add-dir",
   shows: /Adding a new directory|Yes, add it/,
   cursorOnYes: /^\s*❯\s*(?:\d+\.\s*)?Yes, add it/m,
   cursorStuck: 'did not move the add-dir dialog cursor to "Yes, add it"',
+  folder: /Adding a new directory:([\s\S]*?)(?:This session|trust)/,
 };
+
+function dialogKey(dialog: FolderDialog, pane: string): string {
+  const match = dialog.folder?.exec(pane);
+  const folder = match?.[1] ?? "";
+  return `${dialog.name}:${folder.replace(/\s+/g, "")}`;
+}
 const folderDialogs = [trustDialog, addDirDialog];
 const rule = "────";
 const busy = "esc to interrupt";
@@ -41,7 +56,7 @@ export type ClaudeStartOptions = {
   settingsPath?: string;
   pluginDirs?: readonly string[];
   mcpConfigPath?: string;
-  addDir?: string;
+  addDir?: readonly string[];
   env?: Record<string, string>;
 };
 
@@ -50,7 +65,7 @@ export function claudeCommand(
   settingsPath?: string,
   pluginDirs: readonly string[] = [],
   mcpConfigPath?: string,
-  addDir?: string,
+  addDir: readonly string[] = [],
 ): string {
   const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
   const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
@@ -60,7 +75,7 @@ export function claudeCommand(
     mcpConfigPath === undefined
       ? ""
       : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
-  const added = addDir === undefined ? "" : ` --add-dir ${shellQuote(addDir)}`;
+  const added = addDir.map((dir) => ` --add-dir ${shellQuote(dir)}`).join("");
   const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
   return `env ${unset} claude ${session}${modelFlag}${settings}${plugin}${added}${mcp}`;
 }
@@ -150,9 +165,9 @@ export class ClaudeCli {
 
   async waitUntilReady(name: string): Promise<void> {
     const deadline = Date.now() + this.readyTimeoutMs;
-    let shown: FolderDialog | undefined;
+    let shown: string | undefined;
     let dialogSince: number | undefined;
-    const answered = new Set<FolderDialog>();
+    const answered = new Set<string>();
     for (;;) {
       const pane = await this.sessions.capture(name);
       if (bypassDialog.test(pane)) {
@@ -161,14 +176,15 @@ export class ClaudeCli {
         );
       }
       const dialog = folderDialogs.find(({ shows }) => shows.test(pane));
-      if (dialog !== shown) dialogSince = undefined;
-      shown = dialog;
-      if (dialog === undefined) {
+      const key = dialog === undefined ? undefined : dialogKey(dialog, pane);
+      if (key !== shown) dialogSince = undefined;
+      shown = key;
+      if (dialog === undefined || key === undefined) {
         if (showsInputBox(pane)) break;
-      } else if (!answered.has(dialog)) {
+      } else if (!answered.has(key)) {
         dialogSince ??= Date.now();
         if (Date.now() - dialogSince >= this.dialogSettleMs) {
-          answered.add(dialog);
+          answered.add(key);
           await this.answerYes(name, dialog, deadline);
         }
       }

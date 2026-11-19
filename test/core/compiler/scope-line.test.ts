@@ -4,9 +4,9 @@ import { scopeLine, scopeOf, startsWithScopeLine } from "../../../src/core/compi
 const parts = { build: "listing-badge", repo: "mobile-app", workspace: "/fd/workspaces/b1" };
 
 describe("scopeLine", () => {
-  it("names the build, repo and workspace and says to use this piece there", () => {
+  it("names the build, repo and build folder and says to use this piece there", () => {
     expect(scopeLine(parts)).toBe(
-      "Part of build listing-badge (repo mobile-app, workspace /fd/workspaces/b1). For work in this build's workspace, use this, not a similarly named skill from elsewhere.",
+      "Part of build listing-badge (repo mobile-app, build folder /fd/workspaces/b1). For work in this build, use this, not a similarly named skill from elsewhere.",
     );
   });
 

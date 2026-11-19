@@ -7,8 +7,10 @@ import {
   needsSessionSetup,
   selectBuildRefusal,
   selectCanBuild,
+  selectDeleteWorktrees,
   selectExistingBranches,
   selectKeptNote,
+  selectKeptNotes,
   selectLiveBadge,
   selectNodeDisplay,
   selectRunDisabled,
@@ -165,6 +167,7 @@ const setup = async (
       return () => {};
     }),
     runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({
+      kind: "choices",
       automatic: options.automatic ?? false,
     })),
     stopRun: vi.fn<FlowdeckBridge["stopRun"]>(async () => ({ stopped: true })),
@@ -353,6 +356,12 @@ describe("the Build dialog", () => {
       existingBranch: null,
       error: null,
       ignored: [],
+      target: {
+        repoOverride: true,
+        existingBranch: true,
+        branch: true,
+        sessions: [{ name: "main", repo: "/code/shop", branch: "dev" }],
+      },
       step: "form",
     });
   });
@@ -756,6 +765,69 @@ describe("the Build dialog on a workflow with two session containers", () => {
 
     expect(run.getState().buildDialog?.ignored).toEqual([{ id: "loose", label: "Loose" }]);
   });
+
+  it("carries the build target of the saved version", async () => {
+    const { run } = await setup({ built: twoSessions() });
+
+    await run.getState().openBuild(fromCard);
+
+    expect(run.getState().buildDialog?.target).toEqual({
+      repoOverride: false,
+      existingBranch: false,
+      branch: true,
+      sessions: [
+        { name: "main", repo: "/code/shop", branch: "dev" },
+        { name: "web", repo: "/code/blog", branch: "main" },
+      ],
+    });
+  });
+
+  it("builds without a repo or base and sends only a new branch name", async () => {
+    const { bridge, run } = await setup({ built: onMainFlowTwoSessions() });
+    await run.getState().openBuild({ ...fromCard, buildConfig: {}, variables: [] });
+    run.getState().editBuild({ name: "fix-login", branchMode: "existing" });
+
+    expect(selectCanBuild(run.getState())).toBe(true);
+    await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
+
+    const sent = bridge.buildVersion.mock.calls[0]?.[0];
+    expect(sent).not.toHaveProperty("repo");
+    expect(sent).not.toHaveProperty("base");
+    expect(sent?.branch).toEqual({ mode: "new", name: "flowdeck/fix-login", base: "" });
+  });
+
+  const onMainFlowTwoSessions = (): Flow => {
+    const withLoose = twoSessions();
+    return {
+      ...withLoose,
+      nodes: withLoose.nodes.filter((node) => node.id !== "loose"),
+      containers: withLoose.containers.map((container) => ({
+        ...container,
+        nodes: container.nodes.filter((id) => id !== "loose"),
+      })),
+    };
+  };
+});
+
+describe("the Build dialog on a workspace with no session container", () => {
+  const workspaceOnly = (): Flow =>
+    flow([trigger("w-start"), output("w-stop")], [thenWire("w-start", "w-stop")], flowSettings, {
+      containers: [workspaceContainer(["w-start", "w-stop"])],
+    });
+
+  it("builds with no repo and no branch, and sends neither", async () => {
+    const { bridge, run } = await setup({ built: workspaceOnly() });
+    await run.getState().openBuild({ ...fromCard, buildConfig: {}, variables: [] });
+    run.getState().editBuild({ name: "notes" });
+
+    expect(selectCanBuild(run.getState())).toBe(true);
+    await expect(run.getState().confirmBuild()).resolves.toBe("b-0f3a9c2e");
+
+    const sent = bridge.buildVersion.mock.calls[0]?.[0];
+    expect(sent).not.toHaveProperty("repo");
+    expect(sent).not.toHaveProperty("base");
+    expect(sent).not.toHaveProperty("branch");
+  });
 });
 
 describe("the Build dialog's repository", () => {
@@ -1113,6 +1185,20 @@ describe("runBuild", () => {
     expect(bridge.runBuild).not.toHaveBeenCalled();
   });
 
+  it("holds the reason the run options refuse a build, without asking for options or starting it", async () => {
+    const { bridge, run } = await setup();
+    bridge.runOptions.mockResolvedValueOnce({
+      kind: "error",
+      message: "Running several sessions is not supported yet.",
+    });
+
+    await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
+
+    expect(run.getState().error).toBe("Running several sessions is not supported yet.");
+    expect(run.getState().dialog).toBeNull();
+    expect(bridge.runBuild).not.toHaveBeenCalled();
+  });
+
   it("holds the message of a refused run, and clears it once a run starts", async () => {
     const { bridge, run } = await setup();
     bridge.runBuild.mockResolvedValueOnce({
@@ -1242,11 +1328,11 @@ describe("deleteBuild", () => {
     [{ kind: "folder", path: "/elsewhere/builds/oldhash" }],
   ] as const)("holds what it kept, %j, with the build id", async (kept) => {
     const { bridge, run } = await setup();
-    bridge.deleteBuild.mockResolvedValueOnce({ ok: true, kept });
+    bridge.deleteBuild.mockResolvedValueOnce({ ok: true, kept: [kept] });
 
     await run.getState().deleteBuild("b-1");
 
-    expect(run.getState().kept).toEqual({ buildId: "b-1", ...kept });
+    expect(run.getState().kept).toEqual([{ buildId: "b-1", ...kept }]);
   });
 
   it.each([
@@ -1285,6 +1371,24 @@ describe("deleteBuild", () => {
     ],
   ] as const)("words what it kept, %j, by why it was kept", (kept, note) => {
     expect(selectKeptNote({ buildId: "b-1", ...kept })).toBe(note);
+  });
+
+  it("words every worktree a delete kept, one note each", async () => {
+    const { bridge, run } = await setup();
+    bridge.deleteBuild.mockResolvedValueOnce({
+      ok: true,
+      kept: [
+        { kind: "worktree", path: "/fd/workspaces/b-1/sessions/android/android" },
+        { kind: "worktree", path: "/fd/workspaces/b-1/sessions/ios/ios" },
+      ],
+    });
+
+    await run.getState().deleteBuild("b-1");
+
+    expect(selectKeptNotes(run.getState())).toEqual([
+      "The build is deleted. Its worktree held work, so it was kept at /fd/workspaces/b-1/sessions/android/android",
+      "The build is deleted. Its worktree held work, so it was kept at /fd/workspaces/b-1/sessions/ios/ios",
+    ]);
   });
 
   it("holds the refusal and keeps nothing when the build cannot be deleted", async () => {
@@ -1386,6 +1490,48 @@ describe("confirming a delete", () => {
   ] as const)("warns a build or pending delete loses work for %j: %s", (preview, warns) => {
     expect(losesWork({ kind: "build", id: "b-1", preview })).toBe(warns);
     expect(losesWork({ kind: "pending", id: "pb-1", preview })).toBe(warns);
+  });
+
+  it("lists every worktree a build delete would remove, flagging the one that loses work", async () => {
+    const { bridge, run } = await setup();
+    bridge.deletePreview.mockResolvedValueOnce({
+      dirtyWorktree: true,
+      unpushedBranch: false,
+      worktrees: [
+        {
+          path: "/fd/workspaces/b-1/sessions/android/android",
+          branch: "flowdeck/fix-login-android",
+          dirtyWorktree: true,
+          unpushedBranch: false,
+        },
+        {
+          path: "/fd/workspaces/b-1/sessions/ios/ios",
+          branch: "flowdeck/fix-login-ios",
+          dirtyWorktree: false,
+          unpushedBranch: false,
+        },
+      ],
+    });
+
+    await run.getState().askDelete({ kind: "build", id: "b-1" });
+    const question = run.getState().confirmingDelete;
+
+    expect(question === null ? null : selectDeleteWorktrees(question)).toEqual([
+      {
+        path: "/fd/workspaces/b-1/sessions/android/android",
+        branch: "flowdeck/fix-login-android",
+        losesWork: true,
+      },
+      {
+        path: "/fd/workspaces/b-1/sessions/ios/ios",
+        branch: "flowdeck/fix-login-ios",
+        losesWork: false,
+      },
+    ]);
+  });
+
+  it("lists no worktree for a run delete", () => {
+    expect(selectDeleteWorktrees({ kind: "run", id: "run-2", from: "runs" })).toEqual([]);
   });
 
   it("never warns a run delete loses work", () => {

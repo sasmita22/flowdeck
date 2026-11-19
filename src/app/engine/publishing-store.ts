@@ -34,6 +34,8 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     deleteRun: (runId) => store.deleteRun(runId),
     deletePendingBuild: (id) => store.deletePendingBuild(id),
     listBuilds: () => store.listBuilds(),
+    addBuildWorktree: (buildId, worktree) => store.addBuildWorktree(buildId, worktree),
+    buildWorktrees: (buildId) => store.buildWorktrees(buildId),
     listRuns: () => store.listRuns(),
     findRunSummary: (id) => store.findRunSummary(id),
     buildFiles: (id) => store.buildFiles(id),

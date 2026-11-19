@@ -136,6 +136,56 @@ export const asWorkflow = (
   session: Omit<SessionOptions, "id"> = {},
 ): Flow => flow(literal.nodes, literal.wires, literal.settings, { session });
 
+export type SessionSpec = {
+  name: string;
+  repo: string;
+  branch: string;
+  model?: string;
+  members?: string[];
+};
+
+const memberId = (containerId: string, label: string) =>
+  `${containerId}-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+const containerChain = (containerId: string, members: string[]) => {
+  const start = `${containerId}-start`;
+  const stop = `${containerId}-stop`;
+  const agents = members.map((label) => ({ ...agent(memberId(containerId, label)), label }));
+  const ids = [start, ...agents.map((node) => node.id), stop];
+  return {
+    ids,
+    nodes: [trigger(start), ...agents, output(stop)],
+    wires: ids.slice(1).map((id, index) => thenWire(ids[index] as string, id)),
+  };
+};
+
+export const sessionsWorkflow = (
+  sessions: SessionSpec[],
+  options: { workspace?: string[] } = {},
+): Flow => {
+  const workspace = containerChain("workspace-1", options.workspace ?? []);
+  const chains = sessions.map(({ members = ["Plan"], ...session }, index) => {
+    const id = `session-${index + 1}`;
+    const chain = containerChain(id, members);
+    return {
+      chain,
+      container: sessionContainer(chain.ids, { model: "sonnet", ...session, id }),
+    };
+  });
+  return parseFlow({
+    nodes: [...workspace.nodes, ...chains.flatMap(({ chain }) => chain.nodes)],
+    wires: [...workspace.wires, ...chains.flatMap(({ chain }) => chain.wires)],
+    settings: flowSettings,
+    containers: [workspaceContainer(workspace.ids), ...chains.map(({ container }) => container)],
+  });
+};
+
+export const twoSessionWorkflow = (): Flow =>
+  sessionsWorkflow([
+    { name: "android", repo: "/repos/android", branch: "main", model: "sonnet" },
+    { name: "ios", repo: "/repos/ios", branch: "develop", model: "haiku" },
+  ]);
+
 type Placed = { id: string; type: string; parent?: string };
 type Linked = { kind: string; from: { node: string }; to: { node: string } };
 

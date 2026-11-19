@@ -7,12 +7,11 @@ import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import type { ToolStarts } from "./tool-start.js";
-import { parseManifest, type ParsedManifest } from "./manifest.js";
+import { parseManifest, singleSession, type ParsedManifest } from "./manifest.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
 import type { HumanWaiter } from "./wait.js";
-import { worktreePath } from "./workspace.js";
 
 export type OpenSessionOptions = {
   sessionName: string;
@@ -20,12 +19,11 @@ export type OpenSessionOptions = {
   model: string;
   socketPath: string;
   cwd: string;
-  layout: VerifyLayout;
   claudeSessionId: string;
   hooks: HookPaths;
   attach?: boolean;
   resume?: boolean;
-};
+} & ({ layout: "legacy" } | { layout: "workspace"; workspaceFolder: string });
 
 export type OpenedSession = {
   sessionId: string;
@@ -109,23 +107,21 @@ export async function loadBuild(
     };
   }
   const manifest = parseManifest(await deps.fs.readFile(`${row.dir}/manifest.json`), row);
+  const session = singleSession(manifest);
+  if (!session.ok) return { kind: "error", message: session.reason };
   const problems = structureProblems(manifest.nodes, manifest.wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
+  const worktree = session.container.worktree;
   return {
     kind: "loaded",
-    build: {
-      ...manifest,
-      ...(row.name !== null && row.repo !== null
-        ? { worktree: worktreePath(row.dir, row.repo) }
-        : {}),
-    },
+    build: { ...manifest, ...(worktree === undefined ? {} : { worktree }) },
   };
 }
 
 const checksACondition = (node: LoadedBuild["nodes"][number]) =>
   node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
 
-export const needsClaude = (manifest: Pick<Manifest, "nodes">) =>
+export const needsClaude = (manifest: Required<Pick<Manifest, "nodes">>) =>
   manifest.nodes.some((node) => node.type === "agent" || checksACondition(node));
 
 type ResumeRead = { actions: ResumeActions; stop?: TurnEndEvent };
@@ -235,6 +231,8 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     deleteRun: (runId) => store.deleteRun(runId),
     deletePendingBuild: (id) => store.deletePendingBuild(id),
     listBuilds: () => store.listBuilds(),
+    addBuildWorktree: (buildId, worktree) => store.addBuildWorktree(buildId, worktree),
+    buildWorktrees: (buildId) => store.buildWorktrees(buildId),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),

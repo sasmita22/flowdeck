@@ -22,6 +22,7 @@ import type {
   BuildFileRecord,
   BuildRecord,
   BuildSnapshot,
+  BuildWorktree,
   EventEntry,
   ManifestGap,
   NewBuild,
@@ -78,6 +79,7 @@ export class FakeStore implements Store {
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: RecordedBuild[] = [];
   private readonly manifests = new Map<string, string>();
+  private readonly worktrees = new Map<string, BuildWorktree[]>();
   private readonly buildCreatedAt = new Map<string, number>();
   private readonly runNumbers = new Map<string, number>();
   private readonly lastRunNumbers = new Map<string, number>();
@@ -272,6 +274,7 @@ export class FakeStore implements Store {
     keep(this.buildRecords, (known) => known.id !== id);
     this.manifests.delete(id);
     this.lastRunNumbers.delete(id);
+    this.worktrees.delete(id);
   }
 
   private removePendingBuilds(ids: readonly string[]): void {
@@ -291,6 +294,12 @@ export class FakeStore implements Store {
         }
       });
     }
+    for (const pendingId of removed) {
+      const session = this.buildEventLog.findLast(
+        (known) => known.pendingId === pendingId && known.event.type === "session",
+      )?.event;
+      if (session?.type === "session") this.worktrees.delete(session.buildId);
+    }
     keep(this.buildActivityLog, (known) => !removed.has(known.pendingId));
     keep(this.buildEventLog, (known) => !removed.has(known.pendingId));
     keep(this.buildStepTextRows, (known) => !removed.has(known.pendingId));
@@ -304,6 +313,14 @@ export class FakeStore implements Store {
 
   listBuilds(): BuildRecord[] {
     return this.allBuilds();
+  }
+
+  addBuildWorktree(buildId: string, worktree: BuildWorktree): void {
+    this.worktrees.set(buildId, [...(this.worktrees.get(buildId) ?? []), copy(worktree)]);
+  }
+
+  buildWorktrees(buildId: string): BuildWorktree[] {
+    return copy(this.worktrees.get(buildId) ?? []);
   }
 
   startPendingBuild(build: NewPendingBuild): PendingBuildStart {

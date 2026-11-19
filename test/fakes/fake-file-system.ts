@@ -12,15 +12,17 @@ export type FileSystemCall = {
     | "folders"
     | "entries"
     | "remove"
-    | "removeTree";
+    | "removeTree"
+    | "realPath";
   path: string;
-  skip?: string;
+  skip?: readonly string[];
 };
 
 export class FakeFileSystem implements FileSystem {
   readonly calls: FileSystemCall[] = [];
   private readonly files: Map<string, string>;
   private readonly privatePaths = new Set<string>();
+  private readonly links = new Map<string, string>();
 
   constructor(seed: Record<string, string> = {}) {
     this.files = new Map(Object.entries(seed));
@@ -70,17 +72,17 @@ export class FakeFileSystem implements FileSystem {
     this.privatePaths.delete(path);
   }
 
-  async removeTree(path: string, { keep }: { keep?: string } = {}): Promise<void> {
+  async removeTree(path: string, { keep = [] }: { keep?: string[] } = {}): Promise<void> {
     this.calls.push({ method: "removeTree", path });
     for (const child of this.under(path)) {
       const file = `${path}/${child}`;
-      if (keep !== undefined && file.startsWith(`${keep}/`)) continue;
+      if (keep.some((kept) => file.startsWith(`${kept}/`))) continue;
       this.files.delete(file);
       this.privatePaths.delete(file);
     }
   }
 
-  async list(dir: string, { skip }: { skip?: string } = {}): Promise<string[]> {
+  async list(dir: string, { skip }: { skip?: readonly string[] } = {}): Promise<string[]> {
     this.calls.push(
       skip === undefined ? { method: "list", path: dir } : { method: "list", path: dir, skip },
     );
@@ -94,7 +96,9 @@ export class FakeFileSystem implements FileSystem {
       file
         .split("/")
         .slice(0, -1)
-        .some((_, index, folders) => posix.join(dir, ...folders.slice(0, index + 1)) === skip);
+        .some((_, index, folders) =>
+          (skip ?? []).includes(posix.join(dir, ...folders.slice(0, index + 1))),
+        );
     return files.filter((file) => !skipped(file)).sort();
   }
 
@@ -125,6 +129,18 @@ export class FakeFileSystem implements FileSystem {
         .map(([name]) => ({ name, kind }))
         .sort((a, b) => (a.name < b.name ? -1 : 1));
     return [...named("folder"), ...named("file")];
+  }
+
+  link(path: string, real: string): void {
+    this.links.set(path, real);
+  }
+
+  async realPath(path: string): Promise<string> {
+    this.calls.push({ method: "realPath", path });
+    for (const [link, real] of this.links) {
+      if (path === link || path.startsWith(`${link}/`)) return real + path.slice(link.length);
+    }
+    return path;
   }
 
   private under(dir: string): string[] {

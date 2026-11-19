@@ -11,21 +11,34 @@ import {
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
-import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  onMainFlow,
+  thenWire,
+  twoSessionWorkflow,
+  withSession,
+} from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";
 const expectedFiles = [
-  "CLAUDE.md",
   "build-report.json",
   "manifest.json",
-  "plugin/.claude-plugin/plugin.json",
-  "plugin/agents/a.md",
-  "plugin/agents/p.md",
-  "plugin/hooks/hooks.json",
-  "plugin/hooks/no-force-push.sh",
-  "plugin/hooks/rules-after-compact.sh",
-  "plugin/skills/run/SKILL.md",
-  "settings.json",
+  "sessions/main/CLAUDE.md",
+  "sessions/main/plugin/.claude-plugin/plugin.json",
+  "sessions/main/plugin/agents/a.md",
+  "sessions/main/plugin/agents/p.md",
+  "sessions/main/plugin/hooks/hooks.json",
+  "sessions/main/plugin/hooks/no-force-push.sh",
+  "sessions/main/plugin/hooks/rules-after-compact.sh",
+  "sessions/main/plugin/skills/run/SKILL.md",
+  "sessions/main/settings.json",
+  "workspace/CLAUDE.md",
+  "workspace/plugin/.claude-plugin/plugin.json",
+  "workspace/plugin/hooks/hooks.json",
+  "workspace/plugin/hooks/no-force-push.sh",
+  "workspace/plugin/hooks/rules-after-compact.sh",
+  "workspace/plugin/skills/run/SKILL.md",
+  "workspace/settings.json",
 ];
 
 const reportPath = "build-report.json";
@@ -82,7 +95,7 @@ describe("build", () => {
 
     expect(result.dir).toBe(`/fd-home/workspaces/${workspace().id}`);
     expect(await fs.list(result.dir)).toEqual(expectedFiles);
-    const settings = JSON.parse(await fs.readFile(`${result.dir}/settings.json`));
+    const settings = JSON.parse(await fs.readFile(`${result.dir}/sessions/main/settings.json`));
     expect(settings.permissions).not.toHaveProperty("allow");
     expect(settings.enableAllProjectMcpServers).toBe(true);
   });
@@ -138,17 +151,17 @@ describe("build", () => {
     expect(await fs.list(login.dir)).toEqual(expectedFiles);
     expect(await fs.list(signup.dir)).toEqual(expectedFiles);
     const pluginName = async (dir: string) =>
-      JSON.parse(await fs.readFile(`${dir}/plugin/.claude-plugin/plugin.json`)).name;
-    expect(await pluginName(login.dir)).toBe("fix-login");
-    expect(await pluginName(signup.dir)).toBe("fix-signup");
+      JSON.parse(await fs.readFile(`${dir}/sessions/main/plugin/.claude-plugin/plugin.json`)).name;
+    expect(await pluginName(login.dir)).toBe("fix-login-main");
+    expect(await pluginName(signup.dir)).toBe("fix-signup-main");
   });
 
   it("covers CLAUDE.md in the hash, so a build from another base has another hash", async () => {
     const onMain = succeeded(
-      await run(new FakeFileSystem(), sample(), workspace({ base: "main" })),
+      await run(new FakeFileSystem(), withSession(sample(), { branch: "main" })),
     );
     const onRelease = succeeded(
-      await run(new FakeFileSystem(), sample(), workspace({ base: "release" })),
+      await run(new FakeFileSystem(), withSession(sample(), { branch: "release" })),
     );
 
     expect(onRelease.hash).not.toBe(onMain.hash);
@@ -309,5 +322,41 @@ describe("build", () => {
 
     expect(withNotes.hash).toBe(without.hash);
     expect(await readBack(notedFs, withNotes.dir)).toEqual(await readBack(plainFs, without.dir));
+  });
+
+  it("lays down a folder per container for two sessions, matching its file list", async () => {
+    const fs = new FakeFileSystem();
+
+    const { dir } = succeeded(await run(fs, twoSessionWorkflow()));
+
+    expect(await fs.list(dir)).toMatchInlineSnapshot(`
+      [
+        "build-report.json",
+        "manifest.json",
+        "sessions/android/CLAUDE.md",
+        "sessions/android/plugin/.claude-plugin/plugin.json",
+        "sessions/android/plugin/agents/plan.md",
+        "sessions/android/plugin/hooks/hooks.json",
+        "sessions/android/plugin/hooks/no-force-push.sh",
+        "sessions/android/plugin/hooks/rules-after-compact.sh",
+        "sessions/android/plugin/skills/run/SKILL.md",
+        "sessions/android/settings.json",
+        "sessions/ios/CLAUDE.md",
+        "sessions/ios/plugin/.claude-plugin/plugin.json",
+        "sessions/ios/plugin/agents/plan.md",
+        "sessions/ios/plugin/hooks/hooks.json",
+        "sessions/ios/plugin/hooks/no-force-push.sh",
+        "sessions/ios/plugin/hooks/rules-after-compact.sh",
+        "sessions/ios/plugin/skills/run/SKILL.md",
+        "sessions/ios/settings.json",
+        "workspace/CLAUDE.md",
+        "workspace/plugin/.claude-plugin/plugin.json",
+        "workspace/plugin/hooks/hooks.json",
+        "workspace/plugin/hooks/no-force-push.sh",
+        "workspace/plugin/hooks/rules-after-compact.sh",
+        "workspace/plugin/skills/run/SKILL.md",
+        "workspace/settings.json",
+      ]
+    `);
   });
 });

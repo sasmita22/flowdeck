@@ -211,7 +211,7 @@ const manifestOf = (built: EndedBuild): Manifest =>
   JSON.parse(contentOf(built, "manifest.json")) as Manifest;
 
 const nodeOf = (manifest: Manifest, id: string): ManifestNode => {
-  const node = manifest.nodes.find((candidate) => candidate.id === id);
+  const node = (manifest.nodes ?? []).find((candidate) => candidate.id === id);
   if (node === undefined) throw new Error(`no manifest node ${id}`);
   return node;
 };
@@ -464,6 +464,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1" || draftsOnly)("AT-12 (live)",
         sessionName,
         claudeSessionId,
         workspaceDir: workDir,
+        sessionSlugs: ["main"],
         kitDir: kit.dir,
         settingsPath,
         model: "haiku",

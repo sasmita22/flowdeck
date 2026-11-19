@@ -220,16 +220,49 @@ describe("buildPipelineOf", () => {
 
       const layDown = laneOf(pipeline, 2);
       expect(layDown.status).toBe("done");
-      expect(layDown.worktree).toEqual({
-        status: "failed",
-        ...failed,
-        message: "fatal: invalid reference: no-such-branch",
-      });
+      expect(layDown.worktrees).toEqual([
+        {
+          status: "failed",
+          ...failed,
+          message: "fatal: invalid reference: no-such-branch",
+        },
+      ]);
       expect(pipeline.header.status).toBe("failed");
     });
 
     it("shows the worktree it cut as a done sub-step of Lay down", () => {
-      expect(laneOf(built(), 2).worktree).toEqual({ status: "done", ...worktree });
+      expect(laneOf(built(), 2).worktrees).toEqual([{ status: "done", ...worktree }]);
+    });
+
+    it("shows every worktree it cut as its own sub-step of Lay down, in the order cut", () => {
+      const android = {
+        path: "/home/workspaces/b1/sessions/android/android",
+        branch: "flowdeck/nightly-android",
+        base: "main",
+      };
+      const ios = {
+        path: "/home/workspaces/b1/sessions/ios/ios",
+        branch: "flowdeck/nightly-ios",
+        base: "develop",
+      };
+      const pipeline = buildPipelineOf(
+        pending(),
+        stored([
+          [100, step(1, "running")],
+          [110, step(1, "done")],
+          [120, step(2, "running")],
+          [150, step(2, "done")],
+          [160, { type: "worktree", status: "done", ...android }],
+          [165, { type: "worktree", status: "done", ...ios }],
+          [170, session],
+        ]),
+        [],
+      );
+
+      expect(laneOf(pipeline, 2).worktrees).toEqual([
+        { status: "done", ...android },
+        { status: "done", ...ios },
+      ]);
     });
 
     it("has no worktree sub-step for a build with no worktree event", () => {
@@ -239,7 +272,7 @@ describe("buildPipelineOf", () => {
         [],
       );
 
-      expect(laneOf(pipeline, 2).worktree).toBeUndefined();
+      expect(laneOf(pipeline, 2).worktrees).toBeUndefined();
     });
   });
 
@@ -443,6 +476,55 @@ describe("buildPipelineOf", () => {
       expect(pipeline.header.model).toBeUndefined();
       expect(pipeline.header.cost).toBeUndefined();
     });
+    const ios = {
+      path: "/home/workspaces/b1/sessions/ios/ios",
+      branch: "flowdeck/nightly-ios",
+      base: "develop",
+    };
+    const android = {
+      path: "/home/workspaces/b1/sessions/android/android",
+      branch: "flowdeck/nightly-android",
+      base: "main",
+    };
+
+    it.each<[string, [number, BuildEvent][]]>([
+      [
+        "two session containers",
+        [
+          [160, { type: "worktree", status: "done", ...android }],
+          [165, { type: "worktree", status: "done", ...ios }],
+          [170, { ...session, repo: "", base: "" }],
+        ],
+      ],
+      ["no session container", [[170, { ...session, repo: "", base: "" }]]],
+    ])(
+      "shows no repo, base, branch or path for a build with %s, and every worktree in Lay down",
+      (_label, cuts) => {
+        const pipeline = buildPipelineOf(
+          pending(),
+          stored([
+            ...laidDown.filter(
+              ([, event]) => event.type !== "worktree" && event.type !== "session",
+            ),
+            ...cuts,
+          ]),
+          [],
+        );
+
+        for (const field of ["repo", "base", "branch", "path"] as const) {
+          expect(pipeline.header[field], field).toBeUndefined();
+        }
+        expect(pipeline.header.model).toBe("haiku");
+        expect(laneOf(pipeline, 2).worktrees ?? []).toEqual(
+          cuts.flatMap(([, event]) =>
+            event.type === "worktree"
+              ? [{ status: "done", path: event.path, branch: event.branch, base: event.base }]
+              : [],
+          ),
+        );
+      },
+    );
+
     const cutOn = (branchCreated: boolean | undefined) =>
       buildPipelineOf(
         pending(),

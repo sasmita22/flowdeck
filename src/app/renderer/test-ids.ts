@@ -109,6 +109,7 @@ export const pageTestIds = {
     `build-row-${pendingId}-${step}-${round}-${path}`,
   buildBuiltLink: (pendingId: string) => `build-built-link-${pendingId}`,
   buildWorktree: (pendingId: string) => `build-worktree-${pendingId}`,
+  buildWorktreeLine: (pendingId: string, path: string) => `build-worktree-${pendingId}-${path}`,
   buildElapsed: (pendingId: string) => `build-elapsed-${pendingId}`,
   buildQuestion: (pendingId: string, index: number) => `build-question-${pendingId}-${index}`,
   buildAnswer: (pendingId: string, index: number) => `build-answer-${pendingId}-${index}`,
@@ -173,6 +174,8 @@ export const pageTestIds = {
   deletePromptConfirm: "delete-prompt-confirm",
   deletePromptCancel: "delete-prompt-cancel",
   deletePromptWarning: "delete-prompt-warning",
+  deletePromptWorktrees: "delete-prompt-worktrees",
+  deletePromptWorktree: (path: string) => `delete-prompt-worktree-${path}`,
 } as const;
 
 export const dialogTestIds = {
@@ -194,6 +197,10 @@ export const buildDialogTestIds = {
   branchExisting: "build-dialog-branch-existing",
   branchName: "build-dialog-branch-name",
   existingBranch: (name: string) => `build-dialog-existing-branch-${name}`,
+  sessions: "build-dialog-sessions",
+  session: (name: string) => `build-dialog-session-${name}`,
+  sessionRepo: (name: string) => `build-dialog-session-repo-${name}`,
+  sessionBranch: (name: string) => `build-dialog-session-branch-${name}`,
   variable: (name: string) => `build-dialog-variable-${name}`,
   refusal: "build-dialog-refusal",
   confirm: "build-dialog-confirm",

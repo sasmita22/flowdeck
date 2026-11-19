@@ -71,7 +71,7 @@ import { stampedBefore, waitForTurnEnd, type TurnEndEvent, type TurnEvents } fro
 import { parseProducedValue, parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
-export type RunnableManifest = Pick<Manifest, "nodes"> &
+export type RunnableManifest = Required<Pick<Manifest, "nodes">> &
   Partial<Pick<Manifest, "wires" | "values">> & {
     hash: string;
     prefix: string;

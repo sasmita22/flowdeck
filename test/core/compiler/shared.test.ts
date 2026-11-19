@@ -11,7 +11,13 @@ import {
   type SharedResult,
 } from "../../../src/core/compiler/shared.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  onMainFlow,
+  sessionsWorkflow,
+  thenWire,
+} from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -28,8 +34,8 @@ const reviewers = (): Flow =>
 
 const home = "/fd-home";
 const parts: ScopeParts = {
-  build: "alpha",
-  repo: "carousell-web",
+  build: "alpha-main",
+  repo: "repo",
   workspace: `${home}/workspaces/b-alpha-0001`,
 };
 
@@ -96,8 +102,8 @@ const expectNothingLaid = (
 describe("applyShared", () => {
   describe("an accepted entry", () => {
     it.each<[Entry["kind"], string]>([
-      ["skill", "plugin/skills/repo-conventions/SKILL.md"],
-      ["command", "plugin/commands/repo-conventions.md"],
+      ["skill", "sessions/main/plugin/skills/repo-conventions/SKILL.md"],
+      ["command", "sessions/main/plugin/commands/repo-conventions.md"],
     ])("lays a %s at %s", async (kind, path) => {
       const before = await laid();
 
@@ -112,7 +118,7 @@ describe("applyShared", () => {
       const before = await laid();
 
       const { files } = applyShared(before.files, before.manifest, [skill("repo-conventions")]);
-      const draft = contentOf(files, "plugin/skills/repo-conventions/SKILL.md") ?? "";
+      const draft = contentOf(files, "sessions/main/plugin/skills/repo-conventions/SKILL.md") ?? "";
 
       const fields = frontmatterOf(draft);
       expect(fields.name).toBe("repo-conventions");
@@ -136,8 +142,8 @@ describe("applyShared", () => {
       expect(rejected).toEqual([]);
       expect(accepted).toEqual(entries);
       for (const path of [
-        "plugin/skills/repo-conventions/SKILL.md",
-        "plugin/commands/run-checks.md",
+        "sessions/main/plugin/skills/repo-conventions/SKILL.md",
+        "sessions/main/plugin/commands/run-checks.md",
       ]) {
         expect(manifest.files[path], path).toBe(sha256Hex(contentOf(files, path) ?? ""));
       }
@@ -195,7 +201,9 @@ describe("applyShared", () => {
 
       expect(result.accepted).toEqual([skill("repo-conventions")]);
       expect(result.rejected).toHaveLength(1);
-      expect(paths(result.files)).toContain("plugin/skills/repo-conventions/SKILL.md");
+      expect(paths(result.files)).toContain(
+        "sessions/main/plugin/skills/repo-conventions/SKILL.md",
+      );
     });
 
     it("asks about a second entry with a name already shared", async () => {
@@ -210,7 +218,9 @@ describe("applyShared", () => {
       expect(result.rejected).toEqual([
         { nodeId: "b", text: expect.stringContaining("repo-conventions") },
       ]);
-      expect(paths(result.files)).not.toContain("plugin/commands/repo-conventions.md");
+      expect(paths(result.files)).not.toContain(
+        "sessions/main/plugin/commands/repo-conventions.md",
+      );
     });
   });
 
@@ -220,3 +230,61 @@ describe("applyShared", () => {
 });
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+describe("applyShared per container", () => {
+  const twoContainers = (): Flow =>
+    sessionsWorkflow([
+      { name: "android", repo: "/repos/android", branch: "main", members: ["Plan", "Plan again"] },
+      { name: "ios", repo: "/repos/ios", branch: "develop", members: ["Plan", "Review"] },
+    ]);
+
+  const laidTwo = async (): Promise<{ files: BuildFile[]; manifest: Manifest }> => {
+    const result = await layDown(twoContainers(), deps);
+    expect(result.ok).toBe(true);
+    const files = result.ok ? result.files : [];
+    const manifest = JSON.parse(
+      files.find((file) => file.path === "manifest.json")?.content ?? "{}",
+    ) as Manifest;
+    return { files, manifest };
+  };
+
+  const added = (before: readonly BuildFile[], after: readonly BuildFile[]) =>
+    paths(after).filter((path) => !paths(before).includes(path));
+
+  it("extracts a shared piece inside the one container whose agents use it", async () => {
+    const { files, manifest } = await laidTwo();
+
+    const result = applyShared(files, manifest, [
+      skill("conventions", ["session-1-plan", "session-1-plan-again"]),
+    ]);
+
+    expect(result.accepted.map((entry) => entry.name)).toEqual(["conventions"]);
+    expect(added(files, result.files)).toEqual([
+      "sessions/android/plugin/skills/conventions/SKILL.md",
+    ]);
+    const draft = contentOf(result.files, "sessions/android/plugin/skills/conventions/SKILL.md");
+    expect(draft).toContain("alpha-android:conventions");
+    expect(draft).not.toContain("alpha-ios");
+    expect(draft).not.toContain("alpha-workspace");
+  });
+
+  it("never shares a piece between agents of two containers", async () => {
+    const { files, manifest } = await laidTwo();
+
+    const result = applyShared(files, manifest, [
+      skill("conventions", ["session-1-plan", "session-1-plan-again"]),
+      skill("across", ["session-1-plan", "session-2-review"]),
+    ]);
+
+    expect(result.accepted.map((entry) => entry.name)).toEqual(["conventions"]);
+    expect(added(files, result.files)).toEqual([
+      "sessions/android/plugin/skills/conventions/SKILL.md",
+    ]);
+    for (const file of result.files.filter((candidate) =>
+      candidate.path.startsWith("sessions/ios/"),
+    )) {
+      expect(file.content).not.toContain("conventions");
+      expect(file.content).not.toContain("across");
+    }
+  });
+});

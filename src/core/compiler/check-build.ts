@@ -2,14 +2,16 @@ import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
-import type { BuildFile, Manifest } from "./lower.js";
-import { orchestratorPath } from "./orchestrator.js";
-import { pieceOf } from "./pieces.js";
+import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
+import { containerRoot, pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
-import { sharedPath } from "./shared.js";
+import { sharedContainer, sharedPath } from "./shared.js";
 import { standardRules } from "./standard-rules.js";
 
-export type BuildCheckFailure = { file: string; rule: string; detail: string };
+export type BuildCheckFailure = { file: string; rule: string; detail: string; container?: string };
+
+export const failureLine = (failure: BuildCheckFailure) =>
+  `${failure.container === undefined ? "" : `[${failure.container}] `}${failure.file} ${failure.rule}: ${failure.detail}`;
 
 export type BuildCheckInputs = {
   laidDown: readonly BuildFile[];
@@ -22,7 +24,6 @@ export type BuildCheckInputs = {
 const descriptionFloor = 60;
 
 const codeOwned = ["plugin/hooks/hooks.json", "plugin/.claude-plugin/plugin.json", "settings.json"];
-
 const unfilledLine = /^@unfilled.*\n\n?/m;
 
 const frontmatterBlock = /^---\n([\s\S]*?)\n---\n/;
@@ -54,9 +55,9 @@ const bodyOf = (content: string) =>
 
 type Piece = { file: string; piece: string; labels: string[] };
 
-const piecesOf = (manifest: Manifest): Piece[] => {
+const piecesOf = (nodes: readonly ManifestNode[]): Piece[] => {
   const byFile = new Map<string, Piece>();
-  for (const node of manifest.nodes) {
+  for (const node of nodes) {
     if (node.file === undefined || node.type !== "agent") continue;
     const known = byFile.get(node.file);
     if (known === undefined) {
@@ -72,22 +73,14 @@ const piecesOf = (manifest: Manifest): Piece[] => {
   return [...byFile.values()];
 };
 
-export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
-  const { laidDown, readBack, manifest, flow, shared } = inputs;
-  const laid = new Map(laidDown.map((file) => [file.path, file.content]));
-  const back = new Map(readBack.map((file) => [file.path, file.content]));
-  const failures: BuildCheckFailure[] = [];
-  const fail = (file: string, rule: string, detail: string) => {
-    failures.push({ file, rule, detail });
-  };
-  const pieces = piecesOf(manifest);
-  const pieceNames = new Set([
-    ...pieces.map((piece) => piece.piece),
-    "run",
-    ...shared.map((entry) => entry.name),
-  ]);
-  const prefix = manifest.prefix ?? "";
+type Check = {
+  back: ReadonlyMap<string, string>;
+  laid: ReadonlyMap<string, string>;
+  flow: Flow;
+  fail: (file: string, rule: string, detail: string) => void;
+};
 
+const checkPieces = (pieces: readonly Piece[], { back, laid, fail }: Check) => {
   for (const piece of pieces) {
     const content = back.get(piece.file);
     if (content === undefined) {
@@ -125,12 +118,19 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     if (bodyOf(content) === bodyOf(laid.get(piece.file) ?? ""))
       fail(piece.file, "body", "body has nothing beyond its draft");
   }
+};
 
+const checkShared = (
+  container: ManifestContainer,
+  shared: BuildReport["shared"],
+  { back, laid, fail }: Check,
+) => {
+  const root = containerRoot(container);
   const filesOf = (ids: readonly string[]) => [
-    ...new Set(ids.flatMap((id) => manifest.nodes.find((node) => node.id === id)?.file ?? [])),
+    ...new Set(ids.flatMap((id) => container.nodes.find((node) => node.id === id)?.file ?? [])),
   ];
   for (const entry of shared) {
-    const path = sharedPath(entry);
+    const path = sharedPath(entry, root);
     const content = back.get(path);
     if (content === undefined || content.trim() === "") {
       fail(path, "missing", `shared ${entry.kind} ${entry.name} has no content`);
@@ -140,7 +140,7 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
       if (bodyOf(content) === bodyOf(laid.get(path) ?? ""))
         fail(path, "body", "body has nothing beyond its draft");
     }
-    const reference = `${prefix}:${entry.name}`;
+    const reference = `${container.prefix}:${entry.name}`;
     for (const file of filesOf(entry.usedBy)) {
       const agentFile = back.get(file);
       if (agentFile === undefined) continue;
@@ -148,12 +148,31 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
         fail(file, "shared", `never runs the shared ${entry.kind} ${reference}`);
     }
   }
+};
+
+const checkContainer = (
+  container: ManifestContainer,
+  shared: BuildReport["shared"],
+  check: Check,
+) => {
+  const { back, laid, flow, fail } = check;
+  const root = containerRoot(container);
+  const plugin = `${root}/plugin/`;
+  const pieces = piecesOf(container.nodes);
+  const pieceNames = new Set([
+    ...pieces.map((piece) => piece.piece),
+    "run",
+    ...shared.map((entry) => entry.name),
+  ]);
+  const { prefix } = container;
+
+  checkPieces(pieces, check);
+  checkShared(container, shared, check);
 
   for (const [path, content] of back) {
-    if (path.startsWith("plugin/") && !laid.has(path))
-      fail(path, "extra", "file was not laid down by code");
-    if (unfilledLine.test(content)) fail(path, "unfilled", "an @unfilled line is left");
-    if (path.startsWith("plugin/") && path.endsWith(".md")) {
+    if (!path.startsWith(plugin)) continue;
+    if (!laid.has(path)) fail(path, "extra", "file was not laid down by code");
+    if (path.endsWith(".md")) {
       for (const match of content.matchAll(/([a-z0-9][a-z0-9-]*):([a-z0-9][a-z0-9-]*)/g)) {
         const [reference = "", owner, target = ""] = match;
         if (owner === prefix && !pieceNames.has(target))
@@ -164,29 +183,61 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     }
   }
 
-  for (const path of codeOwned) {
+  for (const path of codeOwned.map((file) => `${root}/${file}`)) {
     if (back.get(path) !== laid.get(path)) fail(path, "code-owned", "differs from what code wrote");
   }
 
-  if (!(back.get("CLAUDE.md") ?? "").includes(standardRules.text))
-    fail("CLAUDE.md", "standard-rules", "the standard rules are missing or altered");
+  const claudeMd = `${root}/CLAUDE.md`;
+  if (!(back.get(claudeMd) ?? "").includes(standardRules.text))
+    fail(claudeMd, "standard-rules", "the standard rules are missing or altered");
 
+  const members = new Set(container.nodes.map((node) => node.id));
   const handedOn = new Set(
-    handoffPairs(flow.nodes).flatMap((pair) => (hasTemplate(pair.file) ? [pair.file] : [])),
+    handoffPairs(flow.nodes.filter((node) => members.has(node.id))).flatMap((pair) =>
+      hasTemplate(pair.file) ? [pair.file] : [],
+    ),
   );
   for (const file of handedOn) {
-    if (!back.has(templatePath(file)))
-      fail(templatePath(file), "template", `hand-off file ${file} has no template`);
+    const path = `${root}/${templatePath(file)}`;
+    if (!back.has(path)) fail(path, "template", `hand-off file ${file} has no template`);
   }
 
+  const orchestratorPath = container.orchestrator;
   const orchestrator = back.get(orchestratorPath);
   const marked = (orchestrator ?? "")
     .split("\n")
     .flatMap((line) => /^\d+\. NODE (\S+) /.exec(line)?.[1] ?? []);
-  const expected = manifest.nodes.map((node) => node.id);
+  const expected = container.nodes.map((node) => node.id);
   if (orchestrator === undefined) fail(orchestratorPath, "missing", "the orchestrator is missing");
   else if (marked.join("\n") !== expected.join("\n"))
     fail(orchestratorPath, "orchestrator", "NODE markers do not follow the manifest's order");
+};
+
+export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
+  const { laidDown, readBack, manifest, flow, shared } = inputs;
+  const laid = new Map(laidDown.map((file) => [file.path, file.content]));
+  const back = new Map(readBack.map((file) => [file.path, file.content]));
+  const failures: BuildCheckFailure[] = [];
+  const { containers } = manifest;
+
+  for (const container of containers) {
+    const fail = (file: string, rule: string, detail: string) => {
+      failures.push({ file, rule, detail, container: container.slug });
+    };
+    const own = shared.filter((entry) => sharedContainer(containers, entry) === container);
+    checkContainer(container, own, { back, laid, flow, fail });
+  }
+
+  for (const [path, content] of back) {
+    if (!unfilledLine.test(content)) continue;
+    const owner = containers.find((container) => path.startsWith(`${containerRoot(container)}/`));
+    failures.push({
+      file: path,
+      rule: "unfilled",
+      detail: "an @unfilled line is left",
+      ...(owner === undefined ? {} : { container: owner.slug }),
+    });
+  }
 
   return failures;
 }

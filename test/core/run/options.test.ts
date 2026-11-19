@@ -3,8 +3,9 @@ import { lower } from "../../../src/core/compiler/lower.js";
 import { runChoices, storedAuto, storedOptions } from "../../../src/core/run/options.js";
 import { agent, flow, gate } from "../../fixtures/flow-builders.js";
 
-const manifestOf = (nodes: unknown[]) =>
-  lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest;
+const manifestOf = (nodes: unknown[]) => ({
+  nodes: lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest.nodes ?? [],
+});
 
 describe("runChoices", () => {
   it("offers only automatic mode for a build with a skippable gate", () => {
@@ -13,13 +14,13 @@ describe("runChoices", () => {
       agent("p"),
     ]);
 
-    expect(runChoices(manifest)).toEqual({ automatic: true });
+    expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: true });
   });
 
   it("offers nothing for a build without a skippable gate", () => {
     const manifest = manifestOf([agent("s"), gate("g"), agent("p")]);
 
-    expect(runChoices(manifest)).toEqual({ automatic: false });
+    expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: false });
   });
 });
 

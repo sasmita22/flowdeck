@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
@@ -26,7 +26,13 @@ import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
-import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  onMainFlow,
+  sessionsWorkflow,
+  thenWire,
+} from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
 import { FakeBuildAgents } from "../../fakes/fake-build-agents.js";
@@ -522,10 +528,10 @@ describe("an app restart", () => {
       overrides: Partial<EngineHandlerOptions> = {},
       repoPath = repo.path,
       request: Record<string, unknown> = {},
+      blueprint: Flow = onMainFlow([agent("p1")], []),
     ) => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
-      const blueprint = onMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save(inRepo(blueprint, repoPath));
       const name = "left-going";
       const answered = (await call(first, "build-version", {
@@ -671,7 +677,9 @@ describe("an app restart", () => {
       const built = runs.findBuildByName(name);
       const recorded = runs.builds().find((build) => build.id === built?.id);
       expect(recorded?.nodes.map((node) => node.nodeId)).toEqual(["start", "p1", "stop"]);
-      const claudeMd = await new NodeFileSystem().readFile(join(built?.dir ?? "", "CLAUDE.md"));
+      const claudeMd = await new NodeFileSystem().readFile(
+        join(built?.dir ?? "", "sessions/main/CLAUDE.md"),
+      );
       expect(claudeMd.split("\n").filter((line) => line.startsWith("- Blueprint: "))).toEqual([
         `- Blueprint: ${snapshot.blueprintName}, version ${snapshot.version}`,
       ]);
@@ -714,7 +722,9 @@ describe("an app restart", () => {
       const built = await finishedAfterRestart(spec, name, onFeatY);
 
       expect(built).toMatchObject({ branch: "feat-y", branchCreated: false });
-      const claudeMd = await new NodeFileSystem().readFile(join(built.dir, "CLAUDE.md"));
+      const claudeMd = await new NodeFileSystem().readFile(
+        join(built.dir, "sessions/main/CLAUDE.md"),
+      );
       expect(claudeMd.split("\n").filter((line) => line.startsWith("- Branch: "))).toEqual([
         "- Branch: feat-y (existing)",
       ]);
@@ -1004,6 +1014,31 @@ describe("an app restart", () => {
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
       expect(await worktreeCount(source.path)).toBe(1);
       expect(await flowdeckBranches(source.path)).toEqual([]);
+    });
+
+    it("ends a build left in step 3 with a worktree per session container failed, removing every worktree", async () => {
+      const worktree = new FakeWorktree();
+      const twoSessions = sessionsWorkflow([
+        { name: "android", repo: repo.path, branch: "main" },
+        { name: "ios", repo: repo.path, branch: "main" },
+      ]);
+      const { pendingId, spec } = await leftMidTurn({ worktree }, repo.path, {}, twoSessions);
+      const cut = worktree.calls.map((added) => added.path);
+      expect(cut).toEqual([
+        join(spec.workspaceDir, "sessions/android", basename(repo.path)),
+        join(spec.workspaceDir, "sessions/ios", basename(repo.path)),
+      ]);
+
+      const second = newHandler({
+        buildAgents: new FakeBuildAgents({ fs: new NodeFileSystem() }),
+        worktree,
+      });
+      await second.reattach();
+
+      await vi.waitFor(() => expect(runs.listPendingBuilds()).toEqual([]), { timeout: 3000 });
+      expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Failed" });
+      expect(worktree.removed.map((removed) => removed.path)).toEqual(cut);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
     });
 
     it("ends a build left in step 3 on an existing branch failed, removing its worktree and keeping the branch", async () => {

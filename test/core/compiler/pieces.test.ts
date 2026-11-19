@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { pieceNames, pieceOf } from "../../../src/core/compiler/pieces.js";
-import { agent, flow, gate, thenWire, trigger } from "../../fixtures/flow-builders.js";
+import {
+  containerPrefix,
+  containerSlugs,
+  pieceNames,
+  pieceOf,
+} from "../../../src/core/compiler/pieces.js";
+import {
+  agent,
+  flow,
+  gate,
+  sessionsWorkflow,
+  thenWire,
+  trigger,
+  twoSessionWorkflow,
+} from "../../fixtures/flow-builders.js";
 
 const labelled = (make: typeof agent) => (id: string, label: string) => ({ ...make(id), label });
 
@@ -63,5 +76,51 @@ describe("pieceOf", () => {
   it("returns the node's piece, or its id when the build named none", () => {
     expect(pieceOf({ id: "n1", piece: "review-2" })).toBe("review-2");
     expect(pieceOf({ id: "n1" })).toBe("n1");
+  });
+});
+
+const session = (name: string) => ({ name, repo: "/repos/app", branch: "main" });
+
+const slugsOf = (names: string[]) =>
+  Object.fromEntries(containerSlugs(sessionsWorkflow(names.map(session))));
+
+describe("containerSlugs", () => {
+  it("names the workspace workspace and each session by its name", () => {
+    expect(Object.fromEntries(containerSlugs(twoSessionWorkflow()))).toEqual({
+      "workspace-1": "workspace",
+      "session-1": "android",
+      "session-2": "ios",
+    });
+  });
+
+  it("gives names that slug alike different slugs, in container order", () => {
+    expect(slugsOf(["My App", "my-app"])).toEqual({
+      "workspace-1": "workspace",
+      "session-1": "my-app",
+      "session-2": "my-app-2",
+    });
+  });
+
+  it("never gives a session the workspace's slug", () => {
+    expect(slugsOf(["workspace", "Workspace"])).toEqual({
+      "workspace-1": "workspace",
+      "session-1": "workspace-2",
+      "session-2": "workspace-3",
+    });
+  });
+
+  it("keeps only lowercase letters, digits and single hyphens", () => {
+    expect(slugsOf(["../Web App/v2 ✓", "a_b.c"])).toEqual({
+      "workspace-1": "workspace",
+      "session-1": "web-app-v2",
+      "session-2": "a-b-c",
+    });
+  });
+});
+
+describe("containerPrefix", () => {
+  it("joins the build prefix and the container slug", () => {
+    expect(containerPrefix("fix-login", "android")).toBe("fix-login-android");
+    expect(containerPrefix("fix-login", "workspace")).toBe("fix-login-workspace");
   });
 });

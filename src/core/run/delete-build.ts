@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { legacyBranchName } from "./branch-name.js";
-import { buildWorktree, type RunWorktree, type WorktreeRemoval } from "./workspace.js";
-import type { BuildRecord, Store } from "./store.js";
+import type { RunWorktree, WorktreeRemoval } from "./workspace.js";
+import type { BuildRecord, BuildWorktree, Store } from "./store.js";
 
 export type DeleteBuildDeps = {
-  store: Pick<Store, "findBuild" | "listRuns" | "deleteBuild">;
+  store: Pick<Store, "findBuild" | "listRuns" | "deleteBuild" | "buildWorktrees">;
   worktree: {
     remove(options: RunWorktree & { force?: boolean }): Promise<WorktreeRemoval>;
     isDirty(path: string): Promise<boolean>;
@@ -15,7 +15,7 @@ export type DeleteBuildDeps = {
   };
   fs: {
     exists(path: string): Promise<boolean>;
-    removeTree(path: string, options?: { keep?: string }): Promise<void>;
+    removeTree(path: string, options?: { keep?: string[] }): Promise<void>;
     folders(dir: string): Promise<string[]>;
     readFile(path: string): Promise<string>;
     replaceFile(path: string, content: string): Promise<void>;
@@ -40,7 +40,7 @@ const keptAfterDeleteSchema = z.discriminatedUnion("kind", [
 export type KeptAfterDelete = z.infer<typeof keptAfterDeleteSchema>;
 
 export const deleteBuildResultSchema = z.union([
-  z.object({ ok: z.literal(true), kept: keptAfterDeleteSchema.optional() }),
+  z.object({ ok: z.literal(true), kept: z.array(keptAfterDeleteSchema).min(1).optional() }),
   z.object({ ok: z.literal(false), message: z.string() }),
 ]);
 
@@ -59,9 +59,13 @@ export const isInside = (folder: string, path: string): boolean => {
   return inner.length > outer.length && outer.every((part, index) => inner[index] === part);
 };
 
-const deleted = (deps: DeleteBuildDeps, id: string, kept?: KeptAfterDelete): DeleteBuildResult => {
+const deleted = (
+  deps: DeleteBuildDeps,
+  id: string,
+  kept: readonly KeptAfterDelete[] = [],
+): DeleteBuildResult => {
   deps.store.deleteBuild(id);
-  return kept === undefined ? { ok: true } : { ok: true, kept };
+  return kept.length === 0 ? { ok: true } : { ok: true, kept: [...kept] };
 };
 
 export type TeardownDeps = Pick<DeleteBuildDeps, "worktree" | "fs">;
@@ -71,48 +75,59 @@ const holdsWork = async (deps: TeardownDeps, worktree: RunWorktree): Promise<boo
   (worktree.create &&
     (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base)));
 
-async function forceTeardown(
+async function forceRemove(
   deps: TeardownDeps,
-  dir: string,
   worktree: RunWorktree,
 ): Promise<KeptAfterDelete | undefined> {
   const removal = await deps.worktree.remove({ ...worktree, force: true });
-  if (removal.worktree === "kept") {
-    await deps.fs.removeTree(dir, { keep: worktree.path });
-    return { kind: "worktree", path: worktree.path };
-  }
+  if (removal.worktree === "kept") return { kind: "worktree", path: worktree.path };
   if (worktree.create && removal.branch === "kept") {
     await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
   }
-  await deps.fs.removeTree(dir);
   return undefined;
 }
 
-export async function teardownWorkspace(
+async function removeUnlessHoldingWork(
   deps: TeardownDeps,
-  { dir, worktree, force = false }: { dir: string; worktree?: RunWorktree; force?: boolean },
+  worktree: RunWorktree,
 ): Promise<KeptAfterDelete | undefined> {
-  if (worktree === undefined) {
-    await deps.fs.removeTree(dir);
-    return undefined;
-  }
-  if (force) return forceTeardown(deps, dir, worktree);
   const present = await deps.fs.exists(worktree.path);
   const keptWorktree: KeptAfterDelete = { kind: "worktree", path: worktree.path };
-  if (present && (await holdsWork(deps, worktree))) {
-    await deps.fs.removeTree(dir, { keep: worktree.path });
-    return keptWorktree;
-  }
+  if (present && (await holdsWork(deps, worktree))) return keptWorktree;
   const removal = await deps.worktree.remove(worktree);
-  if (removal.worktree === "kept") {
-    await deps.fs.removeTree(dir, { keep: worktree.path });
-    return keptWorktree;
-  }
+  if (removal.worktree === "kept") return keptWorktree;
   const branchLeft = worktree.create && removal.branch === "kept";
   if (present && branchLeft) await deps.worktree.deleteBranch(worktree.repo, worktree.branch);
-  await deps.fs.removeTree(dir);
   return !present && branchLeft ? { kind: "branch", branch: worktree.branch } : undefined;
 }
+
+async function removeEach(
+  deps: TeardownDeps,
+  dir: string,
+  worktrees: readonly RunWorktree[],
+  remove: (worktree: RunWorktree) => Promise<KeptAfterDelete | undefined>,
+): Promise<KeptAfterDelete[]> {
+  const kept: KeptAfterDelete[] = [];
+  for (const worktree of worktrees) {
+    const left = await remove(worktree);
+    if (left !== undefined) kept.push(left);
+  }
+  const keep = kept.flatMap((left) => (left.kind === "worktree" ? [left.path] : []));
+  await (keep.length === 0 ? deps.fs.removeTree(dir) : deps.fs.removeTree(dir, { keep }));
+  return kept;
+}
+
+export const teardownWorkspace = (
+  deps: TeardownDeps,
+  {
+    dir,
+    worktrees = [],
+    force = false,
+  }: { dir: string; worktrees?: readonly RunWorktree[]; force?: boolean },
+): Promise<KeptAfterDelete[]> =>
+  removeEach(deps, dir, worktrees, (worktree) =>
+    force ? forceRemove(deps, worktree) : removeUnlessHoldingWork(deps, worktree),
+  );
 
 export const storedBranch = (
   build: BuildRecord,
@@ -122,37 +137,72 @@ export const storedBranch = (
     ? { branch: legacyBranchName(name, build.id), create: true }
     : { branch: build.branch, create: build.branchCreated };
 
-const storedWorktree = (build: BuildRecord): RunWorktree | undefined =>
-  build.name === null || build.repo === null || build.base === null
-    ? undefined
-    : {
-        repo: build.repo,
-        base: build.base,
-        ...buildWorktree({ repo: build.repo, dir: build.dir, ...storedBranch(build, build.name) }),
-      };
+export const runWorktreeOf = ({
+  repo,
+  base,
+  branch,
+  branchCreated,
+  path,
+}: BuildWorktree): RunWorktree => ({
+  repo,
+  base,
+  branch,
+  create: branchCreated,
+  path,
+});
 
-export const deletePreviewSchema = z.object({
+const storedWorktrees = (store: Pick<Store, "buildWorktrees">, build: BuildRecord): RunWorktree[] =>
+  store.buildWorktrees(build.id).map(runWorktreeOf);
+
+const worktreeStateSchema = z.object({
   dirtyWorktree: z.boolean(),
   unpushedBranch: z.boolean(),
 });
 
+export const deletePreviewSchema = worktreeStateSchema.extend({
+  worktrees: z
+    .array(worktreeStateSchema.extend({ path: z.string(), branch: z.string() }))
+    .optional(),
+});
+
 export type DeletePreview = z.infer<typeof deletePreviewSchema>;
 
-export const deletePreview = (deps: TeardownDeps, build: BuildRecord): Promise<DeletePreview> =>
-  worktreePreview(deps, storedWorktree(build));
+type WorktreeState = z.infer<typeof worktreeStateSchema>;
 
-export async function worktreePreview(
+const worktreeState = async (
   deps: TeardownDeps,
-  worktree: RunWorktree | undefined,
-): Promise<DeletePreview> {
-  if (worktree === undefined) return { dirtyWorktree: false, unpushedBranch: false };
-  const dirtyWorktree =
-    (await deps.fs.exists(worktree.path)) && (await deps.worktree.isDirty(worktree.path));
-  const unpushedBranch =
+  worktree: RunWorktree,
+): Promise<WorktreeState> => ({
+  dirtyWorktree:
+    (await deps.fs.exists(worktree.path)) && (await deps.worktree.isDirty(worktree.path)),
+  unpushedBranch:
     worktree.create &&
-    (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base));
-  return { dirtyWorktree, unpushedBranch };
-}
+    (await deps.worktree.hasUnpushed(worktree.repo, worktree.branch, worktree.base)),
+});
+
+export const worktreePreview = async (
+  deps: TeardownDeps,
+  worktrees: readonly RunWorktree[],
+): Promise<DeletePreview> => {
+  const states = [];
+  for (const worktree of worktrees) {
+    states.push({
+      path: worktree.path,
+      branch: worktree.branch,
+      ...(await worktreeState(deps, worktree)),
+    });
+  }
+  return {
+    dirtyWorktree: states.some((state) => state.dirtyWorktree),
+    unpushedBranch: states.some((state) => state.unpushedBranch),
+    worktrees: states,
+  };
+};
+
+export const deletePreview = (
+  deps: TeardownDeps & { store: Pick<Store, "buildWorktrees"> },
+  build: BuildRecord,
+): Promise<DeletePreview> => worktreePreview(deps, storedWorktrees(deps.store, build));
 
 const runningMessage = "This build has a run left going. Stop or resume it first.";
 
@@ -200,19 +250,18 @@ async function removeLeftovers(deps: DeleteBuildDeps, workspace?: string): Promi
 
 const keptReason = { open: "open-pr", unknown: "pr-unknown" } as const;
 
-async function teardownBuild(
+async function removeBuildWorktree(
   deps: DeleteBuildDeps,
-  dir: string,
   worktree: RunWorktree,
 ): Promise<KeptAfterDelete | undefined> {
-  if (!worktree.create) return forceTeardown(deps, dir, worktree);
+  if (!worktree.create) return forceRemove(deps, worktree);
   const state = await deps.pullRequests.openOn(worktree.repo, worktree.branch);
   if (state !== "none") {
-    const kept = await forceTeardown(deps, dir, { ...worktree, create: false });
+    const kept = await forceRemove(deps, { ...worktree, create: false });
     return kept ?? { kind: "branch", branch: worktree.branch, reason: keptReason[state] };
   }
   const tip = await deps.worktree.branchTip(worktree.repo, worktree.branch);
-  const kept = await forceTeardown(deps, dir, worktree);
+  const kept = await forceRemove(deps, worktree);
   if (kept !== undefined || tip === undefined) return kept;
   return deleteRemoteBranch(deps, worktree, tip);
 }
@@ -238,7 +287,7 @@ async function deleteOldBuild(
 ): Promise<DeleteBuildResult> {
   if (!isInside(deps.home, build.dir)) {
     await removeLeftovers(deps);
-    return deleted(deps, build.id, { kind: "folder", path: build.dir });
+    return deleted(deps, build.id, [{ kind: "folder", path: build.dir }]);
   }
   await deps.fs.removeTree(build.dir);
   await removeLeftovers(deps, build.dir);
@@ -256,9 +305,11 @@ export async function deleteBuild(
   if (deps.store.listRuns().some((run) => run.buildId === buildId && run.status === "running")) {
     return { ok: false, message: runningMessage };
   }
-  const worktree = storedWorktree(build);
-  if (worktree === undefined) return deleteOldBuild(deps, build);
-  const kept = await teardownBuild(deps, build.dir, worktree);
+  const worktrees = storedWorktrees(deps.store, build);
+  if (worktrees.length === 0) return deleteOldBuild(deps, build);
+  const kept = await removeEach(deps, build.dir, worktrees, (worktree) =>
+    removeBuildWorktree(deps, worktree),
+  );
   await removeLeftovers(deps, build.dir);
   return deleted(deps, build.id, kept);
 }

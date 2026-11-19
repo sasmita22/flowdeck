@@ -13,6 +13,7 @@ export type BuildFileSystem = VerifyFileSystem & {
   exists(path: string): Promise<boolean>;
   writeFile(path: string, content: string): Promise<void>;
   remove(path: string): Promise<void>;
+  realPath(path: string): Promise<string>;
 };
 
 export type BuildResult =
@@ -45,7 +46,7 @@ export async function layDown(flow: Flow, deps: LayDownDeps): Promise<LayDownRes
   const { id, name, values, ...target } = deps.workspace;
   const workspace = workspaceDir(deps.home, id);
   const kit = deps.kitVersion === undefined ? {} : { kitVersion: deps.kitVersion };
-  const lowered = lower(flow, { name, values, repo: target.repo, workspace, ...kit }, deps.source);
+  const lowered = lower(flow, { name, values, workspace, ...kit }, deps.source);
   return { ok: true, files: emit(lowered, { ...target, workspace }) };
 }
 

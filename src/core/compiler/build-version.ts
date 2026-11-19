@@ -2,13 +2,8 @@ import { z } from "zod";
 import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
-import type { BuildConfig, Flow, SessionContainer } from "../flow/schema.js";
-import {
-  flowContainerMembers,
-  isWorkflow,
-  libraryBuildReason,
-  sessionBuildConfig,
-} from "../flow/structure.js";
+import type { Flow, SessionContainer } from "../flow/schema.js";
+import { isWorkflow, libraryBuildReason } from "../flow/structure.js";
 import { foundVariables, type VariableValues } from "../flow/variables.js";
 import type { FolderState } from "../flow/workspace-info.js";
 import type { AgentCall } from "../run/agent-calls.js";
@@ -28,7 +23,7 @@ import {
 } from "../run/build-progress.js";
 import { teardownWorkspace, type TeardownDeps } from "../run/delete-build.js";
 import type { BuildSource, Store } from "../run/store.js";
-import { buildWorktree, type RunWorktree } from "../run/workspace.js";
+import { sessionWorktree, type RunWorktree } from "../run/workspace.js";
 import { layDown, lockBuild, workspaceDir, type BuildDeps, type BuildResult } from "./build.js";
 import {
   buildAnswerSchema,
@@ -37,15 +32,23 @@ import {
   type BuildReport,
 } from "./build-report.js";
 import { buildSessionSettings } from "./build-session.js";
-import { auditTurn, nodeIdsOf, pieceKind, writeTurn } from "./build-turns.js";
+import {
+  auditPiece,
+  auditTurn,
+  manifestNodes,
+  nodeIdsOf,
+  pieceKind,
+  writeTurn,
+} from "./build-turns.js";
 import { canonicalJson } from "./canonical-json.js";
-import { checkBuild, type BuildCheckFailure } from "./check-build.js";
-import { reportPath } from "./emit.js";
+import { checkBuild, failureLine, type BuildCheckFailure } from "./check-build.js";
+import { reportPath, type ContainerBranch } from "./emit.js";
 import { sha256Hex } from "./hash.js";
 import { shellQuote } from "./hook-settings.js";
 import type { BuildFile, Manifest } from "./lower.js";
 import { applyMerges } from "./merge.js";
-import { applyShared, sharedPath } from "./shared.js";
+import { containerRoot, containerSlugs } from "./pieces.js";
+import { applyShared, sharedContainer, sharedPath } from "./shared.js";
 import { buildRecord } from "./record.js";
 import { validate, type ValidationError } from "./validate.js";
 import { workspaceListing, workspaceRootFiles } from "./verify.js";
@@ -70,6 +73,7 @@ export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
     | "appendBuildEvent"
     | "endPendingBuild"
     | "findPendingBuildByName"
+    | "addBuildWorktree"
   >;
   gitState: {
     read(folder: string): Promise<FolderState>;
@@ -85,6 +89,7 @@ export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
       sessionName: string;
       claudeSessionId: string;
       workspaceDir: string;
+      sessionSlugs: readonly string[];
       kitDir: string;
       settingsPath: string;
       model?: string;
@@ -191,7 +196,6 @@ async function branchProblem(
 
 async function requestProblems(
   request: BuildRequest,
-  repo: string,
   flow: Flow,
   deps: BuildFlowDeps,
 ): Promise<ValidationError[]> {
@@ -209,18 +213,28 @@ async function requestProblems(
   if (deps.store.findPendingBuildByName(request.name) !== undefined) {
     return [{ rule: "build-name", message: busy.name(request.name) }];
   }
-  const state = await untilStopped(deps.signal, deps.gitState.read(repo));
-  if (state.kind === "missing" || state.kind === "not-a-repo") {
-    const problem = state.kind === "missing" ? "does not exist" : "is not a git repository";
-    return [{ rule: "build-repo", message: `${repo} ${problem}.` }];
+  const sessions = sessionsOf(flow);
+  for (const { container } of sessions) {
+    const state = await untilStopped(deps.signal, deps.gitState.read(container.repo));
+    if (state.kind === "missing" || state.kind === "not-a-repo") {
+      const problem = state.kind === "missing" ? "does not exist" : "is not a git repository";
+      return [{ rule: "build-repo", message: `${container.repo} ${problem}.` }];
+    }
   }
   const unset = emptyTextVariables(flow, request.values);
   if (unset.length > 0) {
     return [{ rule: "build-values", message: `Give a value for ${unset.join(", ")}.` }];
   }
-  const branch =
-    request.branch === undefined ? undefined : await branchProblem(request.branch, repo, deps);
-  return branch === undefined ? [] : [{ rule: "build-branch", message: branch }];
+  if (request.branch === undefined) return [];
+  for (const session of sessions) {
+    const branch = await branchProblem(
+      sessionRequestBranch(request.branch, session, sessions.length),
+      session.container.repo,
+      deps,
+    );
+    if (branch !== undefined) return [{ rule: "build-branch", message: branch }];
+  }
+  return [];
 }
 
 export const buildInputsSchema = z.object({
@@ -246,36 +260,43 @@ const requestBase = ({ base, branch }: BuildRequest): string | undefined =>
 const isSession = (container: Flow["containers"][number]): container is SessionContainer =>
   container.kind === "session";
 
-const bridgeProblem = (flow: Flow): string | undefined => {
-  if (!isWorkflow(flow)) {
-    return libraryBuildReason;
-  }
-  const sessions = flow.containers.filter(isSession).length;
-  if (sessions === 0) {
-    return "A workflow needs a session to build; building the workspace alone comes with multi-session builds.";
-  }
-  if (sessions > 1) {
-    return "A workflow builds one session for now; building several comes with multi-session builds.";
-  }
-  const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
-  const workspace = flow.containers.find((container) => container.kind === "workspace");
-  const holdsMore = flowContainerMembers(flow, workspace?.id ?? "").some(
-    (id) => types.get(id) !== "trigger" && types.get(id) !== "output",
-  );
-  return holdsMore
-    ? "The workspace holds only its Start and Stop for now; steps in the workspace come with multi-session builds."
-    : undefined;
+type SessionOf = { container: SessionContainer; slug: string };
+
+const sessionsOf = (flow: Flow): SessionOf[] => {
+  const slugs = containerSlugs(flow);
+  return flow.containers
+    .filter(isSession)
+    .map((container) => ({ container, slug: slugs.get(container.id) ?? container.id }));
 };
 
-const buildConfigOf = (flow: Flow): BuildConfig => sessionBuildConfig(flow) ?? {};
+const ownBranch = (dialogBranch: string, slug: string) => `${dialogBranch}-${slug}`;
+
+const sessionRequestBranch = (
+  branch: RequestBranch,
+  { container, slug }: SessionOf,
+  sessions: number,
+): RequestBranch =>
+  sessions === 1
+    ? branch
+    : { mode: "new", name: ownBranch(branch.name, slug), base: container.branch };
+
+const sessionBranchOf = (
+  { branch, branchCreated }: SessionBranch,
+  slug: string,
+  sessions: number,
+): SessionBranch =>
+  sessions === 1
+    ? { branch, branchCreated }
+    : { branch: ownBranch(branch, slug), branchCreated: true };
 
 const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
   const { repo, buildModel } = request;
   const base = requestBase(request);
+  const single = flow.containers.filter(isSession).length === 1;
   return {
     ...flow,
     containers: flow.containers.map((container) =>
-      isSession(container)
+      single && isSession(container)
         ? {
             ...container,
             ...(repo === undefined ? {} : { repo }),
@@ -297,19 +318,16 @@ export async function startBuild(
   deps: BuildFlowDeps,
   origin?: BuildOrigin,
 ): Promise<StartBuildResult> {
-  const bridge = bridgeProblem(saved);
-  if (bridge !== undefined)
-    return { ok: false, errors: [{ rule: "build-bridge", message: bridge }] };
+  if (!isWorkflow(saved)) {
+    return { ok: false, errors: [{ rule: "build-library", message: libraryBuildReason }] };
+  }
   const flow = mainFlowOnly(withRequestTarget(saved, request));
-  const buildConfig = buildConfigOf(flow);
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
-  const problems = await requestProblems(request, buildConfig.repo ?? "", flow, deps).catch(
-    (error: unknown) => {
-      if (error instanceof BuildStopped) return undefined;
-      throw error;
-    },
-  );
+  const problems = await requestProblems(request, flow, deps).catch((error: unknown) => {
+    if (error instanceof BuildStopped) return undefined;
+    throw error;
+  });
   if (problems === undefined) return stoppedResult;
   if (problems.length > 0) return { ok: false, errors: problems };
   if (deps.signal?.aborted === true) return stoppedResult;
@@ -343,12 +361,19 @@ const manifestPath = "manifest.json";
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 const labelsOf = (manifest: Manifest, path: string): string[] =>
-  manifest.nodes.flatMap((node) => (node.file === path ? [node.label] : []));
+  manifestNodes(manifest).flatMap((node) => (node.file === path ? [node.label] : []));
 
 const maxRounds = 3;
 
 const manifestOf = (files: readonly BuildFile[]): Manifest =>
   JSON.parse(files.find((file) => file.path === manifestPath)?.content ?? "{}") as Manifest;
+
+const sharedFile = (manifest: Manifest, entry: BuildReport["shared"][number]): string[] => {
+  const container = sharedContainer(manifest.containers, entry);
+  return container === undefined ? [] : [sharedPath(entry, containerRoot(container))];
+};
+
+const templateFolder = /^(workspace|sessions\/[^/]+)\/plugin\/templates\//;
 
 const componentsOf = (
   manifest: Manifest,
@@ -356,21 +381,18 @@ const componentsOf = (
   shared: BuildReport["shared"] = [],
 ): string[] => [
   ...new Set(
-    manifest.nodes.flatMap((node) =>
+    manifestNodes(manifest).flatMap((node) =>
       node.type === "agent" && node.file !== undefined ? [node.file] : [],
     ),
   ),
-  ...files.flatMap((file) => (file.path.startsWith("plugin/templates/") ? [file.path] : [])),
-  ...shared.map(sharedPath),
+  ...files.flatMap((file) => (templateFolder.test(file.path) ? [file.path] : [])),
+  ...shared.flatMap((entry) => sharedFile(manifest, entry)),
 ];
 
 const componentStatus = (call: AgentCall): ComponentStatus => {
   if (call.status === undefined) return "running";
   return call.status === "completed" ? "done" : "failed";
 };
-
-const failureLine = (failure: BuildCheckFailure) =>
-  `${failure.file} ${failure.rule}: ${failure.detail}`;
 
 export const questionRule = "build-question";
 
@@ -426,11 +448,10 @@ export async function runBuild(
   resume?: BuildResume,
 ): Promise<BuildResult> {
   const flow = mainFlowOnly(withRequestTarget(saved, request));
-  const buildConfig = buildConfigOf(flow);
-  const repo = buildConfig.repo ?? "";
+  const sessions = sessionsOf(flow);
   let current: BuildStepNumber = resume === undefined ? 1 : 3;
   let report: unknown;
-  let workspace: { dir: string; worktree?: RunWorktree } | undefined;
+  let workspace: { dir: string; worktrees: RunWorktree[] } | undefined;
   let session: string | undefined;
   let opening: string | undefined;
   let recorded = false;
@@ -498,39 +519,69 @@ export async function runBuild(
 
   try {
     checkpoint();
-    const { id, base } =
+    const baseOf = async ({ container }: SessionOf) =>
+      container.branch === ""
+        ? await waited(deps.gitState.defaultBranch(container.repo))
+        : container.branch;
+    const { id, bases } =
       resume === undefined
-        ? await stage(1, async () => ({
-            id: deps.newId(),
-            base: buildConfig.base ?? (await waited(deps.gitState.defaultBranch(repo))),
-          }))
-        : { id: resume.session.buildId, base: resume.session.base };
-    const { branch, branchCreated } =
+        ? await stage(1, async () => {
+            const bases: string[] = [];
+            for (const session of sessions) bases.push(await baseOf(session));
+            return { id: deps.newId(), bases };
+          })
+        : {
+            id: resume.session.buildId,
+            bases: sessions.map(({ container }) =>
+              sessions.length === 1 ? resume.session.base : container.branch,
+            ),
+          };
+    const dialogBranch =
       resume === undefined
         ? requestedBranch(request, id)
         : sessionBranch(resume.session, request.name, id);
+    const dir = workspaceDir(deps.home, id);
+    const cuts = sessions.map(({ container, slug }, index) => {
+      const { branch, branchCreated } = sessionBranchOf(dialogBranch, slug, sessions.length);
+      const worktree: RunWorktree = {
+        repo: container.repo,
+        base: bases[index] ?? "",
+        branch,
+        create: branchCreated,
+        path: sessionWorktree(dir, slug, container.repo),
+      };
+      return { slug, worktree };
+    });
+    const single = cuts.length === 1 ? cuts[0]?.worktree : undefined;
     const identity = {
       id,
       name: request.name,
       values: withDefaults(flow, request.values),
-      repo,
-      base,
-      branch,
-      branchCreated,
+      repo: single?.repo ?? null,
+      base: single?.base ?? null,
+      branch: single?.branch ?? null,
+      branchCreated: single?.create ?? null,
     };
-    const dir = workspaceDir(deps.home, id);
-    const worktree = { repo, base, ...buildWorktree({ repo, dir, branch, create: branchCreated }) };
+    const branches: Record<string, ContainerBranch> = Object.fromEntries(
+      cuts.map(({ slug, worktree }) => [
+        slug,
+        { branch: worktree.branch, branchCreated: worktree.create },
+      ]),
+    );
     if (resume === undefined) {
       current = 2;
       append({ type: "step", step: 2, status: "running" });
     } else {
       opening = resume.session.name;
-      workspace = { dir };
-      if (!(await deps.fs.exists(worktree.path))) {
-        throw new Error(`The build's worktree ${worktree.path} is gone.`);
+      workspace = { dir, worktrees: [] };
+      for (const { worktree } of cuts) {
+        if (!(await deps.fs.exists(worktree.path))) {
+          throw new Error(`The build's worktree ${worktree.path} is gone.`);
+        }
       }
-      workspace = { dir, worktree };
+      workspace = { dir, worktrees: cuts.map(({ worktree }) => worktree) };
     }
+    const realDir = await settled(deps.fs.realPath(dir));
     const laidDown = await waited(
       layDown(flow, {
         home: deps.home,
@@ -538,6 +589,8 @@ export async function runBuild(
         ...(origin === undefined ? {} : { source: origin.source }),
         workspace: {
           ...identity,
+          branches,
+          realDir,
           ...(origin === undefined ? {} : { blueprint: origin.blueprint }),
         },
       }),
@@ -556,7 +609,7 @@ export async function runBuild(
       return laidDown;
     }
     if (resume === undefined) {
-      workspace = { dir };
+      workspace = { dir, worktrees: [] };
       for (const file of laidDown.files) {
         await settled(deps.fs.writeFile(`${dir}/${file.path}`, file.content));
       }
@@ -569,16 +622,31 @@ export async function runBuild(
     );
     report = latest;
     if (resume === undefined) {
-      const cut = { path: worktree.path, branch, base, branchCreated };
-      try {
-        await deps.worktree.add(worktree);
-      } catch (error) {
-        append({ type: "worktree", status: "failed", ...cut, message: messageOf(error) });
-        failureAppended = true;
-        throw error;
+      for (const { slug, worktree } of cuts) {
+        const cut = {
+          path: worktree.path,
+          branch: worktree.branch,
+          base: worktree.base,
+          branchCreated: worktree.create,
+        };
+        try {
+          await deps.worktree.add(worktree);
+        } catch (error) {
+          append({ type: "worktree", status: "failed", ...cut, message: messageOf(error) });
+          failureAppended = true;
+          throw error;
+        }
+        workspace = { dir, worktrees: [...(workspace?.worktrees ?? []), worktree] };
+        deps.store.addBuildWorktree(id, {
+          container: slug,
+          repo: worktree.repo,
+          base: worktree.base,
+          branch: worktree.branch,
+          branchCreated: worktree.create,
+          path: worktree.path,
+        });
+        append({ type: "worktree", status: "done", ...cut });
       }
-      workspace = { dir, worktree };
-      append({ type: "worktree", status: "done", ...cut });
     }
 
     current = 3;
@@ -590,11 +658,11 @@ export async function runBuild(
         name: sessionName,
         claudeSessionId,
         buildId: id,
-        repo,
-        base,
+        repo: identity.repo ?? "",
+        base: identity.base ?? "",
         values: identity.values,
-        branch,
-        branchCreated,
+        branch: dialogBranch.branch,
+        branchCreated: dialogBranch.branchCreated,
         model: flow.settings.buildModel,
       });
       await settled(
@@ -616,6 +684,7 @@ export async function runBuild(
       sessionName,
       claudeSessionId,
       workspaceDir: dir,
+      sessionSlugs: sessionsOf(flow).map(({ slug }) => slug),
       kitDir: deps.kit.dir,
       settingsPath: deps.settingsPath,
       model: flow.settings.buildModel,
@@ -634,7 +703,7 @@ export async function runBuild(
       append({
         type: "component",
         path: piece,
-        kind: piece === "workspace" ? "workspace" : pieceKind(piece),
+        kind: piece === auditPiece ? "workspace" : pieceKind(piece),
         nodeIds: nodeIdsOf(manifest, piece),
         labels: labelsOf(manifest, piece),
         status,
@@ -733,9 +802,9 @@ export async function runBuild(
           ...new Set([
             ...merged.mergedPieces,
             ...shared.flatMap((entry) => [
-              sharedPath(entry),
+              ...sharedFile(manifest, entry),
               ...entry.usedBy.flatMap(
-                (id) => manifest.nodes.find((node) => node.id === id)?.file ?? [],
+                (id) => manifestNodes(manifest).find((node) => node.id === id)?.file ?? [],
               ),
             ]),
           ]),

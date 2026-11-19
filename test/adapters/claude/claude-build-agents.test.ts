@@ -18,6 +18,7 @@ const spec = {
   sessionName: name,
   claudeSessionId: "3f2a1c4e-0000-4000-8000-000000000001",
   workspaceDir: "/fd/workspaces/alpha",
+  sessionSlugs: ["main"],
   kitDir: "/fd/kit/0123456789ab",
   settingsPath: "/fd/workspaces/alpha/build-settings.json",
   env: { FLOWDECK_HOOK_NODE: "/opt/node", FLOWDECK_HOOK_SCRIPT: "/fd/hooks/flowdeck-hook.cjs" },
@@ -151,7 +152,7 @@ describe("ClaudeBuildAgents", () => {
       expect(t.socketPaths).toEqual([socketPath()]);
     });
 
-    it("launches Claude with the build settings and the workspace plugin then the kit", async () => {
+    it("launches Claude with the build settings, each container's plugin, then the kit", async () => {
       const t = harness();
 
       await t.agents.open(spec);
@@ -160,9 +161,25 @@ describe("ClaudeBuildAgents", () => {
       expect(command).toContain(" claude --session-id ");
       expect(command).toContain(" --settings '/fd/workspaces/alpha/build-settings.json'");
       expect(command).toContain(
-        " --plugin-dir '/fd/workspaces/alpha/plugin' --plugin-dir '/fd/kit/0123456789ab'",
+        " --plugin-dir '/fd/workspaces/alpha/workspace/plugin' --plugin-dir '/fd/workspaces/alpha/sessions/main/plugin' --plugin-dir '/fd/kit/0123456789ab'",
       );
-      expect(command.match(/--plugin-dir/g)).toHaveLength(2);
+      expect(command.match(/--plugin-dir/g)).toHaveLength(3);
+    });
+
+    it("loads every container's plugin, workspace first, then the kit", async () => {
+      const t = harness();
+
+      await t.agents.open({ ...spec, sessionSlugs: ["android", "ios"] });
+
+      const pluginDirs = [...t.started().command.matchAll(/ --plugin-dir '([^']*)'/g)].map(
+        (match) => match[1],
+      );
+      expect(pluginDirs).toEqual([
+        "/fd/workspaces/alpha/workspace/plugin",
+        "/fd/workspaces/alpha/sessions/android/plugin",
+        "/fd/workspaces/alpha/sessions/ios/plugin",
+        "/fd/kit/0123456789ab",
+      ]);
     });
 
     it("passes the model when one is set", async () => {

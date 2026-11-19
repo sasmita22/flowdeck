@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { emptyReport, type BuildReport } from "../../src/core/compiler/build-report.js";
+import type { Manifest } from "../../src/core/compiler/lower.js";
 import { markerOf } from "../../src/core/run/agent-calls.js";
 import type { FileSystem } from "../../src/ports/file-system.js";
 import type {
@@ -132,12 +133,14 @@ export class FakeBuildAgents implements BuildAgents {
     if (entries.length === 0) return runs;
     const manifest = JSON.parse(
       await this.options.fs.readFile(join(workspaceDir, "manifest.json")),
-    ) as { prefix?: string; nodes: { id: string; file?: string }[] };
+    ) as Pick<Manifest, "containers">;
     for (const entry of entries) {
       for (const id of entry.usedBy) {
-        const file = manifest.nodes.find((node) => node.id === id)?.file;
-        if (file === undefined) continue;
-        runs.set(file, [...(runs.get(file) ?? []), `${manifest.prefix ?? ""}:${entry.name}`]);
+        for (const container of manifest.containers) {
+          const file = container.nodes.find((node) => node.id === id)?.file;
+          if (file === undefined) continue;
+          runs.set(file, [...(runs.get(file) ?? []), `${container.prefix}:${entry.name}`]);
+        }
       }
     }
     return runs;

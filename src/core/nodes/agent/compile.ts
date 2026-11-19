@@ -36,7 +36,7 @@ export function compileAgent(
     "## Role",
     draft,
     "## Inputs",
-    handoffFolderLine(scope.repo),
+    handoffFolderLine(scope.repo, scope.kind),
     orNone(handoffText({ given, writes: [] })),
     "## Steps",
     fillVariables(instructions, values),

@@ -74,9 +74,28 @@ describe("FakeFileSystem", () => {
       "ws/b1/repo2/x.md": "x",
     });
 
-    await fs.removeTree("ws/b1", { keep: "ws/b1/repo" });
+    await fs.removeTree("ws/b1", { keep: ["ws/b1/repo"] });
 
     expect(await fs.list("ws/b1")).toEqual(["repo/src/work.ts"]);
+  });
+
+  it("removes a folder tree except the files under every kept child", async () => {
+    const fs = new FakeFileSystem({
+      "b1/workspace/CLAUDE.md": "w",
+      "b1/sessions/android/CLAUDE.md": "a",
+      "b1/sessions/android/android/src/work.kt": "k",
+      "b1/sessions/ios/plugin/agents/plan.md": "p",
+      "b1/sessions/ios/ios/src/work.swift": "s",
+    });
+
+    await fs.removeTree("b1", {
+      keep: ["b1/sessions/android/android", "b1/sessions/ios/ios"],
+    });
+
+    expect(await fs.list("b1")).toEqual([
+      "sessions/android/android/src/work.kt",
+      "sessions/ios/ios/src/work.swift",
+    ]);
   });
 
   it("rejects reading a missing file", async () => {
@@ -110,9 +129,9 @@ describe("FakeFileSystem", () => {
     await fs.writeFile("root/repo/a.md", "a");
     await fs.writeFile("root/repository/b.md", "b");
 
-    expect(await fs.list("root", { skip: "root/repo" })).toEqual(["repository/b.md", "z.md"]);
+    expect(await fs.list("root", { skip: ["root/repo"] })).toEqual(["repository/b.md", "z.md"]);
     expect(fs.calls.filter((call) => call.method === "list")).toEqual([
-      { method: "list", path: "root", skip: "root/repo" },
+      { method: "list", path: "root", skip: ["root/repo"] },
     ]);
   });
 

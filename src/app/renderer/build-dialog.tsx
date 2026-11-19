@@ -18,6 +18,7 @@ import {
   type RunState,
 } from "./run-store.js";
 import { buildDialogTestIds, controlTestIds } from "./test-ids.js";
+import type { BuildTargetSession } from "./workspace-store.js";
 
 const fieldStyle: CSSProperties = {
   display: "flex",
@@ -95,6 +96,17 @@ const reasonStyle: CSSProperties = {
   overflowWrap: "anywhere",
 };
 
+const sessionListStyle: CSSProperties = {
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const sessionStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 2 };
+
 const branchModes: readonly { mode: BranchMode; label: string; testId: string }[] = [
   { mode: "new", label: "New branch", testId: buildDialogTestIds.branchNew },
   { mode: "existing", label: "Existing branch", testId: buildDialogTestIds.branchExisting },
@@ -139,6 +151,18 @@ function BranchChoice({
   branches: StoreApi<BranchState>;
 }) {
   const edit = run.getState().editBuild;
+  if (!dialog.target.existingBranch) {
+    return (
+      <label style={fieldStyle}>
+        Branch name
+        <input
+          data-testid={buildDialogTestIds.branchName}
+          value={dialog.branchName}
+          onChange={(event) => edit({ branchName: event.target.value })}
+        />
+      </label>
+    );
+  }
   return (
     <>
       <div style={fieldStyle}>
@@ -185,6 +209,31 @@ function BranchChoice({
   );
 }
 
+function SessionTargets({ sessions }: { sessions: readonly BuildTargetSession[] }) {
+  return (
+    <div style={fieldStyle}>
+      Sessions
+      <ul data-testid={buildDialogTestIds.sessions} style={sessionListStyle}>
+        {sessions.map(({ name, repo, branch }, index) => (
+          <li
+            key={`${index}-${name}`}
+            data-testid={buildDialogTestIds.session(name)}
+            style={sessionStyle}
+          >
+            <span style={branchNameStyle}>{name}</span>
+            <span data-testid={buildDialogTestIds.sessionRepo(name)} style={reasonStyle}>
+              {repo}
+            </span>
+            <span data-testid={buildDialogTestIds.sessionBranch(name)} style={reasonStyle}>
+              from {branch}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function BuildForm({
   dialog,
   canBuild,
@@ -222,14 +271,18 @@ function BuildForm({
           onChange={(event) => edit({ name: event.target.value })}
         />
       </label>
-      <RepoField
-        value={dialog.repo}
-        testId={buildDialogTestIds.repo}
-        browseTestId={buildDialogTestIds.repoBrowse}
-        onCommit={setRepo}
-        onBrowse={() => void branches.getState().browse(setRepo)}
-      />
-      <BranchChoice dialog={dialog} run={run} branches={branches} />
+      {dialog.target.repoOverride ? (
+        <RepoField
+          value={dialog.repo}
+          testId={buildDialogTestIds.repo}
+          browseTestId={buildDialogTestIds.repoBrowse}
+          onCommit={setRepo}
+          onBrowse={() => void branches.getState().browse(setRepo)}
+        />
+      ) : (
+        <SessionTargets sessions={dialog.target.sessions} />
+      )}
+      {dialog.target.branch && <BranchChoice dialog={dialog} run={run} branches={branches} />}
       <ModelField
         label="Build model"
         value={dialog.buildModel}

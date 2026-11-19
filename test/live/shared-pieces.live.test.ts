@@ -21,6 +21,7 @@ import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 const kitSourceDir = fileURLToPath(new URL("../../kit", import.meta.url));
 const buildTimeoutMs = 900_000;
 const runTests = "Run the tests with `node --test` and report the failures.";
+const sessionRoot = "sessions/main";
 
 type Built = CheckedBuild & { outcome: string; report: BuildReport; files: Map<string, string> };
 
@@ -61,7 +62,7 @@ async function build(flow: Flow, name: string): Promise<Built> {
       )}`,
     );
     for (const [path, content] of files) {
-      if (path.startsWith("plugin/")) console.log(`--- ${path}\n${content}`);
+      if (path.startsWith(`${sessionRoot}/plugin/`)) console.log(`--- ${path}\n${content}`);
     }
     return { ...checked, outcome: built.outcome.outcome, report, files };
   } finally {
@@ -92,10 +93,10 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a build's shared pieces", ()
     const [entry] = built.report.shared;
     if (entry === undefined) throw new Error("no shared piece");
     expect([...entry.usedBy].sort()).toEqual(["build", "docs", "lint"]);
-    expect(built.files.get(sharedPath(entry))?.trim()).toBeTruthy();
+    expect(built.files.get(sharedPath(entry, sessionRoot))?.trim()).toBeTruthy();
     for (const id of ["build", "lint", "docs"]) {
-      const agentFile = built.files.get(`plugin/agents/${id}.md`) ?? "";
-      expect(agentFile).toContain(`${name}:${entry.name}`);
+      const agentFile = built.files.get(`${sessionRoot}/plugin/agents/${id}.md`) ?? "";
+      expect(agentFile).toContain(`${name}-main:${entry.name}`);
     }
   });
 

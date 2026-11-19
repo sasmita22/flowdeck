@@ -12,7 +12,7 @@ import { layDown, workspaceDir } from "../../src/core/compiler/build.js";
 import { buildSessionSettings } from "../../src/core/compiler/build-session.js";
 import { buildHookCommand, shellQuote } from "../../src/core/compiler/hook-settings.js";
 import { legacyBranchName } from "../../src/core/run/branch-name.js";
-import { buildWorktree } from "../../src/core/run/workspace.js";
+import { sessionFolder, sessionWorktree } from "../../src/core/run/workspace.js";
 import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
@@ -112,8 +112,10 @@ beforeAll(async () => {
   for (const file of laidDown.files) await fs.writeFile(`${dir}/${file.path}`, file.content);
 
   const worktree = {
-    ...buildWorktree({ repo: repo.path, dir, branch, create: true }),
     repo: repo.path,
+    branch,
+    create: true,
+    path: sessionWorktree(dir, "main", repo.path),
   };
   await new GitWorktree().add({ ...worktree, base: "main" });
   worktreePath = worktree.path;
@@ -132,8 +134,8 @@ afterAll(async () => {
 
 describe("the build guard in a laid-down workspace", () => {
   it("has a workspace CLAUDE.md, no new agent file yet, and the worktree's README", async () => {
-    expect((await stat(join(dir, "CLAUDE.md"))).isFile()).toBe(true);
-    await expect(stat(join(dir, "plugin/agents/new.md"))).rejects.toThrow();
+    expect((await stat(join(sessionFolder(dir, "main"), "CLAUDE.md"))).isFile()).toBe(true);
+    await expect(stat(join(sessionFolder(dir, "main"), "plugin/agents/new.md"))).rejects.toThrow();
     expect(await readFile(join(worktreePath, "README.md"), "utf8")).toBe("hello\n");
     expect(worktreePath.startsWith(`${dir}/`)).toBe(true);
   });
@@ -143,10 +145,16 @@ describe("the build guard in a laid-down workspace", () => {
       "a Write of a new plugin/agents/new.md",
       () => ({
         tool_name: "Write",
-        tool_input: { file_path: "plugin/agents/new.md", content: "---\nname: new\n---\n" },
+        tool_input: {
+          file_path: "sessions/main/plugin/agents/new.md",
+          content: "---\nname: new\n---\n",
+        },
       }),
     ],
-    ["a Bash rm CLAUDE.md", () => ({ tool_name: "Bash", tool_input: { command: "rm CLAUDE.md" } })],
+    [
+      "a Bash rm CLAUDE.md",
+      () => ({ tool_name: "Bash", tool_input: { command: "rm sessions/main/CLAUDE.md" } }),
+    ],
     [
       "an Edit inside the worktree",
       () => ({

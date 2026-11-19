@@ -4,6 +4,7 @@ export type {
   BuildRecord,
   BuildSnapshot,
   BuildSource,
+  BuildWorktree,
   EventEntry,
   ManifestGap,
   NewBuild,

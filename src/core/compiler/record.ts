@@ -34,11 +34,13 @@ export function buildRecord(
       ...Object.entries(manifest.files).map(([path, sha256]) => ({ path, sha256 })),
       { path: manifestPath, sha256: sha256Hex(manifestContent) },
     ].sort(byPath),
-    nodes: manifest.nodes.map((node) => ({
-      nodeId: node.id,
-      type: node.type,
-      config: node.settings,
-      ...(node.file === undefined ? {} : { file: node.file }),
-    })),
+    nodes: (manifest.nodes ?? manifest.containers.flatMap((container) => container.nodes)).map(
+      (node) => ({
+        nodeId: node.id,
+        type: node.type,
+        config: node.settings,
+        ...(node.file === undefined ? {} : { file: node.file }),
+      }),
+    ),
   };
 }

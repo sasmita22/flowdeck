@@ -12,6 +12,7 @@ import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
 
 const home = "/fd-home";
+const codeOwned = "sessions/main/settings.json";
 const workspaceDir = `${home}/workspaces/b-alpha-0001`;
 const sessionName = "fd-build-alpha";
 
@@ -44,13 +45,21 @@ const openSpec = {
   sessionName,
   claudeSessionId: "claude-session-1",
   workspaceDir,
+  sessionSlugs: ["main"],
   kitDir: `${home}/kit`,
   settingsPath: `${home}/build-sessions/b-alpha-0001/settings.json`,
   model: "haiku",
   env: { FLOWDECK_SOCK: `${home}/sock/${sessionName}.sock` },
 };
 
-type Laid = { fs: FakeFileSystem; source: Flow; laidDown: BuildFile[]; manifest: Manifest };
+type OneSessionManifest = Manifest & Required<Pick<Manifest, "nodes">>;
+
+type Laid = {
+  fs: FakeFileSystem;
+  source: Flow;
+  laidDown: BuildFile[];
+  manifest: OneSessionManifest;
+};
 
 const laid = async (): Promise<Laid> => {
   const source = sample();
@@ -59,14 +68,14 @@ const laid = async (): Promise<Laid> => {
   const laidDown = result.ok ? result.files : [];
   const manifest = JSON.parse(
     laidDown.find((file) => file.path === "manifest.json")?.content ?? "{}",
-  ) as Manifest;
+  ) as OneSessionManifest;
   const fs = new FakeFileSystem(
     Object.fromEntries(laidDown.map((file) => [join(workspaceDir, file.path), file.content])),
   );
   return { fs, source, laidDown, manifest };
 };
 
-const pieceFiles = (manifest: Manifest): string[] => [
+const pieceFiles = (manifest: OneSessionManifest): string[] => [
   ...new Set(
     manifest.nodes.flatMap((node) =>
       node.file !== undefined && node.type === "agent" ? [node.file] : [],
@@ -74,7 +83,7 @@ const pieceFiles = (manifest: Manifest): string[] => [
   ),
 ];
 
-const agentFile = (manifest: Manifest): string =>
+const agentFile = (manifest: OneSessionManifest): string =>
   manifest.nodes.find((node) => node.id === "a")?.file ?? "";
 
 const turnText = (paths: readonly string[]) => paths.map(pieceMarker).join("\n\n");
@@ -111,13 +120,13 @@ describe("FakeBuildAgents", () => {
     const first = turnText([agentFile(state.manifest)]);
 
     await agents.turn(sessionName, first, noCalls);
-    await agents.turn(sessionName, "PIECE workspace", noCalls);
+    await agents.turn(sessionName, "PIECE build", noCalls);
     await agents.close(sessionName);
 
     expect(agents.opened).toEqual([openSpec]);
     expect(agents.turns).toEqual([
       { sessionName, text: first },
-      { sessionName, text: "PIECE workspace" },
+      { sessionName, text: "PIECE build" },
     ]);
     expect(agents.closed).toEqual([sessionName]);
   });
@@ -223,14 +232,16 @@ describe("FakeBuildAgents", () => {
     const state = await laid();
     const agents = await openWith(state);
     const calls: AgentCall[] = [];
+    const buildFiles = () => state.fs.list(workspaceDir);
+    const before = await buildFiles();
 
-    await agents.turn(sessionName, "PIECE workspace", (call) => calls.push(call));
+    await agents.turn(sessionName, "PIECE build", (call) => calls.push(call));
 
     expect(calls.map((call) => [call.piece, call.status])).toEqual([
-      ["workspace", undefined],
-      ["workspace", "completed"],
+      ["build", undefined],
+      ["build", "completed"],
     ]);
-    expect(await state.fs.exists(join(workspaceDir, "workspace"))).toBe(false);
+    expect(await buildFiles()).toEqual(before);
   });
 
   it("leaves the @unfilled line on a scripted piece in the scripted round, and fills it after", async () => {
@@ -266,32 +277,29 @@ describe("FakeBuildAgents", () => {
   it("edits a code-owned file in the scripted round, so step 5 names it", async () => {
     const state = await laid();
     const agents = await openWith(state, {
-      editCodeOwned: [{ path: "settings.json", rounds: [1] }],
+      editCodeOwned: [{ path: codeOwned, rounds: [1] }],
     });
 
     await agents.turn(sessionName, turnText(pieceFiles(state.manifest)), noCalls);
 
     expect(await check(state)).toEqual([
-      expect.objectContaining({ file: "settings.json", rule: "code-owned" }),
+      expect.objectContaining({ file: codeOwned, rule: "code-owned" }),
     ]);
   });
 
   it("edits a code-owned file in every round when no rounds are scripted", async () => {
     const state = await laid();
-    const path = join(workspaceDir, "settings.json");
-    const agents = await openWith(state, { editCodeOwned: [{ path: "settings.json" }] });
+    const path = join(workspaceDir, codeOwned);
+    const agents = await openWith(state, { editCodeOwned: [{ path: codeOwned }] });
     const pieces = turnText(pieceFiles(state.manifest));
 
     await agents.turn(sessionName, pieces, noCalls);
     const afterOne = await state.fs.readFile(path);
-    await state.fs.writeFile(
-      path,
-      state.laidDown.find((f) => f.path === "settings.json")?.content ?? "",
-    );
+    await state.fs.writeFile(path, state.laidDown.find((f) => f.path === codeOwned)?.content ?? "");
     await agents.turn(sessionName, pieces, noCalls);
 
-    expect(afterOne).not.toBe(state.laidDown.find((f) => f.path === "settings.json")?.content);
-    expect((await check(state)).map((failure) => failure.file)).toEqual(["settings.json"]);
+    expect(afterOne).not.toBe(state.laidDown.find((f) => f.path === codeOwned)?.content);
+    expect((await check(state)).map((failure) => failure.file)).toEqual([codeOwned]);
   });
 
   it("writes the scripted questions, merges and keptApart into build-report.json", async () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildWorktree, repoFolder, worktreePath } from "../../../src/core/run/workspace.js";
+import {
+  repoFolder,
+  sessionFolder,
+  sessionWorktree,
+  workspaceFolder,
+} from "../../../src/core/run/workspace.js";
 
 describe("repoFolder", () => {
   it.each([
@@ -12,30 +17,28 @@ describe("repoFolder", () => {
   });
 });
 
-describe("worktreePath", () => {
-  it("puts the worktree in the build's workspace under the repo's folder", () => {
-    expect(worktreePath("/fd/workspaces/0f3a9c2e", "/work/carousell-web/")).toBe(
-      "/fd/workspaces/0f3a9c2e/carousell-web",
+describe("container folders", () => {
+  const dir = "/fd/builds/fix-login";
+
+  it("puts the workspace folder at the build's workspace", () => {
+    expect(workspaceFolder(dir)).toBe("/fd/builds/fix-login/workspace");
+  });
+
+  it("puts a session's folder under sessions by its slug", () => {
+    expect(sessionFolder(dir, "android")).toBe("/fd/builds/fix-login/sessions/android");
+  });
+
+  it("puts a session's worktree in its folder under the repo's folder", () => {
+    expect(sessionWorktree(dir, "android", "/work/carousell-android/")).toBe(
+      "/fd/builds/fix-login/sessions/android/carousell-android",
     );
   });
-});
 
-describe("buildWorktree", () => {
-  it.each([
-    ["feat-y", false],
-    ["flowdeck/fix-login", true],
-  ])("keeps the branch %s it is given, with create %s, at the derived path", (branch, create) => {
-    expect(
-      buildWorktree({
-        repo: "/work/carousell-web/",
-        dir: "/fd/workspaces/0f3a9c2e-1111-2222-3333-444455556666",
-        branch,
-        create,
-      }),
-    ).toEqual({
-      branch,
-      create,
-      path: "/fd/workspaces/0f3a9c2e-1111-2222-3333-444455556666/carousell-web",
-    });
+  it("gives repos with the same folder name in different sessions different worktrees", () => {
+    const first = sessionWorktree(dir, "app", "/work/a/app");
+    const second = sessionWorktree(dir, "app-2", "/work/b/app");
+
+    expect(first).toBe("/fd/builds/fix-login/sessions/app/app");
+    expect(second).toBe("/fd/builds/fix-login/sessions/app-2/app");
   });
 });

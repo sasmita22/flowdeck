@@ -5,6 +5,7 @@ export type BuildAgentsOpenSpec = {
   sessionName: string;
   claudeSessionId: string;
   workspaceDir: string;
+  sessionSlugs: readonly string[];
   kitDir: string;
   settingsPath: string;
   model?: string;

@@ -133,7 +133,7 @@ describe("NodeFileSystem", () => {
     const repo = join(tmp, "repo");
     await chmod(repo, 0o000);
     try {
-      expect(await fs.list(tmp, { skip: repo })).toEqual(["a/b.md", "repository/x.md", "z.md"]);
+      expect(await fs.list(tmp, { skip: [repo] })).toEqual(["a/b.md", "repository/x.md", "z.md"]);
     } finally {
       await chmod(repo, 0o700);
     }
@@ -175,11 +175,32 @@ describe("NodeFileSystem", () => {
     await fs.writeFile(join(workspace, "repo2/x.md"), "x");
     await mkdir(join(workspace, "repo/empty"));
 
-    await fs.removeTree(workspace, { keep: join(workspace, "repo") });
+    await fs.removeTree(workspace, { keep: [join(workspace, "repo")] });
 
     expect(await fs.list(workspace)).toEqual(["repo/src/work.ts"]);
     expect(await fs.exists(join(workspace, "repo/empty"))).toBe(true);
     expect(await fs.exists(join(workspace, "plugin"))).toBe(false);
+  });
+
+  it("removes a folder tree except every kept child and everything inside each", async () => {
+    const build = join(tmp, "b1");
+    const android = join(build, "sessions/android/android");
+    const ios = join(build, "sessions/ios/ios");
+    await fs.writeFile(join(build, "workspace/CLAUDE.md"), "w");
+    await fs.writeFile(join(build, "sessions/android/CLAUDE.md"), "a");
+    await fs.writeFile(join(android, "src/work.kt"), "k");
+    await fs.writeFile(join(build, "sessions/ios/plugin/agents/plan.md"), "p");
+    await fs.writeFile(join(ios, "src/work.swift"), "s");
+    await mkdir(join(ios, "empty"));
+
+    await fs.removeTree(build, { keep: [android, ios] });
+
+    expect(await fs.list(build)).toEqual([
+      "sessions/android/android/src/work.kt",
+      "sessions/ios/ios/src/work.swift",
+    ]);
+    expect(await fs.exists(join(ios, "empty"))).toBe(true);
+    expect(await fs.exists(join(build, "workspace"))).toBe(false);
   });
 
   describe("entries", () => {
@@ -243,6 +264,28 @@ describe("NodeFileSystem", () => {
       expect(await fs.entries(join(build, "src"), { inside: alias })).toEqual([
         { name: "x.ts", kind: "file" },
       ]);
+    });
+  });
+
+  describe("realPath", () => {
+    it("resolves a folder reached through a link to the folder it points at", async () => {
+      const real = join(tmp, "real");
+      const alias = join(tmp, "alias");
+      await mkdir(real);
+      await symlink(real, alias);
+
+      expect(await fs.realPath(alias)).toBe(await realpath(real));
+    });
+
+    it("resolves a folder not made yet through the link above it", async () => {
+      const real = join(tmp, "real");
+      const alias = join(tmp, "alias");
+      await mkdir(real);
+      await symlink(real, alias);
+
+      expect(await fs.realPath(join(alias, "workspaces", "b1"))).toBe(
+        join(await realpath(real), "workspaces", "b1"),
+      );
     });
   });
 });

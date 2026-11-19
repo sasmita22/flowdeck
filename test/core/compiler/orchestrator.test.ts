@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { lower } from "../../../src/core/compiler/lower.js";
-import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
+import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
 import { order } from "../../../src/core/flow/order.js";
@@ -19,6 +19,7 @@ import {
   output,
   thenWire,
   trigger,
+  twoSessionWorkflow,
   wire,
 } from "../../fixtures/flow-builders.js";
 import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
@@ -70,10 +71,12 @@ const sample = (): Flow =>
 
 const manifestOf = (input: Flow) => {
   const { manifest } = lower(input, { name: scope.build, values: {} });
+  const session = manifest.containers.find((container) => container.kind === "session");
+  if (session === undefined) throw new Error("the flow has no session container");
   const pieces = pieceNames(input);
   return {
-    ...manifest,
-    nodes: manifest.nodes.map((node) => {
+    ...session,
+    nodes: session.nodes.map((node) => {
       const piece = pieces.get(node.id);
       return piece === undefined ? node : { ...node, piece };
     }),
@@ -99,11 +102,11 @@ const lineOf = (content: string, nodeId: string) =>
   stepLines(content).find((line) => line.includes(`NODE ${nodeId} `)) ?? "";
 
 describe("orchestratorSkill", () => {
-  it("writes plugin/skills/run/SKILL.md named run, its description opening with the scope line", () => {
+  it("writes the session's plugin/skills/run/SKILL.md named run, its description opening with the scope line", () => {
     const { path, content } = skill();
     const fields = frontmatter(content);
 
-    expect(path).toBe("plugin/skills/run/SKILL.md");
+    expect(path).toBe("sessions/main/plugin/skills/run/SKILL.md");
     expect(fields.name).toBe("run");
     expect(String(fields.description).startsWith(scopeLine(scope))).toBe(true);
   });
@@ -115,10 +118,11 @@ describe("orchestratorSkill", () => {
     expect(ids).toEqual(manifestOf(sample()).nodes.map((node) => node.id));
   });
 
-  it("says hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace, never the workspace itself", () => {
+  it("says hand-off files are named bare in the run's working folder, which sits at the repo folder in this session's own folder", () => {
     const { content } = skill();
+    const body = content.slice(content.indexOf("\n---\n") + 5);
 
-    expectBareHandoffRule(content, "carousell-web");
+    expectBareHandoffRule(body, "carousell-web");
     expect(
       nestedHandoffPaths(content, "carousell-web", ["plan.md", "code.md", "units.md"]),
     ).toEqual([]);
@@ -127,14 +131,14 @@ describe("orchestratorSkill", () => {
   it("hands work only to agents: no step reads a skill or runs a command, and no line names a Prompt", () => {
     const { content } = skill();
 
-    expect(lineOf(content, "p")).toContain("dispatch `fix-login:plan`");
+    expect(lineOf(content, "p")).toContain("dispatch `fix-login-main:plan`");
     expect(content).not.toMatch(/by path and follow it|check its exit code|Prompt/);
   });
 
   it("dispatches an Agent node by its full name with its node marker and details, and waits", () => {
     const line = lineOf(skill().content, "a");
 
-    expect(line).toContain("dispatch `fix-login:code`");
+    expect(line).toContain("dispatch `fix-login-main:code`");
     expect(line).toContain(JSON.stringify("NODE a\nYou are given: plan.md\nWrite: code.md\nGo"));
     expect(line).toContain("wait");
   });
@@ -233,8 +237,8 @@ describe("orchestratorSkill", () => {
     const line = lineOf(skill().content, "f");
 
     expect(line).toMatch(/one message/);
-    expect(line).toContain("`fix-login:check`");
-    expect(line).toContain("`fix-login:check-2`");
+    expect(line).toContain("`fix-login-main:check`");
+    expect(line).toContain("`fix-login-main:check-2`");
     expect(line).toContain(JSON.stringify("NODE x\nGo"));
     expect(line).toContain(JSON.stringify("NODE y\nGo"));
   });
@@ -299,6 +303,46 @@ describe("orchestratorSkill", () => {
     const named = [...skill().content.matchAll(/`([a-z0-9-]+):([a-z0-9-]+)`/g)];
 
     expect(named.length).toBeGreaterThan(0);
-    for (const [, prefix] of named) expect(prefix).toBe("fix-login");
+    for (const [, prefix] of named) expect(prefix).toBe("fix-login-main");
+  });
+});
+
+describe("an orchestrator per container", () => {
+  const containers = () =>
+    lower(twoSessionWorkflow(), { name: "fix-login", values: {} }).manifest.containers ?? [];
+
+  const rootOf = (container: { kind: string; slug: string }) =>
+    container.kind === "workspace" ? "workspace" : `sessions/${container.slug}`;
+
+  const markers = (content: string) =>
+    content.split("\n").flatMap((line) => /^\d+\. NODE (\S+) /.exec(line)?.[1] ?? []);
+
+  it("places the orchestrator under the container root it is given", () => {
+    expect(orchestratorPath("workspace")).toBe("workspace/plugin/skills/run/SKILL.md");
+    expect(orchestratorPath("sessions/ios")).toBe("sessions/ios/plugin/skills/run/SKILL.md");
+  });
+
+  it("writes one orchestrator per container, each at its own root", () => {
+    const paths = containers().map((container) => orchestratorSkill(container, scope).path);
+
+    expect(paths).toEqual(containers().map((container) => orchestratorPath(rootOf(container))));
+    expect(paths).toEqual([
+      "workspace/plugin/skills/run/SKILL.md",
+      "sessions/android/plugin/skills/run/SKILL.md",
+      "sessions/ios/plugin/skills/run/SKILL.md",
+    ]);
+  });
+
+  it("walks only its own container's nodes: the ios orchestrator names no android node", () => {
+    const ios = containers().find((container) => container.slug === "ios");
+    expect(ios).toBeDefined();
+    if (ios === undefined) return;
+
+    const content = orchestratorSkill(ios, scope).content;
+
+    expect(markers(content)).toEqual(["session-2-start", "session-2-plan", "session-2-stop"]);
+    expect(content).not.toContain("session-1-");
+    expect(content).not.toContain("fix-login-android");
+    expect(content).toContain("fix-login-ios:plan");
   });
 });

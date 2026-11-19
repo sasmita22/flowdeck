@@ -59,25 +59,26 @@ export class NodeFileSystem implements FileSystem {
     await rm(path, { force: true });
   }
 
-  async removeTree(path: string, { keep }: { keep?: string } = {}): Promise<void> {
-    if (keep === undefined) {
+  async removeTree(path: string, { keep = [] }: { keep?: string[] } = {}): Promise<void> {
+    if (keep.length === 0) {
       await rm(path, { recursive: true, force: true });
       return;
     }
     for (const name of await readdir(path)) {
       const child = join(path, name);
-      if (child === keep) continue;
-      if (keep.startsWith(child + sep)) await this.removeTree(child, { keep });
+      if (keep.includes(child)) continue;
+      const inside = keep.filter((kept) => kept.startsWith(child + sep));
+      if (inside.length > 0) await this.removeTree(child, { keep: inside });
       else await rm(child, { recursive: true, force: true });
     }
   }
 
-  async list(dir: string, { skip }: { skip?: string } = {}): Promise<string[]> {
+  async list(dir: string, { skip = [] }: { skip?: readonly string[] } = {}): Promise<string[]> {
     const files: string[] = [];
     const walk = async (folder: string): Promise<void> => {
       for (const entry of await readdir(folder, { withFileTypes: true })) {
         const path = join(folder, entry.name);
-        if (entry.isDirectory() && path !== skip) await walk(path);
+        if (entry.isDirectory() && !skip.includes(path)) await walk(path);
         else if (entry.isFile()) files.push(relative(dir, path).split(sep).join("/"));
       }
     };
@@ -95,6 +96,16 @@ export class NodeFileSystem implements FileSystem {
     } catch (error) {
       if (hasCode(error, "ENOENT")) return [];
       throw error;
+    }
+  }
+
+  async realPath(path: string): Promise<string> {
+    try {
+      return await realpath(path);
+    } catch (error) {
+      const parent = dirname(path);
+      if (!hasCode(error, "ENOENT") || parent === path) throw error;
+      return join(await this.realPath(parent), basename(path));
     }
   }
 

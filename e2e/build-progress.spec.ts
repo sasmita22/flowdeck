@@ -202,7 +202,7 @@ test("a build whose first check fails shows a round 2 lane, round 1 Verify shows
   launched = await launchWithFakeClaude({
     home,
     logPath: test.info().outputPath("app.log"),
-    unfilledInRound1: "plugin/agents/s1.md",
+    unfilledInRound1: "sessions/main/plugin/agents/s1.md",
   });
   const { window } = launched;
   await openBlueprint(window, flowId);
@@ -225,14 +225,18 @@ test("a build whose first check fails shows a round 2 lane, round 1 Verify shows
   await expect(round1Verify).toContainText("failed");
   await round1Verify.click();
   const log = window.getByTestId(pageTestIds.buildActivity(pendingId));
-  await expect(log).toContainText("plugin/agents/s1.md body: body has nothing beyond its draft");
+  await expect(log).toContainText(
+    "sessions/main/plugin/agents/s1.md body: body has nothing beyond its draft",
+  );
 
   await window.getByTestId(pageTestIds.buildStage(pendingId, 3, 1)).click();
-  await expect(log).toContainText("plugin/agents/s1.md");
-  await expect(log).toContainText("plugin/agents/s2.md");
-  await window.getByTestId(pageTestIds.buildRow(pendingId, 3, 1, "plugin/agents/s2.md")).click();
-  await expect(log).toContainText("plugin/agents/s2.md");
-  await expect(log).not.toContainText("plugin/agents/s1.md");
+  await expect(log).toContainText("sessions/main/plugin/agents/s1.md");
+  await expect(log).toContainText("sessions/main/plugin/agents/s2.md");
+  await window
+    .getByTestId(pageTestIds.buildRow(pendingId, 3, 1, "sessions/main/plugin/agents/s2.md"))
+    .click();
+  await expect(log).toContainText("sessions/main/plugin/agents/s2.md");
+  await expect(log).not.toContainText("sessions/main/plugin/agents/s1.md");
 });
 
 type StoredEntry = {
@@ -257,8 +261,8 @@ const buildActivityOf = (pendingId: string): StoredEntry[] => [
 
 test("an agent row's log shows each step its build agent took, with the time, the detail and the agent's report, and none of another agent's steps", async () => {
   test.setTimeout(90_000);
-  const s1 = "plugin/agents/s1.md";
-  const s2 = "plugin/agents/s2.md";
+  const s1 = "sessions/main/plugin/agents/s1.md";
+  const s2 = "sessions/main/plugin/agents/s2.md";
   const { flowId } = seedBlueprint(home, "Fixer", twoAgents(), repo.path);
   launched = await launchWithFakeClaude({
     home,
@@ -324,8 +328,8 @@ test("an agent row's log shows each step its build agent took, with the time, th
 
 test("a build step cut short shows its full text on request, an uncut step has no such control, and one piece's full text does not reach another's", async () => {
   test.setTimeout(90_000);
-  const s1 = "plugin/agents/s1.md";
-  const s2 = "plugin/agents/s2.md";
+  const s1 = "sessions/main/plugin/agents/s1.md";
+  const s2 = "sessions/main/plugin/agents/s2.md";
   const tail = "END-OF-FULL-OUTPUT";
   const { flowId } = seedBlueprint(home, "Fixer", twoAgents(), repo.path);
   launched = await launchWithFakeClaude({

@@ -3,6 +3,7 @@ import type { BuildFile } from "./lower.js";
 
 export type VerifyFileSystem = {
   list(dir: string): Promise<string[]>;
+  folders(dir: string): Promise<string[]>;
   readFile(path: string): Promise<string>;
 };
 
@@ -43,7 +44,8 @@ const byPath = (a: VerifyProblem, b: VerifyProblem) =>
 export type VerifyLayout = "workspace" | "legacy";
 
 const pluginFolder = "plugin";
-export const workspaceRootFiles = [manifestPath, "CLAUDE.md", "settings.json"];
+export const workspaceRootFiles = [manifestPath];
+const containerRootFiles = ["CLAUDE.md", "settings.json"];
 
 type Listing = { paths: string[]; read(path: string): Promise<string> };
 
@@ -70,20 +72,35 @@ async function legacyListing(dir: string, fs: VerifyFileSystem): Promise<Listing
   return paths === undefined ? undefined : { paths, read: (path) => fs.readFile(`${dir}/${path}`) };
 }
 
+const containerRoots = async (fs: VerifyFileSystem, dir: string): Promise<string[]> => [
+  "workspace",
+  ...(await fs.folders(`${dir}/sessions`)).map((slug) => `sessions/${slug}`),
+];
+
 export async function workspaceListing(
   fs: VerifyFileSystem,
   dir: string,
   rootFiles: readonly string[],
 ): Promise<Listing | undefined> {
-  const plugin = await listOrMissing(fs, `${dir}/${pluginFolder}`);
-  if (plugin === undefined) return undefined;
   const root = new Map<string, string>();
+  const plugins: string[] = [];
+  for (const container of await containerRoots(fs, dir)) {
+    const plugin = await listOrMissing(fs, `${dir}/${container}/${pluginFolder}`);
+    if (plugin === undefined) continue;
+    plugins.push(...plugin.map((path) => `${container}/${pluginFolder}/${path}`));
+    for (const file of containerRootFiles) {
+      const path = `${container}/${file}`;
+      const content = await readOrMissing(fs, `${dir}/${path}`);
+      if (content !== undefined) root.set(path, content);
+    }
+  }
+  if (plugins.length === 0) return undefined;
   for (const path of rootFiles) {
     const content = await readOrMissing(fs, `${dir}/${path}`);
     if (content !== undefined) root.set(path, content);
   }
   return {
-    paths: [...root.keys(), ...plugin.map((path) => `${pluginFolder}/${path}`)],
+    paths: [...root.keys(), ...plugins],
     read: async (path) => root.get(path) ?? fs.readFile(`${dir}/${path}`),
   };
 }

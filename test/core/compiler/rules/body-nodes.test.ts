@@ -14,6 +14,7 @@ import {
   output,
   trigger,
 } from "../../../fixtures/flow-builders.js";
+import { oneSession } from "../../../fixtures/one-session.js";
 
 const reported = (nodes: unknown[]) =>
   rule.check(flow(nodes, [])).map(({ rule, node, message }) => ({ rule, node, message }));
@@ -67,7 +68,7 @@ describe("body-nodes", () => {
       ],
       [],
     );
-    const { manifest } = lower(built, { name: "fix-login", values: {} });
+    const manifest = oneSession(lower(built, { name: "fix-login", values: {} }).manifest);
     const runner = structureProblems(manifest.nodes, manifest.wires);
 
     const validator = [...loopBody.check(built), ...rule.check(built)].map(({ message }) =>

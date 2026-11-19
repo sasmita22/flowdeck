@@ -241,15 +241,23 @@ function LaneView({
           <LaneTook lane={lane} since={since} />
         </span>
       </button>
-      {lane.worktree !== undefined && (
-        <div className="fd-pipeline-sub" data-testid={pageTestIds.buildWorktree(pendingId)}>
-          <StatusIcon status={lane.worktree.status} />
-          <span className="fd-ellipsis" title={lane.worktree.path}>
-            Worktree {lane.worktree.branch}
-          </span>
-          {lane.worktree.message !== undefined && (
-            <span className="fd-pipeline-error">{lane.worktree.message}</span>
-          )}
+      {lane.worktrees !== undefined && (
+        <div data-testid={pageTestIds.buildWorktree(pendingId)}>
+          {lane.worktrees.map((worktree) => (
+            <div
+              key={worktree.path}
+              className="fd-pipeline-sub"
+              data-testid={pageTestIds.buildWorktreeLine(pendingId, worktree.path)}
+            >
+              <StatusIcon status={worktree.status} />
+              <span className="fd-ellipsis" title={worktree.path}>
+                Worktree {worktree.branch} at {worktree.path}
+              </span>
+              {worktree.message !== undefined && (
+                <span className="fd-pipeline-error">{worktree.message}</span>
+              )}
+            </div>
+          ))}
         </div>
       )}
       {lane.rows.length > 0 && (

@@ -3,6 +3,7 @@ import { lower } from "../../../src/core/compiler/lower.js";
 import { FlowCycleError, order } from "../../../src/core/flow/order.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { stageSourcesOf } from "../../../src/core/run/manifest.js";
+import { oneSession } from "../../fixtures/one-session.js";
 
 const at = { x: 0, y: 0 };
 const withParent = (parent?: string) => (parent === undefined ? {} : { parent });
@@ -174,7 +175,7 @@ describe("order", () => {
       then("L", "O"),
     ]);
     const { nodes, wires } = stageSourcesOf({
-      ...lower(input, { name: "fix-login", values: {} }).manifest,
+      ...oneSession(lower(input, { name: "fix-login", values: {} }).manifest),
       files: {},
     });
 

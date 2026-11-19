@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { agent, onMainFlow } from "../test/fixtures/flow-builders.js";
@@ -14,6 +14,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 
 const run = promisify(execFile);
 const watchMs = 30_000;
@@ -55,7 +56,8 @@ const closeApp = async () => {
   await previous?.close();
 };
 
-const worktreeOf = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
+const worktreeOf = (buildId: string) =>
+  sessionWorktree(join(home, "workspaces", buildId), "main", repo.path);
 
 const worktreePaths = async (): Promise<string[]> =>
   (await run("git", ["-C", repo.path, "worktree", "list", "--porcelain"])).stdout

@@ -3,6 +3,7 @@ import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import { createCanvasStore } from "../../../src/app/renderer/canvas/store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import {
+  buildTarget,
   createWorkspaceStore,
   selectWorkspaceLabel,
 } from "../../../src/app/renderer/workspace-store.js";
@@ -12,6 +13,8 @@ import {
   flow,
   flowSettings,
   sessionContainer,
+  sessionsWorkflow,
+  twoSessionWorkflow,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
@@ -191,5 +194,32 @@ describe("createWorkspaceStore", () => {
 
     expect(bridge.workspaceInfo).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(shop));
     expect(label()?.folder).toEqual({ name: "shop", title: "/code/shop" });
+  });
+});
+
+describe("buildTarget", () => {
+  it("offers the repo and base override and the existing-branch choice for one session", () => {
+    expect(buildTarget(atFolder(shop))).toMatchObject({ repoOverride: true, existingBranch: true });
+  });
+
+  it("hides the repo and base override, offers no existing branch, and names each session's repo and branch for two sessions", () => {
+    expect(buildTarget(twoSessionWorkflow())).toEqual({
+      repoOverride: false,
+      existingBranch: false,
+      branch: true,
+      sessions: [
+        { name: "android", repo: "/repos/android", branch: "main" },
+        { name: "ios", repo: "/repos/ios", branch: "develop" },
+      ],
+    });
+  });
+
+  it("offers no repo, base or branch at all for a workspace with no session", () => {
+    expect(buildTarget(sessionsWorkflow([]))).toEqual({
+      repoOverride: false,
+      existingBranch: false,
+      branch: false,
+      sessions: [],
+    });
   });
 });

@@ -3,17 +3,20 @@ import { layDown, type LayDownDeps } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import {
   checkBuild,
+  failureLine,
   type BuildCheckFailure,
   type BuildCheckInputs,
 } from "../../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../../src/core/compiler/lower.js";
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { scopeLine, type ScopeParts } from "../../../src/core/compiler/scope-line.js";
+import { descriptionOf } from "../../../src/core/compiler/merge.js";
+import { scopeOf } from "../../../src/core/compiler/scope-line.js";
 import { applyShared, sharedPath } from "../../../src/core/compiler/shared.js";
 import type { BuildReport } from "../../../src/core/compiler/build-report.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire, twoSessionWorkflow } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -42,8 +45,8 @@ const twoReviewers = (): Flow =>
 
 const home = "/fd-home";
 const parts: ScopeParts = {
-  build: "alpha",
-  repo: "carousell-web",
+  build: "alpha-main",
+  repo: "repo",
   workspace: `${home}/workspaces/b-alpha-0001`,
 };
 const otherParts: ScopeParts = {
@@ -81,11 +84,16 @@ const withField = (content: string, key: string, value: string | undefined): str
 
 const unfilledLine = /^@unfilled.*\n\n?/m;
 
+const root = "sessions/main";
+const inRoot = (path: string) => `${root}/${path}`;
+const orchestrator = orchestratorPath(root);
+
 const isPieceFile = (path: string) =>
-  path !== orchestratorPath &&
-  (/^plugin\/agents\/[^/]+\.md$/.test(path) ||
-    /^plugin\/skills\/[^/]+\/SKILL\.md$/.test(path) ||
-    /^plugin\/commands\/[^/]+\.md$/.test(path));
+  path !== orchestrator &&
+  /^(workspace|sessions\/[^/]+)\/plugin\/(agents\/[^/]+\.md|skills\/[^/]+\/SKILL\.md|commands\/[^/]+\.md)$/.test(
+    path,
+  ) &&
+  !path.endsWith("/skills/run/SKILL.md");
 
 const describedOnly = (file: BuildFile): BuildFile => ({
   path: file.path,
@@ -97,7 +105,7 @@ const describedOnly = (file: BuildFile): BuildFile => ({
 });
 
 const filledOne = (file: BuildFile): BuildFile => {
-  if (file.path === "CLAUDE.md") {
+  if (file.path.endsWith("CLAUDE.md")) {
     return { path: file.path, content: `${file.content}\n## Repo notes\n\nRun the tests first.\n` };
   }
   if (!isPieceFile(file.path)) return file;
@@ -129,7 +137,7 @@ const workspace = async (source: Flow = sample()): Promise<BuildCheckInputs> => 
 };
 
 const fileOf = (inputs: BuildCheckInputs, nodeId: string): string => {
-  const file = inputs.manifest.nodes.find((node) => node.id === nodeId)?.file;
+  const file = (inputs.manifest.nodes ?? []).find((node) => node.id === nodeId)?.file;
   expect(file, nodeId).toBeDefined();
   return file ?? "";
 };
@@ -169,23 +177,27 @@ const merged = async (): Promise<BuildCheckInputs & { kept: string }> => {
   const source = twoReviewers();
   const before = await laid(source);
   const original = manifestOf(before);
-  const keptPiece = original.nodes.find((node) => node.id === "a")?.piece ?? "";
-  const keptFile = original.nodes.find((node) => node.id === "a")?.file ?? "";
-  const absorbed = original.nodes.find((node) => node.id === "b")?.file ?? "";
-  const nodes = original.nodes.map((node) =>
+  const keptPiece = (original.nodes ?? []).find((node) => node.id === "a")?.piece ?? "";
+  const keptFile = (original.nodes ?? []).find((node) => node.id === "a")?.file ?? "";
+  const absorbed = (original.nodes ?? []).find((node) => node.id === "b")?.file ?? "";
+  const nodes = (original.nodes ?? []).map((node) =>
     node.id === "b" ? { ...node, piece: keptPiece, file: keptFile } : node,
   );
   const files = Object.fromEntries(
     Object.entries(original.files).filter(([path]) => path !== absorbed),
   );
-  const manifest: Manifest = { ...original, nodes, files };
+  const containers = (original.containers ?? []).map((container) =>
+    container.slug === "main" ? { ...container, nodes } : container,
+  );
+  const session = containers.find((container) => container.slug === "main");
+  const manifest: Manifest = { ...original, nodes, containers, files };
   const laidDown = before
     .filter((file) => file.path !== absorbed)
     .map((file) => {
       if (file.path === "manifest.json")
         return { path: file.path, content: canonicalJson(manifest) };
-      if (file.path === orchestratorPath)
-        return orchestratorSkill({ ...manifest, prefix: parts.build }, parts);
+      if (file.path === orchestrator && session !== undefined)
+        return orchestratorSkill(session, parts);
       return file;
     });
   return {
@@ -202,7 +214,7 @@ describe("checkBuild", () => {
   it("passes a workspace whose pieces are filled and whose other files are untouched, templates keeping their @template line", async () => {
     const inputs = await workspace();
 
-    expect(inputs.readBack.map((file) => file.path)).toContain("plugin/templates/spec.md");
+    expect(inputs.readBack.map((file) => file.path)).toContain(inRoot("plugin/templates/spec.md"));
     expect(checkBuild(inputs)).toEqual([]);
   });
 
@@ -226,7 +238,7 @@ describe("checkBuild", () => {
 
     it("names an extra file under plugin/", async () => {
       const inputs = await workspace();
-      const extra = { path: "plugin/skills/extra/SKILL.md", content: "# Extra\n" };
+      const extra = { path: inRoot("plugin/skills/extra/SKILL.md"), content: "# Extra\n" };
 
       expectFailsOn({ ...inputs, readBack: [...inputs.readBack, extra] }, extra.path);
     });
@@ -274,31 +286,30 @@ describe("checkBuild", () => {
   });
 
   describe("AT-22: code-owned files are untouched", () => {
-    it.each(["plugin/hooks/hooks.json", "plugin/.claude-plugin/plugin.json", "settings.json"])(
-      "names %s when it differs by one byte",
-      async (file) => {
-        expectFailsOn(
-          edited(await workspace(), file, (content) => `${content} `),
-          file,
-        );
-      },
-    );
+    it.each(
+      ["plugin/hooks/hooks.json", "plugin/.claude-plugin/plugin.json", "settings.json"].map(inRoot),
+    )("names %s when it differs by one byte", async (file) => {
+      expectFailsOn(
+        edited(await workspace(), file, (content) => `${content} `),
+        file,
+      );
+    });
 
     it("names CLAUDE.md when the standard rules are missing", async () => {
       expectFailsOn(
-        edited(await workspace(), "CLAUDE.md", (content) =>
+        edited(await workspace(), inRoot("CLAUDE.md"), (content) =>
           content.replace(standardRules.text, ""),
         ),
-        "CLAUDE.md",
+        inRoot("CLAUDE.md"),
       );
     });
 
     it("names CLAUDE.md when one standard rule is altered", async () => {
       expectFailsOn(
-        edited(await workspace(), "CLAUDE.md", (content) =>
+        edited(await workspace(), inRoot("CLAUDE.md"), (content) =>
           content.replace("no force pushes", "no rebases"),
         ),
-        "CLAUDE.md",
+        inRoot("CLAUDE.md"),
       );
     });
   });
@@ -351,7 +362,7 @@ describe("checkBuild", () => {
       async (tools) => {
         const inputs = await workspace();
         const file = fileOf(inputs, "a");
-        const piece = inputs.manifest.nodes.find((node) => node.id === "a")?.piece ?? "";
+        const piece = (inputs.manifest.nodes ?? []).find((node) => node.id === "a")?.piece ?? "";
 
         const failures = checkBuild(
           edited(inputs, file, (content) => withField(content, "tools", tools)),
@@ -359,7 +370,12 @@ describe("checkBuild", () => {
 
         expect(piece).not.toBe("");
         expect(failures).toEqual([
-          { file, rule: expect.any(String), detail: expect.stringContaining(piece) },
+          {
+            file,
+            rule: expect.any(String),
+            detail: expect.stringContaining(piece),
+            container: "main",
+          },
         ]);
         expect(failures[0]?.detail).toMatch(/tools/);
       },
@@ -380,8 +396,8 @@ describe("checkBuild", () => {
   describe("references", () => {
     it("names a hand-off file whose template is missing", async () => {
       expectFailsOn(
-        without(await workspace(), "plugin/templates/spec.md"),
-        "plugin/templates/spec.md",
+        without(await workspace(), inRoot("plugin/templates/spec.md")),
+        inRoot("plugin/templates/spec.md"),
       );
     });
 
@@ -403,7 +419,7 @@ describe("checkBuild", () => {
       };
       const inputs = await workspace(plain);
       const readBack = inputs.readBack.filter(
-        (file) => file.path !== "plugin/templates/greeting.txt",
+        (file) => file.path !== inRoot("plugin/templates/greeting.txt"),
       );
 
       expect(checkBuild({ ...inputs, readBack })).toEqual([]);
@@ -414,7 +430,11 @@ describe("checkBuild", () => {
       const file = fileOf(inputs, "a");
 
       expectFailsOn(
-        edited(inputs, file, (content) => `${content}\nHand over to \`alpha:publish-notes\`.\n`),
+        edited(
+          inputs,
+          file,
+          (content) => `${content}\nHand over to \`alpha-main:publish-notes\`.\n`,
+        ),
         file,
       );
     });
@@ -422,7 +442,7 @@ describe("checkBuild", () => {
     it("names a file that references a piece under another build's prefix", async () => {
       const inputs = await workspace();
       const file = fileOf(inputs, "a");
-      const shipIt = inputs.manifest.nodes.find((node) => node.id === "s")?.piece;
+      const shipIt = (inputs.manifest.nodes ?? []).find((node) => node.id === "s")?.piece;
 
       expect(shipIt).toBe("ship-it");
       expectFailsOn(
@@ -437,35 +457,35 @@ describe("checkBuild", () => {
 
     it("names the orchestrator when its NODE markers are out of manifest order", async () => {
       expectFailsOn(
-        edited(await workspace(), orchestratorPath, (content) => {
+        edited(await workspace(), orchestrator, (content) => {
           const lines = content.split("\n");
           const first = lines.findIndex((line) => stepLine.test(line));
           const [one = "", two = ""] = lines.slice(first, first + 2);
           lines.splice(first, 2, two, one);
           return lines.join("\n");
         }),
-        orchestratorPath,
+        orchestrator,
       );
     });
 
     it("names the orchestrator as missing when the workspace has none", async () => {
-      const failures = checkBuild(without(await workspace(), orchestratorPath));
+      const failures = checkBuild(without(await workspace(), orchestrator));
 
       expect(failures).toContainEqual(
-        expect.objectContaining({ file: orchestratorPath, rule: "missing" }),
+        expect.objectContaining({ file: orchestrator, rule: "missing" }),
       );
     });
 
     it("names the orchestrator when a node's NODE marker is missing", async () => {
       expectFailsOn(
-        edited(await workspace(), orchestratorPath, (content) =>
+        edited(await workspace(), orchestrator, (content) =>
           content
             .split("\n")
             .filter((line) => !/^\d+\. NODE s /.test(line))
             .join("\n")
             .replaceAll(" Then go on to NODE s.", ""),
         ),
-        orchestratorPath,
+        orchestrator,
       );
     });
   });
@@ -498,14 +518,14 @@ describe("checkBuild", () => {
       expect(applied.accepted).toEqual([entry]);
       const users = new Set(
         entry.usedBy.flatMap(
-          (id) => applied.manifest.nodes.find((node) => node.id === id)?.file ?? [],
+          (id) => (applied.manifest.nodes ?? []).find((node) => node.id === id)?.file ?? [],
         ),
       );
       const readBack = applied.files.map(filledOne).map((file) =>
         users.has(file.path)
           ? {
               ...file,
-              content: `${file.content}\nRun \`alpha:${entry.name}\` with the Skill tool.\n`,
+              content: `${file.content}\nRun \`alpha-main:${entry.name}\` with the Skill tool.\n`,
             }
           : file,
       );
@@ -515,7 +535,7 @@ describe("checkBuild", () => {
         manifest: applied.manifest,
         flow: source,
         shared: applied.accepted,
-        path: sharedPath(entry),
+        path: sharedPath(entry, root),
       };
     };
 
@@ -529,13 +549,13 @@ describe("checkBuild", () => {
     it("passes a shared command the same way", async () => {
       const { path, ...inputs } = await sharing({ ...conventions, kind: "command" });
 
-      expect(path).toBe("plugin/commands/repo-conventions.md");
+      expect(path).toBe(inRoot("plugin/commands/repo-conventions.md"));
       expect(checkBuild(inputs)).toEqual([]);
     });
 
     it("still names a plugin/ file that nothing declares as extra", async () => {
       const inputs = await sharing();
-      const stray = { path: "plugin/skills/stray/SKILL.md", content: "# Stray\n" };
+      const stray = { path: inRoot("plugin/skills/stray/SKILL.md"), content: "# Stray\n" };
 
       expectFailsOn({ ...inputs, readBack: [...inputs.readBack, stray] }, stray.path);
     });
@@ -589,7 +609,7 @@ describe("checkBuild", () => {
       const file = fileOf(inputs, "b");
 
       expectFailsOn(
-        edited(inputs, file, (content) => content.replace("`alpha:repo-conventions`", "it")),
+        edited(inputs, file, (content) => content.replace("`alpha-main:repo-conventions`", "it")),
         file,
       );
     });
@@ -599,9 +619,125 @@ describe("checkBuild", () => {
       const file = fileOf(inputs, "a");
 
       expectFailsOn(
-        edited(inputs, file, (content) => `${content}\nThen run \`alpha:repo-rules\`.\n`),
+        edited(inputs, file, (content) => `${content}\nThen run \`alpha-main:repo-rules\`.\n`),
         file,
       );
     });
+  });
+});
+
+describe("checkBuild per container", () => {
+  const fillContainerFile = (file: BuildFile): BuildFile => {
+    if (file.path.endsWith("CLAUDE.md")) {
+      return {
+        path: file.path,
+        content: `${file.content}\n## Repo notes\n\nRun the tests first.\n`,
+      };
+    }
+    if (!/(^|\/)plugin\/agents\/[^/]+\.md$/.test(file.path)) return file;
+    const scope = scopeOf(descriptionOf(file.content));
+    const described = withField(
+      file.content,
+      "description",
+      `${scope === undefined ? "" : scopeLine(scope)} ${filledDescription}`,
+    ).replace(unfilledLine, "");
+    return {
+      path: file.path,
+      content: `${described}\n## Worked example\n\nRead the spec, compare it with the ticket, write each gap down.\n`,
+    };
+  };
+
+  const twoSessions = async (): Promise<BuildCheckInputs> => {
+    const source = twoSessionWorkflow();
+    const laidDown = await laid(source);
+    return {
+      laidDown,
+      readBack: laidDown.map(fillContainerFile),
+      manifest: manifestOf(laidDown),
+      flow: source,
+      shared: [],
+    };
+  };
+
+  const expectOnlyIn = (failures: readonly BuildCheckFailure[], container: string) => {
+    expect(failures).not.toEqual([]);
+    for (const line of failures.map(failureLine))
+      expect(line).toMatch(new RegExp(`^\\[${container}\\] `));
+  };
+
+  it("fails a build whose ios orchestrator was removed, naming ios, and android has no failure", async () => {
+    const path = "sessions/ios/plugin/skills/run/SKILL.md";
+
+    const failures = checkBuild(without(await twoSessions(), path));
+
+    expect(failures).toContainEqual(expect.objectContaining({ file: path, container: "ios" }));
+    expectOnlyIn(failures, "ios");
+  });
+
+  it("accepts a reference to a piece under its own container's prefix", async () => {
+    const inputs = edited(
+      await twoSessions(),
+      "sessions/ios/plugin/agents/plan.md",
+      (content) => `${content}\nWhen unsure, run alpha-ios:plan again.\n`,
+    );
+
+    expect(checkBuild(inputs)).toEqual([]);
+  });
+
+  it("fails a reference to another container's piece, naming the container it is in", async () => {
+    const path = "sessions/ios/plugin/agents/plan.md";
+    const inputs = edited(
+      await twoSessions(),
+      path,
+      (content) => `${content}\nWhen unsure, run alpha-android:plan.\n`,
+    );
+
+    const failures = checkBuild(inputs);
+
+    expect(failures).toContainEqual(
+      expect.objectContaining({ file: path, rule: "reference", container: "ios" }),
+    );
+    expectOnlyIn(failures, "ios");
+  });
+
+  it("checks the standard rules in each container's CLAUDE.md", async () => {
+    const path = "sessions/android/CLAUDE.md";
+    const inputs = edited(await twoSessions(), path, (content) =>
+      content.replace(standardRules.text, ""),
+    );
+
+    const failures = checkBuild(inputs);
+
+    expect(failures).toContainEqual(
+      expect.objectContaining({ file: path, rule: "standard-rules", container: "android" }),
+    );
+    expectOnlyIn(failures, "android");
+  });
+
+  it("keeps each container's settings code-owned", async () => {
+    const path = "sessions/ios/settings.json";
+    const inputs = edited(await twoSessions(), path, (content) => `${content} `);
+
+    const failures = checkBuild(inputs);
+
+    expect(failures).toContainEqual(
+      expect.objectContaining({ file: path, rule: "code-owned", container: "ios" }),
+    );
+    expectOnlyIn(failures, "ios");
+  });
+
+  it("names a file added to a container's plugin as extra", async () => {
+    const path = "sessions/android/plugin/agents/stray.md";
+    const inputs = await twoSessions();
+
+    const failures = checkBuild({
+      ...inputs,
+      readBack: [...inputs.readBack, { path, content: "---\nname: stray\n---\nStray.\n" }],
+    });
+
+    expect(failures).toContainEqual(
+      expect.objectContaining({ file: path, rule: "extra", container: "android" }),
+    );
+    expectOnlyIn(failures, "android");
   });
 });

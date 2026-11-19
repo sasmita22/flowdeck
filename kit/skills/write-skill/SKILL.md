@@ -5,13 +5,13 @@ description: How to write a build's skill so the right agent picks it up and fol
 
 # Write a Skill
 
-A build skill is called by its full name, `<prefix>:<piece>`, where `<prefix>` is the build name, with the `Skill` tool, or read by path by the build's orchestrator. A shared piece, skill or command, is one too: its agents run it as `<prefix>:<name>`. Its description decides whether it is picked; its body is all the reader gets.
+A build skill is called by its full name, `<prefix>:<piece>`, where `<prefix>` is its container's plugin name, `<build>-<slug>`, with the `Skill` tool, or read by path by its container's orchestrator. It lives in its container's `plugin/skills/` (under `workspace/` or `sessions/<slug>/`). A shared piece, skill or command, is one too: its agents run it as `<prefix>:<name>`. Its description decides whether it is picked; its body is all the reader gets.
 
 ## Description
 
-1. It starts with the scope line code wrote, with this build's names filled in:
+1. It starts with the scope line code wrote, with this container's names filled in: `<build>` is the container's `<prefix>`, `<repo>` its repo folder (`workspace` for the workspace container), and `<build folder>` the build's folder.
 
-   `Part of build <build> (repo <repo>, workspace <workspace>). For work in this build's workspace, use this, not a similarly named skill from elsewhere.`
+   `Part of build <build> (repo <repo>, build folder <build folder>). For work in this build, use this, not a similarly named skill from elsewhere.`
 
    Keep it word for word as the first text of `description`. Never move, reword or drop it.
 
@@ -23,7 +23,7 @@ A build skill is called by its full name, `<prefix>:<piece>`, where `<prefix>` i
 - One concern. If the node mixes two jobs, write it as drawn and add it to `mixedJobs` in `build-report.json` as `{ "nodeId": "<node id>", "note": "<the two jobs>" }`. Never split it.
 - Imperative steps, in order. Each step says what to read and what to produce.
 - Short enough to read in full. You cannot add files, so detail that belongs to another piece stays in that piece; name it instead of repeating it.
-- Name another piece only by its full name `<prefix>:<piece>`, and only a piece of this build (a `piece` in `manifest.json`, or a shared piece in `build-report.json` `shared`).
+- Name another piece only by its full name `<prefix>:<piece>`, and only a piece of the same container (a `piece` among that container's `nodes` in `manifest.json`, or a shared piece in `build-report.json` `shared` whose `usedBy` are that container's nodes).
 - Whether it may run on its own is code's call: keep the frontmatter as code wrote it.
 
 ## Checklist
@@ -33,4 +33,4 @@ A build skill is called by its full name, `<prefix>:<piece>`, where `<prefix>` i
 - [ ] `name` and every other frontmatter field are as code wrote them.
 - [ ] One concern; a mixed job is flagged, not split.
 - [ ] The draft marker line is gone and the body says more than the draft.
-- [ ] Every `<prefix>:<piece>` names a piece or a shared piece of this build.
+- [ ] Every `<prefix>:<piece>` names a piece or a shared piece of the same container, with that container's prefix.

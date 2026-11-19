@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { dirname, join, normalize } from "node:path";
+import { join, normalize, relative, sep } from "node:path";
 import { z } from "zod";
 import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.js";
 import { workspaceDir, type BuildResult } from "../../core/compiler/build.js";
@@ -31,7 +31,6 @@ import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
 import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
 import {
   progressOf,
-  sessionBranch,
   type BuildEvent,
   type BuildOutcome,
   type BuildSessionEvent,
@@ -64,6 +63,7 @@ import {
   deleteBuild,
   deletePreview,
   isInside,
+  runWorktreeOf,
   storedBranch,
   teardownWorkspace,
   worktreePreview,
@@ -75,7 +75,12 @@ import { retryEntries } from "../../core/run/retry.js";
 import { sha256Hex } from "../../core/compiler/hash.js";
 import { backfillManifests } from "../../core/run/backfill-manifests.js";
 import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
-import { parseManifest, stageSourcesOf, type ParsedManifest } from "../../core/run/manifest.js";
+import {
+  parseManifest,
+  singleSession,
+  stageSourcesOf,
+  type ParsedManifest,
+} from "../../core/run/manifest.js";
 import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
 import { candidatePaths } from "../../core/run/other-repos.js";
@@ -107,7 +112,7 @@ import {
   type LoadedRun,
   type WriteStoryResult,
 } from "../../core/run/listing.js";
-import { buildWorktree, repoFolder } from "../../core/run/workspace.js";
+import { repoFolder, workspaceFolder } from "../../core/run/workspace.js";
 import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema, type HumanWaiter } from "../../core/run/wait.js";
 import type { BlueprintSessions } from "../../ports/blueprint-sessions.js";
@@ -291,6 +296,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     findBuild: (id) => store.findBuild(id),
     findBuildByName: (name) => store.findBuildByName(name),
     listBuilds: () => store.listBuilds(),
+    buildWorktrees: (buildId) => store.buildWorktrees(buildId),
     buildFiles: (id) => store.buildFiles(id),
     startPendingBuild: (build) => store.startPendingBuild(build),
     appendBuildEvent: (pendingId, event) => store.appendBuildEvent(pendingId, event),
@@ -308,6 +314,7 @@ function detachable(store: Store, detached: () => boolean): Store {
     buildManifest: (buildId) => store.buildManifest(buildId),
     listManifestGaps: () => store.listManifestGaps(),
     recordBuild: (build) => store.recordBuild(build),
+    addBuildWorktree: (buildId, worktree) => store.addBuildWorktree(buildId, worktree),
     deleteBuild: (id) => store.deleteBuild(id),
     deleteRun: (runId) => store.deleteRun(runId),
     deletePendingBuild: (id) => store.deletePendingBuild(id),
@@ -413,6 +420,12 @@ const progressEntry = (
 const isOld = (build: BuildRecord) => build.name === null;
 
 type ProjectBuild = BuildRecord & { name: string; repo: string; base: string };
+
+const runModel = (manifest: LoadedBuild): string => {
+  const running = singleSession(manifest);
+  if (!running.ok) throw new Error(running.reason);
+  return running.container.model;
+};
 
 const hasProject = (build: BuildRecord): build is ProjectBuild =>
   build.name !== null && build.repo !== null && build.base !== null;
@@ -661,6 +674,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       startPendingBuild: (build) => deps.store.startPendingBuild(build),
       appendBuildEvent: (pendingId, event) => deps.store.appendBuildEvent(pendingId, event),
       findPendingBuildByName: (name) => deps.store.findPendingBuildByName(name),
+      addBuildWorktree: (buildId, worktree) => deps.store.addBuildWorktree(buildId, worktree),
       endPendingBuild: (pendingId, end) => {
         report = end.report;
         deps.store.endPendingBuild(pendingId, end);
@@ -855,16 +869,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       .buildEvents(pendingId)
       .findLast((event): event is BuildSessionEvent & StoredBuildEvent => event.type === "session");
 
-  const sessionWorkspace = async (session: BuildSessionEvent, name: string) => {
-    const dir = workspaceDir(options.home, session.buildId);
-    const { branch, branchCreated } = sessionBranch(session, name, session.buildId);
-    const worktree = {
-      repo: session.repo,
-      base: session.base,
-      ...buildWorktree({ repo: session.repo, dir, branch, create: branchCreated }),
-    };
-    const added = await options.fs.exists(worktree.path);
-    return { dir, ...(added ? { worktree } : {}) };
+  const sessionWorkspace = async (runs: Store, session: BuildSessionEvent) => {
+    const worktrees = [];
+    for (const row of runs.buildWorktrees(session.buildId)) {
+      if (await options.fs.exists(row.path)) worktrees.push(runWorktreeOf(row));
+    }
+    return { dir: workspaceDir(options.home, session.buildId), worktrees };
   };
 
   const failLeftBuild = async (runs: Store, pending: PendingBuild, why: string) => {
@@ -876,7 +886,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       await options.fs.removeTree(buildSessionFolder(session.name));
       await teardownWorkspace(
         { fs: options.fs, worktree: options.worktree },
-        await sessionWorkspace(session, pending.name),
+        await sessionWorkspace(runs, session),
       );
     }
     runs.endPendingBuild(pending.id, { outcome: "failed", endedAt: options.run.now() });
@@ -1093,8 +1103,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   ) => ({
     ...session,
     buildDir,
+    workspaceFolder: workspaceFolder(buildDir),
     layout: manifest.layout,
-    model: manifest.session.model,
+    model: runModel(manifest),
     hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
   });
 
@@ -1517,7 +1528,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
-    if (loaded.kind === "error") throw new Error(loaded.message);
+    if (loaded.kind === "error") return { kind: "error", message: loaded.message };
     return runChoices(loaded.build);
   };
 
@@ -1739,20 +1750,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const listBuilds = (runs: Store): ListedBuild[] =>
     runs.listBuilds().map((build) => ({ ...build, old: isOld(build) }));
 
-  const readWorktree = async (build: BuildRecord): Promise<AssistantReadBuild["worktree"]> => {
-    if (build.name === null || build.repo === null || build.base === null) return null;
-    const { path, branch } = buildWorktree({
-      repo: build.repo,
-      dir: build.dir,
-      ...storedBranch(build, build.name),
-    });
+  const readWorktree = async (
+    runs: Store,
+    build: BuildRecord,
+  ): Promise<AssistantReadBuild["worktree"]> => {
+    const [row] = hasProject(build) ? runs.buildWorktrees(build.id) : [];
+    if (row === undefined) return null;
+    const { path, repo, branch, base } = row;
     if (!(await options.fs.exists(path)))
       return { path, exists: false, dirty: null, unpushed: null };
     return {
       path,
       exists: true,
       dirty: await options.worktree.isDirty(path),
-      unpushed: await options.worktree.hasUnpushed(build.repo, branch, build.base),
+      unpushed: await options.worktree.hasUnpushed(repo, branch, base),
     };
   };
 
@@ -1766,7 +1777,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
     if (!hasProject(build)) return null;
-    const worktree = await readWorktree(build);
+    const worktree = await readWorktree(runs, build);
     if (worktree === null) return null;
     const { branch, create } = storedBranch(build, build.name);
     return buildProjectSchema.parse({
@@ -1785,9 +1796,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
     if (!hasProject(build)) throw new Error(`Build ${buildId} has no project`);
-    const checkout = join(build.dir, repoFolder(build.repo));
     const target = join(build.dir, path);
-    const underCheckout = target === checkout || isInside(checkout, target);
+    const underCheckout = runs
+      .buildWorktrees(build.id)
+      .some((row) => target === normalize(row.path) || isInside(row.path, target));
     if (!isInside(build.dir, target) || !underCheckout)
       throw new Error(`${path} is outside the build's project`);
     return buildEntriesSchema.parse(await options.fs.entries(target, { inside: build.dir }));
@@ -1797,13 +1809,19 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     runs: Store,
     pendingId: string,
   ): Promise<PendingBuildTree | null> => {
-    const laidDown = runs.buildEvents(pendingId).findLast((event) => event.type === "worktree");
-    if (laidDown === undefined) return null;
-    const checkout = normalize(laidDown.path);
-    const dir = dirname(checkout);
+    const laidDown = runs
+      .buildEvents(pendingId)
+      .flatMap((event) => (event.type === "worktree" ? [normalize(event.path)] : []));
+    const latest = laidDown.at(-1);
+    if (latest === undefined) return null;
+    const workspaces = normalize(join(options.home, "workspaces"));
+    const [buildId = ".."] = relative(workspaces, latest).split(sep);
+    if (buildId === ".." || buildId === "") return null;
+    const dir = workspaceDir(options.home, buildId);
+    const checkouts = laidDown.filter((path) => isInside(dir, path));
     if (!(await options.fs.exists(dir))) return null;
     return pendingBuildTreeSchema.parse({
-      paths: await options.fs.list(dir, { skip: checkout }),
+      paths: await options.fs.list(dir, { skip: checkouts }),
     });
   };
 
@@ -1811,7 +1829,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const build = runs.findBuild(id);
     if (build === undefined) throw new Error(`No build ${id}`);
     const exists = await options.fs.exists(build.dir);
-    const worktree = await readWorktree(build);
+    const worktree = await readWorktree(runs, build);
+    const checkouts = runs.buildWorktrees(build.id).map((row) => row.path);
     return {
       repo: build.repo,
       base: build.base,
@@ -1820,10 +1839,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         path: build.dir,
         exists,
         tree: exists
-          ? await options.fs.list(
-              build.dir,
-              build.repo === null ? {} : { skip: join(build.dir, repoFolder(build.repo)) },
-            )
+          ? await options.fs.list(build.dir, checkouts.length === 0 ? {} : { skip: checkouts })
           : [],
       },
       worktree,
@@ -1866,15 +1882,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const previewDelete = async (runs: Store, buildId: string) => {
     const build = runs.findBuild(buildId);
     if (build === undefined) throw new Error(`No build ${buildId}`);
-    return deletePreview({ worktree: options.worktree, fs: options.fs }, build);
+    return deletePreview({ worktree: options.worktree, fs: options.fs, store: runs }, build);
   };
 
   const previewPendingDelete = async (runs: Store, id: string) => {
     const pending = runs.pendingBuild(id);
     if (pending === null) throw new Error(`No pending build ${id}`);
     const session = lastSession(runs, id);
-    const left = session === undefined ? undefined : await sessionWorkspace(session, pending.name);
-    return worktreePreview({ worktree: options.worktree, fs: options.fs }, left?.worktree);
+    const left = session === undefined ? undefined : await sessionWorkspace(runs, session);
+    return worktreePreview({ worktree: options.worktree, fs: options.fs }, left?.worktrees ?? []);
   };
 
   const removePendingBuild = async (runs: Store, id: string): Promise<void> => {
@@ -1883,7 +1899,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const session = lastSession(runs, id);
     if (pending !== null && session !== undefined) {
       await options.fs.removeTree(buildSessionFolder(session.name));
-      const left = await sessionWorkspace(session, pending.name);
+      const left = await sessionWorkspace(runs, session);
       if (await options.fs.exists(left.dir))
         await teardownWorkspace(
           { fs: options.fs, worktree: options.worktree },

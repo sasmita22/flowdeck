@@ -1,20 +1,32 @@
 import type { BuildAnswer, BuildReport } from "./build-report.js";
 import type { BuildCheckFailure } from "./check-build.js";
-import type { Manifest } from "./lower.js";
+import type { Manifest, ManifestContainer } from "./lower.js";
+import { containerRoot } from "./pieces.js";
 
 type PieceKind = "agent" | "template" | "workspace" | "shared";
 
+export const auditPiece = "build";
+
 const kit = (name: string) => `flowdeck-build:${name}`;
 
+const insideContainer = (path: string) => path.replace(/^(workspace|sessions\/[^/]+)\//, "");
+
 export const pieceKind = (path: string): PieceKind => {
-  if (path === "CLAUDE.md") return "workspace";
-  if (path.startsWith("plugin/templates/")) return "template";
-  if (path.startsWith("plugin/skills/") || path.startsWith("plugin/commands/")) return "shared";
+  const local = insideContainer(path);
+  if (local === "CLAUDE.md") return "workspace";
+  if (local.startsWith("plugin/templates/")) return "template";
+  if (local.startsWith("plugin/skills/") || local.startsWith("plugin/commands/")) return "shared";
   return "agent";
 };
 
+export const manifestNodes = (manifest: Manifest) =>
+  manifest.containers.flatMap((container) => container.nodes);
+
 export const nodeIdsOf = (manifest: Manifest, path: string): string[] =>
-  manifest.nodes.flatMap((node) => (node.file === path ? [node.id] : []));
+  manifestNodes(manifest).flatMap((node) => (node.file === path ? [node.id] : []));
+
+const containerOf = (manifest: Manifest, path: string): ManifestContainer | undefined =>
+  manifest.containers.find((container) => path.startsWith(`${containerRoot(container)}/`));
 
 const answerNodes = ({ nodeId, otherNodeId }: BuildAnswer): string[] =>
   otherNodeId === undefined ? [nodeId] : [nodeId, otherNodeId];
@@ -27,9 +39,14 @@ const answerLines = (answer: BuildAnswer): string[] => [
   `ANSWER ${answer.answer}`,
 ];
 
-const repoLines = (manifest: Manifest): string[] => {
-  const repo = manifest.session.buildConfig?.repo;
-  return repo === undefined ? [] : [`REPO ${repo}`];
+const containerLines = (container: ManifestContainer): string[] => [
+  `CONTAINER ${container.slug}`,
+  ...(container.repo === undefined ? [] : [`REPO ${container.repo}`]),
+];
+
+const pieceContainerLines = (manifest: Manifest, path: string): string[] => {
+  const container = containerOf(manifest, path);
+  return container === undefined ? [] : containerLines(container);
 };
 
 const failureLine = (failure: BuildCheckFailure) =>
@@ -37,8 +54,9 @@ const failureLine = (failure: BuildCheckFailure) =>
 
 const sharedLines = (manifest: Manifest, path: string, shared: BuildReport["shared"]): string[] => {
   const nodeIds = nodeIdsOf(manifest, path);
+  const prefix = containerOf(manifest, path)?.prefix ?? manifest.prefix ?? "";
   return shared.flatMap(({ name, usedBy }) =>
-    usedBy.some((id) => nodeIds.includes(id)) ? [`SHARED ${manifest.prefix ?? ""}:${name}`] : [],
+    usedBy.some((id) => nodeIds.includes(id)) ? [`SHARED ${prefix}:${name}`] : [],
   );
 };
 
@@ -59,7 +77,7 @@ export const writeTurn = (
     [
       `PIECE ${path}`,
       `KIND ${pieceKind(path)}`,
-      ...repoLines(manifest),
+      ...pieceContainerLines(manifest, path),
       ...sharedLines(manifest, path, shared),
       ...carried.filter((failure) => failure.file === path).map(failureLine),
       ...given.filter((answer) => isAbout(answer, nodeIdsOf(manifest, path))).flatMap(answerLines),
@@ -90,12 +108,19 @@ export const writeTurn = (
   ].join("\n");
 };
 
+const containerParagraphs = (containers: readonly ManifestContainer[]): string[] =>
+  containers.flatMap((container) => [
+    "",
+    ...containerLines(container),
+    `FOLDER ${containerRoot(container)}`,
+  ]);
+
 export const auditTurn = (manifest: Manifest, answers: readonly BuildAnswer[] = []): string =>
   [
     `Dispatch ${kit("handoff-auditor")} once${manifest.prefix === undefined ? "" : ` for the build ${manifest.prefix}`}, with this prompt:`,
     "",
-    "PIECE workspace",
-    ...repoLines(manifest),
+    `PIECE ${auditPiece}`,
     ...answers.flatMap(answerLines),
+    ...containerParagraphs(manifest.containers),
     "",
   ].join("\n");

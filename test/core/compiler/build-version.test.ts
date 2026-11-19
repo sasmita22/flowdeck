@@ -47,8 +47,10 @@ import {
   onMainFlow,
   output,
   sessionContainer,
+  sessionsWorkflow,
   thenWire,
   trigger,
+  twoSessionWorkflow,
   wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
@@ -93,6 +95,8 @@ const ids = (...values: string[]) => {
     return next;
   };
 };
+
+type OneSessionManifest = Manifest & Required<Pick<Manifest, "nodes" | "wires" | "session">>;
 
 const firstId = "0f3a9c2e-1111-2222-3333-444455556666";
 const secondId = "7b1d44aa-1111-2222-3333-444455556666";
@@ -280,7 +284,7 @@ describe("buildVersion", () => {
           base: "main",
           branch: "flowdeck/fix-login-0f3a9c2e",
           create: true,
-          path: `${dir}/carousell-web`,
+          path: `${dir}/sessions/main/carousell-web`,
         },
       ]);
       expect(store.builds()).toEqual([
@@ -367,7 +371,7 @@ describe("buildVersion", () => {
           base: "main",
           branch: "flowdeck/fix-login-0f3a9c2e",
           create: true,
-          path: `${dir}/carousell-web`,
+          path: `${dir}/sessions/main/carousell-web`,
         },
       ]);
       expect(await base.fs.exists(`${dir}/manifest.json`)).toBe(false);
@@ -383,8 +387,14 @@ describe("buildVersion", () => {
       expect(a.dir).toBe(`${home}/workspaces/${firstId}`);
       expect(b.dir).toBe(`${home}/workspaces/${secondId}`);
       expect(worktree.calls.map(({ branch, path }) => ({ branch, path }))).toEqual([
-        { branch: "flowdeck/a-0f3a9c2e", path: `${home}/workspaces/${firstId}/carousell-web` },
-        { branch: "flowdeck/b-7b1d44aa", path: `${home}/workspaces/${secondId}/carousell-web` },
+        {
+          branch: "flowdeck/a-0f3a9c2e",
+          path: `${home}/workspaces/${firstId}/sessions/main/carousell-web`,
+        },
+        {
+          branch: "flowdeck/b-7b1d44aa",
+          path: `${home}/workspaces/${secondId}/sessions/main/carousell-web`,
+        },
       ]);
       expect(store.builds().map(({ id, name }) => ({ id, name }))).toEqual([
         { id: firstId, name: "a" },
@@ -426,7 +436,8 @@ describe("buildVersion", () => {
         const { fs, deps } = setup({ flows: [shipFlow()] });
         const result = await buildVersion(v1, { name: "fix-login", repo, values }, deps);
         if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
-        return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest).values;
+        return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as OneSessionManifest)
+          .values;
       };
 
       it("lands in the manifest as false when the request leaves it out", async () => {
@@ -772,7 +783,7 @@ describe("buildVersion", () => {
     });
 
     const cutAt = () => ({
-      path: `${home}/workspaces/${firstId}/carousell-web`,
+      path: `${home}/workspaces/${firstId}/sessions/main/carousell-web`,
       branch: "flowdeck/fix-login-0f3a9c2e",
       base: "main",
       branchCreated: true,
@@ -914,7 +925,7 @@ describe("buildVersion", () => {
           base: "main",
           branch: "flowdeck/fix-login-0f3a9c2e",
           create: true,
-          path: `${dir}/carousell-web`,
+          path: `${dir}/sessions/main/carousell-web`,
         },
       ]);
       expect(await base.fs.exists(`${dir}/manifest.json`)).toBe(false);
@@ -973,7 +984,7 @@ describe("buildVersion", () => {
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
         laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-      ) as Manifest;
+      ) as OneSessionManifest;
       const file = manifest.nodes.find((node) => node.id === nodeId)?.file;
       if (file === undefined) throw new Error(`no piece for ${nodeId}`);
       return file;
@@ -1098,7 +1109,7 @@ describe("buildVersion", () => {
       base: "main",
       branch: "flowdeck/fix-login-0f3a9c2e",
       create: true,
-      path: `${dir()}/carousell-web`,
+      path: `${dir()}/sessions/main/carousell-web`,
     });
 
     const expectTornDown = async (t: ReturnType<typeof traced>) => {
@@ -1146,7 +1157,7 @@ describe("buildVersion", () => {
 
     it("leaves a seeded repository's files in the worktree untouched and out of the build", async () => {
       const t = traced();
-      const worktreeDir = `${dir()}/carousell-web`;
+      const worktreeDir = `${dir()}/sessions/main/carousell-web`;
       const seeded = {
         [`${worktreeDir}/README.md`]: "@unfilled: the repo's own placeholder\n\nRepo notes.\n",
         [`${worktreeDir}/assets/logo.png`]: String.fromCharCode(0x89, 0x50, 0xff, 0xfe, 0x00, 0xc3),
@@ -1176,11 +1187,15 @@ describe("buildVersion", () => {
       expect(t.ends).toEqual([
         { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "built" }) },
       ]);
-      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest & {
+      const manifest = JSON.parse(
+        await t.fs.readFile(`${dir()}/manifest.json`),
+      ) as OneSessionManifest & {
         files: Record<string, string>;
       };
       expect(
-        Object.keys(manifest.files).filter((path) => path.startsWith("carousell-web/")),
+        Object.keys(manifest.files).filter((path) =>
+          path.startsWith("sessions/main/carousell-web/"),
+        ),
       ).toEqual([]);
       for (const [path, content] of Object.entries(seeded)) {
         expect(await t.fs.readFile(path)).toBe(content);
@@ -1351,7 +1366,7 @@ describe("buildVersion", () => {
       intoSession(source, [agent("loose")] as Flow["nodes"]);
 
     const builtManifest = async (t: ReturnType<typeof traced>) =>
-      JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+      JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as OneSessionManifest;
 
     it("rebuilds with answers into the same manifest as the main flow alone", async () => {
       const rebuilt = async (source: Flow) => {
@@ -1516,7 +1531,21 @@ describe("buildVersion", () => {
       expect(isWriteTurn(write?.text ?? "")).toBe(true);
       expect([...piecesNamed(write?.text ?? "")].sort()).toEqual([...pieces].sort());
       expect(isAuditTurn(audit?.text ?? "")).toBe(true);
-      expect(piecesNamed(audit?.text ?? "")).toEqual(["workspace"]);
+      expect(piecesNamed(audit?.text ?? "")).toEqual(["build"]);
+    });
+
+    it("records the audit's component event as the workspace kind", async () => {
+      const t = traced();
+
+      const { pending } = await t.run();
+
+      const audits = eventsOf(t.store, pending.pendingId).filter(
+        (event) => event.type === "component" && event.path === "build",
+      );
+      expect(audits.length).toBeGreaterThan(0);
+      expect(
+        audits.every((event) => event.type === "component" && event.kind === "workspace"),
+      ).toBe(true);
     });
 
     it("locks the filled files after the agents, with the kit version in the manifest", async () => {
@@ -1528,7 +1557,9 @@ describe("buildVersion", () => {
       if (!isBuilt(result)) throw new Error(`build failed: ${String(result)}`);
       const filled = await t.fs.readFile(`${dir()}/${pieceA}`);
       expect(filled).not.toMatch(/@unfilled/);
-      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest & {
+      const manifest = JSON.parse(
+        await t.fs.readFile(`${dir()}/manifest.json`),
+      ) as OneSessionManifest & {
         hash: string;
       };
       expect(manifest.kitVersion).toBe(kit.version);
@@ -1555,7 +1586,9 @@ describe("buildVersion", () => {
       expect(piecesNamed(t.fake.turns[2]?.text ?? "")).toEqual([pieceA]);
       expectInOrder(t.timeline, ["audit turn", "write turn", "step 5 running", "end built"]);
       expect(await t.fs.exists(`${dir()}/${pieceB}`)).toBe(false);
-      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+      const manifest = JSON.parse(
+        await t.fs.readFile(`${dir()}/manifest.json`),
+      ) as OneSessionManifest;
       expect(manifest.nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
     });
 
@@ -1588,7 +1621,7 @@ describe("buildVersion", () => {
         kind: "skill",
         usedBy: ["a", "b"],
       };
-      const draftPath = "plugin/skills/repo-conventions/SKILL.md";
+      const draftPath = "sessions/main/plugin/skills/repo-conventions/SKILL.md";
       const turnKinds = (fake: FakeBuildAgents) =>
         fake.turns.map((turn) => (isAuditTurn(turn.text) ? "audit" : "write"));
 
@@ -1607,7 +1640,7 @@ describe("buildVersion", () => {
         for (const piece of [pieceA, pieceB]) {
           expect(rewrite).toMatch(
             new RegExp(
-              `PIECE ${piece}\\n(?:[A-Z]+ [^\\n]*\\n)*SHARED fix-login:repo-conventions\\n`,
+              `PIECE ${piece}\\n(?:[A-Z]+ [^\\n]*\\n)*SHARED fix-login-main:repo-conventions\\n`,
             ),
           );
         }
@@ -1616,7 +1649,9 @@ describe("buildVersion", () => {
             (call) => call.method === "writeFile" && call.path === `${dir()}/${draftPath}`,
           ),
         ).toBe(true);
-        const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+        const manifest = JSON.parse(
+          await t.fs.readFile(`${dir()}/manifest.json`),
+        ) as OneSessionManifest;
         expect(manifest.files[draftPath]).toBe(
           sha256Hex(await t.fs.readFile(`${dir()}/${draftPath}`)),
         );
@@ -1675,13 +1710,13 @@ describe("buildVersion", () => {
         if (!laid.ok) throw new Error("the flow does not lay down");
         const laidManifest = JSON.parse(
           laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-        ) as Manifest;
+        ) as OneSessionManifest;
         const applied = applyShared(laid.files, laidManifest, [conventions]);
         for (const file of applied.files)
           await t.fs.writeFile(`${dir()}/${file.path}`, file.content);
         await t.fs.writeFile(`${cut().path}/README.md`, "Repo notes.\n");
         const pieces = [
-          ...new Set(applied.manifest.nodes.flatMap((node) => node.file ?? [])),
+          ...new Set((applied.manifest.nodes ?? []).flatMap((node) => node.file ?? [])),
           draftPath,
         ];
         await t.fake.open({ ...t.fake.opened[0], sessionName, workspaceDir: dir() } as never);
@@ -1738,7 +1773,9 @@ describe("buildVersion", () => {
         expect(result).toEqual(expect.objectContaining({ ok: true }));
         expect(t.fake.turns).toHaveLength(turnsBefore);
         expect(await t.fs.readFile(`${dir()}/${draftPath}`)).toBe(filledDraft);
-        const locked = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+        const locked = JSON.parse(
+          await t.fs.readFile(`${dir()}/manifest.json`),
+        ) as OneSessionManifest;
         expect(locked.files[draftPath]).toBe(sha256Hex(filledDraft));
       });
     });
@@ -1824,7 +1861,7 @@ describe("buildVersion", () => {
     });
 
     it("fails step 5 naming a code-owned file the agents edited, and locks nothing after three rounds", async () => {
-      const t = traced({ script: { editCodeOwned: [{ path: "settings.json" }] } });
+      const t = traced({ script: { editCodeOwned: [{ path: "sessions/main/settings.json" }] } });
 
       const { pending } = await t.run();
 
@@ -1832,7 +1869,7 @@ describe("buildVersion", () => {
         (event) => event.step === 5 && event.status === "failed",
       );
       expect(failedChecks.length).toBeGreaterThan(0);
-      expect(failedChecks.at(-1)?.message).toContain("settings.json");
+      expect(failedChecks.at(-1)?.message).toContain("sessions/main/settings.json");
       expect(writeTurns(t.fake)).toHaveLength(3);
       expect(t.ends).toEqual([
         { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "failed" }) },
@@ -2075,7 +2112,11 @@ describe("buildVersion", () => {
 
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
       expect(worktree.calls).toEqual([
-        expect.objectContaining({ repo, base: "main", path: `${result.dir}/carousell-web` }),
+        expect.objectContaining({
+          repo,
+          base: "main",
+          path: `${result.dir}/sessions/main/carousell-web`,
+        }),
       ]);
       expect(store.builds()[0]).toEqual(expect.objectContaining({ repo, base: "main" }));
       expect(flows.load(v1)?.flow.containers).toEqual(ticketFlow(unset).containers);
@@ -2152,7 +2193,12 @@ describe("buildVersion", () => {
         (error: unknown) => error,
       );
       const events = eventsOf(t.store, started.pendingId);
-      return { ...t, result, events, path: `${home}/workspaces/${firstId}/carousell-web` };
+      return {
+        ...t,
+        result,
+        events,
+        path: `${home}/workspaces/${firstId}/sessions/main/carousell-web`,
+      };
     };
 
     it("cuts the worktree on an existing branch without creating it, with the base step 1 resolves", async () => {
@@ -2551,7 +2597,9 @@ describe("buildVersion", () => {
 
       expect(flows.loadLatest()?.version).toBe(2);
       const snapshot = store.buildSnapshot({ buildId: result.record.id });
-      const manifest = JSON.parse(store.buildManifest(result.record.id) ?? "{}") as Manifest;
+      const manifest = JSON.parse(
+        store.buildManifest(result.record.id) ?? "{}",
+      ) as OneSessionManifest;
       expect(manifest.nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
       expect(snapshot?.svg).toContain("Planner");
       expect(snapshot?.svg).not.toContain("Reviewer");
@@ -2598,7 +2646,7 @@ describe("buildVersion", () => {
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
         laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-      ) as Manifest;
+      ) as OneSessionManifest;
       return manifest.nodes.flatMap((node) =>
         nodeIds.includes(node.id) && node.file !== undefined ? [node.file] : [],
       );
@@ -2611,7 +2659,9 @@ describe("buildVersion", () => {
       const result = await buildVersion(v1, request, deps);
 
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
-      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      const manifest = JSON.parse(
+        await fs.readFile(`${result.dir}/manifest.json`),
+      ) as OneSessionManifest;
       expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "a", "stop"]);
       expect(
         manifest.wires.filter(
@@ -2676,6 +2726,265 @@ describe("buildVersion", () => {
     });
   });
 
+  describe("a build per session container", () => {
+    const android = "/repos/android";
+    const ios = "/repos/ios";
+    const web = "/repos/web";
+    const request: BuildRequest = {
+      name: "fix-login",
+      values: {},
+      branch: { mode: "new", name: "flowdeck/fix-login", base: "main" },
+    };
+    const everyRepo: Record<string, FolderState> = {
+      [android]: { kind: "branch", name: "main" },
+      [ios]: { kind: "branch", name: "develop" },
+      [web]: { kind: "branch", name: "main" },
+    };
+
+    const built = async (saved: Flow, states = everyRepo, given = request) => {
+      const t = setup({ flows: [saved] });
+      const gitState = new FakeGitState(states, {
+        branches: { [android]: ["main"], [ios]: ["develop"], [web]: ["main"] },
+      });
+      const deps = { ...t.deps, gitState };
+      const started = await startBuild(saved, given, deps);
+      const result =
+        "kind" in started
+          ? await runBuild(started, saved, given, deps).catch((error: unknown) => error)
+          : started;
+      const events = "kind" in started ? eventsOf(t.store, started.pendingId) : [];
+      return { ...t, gitState, started, result, events, dir: `${home}/workspaces/${firstId}` };
+    };
+
+    const sameRepoTwice = () =>
+      sessionsWorkflow([
+        { name: "web-a", repo: web, branch: "main" },
+        { name: "web-b", repo: web, branch: "main" },
+      ]);
+
+    it("cuts one worktree per session container, from its own base in its own repo, on the dialog branch suffixed with its slug", async () => {
+      const { worktree, dir } = await built(twoSessionWorkflow());
+
+      expect(worktree.calls).toEqual([
+        {
+          repo: android,
+          base: "main",
+          branch: "flowdeck/fix-login-android",
+          create: true,
+          path: `${dir}/sessions/android/android`,
+        },
+        {
+          repo: ios,
+          base: "develop",
+          branch: "flowdeck/fix-login-ios",
+          create: true,
+          path: `${dir}/sessions/ios/ios`,
+        },
+      ]);
+    });
+
+    it("writes one worktree event and one build worktree row per session container", async () => {
+      const { store, events, dir } = await built(twoSessionWorkflow());
+
+      expect(events.filter((event) => event.type === "worktree")).toEqual([
+        expect.objectContaining({
+          status: "done",
+          path: `${dir}/sessions/android/android`,
+          branch: "flowdeck/fix-login-android",
+          base: "main",
+          branchCreated: true,
+        }),
+        expect.objectContaining({
+          status: "done",
+          path: `${dir}/sessions/ios/ios`,
+          branch: "flowdeck/fix-login-ios",
+          base: "develop",
+          branchCreated: true,
+        }),
+      ]);
+      expect(store.buildWorktrees(firstId)).toEqual([
+        {
+          container: "android",
+          repo: android,
+          base: "main",
+          branch: "flowdeck/fix-login-android",
+          branchCreated: true,
+          path: `${dir}/sessions/android/android`,
+        },
+        {
+          container: "ios",
+          repo: ios,
+          base: "develop",
+          branch: "flowdeck/fix-login-ios",
+          branchCreated: true,
+          path: `${dir}/sessions/ios/ios`,
+        },
+      ]);
+    });
+
+    it("marks each container's pieces waiting under the container's own folder", async () => {
+      const { events } = await built(twoSessionWorkflow());
+
+      expect(
+        events.filter((event) => event.type === "component" && event.status === "waiting"),
+      ).toEqual([
+        expect.objectContaining({
+          path: "sessions/android/plugin/agents/plan.md",
+          kind: "agent",
+          nodeIds: ["session-1-plan"],
+        }),
+        expect.objectContaining({
+          path: "sessions/ios/plugin/agents/plan.md",
+          kind: "agent",
+          nodeIds: ["session-2-plan"],
+        }),
+      ]);
+    });
+
+    it("cuts two worktrees on two branches in two folders for two containers on the same repo and branch", async () => {
+      const { worktree, dir } = await built(sameRepoTwice());
+
+      expect(
+        worktree.calls.map(({ repo, base, branch, path }) => ({ repo, base, branch, path })),
+      ).toEqual([
+        {
+          repo: web,
+          base: "main",
+          branch: "flowdeck/fix-login-web-a",
+          path: `${dir}/sessions/web-a/web`,
+        },
+        {
+          repo: web,
+          base: "main",
+          branch: "flowdeck/fix-login-web-b",
+          path: `${dir}/sessions/web-b/web`,
+        },
+      ]);
+    });
+
+    it("refuses a session container whose repo is missing, naming it, before any worktree is cut", async () => {
+      const { store, fs, worktree, result } = await built(twoSessionWorkflow(), {
+        [android]: { kind: "branch", name: "main" },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [{ rule: "build-repo", message: `${ios} does not exist.` }],
+      });
+      expect(store.listPendingBuilds()).toEqual([]);
+      expectNothingDone(store, fs, worktree);
+    });
+
+    it("refuses a session container with no base, naming it, before any worktree is cut", async () => {
+      const noBase = sessionsWorkflow([
+        { name: "android", repo: android, branch: "main" },
+        { name: "ios", repo: ios, branch: "" },
+      ]);
+
+      const { store, fs, worktree, result } = await built(noBase);
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          expect.objectContaining({
+            rule: "session-settings",
+            container: "session-2",
+            field: "branch",
+          }),
+        ],
+      });
+      expectNothingDone(store, fs, worktree);
+    });
+
+    it.each<
+      [
+        string,
+        NonNullable<BuildRequest["branch"]>,
+        { base: string; branch: string; create: boolean },
+      ]
+    >([
+      [
+        "an existing branch",
+        { mode: "existing", name: "feat-y" },
+        { base: "main", branch: "feat-y", create: false },
+      ],
+      [
+        "a new branch",
+        { mode: "new", name: "flowdeck/fix-login", base: "develop" },
+        { base: "develop", branch: "flowdeck/fix-login", create: true },
+      ],
+    ])(
+      "with one session, cuts %s in the dialog's repo, unsuffixed, under the session's folder",
+      async (_label, branch, cut) => {
+        const oneSession = sessionsWorkflow([
+          { name: "web", repo: "/elsewhere", branch: "release" },
+        ]);
+        const t = setup({ flows: [oneSession], branches: ["main", "develop", "feat-y"] });
+        const given: BuildRequest = { name: "fix-login", repo, base: "main", values: {}, branch };
+
+        const started = await startBuild(oneSession, given, t.deps);
+        if ("kind" in started)
+          await runBuild(started, oneSession, given, t.deps).catch(() => undefined);
+
+        expect(t.worktree.calls).toEqual([
+          { repo, ...cut, path: `${home}/workspaces/${firstId}/sessions/web/carousell-web` },
+        ]);
+      },
+    );
+
+    it("denies each session Edit and Write on the workspace folder by both its given and its real path", async () => {
+      const saved = twoSessionWorkflow();
+      const t = setup({ flows: [saved] });
+      t.fs.link(home, "/private/real-home");
+      const gitState = new FakeGitState(everyRepo, {
+        branches: { [android]: ["main"], [ios]: ["develop"], [web]: ["main"] },
+      });
+      const deps = { ...t.deps, gitState };
+      const started = await startBuild(saved, request, deps);
+      if (!("kind" in started)) throw new Error("the build did not start");
+      await runBuild(started, saved, request, deps);
+      const given = `/${home}/workspaces/${firstId}/workspace/**`;
+      const real = `//private/real-home/workspaces/${firstId}/workspace/**`;
+
+      for (const slug of ["android", "ios"]) {
+        const settings = JSON.parse(
+          await t.fs.readFile(`${home}/workspaces/${firstId}/sessions/${slug}/settings.json`),
+        );
+        expect(settings.permissions.deny).toEqual(
+          expect.arrayContaining([
+            `Edit(${given})`,
+            `Write(${given})`,
+            `Edit(${real})`,
+            `Write(${real})`,
+          ]),
+        );
+      }
+    });
+
+    it("builds a workspace with no session container, cutting no worktree", async () => {
+      const { worktree, result } = await built(sessionsWorkflow([]), everyRepo, {
+        name: "fix-login",
+        values: {},
+      });
+
+      expect(errorMessages(result as BuildResult)).toEqual([]);
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(worktree.calls).toEqual([]);
+    });
+
+    it.each<[string, () => Flow, BuildRequest]>([
+      ["two session containers", twoSessionWorkflow, request],
+      ["no session container", () => sessionsWorkflow([]), { name: "fix-login", values: {} }],
+    ])("records no repo, base or branch for a build with %s", async (_label, saved, given) => {
+      const { store, result } = await built(saved(), everyRepo, given);
+
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      expect(store.builds()).toEqual([
+        expect.objectContaining({ repo: null, base: null, branch: null }),
+      ]);
+    });
+  });
+
   describe("the build bridge", () => {
     const request = { name: "fix-login", repo, base: "main", values: {} };
 
@@ -2726,17 +3035,17 @@ describe("buildVersion", () => {
       expect(message).toMatch(/cannot be built/i);
     });
 
-    it("refuses one workspace with two sessions, one with none, and a workspace holding more than its Start and Stop, each with its own reason that it comes with multi-session builds", async () => {
-      const messages = [
-        await refusedWith(
-          shaped(workspacePart(), sessionPart("session-1"), sessionPart("session-2")),
-        ),
-        await refusedWith(shaped(workspacePart())),
-        await refusedWith(shaped(workspacePart(["workspace-a"]), sessionPart("session-1"))),
-      ];
+    it("builds a workspace holding an Agent", async () => {
+      const saved = shaped(workspacePart(["workspace-a"]), sessionPart("session-1"));
+      const { deps } = setup();
 
-      for (const message of messages) expect(message).toMatch(/multi-session builds/i);
-      expect(new Set(messages).size).toBe(3);
+      const started = await startBuild(saved, request, deps);
+      expect(errorMessages(started)).toEqual([]);
+      if (!("kind" in started)) return;
+      const result = await runBuild(started, saved, request, deps);
+
+      expect(errorMessages(result)).toEqual([]);
+      expect(result.ok).toBe(true);
     });
 
     it("builds one workspace and one session from the repo and base the request gives, written onto the session container", async () => {
@@ -2759,7 +3068,9 @@ describe("buildVersion", () => {
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
       expect(gitState.reads).toEqual([repo]);
       expect(worktree.calls).toEqual([expect.objectContaining({ repo, base: "main" })]);
-      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      const manifest = JSON.parse(
+        await fs.readFile(`${result.dir}/manifest.json`),
+      ) as OneSessionManifest;
       expect(manifest.session.buildConfig).toStrictEqual({ repo, base: "main" });
       expect(saved).toStrictEqual(kept);
     });

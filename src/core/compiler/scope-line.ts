@@ -1,7 +1,12 @@
-export type ScopeParts = { build: string; repo: string; workspace: string };
+export type ScopeParts = {
+  build: string;
+  repo: string;
+  workspace: string;
+  kind?: "workspace" | "session";
+};
 
 export function scopeLine({ build, repo, workspace }: ScopeParts): string {
-  return `Part of build ${build} (repo ${repo}, workspace ${workspace}). For work in this build's workspace, use this, not a similarly named skill from elsewhere.`;
+  return `Part of build ${build} (repo ${repo}, build folder ${workspace}). For work in this build, use this, not a similarly named skill from elsewhere.`;
 }
 
 export function startsWithScopeLine(description: string, parts: ScopeParts): boolean {

@@ -12,6 +12,7 @@ import {
   loop,
   thenWire,
 } from "../../../fixtures/flow-builders.js";
+import { oneSession } from "../../../fixtures/one-session.js";
 
 const check = (nodes: unknown[], wires: unknown[] = []) => rule.check(flow(nodes, wires));
 const reported = (nodes: unknown[], wires: unknown[] = []) =>
@@ -118,7 +119,7 @@ describe("loop-body", () => {
     ],
   ])("finds exactly the problems the runner refuses (case %#)", (nodes, wires) => {
     const built = flow(nodes, wires);
-    const { manifest } = lower(built, { name: "fix-login", values: {} });
+    const manifest = oneSession(lower(built, { name: "fix-login", values: {} }).manifest);
     const runner = structureProblems(manifest.nodes, manifest.wires);
 
     expect(rule.check(built).map(({ message }) => message.replace(/\.$/, ""))).toEqual(runner);

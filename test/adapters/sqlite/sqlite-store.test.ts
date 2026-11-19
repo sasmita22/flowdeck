@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
-import { access, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
@@ -174,9 +175,10 @@ describe("SqliteStore", () => {
       { name: "021_complete_deletes_and_build_texts.sql" },
       { name: "022_clean_start.sql" },
       { name: "023_containers_clean_start.sql" },
+      { name: "024_build_worktrees_clean_start.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 23]);
+    expect(before).toEqual([1, 1, 3, 1, 24]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -919,6 +921,112 @@ describe("SqliteStore", () => {
 
       expect(() => store.recordBuild(another("b2", "fix-login"))).toThrow();
       expect(count(raw(), "builds")).toBe(1);
+    });
+  });
+
+  describe("build worktrees", () => {
+    const android = {
+      container: "android",
+      repo: "/repos/android",
+      base: "main",
+      branch: "fix-login-android",
+      branchCreated: true,
+      path: "/fd/workspaces/b1/sessions/android/android",
+    };
+    const ios = {
+      container: "ios",
+      repo: "/repos/ios",
+      base: "develop",
+      branch: "fix-login-ios",
+      branchCreated: true,
+      path: "/fd/workspaces/b1/sessions/ios/ios",
+    };
+    const existingBranch = {
+      container: "main",
+      repo: "/repo",
+      base: "main",
+      branch: "feature/signup",
+      branchCreated: false,
+      path: "/fd/workspaces/b2/sessions/main/repo",
+    };
+
+    it("lists every worktree added for a build, in the order added", () => {
+      const store = open();
+
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+
+      expect(store.buildWorktrees("b1")).toEqual([android, ios]);
+    });
+
+    it("removes a build's worktrees with the build, keeping another build's", () => {
+      const store = open();
+      store.recordBuild(another("b2", "fix-signup"));
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+      store.addBuildWorktree("b2", existingBranch);
+
+      store.deleteBuild("b1");
+
+      expect(store.buildWorktrees("b1")).toEqual([]);
+      expect(store.buildWorktrees("b2")).toEqual([existingBranch]);
+    });
+
+    it("removes the worktrees of a build that was never recorded when its pending build is deleted, keeping another build's", () => {
+      const store = open();
+      store.addBuildWorktree("b2", existingBranch);
+      const gone = startedId(store, pending("flow-1", "nightly"));
+      store.appendBuildEvent(gone, {
+        type: "session",
+        name: "fd-build-nightly",
+        claudeSessionId: "claude-1",
+        buildId: "b1",
+        repo: "",
+        base: "",
+        values: {},
+      });
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+      store.endPendingBuild(gone, { outcome: "failed", endedAt: 2_000 });
+
+      store.deletePendingBuild(gone);
+
+      expect(store.buildWorktrees("b1")).toEqual([]);
+      expect(store.buildWorktrees("b2")).toEqual([existingBranch]);
+    });
+
+    it("migrating a database at 023 empties builds and runs, keeps blueprints, and adds the table", async () => {
+      const allMigrations = fileURLToPath(
+        new URL("../../../src/adapters/sqlite/migrations/", import.meta.url),
+      );
+      const to023 = join(folder, "to-023");
+      await mkdir(to023);
+      for (const file of (await readdir(allMigrations)).filter((each) => each < "024")) {
+        await copyFile(join(allMigrations, file), join(to023, file));
+      }
+      const old = openDatabase({ path, migrationsDir: to023 });
+      new SqliteFlowStore({ db: old, newId: () => "flow-1" }).save(flow([agent("s1")], []));
+      const oldStore = new SqliteStore({ db: old });
+      oldStore.recordBuild(build);
+      oldStore.createRun(newRun());
+      old.close();
+
+      const store = new SqliteStore({ path });
+      opened.push(store);
+
+      const db = raw();
+      expect(["builds", "runs", "flows", "flow_versions"].map((t) => count(db, t))).toEqual([
+        0, 0, 1, 1,
+      ]);
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'build_worktrees'",
+          )
+          .pluck()
+          .get(),
+      ).toBe("build_worktrees");
+      expect(store.buildWorktrees("b1")).toEqual([]);
     });
   });
 

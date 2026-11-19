@@ -12,8 +12,10 @@ import {
   loop,
   output,
   sessionContainer,
+  sessionsWorkflow,
   thenWire,
   trigger,
+  twoSessionWorkflow,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
@@ -37,7 +39,9 @@ const workspace = {
   workspace: "/fd-home/workspaces/b1",
 };
 
-const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd-home/workspaces/b1" };
+const scope = { build: "fix-login-main", repo: "repo", workspace: "/fd-home/workspaces/b1" };
+
+const sessionNodes = (input: Flow) => lower(input, workspace).manifest.nodes ?? [];
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -53,7 +57,7 @@ describe("lower", () => {
   });
 
   it("lists manifest nodes in run order, not array order", () => {
-    expect(lower(sample(), workspace).manifest.nodes.map((node) => node.id)).toEqual([
+    expect(sessionNodes(sample()).map((node) => node.id)).toEqual([
       "start",
       "p",
       "a",
@@ -65,14 +69,14 @@ describe("lower", () => {
 
   it("records each node's id, type, label, settings, parent, piece and file only", () => {
     const input = sample();
-    const entries = lower(input, workspace).manifest.nodes;
+    const entries = sessionNodes(input);
 
     expect(entries.find((node) => node.id === "p")).toStrictEqual({
       id: "p",
       type: "agent",
       label: "p",
       settings: nodeOf(input, "p", "agent").settings,
-      file: "plugin/agents/p.md",
+      file: "sessions/main/plugin/agents/p.md",
       piece: "p",
     });
     expect(entries.find((node) => node.id === "a")).toStrictEqual({
@@ -80,7 +84,7 @@ describe("lower", () => {
       type: "agent",
       label: "a",
       settings: nodeOf(input, "a", "agent").settings,
-      file: "plugin/agents/a.md",
+      file: "sessions/main/plugin/agents/a.md",
       piece: "a",
     });
     expect(entries.find((node) => node.id === "x")).toStrictEqual({
@@ -89,7 +93,7 @@ describe("lower", () => {
       label: "x",
       parent: "L",
       settings: nodeOf(input, "x", "agent").settings,
-      file: "plugin/agents/x.md",
+      file: "sessions/main/plugin/agents/x.md",
       piece: "x",
     });
     expect(entries.find((node) => node.id === "L")).toStrictEqual({
@@ -113,7 +117,7 @@ describe("lower", () => {
     );
     const pieces = pieceNames(input);
 
-    const named = lower(input, workspace).manifest.nodes.map(({ id, piece, file }) => ({
+    const named = sessionNodes(input).map(({ id, piece, file }) => ({
       id,
       piece,
       file,
@@ -121,10 +125,26 @@ describe("lower", () => {
 
     expect(named).toStrictEqual([
       { id: "start", piece: undefined, file: undefined },
-      { id: "p1", piece: pieces.get("p1"), file: `plugin/agents/${pieces.get("p1")}.md` },
-      { id: "a1", piece: pieces.get("a1"), file: `plugin/agents/${pieces.get("a1")}.md` },
-      { id: "p2", piece: pieces.get("p2"), file: `plugin/agents/${pieces.get("p2")}.md` },
-      { id: "a2", piece: pieces.get("a2"), file: `plugin/agents/${pieces.get("a2")}.md` },
+      {
+        id: "p1",
+        piece: pieces.get("p1"),
+        file: `sessions/main/plugin/agents/${pieces.get("p1")}.md`,
+      },
+      {
+        id: "a1",
+        piece: pieces.get("a1"),
+        file: `sessions/main/plugin/agents/${pieces.get("a1")}.md`,
+      },
+      {
+        id: "p2",
+        piece: pieces.get("p2"),
+        file: `sessions/main/plugin/agents/${pieces.get("p2")}.md`,
+      },
+      {
+        id: "a2",
+        piece: pieces.get("a2"),
+        file: `sessions/main/plugin/agents/${pieces.get("a2")}.md`,
+      },
     ]);
     expect(named.map(({ piece }) => piece)).toEqual([
       undefined,
@@ -196,7 +216,7 @@ describe("lower", () => {
     });
 
     it("compiles only its members and their body nodes, leaving the workspace's Start and Stop out", () => {
-      expect(lower(bridged(), workspace).manifest.nodes.map((node) => node.id)).toEqual([
+      expect(sessionNodes(bridged()).map((node) => node.id)).toEqual([
         "start",
         "p",
         "L",
@@ -207,8 +227,8 @@ describe("lower", () => {
 
     it("gives the build its own Start as the one trigger", () => {
       expect(
-        lower(bridged(), workspace)
-          .manifest.nodes.filter((node) => node.type === "trigger")
+        sessionNodes(bridged())
+          .filter((node) => node.type === "trigger")
           .map((node) => node.id),
       ).toEqual(["start"]);
     });
@@ -223,14 +243,14 @@ describe("lower", () => {
     expect(lower(input, workspace).manifest.settings).toStrictEqual(chosen);
   });
 
-  it("records the build name as the prefix, the workspace layout and the build's values", () => {
+  it("records the build name and session slug as the prefix, the workspace layout and the build's values", () => {
     const { manifest } = lower(sample(), {
       ...workspace,
       name: "fix-login",
       values: { ticket: "FD-99", "proceed-e2e": true },
     });
 
-    expect(manifest.prefix).toBe("fix-login");
+    expect(manifest.prefix).toBe("fix-login-main");
     expect(manifest.layout).toBe("workspace");
     expect(manifest.values).toStrictEqual({ ticket: "FD-99", "proceed-e2e": true });
     expect(manifest).not.toHaveProperty("inputs");
@@ -240,8 +260,10 @@ describe("lower", () => {
     const first = lower(sample(), workspace);
     const second = lower(sample(), { ...workspace, name: "fix-signup" });
 
-    expect(second.manifest.prefix).toBe("fix-signup");
-    expect({ ...second.manifest, prefix: first.manifest.prefix }).toStrictEqual(first.manifest);
+    expect(second.manifest.prefix).toBe("fix-signup-main");
+    expect(
+      JSON.parse(JSON.stringify(second.manifest).replaceAll("fix-signup", "fix-login")),
+    ).toStrictEqual(JSON.parse(JSON.stringify(first.manifest)));
     expect(second.nodeFiles.map((file) => file.path)).toEqual(
       first.nodeFiles.map((file) => file.path),
     );
@@ -265,7 +287,7 @@ describe("lower", () => {
       ),
     );
 
-    const filled = files["plugin/agents/p.md"] ?? "";
+    const filled = files["sessions/main/plugin/agents/p.md"] ?? "";
     expect(filled).toContain("Fix FD-99");
     expect(filled).not.toContain("{{ticket}}");
   });
@@ -273,11 +295,13 @@ describe("lower", () => {
   it("compiles one file per agent node, with its piece and this build's scope, and none for the rest", () => {
     const input = sample();
 
-    expect(lower(input, workspace).nodeFiles).toStrictEqual([
-      compileAgent(nodeOf(input, "p", "agent"), { piece: "p", scope }),
-      compileAgent(nodeOf(input, "a", "agent"), { piece: "a", scope }),
-      compileAgent(nodeOf(input, "x", "agent"), { piece: "x", scope }),
-    ]);
+    expect(lower(input, workspace).nodeFiles).toStrictEqual(
+      [
+        compileAgent(nodeOf(input, "p", "agent"), { piece: "p", scope }),
+        compileAgent(nodeOf(input, "a", "agent"), { piece: "a", scope }),
+        compileAgent(nodeOf(input, "x", "agent"), { piece: "x", scope }),
+      ].map((file) => ({ ...file, path: `sessions/main/${file.path}` })),
+    );
   });
 
   describe("hand-off files", () => {
@@ -305,12 +329,12 @@ describe("lower", () => {
         lower(handoff(), workspace).nodeFiles.map(({ path, content }) => [path, content]),
       );
 
-      const plan = files["plugin/agents/plan.md"] ?? "";
-      const check = files["plugin/agents/check.md"] ?? "";
+      const plan = files["sessions/main/plugin/agents/plan.md"] ?? "";
+      const check = files["sessions/main/plugin/agents/check.md"] ?? "";
       expect(sectionOf(plan, /^## Output$/)).toContain("plan.md");
       expect(sectionOf(plan, /^## Inputs$/)).not.toContain("plan.md");
-      expect(files["plugin/agents/build.md"]).toContain("You are given: plan.md\n");
-      expect(files["plugin/agents/build.md"]).toContain("Write: diff.md\n");
+      expect(files["sessions/main/plugin/agents/build.md"]).toContain("You are given: plan.md\n");
+      expect(files["sessions/main/plugin/agents/build.md"]).toContain("Write: diff.md\n");
       expect(sectionOf(check, /^## Inputs$/)).toMatch(/plan\.md[\s\S]*diff\.md/);
       expect(sectionOf(check, /^## Output$/)).not.toMatch(/plan\.md|diff\.md/);
     });
@@ -321,5 +345,72 @@ describe("lower", () => {
     moved.nodes = moved.nodes.map((node, i) => ({ ...node, position: { x: i * 100, y: 7 } }));
 
     expect(lower(moved, workspace)).toStrictEqual(lower(sample(), workspace));
+  });
+
+  describe("per container", () => {
+    const containersOf = (input: Flow) => lower(input, workspace).manifest.containers ?? [];
+
+    const named = (input: Flow, nodeId: string) => {
+      const container = containersOf(input).find((candidate) =>
+        candidate.nodes.some((node) => node.id === nodeId),
+      );
+      const node = container?.nodes.find((candidate) => candidate.id === nodeId);
+      return `${container?.prefix ?? ""}:${node?.piece ?? ""}`;
+    };
+
+    it("lowers one set for the workspace and one for each session container", () => {
+      expect(containersOf(twoSessionWorkflow()).map(({ kind, slug }) => ({ kind, slug }))).toEqual([
+        { kind: "workspace", slug: "workspace" },
+        { kind: "session", slug: "android" },
+        { kind: "session", slug: "ios" },
+      ]);
+    });
+
+    it("prefixes each container with the build name and its slug", () => {
+      expect(containersOf(twoSessionWorkflow()).map((container) => container.prefix)).toEqual([
+        "fix-login-workspace",
+        "fix-login-android",
+        "fix-login-ios",
+      ]);
+    });
+
+    it("names a Plan in android and a Plan in ios apart", () => {
+      const input = twoSessionWorkflow();
+
+      expect(named(input, "session-1-plan")).toBe("fix-login-android:plan");
+      expect(named(input, "session-2-plan")).toBe("fix-login-ios:plan");
+    });
+
+    it("lowers the workspace's own members into the workspace, named apart from a session's", () => {
+      const input = sessionsWorkflow(
+        [{ name: "android", repo: "/repos/android", branch: "main" }],
+        { workspace: ["Plan"] },
+      );
+
+      expect(named(input, "workspace-1-plan")).toBe("fix-login-workspace:plan");
+      expect(named(input, "session-1-plan")).toBe("fix-login-android:plan");
+    });
+
+    it("holds only each container's own nodes, in run order, and the wires between them", () => {
+      const sets = containersOf(twoSessionWorkflow()).map((container) => ({
+        nodes: container.nodes.map((node) => node.id),
+        wires: container.wires.map((wire) => `${wire.from.node}>${wire.to.node}`),
+      }));
+
+      expect(sets).toEqual([
+        {
+          nodes: ["workspace-1-start", "workspace-1-stop"],
+          wires: ["workspace-1-start>workspace-1-stop"],
+        },
+        {
+          nodes: ["session-1-start", "session-1-plan", "session-1-stop"],
+          wires: ["session-1-start>session-1-plan", "session-1-plan>session-1-stop"],
+        },
+        {
+          nodes: ["session-2-start", "session-2-plan", "session-2-stop"],
+          wires: ["session-2-start>session-2-plan", "session-2-plan>session-2-stop"],
+        },
+      ]);
+    });
   });
 });

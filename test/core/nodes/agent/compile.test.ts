@@ -124,7 +124,7 @@ describe("compileAgent", () => {
     expect(body).toContain("Write: review.md\n");
   });
 
-  it("says under Inputs that hand-off files are named bare in the run's working folder, which sits at the repo folder in the workspace", () => {
+  it("says under Inputs that hand-off files are named bare in the run's working folder, which sits at the repo folder in this session's own folder", () => {
     const content = compiled(
       agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] }),
     ).content;

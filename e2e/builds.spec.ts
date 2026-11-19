@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   buildDialogTestIds,
@@ -21,6 +21,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { waitForBuilt } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 
 const run = promisify(execFile);
 
@@ -295,7 +296,9 @@ test("A running build refuses another run, while a second build runs beside it i
     .split("\n")
     .map((line) => JSON.parse(line) as { cwd: string });
   expect(launches.map(({ cwd }) => cwd).sort()).toEqual(
-    [first, second].map((id) => join(home, "workspaces", id, basename(repo.path))).sort(),
+    [first, second]
+      .map((id) => sessionWorktree(join(home, "workspaces", id), "main", repo.path))
+      .sort(),
   );
 });
 
