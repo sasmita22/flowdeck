@@ -33,6 +33,30 @@ export const selectWorkspaceLabel = ({ folder, info }: WorkspaceState): Workspac
 
 export const sessionFolder = (flow: Flow): BuildConfig => sessionBuildConfig(flow) ?? {};
 
+export type BuildTargetSession = { name: string; repo: string; branch: string };
+
+export type BuildTarget = {
+  repoOverride: boolean;
+  existingBranch: boolean;
+  branch: boolean;
+  sessions: BuildTargetSession[];
+};
+
+export const buildTarget = (flow: Flow): BuildTarget => {
+  const sessions = flow.containers.flatMap((container) =>
+    container.kind === "session"
+      ? [{ name: container.name, repo: container.repo, branch: container.branch }]
+      : [],
+  );
+  const single = sessions.length === 1;
+  return {
+    repoOverride: single,
+    existingBranch: single,
+    branch: sessions.length > 0,
+    sessions,
+  };
+};
+
 const folderKey = (folder: BuildConfig | null): string | null =>
   folder === null ? null : JSON.stringify([folder.repo ?? null, folder.base ?? null]);
 

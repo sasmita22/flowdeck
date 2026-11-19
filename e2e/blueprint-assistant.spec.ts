@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import type { Flow } from "../src/core/flow/schema.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 import {
   agent,
   flow,
@@ -601,7 +602,7 @@ test("the agent lists live and old builds, leaves a deleted one out, and reads o
   expect(rows("SELECT id FROM builds WHERE id = ?", goneId)).toEqual([]);
   const [kept] = rows<{ dir: string }>("SELECT dir FROM builds WHERE id = ?", keepId);
   if (kept === undefined) throw new Error("the kept build has no row");
-  const worktreePath = join(kept.dir, repoName);
+  const worktreePath = sessionWorktree(kept.dir, "main", repo.path);
   await writeFile(join(worktreePath, "scratch.txt"), "uncommitted\n");
 
   await openOn(window, flowId);
@@ -642,9 +643,16 @@ test("the agent lists live and old builds, leaves a deleted one out, and reads o
     worktree: { path: worktreePath, exists: true, dirty: true, unpushed: false },
   });
   const tree = read.workspace.tree;
-  expect(tree).toEqual(expect.arrayContaining(["CLAUDE.md", "settings.json", "manifest.json"]));
-  expect(tree.some((path) => path.startsWith("plugin/"))).toBe(true);
-  expect(tree.filter((path) => path.startsWith(`${repoName}/`))).toEqual([]);
+  expect(tree).toEqual(
+    expect.arrayContaining([
+      "workspace/CLAUDE.md",
+      "sessions/main/CLAUDE.md",
+      "sessions/main/settings.json",
+      "manifest.json",
+    ]),
+  );
+  expect(tree.some((path) => path.startsWith("sessions/main/plugin/"))).toBe(true);
+  expect(tree.filter((path) => path.startsWith(`sessions/main/${repoName}/`))).toEqual([]);
 
   await rm(kept.dir, { recursive: true, force: true });
   await askInPane(window, "read it again");

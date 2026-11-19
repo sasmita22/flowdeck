@@ -100,10 +100,21 @@ const setup = ({
   prepare?: (runs: FakeStore) => void;
 } = {}) => {
   const runs = new StoreWithOldBuild({ now: () => new Date(deletedAtTime) });
-  runs.recordBuild(live);
-  runs.recordBuild(gone);
+  const record = (added: NewBuild) => {
+    runs.recordBuild(added);
+    runs.addBuildWorktree(added.id, {
+      container: "main",
+      repo: added.repo ?? "",
+      base: added.base ?? "",
+      branch: added.branch ?? "",
+      branchCreated: added.branchCreated ?? true,
+      path: `${added.dir}/app`,
+    });
+  };
+  record(live);
+  record(gone);
   runs.deleteBuild(gone.id);
-  for (const added of builds) runs.recordBuild(added);
+  for (const added of builds) record(added);
   prepare(runs);
   const options: EngineHandlerOptions = {
     version: "1.2.3",
@@ -223,7 +234,7 @@ describe("engine build tools", () => {
       await call(setup({ fs }), "assistant-read-build", { id: live.id });
 
       expect(fs.calls.filter((call) => call.method === "list")).toEqual([
-        { method: "list", path: liveDir, skip: liveWorktree },
+        { method: "list", path: liveDir, skip: [liveWorktree] },
       ]);
     });
 

@@ -11,8 +11,11 @@ const once = (files: readonly string[]) => [...new Set(files)];
 const line = (lead: string, files: readonly string[]) =>
   files.length === 0 ? [] : [`${lead}: ${files.join(", ")}`];
 
-export const handoffFolderLine = (folder: string): string =>
-  `Hand-off files are read and written by bare name (\`<file>\`, not \`${folder}/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`${folder}/\`. Never use the workspace folder itself.`;
+export const handoffFolderLine = (
+  folder: string,
+  kind: "workspace" | "session" = "session",
+): string =>
+  `Hand-off files are read and written by bare name (\`<file>\`, not \`${folder}/<file>\`) in the run's working folder. A run starts there; ${kind === "workspace" ? "for the workspace session" : "in this session's own folder"} that folder is \`${folder}/\`.`;
 
 export const declaredHandoff = (settings: Node["settings"]): Handoff => ({
   given: once("given" in settings ? (settings.given ?? []) : []),

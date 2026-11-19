@@ -8,7 +8,14 @@ type ToolCall = {
 };
 
 const readOnlyTools = new Set(["Read", "Glob", "Grep", "Agent"]);
-const editableFiles = new Set(["CLAUDE.md", "build-report.json"]);
+
+function editable(path: string): boolean {
+  if (path === "build-report.json") return true;
+  const parts = path.split(sep);
+  const own =
+    parts[0] === "workspace" ? parts.slice(1) : parts[0] === "sessions" ? parts.slice(2) : [];
+  return (own.length === 1 && own[0] === "CLAUDE.md") || (own.length > 1 && own[0] === "plugin");
+}
 
 function refusal(call: ToolCall, workspace: string): string | undefined {
   if (typeof call.tool_name === "string" && readOnlyTools.has(call.tool_name)) return undefined;
@@ -22,11 +29,9 @@ function refusal(call: ToolCall, workspace: string): string | undefined {
   if (typeof input["file_path"] !== "string") return "The Edit names no file_path";
   const base = typeof call.cwd === "string" ? call.cwd : workspace;
   const path = relative(workspace, resolve(base, input["file_path"]));
-  const editable =
-    !isAbsolute(path) && (editableFiles.has(path) || path.startsWith(`plugin${sep}`));
-  return editable
+  return !isAbsolute(path) && editable(path)
     ? undefined
-    : `A build session may only edit files under plugin/, CLAUDE.md and build-report.json in ${workspace}`;
+    : `A build session may only edit files under workspace/plugin/ and sessions/*/plugin/, workspace/CLAUDE.md, sessions/*/CLAUDE.md and build-report.json in ${workspace}`;
 }
 
 function deny(reason: string): void {

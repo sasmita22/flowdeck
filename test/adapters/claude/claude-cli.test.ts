@@ -167,12 +167,25 @@ describe("claudeCommand", () => {
       "../settings.json",
       ["../plugin"],
       undefined,
-      "../fd home",
+      ["../fd home"],
     );
 
     expect(command).toContain(" --add-dir '../fd home'");
     expect(command).toContain(" --settings '../settings.json'");
     expect(command).toContain(" --plugin-dir '../plugin'");
+  });
+
+  it("adds every folder for claude to read, each as its own quoted flag, in order", () => {
+    const command = claudeCommand(
+      { sessionId, model: "haiku" },
+      "../settings.json",
+      ["../plugin"],
+      undefined,
+      ["..", "/abs/fd home/workspace"],
+    );
+
+    expect(command).toContain(" --add-dir '..' --add-dir '/abs/fd home/workspace'");
+    expect(command.match(/--add-dir/g)).toHaveLength(2);
   });
 
   it("adds no folder without one", () => {
@@ -436,6 +449,41 @@ describe("ClaudeCli", () => {
       await settling.waitUntilReady("fd-a");
 
       expect(addDirDownAt - addDirShownAt).toBeGreaterThanOrEqual(settleMs);
+    });
+
+    it("answers an add-dir dialog that appears again for the next folder", async () => {
+      const nextFolder = (pane: string) =>
+        pane.replace(/ \/private\/var\/folders\/.*\n s\/3a3eedf3[^\n]*/, " /abs/fd home/workspace");
+      const secondPane = nextFolder(addDirPane);
+      const secondOnYes = nextFolder(addDirOnYes);
+      expect(secondPane).toContain("/abs/fd home/workspace");
+      const panesAtEnter: string[] = [];
+      let current = addDirPane;
+      const show = (pane: string) => {
+        current = pane;
+        sessions.setPane("fd-a", pane);
+      };
+      show(addDirPane);
+      sessions.onInput("fd-a", (input) => {
+        if (!("key" in input)) return;
+        if (input.key === "Down" && current === addDirPane) show(addDirOnYes);
+        else if (input.key === "Down" && current === secondPane) show(secondOnYes);
+        else if (input.key === "Enter") {
+          panesAtEnter.push(current);
+          if (current === addDirOnYes) show(secondPane);
+          else if (current === secondOnYes) show(readyPane);
+        }
+      });
+
+      await cli.waitUntilReady("fd-a");
+
+      expect(panesAtEnter).toEqual([addDirOnYes, secondOnYes]);
+      expect(sessions.inputs("fd-a")).toEqual([
+        { key: "Down" },
+        { key: "Enter" },
+        { key: "Down" },
+        { key: "Enter" },
+      ]);
     });
 
     it("never presses Enter while No, exit is selected, and gives up naming Yes, add it", async () => {

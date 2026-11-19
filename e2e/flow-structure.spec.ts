@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import {
   containerTestIds,
   controlTestIds,
@@ -28,6 +28,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -197,7 +198,8 @@ const status = (window: Page, nodeId: string, round?: number) =>
 
 const seed = (input: Flow) => seedFlow(home, input, repo.path);
 
-const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
+const workFolder = (buildId: string) =>
+  sessionWorktree(join(home, "workspaces", buildId), "main", repo.path);
 
 test.beforeEach(async () => {
   launched = undefined;

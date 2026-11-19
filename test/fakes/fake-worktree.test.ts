@@ -47,6 +47,41 @@ describe("FakeWorktree", () => {
     expect(worktree.calls).toEqual([first, second]);
   });
 
+  it("holds several worktrees by path and removing one leaves the other", async () => {
+    const worktree = new FakeWorktree();
+    const android = {
+      repo: "/repos/android",
+      base: "main",
+      branch: "fd-android",
+      path: join(root, "sessions/android/android"),
+      create: true,
+    };
+    const ios = {
+      repo: "/repos/ios",
+      base: "develop",
+      branch: "fd-ios",
+      path: join(root, "sessions/ios/ios"),
+      create: true,
+    };
+
+    await worktree.add(android);
+    await worktree.add(ios);
+
+    expect(worktree.worktrees).toEqual(
+      new Map([
+        [android.path, { repo: "/repos/android", base: "main", branch: "fd-android" }],
+        [ios.path, { repo: "/repos/ios", base: "develop", branch: "fd-ios" }],
+      ]),
+    );
+
+    await worktree.remove(android);
+
+    expect(worktree.worktrees).toEqual(
+      new Map([[ios.path, { repo: "/repos/ios", base: "develop", branch: "fd-ios" }]]),
+    );
+    expect(await exists(ios.path)).toBe(true);
+  });
+
   it("creates the worktree folder", async () => {
     const path = join(root, "worktrees", "abcd1234");
 

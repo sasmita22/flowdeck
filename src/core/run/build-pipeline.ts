@@ -31,7 +31,7 @@ export type PipelineLane = {
   durationMs?: number;
   message?: string;
   failures?: string[];
-  worktree?: PipelineWorktree;
+  worktrees?: PipelineWorktree[];
   rows: PipelineRow[];
   log: ActivityEntry[];
 };
@@ -118,7 +118,7 @@ const laneOf = (
     (event): event is Stored<"check-failed"> =>
       lane.step === 5 && event.type === "check-failed" && event.round === lane.round,
   );
-  const worktree = events.findLast(
+  const worktrees = events.filter(
     (event): event is Stored<"worktree"> => lane.step === 2 && event.type === "worktree",
   );
   const rows = [...lane.components.values()].map((component): PipelineRow => ({
@@ -136,7 +136,7 @@ const laneOf = (
     ...(closed !== undefined && start !== undefined ? { durationMs: closed.at - start.at } : {}),
     ...(latest?.message === undefined ? {} : { message: latest.message }),
     ...(checkFailed === undefined ? {} : { failures: checkFailed.failures }),
-    ...(worktree === undefined ? {} : { worktree: worktreeOf(worktree) }),
+    ...(worktrees.length === 0 ? {} : { worktrees: worktrees.map(worktreeOf) }),
     rows,
     log,
   };
@@ -147,19 +147,21 @@ const headerOf = (
   events: readonly StoredBuildEvent[],
 ): PipelineHeader => {
   const session = events.findLast((event): event is Stored<"session"> => event.type === "session");
-  const worktree = events.findLast(
+  const worktrees = events.filter(
     (event): event is Stored<"worktree"> => event.type === "worktree",
   );
+  const worktree = worktrees.at(-1);
   const cost = events.findLast((event): event is Stored<"cost"> => event.type === "cost");
+  const oneRepo = worktrees.length <= 1 && session?.repo !== "";
   const base = worktree?.branchCreated === false ? undefined : (worktree?.base ?? session?.base);
   return {
     name: pending.name,
     startedAt: pending.startedAt,
     ...(pending.endedAt === undefined ? {} : { endedAt: pending.endedAt }),
     status: pending.outcome ?? "building",
-    ...(session === undefined ? {} : { repo: session.repo }),
-    ...(base === undefined ? {} : { base }),
-    ...(worktree === undefined ? {} : { branch: worktree.branch, path: worktree.path }),
+    ...(session === undefined || !oneRepo ? {} : { repo: session.repo }),
+    ...(base === undefined || !oneRepo ? {} : { base }),
+    ...(worktree === undefined || !oneRepo ? {} : { branch: worktree.branch, path: worktree.path }),
     ...(session?.model === undefined ? {} : { model: session.model }),
     ...(cost === undefined
       ? {}

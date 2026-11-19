@@ -2,27 +2,6 @@
 
 exports[`build > writes the same bytes as the recorded build 1`] = `
 {
-  "CLAUDE.md": "# Build fix-login
-
-- Blueprint: Bugfix, version 3
-- Repository folder: carousell-web, relative to the workspace; run sessions start inside it
-- Plugin folder: plugin/ in the workspace; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
-- Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
-- Target repo (read only while building): /work/carousell-web
-- Branch: flowdeck/fix-login (new from main)
-
-## Standard rules
-
-1. Never assume: if the ticket, the code or an explicit answer can't settle what to do, stop and ask, even in auto mode.
-2. The target repo's own CLAUDE.md and the guides it names come first; read them at the point of use, never apply rules from memory.
-3. Investigate before changing: follow each behaviour past your own area, treat every claim as a question, trace each value to where it is used, search by concept before saying something is missing, and raise contradictions before acting.
-4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
-5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
-6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
-7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
-8. State every change and every deviation from the instructions with its reason.
-9. Never rewrite shared history: no force pushes.
-",
   "build-report.json": "{
   "keptApart": [],
   "merges": [],
@@ -35,18 +14,153 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 }
 ",
   "manifest.json": "{
+  "containers": [
+    {
+      "kind": "workspace",
+      "model": "sonnet",
+      "name": "workspace",
+      "nodes": [
+        {
+          "id": "workspace-1-start",
+          "label": "workspace-1-start",
+          "settings": {},
+          "type": "trigger"
+        },
+        {
+          "id": "workspace-1-stop",
+          "label": "workspace-1-stop",
+          "settings": {
+            "name": "result",
+            "type": "text"
+          },
+          "type": "output"
+        }
+      ],
+      "orchestrator": "workspace/plugin/skills/run/SKILL.md",
+      "prefix": "fix-login-workspace",
+      "slug": "workspace",
+      "wires": [
+        {
+          "from": {
+            "node": "workspace-1-start",
+            "port": "out"
+          },
+          "kind": "then",
+          "to": {
+            "node": "workspace-1-stop",
+            "port": "in"
+          }
+        }
+      ]
+    },
+    {
+      "base": "main",
+      "branch": "flowdeck/fix-login",
+      "kind": "session",
+      "model": "sonnet",
+      "name": "main",
+      "nodes": [
+        {
+          "id": "start",
+          "label": "start",
+          "settings": {},
+          "type": "trigger"
+        },
+        {
+          "file": "sessions/main/plugin/agents/p.md",
+          "id": "p",
+          "label": "p",
+          "piece": "p",
+          "settings": {
+            "instructions": "Do the work.",
+            "model": "sonnet",
+            "role": "implementer"
+          },
+          "type": "agent"
+        },
+        {
+          "file": "sessions/main/plugin/agents/a.md",
+          "id": "a",
+          "label": "a",
+          "piece": "a",
+          "settings": {
+            "instructions": "Implement the plan.",
+            "model": "sonnet",
+            "role": "implementer"
+          },
+          "type": "agent"
+        },
+        {
+          "id": "stop",
+          "label": "stop",
+          "settings": {
+            "name": "result",
+            "type": "text"
+          },
+          "type": "output"
+        }
+      ],
+      "orchestrator": "sessions/main/plugin/skills/run/SKILL.md",
+      "prefix": "fix-login-main",
+      "repo": "/work/repo",
+      "slug": "main",
+      "wires": [
+        {
+          "from": {
+            "node": "start",
+            "port": "out"
+          },
+          "kind": "then",
+          "to": {
+            "node": "p",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "node": "p",
+            "port": "out"
+          },
+          "kind": "then",
+          "to": {
+            "node": "a",
+            "port": "in"
+          }
+        },
+        {
+          "from": {
+            "node": "a",
+            "port": "out"
+          },
+          "kind": "then",
+          "to": {
+            "node": "stop",
+            "port": "in"
+          }
+        }
+      ],
+      "worktree": "/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo"
+    }
+  ],
   "files": {
-    "CLAUDE.md": "ff27b080caa7705f5445769c210266c27c7dcd280ac966aa86040f4dd048d1bb",
-    "plugin/.claude-plugin/plugin.json": "5b9aa2943152ddb88cabb2b36fa17967b0fe61f348e218b5a3213494b39c6403",
-    "plugin/agents/a.md": "065d49c46327a6d29d6147b3b434f49eae666bd9a944f8781b49c4b3a02ee0db",
-    "plugin/agents/p.md": "be7dac079510a1c843ed0729687f58d71a748c462ddb110f65caa96bc7ea0b6b",
-    "plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
-    "plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
-    "plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
-    "plugin/skills/run/SKILL.md": "40ea2706b8ac9b19b8e25d92cf4ecbb6a06dd1381da61fedee2ccb6b5578a3d6",
-    "settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
+    "sessions/main/CLAUDE.md": "0d7b20ad748993073a83ffa526b05f1459c408071296b94bad61fd26e74b4604",
+    "sessions/main/plugin/.claude-plugin/plugin.json": "889a5055dba69a8ba5e084f8f72077de21b44af9adee44d90d0e68ecb918dc9c",
+    "sessions/main/plugin/agents/a.md": "4fb165349608524a0a063300f21296dd834dc034040a6d645ae4d59c06fa23df",
+    "sessions/main/plugin/agents/p.md": "e61281fb41103f42d043ddeaa3e971584f033408f9bfc09f4642fed7710041d9",
+    "sessions/main/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
+    "sessions/main/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
+    "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
+    "sessions/main/plugin/skills/run/SKILL.md": "dbe6c717c41a7c6d35a43f77ae6208c4250016d8c851f2bd38d64cdfa309f7f6",
+    "sessions/main/settings.json": "f02589aad666d56d676f6c45832f3a56efcad63a5a8c18f86dd79e36acc21d61",
+    "workspace/CLAUDE.md": "39de2e9c39c67c2cfe929c73ed3a92f7db4c5a7c60866dc0bef1aab67ab4b5a1",
+    "workspace/plugin/.claude-plugin/plugin.json": "8e0ed1032a519a50555f09a3c50972864cfe372b93977cffffb9b142c2e5baa9",
+    "workspace/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
+    "workspace/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
+    "workspace/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
+    "workspace/plugin/skills/run/SKILL.md": "4bfb226e73af728acde187f53b7b9679f97fae994236dc18d706cf8737976d76",
+    "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "3a5fa669f6165f5fdc1ea39029415397c5ca1d4816ed3bda71410c673073a809",
+  "hash": "a2e49c864b1f967f8a6469877b3dd5d199f55aba23b4adf647bdc25054e82544",
   "layout": "workspace",
   "nodes": [
     {
@@ -56,7 +170,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
       "type": "trigger"
     },
     {
-      "file": "plugin/agents/p.md",
+      "file": "sessions/main/plugin/agents/p.md",
       "id": "p",
       "label": "p",
       "piece": "p",
@@ -68,7 +182,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
       "type": "agent"
     },
     {
-      "file": "plugin/agents/a.md",
+      "file": "sessions/main/plugin/agents/a.md",
       "id": "a",
       "label": "a",
       "piece": "a",
@@ -92,11 +206,16 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   "outputs": [
     {
       "name": "result",
+      "node": "workspace-1-stop",
+      "type": "text"
+    },
+    {
+      "name": "result",
       "node": "stop",
       "type": "text"
     }
   ],
-  "prefix": "fix-login",
+  "prefix": "fix-login-main",
   "session": {
     "buildConfig": {
       "base": "main",
@@ -148,13 +267,36 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
   ]
 }
 ",
-  "plugin/.claude-plugin/plugin.json": "{
-  "name": "fix-login"
+  "sessions/main/CLAUDE.md": "# Build fix-login-main
+
+- Blueprint: Bugfix, version 3
+- Repository folder: repo, in this session's own folder; run sessions start inside it
+- Plugin folder: plugin/ in this session's own folder; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
+- Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
+- Target repo (read only while building): /work/repo
+- Branch: flowdeck/fix-login (new from main)
+- Workspace folder (read only): /fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace; never edit or write files in it
+- Changes the workspace needs go to the workspace session by message
+
+## Standard rules
+
+1. Never assume: if the ticket, the code or an explicit answer can't settle what to do, stop and ask, even in auto mode.
+2. The target repo's own CLAUDE.md and the guides it names come first; read them at the point of use, never apply rules from memory.
+3. Investigate before changing: follow each behaviour past your own area, treat every claim as a question, trace each value to where it is used, search by concept before saying something is missing, and raise contradictions before acting.
+4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
+5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
+6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
+7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+8. State every change and every deviation from the instructions with its reason.
+9. Never rewrite shared history: no force pushes.
+",
+  "sessions/main/plugin/.claude-plugin/plugin.json": "{
+  "name": "fix-login-main"
 }
 ",
-  "plugin/agents/a.md": "---
+  "sessions/main/plugin/agents/a.md": "---
 name: "a"
-description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. implementer"
+description: "Part of build fix-login-main (repo repo, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. implementer"
 model: "sonnet"
 ---
 @unfilled: the build agents replace this draft with the finished agent.
@@ -165,7 +307,7 @@ implementer
 
 ## Inputs
 
-Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
 None.
 
@@ -181,9 +323,9 @@ None.
 
 Stop once the output is written.
 ",
-  "plugin/agents/p.md": "---
+  "sessions/main/plugin/agents/p.md": "---
 name: "p"
-description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. implementer"
+description: "Part of build fix-login-main (repo repo, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. implementer"
 model: "sonnet"
 ---
 @unfilled: the build agents replace this draft with the finished agent.
@@ -194,7 +336,7 @@ implementer
 
 ## Inputs
 
-Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
 None.
 
@@ -210,7 +352,7 @@ None.
 
 Stop once the output is written.
 ",
-  "plugin/hooks/hooks.json": "{
+  "sessions/main/plugin/hooks/hooks.json": "{
   "hooks": {
     "PermissionRequest": [
       {
@@ -306,14 +448,14 @@ Stop once the output is written.
   }
 }
 ",
-  "plugin/hooks/no-force-push.sh": "#!/usr/bin/env bash
+  "sessions/main/plugin/hooks/no-force-push.sh": "#!/usr/bin/env bash
 input=$(cat)
 if printf '%s' "$input" | grep -Eq 'git[[:space:]]+push([^"]|\\\\")*([[:space:]]-f([[:space:]]|"|$)|[[:space:]]--force)'; then
   printf '%s\\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force pushes rewrite shared history; this build never force pushes."}}'
 fi
 exit 0
 ",
-  "plugin/hooks/rules-after-compact.sh": "#!/usr/bin/env bash
+  "sessions/main/plugin/hooks/rules-after-compact.sh": "#!/usr/bin/env bash
 cat <<'FLOWDECK_RULES'
 These rules still apply after the conversation was compacted:
 
@@ -330,22 +472,191 @@ These rules still apply after the conversation was compacted:
 9. Never rewrite shared history: no force pushes.
 FLOWDECK_RULES
 ",
-  "plugin/skills/run/SKILL.md": "---
+  "sessions/main/plugin/skills/run/SKILL.md": "---
 name: "run"
-description: "Part of build fix-login (repo carousell-web, workspace /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build's workspace, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login:run. Use when running this build's whole flow without the Flowdeck app."
+description: "Part of build fix-login-main (repo repo, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login-main:run. Use when running this build's whole flow without the Flowdeck app."
 ---
-# Run fix-login
+# Run fix-login-main
 
 Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.
 
-Hand-off files are read and written by bare name (\`<file>\`, not \`carousell-web/<file>\`) in the run's working folder. A run starts there; in this build's workspace that folder is \`carousell-web/\`. Never use the workspace folder itself.
+Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
 1. NODE start (start): the run starts here. Then go on to NODE p.
-2. NODE p (p): dispatch \`fix-login:p\` with the prompt "NODE p\\nGo", and wait for it to return. Then go on to NODE a.
-3. NODE a (a): dispatch \`fix-login:a\` with the prompt "NODE a\\nGo", and wait for it to return. Then go on to NODE stop.
+2. NODE p (p): dispatch \`fix-login-main:p\` with the prompt "NODE p\\nGo", and wait for it to return. Then go on to NODE a.
+3. NODE a (a): dispatch \`fix-login-main:a\` with the prompt "NODE a\\nGo", and wait for it to return. Then go on to NODE stop.
 4. NODE stop (stop): the run ends here; its result is \`result\` (text), handed back to the user, not a file any step writes.
 ",
-  "settings.json": "{
+  "sessions/main/settings.json": "{
+  "enableAllProjectMcpServers": true,
+  "env": {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  },
+  "permissions": {
+    "defaultMode": "default",
+    "deny": [
+      "Edit(//fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace/**)",
+      "Write(//fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace/**)"
+    ]
+  }
+}
+",
+  "workspace/CLAUDE.md": "# Build fix-login-workspace
+
+- Blueprint: Bugfix, version 3
+- This is the workspace session's folder; session containers read it but never write it
+- Plugin folder: plugin/ in this folder; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
+
+## Standard rules
+
+1. Never assume: if the ticket, the code or an explicit answer can't settle what to do, stop and ask, even in auto mode.
+2. The target repo's own CLAUDE.md and the guides it names come first; read them at the point of use, never apply rules from memory.
+3. Investigate before changing: follow each behaviour past your own area, treat every claim as a question, trace each value to where it is used, search by concept before saying something is missing, and raise contradictions before acting.
+4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
+5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
+6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
+7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+8. State every change and every deviation from the instructions with its reason.
+9. Never rewrite shared history: no force pushes.
+",
+  "workspace/plugin/.claude-plugin/plugin.json": "{
+  "name": "fix-login-workspace"
+}
+",
+  "workspace/plugin/hooks/hooks.json": "{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\" --permission-deadline-ms=86340000",
+            "timeout": 86400,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \\"\${CLAUDE_PLUGIN_ROOT}/hooks/no-force-push.sh\\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \\"\${CLAUDE_PLUGIN_ROOT}/hooks/rules-after-compact.sh\\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "compact"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "[ -z \\"$FLOWDECK_HOOK_NODE\\" ] || [ -z \\"$FLOWDECK_HOOK_SCRIPT\\" ] || \\"$FLOWDECK_HOOK_NODE\\" \\"$FLOWDECK_HOOK_SCRIPT\\"",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
+",
+  "workspace/plugin/hooks/no-force-push.sh": "#!/usr/bin/env bash
+input=$(cat)
+if printf '%s' "$input" | grep -Eq 'git[[:space:]]+push([^"]|\\\\")*([[:space:]]-f([[:space:]]|"|$)|[[:space:]]--force)'; then
+  printf '%s\\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Force pushes rewrite shared history; this build never force pushes."}}'
+fi
+exit 0
+",
+  "workspace/plugin/hooks/rules-after-compact.sh": "#!/usr/bin/env bash
+cat <<'FLOWDECK_RULES'
+These rules still apply after the conversation was compacted:
+
+## Standard rules
+
+1. Never assume: if the ticket, the code or an explicit answer can't settle what to do, stop and ask, even in auto mode.
+2. The target repo's own CLAUDE.md and the guides it names come first; read them at the point of use, never apply rules from memory.
+3. Investigate before changing: follow each behaviour past your own area, treat every claim as a question, trace each value to where it is used, search by concept before saying something is missing, and raise contradictions before acting.
+4. Make the smallest correct change that matches the existing pattern; no drive-by refactors or speculative code.
+5. Fix the cause, never hide the symptom: no no-op patches, commented-out code, removed guards or blind catches.
+6. Check your own work before handing off: re-read it against the ask; no stubs or partial work.
+7. Write for the next reader: shared names not local paths, no machine state, code by symbol not line number, decisions and their reasons not the conversation.
+8. State every change and every deviation from the instructions with its reason.
+9. Never rewrite shared history: no force pushes.
+FLOWDECK_RULES
+",
+  "workspace/plugin/skills/run/SKILL.md": "---
+name: "run"
+description: "Part of build fix-login-workspace (repo workspace, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login-workspace:run. Use when running this build's whole flow without the Flowdeck app."
+---
+# Run fix-login-workspace
+
+Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.
+
+Hand-off files are read and written by bare name (\`<file>\`, not \`workspace/<file>\`) in the run's working folder. A run starts there; for the workspace session that folder is \`workspace/\`.
+
+1. NODE workspace-1-start (workspace-1-start): the run starts here. Then go on to NODE workspace-1-stop.
+2. NODE workspace-1-stop (workspace-1-stop): the run ends here; its result is \`result\` (text), handed back to the user, not a file any step writes.
+",
+  "workspace/settings.json": "{
   "enableAllProjectMcpServers": true,
   "env": {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"

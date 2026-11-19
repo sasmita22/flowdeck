@@ -7,9 +7,14 @@ import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, type ScopeParts } from "./scope-line.js";
 
-export type OrchestratorManifest = { prefix: string; nodes: ManifestNode[]; wires: Wire[] };
+export type OrchestratorManifest = {
+  prefix: string;
+  nodes: ManifestNode[];
+  wires: Wire[];
+  orchestrator: string;
+};
 
-export const orchestratorPath = "plugin/skills/run/SKILL.md";
+export const orchestratorPath = (root: string): string => `${root}/plugin/skills/run/SKILL.md`;
 
 type Settings = Record<string, unknown>;
 
@@ -20,7 +25,7 @@ const nodeList = (ids: readonly string[]) => ids.map((id) => `NODE ${id}`).join(
 const quoted = (value: string) => JSON.stringify(value);
 
 export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopeParts): BuildFile {
-  const { prefix, nodes, wires } = manifest;
+  const { prefix, nodes, wires, orchestrator } = manifest;
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const thenWires = wires.filter((wire) => wire.kind === "then");
   const outOf = (id: string, port?: string) =>
@@ -96,7 +101,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
     (node, index) => `${index + 1}. NODE ${node.id} (${node.label}): ${step(node)}${next(node)}`,
   );
   return {
-    path: orchestratorPath,
+    path: orchestrator,
     content: [
       "---",
       `name: ${quoted("run")}`,
@@ -106,7 +111,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       "",
       "Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.",
       "",
-      handoffFolderLine(scope.repo),
+      handoffFolderLine(scope.repo, scope.kind),
       "",
       ...steps,
       "",

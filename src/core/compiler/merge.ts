@@ -2,8 +2,8 @@ import type { BuildReport } from "./build-report.js";
 import { canonicalJson } from "./canonical-json.js";
 import { reportPath } from "./emit.js";
 import { sha256Hex } from "./hash.js";
-import type { BuildFile, Manifest, ManifestNode } from "./lower.js";
-import { orchestratorPath, orchestratorSkill } from "./orchestrator.js";
+import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
+import { orchestratorSkill } from "./orchestrator.js";
 import { scopeOf } from "./scope-line.js";
 
 export type MergeResult = {
@@ -30,6 +30,7 @@ const rejection = (
   merge: Merge,
   byId: ReadonlyMap<string, ManifestNode>,
   repeated: ReadonlySet<string>,
+  containerOf: ReadonlyMap<string, ManifestContainer>,
 ): Question | undefined => {
   const unknown = merge.nodeIds.find((id) => !byId.has(id));
   if (unknown !== undefined)
@@ -48,7 +49,19 @@ const rejection = (
       nodeId: first,
       text: `Nodes ${merge.nodeIds.join(", ")} cannot share a piece: only agents can.`,
     };
+  if (new Set(merge.nodeIds.map((id) => containerOf.get(id))).size > 1)
+    return {
+      nodeId: first,
+      text: `Nodes ${merge.nodeIds.join(", ")} cannot share a piece: they are in different containers.`,
+    };
   return undefined;
+};
+
+const orchestratorOf = (container: ManifestContainer, laidDown: readonly BuildFile[]) => {
+  const old = laidDown.find((file) => file.path === container.orchestrator)?.content ?? "";
+  const scope = scopeOf(descriptionOf(old));
+  if (scope === undefined) throw new Error("the laid-down orchestrator has no scope line");
+  return orchestratorSkill(container, scope);
 };
 
 export const applyMerges = (
@@ -56,8 +69,13 @@ export const applyMerges = (
   manifest: Manifest,
   merges: BuildReport["merges"],
 ): MergeResult => {
-  const byId = new Map(manifest.nodes.map((node) => [node.id, node]));
-  const position = new Map(manifest.nodes.map((node, index) => [node.id, index]));
+  const { containers } = manifest;
+  const containerOf = new Map(
+    containers.flatMap((container) => container.nodes.map((node) => [node.id, container])),
+  );
+  const nodes = containers.flatMap((container) => container.nodes);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const position = new Map(nodes.map((node, index) => [node.id, index]));
   const seen = new Set<string>();
   const repeated = new Set<string>();
   for (const id of merges.flatMap((merge) => [...new Set(merge.nodeIds)])) {
@@ -69,7 +87,7 @@ export const applyMerges = (
   const sharedBy = new Map<string, { piece: string; file: string }>();
   const mergedPieces: string[] = [];
   for (const merge of merges) {
-    const question = rejection(merge, byId, repeated);
+    const question = rejection(merge, byId, repeated, containerOf);
     if (question !== undefined) {
       rejected.push(question);
       continue;
@@ -86,31 +104,33 @@ export const applyMerges = (
   if (sharedBy.size === 0) return { files: [...laidDown], manifest, mergedPieces, rejected };
 
   const removed = new Set([...sharedBy.keys()].flatMap((id) => byId.get(id)?.file ?? []));
-  const nodes = manifest.nodes.map((node) => {
+  const withShared = (node: ManifestNode) => {
     const shared = sharedBy.get(node.id);
     return shared === undefined ? node : { ...node, ...shared };
-  });
-
-  const oldOrchestrator = laidDown.find((file) => file.path === orchestratorPath)?.content ?? "";
-  const scope = scopeOf(descriptionOf(oldOrchestrator));
-  if (scope === undefined) throw new Error("the laid-down orchestrator has no scope line");
-  const orchestrator = orchestratorSkill(
-    { prefix: manifest.prefix ?? scope.build, nodes, wires: manifest.wires },
-    scope,
+  };
+  const touched = new Set([...sharedBy.keys()].flatMap((id) => containerOf.get(id) ?? []));
+  const merged = containers.map((container) =>
+    touched.has(container) ? { ...container, nodes: container.nodes.map(withShared) } : container,
+  );
+  const orchestrators = new Map(
+    merged
+      .filter((container) => !containers.includes(container))
+      .map((container) => [container.orchestrator, orchestratorOf(container, laidDown)]),
   );
 
   const kept = laidDown
     .filter((file) => !removed.has(file.path) && file.path !== manifestPath)
-    .map((file) => (file.path === orchestratorPath ? orchestrator : file));
-  const merged: Manifest = {
+    .map((file) => orchestrators.get(file.path) ?? file);
+  const result: Manifest = {
     ...manifest,
-    nodes,
+    ...(manifest.nodes === undefined ? {} : { nodes: manifest.nodes.map(withShared) }),
+    containers: merged,
     files: Object.fromEntries(
       kept
         .filter((file) => file.path !== reportPath)
         .map((file) => [file.path, sha256Hex(file.content)]),
     ),
   };
-  const files = [...kept, { path: manifestPath, content: canonicalJson(merged) }];
-  return { files, manifest: merged, mergedPieces, rejected };
+  const files = [...kept, { path: manifestPath, content: canonicalJson(result) }];
+  return { files, manifest: result, mergedPieces, rejected };
 };

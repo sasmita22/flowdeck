@@ -9,7 +9,7 @@ An Agent node's instructions say what the agent does. Before the agent is writte
 
 ## Steps
 
-1. Find the piece's nodes in `manifest.json`: every node whose `file` is the piece's path. A merged piece serves several nodes; analyze each one.
+1. Find the piece's nodes in its container's `nodes` in `manifest.json`: every node whose `file` is the piece's path. A merged piece serves several nodes; analyze each one.
 2. For each node, read its `settings` (`role`, `instructions`, `given`, `writes`, `produces`).
 3. List its needs, from those settings alone:
    - **Input**: each file or value it reads, and where it comes from.
@@ -32,7 +32,7 @@ Other auditors edit `build-report.json` at the same time. Read it right before t
 ## Hard limits
 
 - Never add a need the node's instructions and settings do not state. A step you think the job should have is not a need.
-- Never fill a need from the target repo here: `fit-to-repo` fits the agent to the repo when it is written.
+- Never fill a need from the target repo here: `fit-to-repo` fits the agent to its container's repo when it is written.
 - Never raise a question from this skill. A need the instructions leave vague stays as vague as they wrote it.
 
 ## Checklist

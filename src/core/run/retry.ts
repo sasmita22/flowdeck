@@ -4,7 +4,7 @@ import { nodeStatus } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 
-type RetryManifest = Pick<Manifest, "nodes" | "wires">;
+type RetryManifest = Required<Pick<Manifest, "nodes" | "wires">>;
 
 const statusIn = (events: readonly StoredEvent[], nodeId: string) =>
   nodeStatus(events.filter((event) => event.nodeId === nodeId));

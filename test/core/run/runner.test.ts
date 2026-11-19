@@ -29,6 +29,7 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import * as builders from "../../fixtures/flow-builders.js";
+import { oneSession } from "../../fixtures/one-session.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
 
 const hash = "abc123";
@@ -2221,7 +2222,7 @@ describe("Runner parallel section", () => {
         ...(withAfter ? [builders.thenWire("j", "after")] : []),
       ],
     );
-    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+    const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
     return { hash, prefix, nodes, wires };
   }
 
@@ -2402,7 +2403,7 @@ describe("Runner parallel section", () => {
         builders.wire("b", "no", "other", "in"),
       ],
     );
-    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+    const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
     const h = sectionHarness({
       onFork: (s) => {
         s.launch("a1");
@@ -3105,7 +3106,7 @@ describe("Runner parallel section", () => {
           builders.thenWire("a2", "j"),
         ],
       );
-      const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+      const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
       const history: History = [
         ["plan", { kind: "sent" }],
         ["plan", { kind: "done" }],
@@ -3208,7 +3209,7 @@ describe("Runner branch on a yes/no variable", () => {
     chosen: Record<string, boolean> = {},
   ): RunnableManifest => {
     const input = builders.flow(nodes, wires);
-    const { manifest: lowered } = lower(input, { name: prefix, values: chosen });
+    const lowered = oneSession(lower(input, { name: prefix, values: chosen }).manifest);
     return {
       hash,
       prefix: lowered.prefix,
@@ -4125,7 +4126,7 @@ describe("Runner hand-off pairs", () => {
         builders.thenWire("a2", "j"),
       ],
     );
-    const { nodes, wires } = lower(flow, { name: prefix, values: {} }).manifest;
+    const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
 
     const result = await runOn(deps, { hash, prefix, nodes, wires });
 

@@ -18,18 +18,28 @@ type Landing =
   | { manifest: "outputs"; value: unknown };
 
 const inFile = (file: string, shows: string): Landing => ({ file, shows });
+const sessionRoot = "sessions/m-session-name";
 const atRunTime = (value: unknown): Landing => ({ manifest: "node", value });
 
 const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
   agent: {
-    role: ["M-agent-role", inFile("plugin/agents/label-agent.md", "M-agent-role")],
+    role: ["M-agent-role", inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-role")],
     instructions: [
       "M-agent-instructions",
-      inFile("plugin/agents/label-agent.md", "M-agent-instructions"),
+      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-instructions"),
     ],
-    model: ["M-agent-model", inFile("plugin/agents/label-agent.md", "M-agent-model")],
-    given: [["M-agent-given.md"], inFile("plugin/agents/label-agent.md", "M-agent-given.md")],
-    writes: [["M-agent-writes.md"], inFile("plugin/agents/label-agent.md", "M-agent-writes.md")],
+    model: [
+      "M-agent-model",
+      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-model"),
+    ],
+    given: [
+      ["M-agent-given.md"],
+      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-given.md"),
+    ],
+    writes: [
+      ["M-agent-writes.md"],
+      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-writes.md"),
+    ],
     produces: ["M-agent-produces", atRunTime("M-agent-produces")],
   },
   gate: {
@@ -84,7 +94,10 @@ const containerKeys = ["id", "kind", "nodes"];
 
 const blueprintSettings: Record<string, [unknown, Landing]> = {
   buildModel: ["M-build-model", { manifest: "settings", value: "M-build-model" }],
-  permissionMode: ["M-permission-mode", inFile("settings.json", "M-permission-mode")],
+  permissionMode: [
+    "M-permission-mode",
+    inFile(`${sessionRoot}/settings.json`, "M-permission-mode"),
+  ],
 };
 
 const idOf: Record<NodeType, string> = {
@@ -138,7 +151,6 @@ const builtFiles = () => {
     lower(everyNode(), {
       name: "M-build",
       values: { "M-variable": true },
-      repo: target.repo,
       workspace: target.workspace,
     }),
     target,
@@ -164,7 +176,7 @@ const landed = (
   }
   switch (landing.manifest) {
     case "node": {
-      const node = manifest.nodes.find((each) => each.id === idOf[type as NodeType]);
+      const node = (manifest.nodes ?? []).find((each) => each.id === idOf[type as NodeType]);
       expect((node?.settings as Record<string, unknown>)[field], `${type}.${field}`).toEqual(
         landing.value,
       );

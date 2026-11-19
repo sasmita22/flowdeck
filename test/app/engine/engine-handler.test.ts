@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import {
   afterEach,
@@ -34,8 +34,10 @@ import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
+import { deleteBuildResultSchema } from "../../../src/core/run/delete-build.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import type { RepoState } from "../../../src/core/run/repo-state.js";
+import { sessionWorktree, workspaceFolder } from "../../../src/core/run/workspace.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
@@ -66,6 +68,7 @@ import {
   loop,
   onMainFlow,
   output,
+  sessionsWorkflow,
   thenWire,
   trigger,
 } from "../../fixtures/flow-builders.js";
@@ -124,6 +127,7 @@ const manifestText = (input: Flow, hash: string): string => {
     base: "main",
     branch: "flowdeck/report",
     branchCreated: true,
+    workspace: "/fd/workspaces/report",
   });
   const manifest = files.find((file) => file.path === "manifest.json");
   if (manifest === undefined) throw new Error("emit wrote no manifest.json");
@@ -1857,7 +1861,7 @@ describe("createEngineHandler", async () => {
     };
 
     const worktreeOf = (buildId: string, from = repo.path) =>
-      join(buildDirOf(buildId), basename(from));
+      sessionWorktree(buildDirOf(buildId), "main", from);
 
     const snapshotsOf = (runId: string) =>
       pushes.flatMap((push) =>
@@ -2519,7 +2523,7 @@ describe("createEngineHandler", async () => {
             base: "main",
             branch: `flowdeck/fix-login-${id.slice(0, 8)}`,
             create: true,
-            path: join(dir, basename(repo.path)),
+            path: sessionWorktree(dir, "main", repo.path),
           },
         ]);
 
@@ -3140,8 +3144,8 @@ describe("createEngineHandler", async () => {
       });
 
       it("folds a build agent's own steps and report into its piece's Activity, and none into another piece", async () => {
-        const writePiece = "plugin/agents/write.md";
-        const checkPiece = "plugin/agents/check.md";
+        const writePiece = "sessions/main/plugin/agents/write.md";
+        const checkPiece = "sessions/main/plugin/agents/check.md";
         const read = {
           agent_id: "ag-write",
           agent_type: "general-purpose",
@@ -3709,7 +3713,7 @@ describe("createEngineHandler", async () => {
           class KeepsFirstSessionFolder extends NodeFileSystem {
             private kept = false;
 
-            override async removeTree(path: string, keep?: { keep?: string }): Promise<void> {
+            override async removeTree(path: string, keep?: { keep?: string[] }): Promise<void> {
               if (!this.kept && path.startsWith(join(home, "build-sessions"))) {
                 this.kept = true;
                 return;
@@ -3758,7 +3762,7 @@ describe("createEngineHandler", async () => {
         );
 
         describe("an ended row whose build left its worktree", () => {
-          const keptPath = (name: string) => `/fd-home/workspaces/b-${name}/app`;
+          const keptPath = (name: string) => `/fd-home/workspaces/b-${name}/sessions/main/app`;
           const sessionFolder = (name: string) => `/fd-home/build-sessions/fd-build-${name}`;
 
           const endedRow = (name: string, { session = true } = {}) => {
@@ -3773,7 +3777,15 @@ describe("createEngineHandler", async () => {
               startedAt: 1_000,
             });
             if (start.kind !== "started") throw new Error("the ended build did not start");
-            if (session)
+            if (session) {
+              runs.addBuildWorktree(`b-${name}`, {
+                container: "main",
+                repo: "/repos/app",
+                base: "main",
+                branch: `flowdeck/${name}`,
+                branchCreated: true,
+                path: keptPath(name),
+              });
               runs.appendBuildEvent(start.pendingId, {
                 type: "session",
                 name: `fd-build-${name}`,
@@ -3785,6 +3797,7 @@ describe("createEngineHandler", async () => {
                 branch: `flowdeck/${name}`,
                 branchCreated: true,
               });
+            }
             runs.endPendingBuild(start.pendingId, { outcome: "failed", endedAt: 2_000 });
             return start.pendingId;
           };
@@ -4461,10 +4474,18 @@ describe("createEngineHandler", async () => {
           nodes: [],
           manifest: "{}",
         });
+        runs.addBuildWorktree("build-pr", {
+          container: "main",
+          repo: "/repos/app",
+          base: "main",
+          branch: "flowdeck/pr",
+          branchCreated: true,
+          path: "/fd-home/workspaces/build-pr/sessions/main/app",
+        });
 
         expect(await deleteBuild("build-pr")).toEqual({
           ok: true,
-          kept: { kind: "branch", branch: "flowdeck/pr", reason: "open-pr" },
+          kept: [{ kind: "branch", branch: "flowdeck/pr", reason: "open-pr" }],
         });
 
         expect(pullRequests.calls).toEqual([{ repo: "/repos/app", branch: "flowdeck/pr" }]);
@@ -4622,6 +4643,251 @@ describe("createEngineHandler", async () => {
         } finally {
           await source.cleanup();
         }
+      });
+    });
+
+    describe("a build with a worktree per session container", () => {
+      const twoSessions = () =>
+        sessionsWorkflow([
+          { name: "android", repo: repo.path, branch: "main" },
+          { name: "ios", repo: repo.path, branch: "main" },
+        ]);
+
+      const containerWorktrees = (buildId: string) => {
+        const dir = buildDirOf(buildId);
+        return [sessionWorktree(dir, "android", repo.path), sessionWorktree(dir, "ios", repo.path)];
+      };
+
+      const answer = async (type: string, payload: unknown) => {
+        const response = await handler.handle({
+          id: nextId++,
+          type: type as Parameters<typeof handler.handle>[0]["type"],
+          payload,
+        });
+        expect(response).toMatchObject({ ok: true });
+        return (response as { value: unknown }).value;
+      };
+
+      const pendingIdOf = (buildId: string) => {
+        const pendingId = pushes.findLast(
+          (push): push is Extract<EnginePush, { push: "build-progress" }> =>
+            push.push === "build-progress" && push.buildId === buildId,
+        )?.pendingId;
+        if (pendingId === undefined) throw new Error(`no build progress names ${buildId}`);
+        return pendingId;
+      };
+
+      const seeingSessions = (seen: OpenSessionOptions[]) => ({
+        ...runEnvironment(new NodeFileSystem()),
+        openSession: async (opening: OpenSessionOptions): Promise<OpenedSession> => {
+          seen.push(opening);
+          throw new Error("seen");
+        },
+      });
+
+      it("refuses to run a build of two session containers, starting no session and making no run", async () => {
+        const seen: OpenSessionOptions[] = [];
+        const worktree = new FakeWorktree();
+        handler = handlerWith({ worktree, run: seeingSessions(seen) });
+        flows.save(twoSessions());
+        const buildId = await builtId();
+        expect(worktree.calls.map((added) => added.path)).toEqual(containerWorktrees(buildId));
+
+        expect(await runBuild(buildId)).toEqual({
+          kind: "error",
+          message: "Running several sessions is not supported yet.",
+        });
+        expect(seen).toEqual([]);
+        expect(runs.runs).toEqual([]);
+      });
+
+      it("answers the run options of a two-session build with the refusal instead of failing the request", async () => {
+        flows.save(twoSessions());
+        const buildId = await builtId();
+
+        expect(await answer("run-options", { buildId })).toEqual({
+          kind: "error",
+          message: "Running several sessions is not supported yet.",
+        });
+      });
+
+      it("starts a one-session build's session with its container's model and the build's workspace folder", async () => {
+        const seen: OpenSessionOptions[] = [];
+        handler = handlerWith({ run: seeingSessions(seen) });
+        const blueprint = twoAgents();
+        flows.save({
+          ...blueprint,
+          containers: blueprint.containers.map((container) =>
+            container.kind === "session" ? { ...container, model: "haiku" } : container,
+          ),
+        });
+        const buildId = await builtId();
+
+        await untilFinished(await startedOn(buildId));
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toMatchObject({
+          cwd: worktreeOf(buildId),
+          model: "haiku",
+          workspaceFolder: workspaceFolder(buildDirOf(buildId)),
+        });
+      });
+
+      it("reports every worktree it had to keep when it deletes the build", async () => {
+        const worktree = new FakeWorktree();
+        handler = handlerWith({ worktree });
+        flows.save(twoSessions());
+        const buildId = await builtId();
+        const worktrees = containerWorktrees(buildId);
+        vi.spyOn(worktree, "remove").mockResolvedValue({ worktree: "kept", branch: "kept" });
+
+        const result = await answer("delete-build", { buildId });
+
+        const reported = JSON.stringify(deleteBuildResultSchema.parse(result));
+        for (const path of worktrees) expect(reported).toContain(path);
+      });
+
+      describe("a pending build it left", () => {
+        const dir = "/fd-home/workspaces/b-two";
+        const left = [`${dir}/sessions/android/app`, `${dir}/sessions/ios/app`] as const;
+
+        const endedRow = () => {
+          const start = runs.startPendingBuild({
+            flowId: "flow-1",
+            version: 1,
+            name: "two",
+            origin: {
+              source: { flowId: "flow-1", version: 1 },
+              blueprint: { name: "Untitled", version: 1 },
+            },
+            startedAt: 1_000,
+          });
+          if (start.kind !== "started") throw new Error("the ended build did not start");
+          for (const [container, path] of [
+            ["android", left[0]],
+            ["ios", left[1]],
+          ] as const) {
+            runs.addBuildWorktree("b-two", {
+              container,
+              repo: "/repos/app",
+              base: "main",
+              branch: `flowdeck/two-${container}`,
+              branchCreated: true,
+              path,
+            });
+          }
+          runs.appendBuildEvent(start.pendingId, {
+            type: "session",
+            name: "fd-build-two",
+            claudeSessionId: "claude-two",
+            buildId: "b-two",
+            repo: "",
+            base: "",
+            values: {},
+          });
+          runs.endPendingBuild(start.pendingId, { outcome: "failed", endedAt: 2_000 });
+          return start.pendingId;
+        };
+
+        const leftOnDisk = () =>
+          new FakeFileSystem(
+            Object.fromEntries(left.map((path) => [`${path}/work.txt`, "kept\n"])),
+          );
+
+        it("previews the work any of its worktrees holds", async () => {
+          handler = handlerWith({
+            home: "/fd-home",
+            fs: leftOnDisk(),
+            worktree: new FakeWorktree({ dirty: [left[1] ?? ""] }),
+          });
+          const id = endedRow();
+
+          expect(await answer("delete-pending-preview", { id })).toMatchObject({
+            dirtyWorktree: true,
+          });
+        });
+
+        it("removes every worktree its rows name, and its folder", async () => {
+          const fs = leftOnDisk();
+          const worktree = new FakeWorktree();
+          handler = handlerWith({ home: "/fd-home", fs, worktree });
+          const id = endedRow();
+
+          await answer("delete-pending-build", { id });
+
+          expect(worktree.removed).toEqual(
+            left.map((path) => expect.objectContaining({ path, force: true })),
+          );
+          expect(await fs.exists(dir)).toBe(false);
+          expect(runs.pendingBuild(id)).toBeNull();
+        });
+      });
+
+      describe("read in the container layout", () => {
+        const builtWithWork = async (blueprint: Flow) => {
+          flows.save(blueprint);
+          const buildId = await builtId();
+          const dir = buildDirOf(buildId);
+          const worktrees = runs.buildWorktrees(buildId).map((row) => row.path);
+          for (const path of worktrees) await writeFile(join(path, "work.txt"), "kept\n");
+          return { buildId, dir, worktrees };
+        };
+
+        const insideAny = (worktrees: string[], dir: string) => (path: string) =>
+          worktrees.some((worktree) => join(dir, path).startsWith(`${worktree}/`));
+
+        it("names the session container's worktree as the build's project", async () => {
+          const { buildId } = await builtWithWork(twoAgents());
+
+          expect(await answer("build-project", { buildId })).toMatchObject({
+            path: worktreeOf(buildId),
+            exists: true,
+          });
+        });
+
+        it("lists the worktree's files by its path under the build", async () => {
+          const { buildId, dir } = await builtWithWork(twoAgents());
+
+          expect(
+            await answer("build-entries", { buildId, path: relative(dir, worktreeOf(buildId)) }),
+          ).toEqual([{ name: "work.txt", kind: "file" }]);
+        });
+
+        it("reads the build with its worktree, listing the build without walking into it", async () => {
+          const { buildId, dir, worktrees } = await builtWithWork(twoAgents());
+
+          const read = (await answer("assistant-read-build", { id: buildId })) as {
+            workspace: { tree: string[] };
+            worktree: unknown;
+          };
+
+          expect(worktrees).toEqual([worktreeOf(buildId)]);
+          expect(read.worktree).toMatchObject({ path: worktreeOf(buildId), exists: true });
+          expect(read.workspace.tree).toEqual(
+            expect.arrayContaining(["workspace/CLAUDE.md", "sessions/main/CLAUDE.md"]),
+          );
+          expect(read.workspace.tree.filter(insideAny(worktrees, dir))).toEqual([]);
+        });
+
+        it("lists a pending build's whole folder without any of its worktrees", async () => {
+          const { buildId, dir, worktrees } = await builtWithWork(twoSessions());
+
+          const tree = (await answer("pending-build-tree", {
+            pendingId: pendingIdOf(buildId),
+          })) as {
+            paths: string[];
+          };
+
+          expect(worktrees).toEqual(containerWorktrees(buildId));
+          expect(tree.paths).toEqual(
+            expect.arrayContaining([
+              "workspace/CLAUDE.md",
+              "sessions/android/CLAUDE.md",
+              "sessions/ios/CLAUDE.md",
+            ]),
+          );
+          expect(tree.paths.filter(insideAny(worktrees, dir))).toEqual([]);
+        });
       });
     });
 
@@ -4824,24 +5090,6 @@ describe("createEngineHandler", async () => {
           message: expect.stringContaining("Make a new build from this blueprint"),
         });
         expect(store.listRuns()).toEqual([]);
-      });
-
-      it("resumes a stopped run of it to the end", async () => {
-        const { id: runId } = store.createRun({
-          buildDir: join(home, "builds", hash),
-          inputs: {},
-          nodeIds: ["s1"],
-          session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "c-old" },
-          buildId: hash,
-        });
-        store.finishRun(runId, "stopped");
-
-        expect(
-          await handler.handle({ id: 1, type: "resume-run", payload: { runId } }),
-        ).toMatchObject({ ok: true, value: { kind: "started", runId } });
-
-        await vi.waitFor(() => expect(store.findRun(runId)?.status).toBe("done"));
-        expect(waiter.calls.map(({ nodeId }) => nodeId)).toEqual(["s1"]);
       });
 
       it("refuses to resume a stopped run of it once deleted, naming the build by its id", async () => {

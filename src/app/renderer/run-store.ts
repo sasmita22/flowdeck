@@ -31,7 +31,7 @@ import type { FlowdeckBridge } from "../preload/bridge.js";
 import { selectDirty, type CanvasState } from "./canvas/store.js";
 import { labelFor } from "../../core/nodes/defaults.js";
 import type { SaveState } from "./save-store.js";
-import { sessionFolder } from "./workspace-store.js";
+import { buildTarget, sessionFolder, type BuildTarget } from "./workspace-store.js";
 
 export type RunBridge = Pick<
   FlowdeckBridge,
@@ -83,6 +83,7 @@ export type BuildDialog = {
   branchNameEdited: boolean;
   existingBranch: string | null;
   ignored: readonly IgnoredNode[];
+  target: BuildTarget;
   step: "form" | "confirm";
   error: string | null;
 };
@@ -122,6 +123,17 @@ export type ConfirmingDelete =
 export const losesWork = (question: ConfirmingDelete): boolean =>
   question.kind !== "run" && (question.preview.dirtyWorktree || question.preview.unpushedBranch);
 
+export type DeleteWorktree = { path: string; branch: string; losesWork: boolean };
+
+export const selectDeleteWorktrees = (question: ConfirmingDelete): DeleteWorktree[] =>
+  question.kind === "run"
+    ? []
+    : (question.preview.worktrees ?? []).map(({ path, branch, dirtyWorktree, unpushedBranch }) => ({
+        path,
+        branch,
+        losesWork: dirtyWorktree || unpushedBranch,
+      }));
+
 export type RunState = {
   snapshots: Record<string, RunSnapshot>;
   latestRunId: string | null;
@@ -130,7 +142,7 @@ export type RunState = {
   problems: Problem[] | null;
   buildDialog: BuildDialog | null;
   dialog: RunDialog | null;
-  kept: KeptBuild | null;
+  kept: KeptBuild[] | null;
   cost: { runId: string; report: CostReport } | null;
   pipelines: Record<string, PipelineItem[] | null>;
   selectedStage: Record<string, StageSelection>;
@@ -211,10 +223,18 @@ export const selectExistingBranches = (run: Pick<RunState, "buildDialog">): Exis
   });
 };
 
+const oneSessionTarget: BuildTarget = {
+  repoOverride: true,
+  existingBranch: true,
+  branch: true,
+  sessions: [],
+};
+
 const chosenBranch = (dialog: BuildDialog): RequestBranch | null => {
-  if (dialog.branchMode === "new") {
+  if (dialog.branchMode === "new" || !dialog.target.existingBranch) {
     const name = dialog.branchName;
-    return isValidBranchName(name) ? { mode: "new", name, base: dialog.base } : null;
+    const base = dialog.target.repoOverride ? dialog.base : "";
+    return isValidBranchName(name) ? { mode: "new", name, base } : null;
   }
   const name = dialog.existingBranch;
   const free = name !== null && dialog.branches.includes(name) && !(name in dialog.checkedOut);
@@ -234,11 +254,12 @@ export const selectBuildRefusal = (run: Pick<RunState, "buildDialog">): string |
 export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
   const dialog = run.buildDialog;
   if (dialog === null) return false;
+  const { repoOverride } = dialog.target;
   return (
     dialog.name.trim() !== "" &&
-    dialog.repo !== "" &&
-    (dialog.branchMode === "existing" || dialog.base !== "") &&
-    chosenBranch(dialog) !== null &&
+    (!repoOverride || dialog.repo !== "") &&
+    (!repoOverride || dialog.branchMode === "existing" || dialog.base !== "") &&
+    (!dialog.target.branch || chosenBranch(dialog) !== null) &&
     emptyTextValues(dialog).length === 0
   );
 };
@@ -310,6 +331,9 @@ export const selectKeptNote = (kept: KeptBuild): string => {
       return `The build is deleted. Its folder ${kept.path} is outside FLOWDECK_HOME, so it was left in place.`;
   }
 };
+
+export const selectKeptNotes = ({ kept }: Pick<RunState, "kept">): string[] =>
+  (kept ?? []).map(selectKeptNote);
 
 const defaults = (variables: readonly FoundVariable[]): Record<string, string | boolean> =>
   Object.fromEntries(
@@ -398,12 +422,13 @@ export const createRunStore = ({
 
     const openedVersion = async (
       flowId: string,
-    ): Promise<{ ignored: IgnoredNode[]; buildModel: string }> => {
+    ): Promise<{ ignored: IgnoredNode[]; buildModel: string; target: BuildTarget }> => {
       const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
       const main = flow ? mainFlow(flow) : undefined;
       return {
         ignored: (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
         buildModel: flow?.settings.buildModel ?? "",
+        target: flow ? buildTarget(flow) : oneSessionTarget,
       };
     };
 
@@ -426,6 +451,7 @@ export const createRunStore = ({
     const launch = async (buildId: string): Promise<Step<string | null>> => {
       const choices = runChoicesSchema.safeParse(await bridge.runOptions({ buildId }));
       if (!choices.success) return { ok: false, error: "unexpected run options" };
+      if (choices.data.kind === "error") return { ok: false, error: choices.data.message };
       if (choices.data.automatic) {
         set({ dialog: { buildId } });
         return { ok: true, value: null };
@@ -494,11 +520,9 @@ export const createRunStore = ({
         if (opened === null) return;
         const { flowId, version, buildConfig, variables } = opened;
         const repo = buildConfig.repo ?? "";
-        const [base, { ignored, buildModel }, { branches, checkedOut }] = await Promise.all([
-          startingBase(buildConfig),
-          openedVersion(flowId),
-          repoBranches(repo),
-        ]);
+        const [base, { ignored, buildModel, target }, { branches, checkedOut }] = await Promise.all(
+          [startingBase(buildConfig), openedVersion(flowId), repoBranches(repo)],
+        );
         set({
           error: null,
           buildDialog: {
@@ -517,6 +541,7 @@ export const createRunStore = ({
             branchNameEdited: false,
             existingBranch: null,
             ignored,
+            target,
             step: "form",
             error: null,
           },
@@ -556,13 +581,15 @@ export const createRunStore = ({
       confirmBuild: async () => {
         const dialog = get().buildDialog;
         if (dialog === null || !selectCanBuild(get()) || get().starting) return null;
-        const branch = chosenBranch(dialog);
+        const branch = dialog.target.branch ? chosenBranch(dialog) : undefined;
         if (branch === null) return null;
         if (dialog.step === "form" && dialog.ignored.length > 0) {
           set({ buildDialog: { ...dialog, step: "confirm", error: null } });
           return null;
         }
-        const { flowId, version, name, repo, base, values } = dialog;
+        const { flowId, version, name, values, target } = dialog;
+        const repo = target.repoOverride ? dialog.repo : "";
+        const base = target.repoOverride ? dialog.base : "";
         const buildModel = dialog.buildModel.trim();
         set({ starting: true });
         const refuse = (error: string, problems: Problem[] | null = null) => {
@@ -575,9 +602,9 @@ export const createRunStore = ({
             flowId,
             version,
             name,
-            repo,
+            ...(repo === "" ? {} : { repo }),
             ...(base === "" ? {} : { base }),
-            branch,
+            ...(branch === undefined ? {} : { branch }),
             values,
             ...(buildModel === "" ? {} : { buildModel }),
           });
@@ -623,7 +650,7 @@ export const createRunStore = ({
             return false;
           }
           set({
-            kept: result.kept === undefined ? null : { buildId, ...result.kept },
+            kept: result.kept?.map((kept) => ({ buildId, ...kept })) ?? null,
             error: null,
           });
           return true;

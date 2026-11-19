@@ -1,26 +1,27 @@
 ---
 name: audit-orchestrator
-description: How to check a build's orchestrator skill, plugin/skills/run/SKILL.md, holds up in plain Claude Code where no runner enforces anything - its Agent and Fork steps only hand off, it waits for each result, and states every gate, hard stop and loop cap as a hard rule. Read in step 4 of a Flowdeck build, before editing the orchestrator skill.
+description: How to check a build container's orchestrator skill, plugin/skills/run/SKILL.md in its container folder, holds up in plain Claude Code where no runner enforces anything - its Agent and Fork steps only hand off, it waits for each result, and states every gate, hard stop and loop cap as a hard rule. Read in step 4 of a Flowdeck build, before editing the orchestrator skill.
 ---
 
 # Audit the Orchestrator
 
-Code writes `plugin/skills/run/SKILL.md` from `manifest.json`, run as `/<prefix>:run`, where `<prefix>` is the build name. Outside Flowdeck nothing enforces the flow but this file, so its wording must hold. You may improve the wording. The order never changes.
+Each container has its own orchestrator: code writes `plugin/skills/run/SKILL.md` in the container's folder (`workspace/` or `sessions/<slug>/`) from that container's `nodes` and `wires` in `manifest.json`, run as `/<prefix>:run`, where `<prefix>` is the container's plugin name, `<build>-<slug>`. Audit one orchestrator at a time, against its own container's nodes only. Outside Flowdeck nothing enforces the flow but this file, so its wording must hold. You may improve the wording. The order never changes.
 
 A question is only for a blueprint input: an empty required field or setting, a missing wire (a read with no writer, or a wait that can never end), or nodes that contradict each other. Everything else is decided inside the node's portion, never a question.
 
 ## Checks
 
-1. **Agent and Fork steps only hand off.** An Agent step dispatches its agent, and a Fork step its branch agents, by full name `<prefix>:<piece>`. Neither does that work itself. The other steps (Start, Gate, Ask, Loop, For each, Branch, Join, Hard stop, Stop) are the orchestrator's own: it asks, repeats, picks or stops as the line says.
+1. **Agent and Fork steps only hand off.** An Agent step dispatches its agent, and a Fork step its branch agents, by full name `<prefix>:<piece>`, a piece of the same container. Neither does that work itself. The other steps (Start, Gate, Ask, Loop, For each, Branch, Join, Hard stop, Stop) are the orchestrator's own: it asks, repeats, picks or stops as the line says.
 2. **Right inputs, then wait.** Each dispatch carries that node's prompt as code wrote it (`NODE <nodeId>` and its files), and the step says to wait for the result before going on.
 3. **Hard rules.** Every Gate, Ask, Hard stop and Loop cap reads as a rule that cannot be skipped: what to ask or check, and what to do at the cap or the stop. A flow with none of these nodes gets no such rule.
-4. **Backed by hooks.** Where a guard hook in `plugin/hooks/` already enforces a rule (no force pushes; rules re-sent after compaction), the wording agrees with it.
+4. **Backed by hooks.** Where a guard hook in the container's `plugin/hooks/` already enforces a rule (no force pushes; rules re-sent after compaction), the wording agrees with it.
 
 ## Hard limits
 
-- Keep every step line starting `<n>. NODE <nodeId> `, in the same order, one per node. Never add, remove, merge or move a step.
+- Keep every step line starting `<n>. NODE <nodeId> `, in the same order, one per node of the container. Never add, remove, merge or move a step.
 - Never change a branch target, a loop cap, a gate's question, or a dispatch prompt.
 - Keep the frontmatter and the scope line. Never touch `plugin/hooks/`.
+- Never name a node or piece of another container.
 - A rule the blueprint's nodes do not state is never added and never a question.
 
 ## Checklist

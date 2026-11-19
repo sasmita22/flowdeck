@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { GitFolderState } from "../src/adapters/git/git-state.js";
 import { GitWorktree } from "../src/adapters/git/worktree.js";
@@ -34,6 +34,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { fakeClaudeDispatched, launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 
 const placed = (built: Flow): Flow => ({
   ...built,
@@ -129,7 +130,8 @@ const tmuxAlive = async (name: string) => {
   }
 };
 
-const workFolder = (buildId: string) => join(home, "workspaces", buildId, basename(repo.path));
+const workFolder = (buildId: string) =>
+  sessionWorktree(join(home, "workspaces", buildId), "main", repo.path);
 
 const shownRun = () => {
   const runId = latestRun()?.id;

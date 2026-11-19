@@ -1,10 +1,9 @@
 import type { BuildReport } from "./build-report.js";
 import { canonicalJson } from "./canonical-json.js";
 import { sha256Hex } from "./hash.js";
-import type { BuildFile, Manifest, ManifestNode } from "./lower.js";
+import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { descriptionOf } from "./merge.js";
-import { orchestratorPath } from "./orchestrator.js";
-import { pieceOf } from "./pieces.js";
+import { containerRoot, pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
 
 export const SHARED_PIECE_TOOL = "Skill";
@@ -23,8 +22,18 @@ const manifestPath = "manifest.json";
 
 const kebabCase = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
-export const sharedPath = ({ name, kind }: Pick<Entry, "name" | "kind">): string =>
-  kind === "skill" ? `plugin/skills/${name}/SKILL.md` : `plugin/commands/${name}.md`;
+export const sharedPath = ({ name, kind }: Pick<Entry, "name" | "kind">, root: string): string =>
+  kind === "skill"
+    ? `${root}/plugin/skills/${name}/SKILL.md`
+    : `${root}/plugin/commands/${name}.md`;
+
+export const sharedContainer = (
+  containers: readonly ManifestContainer[],
+  { usedBy }: Pick<Entry, "usedBy">,
+): ManifestContainer | undefined =>
+  containers.find((container) =>
+    usedBy.every((id) => container.nodes.some((node) => node.id === id)),
+  );
 
 const piecesOf = (usedBy: readonly string[], byId: ReadonlyMap<string, ManifestNode>): string[] => [
   ...new Set(usedBy.map((id) => pieceOf(byId.get(id) ?? { id }))),
@@ -59,6 +68,11 @@ const rejection = (
   return undefined;
 };
 
+const acrossContainers = ({ name, kind, usedBy: [first = ""] }: Entry): Question => ({
+  nodeId: first,
+  text: `Shared ${kind} ${name} names agents of more than one container.`,
+});
+
 const draftOf = (entry: Entry, users: readonly string[], prefix: string, scope: string): string => {
   const frontmatter = [
     `name: ${JSON.stringify(entry.name)}`,
@@ -79,31 +93,38 @@ export const applyShared = (
   shared: BuildReport["shared"],
 ): SharedResult => {
   if (shared.length === 0) return { files: [...laidDown], manifest, accepted: [], rejected: [] };
-  const byId = new Map(manifest.nodes.map((node) => [node.id, node]));
-  const taken = new Set([
-    "run",
-    ...manifest.nodes.flatMap((node) => (node.file === undefined ? [] : [pieceOf(node)])),
-  ]);
-  const orchestrator = laidDown.find((file) => file.path === orchestratorPath)?.content ?? "";
-  const parts = scopeOf(descriptionOf(orchestrator));
-  if (parts === undefined) throw new Error("the laid-down orchestrator has no scope line");
-  const prefix = manifest.prefix ?? parts.build;
+  const { containers } = manifest;
+  const nodes = containers.flatMap((container) => container.nodes);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const taken = new Map(
+    containers.map((container) => [
+      container,
+      new Set([
+        "run",
+        ...container.nodes.flatMap((node) => (node.file === undefined ? [] : [pieceOf(node)])),
+      ]),
+    ]),
+  );
+  const contents = new Map(laidDown.map((file) => [file.path, file.content]));
 
   const accepted: Entry[] = [];
   const rejected: Question[] = [];
   const drafts: BuildFile[] = [];
   for (const entry of shared) {
-    const question = rejection(entry, byId, taken);
-    if (question !== undefined) {
-      rejected.push(question);
+    const container = sharedContainer(containers, entry);
+    const names = (container && taken.get(container)) ?? new Set<string>();
+    const question = rejection(entry, byId, names);
+    if (question !== undefined || container === undefined) {
+      rejected.push(question ?? acrossContainers(entry));
       continue;
     }
-    taken.add(entry.name);
+    const parts = scopeOf(descriptionOf(contents.get(container.orchestrator) ?? ""));
+    if (parts === undefined) throw new Error("the laid-down orchestrator has no scope line");
+    names.add(entry.name);
     accepted.push(entry);
-    const users = piecesOf(entry.usedBy, byId);
     drafts.push({
-      path: sharedPath(entry),
-      content: draftOf(entry, users, prefix, scopeLine(parts)),
+      path: sharedPath(entry, containerRoot(container)),
+      content: draftOf(entry, piecesOf(entry.usedBy, byId), container.prefix, scopeLine(parts)),
     });
   }
   if (drafts.length === 0) return { files: [...laidDown], manifest, accepted, rejected };

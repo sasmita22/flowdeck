@@ -24,16 +24,25 @@ export type NewBuild = {
   id: string;
   hash: string;
   name: string;
-  repo: string;
-  base: string;
-  branch: string;
-  branchCreated: boolean;
+  repo: string | null;
+  base: string | null;
+  branch: string | null;
+  branchCreated: boolean | null;
   values: VariableValues;
   dir: string;
   source?: BuildSource;
   files: BuildFileRecord[];
   nodes: BuildNodeRecord[];
   manifest: string;
+};
+
+export type BuildWorktree = {
+  container: string;
+  repo: string;
+  base: string;
+  branch: string;
+  branchCreated: boolean;
+  path: string;
 };
 
 export type BuildRecord = {
@@ -180,6 +189,8 @@ export interface Store {
   findBuildByName(name: string): BuildRecord | undefined;
   deleteBuild(id: string): void;
   listBuilds(): BuildRecord[];
+  addBuildWorktree(buildId: string, worktree: BuildWorktree): void;
+  buildWorktrees(buildId: string): BuildWorktree[];
   buildFiles(id: string): BuildFileRecord[];
   startPendingBuild(build: NewPendingBuild): PendingBuildStart;
   appendBuildEvent(pendingId: string, event: BuildEvent): void;

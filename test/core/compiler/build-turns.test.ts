@@ -2,10 +2,11 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BuildAnswer } from "../../../src/core/compiler/build-report.js";
-import { auditTurn, writeTurn } from "../../../src/core/compiler/build-turns.js";
+import { layDown } from "../../../src/core/compiler/build.js";
+import { auditTurn, pieceKind, writeTurn } from "../../../src/core/compiler/build-turns.js";
 import type { BuildCheckFailure } from "../../../src/core/compiler/check-build.js";
 import type { Manifest, ManifestNode } from "../../../src/core/compiler/lower.js";
-import { agent } from "../../fixtures/flow-builders.js";
+import { agent, twoSessionWorkflow } from "../../fixtures/flow-builders.js";
 
 const kitDir = join(import.meta.dirname, "../../../kit");
 const kitAgents = readdirSync(join(kitDir, "agents")).map((file) => file.replace(/\.md$/, ""));
@@ -26,27 +27,42 @@ const node = (
 const targetRepo = "/repos/carousell-web";
 
 const manifest = (): Manifest => {
+  const nodes = [
+    node(agent("p1"), { file: "sessions/main/plugin/agents/draft-spec.md", piece: "draft-spec" }),
+    node(agent("a1"), { file: "sessions/main/plugin/agents/review.md", piece: "review" }),
+    node(agent("p2"), { file: "sessions/main/plugin/agents/ship.md", piece: "ship" }),
+  ];
   return {
     version: 1,
     prefix: "ship-it",
     kitVersion: "1",
     layout: "workspace",
     session: { name: "main", buildConfig: { repo: targetRepo, base: "main" }, model: "sonnet" },
-    nodes: [
-      node(agent("p1"), { file: "plugin/agents/draft-spec.md", piece: "draft-spec" }),
-      node(agent("a1"), { file: "plugin/agents/review.md", piece: "review" }),
-      node(agent("p2"), { file: "plugin/agents/ship.md", piece: "ship" }),
-    ],
+    nodes,
     wires: [],
+    containers: [
+      {
+        kind: "session",
+        name: "main",
+        slug: "main",
+        prefix: "ship-it",
+        repo: targetRepo,
+        base: "main",
+        model: "sonnet",
+        nodes,
+        wires: [],
+        orchestrator: "sessions/main/plugin/skills/run/SKILL.md",
+      },
+    ],
     files: {},
   };
 };
 
 const allPieces = [
-  "plugin/agents/draft-spec.md",
-  "plugin/agents/review.md",
-  "plugin/templates/spec.md",
-  "CLAUDE.md",
+  "sessions/main/plugin/agents/draft-spec.md",
+  "sessions/main/plugin/agents/review.md",
+  "sessions/main/plugin/templates/spec.md",
+  "sessions/main/CLAUDE.md",
 ];
 
 const pieceLines = (text: string) => text.split("\n").filter((line) => line.startsWith("PIECE "));
@@ -80,40 +96,43 @@ describe("writeTurn", () => {
   });
 
   it.each([
-    ["plugin/agents/review.md", "agent"],
-    ["plugin/agents/draft-spec.md", "agent"],
-    ["plugin/templates/spec.md", "template"],
-    ["CLAUDE.md", "workspace"],
+    ["sessions/main/plugin/agents/review.md", "agent"],
+    ["sessions/main/plugin/agents/draft-spec.md", "agent"],
+    ["sessions/main/plugin/templates/spec.md", "template"],
+    ["sessions/main/CLAUDE.md", "workspace"],
   ])("starts the prompt for %s with its PIECE line, then KIND %s", (path, kind) => {
     const text = writeTurn(manifest(), allPieces, 1);
 
     expect(text).toContain(`PIECE ${path}\nKIND ${kind}\n`);
   });
 
-  it.each(["plugin/skills/repo-conventions/SKILL.md", "plugin/commands/run-checks.md"])(
-    "gives the shared piece %s the KIND shared",
-    (path) => {
-      const text = writeTurn(manifest(), [...allPieces, path], 1);
+  it.each([
+    "sessions/main/plugin/skills/repo-conventions/SKILL.md",
+    "sessions/main/plugin/commands/run-checks.md",
+  ])("gives the shared piece %s the KIND shared", (path) => {
+    const text = writeTurn(manifest(), [...allPieces, path], 1);
 
-      expect(text).toContain(`PIECE ${path}\nKIND shared\n`);
-    },
-  );
+    expect(text).toContain(`PIECE ${path}\nKIND shared\n`);
+  });
 
   it("gives each agent in a shared piece's usedBy a SHARED line naming it, and no other block", () => {
-    const sharedPath = "plugin/skills/run-tests/SKILL.md";
-    const pieces = [...allPieces, "plugin/agents/ship.md", sharedPath];
+    const sharedPath = "sessions/main/plugin/skills/run-tests/SKILL.md";
+    const pieces = [...allPieces, "sessions/main/plugin/agents/ship.md", sharedPath];
     const shared = [{ name: "run-tests", kind: "skill" as const, usedBy: ["p1", "a1"] }];
 
     const text = writeTurn(manifest(), pieces, 1, [], [], shared);
 
-    for (const path of ["plugin/agents/draft-spec.md", "plugin/agents/review.md"]) {
+    for (const path of [
+      "sessions/main/plugin/agents/draft-spec.md",
+      "sessions/main/plugin/agents/review.md",
+    ]) {
       expect(blockOf(text, path), path).toContain("\nSHARED ship-it:run-tests");
     }
     for (const path of [
-      "plugin/agents/ship.md",
+      "sessions/main/plugin/agents/ship.md",
       sharedPath,
-      "plugin/templates/spec.md",
-      "CLAUDE.md",
+      "sessions/main/plugin/templates/spec.md",
+      "sessions/main/CLAUDE.md",
     ]) {
       expect(blockOf(text, path), path).not.toContain("SHARED");
     }
@@ -121,7 +140,11 @@ describe("writeTurn", () => {
   });
 
   it("gives no piece the kind step or script", () => {
-    const text = writeTurn(manifest(), [...allPieces, "plugin/skills/check/SKILL.md"], 1);
+    const text = writeTurn(
+      manifest(),
+      [...allPieces, "sessions/main/plugin/skills/check/SKILL.md"],
+      1,
+    );
 
     expect(text).not.toMatch(/^KIND (step|script)$/m);
   });
@@ -135,16 +158,20 @@ describe("writeTurn", () => {
   });
 
   it("writes only the pieces it is given", () => {
-    const text = writeTurn(manifest(), ["plugin/agents/ship.md"], 1);
+    const text = writeTurn(manifest(), ["sessions/main/plugin/agents/ship.md"], 1);
 
-    expect(pieceLines(text)).toEqual(["PIECE plugin/agents/ship.md"]);
-    expect(text).toContain("PIECE plugin/agents/ship.md\nKIND agent\n");
+    expect(pieceLines(text)).toEqual(["PIECE sessions/main/plugin/agents/ship.md"]);
+    expect(text).toContain("PIECE sessions/main/plugin/agents/ship.md\nKIND agent\n");
   });
 
   const failures: BuildCheckFailure[] = [
-    { file: "plugin/agents/review.md", rule: "unfilled", detail: "an @unfilled line is left" },
     {
-      file: "plugin/agents/draft-spec.md",
+      file: "sessions/main/plugin/agents/review.md",
+      rule: "unfilled",
+      detail: "an @unfilled line is left",
+    },
+    {
+      file: "sessions/main/plugin/agents/draft-spec.md",
       rule: "description",
       detail: "description is under 60 characters",
     },
@@ -160,11 +187,13 @@ describe("writeTurn", () => {
         .find((line) => line.includes(failure.file) && line.includes(failure.rule));
       expect(failureLine, `${failure.file} ${failure.rule}`).toBeDefined();
     }
-    expect(blockOf(text, "plugin/templates/spec.md")).not.toMatch(/unfilled|description/);
+    expect(blockOf(text, "sessions/main/plugin/templates/spec.md")).not.toMatch(
+      /unfilled|description/,
+    );
   });
 
   it("carries a failure on a file that is not a piece, with its rule", () => {
-    const text = writeTurn(manifest(), ["plugin/agents/review.md"], 3, [
+    const text = writeTurn(manifest(), ["sessions/main/plugin/agents/review.md"], 3, [
       { file: "settings.json", rule: "code-owned", detail: "differs from what code wrote" },
     ]);
 
@@ -212,7 +241,7 @@ describe("writeTurn", () => {
   it("puts each answer inside the block of every piece serving its nodes, and every answer in the handoff-auditor's block", () => {
     const [shared, shipOnly] = answers;
     if (shared === undefined || shipOnly === undefined) throw new Error("two answers expected");
-    const pieces = [...allPieces, "plugin/agents/ship.md"];
+    const pieces = [...allPieces, "sessions/main/plugin/agents/ship.md"];
     const text = writeTurn(manifest(), pieces, 1, [], answers);
     const where = (given: BuildAnswer) =>
       pieces.filter((path) => {
@@ -220,10 +249,13 @@ describe("writeTurn", () => {
         return block.includes(given.text) && block.includes(given.answer);
       });
 
-    expect(where(shared)).toEqual(["plugin/agents/draft-spec.md", "plugin/agents/review.md"]);
-    expect(where(shipOnly)).toEqual(["plugin/agents/ship.md"]);
+    expect(where(shared)).toEqual([
+      "sessions/main/plugin/agents/draft-spec.md",
+      "sessions/main/plugin/agents/review.md",
+    ]);
+    expect(where(shipOnly)).toEqual(["sessions/main/plugin/agents/ship.md"]);
 
-    const audit = blockOf(auditTurn(manifest(), answers), "workspace");
+    const audit = blockOf(auditTurn(manifest(), answers), "build");
     for (const given of answers) {
       expect(audit).toContain(given.text);
       expect(audit).toContain(given.answer);
@@ -256,7 +288,7 @@ describe("writeTurn", () => {
   };
 
   it("instructs the session directly under the loose files, outside every piece's block", () => {
-    const pieces = ["plugin/agents/review.md"];
+    const pieces = ["sessions/main/plugin/agents/review.md"];
     const loose: BuildCheckFailure = {
       file: "settings.json",
       rule: "code-owned",
@@ -268,7 +300,7 @@ describe("writeTurn", () => {
     expect(text.split(looseInstruction)).toHaveLength(2);
     inNoBlock(text, pieces, looseInstruction);
     inNoBlock(text, pieces, "settings.json");
-    expect(pieceLines(text)).toEqual(["PIECE plugin/agents/review.md"]);
+    expect(pieceLines(text)).toEqual(["PIECE sessions/main/plugin/agents/review.md"]);
   });
 
   it("gives no loose-files instruction when every failure is on a piece", () => {
@@ -280,7 +312,7 @@ describe("writeTurn", () => {
 
   it.each([
     ["a round", allPieces],
-    ["a rewrite", ["plugin/agents/review.md"]],
+    ["a rewrite", ["sessions/main/plugin/agents/review.md"]],
   ])(
     "in %s, puts an unplaced answer under its section, below the instruction, and in no block",
     (_caller, pieces) => {
@@ -305,7 +337,13 @@ describe("writeTurn", () => {
   );
 
   it("gives no answers instruction when every answer is placed in a piece", () => {
-    const text = writeTurn(manifest(), [...allPieces, "plugin/agents/ship.md"], 1, [], answers);
+    const text = writeTurn(
+      manifest(),
+      [...allPieces, "sessions/main/plugin/agents/ship.md"],
+      1,
+      [],
+      answers,
+    );
 
     expect(text).not.toContain(answersHeading);
     expect(text).not.toContain(answersInstruction);
@@ -313,19 +351,77 @@ describe("writeTurn", () => {
 });
 
 describe("auditTurn", () => {
-  it("asks for one flowdeck-build:handoff-auditor call with PIECE workspace", () => {
+  it("asks for one flowdeck-build:handoff-auditor call with PIECE build", () => {
     const text = auditTurn(manifest());
 
     expect(text).toContain("flowdeck-build:handoff-auditor");
-    expect(pieceLines(text)).toEqual(["PIECE workspace"]);
+    expect(pieceLines(text)).toEqual(["PIECE build"]);
     expect(text).not.toContain("piece-auditor");
   });
 
   it("names the target repo's absolute path in the auditor's prompt", () => {
-    expect(blockOf(auditTurn(manifest()), "workspace")).toContain(`\nREPO ${targetRepo}`);
+    expect(blockOf(auditTurn(manifest()), "build")).toContain(`\nREPO ${targetRepo}`);
   });
 
   it("gives every kit name the flowdeck-build: prefix", () => {
     expectKitNamesPrefixed(auditTurn(manifest()));
   });
+});
+
+describe("build turns per container", () => {
+  const twoSessions = async (): Promise<Manifest> => {
+    const result = await layDown(twoSessionWorkflow(), {
+      home: "/fd-home",
+      workspace: {
+        id: "b-two",
+        name: "ship-it",
+        values: {},
+        repo: "/repos/android",
+        base: "main",
+        branch: "flowdeck/ship-it",
+        branchCreated: true,
+      },
+    });
+    expect(result.ok).toBe(true);
+    const files = result.ok ? result.files : [];
+    return JSON.parse(
+      files.find((file) => file.path === "manifest.json")?.content ?? "{}",
+    ) as Manifest;
+  };
+
+  const paragraphWith = (text: string, line: string): string[] =>
+    text
+      .split("\n\n")
+      .map((paragraph) => paragraph.split("\n"))
+      .find((lines) => lines.includes(line)) ?? [];
+
+  it("gives an ios piece its container, the ios repo and its sessions/ios path", async () => {
+    const piece = "sessions/ios/plugin/agents/plan.md";
+
+    const block = paragraphWith(writeTurn(await twoSessions(), [piece], 1), `PIECE ${piece}`);
+
+    expect(block).toContain("CONTAINER ios");
+    expect(block).toContain("REPO /repos/ios");
+    expect(block.join("\n")).not.toContain("/repos/android");
+  });
+
+  it("gives the hand-off auditor each container with its own repo", async () => {
+    const text = auditTurn(await twoSessions());
+
+    const ios = paragraphWith(text, "CONTAINER ios");
+    const android = paragraphWith(text, "CONTAINER android");
+
+    expect(ios).toContain("REPO /repos/ios");
+    expect(ios.join("\n")).toContain("sessions/ios");
+    expect(ios.join("\n")).not.toContain("/repos/android");
+    expect(android).toContain("REPO /repos/android");
+    expect(android.join("\n")).not.toContain("/repos/ios");
+  });
+
+  it.each(["workspace/CLAUDE.md", "sessions/ios/CLAUDE.md", "sessions/android/CLAUDE.md"])(
+    "treats %s as workspace rules, not an agent",
+    (path) => {
+      expect(pieceKind(path)).toBe("workspace");
+    },
+  );
 });

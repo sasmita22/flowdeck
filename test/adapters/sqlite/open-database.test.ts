@@ -59,6 +59,7 @@ const allMigrations = [
   { name: "021_complete_deletes_and_build_texts.sql" },
   { name: "022_clean_start.sql" },
   { name: "023_containers_clean_start.sql" },
+  { name: "024_build_worktrees_clean_start.sql" },
 ];
 
 const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");
@@ -1002,7 +1003,7 @@ describe("openDatabase", () => {
     it("reports 023 as applied in this open, on a database that existed before it", async () => {
       await seedBefore023();
 
-      const { reports } = openReporting();
+      const { reports } = openReporting(await stage("to-023", "024"));
 
       expect(reports).toEqual([{ applied: ["023_containers_clean_start"], existedBefore: true }]);
     });

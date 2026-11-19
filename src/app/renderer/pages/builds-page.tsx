@@ -16,7 +16,7 @@ import {
   type LibraryState,
 } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
-import { selectKeptNote, selectRunDisabled, selectRunHint, type RunState } from "../run-store.js";
+import { selectKeptNotes, selectRunDisabled, selectRunHint, type RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
 import { BuildTree } from "./build-tree.js";
@@ -463,10 +463,18 @@ export function BuildsPage({
   return (
     <>
       <PageHead title="Builds" nav={nav} searchLabel="Search builds" />
-      {kept !== null && (
-        <p className="fd-page-note" data-testid={pageTestIds.buildKept(kept.buildId)} role="status">
-          {selectKeptNote(kept)}
-        </p>
+      {kept !== null && kept[0] !== undefined && (
+        <div
+          className="fd-page-note"
+          data-testid={pageTestIds.buildKept(kept[0].buildId)}
+          role="status"
+        >
+          {selectKeptNotes({ kept }).map((note) => (
+            <p key={note} style={{ margin: 0 }}>
+              {note}
+            </p>
+          ))}
+        </div>
       )}
       {loaded && cards.length === 0 && buildingCards.length === 0 && (
         <Empty>No builds yet. Build a saved blueprint from its card or from the editor.</Empty>

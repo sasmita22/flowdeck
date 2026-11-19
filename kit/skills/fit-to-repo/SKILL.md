@@ -1,6 +1,6 @@
 ---
 name: fit-to-repo
-description: How to make a general ask fit the target repo - "review code" means the repo's own rules, gates and test types read from its CLAUDE.md and build files, not a generic checklist. Read with the kind skill before writing any piece of a Flowdeck build.
+description: How to make a general ask fit the repo of a piece's container - "review code" means the repo's own rules, gates and test types read from its CLAUDE.md and build files, not a generic checklist. Read with the kind skill before writing any piece of a Flowdeck build.
 ---
 
 # Fit to the Repo
@@ -11,7 +11,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 ## Steps
 
-1. Find the target repo at the absolute path on your prompt's `REPO <path>` line (also `Target repo` in `CLAUDE.md`). Work only from its files, with Read, Grep and Glob.
+1. Find the target repo at the absolute path on your prompt's `REPO <path>` line, the repo of the piece's own container (also `Target repo` in that container's `CLAUDE.md`). Work only from its files, with Read, Grep and Glob. A workspace container has no repo and no `REPO` line: keep the node's own wording.
 2. Read its `CLAUDE.md` (root first, then any nested one on the piece's path) and every guide it names that the piece's job touches.
 3. Read the build files that set its commands: the package manifest, build scripts, task runner and CI config it has.
 4. For each part of the piece that names a rule, a gate, a command or a test type, use the repo's own. Quote commands exactly as the repo writes them. Fit how the node's own job is done in this repo; never add a step, gate or obligation the node's own steps do not call for.
@@ -23,7 +23,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 - Never add a rule the repo does not have. No generic checklist, no rule from memory or from another repo.
 - When the repo is silent on something the node needs, keep the node's own wording; never a question.
-- The target repo is read only.
+- The target repo is read only. Never fit a piece to another container's repo.
 - Run-time facts are never build-time questions: the branch, the diff, git state, script output and which files will exist are settled when the flow runs, so write the piece to handle them then.
 
 ## Checklist

@@ -203,9 +203,11 @@ describe("run controls", () => {
 
     it("lets a run choose only automatic mode, and only for a build with a skippable gate", async () => {
       expect(await call("run-options", { buildId: await builtId(skippableGate()) })).toEqual({
+        kind: "choices",
         automatic: true,
       });
       expect(await call("run-options", { buildId: await builtId(branchOn("deep")) })).toEqual({
+        kind: "choices",
         automatic: false,
       });
     });

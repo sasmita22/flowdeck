@@ -51,7 +51,8 @@ export async function buildOnCanvas(
   await window.getByTestId(controlTestIds.build).click();
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeVisible();
   await window.getByTestId(buildDialogTestIds.name).fill(name);
-  await window.getByTestId(buildDialogTestIds.branchNew).click();
+  const branchNew = window.getByTestId(buildDialogTestIds.branchNew);
+  if ((await branchNew.count()) > 0) await branchNew.click();
   await expect(window.getByTestId(buildDialogTestIds.branchName)).toHaveValue(
     new RegExp(`^flowdeck/${escaped(name)}(-\\d+)?$`),
   );
@@ -64,6 +65,19 @@ export async function buildOnCanvas(
   await expect(window.getByTestId(buildDialogTestIds.dialog)).toBeHidden();
   return waitForBuilt(window, home, name);
 }
+
+export const buildWorktreePaths = (home: string, buildId: string): string[] => {
+  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
+  try {
+    return (
+      db
+        .prepare("SELECT path FROM build_worktrees WHERE build_id = ? ORDER BY id")
+        .all(buildId) as { path: string }[]
+    ).map(({ path }) => path);
+  } finally {
+    db.close();
+  }
+};
 
 export async function waitForBuilt(window: Page, home: string, name: string): Promise<string> {
   const builtSql = "SELECT id FROM builds WHERE name = ? AND deleted_at IS NULL";

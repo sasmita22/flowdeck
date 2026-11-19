@@ -6,7 +6,13 @@ import { applyMerges, type MergeResult } from "../../../src/core/compiler/merge.
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import type { ScopeParts } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  onMainFlow,
+  sessionsWorkflow,
+  thenWire,
+} from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -33,8 +39,8 @@ const reviewers = (): Flow =>
 
 const home = "/fd-home";
 const parts: ScopeParts = {
-  build: "alpha",
-  repo: "carousell-web",
+  build: "alpha-main",
+  repo: "repo",
   workspace: `${home}/workspaces/b-alpha-0001`,
 };
 
@@ -61,8 +67,11 @@ const laid = async (): Promise<{ files: BuildFile[]; manifest: Manifest }> => {
   return { files, manifest };
 };
 
+const nodesOf = (manifest: Manifest): ManifestNode[] =>
+  manifest.containers?.flatMap((container) => container.nodes) ?? [];
+
 const nodeOf = (manifest: Manifest, id: string): ManifestNode => {
-  const node = manifest.nodes.find((candidate) => candidate.id === id);
+  const node = nodesOf(manifest).find((candidate) => candidate.id === id);
   expect(node, id).toBeDefined();
   return node ?? { id, type: "agent", label: "", settings: {} as ManifestNode["settings"] };
 };
@@ -148,9 +157,10 @@ describe("applyMerges", () => {
 
       const { manifest } = applyMerges(before.files, before.manifest, [merge(["a", "b"])]);
 
-      expect(manifest.nodes.map((node) => node.id)).toEqual(
-        before.manifest.nodes.map((node) => node.id),
+      expect(nodesOf(manifest).map((node) => node.id)).toEqual(
+        nodesOf(before.manifest).map((node) => node.id),
       );
+      expect(manifest.nodes).toEqual(manifest.containers?.[1]?.nodes);
       expect(nodeOf(manifest, "b")).toEqual({
         ...nodeOf(before.manifest, "b"),
         piece: shared.piece,
@@ -164,9 +174,12 @@ describe("applyMerges", () => {
 
       const { files, manifest } = applyMerges(before.files, before.manifest, [merge(["a", "b"])]);
 
-      const expected = orchestratorSkill({ ...manifest, prefix: parts.build }, parts).content;
-      expect(expected).not.toBe(contentOf(before.files, orchestratorPath));
-      expect(contentOf(files, orchestratorPath)).toBe(expected);
+      const session = manifest.containers?.find((container) => container.slug === "main");
+      expect(session).toBeDefined();
+      if (session === undefined) return;
+      const expected = orchestratorSkill(session, parts).content;
+      expect(expected).not.toBe(contentOf(before.files, session.orchestrator));
+      expect(contentOf(files, session.orchestrator)).toBe(expected);
     });
 
     it("writes the merged manifest into manifest.json, its file list matching the files", async () => {
@@ -199,7 +212,7 @@ describe("applyMerges", () => {
   it("refuses to merge when the laid-down orchestrator has no scope line", async () => {
     const before = await laid();
     const files = before.files.map((file) =>
-      file.path === orchestratorPath ? { ...file, content: "# run\n" } : file,
+      file.path === orchestratorPath("sessions/main") ? { ...file, content: "# run\n" } : file,
     );
 
     expect(() => applyMerges(files, before.manifest, [merge(["a", "b"])])).toThrow(
@@ -265,5 +278,68 @@ describe("applyMerges", () => {
 
     expectNothingApplied(result, before);
     expect(result.rejected).toEqual([]);
+  });
+});
+
+describe("applyMerges per container", () => {
+  const twoContainers = (): Flow =>
+    sessionsWorkflow([
+      { name: "android", repo: "/repos/android", branch: "main", members: ["Plan", "Plan again"] },
+      { name: "ios", repo: "/repos/ios", branch: "develop", members: ["Plan", "Review"] },
+    ]);
+
+  const laidTwo = async (): Promise<{ files: BuildFile[]; manifest: Manifest }> => {
+    const result = await layDown(twoContainers(), deps);
+    expect(result.ok).toBe(true);
+    const files = result.ok ? result.files : [];
+    const manifest = JSON.parse(
+      files.find((file) => file.path === "manifest.json")?.content ?? "{}",
+    ) as Manifest;
+    return { files, manifest };
+  };
+
+  const orchestrators = [
+    "workspace/plugin/skills/run/SKILL.md",
+    "sessions/android/plugin/skills/run/SKILL.md",
+    "sessions/ios/plugin/skills/run/SKILL.md",
+  ];
+
+  it("never merges identical pieces from two containers", async () => {
+    const { files, manifest } = await laidTwo();
+
+    const result = applyMerges(files, manifest, [
+      { nodeIds: ["session-1-plan", "session-2-plan"], reason: "same job" },
+    ]);
+
+    expect(paths(result.files)).toEqual(
+      expect.arrayContaining([
+        "sessions/android/plugin/agents/plan.md",
+        "sessions/ios/plugin/agents/plan.md",
+      ]),
+    );
+    expect(result.mergedPieces).toEqual([]);
+    for (const path of orchestrators) {
+      expect(contentOf(files, path)).toBeDefined();
+      expect(contentOf(result.files, path)).toBe(contentOf(files, path));
+    }
+  });
+
+  it("merges identical pieces inside one container, rewriting only that container's orchestrator", async () => {
+    const { files, manifest } = await laidTwo();
+    const android = "sessions/android/plugin/skills/run/SKILL.md";
+
+    const result = applyMerges(files, manifest, [
+      { nodeIds: ["session-1-plan", "session-1-plan-again"], reason: "same job" },
+    ]);
+
+    expect(paths(files)).toContain("sessions/android/plugin/agents/plan-again.md");
+    expect(paths(result.files)).not.toContain("sessions/android/plugin/agents/plan-again.md");
+    expect(result.mergedPieces).toHaveLength(1);
+    expect(contentOf(result.files, android)).not.toBe(contentOf(files, android));
+    expect(contentOf(result.files, android)).not.toContain("alpha-android:plan-again");
+    for (const path of orchestrators.filter((candidate) => candidate !== android)) {
+      expect(contentOf(files, path)).toBeDefined();
+      expect(contentOf(result.files, path)).toBe(contentOf(files, path));
+    }
   });
 });

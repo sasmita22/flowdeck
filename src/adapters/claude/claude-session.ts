@@ -20,10 +20,10 @@ export async function openClaudeSession(
     model,
     socketPath,
     cwd,
-    layout,
     hooks,
     attach,
     resume,
+    ...layout
   }: OpenSessionOptions,
   { sessions, claude, sessionId }: { sessions: SessionHost; claude: ClaudeCli; sessionId: string },
 ): Promise<OpenedSession> {
@@ -31,8 +31,12 @@ export async function openClaudeSession(
     throw new SessionGoneError(sessionName);
   }
   const buildFiles =
-    layout === "workspace"
-      ? { settingsPath: "../settings.json", pluginDirs: ["../plugin"], addDir: ".." }
+    layout.layout === "workspace"
+      ? {
+          settingsPath: "../settings.json",
+          pluginDirs: ["../plugin"],
+          addDir: ["..", ...(layout.workspaceFolder === cwd ? [] : [layout.workspaceFolder])],
+        }
       : { settingsPath: join(buildDir, "settings.json"), pluginDirs: [buildDir] };
   let closed = false;
   let started = attach === true;

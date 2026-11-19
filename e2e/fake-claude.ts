@@ -21,7 +21,7 @@ const flag = (name) => { const at = argv.indexOf(name); return at === -1 ? undef
 const sessionId = flag("--session-id") ?? flag("--resume") ?? "";
 const sock = process.env.FLOWDECK_SOCK ?? "";
 const session = sock.slice(sock.lastIndexOf("/") + 1).replace(/\\.sock$/, "");
-const buildSession = argv.filter((arg) => arg === "--plugin-dir").length === 2;
+const buildSession = argv.filter((arg) => arg === "--plugin-dir").length >= 2;
 let typed = "";
 const draw = () =>
   process.stdout.write(
@@ -189,7 +189,7 @@ const writeUsage = () => {
   writeFileSync(resolve(projectsDir, sessionId + ".jsonl"), JSON.stringify(line) + "\\n");
 };
 const innerSpacing = 20;
-const failingPiece = "plugin/agents/s1.md";
+const isFailingPiece = (path) => path.startsWith("sessions/") && path.endsWith("/plugin/agents/s1.md");
 const pieceSteps = (agentType, index, path) => {
   const inner = (toolName, toolInput) => ({
     agent_id: "fake-build-agent-" + index,
@@ -211,7 +211,7 @@ const pieceSteps = (agentType, index, path) => {
       duration_ms: 3,
     },
   ];
-  if (path !== failingPiece) return steps;
+  if (!isFailingPiece(path)) return steps;
   const check = inner("Bash", { command: "npm run check", description: "Check the piece" });
   return [
     ...steps,
@@ -393,6 +393,20 @@ if (process.env.FLOWDECK_BP_SOCK) {
 
 export const fakeClaudeRan = (home: string) => join(home, "fake-claude-bin", "ran");
 
+const fakeShim = (bin: string) =>
+  `exec "${process.execPath}" "${join(bin, "fake-claude.cjs")}" "$@"`;
+
+const writeShim = async (bin: string, body: string) => {
+  await writeFile(join(bin, "claude"), `#!/bin/sh\n${body}\n`);
+  await chmod(join(bin, "claude"), 0o755);
+};
+
+export async function writeFakeClaude(bin: string): Promise<void> {
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
+  await writeShim(bin, fakeShim(bin));
+}
+
 export async function fakeClaudeDispatched(home: string): Promise<string[]> {
   const text = await readFile(join(home, "fake-claude-bin", "dispatched"), "utf8").catch(() => "");
   return text.split("\n").filter((line) => line !== "");
@@ -452,8 +466,7 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     ...launchOptions
   } = options;
   const bin = join(options.home, "fake-claude-bin");
-  await mkdir(bin, { recursive: true });
-  await writeFile(join(bin, "fake-claude.cjs"), fakeClaude);
+  await writeFakeClaude(bin);
   if (pieceMs !== undefined) await writeFile(join(bin, "piece-ms"), String(pieceMs));
   if (unfilledInRound1 !== undefined) await writeFile(join(bin, "unfilled-once"), unfilledInRound1);
   if (question !== undefined) await writeFile(join(bin, "question"), JSON.stringify(question));
@@ -474,17 +487,16 @@ export async function launchWithFakeClaude(options: FakeClaudeLaunchOptions): Pr
     const { model, inputTokens, outputTokens } = usage;
     await writeFile(join(bin, "usage"), JSON.stringify({ model, inputTokens, outputTokens }));
   }
-  const fake = `exec "${process.execPath}" "${join(bin, "fake-claude.cjs")}" "$@"`;
-  const ownClaude =
-    ownBin === undefined
-      ? fake
-      : [
-          'pluginDirs=0; for arg in "$@"; do [ "$arg" = --plugin-dir ] && pluginDirs=$((pluginDirs + 1)); done',
-          `[ "$pluginDirs" = 2 ] && ${fake}`,
-          `exec "${join(ownBin, "claude")}" "$@"`,
-        ].join("\n");
-  await writeFile(join(bin, "claude"), `#!/bin/sh\n${ownClaude}\n`);
-  await chmod(join(bin, "claude"), 0o755);
+  if (ownBin !== undefined) {
+    await writeShim(
+      bin,
+      [
+        'pluginDirs=0; for arg in "$@"; do [ "$arg" = --plugin-dir ] && pluginDirs=$((pluginDirs + 1)); done',
+        `[ "$pluginDirs" -ge 2 ] && ${fakeShim(bin)}`,
+        `exec "${join(ownBin, "claude")}" "$@"`,
+      ].join("\n"),
+    );
+  }
   const path = [bin, ownBin, basePath ?? process.env["PATH"] ?? ""]
     .filter((dir) => dir !== undefined && dir !== "")
     .join(":");

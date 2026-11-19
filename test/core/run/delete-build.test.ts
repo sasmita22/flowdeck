@@ -77,6 +77,15 @@ const namedBuild = (home: string, repo: string, id = buildId): NewBuild => ({
   manifest: "{}",
 });
 
+const worktreeRow = (build: NewBuild, path: string) => ({
+  container: "main",
+  repo: build.repo ?? "",
+  base: build.base ?? "",
+  branch: build.branch ?? "",
+  branchCreated: build.branchCreated ?? true,
+  path,
+});
+
 const runOf = (build: { id: string; dir: string }): NewRun => ({
   buildDir: build.dir,
   inputs: {},
@@ -127,6 +136,7 @@ describe("deleteBuild", () => {
     const store = new FakeStore();
     const build = { ...namedBuild(home, "/work/carousell-web"), ...over };
     store.recordBuild(build);
+    store.addBuildWorktree(build.id, worktreeRow(build, worktreePath));
     const run = store.createRun(runOf(build));
     if (runStatus === "done") store.finishRun(run.id, "done");
     const fs = new FakeFileSystem(seededFiles(run.id));
@@ -310,7 +320,7 @@ describe("deleteBuild", () => {
 
       expect(result).toEqual({
         ok: true,
-        kept: { kind: "branch", branch, reason: "remote-moved", remotes: ["origin"] },
+        kept: [{ kind: "branch", branch, reason: "remote-moved", remotes: ["origin"] }],
       });
       expect(store.findBuild(buildId)).toBeUndefined();
     });
@@ -323,7 +333,7 @@ describe("deleteBuild", () => {
 
       expect(result).toEqual({
         ok: true,
-        kept: { kind: "branch", branch, reason: "remote-delete-failed" },
+        kept: [{ kind: "branch", branch, reason: "remote-delete-failed" }],
       });
       expect(store.findBuild(buildId)).toBeUndefined();
       expect(await fs.exists(sessionFolder)).toBe(false);
@@ -352,7 +362,7 @@ describe("deleteBuild", () => {
 
         const result = await deleteBuild(deps, buildId);
 
-        expect(result).toEqual({ ok: true, kept: { kind: "branch", branch, reason } });
+        expect(result).toEqual({ ok: true, kept: [{ kind: "branch", branch, reason }] });
         expect(worktree.removed).toEqual([
           {
             repo: "/work/carousell-web",
@@ -376,7 +386,7 @@ describe("deleteBuild", () => {
 
         const result = await deleteBuild(deps, buildId);
 
-        expect(result).toEqual({ ok: true, kept: { kind: "worktree", path: worktreePath } });
+        expect(result).toEqual({ ok: true, kept: [{ kind: "worktree", path: worktreePath }] });
         expect(worktree.deletedRemoteBranches).toEqual([]);
         expect(store.findBuild(buildId)).toBeUndefined();
       },
@@ -471,6 +481,7 @@ describe("deleteBuild", () => {
         create: true,
       });
       store.recordBuild(build);
+      store.addBuildWorktree(build.id, worktreeRow(build, worktreePath));
       const finished = store.createRun(runOf(build));
       store.finishRun(finished.id, "done");
       return { build, worktreePath, runId: finished.id };
@@ -564,6 +575,7 @@ describe("deleteBuild", () => {
         create: false,
       });
       store.recordBuild(build);
+      store.addBuildWorktree(build.id, worktreeRow(build, worktreePath));
       const finished = store.createRun(runOf(build));
       store.finishRun(finished.id, "done");
       return { build, worktreePath, runId: finished.id };
@@ -625,7 +637,7 @@ describe("deleteBuild", () => {
 
       const result = await deleteBuild(deps(), "oldhash2");
 
-      expect(result).toEqual({ ok: true, kept: { kind: "folder", path: dir } });
+      expect(result).toEqual({ ok: true, kept: [{ kind: "folder", path: dir }] });
       expect(await readFile(join(dir, "manifest.json"), "utf8")).toBe("{}\n");
       expect(store.findBuild("oldhash2")).toBeUndefined();
     });
@@ -714,7 +726,7 @@ describe("teardownWorkspace", () => {
 
     await teardownWorkspace(deps, {
       dir,
-      worktree: { repo: repo.path, base: "main", branch, create: true, path: worktreePath },
+      worktrees: [{ repo: repo.path, base: "main", branch, create: true, path: worktreePath }],
     });
 
     expect(store.findBuild(buildId)).toBeUndefined();
@@ -753,10 +765,10 @@ describe("teardownWorkspace", () => {
 
       const kept = await teardownWorkspace(
         { worktree: new GitWorktree(), fs },
-        { dir, worktree: runWorktree },
+        { dir, worktrees: [runWorktree] },
       );
 
-      expect(kept).toEqual({ kind: "worktree", path: runWorktree.path });
+      expect(kept).toEqual([{ kind: "worktree", path: runWorktree.path }]);
       expect(await readFile(join(runWorktree.path, "notes.txt"), "utf8")).toBe(
         "work in progress\n",
       );
@@ -773,10 +785,10 @@ describe("teardownWorkspace", () => {
 
     const kept = await teardownWorkspace(
       { worktree: new GitWorktree(), fs },
-      { dir, worktree: runWorktree },
+      { dir, worktrees: [runWorktree] },
     );
 
-    expect(kept).toEqual({ kind: "branch", branch });
+    expect(kept).toEqual([{ kind: "branch", branch }]);
     expect(await branches(repo.path)).toContain(branch);
     expect(await exists(dir)).toBe(false);
   });
@@ -813,9 +825,9 @@ describe("teardownWorkspace on a branch it did not create", () => {
     const hasUnpushed = vi.spyOn(worktree, "hasUnpushed");
     const { dir, runWorktree } = await existingBranchWorkspace(worktree);
 
-    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktree: runWorktree });
+    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktrees: [runWorktree] });
 
-    expect(kept).toBeUndefined();
+    expect(kept).toEqual([]);
     expect(hasUnpushed).not.toHaveBeenCalled();
     expect(worktree.removed).toEqual([runWorktree]);
     expect(worktree.deletedBranches).toEqual([]);
@@ -828,9 +840,9 @@ describe("teardownWorkspace on a branch it did not create", () => {
     const { dir, runWorktree } = await existingBranchWorkspace(worktree);
     await rm(runWorktree.path, { recursive: true, force: true });
 
-    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktree: runWorktree });
+    const kept = await teardownWorkspace({ worktree, fs }, { dir, worktrees: [runWorktree] });
 
-    expect(kept).toBeUndefined();
+    expect(kept).toEqual([]);
     expect(worktree.deletedBranches).toEqual([]);
   });
 
@@ -839,9 +851,12 @@ describe("teardownWorkspace on a branch it did not create", () => {
     const { dir, runWorktree } = await existingBranchWorkspace(worktree);
     const dirty = new FakeWorktree({ dirty: [runWorktree.path] });
 
-    const kept = await teardownWorkspace({ worktree: dirty, fs }, { dir, worktree: runWorktree });
+    const kept = await teardownWorkspace(
+      { worktree: dirty, fs },
+      { dir, worktrees: [runWorktree] },
+    );
 
-    expect(kept).toEqual({ kind: "worktree", path: runWorktree.path });
+    expect(kept).toEqual([{ kind: "worktree", path: runWorktree.path }]);
     expect(dirty.removed).toEqual([]);
     expect(dirty.deletedBranches).toEqual([]);
     expect(await exists(runWorktree.path)).toBe(true);
@@ -869,32 +884,46 @@ describe("deletePreview", () => {
   const worktreePath = `${home}/workspaces/${buildId}/carousell-web`;
   const presentWorktree = () =>
     new FakeFileSystem({ [`${worktreePath}/README.md`]: "# carousell-web" });
+  const storeWith = (row: { branch: string; branchCreated: boolean }) => {
+    const store = new FakeStore();
+    store.addBuildWorktree(buildId, {
+      container: "main",
+      repo: "/work/carousell-web",
+      base: "main",
+      path: worktreePath,
+      ...row,
+    });
+    return store;
+  };
+  const created = () => storeWith({ branch, branchCreated: true });
+  const preview = (dirtyWorktree: boolean, unpushedBranch: boolean, onBranch = branch) => ({
+    dirtyWorktree,
+    unpushedBranch,
+    worktrees: [{ path: worktreePath, branch: onBranch, dirtyWorktree, unpushedBranch }],
+  });
 
   it("reports a dirty present worktree", async () => {
     const worktree = new FakeWorktree({ dirty: [worktreePath] });
 
-    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
-      dirtyWorktree: true,
-      unpushedBranch: false,
-    });
+    expect(
+      await deletePreview({ worktree, fs: presentWorktree(), store: created() }, build()),
+    ).toEqual(preview(true, false));
   });
 
   it("reports a clean present worktree on a branch with nothing unpushed as losing nothing", async () => {
     const worktree = new FakeWorktree();
 
-    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
-      dirtyWorktree: false,
-      unpushedBranch: false,
-    });
+    expect(
+      await deletePreview({ worktree, fs: presentWorktree(), store: created() }, build()),
+    ).toEqual(preview(false, false));
   });
 
   it("reports unpushed commits on a branch Flowdeck made", async () => {
     const worktree = new FakeWorktree({ unpushed: [branch] });
 
-    expect(await deletePreview({ worktree, fs: presentWorktree() }, build())).toEqual({
-      dirtyWorktree: false,
-      unpushedBranch: true,
-    });
+    expect(
+      await deletePreview({ worktree, fs: presentWorktree(), store: created() }, build()),
+    ).toEqual(preview(false, true));
   });
 
   it("never reports unpushed commits on a branch Flowdeck did not make", async () => {
@@ -902,10 +931,14 @@ describe("deletePreview", () => {
 
     expect(
       await deletePreview(
-        { worktree, fs: presentWorktree() },
+        {
+          worktree,
+          fs: presentWorktree(),
+          store: storeWith({ branch: "feat-y", branchCreated: false }),
+        },
         build({ branch: "feat-y", branchCreated: false }),
       ),
-    ).toEqual({ dirtyWorktree: false, unpushedBranch: false });
+    ).toEqual(preview(false, false, "feat-y"));
   });
 
   it("reports nothing for a build with no worktree", async () => {
@@ -913,10 +946,174 @@ describe("deletePreview", () => {
 
     expect(
       await deletePreview(
-        { worktree, fs: new FakeFileSystem() },
+        { worktree, fs: new FakeFileSystem(), store: new FakeStore() },
         build({ name: null, repo: null, base: null, branch: null, branchCreated: null }),
       ),
-    ).toEqual({ dirtyWorktree: false, unpushedBranch: false });
+    ).toEqual({ dirtyWorktree: false, unpushedBranch: false, worktrees: [] });
+  });
+});
+
+describe("a build with a worktree per session container", () => {
+  const home = "/fd-home";
+  const dir = `${home}/workspaces/${buildId}`;
+  const claudeConfig = {
+    projectsDir: "/claude-config/projects",
+    claudeJson: "/claude-config/.claude.json",
+  };
+  const android = {
+    container: "android",
+    repo: "/repos/android",
+    base: "main",
+    branch: "flowdeck/fix-login-android",
+    branchCreated: true,
+    path: `${dir}/sessions/android/android`,
+  };
+  const ios = {
+    container: "ios",
+    repo: "/repos/ios",
+    base: "develop",
+    branch: "flowdeck/fix-login-ios",
+    branchCreated: true,
+    path: `${dir}/sessions/ios/ios`,
+  };
+  const runWorktree = ({ repo, base, branch, branchCreated, path }: typeof android) => ({
+    repo,
+    base,
+    branch,
+    create: branchCreated,
+    path,
+  });
+
+  const seeded = () =>
+    new FakeFileSystem({
+      [`${dir}/manifest.json`]: "{}",
+      [`${dir}/workspace/CLAUDE.md`]: "# workspace",
+      [`${dir}/sessions/android/CLAUDE.md`]: "# android",
+      [`${android.path}/README.md`]: "# android",
+      [`${dir}/sessions/ios/CLAUDE.md`]: "# ios",
+      [`${ios.path}/README.md`]: "# ios",
+      [claudeConfig.claudeJson]: JSON.stringify({
+        projects: {
+          [`${dir}/workspace`]: { trusted: true },
+          [android.path]: { trusted: true },
+          [ios.path]: { trusted: true },
+          "/repos/android": { trusted: true },
+        },
+      }),
+    });
+
+  const setUp = (worktree = new FakeWorktree()) => {
+    const store = new FakeStore();
+    store.recordBuild({
+      ...namedBuild(home, "/repos/android"),
+      repo: null,
+      base: null,
+      branch: null,
+      branchCreated: null,
+    } as unknown as NewBuild);
+    store.addBuildWorktree(buildId, android);
+    store.addBuildWorktree(buildId, ios);
+    const fs = seeded();
+    const deps = {
+      store,
+      worktree,
+      fs,
+      home,
+      pullRequests: new FakePullRequests(),
+      claudeConfig,
+    };
+    return { deps, store, fs, worktree };
+  };
+
+  it("deletes every worktree its rows name, though the build row names no repo, and the build's folder", async () => {
+    const { deps, store, fs, worktree } = setUp();
+
+    const result = await deleteBuild(deps, buildId);
+
+    expect(worktree.removed.map((removed) => removed.path)).toEqual([android.path, ios.path]);
+    expect(worktree.removed).toEqual([
+      expect.objectContaining({ ...runWorktree(android), force: true }),
+      expect.objectContaining({ ...runWorktree(ios), force: true }),
+    ]);
+    expect(result).toEqual({ ok: true });
+    expect(await fs.exists(dir)).toBe(false);
+    expect(store.findBuild(buildId)).toBeUndefined();
+  });
+
+  it("reports every worktree it had to keep", async () => {
+    const { deps } = setUp();
+    vi.spyOn(deps.worktree, "remove").mockResolvedValue({ worktree: "kept", branch: "kept" });
+
+    const result = await deleteBuild(deps, buildId);
+
+    const reported = JSON.stringify(deleteBuildResultSchema.parse(result));
+    expect(reported).toContain(android.path);
+    expect(reported).toContain(ios.path);
+  });
+
+  it("still drops the .claude.json projects of every session folder under the build", async () => {
+    const { deps, fs } = setUp();
+
+    await deleteBuild(deps, buildId);
+
+    expect(JSON.parse(await fs.readFile(claudeConfig.claudeJson))).toEqual({
+      projects: { "/repos/android": { trusted: true } },
+    });
+  });
+
+  it("tears down every worktree and the workspace when none holds work", async () => {
+    const worktree = new FakeWorktree();
+    const fs = seeded();
+
+    await teardownWorkspace(
+      { worktree, fs },
+      { dir, worktrees: [runWorktree(android), runWorktree(ios)] },
+    );
+
+    expect(worktree.removed.map((removed) => removed.path)).toEqual([android.path, ios.path]);
+    expect(await fs.exists(dir)).toBe(false);
+  });
+
+  it.each<[string, string[]]>([
+    ["both", [android.path, ios.path]],
+    ["one", [ios.path]],
+  ])(
+    "keeps every worktree with unchecked work when %s hold it, removing the rest of the build",
+    async (_label, dirty) => {
+      const worktree = new FakeWorktree({ dirty });
+      const fs = seeded();
+
+      await teardownWorkspace(
+        { worktree, fs },
+        { dir, worktrees: [runWorktree(android), runWorktree(ios)] },
+      );
+
+      for (const path of [android.path, ios.path]) {
+        expect(await fs.exists(`${path}/README.md`), path).toBe(dirty.includes(path));
+      }
+      expect(await fs.exists(`${dir}/workspace/CLAUDE.md`)).toBe(false);
+      expect(await fs.exists(`${dir}/sessions/android/CLAUDE.md`)).toBe(false);
+      expect(await fs.exists(`${dir}/sessions/ios/CLAUDE.md`)).toBe(false);
+    },
+  );
+
+  it("previews each worktree's dirty and unpushed state from its rows", async () => {
+    const { store, fs } = setUp();
+    const worktree = new FakeWorktree({ dirty: [android.path], unpushed: [ios.branch] });
+
+    const recorded = store.findBuild(buildId);
+    if (recorded === undefined) throw new Error("build not recorded");
+
+    const preview = await deletePreview({ worktree, fs, store }, recorded);
+
+    expect(preview).toEqual({
+      dirtyWorktree: true,
+      unpushedBranch: true,
+      worktrees: [
+        { path: android.path, branch: android.branch, dirtyWorktree: true, unpushedBranch: false },
+        { path: ios.path, branch: ios.branch, dirtyWorktree: false, unpushedBranch: true },
+      ],
+    });
   });
 });
 
@@ -961,16 +1158,21 @@ describe("deleteBuildResultSchema", () => {
   it("reads each kept kind, a plain delete and a refusal", () => {
     const results = [
       { ok: true },
-      { ok: true, kept: { kind: "worktree", path: "/w" } },
-      { ok: true, kept: { kind: "branch", branch: "flowdeck/b" } },
-      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "open-pr" } },
-      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "pr-unknown" } },
+      { ok: true, kept: [{ kind: "worktree", path: "/w" }] },
+      { ok: true, kept: [{ kind: "branch", branch: "flowdeck/b" }] },
+      { ok: true, kept: [{ kind: "branch", branch: "flowdeck/b", reason: "open-pr" }] },
+      { ok: true, kept: [{ kind: "branch", branch: "flowdeck/b", reason: "pr-unknown" }] },
       {
         ok: true,
-        kept: { kind: "branch", branch: "flowdeck/b", reason: "remote-moved", remotes: ["origin"] },
+        kept: [
+          { kind: "branch", branch: "flowdeck/b", reason: "remote-moved", remotes: ["origin"] },
+        ],
       },
-      { ok: true, kept: { kind: "branch", branch: "flowdeck/b", reason: "remote-delete-failed" } },
-      { ok: true, kept: { kind: "folder", path: "/f" } },
+      {
+        ok: true,
+        kept: [{ kind: "branch", branch: "flowdeck/b", reason: "remote-delete-failed" }],
+      },
+      { ok: true, kept: [{ kind: "folder", path: "/f" }] },
       { ok: false, message: "no" },
     ];
 
@@ -979,7 +1181,7 @@ describe("deleteBuildResultSchema", () => {
 
   it("rejects a kept thing of an unknown kind", () => {
     expect(
-      deleteBuildResultSchema.safeParse({ ok: true, kept: { kind: "tag", path: "/t" } }).success,
+      deleteBuildResultSchema.safeParse({ ok: true, kept: [{ kind: "tag", path: "/t" }] }).success,
     ).toBe(false);
   });
 });

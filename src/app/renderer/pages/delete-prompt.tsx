@@ -5,7 +5,12 @@ import type { Actions } from "../actions.js";
 import type { BuildProgressState } from "../build-progress-store.js";
 import type { LibraryState } from "../library-store.js";
 import type { NavState } from "../nav-store.js";
-import { losesWork, type ConfirmingDelete, type RunState } from "../run-store.js";
+import {
+  losesWork,
+  selectDeleteWorktrees,
+  type ConfirmingDelete,
+  type RunState,
+} from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 
 const questionText = (question: ConfirmingDelete, name: string) =>
@@ -40,6 +45,7 @@ export function DeletePrompt({
   const [busy, setBusy] = useState(false);
   if (question === null) return null;
   const { cancelDelete } = run.getState();
+  const worktrees = selectDeleteWorktrees(question);
 
   const confirm = async () => {
     setBusy(true);
@@ -66,6 +72,19 @@ export function DeletePrompt({
         data-testid={pageTestIds.deletePrompt}
       >
         <p id="delete-prompt-text">{questionText(question, pendingName ?? name ?? question.id)}</p>
+        {worktrees.length > 0 && (
+          <ul
+            data-testid={pageTestIds.deletePromptWorktrees}
+            style={{ margin: 0, paddingLeft: 20 }}
+          >
+            {worktrees.map((worktree) => (
+              <li key={worktree.path} data-testid={pageTestIds.deletePromptWorktree(worktree.path)}>
+                {worktree.branch} at {worktree.path}
+                {worktree.losesWork && " (has work that is not committed or not pushed)"}
+              </li>
+            ))}
+          </ul>
+        )}
         {losesWork(question) && (
           <p className="fd-dialog-warning" data-testid={pageTestIds.deletePromptWarning}>
             Work that is not committed or not pushed will be lost.

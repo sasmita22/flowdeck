@@ -1,8 +1,8 @@
-import { join } from "node:path";
 import { reportOf } from "../../core/run/activity.js";
 import { agentCallOf, type AgentCall } from "../../core/run/agent-calls.js";
 import { runSocketPath } from "../../core/run/execute.js";
 import { turnFailure } from "../../core/run/turns.js";
+import { sessionFolder, workspaceFolder } from "../../core/run/workspace.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
@@ -75,6 +75,7 @@ export class ClaudeBuildAgents implements BuildAgents {
     sessionName,
     claudeSessionId: sessionId,
     workspaceDir,
+    sessionSlugs,
     kitDir,
     settingsPath,
     model,
@@ -96,7 +97,11 @@ export class ClaudeBuildAgents implements BuildAgents {
       { sessionId, ...(model === undefined ? {} : { model }) },
       {
         settingsPath,
-        pluginDirs: [join(workspaceDir, "plugin"), kitDir],
+        pluginDirs: [
+          `${workspaceFolder(workspaceDir)}/plugin`,
+          ...sessionSlugs.map((slug) => `${sessionFolder(workspaceDir, slug)}/plugin`),
+          kitDir,
+        ],
         env: {
           ...env,
           FLOWDECK_SOCK: socket.path,

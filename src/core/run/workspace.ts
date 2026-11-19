@@ -11,20 +11,9 @@ export type WorktreeRemoval = { worktree: "removed" | "kept"; branch: "removed" 
 export const repoFolder = (repo: string): string =>
   repo.replace(/\/+$/, "").split("/").at(-1) ?? repo;
 
-export const worktreePath = (dir: string, repo: string): string => `${dir}/${repoFolder(repo)}`;
+export const workspaceFolder = (dir: string): string => `${dir}/workspace`;
 
-export const buildWorktree = ({
-  repo,
-  dir,
-  branch,
-  create,
-}: {
-  repo: string;
-  dir: string;
-  branch: string;
-  create: boolean;
-}): Pick<RunWorktree, "branch" | "create" | "path"> => ({
-  branch,
-  create,
-  path: worktreePath(dir, repo),
-});
+export const sessionFolder = (dir: string, slug: string): string => `${dir}/sessions/${slug}`;
+
+export const sessionWorktree = (dir: string, slug: string, repo: string): string =>
+  `${sessionFolder(dir, slug)}/${repoFolder(repo)}`;

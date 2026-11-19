@@ -32,7 +32,13 @@ import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
-import { agent, gate, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  onMainFlow,
+  thenWire,
+  twoSessionWorkflow,
+} from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const fs = new NodeFileSystem();
@@ -44,7 +50,7 @@ const approve: WaitReply = { decision: "approve" };
 const manifestWith = (types: string[]) =>
   ({
     nodes: types.map((type, index) => ({ id: `n${index}`, type })),
-  }) as unknown as Manifest & { hash: string };
+  }) as unknown as Required<Pick<Manifest, "nodes">>;
 
 const buildId = "b1111111-0000-4000-8000-000000000001";
 
@@ -159,12 +165,38 @@ describe("the core run path", () => {
       expect(result.build.hash).toBe(store.findBuild(buildId)?.hash);
     });
 
-    it("takes the prefix from the manifest, and gives a workspace build its worktree", async () => {
+    it("takes the prefix and layout from the manifest", async () => {
       const build = await loaded();
 
-      expect(build.prefix).toBe("fix-login");
+      expect(build.prefix).toBe("fix-login-main");
       expect(build.layout).toBe("workspace");
-      expect(build.worktree).toBe(join(dir, "repo"));
+    });
+
+    it("gives a one-session build the worktree in its session's folder", async () => {
+      expect((await loaded()).worktree).toBe(join(dir, "sessions", "main", "repo"));
+    });
+
+    it("refuses a build with two session containers, saying several sessions cannot run yet", async () => {
+      const twoSessions = await build(twoSessionWorkflow(), {
+        fs,
+        home,
+        workspace: {
+          id: "two-sessions",
+          name: "two-sessions",
+          repo: "/repos/android",
+          base: "main",
+          branch: "flowdeck/two-sessions",
+          branchCreated: true,
+          values: {},
+        },
+      });
+      if (!twoSessions.ok) throw new Error("build failed");
+      store.recordBuild(twoSessions.record);
+
+      expect(await loadBuild("two-sessions", { fs, store })).toEqual({
+        kind: "error",
+        message: "Running several sessions is not supported yet.",
+      });
     });
 
     it("keeps each node's piece and the kit version a build was made with", async () => {
@@ -173,9 +205,10 @@ describe("the core run path", () => {
         base: "main",
         branch: "flowdeck/fix-login",
         branchCreated: true,
+        workspace: dir,
       }).map((file) => {
         if (file.path !== "manifest.json") return file;
-        const manifest = JSON.parse(file.content) as Manifest;
+        const manifest = JSON.parse(file.content) as Required<Manifest>;
         const nodes = manifest.nodes.map((node) => ({ ...node, piece: `piece-${node.id}` }));
         return {
           ...file,
@@ -221,7 +254,8 @@ describe("the core run path", () => {
     });
 
     it("refuses a build with a changed file, naming the file", async () => {
-      const files = (await fs.list(join(dir, "plugin"))).map((path) => `plugin/${path}`);
+      const plugin = "sessions/main/plugin";
+      const files = (await fs.list(join(dir, plugin))).map((path) => `${plugin}/${path}`);
       const changed = files[0];
       if (changed === undefined) throw new Error("the build has no plugin file");
       await writeFile(join(dir, changed), "tampered\n");
@@ -241,19 +275,6 @@ describe("the core run path", () => {
         kind: "error",
         message: "manifest.json: changed",
       });
-    });
-
-    it("loads an old hash-named build from its flat folder, with the hash as its prefix", async () => {
-      const { hash, legacyDir } = await legacyBuild();
-
-      const result = await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) });
-
-      expect(result.kind).toBe("loaded");
-      if (result.kind !== "loaded") return;
-      expect(result.build.hash).toBe(hash);
-      expect(result.build.prefix).toBe(hash);
-      expect(result.build.layout).toBe("legacy");
-      expect(result.build.worktree).toBeUndefined();
     });
 
     it("still names any file an old build did not write, anywhere in its folder", async () => {
@@ -280,6 +301,7 @@ describe("the core run path", () => {
         base: "main",
         branch: "flowdeck/fix-login",
         branchCreated: true,
+        workspace: dir,
       });
       const hash = hashBuild(files.filter((file) => file.path !== reportPath));
       const brokenDir = join(home, "workspaces", "broken");
@@ -421,7 +443,7 @@ describe("the core run path", () => {
       const withCondition = (condition: string) =>
         ({
           nodes: [{ id: "h", type: "hardstop", settings: { condition } }],
-        }) as unknown as Manifest & { hash: string };
+        }) as unknown as Required<Pick<Manifest, "nodes">>;
 
       expect(needsClaude(withCondition("tests fail"))).toBe(true);
       expect(needsClaude(withCondition(" "))).toBe(false);
@@ -893,7 +915,7 @@ describe("AT-19: a build that named no pieces", () => {
     if (!laid.ok) throw new Error("build failed");
     const unnamed = laid.files.map((file) => {
       if (file.path !== "manifest.json") return file;
-      const manifest = JSON.parse(file.content) as Manifest;
+      const manifest = JSON.parse(file.content) as Required<Manifest>;
       for (const node of manifest.nodes) delete node.piece;
       return { ...file, content: canonicalJson(manifest) };
     });
@@ -918,13 +940,13 @@ describe("AT-19: a build that named no pieces", () => {
     const turns = [
       {
         userText:
-          'Use the Agent tool with subagent_type "fix-login:p1" and the prompt "Go". Then reply DONE.',
+          'Use the Agent tool with subagent_type "fix-login-main:p1" and the prompt "Go". Then reply DONE.',
         ended: true,
         lastAssistantText: "DONE",
       },
       {
         userText:
-          'Use the Agent tool with subagent_type "fix-login:a1" and the prompt "Go". Then reply DONE.',
+          'Use the Agent tool with subagent_type "fix-login-main:a1" and the prompt "Go". Then reply DONE.',
         ended: true,
         lastAssistantText: "DONE",
       },
@@ -940,7 +962,7 @@ describe("AT-19: a build that named no pieces", () => {
       cacheReadTokens: 0,
       ...(agentType === undefined ? {} : { agentType }),
     });
-    usage.setEntries(claudeSessionId, [spend("sub_a1", "fix-login:a1"), spend("main_p2")]);
+    usage.setEntries(claudeSessionId, [spend("sub_a1", "fix-login-main:a1"), spend("main_p2")]);
     const events = new FakeEventSource();
     const sends: string[] = [];
 
@@ -976,12 +998,12 @@ describe("AT-19: a build that named no pieces", () => {
                 sessionId: claudeSessionId,
                 payload: {
                   tool_name: "Agent",
-                  tool_input: { subagent_type: "fix-login:p2", prompt: "NODE p2\nGo" },
+                  tool_input: { subagent_type: "fix-login-main:p2", prompt: "NODE p2\nGo" },
                   tool_use_id: "toolu-p2",
                   tool_response: {
                     status: "completed",
                     agentId: "agent-p2",
-                    agentType: "fix-login:p2",
+                    agentType: "fix-login-main:p2",
                     content: [],
                   },
                 },
@@ -995,7 +1017,9 @@ describe("AT-19: a build that named no pieces", () => {
     );
 
     expect(code).toBe(0);
-    expect(sends).toEqual([agentTurnText("fix-login", "p2", { id: "p2", given: [], writes: [] })]);
+    expect(sends).toEqual([
+      agentTurnText("fix-login-main", "p2", { id: "p2", given: [], writes: [] }),
+    ]);
     expect(store.findRun(runId)?.status).toBe("done");
     const charged = Object.fromEntries(
       store

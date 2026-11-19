@@ -7,7 +7,7 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { frontmatter } from "../../fixtures/frontmatter.js";
-import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, onMainFlow, thenWire, withSession } from "../../fixtures/flow-builders.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -53,16 +53,21 @@ const depsOf = (named: Named): LayDownDeps => ({
   },
 });
 
+const root = "sessions/main";
+const prefixOf = (named: Named, path: string) =>
+  path.startsWith("workspace/") ? `${named.name}-workspace` : `${named.name}-main`;
+
 const laidDown = async (named: Named): Promise<BuildFile[]> => {
-  const result = await layDown(sample(), depsOf(named));
+  const result = await layDown(withSession(sample(), { repo: named.repo }), depsOf(named));
   expect(result.ok).toBe(true);
   const files = result.ok ? result.files : [];
-  expect(files.map((file) => file.path)).toContain(orchestratorPath);
+  expect(files.map((file) => file.path)).toContain(orchestratorPath(root));
   return files;
 };
 
 const isPieceFile = (path: string) =>
-  /^plugin\/agents\/[^/]+\.md$/.test(path) || /^plugin\/skills\/[^/]+\/SKILL\.md$/.test(path);
+  /^sessions\/main\/plugin\/agents\/[^/]+\.md$/.test(path) ||
+  /^sessions\/main\/plugin\/skills\/[^/]+\/SKILL\.md$/.test(path);
 
 const pieceFiles = (files: readonly BuildFile[]) => files.filter((file) => isPieceFile(file.path));
 
@@ -126,16 +131,16 @@ describe("layDown", () => {
       async (named) => {
         const files = pieceFiles(await laidDown(named));
         const line = scopeLine({
-          build: named.name,
+          build: `${named.name}-main`,
           repo: named.folder,
           workspace: workspaceDir(named),
         });
 
         expect(files.map((file) => file.path).sort()).toEqual([
-          "plugin/agents/draft-the-spec.md",
-          "plugin/agents/review-the-draft.md",
-          "plugin/agents/ship-it.md",
-          "plugin/skills/run/SKILL.md",
+          "sessions/main/plugin/agents/draft-the-spec.md",
+          "sessions/main/plugin/agents/review-the-draft.md",
+          "sessions/main/plugin/agents/ship-it.md",
+          "sessions/main/plugin/skills/run/SKILL.md",
         ]);
         for (const file of files) {
           const description = String(frontmatter(file.content).description);
@@ -147,14 +152,18 @@ describe("layDown", () => {
 
   describe("AT-17: every reference stays inside the build", () => {
     it.each([alpha, beta])(
-      "writes every <name>:<piece> reference with the prefix $name",
+      "writes every <name>:<piece> reference with the prefix of $name's container that holds it",
       async (named) => {
-        const found = (await laidDown(named)).flatMap((file) => references(file.content));
+        const found = (await laidDown(named)).flatMap((file) =>
+          references(file.content).map((reference) => ({ ...reference, path: file.path })),
+        );
 
         expect(found).toEqual(
-          expect.arrayContaining([{ prefix: named.name, piece: "review-the-draft" }]),
+          expect.arrayContaining([
+            expect.objectContaining({ prefix: `${named.name}-main`, piece: "review-the-draft" }),
+          ]),
         );
-        expect(found.filter(({ prefix }) => prefix !== named.name)).toEqual([]);
+        expect(found.filter(({ prefix, path }) => prefix !== prefixOf(named, path))).toEqual([]);
       },
     );
 
@@ -166,7 +175,7 @@ describe("layDown", () => {
       for (const file of files) {
         for (const piece of pieces) {
           const left = file.content
-            .replaceAll(`alpha:${piece}`, "")
+            .replaceAll(`alpha-main:${piece}`, "")
             .replaceAll(`name: ${JSON.stringify(piece)}\n`, "")
             .replaceAll(`skills/${piece}/`, "")
             .replaceAll(`agents/${piece}.md`, "");

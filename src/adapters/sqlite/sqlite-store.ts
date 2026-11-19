@@ -29,6 +29,7 @@ import type {
   BuildFileRecord,
   BuildRecord,
   BuildSnapshot,
+  BuildWorktree,
   EventEntry,
   ManifestGap,
   NewBuild,
@@ -51,6 +52,8 @@ import { openDatabase } from "./open-database.js";
 export type SqliteStoreOptions =
   | { db: Database.Database; now?: () => Date }
   | { path: string; now?: () => Date; migrationsDir?: string };
+
+type BuildWorktreeRow = Omit<BuildWorktree, "branchCreated"> & { branch_created: number };
 
 type RunRow = {
   id: string;
@@ -692,7 +695,7 @@ export class SqliteStore implements Store {
           build.repo,
           build.base,
           build.branch,
-          build.branchCreated ? 1 : 0,
+          build.branchCreated === null ? null : build.branchCreated ? 1 : 0,
           JSON.stringify(build.values),
           build.dir,
           this.now().getTime(),
@@ -729,12 +732,41 @@ export class SqliteStore implements Store {
         this.db.prepare(`DELETE FROM ${table} WHERE build_id = ?`).run(id);
       }
       this.db.prepare("DELETE FROM run_number_counters WHERE build_id = ?").run(id);
+      this.db.prepare("DELETE FROM build_worktrees WHERE build_id = ?").run(id);
       this.db.prepare("DELETE FROM builds WHERE id = ?").run(id);
     })();
   }
 
   listBuilds(): BuildRecord[] {
     return this.selectBuilds("WHERE builds.deleted_at IS NULL");
+  }
+
+  addBuildWorktree(buildId: string, worktree: BuildWorktree): void {
+    this.db
+      .prepare(
+        "INSERT INTO build_worktrees (build_id, container, repo, base, branch, branch_created, path) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        buildId,
+        worktree.container,
+        worktree.repo,
+        worktree.base,
+        worktree.branch,
+        worktree.branchCreated ? 1 : 0,
+        worktree.path,
+      );
+  }
+
+  buildWorktrees(buildId: string): BuildWorktree[] {
+    const rows = this.db
+      .prepare(
+        "SELECT container, repo, base, branch, branch_created, path FROM build_worktrees WHERE build_id = ? ORDER BY id",
+      )
+      .all(buildId) as BuildWorktreeRow[];
+    return rows.map(({ branch_created, ...row }) => ({
+      ...row,
+      branchCreated: branch_created === 1,
+    }));
   }
 
   private selectBuilds(where: string): BuildRecord[] {
@@ -983,6 +1015,15 @@ export class SqliteStore implements Store {
     const older = this.db.prepare(olderAttemptsOf).pluck().all(JSON.stringify(ids)) as string[];
     const gone = JSON.stringify([...ids, ...older]);
     const goneIds = "SELECT value FROM json_each(?)";
+    this.db
+      .prepare(
+        `DELETE FROM build_worktrees WHERE build_id IN (
+           SELECT (SELECT json_extract(body_json, '$.buildId') FROM build_events
+                    WHERE pending_id = gone.value AND json_extract(body_json, '$.type') = 'session'
+                    ORDER BY seq DESC LIMIT 1)
+             FROM json_each(?) AS gone)`,
+      )
+      .run(gone);
     for (const table of ["build_activity", "build_events", "build_step_texts"]) {
       this.db.prepare(`DELETE FROM ${table} WHERE pending_id IN (${goneIds})`).run(gone);
     }

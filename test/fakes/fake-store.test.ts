@@ -407,6 +407,80 @@ describe("FakeStore", () => {
     });
   });
 
+  describe("build worktrees", () => {
+    const android = {
+      container: "android",
+      repo: "/repos/android",
+      base: "main",
+      branch: "fix-login-android",
+      branchCreated: true,
+      path: "/fd/workspaces/b1/sessions/android/android",
+    };
+    const ios = {
+      container: "ios",
+      repo: "/repos/ios",
+      base: "develop",
+      branch: "fix-login-ios",
+      branchCreated: true,
+      path: "/fd/workspaces/b1/sessions/ios/ios",
+    };
+    const existingBranch = {
+      container: "main",
+      repo: "/repo",
+      base: "main",
+      branch: "feature/signup",
+      branchCreated: false,
+      path: "/fd/workspaces/b2/sessions/main/repo",
+    };
+
+    it("lists every worktree added for a build, in the order added", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+
+      expect(store.buildWorktrees("b1")).toEqual([android, ios]);
+    });
+
+    it("removes a build's worktrees with the build, keeping another build's", () => {
+      const store = new FakeStore();
+      store.recordBuild(build("b1"));
+      store.recordBuild(build("b2"));
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+      store.addBuildWorktree("b2", existingBranch);
+
+      store.deleteBuild("b1");
+
+      expect(store.buildWorktrees("b1")).toEqual([]);
+      expect(store.buildWorktrees("b2")).toEqual([existingBranch]);
+    });
+
+    it("removes the worktrees of a build that was never recorded when its pending build is deleted, keeping another build's", () => {
+      const store = new FakeStore();
+      store.addBuildWorktree("b2", existingBranch);
+      const gone = startedId(store, pending("flow-1", "nightly"));
+      store.appendBuildEvent(gone, {
+        type: "session",
+        name: "fd-build-nightly",
+        claudeSessionId: "claude-1",
+        buildId: "b1",
+        repo: "",
+        base: "",
+        values: {},
+      });
+      store.addBuildWorktree("b1", android);
+      store.addBuildWorktree("b1", ios);
+      store.endPendingBuild(gone, { outcome: "failed", endedAt: 2_000 });
+
+      store.deletePendingBuild(gone);
+
+      expect(store.buildWorktrees("b1")).toEqual([]);
+      expect(store.buildWorktrees("b2")).toEqual([existingBranch]);
+    });
+  });
+
   describe("build manifests", () => {
     const beforeManifests = (id: string, files = lockedBeforeManifests(id).files) => ({
       ...lockedBeforeManifests(id),

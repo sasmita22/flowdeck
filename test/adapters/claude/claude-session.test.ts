@@ -7,7 +7,8 @@ import {
 } from "../../../src/adapters/claude/claude-session.js";
 import { layDown, workspaceDir } from "../../../src/core/compiler/build.js";
 import { legacyBranchName } from "../../../src/core/run/branch-name.js";
-import { buildWorktree } from "../../../src/core/run/workspace.js";
+import { containerPrefix } from "../../../src/core/compiler/pieces.js";
+import { sessionFolder, sessionWorktree } from "../../../src/core/run/workspace.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
 import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
@@ -29,6 +30,7 @@ const workspace = {
   buildDir: "/fd/workspaces/b1",
   cwd: "/fd/workspaces/b1/carousell-web",
   layout: "workspace" as const,
+  workspaceFolder: "/fd/workspaces/b1/workspace",
 };
 
 class SlowStartHost extends FakeSessionHost {
@@ -195,8 +197,41 @@ describe("openClaudeSession", () => {
       expect(command).toContain(" --add-dir '..'");
       expect(command).toContain(" --settings '../settings.json'");
       expect(command).toContain(" --plugin-dir '../plugin'");
-      expect(command).not.toContain("/fd/workspaces/b1");
+      expect(command).not.toMatch(/'\/fd\/workspaces\/b1\/(settings\.json|plugin)'/);
       await session.stop();
+    });
+
+    describe("in the container layout", () => {
+      const dir = "/fd/workspaces/b1";
+      const startCommand = async (cwd: string) => {
+        const sessions = new SlowStartHost();
+        const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+        const opened = openClaudeSession(
+          { ...workspace, buildDir: dir, cwd, workspaceFolder: `${dir}/workspace` },
+          { sessions, claude, sessionId: "s1" },
+        );
+        sessions.finishStart();
+        const session = await opened;
+        await session.session.ensureStarted();
+        const command = sessions.get("fd-run")?.command ?? "";
+        await session.stop();
+        expect(command).toContain(" claude --session-id s1");
+        return command;
+      };
+
+      it("starts a session container reading its own folder and the workspace", async () => {
+        const command = await startCommand(`${dir}/sessions/web/carousell-web`);
+
+        expect(command).toContain(" --settings '../settings.json'");
+        expect(command).toContain(" --plugin-dir '../plugin'");
+        expect(command).toContain(" --add-dir '..' --add-dir '/fd/workspaces/b1/workspace'");
+      });
+
+      it("adds no workspace folder when starting the workspace container", async () => {
+        const command = await startCommand(`${dir}/workspace`);
+
+        expect(command).not.toContain("--add-dir '/fd/workspaces/b1/workspace'");
+      });
     });
 
     it("keeps the workspace flags when it resumes the conversation", async () => {
@@ -238,11 +273,17 @@ describe("openClaudeSession", () => {
       });
       if (!laidDown.ok) throw new Error(JSON.stringify(laidDown.errors));
       const dir = workspaceDir(home, build.id);
-      const cwd = buildWorktree({ repo, dir, branch, create: true }).path;
+      const cwd = sessionWorktree(dir, "main", repo);
       const sessions = new SlowStartHost();
       const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
       const opened = await openClaudeSession(
-        { ...workspace, sessionName: `fd-run-${build.name}`, buildDir: dir, cwd },
+        {
+          ...workspace,
+          sessionName: `fd-run-${build.name}`,
+          buildDir: dir,
+          cwd,
+          workspaceFolder: `${dir}/workspace`,
+        },
         { sessions, claude, sessionId: "s1" },
       );
       sessions.finishStart();
@@ -261,7 +302,7 @@ describe("openClaudeSession", () => {
         const { dir, cwd, command } = await launch(build);
 
         expect(pluginDirs(command)).toEqual(["../plugin"]);
-        expect(resolve(cwd, "../plugin")).toBe(`${dir}/plugin`);
+        expect(resolve(cwd, "../plugin")).toBe(`${sessionFolder(dir, "main")}/plugin`);
       }
     });
 
@@ -272,7 +313,7 @@ describe("openClaudeSession", () => {
         const manifest = files.get(resolve(cwd, pluginDir ?? "", ".claude-plugin/plugin.json"));
 
         expect(manifest).toBeDefined();
-        expect(JSON.parse(manifest ?? "{}")).toEqual({ name: build.name });
+        expect(JSON.parse(manifest ?? "{}")).toEqual({ name: containerPrefix(build.name, "main") });
       }
     });
 

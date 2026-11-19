@@ -1,9 +1,13 @@
 import { z } from "zod";
-import type { Manifest } from "../compiler/lower.js";
+import type { Manifest, ManifestNode } from "../compiler/lower.js";
 
-export type RunChoices = { automatic: boolean };
+export type RunChoices =
+  { kind: "choices"; automatic: boolean } | { kind: "error"; message: string };
 
-export const runChoicesSchema = z.object({ automatic: z.boolean() });
+export const runChoicesSchema: z.ZodType<RunChoices> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("choices"), automatic: z.boolean() }),
+  z.object({ kind: z.literal("error"), message: z.string() }),
+]);
 
 export type RunOptions = {
   inputs: Record<string, string>;
@@ -11,12 +15,13 @@ export type RunOptions = {
   auto: boolean;
 };
 
-type ManifestPart = Pick<Manifest, "nodes">;
+type ManifestPart = Required<Pick<Manifest, "nodes">>;
 
-const skippable = (node: Manifest["nodes"][number]) =>
+const skippable = (node: ManifestNode) =>
   node.type === "gate" && (node.settings as { skippable?: unknown }).skippable === true;
 
 export const runChoices = (manifest: ManifestPart): RunChoices => ({
+  kind: "choices",
   automatic: manifest.nodes.some(skippable),
 });
 

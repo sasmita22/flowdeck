@@ -50,6 +50,30 @@ describe("fileTree", () => {
   });
 
   it.each([
+    ["workspace/plugin/agents", "Agents"],
+    ["workspace/plugin/templates", "Hand-off templates"],
+    ["sessions/main/plugin/agents", "Agents"],
+    ["sessions/main/plugin/skills", "Skills"],
+    ["sessions/main/plugin/templates", "Hand-off templates"],
+    ["sessions/main/plugin/hooks", "Hooks"],
+  ])("labels a container's plugin folder %s as %s", (path, label) => {
+    const containerFiles = [
+      "workspace/plugin/agents/r.md",
+      "workspace/plugin/templates/h.md",
+      "sessions/main/plugin/agents/a.md",
+      "sessions/main/plugin/skills/review/SKILL.md",
+      "sessions/main/plugin/templates/h.md",
+      "sessions/main/plugin/hooks/hooks.json",
+      "sessions/main/repo/plugin/agents/x.md",
+    ];
+
+    expect(folder(fileTree(containerFiles), path).label).toBe(label);
+    expect(folder(fileTree(containerFiles), "sessions/main/repo/plugin/agents").label).toBe(
+      "agents",
+    );
+  });
+
+  it.each([
     ["plugin/commands", "commands"],
     ["plugin/.claude-plugin", ".claude-plugin"],
   ])("keeps the raw name as the label of %s", (path, label) => {

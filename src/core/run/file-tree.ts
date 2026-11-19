@@ -15,9 +15,12 @@ const labels: Record<string, string> = {
   "plugin/hooks": "Hooks",
 };
 
+const containerRoot = /^(?:workspace|sessions\/[^/]+)\//;
+
 const node = (path: string, kind: FileTreeNode["kind"]): FileTreeNode => {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return { name, label: labels[path] ?? name, path, kind, children: [] };
+  const label = labels[path] ?? labels[path.replace(containerRoot, "")] ?? name;
+  return { name, label, path, kind, children: [] };
 };
 
 const byName = (a: FileTreeNode, b: FileTreeNode): number =>

@@ -9,6 +9,7 @@ import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
 import {
   verify,
   workspaceListing,
+  workspaceRootFiles,
   type VerifyFileSystem,
 } from "../../../src/core/compiler/verify.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
@@ -87,28 +88,76 @@ const failingList = (error: Error): VerifyFileSystem => ({
   list: async () => {
     throw error;
   },
+  folders: async () => [],
   readFile: async () => "",
 });
 
 describe("workspaceListing", () => {
   it("lists the plugin and the named root files that exist, never the repository folder", async () => {
     const { fs, dir } = await built();
-    await fs.writeFile(`${dir}/carousell-web/README.md`, "a repo file");
-    await fs.writeFile(`${dir}/carousell-web/plugin/agents/a.md`, "a repo file named like ours");
-    await fs.writeFile(`${dir}/carousell-web/manifest.json`, "{}");
-    const plugin = (await fs.list(`${dir}/plugin`)).map((path) => `plugin/${path}`);
+    await fs.writeFile(`${dir}/sessions/main/repo/README.md`, "a repo file");
+    await fs.writeFile(
+      `${dir}/sessions/main/repo/plugin/agents/a.md`,
+      "a repo file named like ours",
+    );
+    await fs.writeFile(`${dir}/sessions/main/repo/manifest.json`, "{}");
+    const plugins = await Promise.all(
+      ["workspace", "sessions/main"].map(async (root) =>
+        (await fs.list(`${dir}/${root}/plugin`)).map((path) => `${root}/plugin/${path}`),
+      ),
+    );
+    const roots = ["workspace", "sessions/main"].flatMap((root) => [
+      `${root}/CLAUDE.md`,
+      `${root}/settings.json`,
+    ]);
 
     const listing = await workspaceListing(fs, dir, [
       "manifest.json",
-      "CLAUDE.md",
       "build-report.json",
       "absent.json",
     ]);
 
-    expect(plugin.length).toBeGreaterThan(0);
+    expect(plugins.flat().length).toBeGreaterThan(0);
     expect([...(listing?.paths ?? [])].sort()).toStrictEqual(
-      ["manifest.json", "CLAUDE.md", "build-report.json", ...plugin].sort(),
+      ["manifest.json", "build-report.json", ...roots, ...plugins.flat()].sort(),
     );
+  });
+});
+
+describe("workspaceListing per container", () => {
+  const dir = "/fd-home/workspaces/b-two";
+  const ours = [
+    "manifest.json",
+    "workspace/CLAUDE.md",
+    "workspace/settings.json",
+    "workspace/plugin/.claude-plugin/plugin.json",
+    "workspace/plugin/skills/run/SKILL.md",
+    "sessions/android/CLAUDE.md",
+    "sessions/android/settings.json",
+    "sessions/android/plugin/.claude-plugin/plugin.json",
+    "sessions/android/plugin/agents/plan.md",
+    "sessions/android/plugin/skills/run/SKILL.md",
+    "sessions/ios/CLAUDE.md",
+    "sessions/ios/settings.json",
+    "sessions/ios/plugin/agents/plan.md",
+    "sessions/ios/plugin/skills/run/SKILL.md",
+  ];
+  const repoFiles = [
+    "sessions/android/android/README.md",
+    "sessions/android/android/CLAUDE.md",
+    "sessions/android/android/settings.json",
+    "sessions/android/android/plugin/agents/plan.md",
+    "sessions/ios/ios/src/App.swift",
+  ];
+
+  it("lists the workspace and every session's plugin, settings and CLAUDE.md, never a session's worktree", async () => {
+    const fs = new FakeFileSystem(
+      Object.fromEntries([...ours, ...repoFiles].map((path) => [`${dir}/${path}`, path])),
+    );
+
+    const listing = await workspaceListing(fs, dir, workspaceRootFiles);
+
+    expect([...(listing?.paths ?? [])].sort()).toStrictEqual([...ours].sort());
   });
 });
 
@@ -125,8 +174,8 @@ describe("verify", () => {
       tmp = await mkdtemp(join(tmpdir(), "fd-verify-"));
       const fs = new NodeFileSystem() satisfies VerifyFileSystem;
       const { dir, hash } = succeeded(await build(sample(), { fs, home: tmp, workspace }));
-      await mkdir(join(dir, "carousell-web", "src"), { recursive: true });
-      await writeFile(join(dir, "carousell-web", "src", "login.ts"), "export {};\n");
+      await mkdir(join(dir, "sessions", "main", "repo", "src"), { recursive: true });
+      await writeFile(join(dir, "sessions", "main", "repo", "src", "login.ts"), "export {};\n");
 
       expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
     });
@@ -140,9 +189,15 @@ describe("verify", () => {
 
     it("accepts new files inside the worktree folder", async () => {
       const { fs, dir, hash } = await built();
-      await fs.writeFile(`${dir}/carousell-web/README.md`, "changed by the run");
-      await fs.writeFile(`${dir}/carousell-web/.git/HEAD`, "ref: refs/heads/flowdeck/b1111111");
-      await fs.writeFile(`${dir}/carousell-web/plugin/agents/a.md`, "a repo file named like ours");
+      await fs.writeFile(`${dir}/sessions/main/repo/README.md`, "changed by the run");
+      await fs.writeFile(
+        `${dir}/sessions/main/repo/.git/HEAD`,
+        "ref: refs/heads/flowdeck/b1111111",
+      );
+      await fs.writeFile(
+        `${dir}/sessions/main/repo/plugin/agents/a.md`,
+        "a repo file named like ours",
+      );
 
       expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
     });
@@ -165,20 +220,22 @@ describe("verify", () => {
       it("still names CLAUDE.md when it was edited after the lock", async () => {
         const { fs, dir, hash } = await built();
         await fs.writeFile(`${dir}/build-report.json`, '{"questions":["written after the lock"]}');
-        await fs.writeFile(`${dir}/CLAUDE.md`, "tampered");
+        await fs.writeFile(`${dir}/sessions/main/CLAUDE.md`, "tampered");
 
         expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
           ok: false,
-          problems: [{ path: "CLAUDE.md", problem: "changed" }],
+          problems: [{ path: "sessions/main/CLAUDE.md", problem: "changed" }],
         });
       });
     });
 
     it.each([
-      "plugin/agents/p.md",
-      "plugin/.claude-plugin/plugin.json",
-      "settings.json",
-      "CLAUDE.md",
+      "sessions/main/plugin/agents/p.md",
+      "sessions/main/plugin/.claude-plugin/plugin.json",
+      "sessions/main/settings.json",
+      "sessions/main/CLAUDE.md",
+      "workspace/settings.json",
+      "workspace/CLAUDE.md",
     ])("names %s when it was edited", async (path) => {
       const { fs, dir, hash } = await built();
       await fs.writeFile(`${dir}/${path}`, "tampered");
@@ -205,36 +262,36 @@ describe("verify", () => {
 
     it("names a plugin file that was deleted", async () => {
       const { fs, dir, hash } = await built();
-      const copy = await copyWithout(fs, dir, "plugin/agents/a.md");
+      const copy = await copyWithout(fs, dir, "sessions/main/plugin/agents/a.md");
 
       expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
         ok: false,
-        problems: [{ path: "plugin/agents/a.md", problem: "missing" }],
+        problems: [{ path: "sessions/main/plugin/agents/a.md", problem: "missing" }],
       });
     });
 
     it("names a file added to the plugin", async () => {
       const { fs, dir, hash } = await built();
-      await fs.writeFile(`${dir}/plugin/agents/stray.md`, "---\nname: stray\n---\n");
+      await fs.writeFile(`${dir}/sessions/main/plugin/agents/stray.md`, "---\nname: stray\n---\n");
 
       expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
         ok: false,
-        problems: [{ path: "plugin/agents/stray.md", problem: "extra" }],
+        problems: [{ path: "sessions/main/plugin/agents/stray.md", problem: "extra" }],
       });
     });
 
     it("reports every problem at once, sorted by path", async () => {
       const { fs, dir, hash } = await built();
-      const copy = await copyWithout(fs, dir, "plugin/agents/a.md");
-      await copy.writeFile(`${dir}/settings.json`, "tampered");
-      await copy.writeFile(`${dir}/plugin/skills/extra/SKILL.md`, "stray");
+      const copy = await copyWithout(fs, dir, "sessions/main/plugin/agents/a.md");
+      await copy.writeFile(`${dir}/sessions/main/settings.json`, "tampered");
+      await copy.writeFile(`${dir}/sessions/main/plugin/skills/extra/SKILL.md`, "stray");
 
       expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
         ok: false,
         problems: [
-          { path: "plugin/agents/a.md", problem: "missing" },
-          { path: "plugin/skills/extra/SKILL.md", problem: "extra" },
-          { path: "settings.json", problem: "changed" },
+          { path: "sessions/main/plugin/agents/a.md", problem: "missing" },
+          { path: "sessions/main/plugin/skills/extra/SKILL.md", problem: "extra" },
+          { path: "sessions/main/settings.json", problem: "changed" },
         ],
       });
     });

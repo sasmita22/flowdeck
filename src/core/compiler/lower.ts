@@ -1,11 +1,12 @@
 import { order } from "../flow/order.js";
-import type { Flow, FlowSettings, Node, Session, SessionContainer, Wire } from "../flow/schema.js";
+import type { Flow, FlowContainer, FlowSettings, Node, Session, Wire } from "../flow/schema.js";
 import { flowContainerMembers } from "../flow/structure.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
 import { compileAgent } from "../nodes/agent/compile.js";
 import { repoFolder } from "../run/workspace.js";
-import { pieceNames } from "./pieces.js";
+import { orchestratorPath } from "./orchestrator.js";
+import { containerPrefix, containerRoot, containerSlugs, pieceNames } from "./pieces.js";
 
 export type BuildFile = { path: string; content: string };
 
@@ -21,6 +22,21 @@ export type ManifestNode = {
 
 export type ManifestOutput = { node: string; name: string; type: string };
 
+export type ManifestContainer = {
+  kind: "workspace" | "session";
+  name: string;
+  slug: string;
+  prefix: string;
+  repo?: string;
+  base?: string;
+  branch?: string;
+  worktree?: string;
+  model: string;
+  nodes: ManifestNode[];
+  wires: Wire[];
+  orchestrator: string;
+};
+
 export type Manifest = {
   version: 1;
   prefix?: string;
@@ -29,42 +45,34 @@ export type Manifest = {
   values?: VariableValues;
   source?: BuildSource;
   outputs?: ManifestOutput[];
-  session: Session;
+  session?: Session;
   settings?: FlowSettings;
-  nodes: ManifestNode[];
-  wires: Wire[];
+  nodes?: ManifestNode[];
+  wires?: Wire[];
+  containers: ManifestContainer[];
   files: Record<string, string>;
 };
 
 export type LowerInputs = {
   name: string;
   values: VariableValues;
-  repo?: string;
   workspace?: string;
   kitVersion?: string;
 };
 
 export type LoweredManifest = Omit<Manifest, "files"> &
-  Required<Pick<Manifest, "prefix" | "layout" | "values" | "settings">>;
+  Required<Pick<Manifest, "layout" | "values" | "settings">>;
 
 const compile = (
   node: Node,
   piece: string | undefined,
-  inputs: LowerInputs,
+  scope: { build: string; repo: string; workspace: string },
+  values: VariableValues,
 ): BuildFile | undefined => {
   if (piece === undefined) return undefined;
-  const compileInputs = {
-    piece,
-    scope: {
-      build: inputs.name,
-      repo: repoFolder(inputs.repo ?? ""),
-      workspace: inputs.workspace ?? "",
-    },
-    values: inputs.values,
-  };
   switch (node.type) {
     case "agent":
-      return compileAgent(node, compileInputs);
+      return compileAgent(node, { piece, scope, values });
     default:
       return undefined;
   }
@@ -77,16 +85,8 @@ const declaredOutputs = (nodes: readonly Node[]): ManifestOutput[] =>
       : [],
   );
 
-const sessionOf = (flow: Flow): SessionContainer => {
-  const session = flow.containers.find(
-    (container): container is SessionContainer => container.kind === "session",
-  );
-  if (session === undefined) throw new Error("A build needs a session container.");
-  return session;
-};
-
-const sessionPart = (flow: Flow, session: SessionContainer): Flow => {
-  const members = new Set(flowContainerMembers(flow, session.id));
+const containerPart = (flow: Flow, container: FlowContainer): Flow => {
+  const members = new Set(flowContainerMembers(flow, container.id));
   return {
     ...flow,
     nodes: flow.nodes.filter((node) => members.has(node.id)),
@@ -94,36 +94,40 @@ const sessionPart = (flow: Flow, session: SessionContainer): Flow => {
   };
 };
 
-export function lower(
+type Lowered = { container: ManifestContainer; files: BuildFile[]; outputs: ManifestOutput[] };
+
+const lowerContainer = (
   whole: Flow,
+  container: FlowContainer,
+  slug: string,
   inputs: LowerInputs,
-  source?: BuildSource,
-): { manifest: LoweredManifest; nodeFiles: BuildFile[] } {
-  const session = sessionOf(whole);
-  const flow = sessionPart(whole, session);
-  const byId = new Map(flow.nodes.map((node) => [node.id, node]));
-  const nodes = order(flow).flatMap((id) => byId.get(id) ?? []);
-  const pieces = pieceNames(flow);
+): Lowered => {
+  const part = containerPart(whole, container);
+  const byId = new Map(part.nodes.map((node) => [node.id, node]));
+  const nodes = order(part).flatMap((id) => byId.get(id) ?? []);
+  const pieces = pieceNames(part);
+  const prefix = containerPrefix(inputs.name, slug);
+  const root = containerRoot({ kind: container.kind, slug });
+  const folder = container.kind === "session" ? repoFolder(container.repo) : root;
+  const scope = {
+    build: prefix,
+    repo: folder,
+    workspace: inputs.workspace ?? "",
+    kind: container.kind,
+  };
   const compiled = nodes.map((node) => {
     const piece = pieces.get(node.id);
-    return { node, piece, file: compile(node, piece, inputs) };
+    const file = compile(node, piece, scope, inputs.values);
+    return { node, piece, file: file && { ...file, path: `${root}/${file.path}` } };
   });
-  const outputs = declaredOutputs(nodes);
   return {
-    manifest: {
-      version: 1,
-      prefix: inputs.name,
-      ...(inputs.kitVersion === undefined ? {} : { kitVersion: inputs.kitVersion }),
-      layout: "workspace",
-      values: inputs.values,
-      ...(source === undefined ? {} : { source }),
-      ...(outputs.length === 0 ? {} : { outputs }),
-      session: {
-        name: session.name,
-        buildConfig: { repo: session.repo, base: session.branch },
-        model: session.model,
-      },
-      settings: flow.settings,
+    container: {
+      kind: container.kind,
+      name: container.kind === "session" ? container.name : "workspace",
+      slug,
+      prefix,
+      ...(container.kind === "session" ? { repo: container.repo, base: container.branch } : {}),
+      model: container.model,
       nodes: compiled.map(({ node, piece, file }) => ({
         id: node.id,
         type: node.type,
@@ -133,8 +137,53 @@ export function lower(
         ...(file === undefined ? {} : { file: file.path }),
         ...(piece === undefined ? {} : { piece }),
       })),
-      wires: flow.wires,
+      wires: part.wires,
+      orchestrator: orchestratorPath(root),
     },
-    nodeFiles: compiled.flatMap(({ file }) => file ?? []),
+    files: compiled.flatMap(({ file }) => file ?? []),
+    outputs: declaredOutputs(nodes),
+  };
+};
+
+const singleSessionFields = (lowered: readonly Lowered[]) => {
+  const sessions = lowered.filter(({ container }) => container.kind === "session");
+  const [single] = sessions;
+  if (sessions.length !== 1 || single === undefined) return {};
+  const { container: only } = single;
+  return {
+    prefix: only.prefix,
+    session: {
+      name: only.name,
+      buildConfig: { repo: only.repo, base: only.base },
+      model: only.model,
+    },
+    nodes: only.nodes,
+    wires: only.wires,
+  };
+};
+
+export function lower(
+  flow: Flow,
+  inputs: LowerInputs,
+  source?: BuildSource,
+): { manifest: LoweredManifest; nodeFiles: BuildFile[] } {
+  const slugs = containerSlugs(flow);
+  const lowered = flow.containers.map((container) =>
+    lowerContainer(flow, container, slugs.get(container.id) ?? container.kind, inputs),
+  );
+  const outputs = lowered.flatMap((part) => part.outputs);
+  return {
+    manifest: {
+      version: 1,
+      ...(inputs.kitVersion === undefined ? {} : { kitVersion: inputs.kitVersion }),
+      layout: "workspace",
+      values: inputs.values,
+      ...(source === undefined ? {} : { source }),
+      ...singleSessionFields(lowered),
+      ...(outputs.length === 0 ? {} : { outputs }),
+      settings: flow.settings,
+      containers: lowered.map(({ container }) => container),
+    },
+    nodeFiles: lowered.flatMap(({ files }) => files),
   };
 }

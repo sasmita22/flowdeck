@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { readFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   branchVariableTestId,
@@ -37,6 +37,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
+import { sessionWorktree } from "../src/core/run/workspace.js";
 
 const git = async (repo: string, ...args: string[]) =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -533,7 +534,7 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
     );
     const [session] = db.prepare("SELECT cwd FROM run_sessions").all() as { cwd: string }[];
     expect(await realpath(session?.cwd ?? "")).toBe(
-      await realpath(join(home, "workspaces", buildId, basename(repo.path))),
+      await realpath(sessionWorktree(join(home, "workspaces", buildId), "session", repo.path)),
     );
   } finally {
     db.close();
@@ -607,7 +608,7 @@ const runInBuild = async (writes: Record<string, string> = {}) => {
     "done",
     { timeout: 20_000 },
   );
-  const path = join(home, "workspaces", buildId, basename(repo.path));
+  const path = sessionWorktree(join(home, "workspaces", buildId), "main", repo.path);
   return { window, repo, path, branch: "flowdeck/wt" };
 };
 

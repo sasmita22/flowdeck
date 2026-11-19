@@ -111,6 +111,7 @@ const manifestOf = (input: Flow, hash: string): string => {
     base: "main",
     branch: "flowdeck/stale",
     branchCreated: true,
+    workspace: "/nowhere",
   });
   const manifest = files.find((file) => file.path === "manifest.json");
   if (manifest === undefined) throw new Error("emit wrote no manifest.json");
@@ -242,13 +243,18 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await confirmBuild(window, "plan-it");
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("plan-it v1");
   await expect(window.getByTestId(pageTestIds.buildFile("manifest.json"))).toBeVisible();
-  const agents = window.getByTestId(pageTestIds.buildFolder("plugin/agents"));
-  const templates = window.getByTestId(pageTestIds.buildFolder("plugin/templates"));
+  for (const folder of ["sessions", "sessions/main", "sessions/main/plugin"]) {
+    await window.getByTestId(pageTestIds.buildFolder(folder)).click();
+  }
+  const agents = window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/agents"));
+  const templates = window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/templates"));
   await expect(agents).toHaveText("Agents");
   await expect(agents).toHaveAttribute("aria-expanded", "false");
   await expect(templates).toHaveText("Hand-off templates");
   await expect(templates).toHaveAttribute("aria-expanded", "false");
-  await expect(window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md"))).toHaveCount(0);
+  await expect(
+    window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/agents/p1.md")),
+  ).toHaveCount(0);
   await expect(window.locator('[data-testid^="build-file-"][aria-expanded]')).toHaveCount(0);
   const branch = dbRows<{ branch: string }>("SELECT branch FROM builds WHERE name = 'plan-it'")[0]
     ?.branch;
@@ -259,17 +265,18 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(project).toContainText(/\bclean\b/);
   await templates.click();
   await expect(templates).toHaveAttribute("aria-expanded", "true");
-  await expect(window.getByTestId(pageTestIds.buildFile("plugin/templates/plan.md"))).toBeVisible();
+  await expect(
+    window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/templates/plan.md")),
+  ).toBeVisible();
   await agents.click();
   await expect(agents).toHaveAttribute("aria-expanded", "true");
-  await window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md")).click();
+  await window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/agents/p1.md")).click();
   await expect(window.getByTestId(pageTestIds.buildFileContent)).toContainText(
     "Implement the plan.",
   );
-  await expect(window.getByTestId(pageTestIds.buildFile("plugin/agents/p1.md"))).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await expect(
+    window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/agents/p1.md")),
+  ).toHaveAttribute("aria-current", "true");
   await expect(window.locator('[data-testid^="build-file-"][aria-current]')).toHaveCount(1);
   await shot(target, testInfo, "build-files");
   const collapsed = window.locator('[data-testid^="build-folder-"][aria-expanded="false"]');
