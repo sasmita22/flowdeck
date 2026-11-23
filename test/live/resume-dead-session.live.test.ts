@@ -27,7 +27,7 @@ import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { agentType } from "../../src/core/nodes/agent/execute.js";
 import { FakeConnectorSource } from "../fakes/fake-connector-source.js";
 import { FakePullRequests } from "../fakes/fake-pull-requests.js";
-import { gate, onMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
+import { gate, onWorkspaceMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
 import { readLines, tokenResults, type TranscriptEntry } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../fixtures/fake-build-deps.js";
@@ -140,7 +140,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
     "goes on in a new tmux session with claude --resume, on the same conversation, sending each node once",
     { timeout: deadlineMs + 60_000 },
     async () => {
-      const base = onMainFlow(
+      const base = onWorkspaceMainFlow(
         [reply("p1", "ALPHA"), gate("g1"), reply("p2", "BRAVO")],
         [thenWire("p1", "g1"), thenWire("g1", "p2")],
       );

@@ -4,9 +4,10 @@ import { order } from "../flow/order.js";
 import { activityEntrySchema, type ActivityEntry } from "./activity.js";
 import type { CostReport } from "./cost.js";
 import { plainReason } from "./failure.js";
-import type { StageNode } from "./manifest.js";
+import type { DisplayStatus } from "./display.js";
+import type { StageGroup, StageNode } from "./manifest.js";
 import { decisionsOf, donePayload, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
-import { nodeStateSchema } from "./snapshot.js";
+import { nodeStateSchema, type SnapshotStatus } from "./snapshot.js";
 import type { NodeState } from "./state.js";
 import type { StoredEvent } from "./store.js";
 import type { HumanDecision } from "./wait.js";
@@ -53,6 +54,13 @@ export type PipelineRound = {
 export type ParallelGroup = { lanes: PipelineItem[][] };
 
 export type PipelineItem = PipelineStage | ParallelGroup;
+
+export type ContainerStatus = Extract<
+  DisplayStatus,
+  "waiting" | "not-started" | "running" | "done" | "stopped" | "failed"
+>;
+
+export type PipelineGroup = { name: string; status: ContainerStatus; items: PipelineItem[] };
 
 const runEventKind = z.enum([
   "sent",
@@ -176,6 +184,35 @@ const grouped = <T extends { nodeId: string }>(entries: readonly T[]): Map<strin
 };
 
 export function pipelineOf(
+  groups: readonly StageGroup[],
+  events: readonly StoredEvent[],
+  activity: readonly ActivityEntry[],
+  cost: CostReport,
+  runStatus: SnapshotStatus,
+): PipelineGroup[] {
+  const eventsOf = grouped([...events].sort((a, b) => a.seq - b.seq));
+  return groups.map((group) => ({
+    name: group.name,
+    status: containerStatusOf(group.nodes, eventsOf, runStatus),
+    items: itemsOfGroup(group.nodes, group.wires, events, activity, cost),
+  }));
+}
+
+function containerStatusOf(
+  nodes: readonly StageNode[],
+  eventsOf: ReadonlyMap<string, readonly StoredEvent[]>,
+  runStatus: SnapshotStatus,
+): ContainerStatus {
+  const states = nodes.map((node) => ({ node, status: nodeStatus(eventsOf.get(node.id) ?? []) }));
+  if (states.some(({ status }) => status === "failed")) return "failed";
+  if (states.some(({ node, status }) => node.type === "output" && status === "done")) return "done";
+  const running = runStatus === "running";
+  if (states.every(({ status }) => status === "waiting"))
+    return running ? "waiting" : "not-started";
+  return running ? "running" : "stopped";
+}
+
+function itemsOfGroup(
   nodes: readonly StageNode[],
   wires: readonly Wire[],
   events: readonly StoredEvent[],

@@ -96,7 +96,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
     return after.length === 0 ? "" : ` Then go on to ${nodeList(after)}.`;
   };
 
-  const description = `${scopeLine(scope)} Runs this build's flow in plain Claude Code, one step at a time: type /${prefix}:run. Use when running this build's whole flow without the Flowdeck app.`;
+  const description = `${scopeLine(scope)} Runs this container's flow one step at a time. Use when /${prefix}:run is typed: by hand in plain Claude Code, or by a Flowdeck run's start command for a session container.`;
   const steps = nodes.map(
     (node, index) => `${index + 1}. NODE ${node.id} (${node.label}): ${step(node)}${next(node)}`,
   );

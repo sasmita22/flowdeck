@@ -18,15 +18,15 @@ import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
 import {
   agent,
   branch,
-  flow,
   fork,
   gate,
   join as joinNode,
-  onMainFlow,
+  onWorkspaceMainFlow,
   output,
   thenWire,
   trigger,
   wire,
+  workspaceFlow,
 } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -44,7 +44,7 @@ const placed = (built: Flow): Flow => ({
   })),
 });
 
-const laidOut = (nodes: unknown[], wires: unknown[]) => placed(onMainFlow(nodes, wires));
+const laidOut = (nodes: unknown[], wires: unknown[]) => placed(onWorkspaceMainFlow(nodes, wires));
 
 const run = promisify(execFile);
 
@@ -147,7 +147,14 @@ const manifestNodeIds = (buildId: string) =>
     "SELECT manifest_json FROM build_manifests WHERE build_id = ?",
     buildId,
   )
-    .flatMap((row) => (JSON.parse(row.manifest_json) as { nodes: { id: string }[] }).nodes)
+    .flatMap(
+      (row) =>
+        (
+          JSON.parse(row.manifest_json) as {
+            containers: { kind: string; nodes: { id: string }[] }[];
+          }
+        ).containers.find(({ kind }) => kind === "workspace")?.nodes ?? [],
+    )
     .map((node) => node.id);
 
 const replyOf = (runId: string, nodeId: string) =>
@@ -201,7 +208,7 @@ test("The run page shows each stage with its status, and no canvas or Open bluep
       "done",
     );
   }
-  await expect(window.getByRole("list", { name: "Stages" })).toBeVisible();
+  await expect(window.getByRole("list", { name: "workspace stages" })).toBeVisible();
   await expect(window.locator(".react-flow")).toHaveCount(0);
   await expect(window.getByRole("button", { name: "Open blueprint" })).toHaveCount(0);
   await darkShot(window, "stages.png");
@@ -249,7 +256,7 @@ test("The picture of the blueprint sits above the stages, collapsed until opened
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(window.getByTestId(pageTestIds.buildPictureImage(buildId))).toHaveCount(0);
   const picture = await toggle.boundingBox();
-  const stages = await window.getByRole("list", { name: "Stages" }).boundingBox();
+  const stages = await window.getByRole("list", { name: "workspace stages" }).boundingBox();
   if (picture === null || stages === null) throw new Error("the picture or the stages are hidden");
   expect(picture.y + picture.height).toBeLessThanOrEqual(stages.y);
 
@@ -561,7 +568,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
 
 test("A build whose yes/no value is no takes Branch's no path", async () => {
   const branched = placed(
-    flow(
+    workspaceFlow(
       [trigger("t"), branch("b", "deep"), agent("yes"), agent("no"), output("stop")],
       [
         thenWire("t", "b"),

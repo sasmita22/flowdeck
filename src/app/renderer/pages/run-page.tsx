@@ -13,6 +13,7 @@ import { selectBuildCards, type LibraryState } from "../library-store.js";
 import { variablesText } from "../../../core/run/digest.js";
 import { repoStateText } from "../../../core/run/repo-state.js";
 import type { LoadedRun } from "../../../core/run/listing.js";
+import type { PipelineGroup, PipelineItem, PipelineStage } from "../../../core/run/pipeline.js";
 import { storyPartsOf } from "../../../core/run/story.js";
 import { Ask } from "../inspector/ask.js";
 import type { NavState } from "../nav-store.js";
@@ -21,6 +22,8 @@ import {
   selectLiveBadge,
   selectRunDisabled,
   selectRunSnapshot,
+  selectSessionFailure,
+  selectStartedSessions,
   type RunState,
   type RunView,
 } from "../run-store.js";
@@ -39,6 +42,27 @@ const tone = {
 } as const;
 
 type Story = NonNullable<LoadedRun["story"]>;
+
+const stagesIn = (items: readonly PipelineItem[]): PipelineStage[] =>
+  items.flatMap((item) =>
+    "lanes" in item
+      ? item.lanes.flatMap(stagesIn)
+      : [item, ...(item.rounds ?? []).flatMap((round) => stagesIn(round.items))],
+  );
+
+const labelsOf = (
+  stages: LoadedRun["stages"],
+  groups: readonly PipelineGroup[] | null | undefined,
+): RunLabels => {
+  const nodes = new Map((stages?.nodes ?? []).map((node) => [node.id, labelFor(node)]));
+  for (const stage of stagesIn((groups ?? []).flatMap((group) => group.items))) {
+    if (!nodes.has(stage.nodeId)) nodes.set(stage.nodeId, labelFor(stage));
+  }
+  return {
+    sessionName: groups?.[0]?.name ?? stages?.session.name ?? "",
+    nodes: [...nodes].map(([id, label]) => ({ id, label })),
+  };
+};
 
 function StoryAccount({ text }: { text: string }) {
   const parts = storyPartsOf(text);
@@ -181,6 +205,9 @@ export function RunPage({
   const runs = useStore(library, (state) => state.runs);
   const card = selectBuildCards({ builds, runs }).find((build) => build.id === buildId);
   const starting = useStore(run, (state) => state.starting);
+  const groups = useStore(run, (state) => state.pipelines[runId]);
+  const sessionFailure = useStore(run, (state) => selectSessionFailure(state, runId));
+  const startedSessions = useStore(run, (state) => selectStartedSessions(state, runId));
 
   useEffect(() => {
     void library.getState().openRun(runId);
@@ -189,6 +216,10 @@ export function RunPage({
     void inspector.getState().view(runId);
     void wait.getState().view(runId);
   }, [library, run, terminal, inspector, wait, runId]);
+
+  useEffect(() => {
+    terminal.getState().setSessions(startedSessions);
+  }, [terminal, startedSessions]);
 
   const liveStatus = live?.status;
   const wasRunning = useRef(false);
@@ -201,13 +232,7 @@ export function RunPage({
   }, [library, runId, liveStatus]);
 
   const stages = loaded?.stages ?? null;
-  const labels = useMemo<RunLabels>(
-    () => ({
-      sessionName: stages?.session.name ?? "",
-      nodes: (stages?.nodes ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
-    }),
-    [stages],
-  );
+  const labels = useMemo(() => labelsOf(stages, groups), [stages, groups]);
 
   const snapshot = live ?? loaded?.snapshot ?? null;
   const view = useMemo(() => createStore<RunView>()(() => ({ snapshot: null })), []);
@@ -339,6 +364,15 @@ export function RunPage({
           </div>
         )}
         <div className="fd-run-stages">
+          {sessionFailure !== null && (
+            <p
+              className="fd-pipeline-error"
+              data-testid={pageTestIds.runSessionFailure}
+              role="alert"
+            >
+              {sessionFailure}
+            </p>
+          )}
           {status === "interrupted" && loaded?.note !== undefined && (
             <p className="fd-run-note" data-testid={pageTestIds.runPageNote} role="status">
               {loaded.note}

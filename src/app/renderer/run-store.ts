@@ -19,7 +19,13 @@ import {
 } from "../../core/run/delete-build.js";
 import { displayStatus, type DisplayStatus } from "../../core/run/display.js";
 import { buildVersionResultSchema, writeStoryResultSchema } from "../../core/run/listing.js";
-import { pipelineSchema, type PipelineItem } from "../../core/run/pipeline.js";
+import {
+  pipelineItemSchema,
+  type ContainerStatus,
+  type PipelineGroup,
+  type PipelineItem,
+} from "../../core/run/pipeline.js";
+import { sessionFailureOf } from "../../core/run/session-watch.js";
 import { runChoicesSchema } from "../../core/run/options.js";
 import {
   runSnapshotSchema,
@@ -45,6 +51,7 @@ export type RunBridge = Pick<
   | "resumeRun"
   | "runCost"
   | "runPipeline"
+  | "onRunSessions"
   | "deleteBuild"
   | "deleteRun"
   | "deletePendingBuild"
@@ -134,6 +141,30 @@ export const selectDeleteWorktrees = (question: ConfirmingDelete): DeleteWorktre
         losesWork: dirtyWorktree || unpushedBranch,
       }));
 
+export type StartedSession = { container: string; tmuxName: string };
+
+const containerStatuses = [
+  "waiting",
+  "not-started",
+  "running",
+  "done",
+  "stopped",
+  "failed",
+] as const satisfies readonly ContainerStatus[];
+
+const pipelineGroupsSchema: z.ZodType<PipelineGroup[]> = z.array(
+  z.object({
+    name: z.string(),
+    status: z.enum(containerStatuses),
+    items: z.array(pipelineItemSchema),
+  }),
+);
+
+const startedSessionsSchema = z.object({
+  runId: z.string(),
+  sessions: z.array(z.object({ container: z.string(), tmuxName: z.string() })),
+});
+
 export type RunState = {
   snapshots: Record<string, RunSnapshot>;
   latestRunId: string | null;
@@ -144,7 +175,8 @@ export type RunState = {
   dialog: RunDialog | null;
   kept: KeptBuild[] | null;
   cost: { runId: string; report: CostReport } | null;
-  pipelines: Record<string, PipelineItem[] | null>;
+  pipelines: Record<string, PipelineGroup[] | null>;
+  startedSessions: Record<string, StartedSession[]>;
   selectedStage: Record<string, StageSelection>;
   menuOpen: string | null;
   confirmingDelete: ConfirmingDelete | null;
@@ -180,7 +212,10 @@ export type RunState = {
   storyErrorFor(runId: string): string | undefined;
 };
 
-export type RunView = { snapshot: RunSnapshot | null };
+export type RunView = {
+  snapshot: RunSnapshot | null;
+  pipeline?: readonly PipelineGroup[] | null;
+};
 
 export const selectRunSnapshot = (
   run: Pick<RunState, "snapshots">,
@@ -264,11 +299,38 @@ export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
   );
 };
 
+const holdsNode = (items: readonly PipelineItem[], nodeId: string): boolean =>
+  items.some((item) =>
+    "lanes" in item
+      ? item.lanes.some((lane) => holdsNode(lane, nodeId))
+      : item.nodeId === nodeId ||
+        (item.rounds ?? []).some((round) => holdsNode(round.items, nodeId)),
+  );
+
+const sessionStarted = (pipeline: RunView["pipeline"], nodeId: string): boolean =>
+  pipeline?.find((group) => holdsNode(group.items, nodeId))?.status !== "not-started";
+
 export const selectNodeDisplay = (run: RunView, nodeId: string): DisplayStatus | null => {
   const { snapshot } = run;
   const state = snapshot?.nodes[nodeId];
-  return snapshot === null || state === undefined ? null : displayStatus(state, snapshot.status);
+  if (snapshot === null || state === undefined) return null;
+  return displayStatus(state, snapshot.status, { started: sessionStarted(run.pipeline, nodeId) });
 };
+
+export const selectSessionFailure = (
+  run: Pick<RunState, "pipelines">,
+  runId: string,
+): string | null => {
+  const failure = sessionFailureOf(run.pipelines[runId] ?? []);
+  return failure === undefined ? null : `Failed in ${failure.container}: ${failure.node}`;
+};
+
+const noSessions: StartedSession[] = [];
+
+export const selectStartedSessions = (
+  run: Pick<RunState, "startedSessions">,
+  runId: string,
+): StartedSession[] => run.startedSessions[runId] ?? noSessions;
 
 const summaryLabel = (
   status: RunSnapshot["status"],
@@ -284,7 +346,9 @@ const summaryLabel = (
 export const selectRunSummary = (run: RunView, waiting = false): string => {
   const { snapshot } = run;
   if (snapshot === null) return "Idle";
-  const shown = Object.values(snapshot.nodes).map((state) => displayStatus(state, snapshot.status));
+  const shown = Object.entries(snapshot.nodes)
+    .filter(([nodeId]) => sessionStarted(run.pipeline, nodeId))
+    .map(([, state]) => displayStatus(state, snapshot.status));
   const done = shown.filter((status) => status === "done").length;
   return `${summaryLabel(snapshot.status, shown, waiting)} · ${done} of ${shown.length} nodes done`;
 };
@@ -490,6 +554,7 @@ export const createRunStore = ({
       kept: null,
       cost: null,
       pipelines: {},
+      startedSessions: {},
       selectedStage: {},
       menuOpen: null,
       confirmingDelete: null,
@@ -505,6 +570,12 @@ export const createRunStore = ({
             snapshots: { ...get().snapshots, [snapshot.runId]: snapshot },
             latestRunId: snapshot.runId,
           });
+        });
+        bridge.onRunSessions((value) => {
+          const parsed = startedSessionsSchema.safeParse(value);
+          if (!parsed.success) return;
+          const { runId, sessions } = parsed.data;
+          set({ startedSessions: { ...get().startedSessions, [runId]: sessions } });
         });
       },
 
@@ -683,7 +754,9 @@ export const createRunStore = ({
 
       loadPipeline: async (runId) => {
         try {
-          const pipeline = pipelineSchema.nullable().parse(await bridge.runPipeline({ runId }));
+          const pipeline = pipelineGroupsSchema
+            .nullable()
+            .parse(await bridge.runPipeline({ runId }));
           set({ pipelines: { ...get().pipelines, [runId]: pipeline } });
         } catch (thrown) {
           set({ error: messageOf(thrown) });

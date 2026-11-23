@@ -1,6 +1,7 @@
 import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
+import { sessionEntryHeading } from "./emit.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { containerRoot, pieceOf } from "./pieces.js";
@@ -213,6 +214,27 @@ const checkContainer = (
     fail(orchestratorPath, "orchestrator", "NODE markers do not follow the manifest's order");
 };
 
+const workspaceClaudeMdPath = `${containerRoot({ kind: "workspace", slug: "workspace" })}/CLAUDE.md`;
+
+const sessionEntry = (claudeMd: string, container: ManifestContainer): string | undefined => {
+  const lines = claudeMd.split("\n");
+  const start = lines.indexOf(sessionEntryHeading(container));
+  if (start === -1) return undefined;
+  const fences = lines.flatMap((line, i) => (i > start && line.startsWith("```") ? [i] : []));
+  const end = fences[1];
+  return end === undefined ? undefined : lines.slice(start, end + 1).join("\n");
+};
+
+const checkSessionList = (container: ManifestContainer, { back, laid, fail }: Check) => {
+  const entry = sessionEntry(laid.get(workspaceClaudeMdPath) ?? "", container);
+  if (entry !== undefined && !(back.get(workspaceClaudeMdPath) ?? "").includes(entry))
+    fail(
+      workspaceClaudeMdPath,
+      "session-list",
+      `the session list entry for ${container.name} is missing or altered`,
+    );
+};
+
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
   const { laidDown, readBack, manifest, flow, shared } = inputs;
   const laid = new Map(laidDown.map((file) => [file.path, file.content]));
@@ -226,6 +248,7 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     };
     const own = shared.filter((entry) => sharedContainer(containers, entry) === container);
     checkContainer(container, own, { back, laid, flow, fail });
+    if (container.kind === "session") checkSessionList(container, { back, laid, flow, fail });
   }
 
   for (const [path, content] of back) {

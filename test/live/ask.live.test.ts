@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
-import { asWorkflow } from "../fixtures/flow-builders.js";
+import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import { FakeWaiter } from "../fakes/fake-waiter.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -26,7 +26,7 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow() {
-  return asWorkflow(
+  return asWorkspaceWorkflow(
     {
       nodes: [
         {

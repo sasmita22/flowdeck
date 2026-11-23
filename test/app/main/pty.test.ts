@@ -198,6 +198,29 @@ describe("open", () => {
     },
   );
 
+  it("attaches to a session the run announced when asked for it by name", () => {
+    const { terminal, spawns } = setup();
+    terminal.setSession("run-1", "fd-run-1");
+    terminal.setContainerSessions("run-1", ["fd-run-1", "fd-run-android"]);
+
+    expect(terminal.open("run-1", size, "fd-run-android")).toBe(true);
+    expect(spawns.map(([, args]) => args)).toEqual([
+      ["-L", "fd-run-android", "attach-session", "-t", "=fd-run-android"],
+    ]);
+  });
+
+  it("attaches to the run's own session when asked for an fd-* session the run never announced", () => {
+    const { terminal, spawns } = setup();
+    terminal.setSession("run-1", "fd-run-1");
+    terminal.setSession("run-2", "fd-run-2");
+    terminal.setContainerSessions("run-2", ["fd-run-2", "fd-run-ios"]);
+
+    expect(terminal.open("run-1", size, "fd-run-ios")).toBe(true);
+    expect(spawns.map(([, args]) => args)).toEqual([
+      ["-L", "fd-run-1", "attach-session", "-t", "=fd-run-1"],
+    ]);
+  });
+
   it("returns true without a second spawn when the run is already attached", () => {
     const { terminal, spawns } = attached();
 

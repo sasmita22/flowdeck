@@ -54,6 +54,7 @@ import {
   wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
+import { oneSession } from "../../fixtures/one-session.js";
 
 const repo = "/work/carousell-web";
 const ticketConfig: BuildConfig = { repo, base: "main" };
@@ -95,8 +96,6 @@ const ids = (...values: string[]) => {
     return next;
   };
 };
-
-type OneSessionManifest = Manifest & Required<Pick<Manifest, "nodes" | "wires" | "session">>;
 
 const firstId = "0f3a9c2e-1111-2222-3333-444455556666";
 const secondId = "7b1d44aa-1111-2222-3333-444455556666";
@@ -436,8 +435,7 @@ describe("buildVersion", () => {
         const { fs, deps } = setup({ flows: [shipFlow()] });
         const result = await buildVersion(v1, { name: "fix-login", repo, values }, deps);
         if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
-        return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as OneSessionManifest)
-          .values;
+        return (JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest).values;
       };
 
       it("lands in the manifest as false when the request leaves it out", async () => {
@@ -984,8 +982,8 @@ describe("buildVersion", () => {
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
         laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-      ) as OneSessionManifest;
-      const file = manifest.nodes.find((node) => node.id === nodeId)?.file;
+      ) as Manifest;
+      const file = oneSession(manifest).nodes.find((node) => node.id === nodeId)?.file;
       if (file === undefined) throw new Error(`no piece for ${nodeId}`);
       return file;
     };
@@ -1187,9 +1185,7 @@ describe("buildVersion", () => {
       expect(t.ends).toEqual([
         { pendingId: pending.pendingId, end: expect.objectContaining({ outcome: "built" }) },
       ]);
-      const manifest = JSON.parse(
-        await t.fs.readFile(`${dir()}/manifest.json`),
-      ) as OneSessionManifest & {
+      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest & {
         files: Record<string, string>;
       };
       expect(
@@ -1366,7 +1362,7 @@ describe("buildVersion", () => {
       intoSession(source, [agent("loose")] as Flow["nodes"]);
 
     const builtManifest = async (t: ReturnType<typeof traced>) =>
-      JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as OneSessionManifest;
+      JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
 
     it("rebuilds with answers into the same manifest as the main flow alone", async () => {
       const rebuilt = async (source: Flow) => {
@@ -1379,7 +1375,13 @@ describe("buildVersion", () => {
       const sprawling = await rebuilt(withLoose(agentsFlow()));
       const alone = await rebuilt(agentsFlow());
 
-      expect(sprawling.nodes.map((node) => node.id)).toEqual(["start", "p1", "a", "b", "stop"]);
+      expect(oneSession(sprawling).nodes.map((node) => node.id)).toEqual([
+        "start",
+        "p1",
+        "a",
+        "b",
+        "stop",
+      ]);
       expect(sprawling).toEqual(alone);
     });
 
@@ -1391,7 +1393,13 @@ describe("buildVersion", () => {
 
       expect(result).toEqual(expect.objectContaining({ ok: true }));
       const manifest = await builtManifest(t);
-      expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "p1", "a", "b", "stop"]);
+      expect(oneSession(manifest).nodes.map((node) => node.id)).toEqual([
+        "start",
+        "p1",
+        "a",
+        "b",
+        "stop",
+      ]);
       expect(writeTurns(t.fake).flatMap((turn) => piecesNamed(turn.text))).not.toContainEqual(
         expect.stringContaining("loose"),
       );
@@ -1557,9 +1565,7 @@ describe("buildVersion", () => {
       if (!isBuilt(result)) throw new Error(`build failed: ${String(result)}`);
       const filled = await t.fs.readFile(`${dir()}/${pieceA}`);
       expect(filled).not.toMatch(/@unfilled/);
-      const manifest = JSON.parse(
-        await t.fs.readFile(`${dir()}/manifest.json`),
-      ) as OneSessionManifest & {
+      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest & {
         hash: string;
       };
       expect(manifest.kitVersion).toBe(kit.version);
@@ -1586,10 +1592,8 @@ describe("buildVersion", () => {
       expect(piecesNamed(t.fake.turns[2]?.text ?? "")).toEqual([pieceA]);
       expectInOrder(t.timeline, ["audit turn", "write turn", "step 5 running", "end built"]);
       expect(await t.fs.exists(`${dir()}/${pieceB}`)).toBe(false);
-      const manifest = JSON.parse(
-        await t.fs.readFile(`${dir()}/manifest.json`),
-      ) as OneSessionManifest;
-      expect(manifest.nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
+      const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
+      expect(oneSession(manifest).nodes.find((node) => node.id === "b")?.file).toBe(pieceA);
     });
 
     it("labels a merged piece's component events with each node's label, in node order", async () => {
@@ -1649,9 +1653,7 @@ describe("buildVersion", () => {
             (call) => call.method === "writeFile" && call.path === `${dir()}/${draftPath}`,
           ),
         ).toBe(true);
-        const manifest = JSON.parse(
-          await t.fs.readFile(`${dir()}/manifest.json`),
-        ) as OneSessionManifest;
+        const manifest = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
         expect(manifest.files[draftPath]).toBe(
           sha256Hex(await t.fs.readFile(`${dir()}/${draftPath}`)),
         );
@@ -1710,13 +1712,13 @@ describe("buildVersion", () => {
         if (!laid.ok) throw new Error("the flow does not lay down");
         const laidManifest = JSON.parse(
           laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-        ) as OneSessionManifest;
+        ) as Manifest;
         const applied = applyShared(laid.files, laidManifest, [conventions]);
         for (const file of applied.files)
           await t.fs.writeFile(`${dir()}/${file.path}`, file.content);
         await t.fs.writeFile(`${cut().path}/README.md`, "Repo notes.\n");
         const pieces = [
-          ...new Set((applied.manifest.nodes ?? []).flatMap((node) => node.file ?? [])),
+          ...new Set(oneSession(applied.manifest).nodes.flatMap((node) => node.file ?? [])),
           draftPath,
         ];
         await t.fake.open({ ...t.fake.opened[0], sessionName, workspaceDir: dir() } as never);
@@ -1773,9 +1775,7 @@ describe("buildVersion", () => {
         expect(result).toEqual(expect.objectContaining({ ok: true }));
         expect(t.fake.turns).toHaveLength(turnsBefore);
         expect(await t.fs.readFile(`${dir()}/${draftPath}`)).toBe(filledDraft);
-        const locked = JSON.parse(
-          await t.fs.readFile(`${dir()}/manifest.json`),
-        ) as OneSessionManifest;
+        const locked = JSON.parse(await t.fs.readFile(`${dir()}/manifest.json`)) as Manifest;
         expect(locked.files[draftPath]).toBe(sha256Hex(filledDraft));
       });
     });
@@ -2490,7 +2490,13 @@ describe("buildVersion", () => {
       if (!result.ok) throw new Error("build failed");
       expect(store.builds()).toEqual([result.record]);
       expect(result.record.source).toEqual(v1);
-      expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["start", "p1", "stop"]);
+      expect(result.record.nodes.map((node) => node.nodeId)).toEqual([
+        "workspace-1-start",
+        "workspace-1-stop",
+        "start",
+        "p1",
+        "stop",
+      ]);
     });
 
     it("names only the flow and version in the build, whatever else the reference carries", async () => {
@@ -2597,10 +2603,8 @@ describe("buildVersion", () => {
 
       expect(flows.loadLatest()?.version).toBe(2);
       const snapshot = store.buildSnapshot({ buildId: result.record.id });
-      const manifest = JSON.parse(
-        store.buildManifest(result.record.id) ?? "{}",
-      ) as OneSessionManifest;
-      expect(manifest.nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
+      const manifest = JSON.parse(store.buildManifest(result.record.id) ?? "{}") as Manifest;
+      expect(oneSession(manifest).nodes.find((node) => node.id === "p1")?.label).toBe("Planner");
       expect(snapshot?.svg).toContain("Planner");
       expect(snapshot?.svg).not.toContain("Reviewer");
     });
@@ -2646,8 +2650,8 @@ describe("buildVersion", () => {
       if (!laid.ok) throw new Error("the flow does not lay down");
       const manifest = JSON.parse(
         laid.files.find((file) => file.path === "manifest.json")?.content ?? "{}",
-      ) as OneSessionManifest;
-      return manifest.nodes.flatMap((node) =>
+      ) as Manifest;
+      return oneSession(manifest).nodes.flatMap((node) =>
         nodeIds.includes(node.id) && node.file !== undefined ? [node.file] : [],
       );
     };
@@ -2659,12 +2663,10 @@ describe("buildVersion", () => {
       const result = await buildVersion(v1, request, deps);
 
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
-      const manifest = JSON.parse(
-        await fs.readFile(`${result.dir}/manifest.json`),
-      ) as OneSessionManifest;
-      expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "a", "stop"]);
+      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      expect(oneSession(manifest).nodes.map((node) => node.id)).toEqual(["start", "a", "stop"]);
       expect(
-        manifest.wires.filter(
+        oneSession(manifest).wires.filter(
           (wire) => ignored.includes(wire.from.node) || ignored.includes(wire.to.node),
         ),
       ).toEqual([]);
@@ -3068,10 +3070,11 @@ describe("buildVersion", () => {
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
       expect(gitState.reads).toEqual([repo]);
       expect(worktree.calls).toEqual([expect.objectContaining({ repo, base: "main" })]);
-      const manifest = JSON.parse(
-        await fs.readFile(`${result.dir}/manifest.json`),
-      ) as OneSessionManifest;
-      expect(manifest.session.buildConfig).toStrictEqual({ repo, base: "main" });
+      const manifest = JSON.parse(await fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      expect(manifest.containers.find((container) => container.kind === "session")).toMatchObject({
+        repo,
+        base: "main",
+      });
       expect(saved).toStrictEqual(kept);
     });
   });

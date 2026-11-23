@@ -151,9 +151,11 @@ function Errors(stores: AppStores) {
 
 function RunSummary({ run, nav, wait }: Pick<AppStores, "run" | "nav" | "wait">) {
   const waiting = useStore(wait, (state) => state.pending !== null);
-  const summary = useStore(run, (state) =>
-    selectRunSummary({ snapshot: selectLatestSnapshot(state) }, waiting),
-  );
+  const summary = useStore(run, (state) => {
+    const latest = selectLatestSnapshot(state);
+    const pipeline = latest === null ? null : (state.pipelines[latest.runId] ?? null);
+    return selectRunSummary({ snapshot: latest, pipeline }, waiting);
+  });
   const liveRunId = useStore(run, (state) => {
     const latest = selectLatestSnapshot(state);
     return latest?.status === "running" ? latest.runId : null;

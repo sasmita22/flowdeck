@@ -36,7 +36,20 @@ const bridge: FlowdeckBridge = {
       ipcRenderer.removeListener(bridgeChannels.runState, handler);
     };
   },
-  openTerminal: (session, size) => ipcRenderer.invoke(bridgeChannels.openTerminal, session, size),
+  onRunSessions: (listener) => {
+    const handler = (_event: unknown, sessions: unknown) => listener(sessions);
+    ipcRenderer.on(bridgeChannels.runSessions, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.runSessions, handler);
+    };
+  },
+  openTerminal: (session, size, tmuxName) =>
+    ipcRenderer.invoke(
+      bridgeChannels.openTerminal,
+      session,
+      size,
+      ...(tmuxName === undefined ? [] : [tmuxName]),
+    ),
   getTerminalStatus: (session) => ipcRenderer.invoke(bridgeChannels.getTerminalStatus, session),
   writeTerminal: (session, data) => ipcRenderer.send(bridgeChannels.terminalInput, session, data),
   resizeTerminal: (session, size) => ipcRenderer.send(bridgeChannels.terminalResize, session, size),

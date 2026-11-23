@@ -17,7 +17,8 @@ import {
   flow,
   inOneSession,
   loop,
-  onMainFlow,
+  onWorkspaceMainFlow,
+  workspaceFlow,
   output,
   thenWire,
   trigger,
@@ -28,7 +29,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
-import { sessionWorktree } from "../src/core/run/workspace.js";
+import { workspaceFolder } from "../src/core/run/workspace.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -198,8 +199,7 @@ const status = (window: Page, nodeId: string, round?: number) =>
 
 const seed = (input: Flow) => seedFlow(home, input, repo.path);
 
-const workFolder = (buildId: string) =>
-  sessionWorktree(join(home, "workspaces", buildId), "main", repo.path);
+const workFolder = (buildId: string) => workspaceFolder(join(home, "workspaces", buildId));
 
 test.beforeEach(async () => {
   launched = undefined;
@@ -368,7 +368,7 @@ test("Planner writes plan.md and Builder is given it, set in the inspector, and 
 
 test("A run holds the reader until the file it is given is written", async () => {
   seed(
-    onMainFlow(
+    onWorkspaceMainFlow(
       [
         at(named("plan", "Planner", { writes: ["plan.md"] }), 80, 160),
         at(named("build", "Builder", { given: ["plan.md"] }), 420, 160),
@@ -403,15 +403,30 @@ test("A run holds the reader until the file it is given is written", async () =>
 
 for (const container of ["loop", "foreach"] as const) {
   test(`A ${container === "loop" ? "Loop" : "For each"} drawn in the app runs to done from its build`, async () => {
-    seed(flow([at(trigger("start"), 0, 120), at(output("stop"), 900, 120)], []));
+    const drawn = workspaceFlow([at(trigger("start"), 0, 120), at(output("stop"), 700, 120)], []);
+    seed({
+      ...drawn,
+      nodes: drawn.nodes.map((node) =>
+        node.id === "session-1-start"
+          ? at(node, 0, 480)
+          : node.id === "session-1-stop"
+            ? at(node, 700, 480)
+            : node,
+      ),
+    });
     const window = await launch();
-    const session = await boxOf(window.getByTestId(containerTestIds.frame("session-1")));
-    await dropOn(window, container, session.x + session.width / 2, session.y + session.height / 2);
+    const workspace = await boxOf(window.getByTestId(containerTestIds.frame("workspace-1")));
+    await dropOn(
+      window,
+      container,
+      workspace.x + workspace.width / 2,
+      workspace.y + workspace.height / 2,
+    );
     const id = `${container}-1`;
     await expect
       .poll(
         async () =>
-          (await readout(window)).containers.find((found) => found.id === "session-1")?.nodes,
+          (await readout(window)).containers.find((found) => found.id === "workspace-1")?.nodes,
       )
       .toEqual(["start", "stop", id]);
     await dropInFrame(window, "agent", window.getByTestId(`${container}-frame-${id}`));
@@ -424,6 +439,7 @@ for (const container of ["loop", "foreach"] as const) {
     await window.getByTestId("node-agent-1").click();
     await window.getByTestId("node-setting-instructions").fill("Say done.");
     await window.getByTestId("node-setting-instructions").blur();
+    await window.getByTestId(controlTestIds.zoomOut).click();
     await connectPorts(
       window,
       window.getByTestId("port-start-out"),

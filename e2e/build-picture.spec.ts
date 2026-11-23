@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { agent, onMainFlow } from "../test/fixtures/flow-builders.js";
+import { agent, onWorkspaceMainFlow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -18,7 +18,7 @@ let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const oneAgent = () => {
-  const built = onMainFlow([{ ...agent("s1"), label: "Old label" }], []);
+  const built = onWorkspaceMainFlow([{ ...agent("s1"), label: "Old label" }], []);
   return {
     ...built,
     nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),

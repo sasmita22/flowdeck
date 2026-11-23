@@ -14,7 +14,7 @@ import {
   flow,
   gate,
   inOneSession,
-  onMainFlow,
+  onWorkspaceMainFlow,
   thenWire,
 } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
@@ -49,7 +49,7 @@ const laidOut = (nodes: unknown[], wires: unknown[]): Flow =>
   );
 
 const runnable = (nodes: unknown[], wires: unknown[]): Flow => {
-  const built = onMainFlow(nodes, wires);
+  const built = onWorkspaceMainFlow(nodes, wires);
   return {
     ...built,
     nodes: built.nodes.map((node, index) => ({

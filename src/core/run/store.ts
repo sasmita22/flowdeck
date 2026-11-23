@@ -6,11 +6,16 @@ import type { RunEvent } from "./run-events.js";
 
 export type RunStatus = "running" | "done" | "failed" | "stopped";
 
+export type RunSession = { tmuxName: string; cwd: string; claudeSessionId: string };
+
+export type RunSessionRecord = RunSession & { parent: string | null };
+
 export type NewRun = {
   buildDir: string;
   inputs: Record<string, unknown>;
   nodeIds: string[];
-  session: { tmuxName: string; cwd: string; claudeSessionId: string };
+  session: RunSession;
+  sessions?: (RunSession & { nodeIds?: string[] })[];
   buildId: string;
 };
 
@@ -73,7 +78,7 @@ export type RunBuildCopy = {
   manifestJson: string | null;
 };
 
-export type RunRecord = Omit<NewRun, "buildId"> &
+export type RunRecord = Omit<NewRun, "buildId" | "sessions"> &
   RunBuildCopy & {
     id: string;
     status: RunStatus;
@@ -157,6 +162,8 @@ export class BuildRunningError extends Error {
 export interface Store {
   createRun(run: NewRun): RunRecord;
   findRun(id: string): RunRecord | undefined;
+  runSessions(runId: string): RunSessionRecord[];
+  nodeSessions(runId: string): Record<string, string>;
   /** Every run, the running ones first, then the newest. */
   listRuns(): RunSummary[];
   findRunSummary(id: string): RunSummary | undefined;

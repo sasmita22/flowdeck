@@ -18,6 +18,9 @@ import {
   selectRunningCount,
   selectRunSnapshot,
   selectRunSummary,
+  selectSessionFailure,
+  selectStartedSessions,
+  type RunView,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
@@ -49,6 +52,7 @@ type RunBridge = Pick<
   | "resumeRun"
   | "runCost"
   | "runPipeline"
+  | "onRunSessions"
   | "deleteBuild"
   | "deleteRun"
   | "deletePendingBuild"
@@ -115,6 +119,10 @@ const stage = (nodeId: string) => ({
   activity: [],
 });
 
+const group = (name: string, status: string, items: unknown[]) => ({ name, status, items });
+
+const inWorkspace = (...items: unknown[]) => [group("workspace", "running", items)];
+
 const built = { kind: "built", id: "b-0f3a9c2e", hash: "h1", dir: "/fd/workspaces/b-0f3a9c2e" };
 
 const setup = async (
@@ -130,6 +138,7 @@ const setup = async (
 ) => {
   const calls: string[] = [];
   let pushListener: (value: unknown) => void = () => undefined;
+  let sessionsListener: (value: unknown) => void = () => undefined;
 
   const saveBridge = {
     saveFlow: vi.fn<(flow: unknown) => Promise<unknown>>(async () => {
@@ -183,7 +192,11 @@ const setup = async (
       nodes: [{ nodeId: "p1", tokens: 10, cost: 0.5, ms: 1000 }],
       total: { tokens: 10, cost: 0.5, ms: 1000 },
     })),
-    runPipeline: vi.fn<FlowdeckBridge["runPipeline"]>(async () => [stage("a1")]),
+    runPipeline: vi.fn<FlowdeckBridge["runPipeline"]>(async () => inWorkspace(stage("a1"))),
+    onRunSessions: vi.fn((listener: (value: unknown) => void) => {
+      sessionsListener = listener;
+      return () => {};
+    }),
     deleteBuild: vi.fn<FlowdeckBridge["deleteBuild"]>(async () => ({ ok: true })),
     deleteRun: vi.fn<FlowdeckBridge["deleteRun"]>(async () => undefined),
     deletePendingBuild: vi.fn<FlowdeckBridge["deletePendingBuild"]>(async () => undefined),
@@ -231,8 +244,9 @@ const setup = async (
   };
   const run = createRunStore({ bridge, save, canvas, every });
   const push = (value: unknown) => pushListener(value);
+  const pushSessions = (value: unknown) => sessionsListener(value);
 
-  return { bridge, saveBridge, canvas, save, run, calls, push, tick };
+  return { bridge, saveBridge, canvas, save, run, calls, push, pushSessions, tick };
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
@@ -1701,7 +1715,7 @@ describe("controls", () => {
     const { bridge, run, tick } = await setup();
     await run.getState().loadPipeline("run-7");
     await run.getState().loadCost("run-7");
-    bridge.runPipeline.mockResolvedValue([{ ...stage("p1"), cost: 0.0042 }]);
+    bridge.runPipeline.mockResolvedValue(inWorkspace({ ...stage("p1"), cost: 0.0042 }));
     bridge.runCost.mockResolvedValue({
       nodes: [{ nodeId: "p1", tokens: 12, cost: 0.0042, ms: 1000 }],
       total: { tokens: 12, cost: 0.0042, ms: 1000 },
@@ -1710,7 +1724,10 @@ describe("controls", () => {
     run.getState().watchCost("run-7");
     await tick();
 
-    expect(run.getState().pipelines["run-7"]?.[0]).toMatchObject({ nodeId: "p1", cost: 0.0042 });
+    expect(run.getState().pipelines["run-7"]?.[0]?.items[0]).toMatchObject({
+      nodeId: "p1",
+      cost: 0.0042,
+    });
     expect(run.getState().cost?.report.nodes[0]?.cost).toBe(0.0042);
   });
 
@@ -1783,17 +1800,17 @@ describe("the run pipeline", () => {
         { round: 2, tokens: 20, cost: 0.7, items: [{ ...stage("body"), tokens: 20, cost: 0.7 }] },
       ],
     };
-    bridge.runPipeline.mockResolvedValueOnce([loop]);
+    bridge.runPipeline.mockResolvedValueOnce(inWorkspace(loop));
 
     await run.getState().loadPipeline("run-7");
 
-    expect(run.getState().pipelines["run-7"]).toEqual([loop]);
+    expect(run.getState().pipelines["run-7"]).toEqual(inWorkspace(loop));
   });
 
   it("keeps the pipeline the engine answers under each run it was asked for", async () => {
     const { bridge, run } = await setup();
-    bridge.runPipeline.mockResolvedValueOnce([stage("a1")]);
-    bridge.runPipeline.mockResolvedValueOnce([stage("b1")]);
+    bridge.runPipeline.mockResolvedValueOnce(inWorkspace(stage("a1")));
+    bridge.runPipeline.mockResolvedValueOnce(inWorkspace(stage("b1")));
 
     await run.getState().loadPipeline("run-7");
     await run.getState().loadPipeline("run-8");
@@ -1801,8 +1818,8 @@ describe("the run pipeline", () => {
     expect(bridge.runPipeline).toHaveBeenNthCalledWith(1, { runId: "run-7" });
     expect(bridge.runPipeline).toHaveBeenNthCalledWith(2, { runId: "run-8" });
     expect(run.getState().pipelines).toEqual({
-      "run-7": [stage("a1")],
-      "run-8": [stage("b1")],
+      "run-7": inWorkspace(stage("a1")),
+      "run-8": inWorkspace(stage("b1")),
     });
   });
 
@@ -1817,13 +1834,13 @@ describe("the run pipeline", () => {
 
   it("replaces a run's pipeline with the newer answer", async () => {
     const { bridge, run } = await setup();
-    bridge.runPipeline.mockResolvedValueOnce([stage("a1")]);
-    bridge.runPipeline.mockResolvedValueOnce([stage("a1"), stage("a2")]);
+    bridge.runPipeline.mockResolvedValueOnce(inWorkspace(stage("a1")));
+    bridge.runPipeline.mockResolvedValueOnce(inWorkspace(stage("a1"), stage("a2")));
 
     await run.getState().loadPipeline("run-7");
     await run.getState().loadPipeline("run-7");
 
-    expect(run.getState().pipelines["run-7"]).toEqual([stage("a1"), stage("a2")]);
+    expect(run.getState().pipelines["run-7"]).toEqual(inWorkspace(stage("a1"), stage("a2")));
   });
 
   it("holds the message and keeps the pipeline it had when the engine refuses", async () => {
@@ -1834,7 +1851,91 @@ describe("the run pipeline", () => {
     await run.getState().loadPipeline("run-7");
 
     expect(run.getState().error).toBe("No run run-7");
-    expect(run.getState().pipelines["run-7"]).toEqual([stage("a1")]);
+    expect(run.getState().pipelines["run-7"]).toEqual(inWorkspace(stage("a1")));
+  });
+});
+
+describe("a run with session containers", () => {
+  const node = (nodeId: string, label: string, status: NodeState) => ({
+    ...stage(nodeId),
+    label,
+    status,
+  });
+
+  const loaded = async (groups: unknown[], runId = "run-7") => {
+    const context = await setup();
+    context.bridge.runPipeline.mockResolvedValueOnce(groups);
+    await context.run.getState().loadPipeline(runId);
+    return context;
+  };
+
+  it("keeps android's stages under android, and shows them with their display", async () => {
+    const groups = [
+      group("workspace", "running", [node("ws-start", "Start", "done")]),
+      group("android", "running", [node("android-a1", "Build", "running")]),
+    ];
+    const { run } = await loaded(groups);
+    const view = {
+      snapshot: snapshot("running", { "ws-start": "done", "android-a1": "running" }, "run-7"),
+      pipeline: run.getState().pipelines["run-7"] ?? null,
+    };
+
+    expect(run.getState().pipelines["run-7"]).toEqual(groups);
+    expect(selectNodeDisplay(view, "android-a1")).toBe("running");
+  });
+
+  it("shows a container with no first event as not started once the run ends", async () => {
+    const groups = [
+      group("workspace", "done", [node("ws-wait", "Wait", "waiting")]),
+      group("android", "not-started", [node("android-a1", "Build", "waiting")]),
+    ];
+    const { run } = await loaded(groups);
+    const view = {
+      snapshot: snapshot("done", { "ws-wait": "waiting", "android-a1": "waiting" }, "run-7"),
+      pipeline: run.getState().pipelines["run-7"] ?? null,
+    };
+
+    expect(run.getState().pipelines["run-7"]?.[1]?.status).toBe("not-started");
+    expect(selectNodeDisplay(view, "android-a1")).toBe("not-started");
+    expect(selectNodeDisplay(view, "ws-wait")).toBe("waiting");
+  });
+
+  it("names the container and node of a failed session", async () => {
+    const { run } = await loaded([
+      group("workspace", "done", [node("ws-start", "Start", "done")]),
+      group("android", "failed", [node("android-a1", "Build", "failed")]),
+    ]);
+
+    expect(selectSessionFailure(run.getState(), "run-7")).toBe("Failed in android: Build");
+  });
+
+  it.each([
+    ["no node failed", "done"],
+    ["only a workspace node failed", "failed"],
+  ] as const)("names no session failure when %s", async (_case, workspaceState) => {
+    const { run } = await loaded([
+      group("workspace", workspaceState, [node("ws-a1", "Plan", workspaceState)]),
+      group("android", "done", [node("android-a1", "Build", "done")]),
+    ]);
+
+    expect(selectSessionFailure(run.getState(), "run-7")).toBeNull();
+  });
+
+  it("keeps the pushed started sessions of each run for the terminal", async () => {
+    const { run, pushSessions } = await setup();
+    await run.getState().connect();
+    const started = [
+      { container: "workspace", tmuxName: "fd-run-aaaa1111" },
+      { container: "android", tmuxName: "fd-run-bbbb2222" },
+    ];
+
+    pushSessions({ runId: "run-7", sessions: started });
+    pushSessions({ runId: "run-8", sessions: [started[0]] });
+    pushSessions({ runId: "run-7", sessions: "fd-run-cccc3333" });
+
+    expect(selectStartedSessions(run.getState(), "run-7")).toEqual(started);
+    expect(selectStartedSessions(run.getState(), "run-8")).toEqual([started[0]]);
+    expect(selectStartedSessions(run.getState(), "run-9")).toEqual([]);
   });
 });
 
@@ -1941,6 +2042,44 @@ describe("selectRunSummary", () => {
     expect(
       summaryOf(snapshot("done", { a: "done", b: "done", c: "done", d: "done", e: "done" })),
     ).toBe("Done · 5 of 5 nodes done");
+  });
+
+  it("leaves out the nodes of a session container that never started", () => {
+    const nodes = {
+      "ws-start": "done",
+      "ws-agent": "done",
+      "ws-stop": "done",
+      "android-start": "waiting",
+      "android-stop": "waiting",
+    } as const;
+    const pipeline = [
+      group("workspace", "done", [stage("ws-start"), stage("ws-agent"), stage("ws-stop")]),
+      group("android", "not-started", [stage("android-start"), stage("android-stop")]),
+    ];
+
+    expect(selectRunSummary({ snapshot: snapshot("done", nodes), pipeline } as RunView)).toBe(
+      "Done · 3 of 3 nodes done",
+    );
+  });
+
+  it("counts the nodes of a session container that started", () => {
+    const nodes = {
+      "ws-start": "done",
+      "ws-stop": "done",
+      "android-start": "done",
+      "android-stop": "waiting",
+      "ios-start": "waiting",
+      "ios-stop": "waiting",
+    } as const;
+    const pipeline = [
+      group("workspace", "done", [stage("ws-start"), stage("ws-stop")]),
+      group("android", "stopped", [stage("android-start"), stage("android-stop")]),
+      group("ios", "not-started", [stage("ios-start"), stage("ios-stop")]),
+    ];
+
+    expect(selectRunSummary({ snapshot: snapshot("done", nodes), pipeline } as RunView)).toBe(
+      "Done · 3 of 4 nodes done",
+    );
   });
 });
 

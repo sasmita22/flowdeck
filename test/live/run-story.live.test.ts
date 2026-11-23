@@ -67,7 +67,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude 
         await live.cleanup();
         await repo.cleanup();
       });
-      const parsed = builders.flow(
+      const parsed = builders.workspaceFlow(
         [
           builders.trigger("t"),
           {

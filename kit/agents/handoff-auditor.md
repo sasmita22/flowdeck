@@ -37,7 +37,7 @@ Read the build as one flow and make its pieces work together. Fix wording; recor
 - Never rename, split, create or delete a piece. The build guard refuses new files, renames and deletes anyway.
 - Never merge pieces yourself; request it in `merges`. Never write a shared piece yourself; request it in `shared`.
 - Never change a frontmatter `name`, the scope line that opens a `description`, or the order of the `NODE` lines in a container's `plugin/skills/run/SKILL.md`.
-- Never touch any container's `settings.json`, `plugin/hooks/` or `plugin/.claude-plugin/`, or the `## Standard rules` section of a `CLAUDE.md`.
+- Never touch any container's `settings.json`, `plugin/hooks/` or `plugin/.claude-plugin/`, or the `## Standard rules` section of a `CLAUDE.md`, or the `## Session containers` section of the workspace's `CLAUDE.md`.
 
 ## build-report.json
 

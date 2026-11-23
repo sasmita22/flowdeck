@@ -128,6 +128,30 @@ export const flow = (
   });
 };
 
+const sessionStart = "session-1-start";
+const sessionStop = "session-1-stop";
+
+export const workspaceFlow = (
+  nodes: unknown[],
+  wires: unknown[],
+  settings: Record<string, unknown> = flowSettings,
+  options: { session?: Omit<SessionOptions, "id">; containers?: unknown[] } = {},
+): Flow => {
+  if (options.containers !== undefined) {
+    return parseFlow({ nodes, wires, settings, containers: options.containers });
+  }
+  const topLevel = topLevelIds(nodes);
+  return parseFlow({
+    nodes: [...nodes, trigger(sessionStart), output(sessionStop)],
+    wires: [...wires, thenWire(sessionStart, sessionStop)],
+    settings,
+    containers: [
+      workspaceContainer(topLevel),
+      sessionContainer([sessionStart, sessionStop], options.session),
+    ],
+  });
+};
+
 export const bareFlow = (nodes: unknown[] = [], wires: unknown[] = []): Flow =>
   flow(nodes, wires, flowSettings, { containers: [] });
 
@@ -135,6 +159,11 @@ export const asWorkflow = (
   literal: { nodes: unknown[]; wires: unknown[]; settings: Record<string, unknown> },
   session: Omit<SessionOptions, "id"> = {},
 ): Flow => flow(literal.nodes, literal.wires, literal.settings, { session });
+
+export const asWorkspaceWorkflow = (
+  literal: { nodes: unknown[]; wires: unknown[]; settings: Record<string, unknown> },
+  session: Omit<SessionOptions, "id"> = {},
+): Flow => workspaceFlow(literal.nodes, literal.wires, literal.settings, { session });
 
 export type SessionSpec = {
   name: string;
@@ -189,37 +218,43 @@ export const twoSessionWorkflow = (): Flow =>
 type Placed = { id: string; type: string; parent?: string };
 type Linked = { kind: string; from: { node: string }; to: { node: string } };
 
-export const onMainFlow = (nodes: unknown[], wires: unknown[]): Flow => {
-  const placed = nodes as Placed[];
-  const clash = placed.find(
-    (node) =>
-      node.id === "start" ||
-      node.id === "stop" ||
-      node.type === "trigger" ||
-      node.type === "output",
-  );
-  if (clash !== undefined) throw new Error(`onMainFlow adds Start and Stop itself: ${clash.id}`);
+const mainFlowOf =
+  (build: typeof flow) =>
+  (nodes: unknown[], wires: unknown[]): Flow => {
+    const placed = nodes as Placed[];
+    const clash = placed.find(
+      (node) =>
+        node.id === "start" ||
+        node.id === "stop" ||
+        node.type === "trigger" ||
+        node.type === "output",
+    );
+    if (clash !== undefined) throw new Error(`onMainFlow adds Start and Stop itself: ${clash.id}`);
 
-  const parentOf = new Map(placed.map((node) => [node.id, node.parent]));
-  const topOf = (id: string): string => {
-    const parent = parentOf.get(id);
-    return parent === undefined ? id : topOf(parent);
+    const parentOf = new Map(placed.map((node) => [node.id, node.parent]));
+    const topOf = (id: string): string => {
+      const parent = parentOf.get(id);
+      return parent === undefined ? id : topOf(parent);
+    };
+    const crossing = (wires as Linked[])
+      .filter((wire) => wire.kind === "then")
+      .map((wire) => ({ from: topOf(wire.from.node), to: topOf(wire.to.node) }))
+      .filter((wire) => wire.from !== wire.to);
+
+    const tops = placed.filter((node) => node.parent === undefined).map((node) => node.id);
+    const entries = tops.filter((id) => !crossing.some((wire) => wire.to === id));
+    const exits = tops.filter((id) => !crossing.some((wire) => wire.from === id));
+
+    return build(
+      [trigger("start"), ...nodes, output("stop")],
+      [
+        ...entries.map((id) => thenWire("start", id)),
+        ...wires,
+        ...exits.map((id) => thenWire(id, "stop")),
+      ],
+    );
   };
-  const crossing = (wires as Linked[])
-    .filter((wire) => wire.kind === "then")
-    .map((wire) => ({ from: topOf(wire.from.node), to: topOf(wire.to.node) }))
-    .filter((wire) => wire.from !== wire.to);
 
-  const tops = placed.filter((node) => node.parent === undefined).map((node) => node.id);
-  const entries = tops.filter((id) => !crossing.some((wire) => wire.to === id));
-  const exits = tops.filter((id) => !crossing.some((wire) => wire.from === id));
+export const onMainFlow = mainFlowOf(flow);
 
-  return flow(
-    [trigger("start"), ...nodes, output("stop")],
-    [
-      ...entries.map((id) => thenWire("start", id)),
-      ...wires,
-      ...exits.map((id) => thenWire(id, "stop")),
-    ],
-  );
-};
+export const onWorkspaceMainFlow = mainFlowOf(workspaceFlow);

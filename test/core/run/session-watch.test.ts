@@ -1,0 +1,290 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { nodeStatus } from "../../../src/core/run/run-events.js";
+import { SessionWatch, sessionFailureOf } from "../../../src/core/run/session-watch.js";
+import type { NodeState } from "../../../src/core/run/state.js";
+import type { EventEntry } from "../../../src/core/run/store.js";
+import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
+
+const ours = "11111111-1111-4111-8111-111111111111";
+const other = "22222222-2222-4222-8222-222222222222";
+const prefix = "fix-login-android";
+const start = "android-start";
+const a1 = "android-a1";
+const a2 = "android-a2";
+const stopNode = "android-stop";
+const iosAgent = "ios-a1";
+
+const container = {
+  prefix,
+  nodes: [
+    { id: start, type: "trigger" as const, label: "Start" },
+    { id: a1, type: "agent" as const, label: "Plan" },
+    { id: a2, type: "agent" as const, label: "Build" },
+    { id: stopNode, type: "output" as const, label: "Stop" },
+  ],
+};
+
+const hookEvent = (
+  kind: HookEventKind,
+  at: number,
+  payload: Record<string, unknown> = {},
+  sessionId = ours,
+): HookEvent => ({
+  kind,
+  sessionId,
+  payload: { hook_event_name: kind, session_id: sessionId, flowdeck_hook_at: at, ...payload },
+});
+
+const agentInput = (nodeId: string) => ({
+  subagent_type: `${prefix}:${nodeId}`,
+  description: "Run",
+  prompt: `NODE ${nodeId}\nGo`,
+});
+
+const agentCall = (nodeId: string, at: number, sessionId = ours) =>
+  hookEvent(
+    "PreToolUse",
+    at,
+    { tool_name: "Agent", tool_input: agentInput(nodeId), tool_use_id: `toolu-${nodeId}` },
+    sessionId,
+  );
+
+const agentDone = (nodeId: string, at: number, sessionId = ours) =>
+  hookEvent(
+    "PostToolUse",
+    at,
+    {
+      tool_name: "Agent",
+      tool_input: agentInput(nodeId),
+      tool_use_id: `toolu-${nodeId}`,
+      tool_response: {
+        status: "completed",
+        agentId: `agent-${nodeId}`,
+        agentType: `${prefix}:${nodeId}`,
+        content: [{ type: "text", text: `${nodeId} finished` }],
+      },
+    },
+    sessionId,
+  );
+
+const bash = (at: number, sessionId = ours) =>
+  hookEvent("PreToolUse", at, { tool_name: "Bash", tool_input: { command: "ls" } }, sessionId);
+
+const stop = (at: number, sessionId = ours) =>
+  hookEvent("Stop", at, { last_assistant_message: "all done" }, sessionId);
+
+const stopFailure = (at: number, sessionId = ours) =>
+  hookEvent(
+    "StopFailure",
+    at,
+    { error: "authentication_failed", last_assistant_message: "Not logged in" },
+    sessionId,
+  );
+
+describe("SessionWatch", () => {
+  let watch: SessionWatch;
+  let emitted: EventEntry[];
+
+  const accept = (...events: HookEvent[]) => {
+    for (const event of events) emitted.push(...watch.accept(event));
+  };
+
+  const died = () => emitted.push(...watch.died());
+
+  const statusOf = (nodeId: string): NodeState =>
+    nodeStatus(emitted.filter((entry) => entry.nodeId === nodeId).map((entry) => entry.event));
+
+  const statuses = () => Object.fromEntries(container.nodes.map(({ id }) => [id, statusOf(id)]));
+
+  beforeEach(() => {
+    watch = new SessionWatch({ container, sessionId: ours });
+    emitted = [];
+  });
+
+  it("emits nothing and is not started before its session's first hook event", () => {
+    expect(watch.started).toBe(false);
+    expect(emitted).toEqual([]);
+  });
+
+  it.each([
+    { name: "a Bash call", first: () => bash(1000) },
+    { name: "a turn-end Stop", first: () => stop(1000) },
+  ])("marks Start done and the session started on its first hook event, $name", ({ first }) => {
+    accept(first());
+
+    expect(watch.started).toBe(true);
+    expect(statusOf(start)).toBe("done");
+    expect(statusOf(a1)).toBe("waiting");
+    expect(statusOf(a2)).toBe("waiting");
+  });
+
+  it("runs each Agent node from its NODE marker's call and finishes it on the call's result", () => {
+    accept(bash(1000), agentCall(a1, 1100));
+    expect(statusOf(a1)).toBe("running");
+
+    accept(agentDone(a1, 1200));
+    expect(statusOf(a1)).toBe("done");
+    expect(statusOf(a2)).toBe("waiting");
+
+    accept(agentCall(a2, 1300));
+    expect(statusOf(a2)).toBe("running");
+
+    accept(agentDone(a2, 1400));
+    expect(statusOf(a2)).toBe("done");
+  });
+
+  it("marks the Stop node done on the turn-end Stop after the run prompt", () => {
+    accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+    accept(agentCall(a2, 1300), agentDone(a2, 1400), stop(1500));
+
+    expect(statuses()).toEqual({ [start]: "done", [a1]: "done", [a2]: "done", [stopNode]: "done" });
+  });
+
+  it("emits only legal moves when hooks repeat a call result and a Stop", () => {
+    accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200), agentDone(a1, 1250));
+    accept(agentCall(a2, 1300), agentDone(a2, 1400), stop(1500), stop(1600));
+
+    expect(statuses()).toEqual({ [start]: "done", [a1]: "done", [a2]: "done", [stopNode]: "done" });
+  });
+
+  describe("a session that fails", () => {
+    it("fails the node whose marker is open on a StopFailure", () => {
+      accept(agentCall(a1, 1100), agentDone(a1, 1200), agentCall(a2, 1300), stopFailure(1400));
+
+      expect(statusOf(a2)).toBe("failed");
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("fails the Stop node on a StopFailure with no marker open", () => {
+      accept(agentCall(a1, 1100), agentDone(a1, 1200), stopFailure(1300));
+
+      expect(statusOf(a1)).toBe("done");
+      expect(statusOf(stopNode)).toBe("failed");
+    });
+
+    it("fails the open node when its tmux session is gone before Stop", () => {
+      accept(agentCall(a1, 1100));
+
+      died();
+
+      expect(statusOf(a1)).toBe("failed");
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("fails the Stop node when its tmux session is gone before Stop with no marker open", () => {
+      accept(agentCall(a1, 1100), agentDone(a1, 1200));
+
+      died();
+
+      expect(statusOf(stopNode)).toBe("failed");
+    });
+
+    it("fails the node it is told to, then emits nothing for a death or any later event", () => {
+      accept(agentCall(a1, 1100), agentDone(a1, 1200));
+
+      emitted.push(...watch.failAt(a2, "tmux: no server running"));
+      const before = emitted.length;
+      died();
+      accept(agentCall(a2, 1300), agentDone(a2, 1400), stop(1500));
+
+      expect(statusOf(a2)).toBe("failed");
+      expect(emitted.at(before - 1)).toEqual({
+        nodeId: a2,
+        event: { kind: "failed", payload: { message: "tmux: no server running" } },
+      });
+      expect(emitted).toHaveLength(before);
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("fails nothing when its tmux session is gone after Stop", () => {
+      accept(agentCall(a1, 1100), agentDone(a1, 1200), stop(1300));
+      const before = emitted.length;
+
+      died();
+
+      expect(emitted).toHaveLength(before);
+      expect(statusOf(stopNode)).toBe("done");
+    });
+  });
+
+  describe("events that are not its session's", () => {
+    it.each([
+      { name: "a Bash call", event: bash(1000, other) },
+      { name: "an Agent call", event: agentCall(a1, 1100, other) },
+      { name: "an Agent result", event: agentDone(a1, 1200, other) },
+      { name: "a Stop", event: stop(1300, other) },
+      { name: "a StopFailure", event: stopFailure(1300, other) },
+    ])("ignores another session's $name", ({ event }) => {
+      accept(event);
+
+      expect(watch.started).toBe(false);
+      expect(emitted).toEqual([]);
+    });
+
+    it.each([
+      { name: "call", event: agentCall(iosAgent, 1100) },
+      { name: "result", event: agentDone(iosAgent, 1200) },
+    ])("ignores an Agent $name marked with another container's node", ({ event }) => {
+      accept(bash(1000));
+      const before = emitted.length;
+
+      accept(event);
+
+      expect(emitted).toHaveLength(before);
+      expect(emitted.map((entry) => entry.nodeId)).not.toContain(iosAgent);
+    });
+  });
+});
+
+describe("sessionFailureOf", () => {
+  const stage = (nodeId: string, label: string, status: NodeState) => ({
+    nodeId,
+    type: "agent" as const,
+    label,
+    status,
+    retries: 0,
+    decisions: [],
+    timeline: [],
+    activity: [],
+  });
+
+  type Groups = Parameters<typeof sessionFailureOf>[0];
+
+  const group = (name: string, items: ReturnType<typeof stage>[]) => ({ name, items });
+
+  const groups = (...list: ReturnType<typeof group>[]) => list as unknown as Groups;
+
+  it("names the container and node of the first failed node in a session group", () => {
+    const result = sessionFailureOf(
+      groups(
+        group("workspace", [stage("ws-a1", "Plan", "done")]),
+        group("android", [stage(a1, "Plan", "done"), stage(a2, "Build", "failed")]),
+        group("ios", [stage(iosAgent, "Review", "failed")]),
+      ),
+    );
+
+    expect(result).toEqual({ container: "android", node: "Build" });
+  });
+
+  it("gives nothing when no session node failed", () => {
+    expect(
+      sessionFailureOf(
+        groups(
+          group("workspace", [stage("ws-a1", "Plan", "done")]),
+          group("android", [stage(a1, "Plan", "done"), stage(a2, "Build", "waiting")]),
+        ),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("leaves a failed workspace node to the workspace's own outcome", () => {
+    expect(
+      sessionFailureOf(
+        groups(
+          group("workspace", [stage("ws-a1", "Plan", "failed")]),
+          group("android", [stage(a1, "Plan", "done")]),
+        ),
+      ),
+    ).toBeUndefined();
+  });
+});

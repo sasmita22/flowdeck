@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vi } from "vitest";
 import { ClaudeBuildAgents } from "../../src/adapters/claude/claude-build-agents.js";
@@ -27,6 +27,7 @@ import type { Flow } from "../../src/core/flow/schema.js";
 import type { VariableValues } from "../../src/core/flow/variables.js";
 import type { RunEnvironment } from "../../src/core/run/execute.js";
 import type { PendingBuildEnd, RunStatus } from "../../src/core/run/store.js";
+import { workspaceFolder } from "../../src/core/run/workspace.js";
 import type { HumanWaiter } from "../../src/core/run/wait.js";
 import type { BuildAgents, BuildAgentsOpenSpec } from "../../src/ports/build-agents.js";
 import type { RunNarrator } from "../../src/ports/run-narrator.js";
@@ -103,9 +104,6 @@ export async function sessionIdsIn(folder: string): Promise<string[]> {
     throw error;
   }
 }
-
-export const workFolderOf = (workspaceDir: string, repo: string) =>
-  join(workspaceDir, basename(repo));
 
 const keptFiles = (path: string) =>
   path.startsWith("plugin/") || ["manifest.json", "build-report.json", "CLAUDE.md"].includes(path);
@@ -343,7 +341,7 @@ export function liveEngine(options: LiveEngineOptions): LiveEngine {
     if (record === undefined) {
       throw new Error(`build ${request.name} ended ${JSON.stringify(ended.outcome)}, not built`);
     }
-    const workFolder = workFolderOf(record.dir, repo);
+    const workFolder = workspaceFolder(record.dir);
     workFolders.add(workFolder);
     return { ...ended, buildId: record.id, hash: record.hash, dir: record.dir, workFolder };
   };

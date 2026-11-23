@@ -14,7 +14,7 @@ import {
   type EngineHandlerOptions,
 } from "../../../src/app/engine/engine-handler.js";
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { PendingWait } from "../../../src/core/run/wait.js";
@@ -29,7 +29,7 @@ import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
   gate,
-  onMainFlow,
+  onWorkspaceMainFlow,
   sessionsWorkflow,
   thenWire,
 } from "../../fixtures/flow-builders.js";
@@ -223,8 +223,64 @@ describe("an app restart", () => {
     )?.value as PendingWait | null | undefined;
   const sessionName = (runId: string) => runs.findRun(runId)?.session.tmuxName ?? "";
 
+  const workspaceAsks = (): Flow => {
+    const built = sessionsWorkflow(
+      [
+        { name: "android", repo: repo.path, branch: "main" },
+        { name: "ios", repo: repo.path, branch: "main" },
+      ],
+      { workspace: ["Plan"] },
+    );
+    const check = gate("workspace-1-check", { settings: { shown: "Check android" } });
+    return parseFlow({
+      ...built,
+      nodes: [...built.nodes, check],
+      wires: [
+        ...built.wires.filter(
+          (each) => !(each.from.node === "workspace-1-plan" && each.to.node === "workspace-1-stop"),
+        ),
+        thenWire("workspace-1-plan", check.id),
+        thenWire(check.id, "workspace-1-stop"),
+      ],
+      containers: built.containers.map((container) =>
+        container.kind === "workspace"
+          ? { ...container, nodes: [...container.nodes, check.id] }
+          : container,
+      ),
+    });
+  };
+
+  const containerSession = (slug: string) => {
+    const env = (opened[0] as (OpenSessionOptions & { env?: Record<string, string> }) | undefined)
+      ?.env;
+    return {
+      tmuxName: env?.[`FD_SESSION_${slug}_TMUX`] ?? "",
+      claudeSessionId: env?.[`FD_SESSION_${slug}_ID`] ?? "",
+    };
+  };
+
+  const agentHook = (kind: "PreToolUse" | "PostToolUse" | "Stop", sessionId: string, nodeId = "") =>
+    events.publish({
+      kind,
+      sessionId,
+      payload: {
+        hook_event_name: kind,
+        session_id: sessionId,
+        ...(kind === "Stop"
+          ? { last_assistant_message: "DONE" }
+          : {
+              tool_name: "Agent",
+              tool_input: { subagent_type: "agent", prompt: `NODE ${nodeId}\nGo` },
+              tool_use_id: `toolu-${nodeId}`,
+              ...(kind === "PostToolUse"
+                ? { tool_response: { status: "completed", agentId: `agent-${nodeId}` } }
+                : {}),
+            }),
+      },
+    });
+
   const askedAtGate = () =>
-    onMainFlow(
+    onWorkspaceMainFlow(
       [agent("p1"), gate("g1", { settings: { shown: "Check the plan" } }), agent("s2")],
       [thenWire("p1", "g1"), thenWire("g1", "s2")],
     );
@@ -270,7 +326,7 @@ describe("an app restart", () => {
       let release: () => void = () => undefined;
       sending.held = new Promise((resolve) => (release = resolve));
       const first = newHandler();
-      await start(first, onMainFlow([agent("p1")], []));
+      await start(first, onWorkspaceMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       let detached = false;
 
@@ -286,7 +342,7 @@ describe("an app restart", () => {
     it("stops waiting for a prompt that never finishes sending after 8 seconds", async () => {
       sending.held = new Promise(() => undefined);
       const first = newHandler();
-      await start(first, onMainFlow([agent("p1")], []));
+      await start(first, onWorkspaceMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(sending.started).toBe(1));
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -331,6 +387,48 @@ describe("an app restart", () => {
       expect(statusOf(runId, "s2")).toBe("done");
     });
 
+    it("reattaches the workspace and every started session, listening to each again, and never reattaches or ends one never started", async () => {
+      const asked: string[] = [];
+      const ended: string[] = [];
+      const first = newHandler();
+      const runId = await start(first, workspaceAsks());
+      await vi.waitFor(() => expect(statusOf(runId, "workspace-1-check")).toBe("needs-you"));
+      const android = containerSession("ANDROID");
+      const ios = containerSession("IOS");
+      agentHook("PreToolUse", android.claudeSessionId, "session-1-plan");
+      await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+      await first.detach();
+      alive.add(sessionName(runId));
+      alive.add(android.tmuxName);
+      events = new FakeEventSource();
+      pushes = [];
+
+      const second = newHandler({
+        sessionAlive: async (name) => {
+          asked.push(name);
+          return alive.has(name);
+        },
+        endSession: async (name) => {
+          ended.push(name);
+          alive.delete(name);
+        },
+      });
+      await second.reattach();
+
+      expect(asked).toEqual(expect.arrayContaining([sessionName(runId), android.tmuxName]));
+      expect(asked).not.toContain(ios.tmuxName);
+      agentHook("PostToolUse", android.claudeSessionId, "session-1-plan");
+      agentHook("Stop", android.claudeSessionId);
+      await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+      await vi.waitFor(() =>
+        expect(lastWait(runId)?.request).toMatchObject({ nodeId: "workspace-1-check" }),
+      );
+      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } });
+      await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
+      expect(ended).not.toContain(ios.tmuxName);
+      expect(statusOf(runId, "session-2-start")).toBe("waiting");
+    });
+
     it("leaves a run interrupted, with a plain note, when its session has ended", async () => {
       const first = newHandler();
       const runId = await start(first, askedAtGate());
@@ -356,7 +454,7 @@ describe("an app restart", () => {
       const first = newHandler();
       const runId = await start(
         first,
-        onMainFlow(
+        onWorkspaceMainFlow(
           [agent("p1"), gate("g1"), agent("p2")],
           [thenWire("p1", "g1"), thenWire("g1", "p2")],
         ),
@@ -528,7 +626,7 @@ describe("an app restart", () => {
       overrides: Partial<EngineHandlerOptions> = {},
       repoPath = repo.path,
       request: Record<string, unknown> = {},
-      blueprint: Flow = onMainFlow([agent("p1")], []),
+      blueprint: Flow = onWorkspaceMainFlow([agent("p1")], []),
     ) => {
       const inFlight = new InFlightAgents();
       const first = newHandler({ buildAgents: inFlight, ...overrides });
@@ -654,7 +752,10 @@ describe("an app restart", () => {
       const snapshot = runs.buildSnapshot({ pendingId });
       if (pending === null || snapshot === null) throw new Error("the build kept no snapshot");
       flows.rename(pending.flowId, "Renamed since");
-      flows.save(onMainFlow([agent("p1"), agent("s2")], [thenWire("p1", "s2")]), pending.flowId);
+      flows.save(
+        onWorkspaceMainFlow([agent("p1"), agent("s2")], [thenWire("p1", "s2")]),
+        pending.flowId,
+      );
       const loaded = vi.spyOn(flows, "load");
       onTestFinished(() => {
         vi.restoreAllMocks();
@@ -676,7 +777,13 @@ describe("an app restart", () => {
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
       const built = runs.findBuildByName(name);
       const recorded = runs.builds().find((build) => build.id === built?.id);
-      expect(recorded?.nodes.map((node) => node.nodeId)).toEqual(["start", "p1", "stop"]);
+      expect(recorded?.nodes.map((node) => node.nodeId)).toEqual([
+        "start",
+        "p1",
+        "stop",
+        "session-1-start",
+        "session-1-stop",
+      ]);
       const claudeMd = await new NodeFileSystem().readFile(
         join(built?.dir ?? "", "sessions/main/CLAUDE.md"),
       );
@@ -783,7 +890,7 @@ describe("an app restart", () => {
           script: { questions: [question] },
         }),
       });
-      const blueprint = onMainFlow([agent("p1")], []);
+      const blueprint = onWorkspaceMainFlow([agent("p1")], []);
       const { flowId, version } = flows.save(inRepo(blueprint, repo.path));
       const asked = (await call(asking, "build-version", {
         flowId,

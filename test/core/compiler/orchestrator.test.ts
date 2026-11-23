@@ -111,6 +111,13 @@ describe("orchestratorSkill", () => {
     expect(String(fields.description).startsWith(scopeLine(scope))).toBe(true);
   });
 
+  it("says in its description that a Flowdeck run's start command types it, not only a person without the app", () => {
+    const description = String(frontmatter(skill().content).description);
+
+    expect(description).toContain("by a Flowdeck run's start command");
+    expect(description).not.toContain("without the Flowdeck app");
+  });
+
   it("lists every node of the session once, in the order the runner uses, each with its node marker", () => {
     const ids = stepLines(skill().content).map((line) => /NODE (\S+) /.exec(line)?.[1]);
 

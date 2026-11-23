@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeStatus, type RunEvent } from "../src/core/run/run-events.js";
-import { flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import { gate, output, thenWire, trigger, workspaceFlow } from "../test/fixtures/flow-builders.js";
 import { dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -85,6 +85,8 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
         .all(run.id),
     ).toEqual([
       { node_id: "s1", finished_at: expect.any(String) },
+      { node_id: "session-1-start", finished_at: null },
+      { node_id: "session-1-stop", finished_at: null },
       { node_id: "start", finished_at: expect.any(String) },
       { node_id: "stop", finished_at: expect.any(String) },
     ]);
@@ -108,7 +110,7 @@ test("Build saves the edit first, the build runs, and the run shows each node's 
 test("A run with no Claude turn has no terminal: the menu's Open terminal stays disabled and the run's Terminal tab says so", async () => {
   seedFlow(
     home,
-    flow(
+    workspaceFlow(
       [
         trigger("start"),
         gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
@@ -142,7 +144,7 @@ test("A run with no Claude turn has no terminal: the menu's Open terminal stays 
   await window.getByTestId("run-tab-activity").click();
 
   const session = window.getByTestId("inspector-session");
-  await expect(session).toContainText("main");
+  await expect(session).toContainText("workspace");
   await expect(session).toHaveAttribute("data-status", "done");
   await expect(window.getByTestId("inspector-node-g1")).toHaveAttribute("data-status", "skipped");
   const runSessions = readFileSync(fakeClaudeRan(home), "utf8")

@@ -2,12 +2,10 @@ import { z } from "zod";
 import type { Manifest, ManifestContainer } from "../compiler/lower.js";
 import { NodeType, Wire } from "../flow/schema.js";
 
-export type ParsedManifest = Omit<Manifest, "prefix" | "layout" | "nodes" | "wires"> &
-  Required<Pick<Manifest, "nodes" | "wires">> & {
-    hash: string;
-    prefix: string;
-    layout: "workspace" | "legacy";
-  };
+export type ParsedManifest = Omit<Manifest, "prefix" | "layout" | "nodes" | "wires" | "session"> & {
+  hash: string;
+  layout: "workspace" | "legacy";
+};
 
 const storedNodeSchema = z.looseObject({
   id: z.string(),
@@ -34,11 +32,7 @@ const storedContainerSchema = z.looseObject({
 const storedManifestSchema = z.looseObject({
   version: z.literal(1),
   hash: z.string(),
-  prefix: z.string().optional(),
-  session: z.looseObject({ name: z.string() }).optional(),
   containers: z.array(storedContainerSchema),
-  nodes: z.array(storedNodeSchema).optional(),
-  wires: z.array(Wire).optional(),
 });
 
 export function parseManifest(
@@ -47,12 +41,8 @@ export function parseManifest(
 ): ParsedManifest {
   const parsed: unknown = JSON.parse(text);
   storedManifestSchema.parse(parsed);
-  const manifest = parsed as Omit<ParsedManifest, "prefix" | "layout"> & { prefix?: string };
-  return {
-    ...manifest,
-    prefix: manifest.prefix ?? build.hash,
-    layout: build.name === null ? "legacy" : "workspace",
-  };
+  const manifest = parsed as Omit<ParsedManifest, "layout">;
+  return { ...manifest, layout: build.name === null ? "legacy" : "workspace" };
 }
 
 const stageNodeSchema = z.object({
@@ -71,46 +61,31 @@ export const stageSourcesSchema = z.object({
 export type StageSources = z.infer<typeof stageSourcesSchema>;
 export type StageNode = StageSources["nodes"][number];
 
-const workspaceSession = { name: "workspace" };
+export type StageGroup = { name: string; nodes: StageNode[]; wires: StageSources["wires"] };
 
-export function stageSourcesOf(
-  manifest: Omit<ParsedManifest, "hash" | "prefix" | "layout">,
-): StageSources {
-  const { containers } = manifest;
-  const [session, nodes, wires] =
-    manifest.session === undefined
-      ? [
-          workspaceSession,
-          containers.flatMap((container) => container.nodes),
-          containers.flatMap((container) => container.wires),
-        ]
-      : [manifest.session, manifest.nodes, manifest.wires];
-  return {
-    session: { name: session.name },
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      label: node.label,
-      ...(node.parent === undefined ? {} : { parent: node.parent }),
-    })),
-    wires: wires.filter((wire) => wire.kind === "then"),
-  };
+const stageGroupOf = (container: ManifestContainer): StageGroup => ({
+  name: container.name,
+  nodes: container.nodes.map((node) => ({
+    id: node.id,
+    type: node.type,
+    label: node.label,
+    ...(node.parent === undefined ? {} : { parent: node.parent }),
+  })),
+  wires: container.wires.filter((wire) => wire.kind === "then"),
+});
+
+export function workspaceOf(manifest: Pick<ParsedManifest, "containers">): ManifestContainer {
+  const workspace = manifest.containers.find((container) => container.kind === "workspace");
+  if (workspace === undefined) throw new Error("The build has no workspace container");
+  return workspace;
 }
 
-export type SessionCheck =
-  { ok: true; container: ManifestContainer } | { ok: false; reason: string };
+export const sessionContainersOf = (
+  manifest: Pick<ParsedManifest, "containers">,
+): ManifestContainer[] => manifest.containers.filter((container) => container.kind === "session");
 
-const startOrStop = (node: { type: string }) => node.type === "trigger" || node.type === "output";
-
-export function singleSession(manifest: Pick<ParsedManifest, "containers">): SessionCheck {
-  const { containers } = manifest;
-  const sessions = containers.filter((container) => container.kind === "session");
-  const workspaceIdle = containers
-    .filter((container) => container.kind === "workspace")
-    .every((workspace) => workspace.nodes.every(startOrStop));
-  const [only] = sessions;
-  if (sessions.length === 1 && only !== undefined && workspaceIdle) {
-    return { ok: true, container: only };
-  }
-  return { ok: false, reason: "Running several sessions is not supported yet." };
-}
+export const stageSourcesOf = (manifest: Pick<ParsedManifest, "containers">): StageGroup[] =>
+  [
+    ...manifest.containers.filter((container) => container.kind === "workspace"),
+    ...sessionContainersOf(manifest),
+  ].map(stageGroupOf);

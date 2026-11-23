@@ -190,6 +190,8 @@ const createHandler = async () =>
     claudeConfig: runClaudeConfig,
     sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
     endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
+    answerDialogs: (name) =>
+      new ClaudeCli({ sessions: new TmuxSessionHost({ socketName: name }) }).waitUntilReady(name),
     homeLock: { acquire: lockHome },
     blueprint: await prepareBlueprint(),
     narrator: new ClaudeNarrator({ home }),

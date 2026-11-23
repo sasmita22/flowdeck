@@ -10,7 +10,7 @@ import { canonicalJson } from "../src/core/compiler/canonical-json.js";
 import { hashBuild } from "../src/core/compiler/hash.js";
 import type { Manifest } from "../src/core/compiler/lower.js";
 import type { Flow } from "../src/core/flow/schema.js";
-import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, gate, onWorkspaceMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -25,7 +25,7 @@ let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const laidOut = (nodes: unknown[], wires: unknown[]): Flow => {
-  const built = onMainFlow(nodes, wires);
+  const built = onWorkspaceMainFlow(nodes, wires);
   return {
     ...built,
     nodes: built.nodes.map((node, index) => ({
@@ -271,9 +271,9 @@ test("A run whose session ended while the app was closed shows interrupted, and 
     return at === -1 ? undefined : firstLaunch?.[at + 1];
   };
   expect(["--add-dir", "--settings", "--plugin-dir"].map(valueOf)).toEqual([
-    "..",
-    "../settings.json",
-    "../plugin",
+    undefined,
+    "settings.json",
+    "plugin",
   ]);
   for (const argv of launches) {
     expect(argv).not.toContain("--mcp-config");

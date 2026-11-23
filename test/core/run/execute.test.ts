@@ -11,8 +11,8 @@ import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { buildRecord } from "../../../src/core/compiler/record.js";
-import { parseFlow } from "../../../src/core/flow/schema.js";
-import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
+import { agentTurnText, agentType } from "../../../src/core/nodes/agent/execute.js";
 import { costOf } from "../../../src/core/run/budget.js";
 import { decideResume } from "../../../src/core/run/resume.js";
 import {
@@ -22,7 +22,10 @@ import {
   needsClaude,
   noClaude,
   runSocketPath,
+  type StartedSessionsView,
 } from "../../../src/core/run/execute.js";
+import { sessionContainersOf, workspaceOf } from "../../../src/core/run/manifest.js";
+import { workspaceFolder } from "../../../src/core/run/workspace.js";
 import type { BuildRecord } from "../../../src/core/run/store.js";
 import type { PermissionDecision } from "../../../src/ports/permission-source.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
@@ -34,16 +37,52 @@ import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
 import {
   agent,
+  flow,
+  flowSettings,
   gate,
-  onMainFlow,
+  output,
+  sessionContainer,
   thenWire,
+  trigger,
   twoSessionWorkflow,
+  workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 
 const fs = new NodeFileSystem();
 
-const gatesOnly = () => onMainFlow([gate("write"), gate("check")], [thenWire("write", "check")]);
+const inWorkspace = (nodes: { id: string }[]): Flow => {
+  const ids = ["start", ...nodes.map((node) => node.id), "stop"];
+  return flow(
+    [trigger("start"), ...nodes, output("stop"), trigger("main-start"), output("main-stop")],
+    [
+      ...ids.slice(1).map((id, index) => thenWire(ids[index] as string, id)),
+      thenWire("main-start", "main-stop"),
+    ],
+    flowSettings,
+    {
+      containers: [workspaceContainer(ids), sessionContainer(["main-start", "main-stop"])],
+    },
+  );
+};
+
+const gatesOnly = () => inWorkspace([gate("write"), gate("check")]);
+
+const workspaceBuild = (manifest: { hash: string; prefix: string; nodes: unknown[] }) =>
+  ({
+    hash: manifest.hash,
+    containers: [
+      {
+        kind: "workspace",
+        name: "workspace",
+        slug: "workspace",
+        prefix: manifest.prefix,
+        model: "sonnet",
+        nodes: manifest.nodes,
+        wires: [],
+      },
+    ],
+  }) as unknown as LoadedBuild;
 
 const approve: WaitReply = { decision: "approve" };
 
@@ -156,7 +195,7 @@ describe("the core run path", () => {
 
       expect(result.kind).toBe("loaded");
       if (result.kind !== "loaded") return;
-      expect(result.build.nodes.map((node) => node.id)).toEqual([
+      expect(workspaceOf(result.build).nodes.map((node) => node.id)).toEqual([
         "start",
         "write",
         "check",
@@ -168,35 +207,14 @@ describe("the core run path", () => {
     it("takes the prefix and layout from the manifest", async () => {
       const build = await loaded();
 
-      expect(build.prefix).toBe("fix-login-main");
+      expect(workspaceOf(build).prefix).toBe("fix-login-workspace");
       expect(build.layout).toBe("workspace");
     });
 
     it("gives a one-session build the worktree in its session's folder", async () => {
-      expect((await loaded()).worktree).toBe(join(dir, "sessions", "main", "repo"));
-    });
+      const [main] = sessionContainersOf(await loaded());
 
-    it("refuses a build with two session containers, saying several sessions cannot run yet", async () => {
-      const twoSessions = await build(twoSessionWorkflow(), {
-        fs,
-        home,
-        workspace: {
-          id: "two-sessions",
-          name: "two-sessions",
-          repo: "/repos/android",
-          base: "main",
-          branch: "flowdeck/two-sessions",
-          branchCreated: true,
-          values: {},
-        },
-      });
-      if (!twoSessions.ok) throw new Error("build failed");
-      store.recordBuild(twoSessions.record);
-
-      expect(await loadBuild("two-sessions", { fs, store })).toEqual({
-        kind: "error",
-        message: "Running several sessions is not supported yet.",
-      });
+      expect(main?.worktree).toBe(join(dir, "sessions", "main", "repo"));
     });
 
     it("keeps each node's piece and the kit version a build was made with", async () => {
@@ -208,11 +226,14 @@ describe("the core run path", () => {
         workspace: dir,
       }).map((file) => {
         if (file.path !== "manifest.json") return file;
-        const manifest = JSON.parse(file.content) as Required<Manifest>;
-        const nodes = manifest.nodes.map((node) => ({ ...node, piece: `piece-${node.id}` }));
+        const manifest = JSON.parse(file.content) as Manifest;
+        const containers = manifest.containers.map((container) => ({
+          ...container,
+          nodes: container.nodes.map((node) => ({ ...node, piece: `piece-${node.id}` })),
+        }));
         return {
           ...file,
-          content: canonicalJson({ ...manifest, nodes, kitVersion: "abc123def456" }),
+          content: canonicalJson({ ...manifest, containers, kitVersion: "abc123def456" }),
         };
       });
       const hash = hashBuild(files.filter((file) => file.path !== reportPath));
@@ -230,7 +251,7 @@ describe("the core run path", () => {
 
       expect(result.kind).toBe("loaded");
       if (result.kind !== "loaded") return;
-      expect(result.build.nodes.map(pieceOf)).toEqual([
+      expect(workspaceOf(result.build).nodes.map(pieceOf)).toEqual([
         "piece-start",
         "piece-write",
         "piece-check",
@@ -242,7 +263,7 @@ describe("the core run path", () => {
     it("falls back to the node id as the piece of a build that named none", async () => {
       const build = await loaded();
 
-      expect(build.nodes.map(pieceOf)).toEqual(["start", "write", "check", "stop"]);
+      expect(workspaceOf(build).nodes.map(pieceOf)).toEqual(["start", "write", "check", "stop"]);
       expect(build.kitVersion).toBeUndefined();
     });
 
@@ -288,7 +309,7 @@ describe("the core run path", () => {
     });
 
     it("refuses a build whose parallel start has one branch, with the section problem", async () => {
-      const broken = parseFlow(
+      const stored = parseFlow(
         JSON.parse(
           await readFile(
             new URL("../../fixtures/broken/parallel-section.json", import.meta.url),
@@ -296,6 +317,15 @@ describe("the core run path", () => {
           ),
         ),
       );
+      const [idle, session] = stored.containers;
+      if (idle === undefined || session === undefined) throw new Error("fixture lost a container");
+      const broken: Flow = {
+        ...stored,
+        containers: [
+          { ...idle, nodes: session.nodes },
+          { ...session, nodes: idle.nodes },
+        ],
+      };
       const files = emit(lower(broken, { name: "fix-login", values: {} }), {
         repo: "/work/repo",
         base: "main",
@@ -344,7 +374,7 @@ describe("the core run path", () => {
       const { id } = store.createRun({
         buildDir: dir,
         inputs: {},
-        nodeIds: build.nodes.map((node) => node.id),
+        nodeIds: workspaceOf(build).nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
         buildId,
       });
@@ -387,7 +417,7 @@ describe("the core run path", () => {
       const { id } = store.createRun({
         buildDir: dir,
         inputs: {},
-        nodeIds: build.nodes.map((node) => node.id),
+        nodeIds: workspaceOf(build).nodes.map((node) => node.id),
         session: { tmuxName: "fd-run-abcd1234", cwd: repo.path, claudeSessionId: "c1" },
         buildId,
       });
@@ -427,6 +457,210 @@ describe("the core run path", () => {
 
       expect(code).toBe(130);
       expect(store.runs[0]?.status).toBe("stopped");
+    });
+  });
+
+  describe("a build with two session containers", () => {
+    const twoSessionsId = "b2222222-0000-4000-8000-000000000002";
+    const workspaceSessionId = "ws-session";
+    let twoSessionsDir: string;
+
+    const onWorkspaceModel = (flow: Flow, model: string): Flow => ({
+      ...flow,
+      containers: flow.containers.map((container) =>
+        container.kind === "workspace" ? { ...container, model } : container,
+      ),
+    });
+
+    beforeEach(async () => {
+      const result = await build(onWorkspaceModel(twoSessionWorkflow(), "opus"), {
+        fs,
+        home,
+        workspace: {
+          id: twoSessionsId,
+          name: "two-sessions",
+          repo: "/repos/android",
+          base: "main",
+          branch: "flowdeck/two-sessions",
+          branchCreated: true,
+          values: {},
+        },
+      });
+      if (!result.ok) throw new Error("build failed");
+      twoSessionsDir = result.dir;
+      store.recordBuild(result.record);
+    });
+
+    const loadedTwoSessions = async () => {
+      const result = await loadBuild(twoSessionsId, { fs, store });
+      if (result.kind !== "loaded") throw new Error(`build not loaded: ${result.message}`);
+      return result.build;
+    };
+
+    const executeTwoSessions = async (
+      startedSessions?: (log: string[]) => StartedSessionsView,
+      entries: Record<string, UsageEntry[]> = {},
+    ) => {
+      const loadedBuild = await loadedTwoSessions();
+      const runs = new FakeStore();
+      const log: string[] = [];
+      const finishRun = runs.finishRun.bind(runs);
+      runs.finishRun = (runId, status) => {
+        log.push(`run ${status}`);
+        finishRun(runId, status);
+      };
+      let opens = 0;
+      let sessionsOpened = 0;
+      const { id } = runs.createRun({
+        buildDir: twoSessionsDir,
+        inputs: {},
+        nodeIds: loadedBuild.containers.flatMap((container) =>
+          container.nodes.map((node) => node.id),
+        ),
+        session: {
+          tmuxName: "fd-run-abcd1234",
+          cwd: workspaceFolder(twoSessionsDir),
+          claudeSessionId: workspaceSessionId,
+        },
+        sessions: sessionContainersOf(loadedBuild).map((container, index) => ({
+          tmuxName: `fd-run-0000000${index}`,
+          cwd: container.worktree ?? "",
+          claudeSessionId: `${container.name}-session`,
+        })),
+        buildId: twoSessionsId,
+      });
+
+      const code = await execute(
+        {
+          fs,
+          waiter: new FakeWaiter([]),
+          usage: {
+            entries: async (sessionId) => {
+              log.push(`usage ${sessionId}`);
+              return entries[sessionId] ?? [];
+            },
+          },
+          startEvents: async () => ({
+            events: new FakeEventSource(),
+            stop: async () => undefined,
+          }),
+          openSession: async () => {
+            sessionsOpened++;
+            throw new Error("execute opens the session through the execution");
+          },
+          store: runs,
+          onChange: () => undefined,
+        },
+        {
+          store: runs,
+          runId: id,
+          manifest: loadedBuild,
+          cwd: workspaceFolder(twoSessionsDir),
+          auto: false,
+          socketPath: join(home, "sockets", "fd-run-abcd1234.sock"),
+          open: async () => {
+            opens++;
+            return {
+              sessionId: workspaceSessionId,
+              session: { ensureStarted: async () => undefined },
+              prompts: {
+                sendPrompt: () => Promise.reject(new Error("the workspace holds no turn")),
+                interrupt: async () => undefined,
+              },
+              stop: async () => {
+                log.push("workspace stopped");
+              },
+            };
+          },
+          ...(startedSessions === undefined ? {} : { startedSessions: startedSessions(log) }),
+        },
+      );
+      return { code, log, opens, sessionsOpened, runs, runId: id, loadedBuild };
+    };
+
+    const started =
+      (failure?: { container: string; node: string }) =>
+      (log: string[]): StartedSessionsView => ({
+        finish: async () => {
+          log.push("sessions finished");
+        },
+        started: () => ["android-session", "ios-session"],
+        failure: () => failure,
+      });
+
+    it("loads, in the build's workspace folder, on the workspace container's model", async () => {
+      const loadedBuild = await loadedTwoSessions();
+
+      expect(loadedBuild.cwd).toBe(workspaceFolder(twoSessionsDir));
+      expect(workspaceOf(loadedBuild).model).toBe("opus");
+    });
+
+    it("opens exactly one session and runs only the workspace container's nodes", async () => {
+      const { code, opens, sessionsOpened, runs, runId, loadedBuild } = await executeTwoSessions();
+      const workspaceNodes = workspaceOf(loadedBuild).nodes.map((node) => node.id);
+
+      expect(opens).toBe(1);
+      expect(sessionsOpened).toBe(0);
+      expect(code).toBe(0);
+      expect(runs.findRun(runId)?.status).toBe("done");
+      expect(new Set(runs.events(runId).map((event) => event.nodeId))).toEqual(
+        new Set(workspaceNodes),
+      );
+    });
+
+    it("at the workspace Stop, stops the workspace, finishes the started sessions, charges every session, then ends done", async () => {
+      const { log } = await executeTwoSessions(started());
+
+      expect(log.slice(0, 2)).toEqual(["workspace stopped", "sessions finished"]);
+      expect(log.slice(2, -1).sort()).toEqual([
+        "usage android-session",
+        "usage ios-session",
+        `usage ${workspaceSessionId}`,
+      ]);
+      expect(log.at(-1)).toBe("run done");
+    });
+
+    it("ends the run failed when a started session failed", async () => {
+      const { log, runs, runId } = await executeTwoSessions(
+        started({ container: "android", node: "session-1-plan" }),
+      );
+
+      expect(log.at(-1)).toBe("run failed");
+      expect(runs.findRun(runId)?.status).toBe("failed");
+    });
+
+    it("charges a started session's usage to its own container's nodes and totals every session", async () => {
+      const loadedBuild = await loadedTwoSessions();
+      const android = sessionContainersOf(loadedBuild).find((each) => each.name === "android");
+      const plan = android?.nodes.find((node) => node.type === "agent");
+      if (android === undefined || plan === undefined) throw new Error("no android agent node");
+      const spend = (messageId: string, type?: string): UsageEntry => ({
+        messageId,
+        model: "claude-haiku-5-5",
+        inputTokens: 0,
+        outputTokens: 1000,
+        cacheWrite5mTokens: 0,
+        cacheWrite1hTokens: 0,
+        cacheReadTokens: 0,
+        ...(type === undefined ? {} : { agentType: type }),
+      });
+      const workspaceSpend = spend("ws_main");
+      const androidSpend = spend("android_plan", agentType(android.prefix, pieceOf(plan)));
+
+      const { runs, runId } = await executeTwoSessions(started(), {
+        [workspaceSessionId]: [workspaceSpend],
+        "android-session": [androidSpend],
+      });
+
+      const usage = runs.events(runId).filter((event) => event.kind === "usage");
+      expect(usage.map((event) => event.nodeId)).toEqual([plan.id]);
+      expect(runs.findRunSummary(runId)?.totalCost).toBe(costOf([workspaceSpend, androidSpend]));
+    });
+
+    it("without started sessions, stops the workspace, charges it alone and ends done", async () => {
+      const { log } = await executeTwoSessions();
+
+      expect(log).toEqual(["workspace stopped", `usage ${workspaceSessionId}`, "run done"]);
     });
   });
 
@@ -471,11 +705,10 @@ describe("the core run path", () => {
 
 describe("execute wiring", () => {
   const claudeSessionId = "c1";
-  const agentBuild = (budget?: number) =>
-    ({
+  const agentBuild = (budget?: number) => ({
+    ...workspaceBuild({
       hash: "abc123",
       prefix: "fix-login",
-      session: budget === undefined ? {} : { budget },
       nodes: [
         {
           id: "n1",
@@ -484,7 +717,9 @@ describe("execute wiring", () => {
           settings: { role: "", instructions: "Do it.", model: "sonnet", tools: [] },
         },
       ],
-    }) as unknown as LoadedBuild;
+    }),
+    session: budget === undefined ? {} : { budget },
+  });
   const n1Done = {
     tool_name: "Agent",
     tool_input: { subagent_type: "fix-login:n1", prompt: "NODE n1\nGo" },
@@ -526,7 +761,7 @@ describe("execute wiring", () => {
     const { id } = store.createRun({
       buildDir: "/fd/builds/abc",
       inputs: {},
-      nodeIds: options.manifest.nodes.map((node) => node.id),
+      nodeIds: workspaceOf(options.manifest).nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
       buildId: options.manifest.hash,
     });
@@ -583,7 +818,7 @@ describe("execute wiring", () => {
     const { id } = store.createRun({
       buildDir: "/fd/builds/abc",
       inputs: {},
-      nodeIds: manifest.nodes.map((node) => node.id),
+      nodeIds: workspaceOf(manifest).nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
       buildId: manifest.hash,
     });
@@ -754,10 +989,9 @@ describe("execute wiring", () => {
   it("charges a Loop body node's usage per round, keeping the run's total cost", async () => {
     const fence = "```";
     const verdict = (done: boolean) => `ok\n${fence}json\n{"done": ${done}}\n${fence}`;
-    const manifest = {
+    const manifest = workspaceBuild({
       hash: "abc123",
       prefix: "fix-login",
-      session: {},
       nodes: [
         {
           id: "l1",
@@ -773,7 +1007,7 @@ describe("execute wiring", () => {
           settings: { role: "", instructions: "Do it.", model: "haiku", tools: [] },
         },
       ],
-    } as unknown as LoadedBuild;
+    });
     let clock = Date.parse("2026-11-16T10:00:00Z");
     const store = new FakeStore({ now: () => new Date(clock) });
     const events = new FakeEventSource();
@@ -782,7 +1016,7 @@ describe("execute wiring", () => {
     const { id: runId } = store.createRun({
       buildDir: "/fd/builds/abc",
       inputs: {},
-      nodeIds: manifest.nodes.map((node) => node.id),
+      nodeIds: workspaceOf(manifest).nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-abcd1234", cwd: "/repo", claudeSessionId },
       buildId: manifest.hash,
     });
@@ -905,18 +1139,17 @@ describe("AT-19: a build that named no pieces", () => {
       branchCreated: true,
       values: {},
     };
-    const laid = await layDown(
-      onMainFlow(
-        [agent("p1"), agent("a1"), agent("p2")],
-        [thenWire("p1", "a1"), thenWire("a1", "p2")],
-      ),
-      { home, workspace },
-    );
+    const laid = await layDown(inWorkspace([agent("p1"), agent("a1"), agent("p2")]), {
+      home,
+      workspace,
+    });
     if (!laid.ok) throw new Error("build failed");
     const unnamed = laid.files.map((file) => {
       if (file.path !== "manifest.json") return file;
-      const manifest = JSON.parse(file.content) as Required<Manifest>;
-      for (const node of manifest.nodes) delete node.piece;
+      const manifest = JSON.parse(file.content) as Manifest;
+      for (const node of manifest.containers.flatMap((container) => container.nodes)) {
+        delete node.piece;
+      }
       return { ...file, content: canonicalJson(manifest) };
     });
     const dir = join(home, "workspaces", id);
@@ -926,11 +1159,12 @@ describe("AT-19: a build that named no pieces", () => {
     const loadedBuild = await loadBuild(id, { fs, store });
     if (loadedBuild.kind !== "loaded") throw new Error(loadedBuild.message);
     const manifest = loadedBuild.build;
-    expect(manifest.nodes.some((node) => node.piece !== undefined)).toBe(false);
+    const view = workspaceOf(manifest);
+    expect(view.nodes.some((node) => node.piece !== undefined)).toBe(false);
     const { id: runId } = store.createRun({
       buildDir: built.dir,
       inputs: {},
-      nodeIds: manifest.nodes.map((node) => node.id),
+      nodeIds: view.nodes.map((node) => node.id),
       session: { tmuxName: "fd-run-fd61", cwd: "/repo", claudeSessionId },
       buildId: id,
     });
@@ -940,13 +1174,13 @@ describe("AT-19: a build that named no pieces", () => {
     const turns = [
       {
         userText:
-          'Use the Agent tool with subagent_type "fix-login-main:p1" and the prompt "Go". Then reply DONE.',
+          'Use the Agent tool with subagent_type "fix-login-workspace:p1" and the prompt "Go". Then reply DONE.',
         ended: true,
         lastAssistantText: "DONE",
       },
       {
         userText:
-          'Use the Agent tool with subagent_type "fix-login-main:a1" and the prompt "Go". Then reply DONE.',
+          'Use the Agent tool with subagent_type "fix-login-workspace:a1" and the prompt "Go". Then reply DONE.',
         ended: true,
         lastAssistantText: "DONE",
       },
@@ -962,7 +1196,10 @@ describe("AT-19: a build that named no pieces", () => {
       cacheReadTokens: 0,
       ...(agentType === undefined ? {} : { agentType }),
     });
-    usage.setEntries(claudeSessionId, [spend("sub_a1", "fix-login-main:a1"), spend("main_p2")]);
+    usage.setEntries(claudeSessionId, [
+      spend("sub_a1", "fix-login-workspace:a1"),
+      spend("main_p2"),
+    ]);
     const events = new FakeEventSource();
     const sends: string[] = [];
 
@@ -985,7 +1222,12 @@ describe("AT-19: a build that named no pieces", () => {
         cwd: "/repo",
         auto: false,
         socketPath: "/fd/sockets/fd-run-fd61.sock",
-        actions: async () => decideResume({ manifest, events: store.events(runId), turns }),
+        actions: async () =>
+          decideResume({
+            manifest: { ...view, hash: manifest.hash },
+            events: store.events(runId),
+            turns,
+          }),
         open: async () => ({
           sessionId: claudeSessionId,
           session: { ensureStarted: async () => undefined },
@@ -998,12 +1240,12 @@ describe("AT-19: a build that named no pieces", () => {
                 sessionId: claudeSessionId,
                 payload: {
                   tool_name: "Agent",
-                  tool_input: { subagent_type: "fix-login-main:p2", prompt: "NODE p2\nGo" },
+                  tool_input: { subagent_type: "fix-login-workspace:p2", prompt: "NODE p2\nGo" },
                   tool_use_id: "toolu-p2",
                   tool_response: {
                     status: "completed",
                     agentId: "agent-p2",
-                    agentType: "fix-login-main:p2",
+                    agentType: "fix-login-workspace:p2",
                     content: [],
                   },
                 },
@@ -1018,7 +1260,7 @@ describe("AT-19: a build that named no pieces", () => {
 
     expect(code).toBe(0);
     expect(sends).toEqual([
-      agentTurnText("fix-login-main", "p2", { id: "p2", given: [], writes: [] }),
+      agentTurnText("fix-login-workspace", "p2", { id: "p2", given: [], writes: [] }),
     ]);
     expect(store.findRun(runId)?.status).toBe("done");
     const charged = Object.fromEntries(

@@ -1,4 +1,6 @@
+import { sessionFolder, sessionWorktree } from "../run/workspace.js";
 import { noForcePushPath, rulesAfterCompactPath } from "./guard-hooks.js";
+import type { ManifestContainer } from "./lower.js";
 
 type HookEntry = {
   matcher?: string;
@@ -71,4 +73,90 @@ export function hookSettings(command: string): HookSettings {
       SessionStart: [guard("compact", rulesAfterCompactPath.replace(/^plugin\//, ""))],
     },
   };
+}
+
+export const PARENT_SESSION_VARS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+] as const;
+
+export type ClaudeSession = { sessionId: string; model?: string; resume?: boolean };
+
+export function claudeCommand(
+  { sessionId, model, resume }: ClaudeSession,
+  settingsPath?: string,
+  pluginDirs: readonly string[] = [],
+  mcpConfigPath?: string,
+  addDir: readonly string[] = [],
+): string {
+  const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
+  const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
+  const plugin = pluginDirs.map((dir) => ` --plugin-dir ${shellQuote(dir)}`).join("");
+  const modelFlag = model === undefined ? "" : ` --model ${shellQuote(model)}`;
+  const mcp =
+    mcpConfigPath === undefined
+      ? ""
+      : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
+  const added = addDir.map((dir) => ` --add-dir ${shellQuote(dir)}`).join("");
+  const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
+  return `env ${unset} claude ${session}${modelFlag}${settings}${plugin}${added}${mcp}`;
+}
+
+export type SessionEnvNames = { tmux: string; id: string };
+
+const envSlug = (slug: string) => slug.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+
+export function sessionEnvNames(
+  containers: readonly Pick<ManifestContainer, "kind" | "slug">[],
+): Map<string, SessionEnvNames> {
+  const taken = new Set<string>();
+  const names = new Map<string, SessionEnvNames>();
+  for (const { kind, slug } of containers) {
+    if (kind !== "session") continue;
+    const base = `FD_SESSION_${envSlug(slug)}`;
+    let stem = base;
+    for (let n = 2; taken.has(stem); n += 1) stem = `${base}_${n}`;
+    taken.add(stem);
+    names.set(slug, { tmux: `${stem}_TMUX`, id: `${stem}_ID` });
+  }
+  return names;
+}
+
+const forwardedVariables = ["FLOWDECK_SOCK", nodeVariable, scriptVariable] as const;
+
+export function containerStartCommand({
+  container,
+  buildDir,
+  workspaceDir,
+  env,
+}: {
+  container: ManifestContainer;
+  buildDir: string;
+  workspaceDir: string;
+  env: SessionEnvNames;
+}): string {
+  const folder = sessionFolder(buildDir, container.slug);
+  const worktree =
+    container.worktree ?? sessionWorktree(buildDir, container.slug, container.repo ?? "");
+  const tmux = `"$${env.tmux}"`;
+  const forwarded = [
+    ...forwardedVariables.map((name) => `-e ${name}="$${name}"`),
+    "-e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+  ].join(" ");
+  const claude = claudeCommand(
+    { sessionId: `"$${env.id}"`, model: container.model },
+    `${folder}/settings.json`,
+    [`${folder}/plugin`],
+    undefined,
+    [workspaceDir],
+  );
+  return `tmux -L ${tmux} new-session -d -s ${tmux} -c ${shellQuote(worktree)} ${forwarded} ${claude} ${shellQuote(`/${container.prefix}:run`)}`;
 }

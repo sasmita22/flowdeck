@@ -6,8 +6,13 @@ import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit, workspaceClaudeMd } from "../../../src/core/compiler/emit.js";
 import { guardHookFiles } from "../../../src/core/compiler/guard-hooks.js";
 import { handoffTemplates } from "../../../src/core/compiler/handoff-templates.js";
-import { buildHookCommand, hookSettings } from "../../../src/core/compiler/hook-settings.js";
-import { lower } from "../../../src/core/compiler/lower.js";
+import {
+  buildHookCommand,
+  containerStartCommand,
+  hookSettings,
+  sessionEnvNames,
+} from "../../../src/core/compiler/hook-settings.js";
+import { lower, type ManifestContainer } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import { newCanvasFlow } from "../../../src/app/renderer/canvas/store.js";
@@ -553,21 +558,106 @@ describe("emit per container", () => {
     ]);
   });
 
-  it("fills the top-level session, prefix, nodes and wires from the one session container", async () => {
-    const manifest = json(
-      await laidDown(
-        sessionsWorkflow([{ name: "android", repo: "/repos/android", branch: "main" }]),
-      ),
-      "manifest.json",
-    );
-    const android = manifest.containers.find(
-      (container: { slug: string }) => container.slug === "android",
-    );
+  describe("the workspace CLAUDE.md's session list", () => {
+    const listed = async () => {
+      const files = await laidDown();
+      const manifest = json(files, "manifest.json") as { containers: ManifestContainer[] };
+      const names = sessionEnvNames(manifest.containers);
+      const sessions = manifest.containers
+        .filter((container) => container.kind === "session")
+        .map((container) => ({
+          container,
+          env: names.get(container.slug) ?? { tmux: "", id: "" },
+          command: containerStartCommand({
+            container,
+            buildDir: dir,
+            workspaceDir: `${dir}/workspace`,
+            env: names.get(container.slug) ?? { tmux: "", id: "" },
+          }),
+        }));
+      return { text: fileAt(files, "workspace/CLAUDE.md"), sessions };
+    };
 
-    expect(manifest.session.name).toBe("android");
-    expect(manifest.prefix).toBe("fix-login-android");
-    expect(manifest.nodes).toEqual(android.nodes);
-    expect(manifest.wires).toEqual(android.wires);
+    it("names every session container with its name, repository, branch, worktree, model and start command, as the manifest records them", async () => {
+      const { text, sessions } = await listed();
+
+      expect(sessions.map(({ container }) => container.slug)).toEqual(["android", "ios"]);
+      for (const { container, command } of sessions) {
+        for (const value of [
+          container.name,
+          container.repo,
+          container.branch,
+          container.worktree,
+          container.model,
+          command,
+        ]) {
+          expect(value, container.slug).toBeDefined();
+          expect(text, `${container.slug}: ${value}`).toContain(value);
+        }
+      }
+    });
+
+    it("writes each start command on its own line inside a fenced block, to be run as written", async () => {
+      const { text, sessions } = await listed();
+      const lines = text.split("\n");
+
+      for (const { container, command } of sessions) {
+        const at = lines.indexOf(command);
+        expect(at, container.slug).toBeGreaterThan(0);
+        const fencesBefore = lines.slice(0, at).filter((line) => line.startsWith("```")).length;
+        expect(fencesBefore % 2, container.slug).toBe(1);
+      }
+      expect(text).toMatch(/run .*as written/i);
+    });
+
+    it("says a start command runs at most once per run and returns while the container works on", async () => {
+      const { text } = await listed();
+
+      expect(text).toContain("at most once per run; it returns at once");
+    });
+
+    it("gives each command the container's tmux variable, plugin, settings, the workspace folder, its model and its orchestrator", async () => {
+      const { text, sessions } = await listed();
+      const lines = text.split("\n");
+
+      expect(sessions.map(({ env }) => env.tmux)).toEqual([
+        "FD_SESSION_ANDROID_TMUX",
+        "FD_SESSION_IOS_TMUX",
+      ]);
+      for (const { container, env } of sessions) {
+        const command = lines.find((line) => line.includes(`-L "$${env.tmux}"`)) ?? "";
+        expect(command, container.slug).not.toBe("");
+        expect(command).toContain(`--plugin-dir '${dir}/sessions/${container.slug}/plugin'`);
+        expect(command).toContain(`--settings '${dir}/sessions/${container.slug}/settings.json'`);
+        expect(command).toContain(`--add-dir '${dir}/workspace'`);
+        expect(command).toContain(`--model '${container.model}'`);
+        expect(command).toContain(`'/${container.prefix}:run'`);
+      }
+    });
+
+    it("says each container's tmux and session id variables are set in the workspace session's environment", async () => {
+      const { text, sessions } = await listed();
+
+      for (const { env } of sessions) {
+        expect(text).toContain(env.tmux);
+        expect(text).toContain(env.id);
+      }
+      expect(
+        text
+          .split("\n")
+          .some((line) => /environment/i.test(line) && /workspace session/i.test(line)),
+      ).toBe(true);
+    });
+
+    it("holds no value that changes from run to run, so its hash stays the same", async () => {
+      const { text, sessions } = await listed();
+
+      expect(sessions).toHaveLength(2);
+      expect(text).toContain("FD_SESSION_");
+      expect(text).not.toContain(".sock");
+      expect(text).not.toContain("fd-run-");
+      expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    });
   });
 
   it.each([

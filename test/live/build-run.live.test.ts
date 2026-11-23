@@ -23,7 +23,7 @@ import {
   sessionIdsIn,
   type LiveEngine,
 } from "../fixtures/live-engine.js";
-import { asWorkflow } from "../fixtures/flow-builders.js";
+import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
@@ -60,7 +60,7 @@ type Step = {
 
 function liveFlow(steps: Step[]): Flow {
   const ids = ["t", ...steps.map((step) => step.id), "o"];
-  return asWorkflow(
+  return asWorkspaceWorkflow(
     {
       nodes: [
         { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },

@@ -150,59 +150,18 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "sessions/main/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "sessions/main/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
-    "sessions/main/plugin/skills/run/SKILL.md": "dbe6c717c41a7c6d35a43f77ae6208c4250016d8c851f2bd38d64cdfa309f7f6",
+    "sessions/main/plugin/skills/run/SKILL.md": "baafa9f89779ce89bd32ddf47d52051ea2816d2c70d4bf5d471d3f52815113a6",
     "sessions/main/settings.json": "f02589aad666d56d676f6c45832f3a56efcad63a5a8c18f86dd79e36acc21d61",
-    "workspace/CLAUDE.md": "39de2e9c39c67c2cfe929c73ed3a92f7db4c5a7c60866dc0bef1aab67ab4b5a1",
+    "workspace/CLAUDE.md": "655a8d2200a65d9c6b9cda969b922fec8679ec3840053417fe206a818c84c309",
     "workspace/plugin/.claude-plugin/plugin.json": "8e0ed1032a519a50555f09a3c50972864cfe372b93977cffffb9b142c2e5baa9",
     "workspace/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "workspace/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "workspace/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
-    "workspace/plugin/skills/run/SKILL.md": "4bfb226e73af728acde187f53b7b9679f97fae994236dc18d706cf8737976d76",
+    "workspace/plugin/skills/run/SKILL.md": "77446319989affd5a82c039d4a8a797a163a915198b1e14f4903bc02edf7c6b4",
     "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "a2e49c864b1f967f8a6469877b3dd5d199f55aba23b4adf647bdc25054e82544",
+  "hash": "28b632a97432d6b946c87e701dfbfa90d40dbfae90c116b4620dfaa563ed2f7f",
   "layout": "workspace",
-  "nodes": [
-    {
-      "id": "start",
-      "label": "start",
-      "settings": {},
-      "type": "trigger"
-    },
-    {
-      "file": "sessions/main/plugin/agents/p.md",
-      "id": "p",
-      "label": "p",
-      "piece": "p",
-      "settings": {
-        "instructions": "Do the work.",
-        "model": "sonnet",
-        "role": "implementer"
-      },
-      "type": "agent"
-    },
-    {
-      "file": "sessions/main/plugin/agents/a.md",
-      "id": "a",
-      "label": "a",
-      "piece": "a",
-      "settings": {
-        "instructions": "Implement the plan.",
-        "model": "sonnet",
-        "role": "implementer"
-      },
-      "type": "agent"
-    },
-    {
-      "id": "stop",
-      "label": "stop",
-      "settings": {
-        "name": "result",
-        "type": "text"
-      },
-      "type": "output"
-    }
-  ],
   "outputs": [
     {
       "name": "result",
@@ -215,56 +174,12 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
       "type": "text"
     }
   ],
-  "prefix": "fix-login-main",
-  "session": {
-    "buildConfig": {
-      "base": "main",
-      "repo": "/work/repo"
-    },
-    "model": "sonnet",
-    "name": "main"
-  },
   "settings": {
     "buildModel": "sonnet",
     "permissionMode": "default"
   },
   "values": {},
-  "version": 1,
-  "wires": [
-    {
-      "from": {
-        "node": "start",
-        "port": "out"
-      },
-      "kind": "then",
-      "to": {
-        "node": "p",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "node": "p",
-        "port": "out"
-      },
-      "kind": "then",
-      "to": {
-        "node": "a",
-        "port": "in"
-      }
-    },
-    {
-      "from": {
-        "node": "a",
-        "port": "out"
-      },
-      "kind": "then",
-      "to": {
-        "node": "stop",
-        "port": "in"
-      }
-    }
-  ]
+  "version": 1
 }
 ",
   "sessions/main/CLAUDE.md": "# Build fix-login-main
@@ -474,7 +389,7 @@ FLOWDECK_RULES
 ",
   "sessions/main/plugin/skills/run/SKILL.md": "---
 name: "run"
-description: "Part of build fix-login-main (repo repo, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login-main:run. Use when running this build's whole flow without the Flowdeck app."
+description: "Part of build fix-login-main (repo repo, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this container's flow one step at a time. Use when /fix-login-main:run is typed: by hand in plain Claude Code, or by a Flowdeck run's start command for a session container."
 ---
 # Run fix-login-main
 
@@ -506,6 +421,24 @@ Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\
 - Blueprint: Bugfix, version 3
 - This is the workspace session's folder; session containers read it but never write it
 - Plugin folder: plugin/ in this folder; run sessions reach it as \${CLAUDE_PLUGIN_ROOT}
+
+## Session containers
+
+- The workspace session's environment holds each container's variables below, set fresh for every run
+- Run a container's start command as written, from a shell, at most once per run; it returns at once, and the container then runs its own Start to Stop in its own tmux session
+
+### Session container main (main)
+
+- Name: main
+- Repository: /work/repo
+- Branch: flowdeck/fix-login
+- Worktree: /fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo
+- Model: sonnet
+- Variables: FD_SESSION_MAIN_TMUX holds its tmux name, FD_SESSION_MAIN_ID its Claude session id
+
+\`\`\`sh
+tmux -L "$FD_SESSION_MAIN_TMUX" new-session -d -s "$FD_SESSION_MAIN_TMUX" -c '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo' -e FLOWDECK_SOCK="$FLOWDECK_SOCK" -e FLOWDECK_HOOK_NODE="$FLOWDECK_HOOK_NODE" -e FLOWDECK_HOOK_SCRIPT="$FLOWDECK_HOOK_SCRIPT" -e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID -u CLAUDE_EFFORT claude --session-id "$FD_SESSION_MAIN_ID" --model 'sonnet' --settings '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/settings.json' --plugin-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/plugin' --add-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace' '/fix-login-main:run'
+\`\`\`
 
 ## Standard rules
 
@@ -645,7 +578,7 @@ FLOWDECK_RULES
 ",
   "workspace/plugin/skills/run/SKILL.md": "---
 name: "run"
-description: "Part of build fix-login-workspace (repo workspace, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this build's flow in plain Claude Code, one step at a time: type /fix-login-workspace:run. Use when running this build's whole flow without the Flowdeck app."
+description: "Part of build fix-login-workspace (repo workspace, build folder /fd-home/workspaces/b1111111-0000-4000-8000-000000000001). For work in this build, use this, not a similarly named skill from elsewhere. Runs this container's flow one step at a time. Use when /fix-login-workspace:run is typed: by hand in plain Claude Code, or by a Flowdeck run's start command for a session container."
 ---
 # Run fix-login-workspace
 

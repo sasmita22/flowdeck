@@ -65,6 +65,7 @@ export type EngineResponse =
 export type EnginePush =
   | { push: "run-state"; value: RunSnapshot }
   | { push: "session"; runId: string; value: string | null }
+  | { push: "run-sessions"; runId: string; sessions: { container: string; tmuxName: string }[] }
   | { push: "activity"; value: { runId: string; entry: ActivityEntry } }
   | { push: "build-activity"; pendingId: string; entry: ActivityEntry }
   | { push: "wait"; runId: string; value: PendingWait | null }

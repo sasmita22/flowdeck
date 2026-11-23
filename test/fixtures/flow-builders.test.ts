@@ -7,11 +7,13 @@ import {
   flowSettings,
   loop,
   onMainFlow,
+  onWorkspaceMainFlow,
   output,
   sessionContainer,
   thenWire,
   trigger,
   workspaceContainer,
+  workspaceFlow,
 } from "./flow-builders.js";
 
 const reachedIds = (found: ReturnType<typeof mainFlow>) => [...(found?.reached ?? [])].sort();
@@ -158,6 +160,101 @@ describe("flow", () => {
     expect(result.containers).toEqual(containers);
     expect(result.nodes.map((node) => node.id)).toEqual(["a", "b"]);
     expect(result.wires).toEqual([]);
+  });
+});
+
+describe("workspaceFlow", () => {
+  const defaultSession = {
+    id: "session-1",
+    kind: "session",
+    name: "main",
+    repo: "/work/repo",
+    branch: "main",
+    model: "sonnet",
+    nodes: ["session-1-start", "session-1-stop"],
+  };
+
+  it("puts every top-level node in the workspace beside a session container of Start and Stop only", () => {
+    const result = workspaceFlow(
+      [agent("a"), loop("l"), agent("x", { parent: "l" }), agent("b")],
+      [],
+    );
+
+    expect(result.containers).toEqual([
+      { id: "workspace-1", kind: "workspace", model: "sonnet", nodes: ["a", "l", "b"] },
+      defaultSession,
+    ]);
+  });
+
+  it("appends the session container's Start and Stop and the Then wire between them", () => {
+    const result = workspaceFlow([agent("a"), agent("b")], [thenWire("a", "b")]);
+
+    expect(result.nodes.map(({ id, type }) => ({ id, type }))).toEqual([
+      { id: "a", type: "agent" },
+      { id: "b", type: "agent" },
+      { id: "session-1-start", type: "trigger" },
+      { id: "session-1-stop", type: "output" },
+    ]);
+    expect(result.wires).toEqual([
+      thenWire("a", "b"),
+      thenWire("session-1-start", "session-1-stop"),
+    ]);
+  });
+
+  it("leaves the session container with no Start, Stop, count or membership problem", () => {
+    const containerRules = [
+      "workspace-count",
+      "one-start",
+      "stop-required",
+      "one-stop",
+      "outside-container",
+    ];
+    const sessionIds = new Set(["session-1", "session-1-start", "session-1-stop"]);
+
+    expect(
+      validate(workspaceFlow([agent("a")], [])).filter(
+        (error) =>
+          containerRules.includes(error.rule) &&
+          (sessionIds.has(error.container ?? "") || sessionIds.has(error.node ?? "")),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["name", "review"],
+    ["repo", "/r/shop"],
+    ["branch", "dev"],
+    ["model", "haiku"],
+  ])("sets the session container's %s", (field, value) => {
+    const result = workspaceFlow([agent("a")], [], flowSettings, { session: { [field]: value } });
+
+    expect(result.containers[1]).toEqual({ ...defaultSession, [field]: value });
+  });
+
+  it("takes a containers list verbatim, as flow does", () => {
+    const containers = [workspaceContainer(["a"])];
+
+    expect(workspaceFlow([agent("a")], [], flowSettings, { containers })).toEqual(
+      flow([agent("a")], [], flowSettings, { containers }),
+    );
+  });
+});
+
+describe("onWorkspaceMainFlow", () => {
+  it("wires Start into the chain and the chain into Stop, all in the workspace", () => {
+    const result = onWorkspaceMainFlow([agent("a"), agent("b")], [thenWire("a", "b")]);
+
+    expect(result.containers[0]?.nodes).toEqual(["start", "a", "b", "stop"]);
+    expect(result.containers[1]?.nodes).toEqual(["session-1-start", "session-1-stop"]);
+    expect(result.wires).toEqual(
+      expect.arrayContaining([thenWire("start", "a"), thenWire("b", "stop")]),
+    );
+    expect(mainFlow(result)?.ignored).toEqual([]);
+    expect(validate(result)).toEqual([]);
+  });
+
+  it("throws on input holding a trigger, as onMainFlow does", () => {
+    expect(() => onWorkspaceMainFlow([trigger("go")], [])).toThrow("adds Start and Stop itself");
   });
 });
 

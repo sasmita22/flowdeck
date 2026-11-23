@@ -4,7 +4,9 @@ import { runChoices, storedAuto, storedOptions } from "../../../src/core/run/opt
 import { agent, flow, gate } from "../../fixtures/flow-builders.js";
 
 const manifestOf = (nodes: unknown[]) => ({
-  nodes: lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest.nodes ?? [],
+  nodes: lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest.containers.flatMap(
+    (container) => container.nodes,
+  ),
 });
 
 describe("runChoices", () => {

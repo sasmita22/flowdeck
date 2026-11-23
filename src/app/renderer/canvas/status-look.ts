@@ -2,6 +2,7 @@ import type { DisplayStatus } from "../../../core/run/display.js";
 
 const colors: Record<DisplayStatus, string> = {
   waiting: "#9ca3af",
+  "not-started": "#6b7280",
   sent: "#06b6d4",
   running: "#3b82f6",
   "needs you": "#ec4899",
@@ -12,7 +13,7 @@ const colors: Record<DisplayStatus, string> = {
 };
 
 export const statusBadge = (status: DisplayStatus): { label: string; color: string } => ({
-  label: status,
+  label: status === "not-started" ? "not started" : status,
   color: colors[status],
 });
 

@@ -3,7 +3,12 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
 import { displayStatus, type DisplayStatus } from "../../../core/run/display.js";
-import type { PipelineItem, PipelineStage, TimelineEvent } from "../../../core/run/pipeline.js";
+import type {
+  PipelineGroup,
+  PipelineItem,
+  PipelineStage,
+  TimelineEvent,
+} from "../../../core/run/pipeline.js";
 import type { SnapshotStatus } from "../../../core/run/snapshot.js";
 import type { NodeState } from "../../../core/run/state.js";
 import type { HumanDecision } from "../../../core/run/wait.js";
@@ -108,14 +113,15 @@ type RailProps = {
   runId: string;
   live: Live;
   runStatus: SnapshotStatus;
+  started: boolean;
   chosen: Placed | undefined;
   onSelect: (selection: StageSelection) => void;
 };
 
 function StageRow({ placed, ...rail }: RailProps & { placed: Placed }) {
-  const { runId, live, runStatus, chosen, onSelect } = rail;
+  const { runId, live, runStatus, started, chosen, onSelect } = rail;
   const { stage, round } = placed;
-  const shown = displayStatus(stateOf(placed, live), runStatus);
+  const shown = displayStatus(stateOf(placed, live), runStatus, { started });
   const selected = chosen?.stage === stage;
   return (
     <li className="fd-run-step">
@@ -206,6 +212,7 @@ function StageDetail({
   placed,
   state,
   runStatus,
+  started,
   run,
   activity,
   labels,
@@ -217,6 +224,7 @@ function StageDetail({
   placed: Placed;
   state: NodeState;
   runStatus: SnapshotStatus;
+  started: boolean;
   run: StoreApi<RunState>;
   activity: readonly ActivityEntry[];
   labels: RunLabels;
@@ -225,7 +233,7 @@ function StageDetail({
   fullText: FullTextSource;
 }) {
   const { stage, round } = placed;
-  const shown = displayStatus(state, runStatus);
+  const shown = displayStatus(state, runStatus, { started });
   return (
     <section
       className="fd-run-detail"
@@ -292,6 +300,61 @@ function StageDetail({
   );
 }
 
+const groupHolding = (groups: readonly PipelineGroup[], placed: Placed | undefined) =>
+  placed === undefined
+    ? undefined
+    : groups.find((group) => placedIn(group.items).some(({ stage }) => stage === placed.stage));
+
+function ContainerGroups({
+  groups,
+  ...rail
+}: Omit<RailProps, "started"> & { groups: readonly PipelineGroup[] }) {
+  const railClass = "fd-file-list fd-run-rail fd-pipeline-rail";
+  const [only] = groups;
+  if (groups.length === 1 && only !== undefined) {
+    return (
+      <Rail
+        {...rail}
+        items={only.items}
+        round={undefined}
+        label="Stages"
+        className={railClass}
+        started={only.status !== "not-started"}
+      />
+    );
+  }
+  return (
+    <div className="fd-pipeline-rail">
+      {groups.map((group) => (
+        <section
+          key={group.name}
+          data-testid={pageTestIds.runContainerGroup(group.name)}
+          aria-label={group.name}
+        >
+          <h3 className="fd-run-detail-heading">
+            <span className="fd-ellipsis">{group.name}</span>{" "}
+            <span
+              data-testid={pageTestIds.runContainerStatus(group.name)}
+              data-status={group.status}
+              style={{ color: statusBadge(group.status).color }}
+            >
+              {statusBadge(group.status).label}
+            </span>
+          </h3>
+          <Rail
+            {...rail}
+            items={group.items}
+            round={undefined}
+            label={`${group.name} stages`}
+            className="fd-file-list fd-run-rail"
+            started={group.status !== "not-started"}
+          />
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function RunPipeline({
   runId,
   recorded,
@@ -337,15 +400,17 @@ export function RunPipeline({
     );
   }
   if (pipeline === undefined) return <p className="fd-muted">Reading the stages…</p>;
-  const chosen = chosenStage(pipeline, selection, live, runStatus);
+  const chosen = chosenStage(
+    pipeline.flatMap((group) => group.items),
+    selection,
+    live,
+    runStatus,
+  );
   const onSelect = (stage: StageSelection) => run.getState().selectStage(runId, stage);
   return (
     <div className="fd-pipeline">
-      <Rail
-        items={pipeline}
-        round={undefined}
-        label="Stages"
-        className="fd-file-list fd-run-rail fd-pipeline-rail"
+      <ContainerGroups
+        groups={pipeline}
         runId={runId}
         live={live}
         runStatus={runStatus}
@@ -359,6 +424,7 @@ export function RunPipeline({
             placed={chosen}
             state={stateOf(chosen, live)}
             runStatus={runStatus}
+            started={groupHolding(pipeline, chosen)?.status !== "not-started"}
             run={run}
             activity={activity}
             labels={labels}

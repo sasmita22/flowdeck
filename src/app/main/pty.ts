@@ -17,8 +17,9 @@ export type PtySpawn = (
 
 export type Terminal = {
   setSession(runId: string, name: string | null): void;
+  setContainerSessions(runId: string, names: readonly string[]): void;
   status(runId: string): TerminalStatus;
-  open(runId: string, size: unknown): boolean;
+  open(runId: string, size: unknown, tmuxName?: unknown): boolean;
   write(runId: string, data: unknown): void;
   resize(runId: string, size: unknown): void;
   close(runId: string): void;
@@ -26,7 +27,13 @@ export type Terminal = {
   dispose(): void;
 };
 
-type RunTerminal = { session: string | null; pty: PtyProcess | null; poppedOut: boolean };
+type RunTerminal = {
+  session: string | null;
+  pty: PtyProcess | null;
+  attached: string | null;
+  announced: ReadonlySet<string>;
+  poppedOut: boolean;
+};
 
 const isValidName = (name: string): boolean => {
   try {
@@ -57,7 +64,13 @@ export function createTerminal(options: {
   const runOf = (runId: string): RunTerminal => {
     const existing = runs.get(runId);
     if (existing !== undefined) return existing;
-    const created: RunTerminal = { session: null, pty: null, poppedOut: false };
+    const created: RunTerminal = {
+      session: null,
+      pty: null,
+      attached: null,
+      announced: new Set(),
+      poppedOut: false,
+    };
     runs.set(runId, created);
     return created;
   };
@@ -87,24 +100,32 @@ export function createTerminal(options: {
       runOf(runId).session = name !== null && isValidName(name) ? name : null;
       report(runId);
     },
+    setContainerSessions(runId, names) {
+      if (disposed) return;
+      runOf(runId).announced = new Set(names);
+    },
     status,
-    open(runId, size) {
+    open(runId, size, tmuxName) {
       const run = runs.get(runId);
       if (disposed || run === undefined || run.session === null) return false;
       const parsed = terminalSizeSchema.safeParse(size);
       if (!parsed.success) return false;
-      if (run.pty !== null) return true;
-      const spawned = options.spawn(
-        "tmux",
-        ["-L", run.session, "attach-session", "-t", `=${run.session}`],
-        {
-          name: "xterm-256color",
-          cols: parsed.data.cols,
-          rows: parsed.data.rows,
-          env: attachEnv(options.env),
-        },
-      );
+      const target =
+        typeof tmuxName === "string" && run.announced.has(tmuxName) && isValidName(tmuxName)
+          ? tmuxName
+          : run.session;
+      if (run.pty !== null && run.attached === target) return true;
+      const replaced = run.pty;
+      run.pty = null;
+      replaced?.kill();
+      const spawned = options.spawn("tmux", ["-L", target, "attach-session", "-t", `=${target}`], {
+        name: "xterm-256color",
+        cols: parsed.data.cols,
+        rows: parsed.data.rows,
+        env: attachEnv(options.env),
+      });
       run.pty = spawned;
+      run.attached = target;
       spawned.onData((data) => options.sendData(runId, data));
       spawned.onExit(() => {
         if (run.pty !== spawned) return;

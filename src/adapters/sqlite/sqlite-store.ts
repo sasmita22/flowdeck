@@ -39,6 +39,7 @@ import type {
   PendingBuildEnd,
   PendingBuildStart,
   RunRecord,
+  RunSessionRecord,
   RunStatus,
   RunStory,
   RunSummary,
@@ -172,6 +173,15 @@ type BuildRow = {
 
 const stateMovingKindList = stateMovingKinds.map((kind) => `'${kind}'`).join(", ");
 
+const inStartedSession = `run_nodes.session_id IN (
+  SELECT run_sessions.id FROM run_sessions
+   WHERE run_sessions.run_id = runs.id
+     AND (run_sessions.parent IS NULL
+       OR EXISTS (SELECT 1 FROM run_nodes AS mates
+                    JOIN events ON events.run_id = mates.run_id AND events.node_id = mates.node_id
+                   WHERE mates.session_id = run_sessions.id
+                     AND events.kind IN (${stateMovingKindList}))))`;
+
 const runTables = [
   ["step_texts", "run_id"],
   ["run_repo_states", "run_id"],
@@ -194,9 +204,11 @@ const runSummaries = `
   SELECT runs.id, runs.status, runs.build_id, runs.created_at, runs.total_cost,
          CASE WHEN runs.status = 'running' THEN NULL
               ELSE (SELECT MAX(time) FROM events WHERE events.run_id = runs.id) END AS ended_at,
-         (SELECT count(*) FROM run_nodes WHERE run_nodes.run_id = runs.id) AS node_count,
+         (SELECT count(*) FROM run_nodes
+           WHERE run_nodes.run_id = runs.id AND ${inStartedSession}) AS node_count,
          (SELECT count(*) FROM run_nodes
            WHERE run_nodes.run_id = runs.id
+             AND ${inStartedSession}
              AND (SELECT events.kind FROM events
                    WHERE events.run_id = run_nodes.run_id AND events.node_id = run_nodes.node_id
                      AND events.kind IN (${stateMovingKindList})
@@ -373,15 +385,33 @@ export class SqliteStore implements Store {
           run.buildId,
           run.buildId,
         );
-      const session = this.db
-        .prepare(
-          "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status) VALUES (?, ?, ?, ?, 'open')",
-        )
-        .run(id, run.session.tmuxName, run.session.cwd, run.session.claudeSessionId);
+      const insertSession = this.db.prepare(
+        "INSERT INTO run_sessions (run_id, tmux_name, cwd, claude_session_id, status, parent) VALUES (?, ?, ?, ?, 'open', ?)",
+      );
+      const session = insertSession.run(
+        id,
+        run.session.tmuxName,
+        run.session.cwd,
+        run.session.claudeSessionId,
+        null,
+      );
+      const owners = new Map<string, number | bigint>();
+      for (const extra of run.sessions ?? []) {
+        const row = insertSession.run(
+          id,
+          extra.tmuxName,
+          extra.cwd,
+          extra.claudeSessionId,
+          session.lastInsertRowid,
+        );
+        for (const nodeId of extra.nodeIds ?? []) owners.set(nodeId, row.lastInsertRowid);
+      }
       const insertNode = this.db.prepare(
         "INSERT INTO run_nodes (run_id, node_id, session_id) VALUES (?, ?, ?)",
       );
-      for (const nodeId of run.nodeIds) insertNode.run(id, nodeId, session.lastInsertRowid);
+      for (const nodeId of run.nodeIds) {
+        insertNode.run(id, nodeId, owners.get(nodeId) ?? session.lastInsertRowid);
+      }
     });
     const created = this.findRun(id);
     if (created === undefined) throw new Error(`run ${id} was not recorded`);
@@ -415,6 +445,40 @@ export class SqliteStore implements Store {
       ...(row.build_id === null ? {} : { buildId: row.build_id }),
       ...toRunBuildCopy(row),
     };
+  }
+
+  runSessions(runId: string): RunSessionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT session.tmux_name, session.cwd, session.claude_session_id,
+                parent.claude_session_id AS parent
+           FROM run_sessions AS session
+           LEFT JOIN run_sessions AS parent ON parent.id = session.parent
+          WHERE session.run_id = ? ORDER BY session.id`,
+      )
+      .all(runId) as {
+      tmux_name: string;
+      cwd: string;
+      claude_session_id: string;
+      parent: string | null;
+    }[];
+    return rows.map((row) => ({
+      tmuxName: row.tmux_name,
+      cwd: row.cwd,
+      claudeSessionId: row.claude_session_id,
+      parent: row.parent,
+    }));
+  }
+
+  nodeSessions(runId: string): Record<string, string> {
+    const rows = this.db
+      .prepare(
+        `SELECT run_nodes.node_id, run_sessions.claude_session_id
+           FROM run_nodes JOIN run_sessions ON run_sessions.id = run_nodes.session_id
+          WHERE run_nodes.run_id = ? ORDER BY run_nodes.rowid`,
+      )
+      .all(runId) as { node_id: string; claude_session_id: string }[];
+    return Object.fromEntries(rows.map((row) => [row.node_id, row.claude_session_id]));
   }
 
   listRuns(): RunSummary[] {

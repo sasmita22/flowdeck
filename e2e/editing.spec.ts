@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { readFile, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import {
   branchVariableTestId,
@@ -25,7 +25,7 @@ import {
   gate,
   inOneSession,
   loop,
-  onMainFlow,
+  onWorkspaceMainFlow,
   output,
   thenWire,
   trigger,
@@ -37,7 +37,7 @@ import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, runIdOf } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
-import { sessionWorktree } from "../src/core/run/workspace.js";
+import { sessionWorktree, workspaceFolder } from "../src/core/run/workspace.js";
 
 const git = async (repo: string, ...args: string[]) =>
   (await promisify(execFile)("git", ["-C", repo, ...args])).stdout;
@@ -466,35 +466,35 @@ test("The view fits a blueprint when it opens, and Cmd+= Cmd+- Cmd+0 zoom", asyn
 test("A new blueprint with one Agent asks for its repository at Build, then runs", async () => {
   const repo = await tempRepo();
   const window = await launch();
-  const startOut = await boxOf(window.getByTestId("port-trigger-2-out"));
-  const stopIn = await boxOf(window.getByTestId("port-output-2-in"));
+  const startOut = await boxOf(window.getByTestId("port-trigger-1-out"));
+  const stopIn = await boxOf(window.getByTestId("port-output-1-in"));
   await window.mouse.click((startOut.x + stopIn.x) / 2, startOut.y + startOut.height / 2);
   await window.keyboard.press("Delete");
   await expect
     .poll(async () => (await readout(window)).wires.map(({ from }) => from.node))
-    .toEqual(["trigger-1"]);
+    .toEqual(["trigger-2"]);
   const canvas = await boxOf(window.getByTestId("canvas"));
-  const session = await boxOf(window.getByTestId(containerTestIds.frame("session-1")));
+  const workspace = await boxOf(window.getByTestId(containerTestIds.frame("workspace-1")));
   await window.getByTestId(paletteTestId("agent")).dragTo(window.getByTestId("canvas"), {
     targetPosition: {
-      x: session.x - canvas.x + session.width / 2,
-      y: session.y - canvas.y + session.height / 2,
+      x: workspace.x - canvas.x + workspace.width / 2,
+      y: workspace.y - canvas.y + workspace.height / 2,
     },
   });
   await expect
     .poll(
-      async () => (await readout(window)).containers.find(({ id }) => id === "session-1")?.nodes,
+      async () => (await readout(window)).containers.find(({ id }) => id === "workspace-1")?.nodes,
     )
-    .toEqual(["trigger-2", "output-2", "agent-1"]);
+    .toEqual(["trigger-1", "output-1", "agent-1"]);
   await connectPorts(
     window,
-    window.getByTestId("port-trigger-2-out"),
+    window.getByTestId("port-trigger-1-out"),
     window.getByTestId("port-agent-1-in"),
   );
   await connectPorts(
     window,
     window.getByTestId("port-agent-1-out"),
-    window.getByTestId("port-output-2-in"),
+    window.getByTestId("port-output-1-in"),
   );
   await window.getByTestId("node-agent-1").click();
   await window.getByTestId("node-setting-instructions").fill("Print the working folder.");
@@ -528,14 +528,20 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
     expect(db.prepare("SELECT node_id, finished_at FROM run_nodes ORDER BY node_id").all()).toEqual(
       [
         { node_id: "agent-1", finished_at: expect.any(String) },
-        { node_id: "output-2", finished_at: expect.any(String) },
-        { node_id: "trigger-2", finished_at: expect.any(String) },
+        { node_id: "output-1", finished_at: expect.any(String) },
+        { node_id: "output-2", finished_at: null },
+        { node_id: "trigger-1", finished_at: expect.any(String) },
+        { node_id: "trigger-2", finished_at: null },
       ],
     );
-    const [session] = db.prepare("SELECT cwd FROM run_sessions").all() as { cwd: string }[];
-    expect(await realpath(session?.cwd ?? "")).toBe(
-      await realpath(sessionWorktree(join(home, "workspaces", buildId), "session", repo.path)),
-    );
+    const sessions = db.prepare("SELECT cwd FROM run_sessions ORDER BY id").all() as {
+      cwd: string;
+    }[];
+    const dir = join(home, "workspaces", buildId);
+    expect(await Promise.all(sessions.map(({ cwd }) => realpath(cwd)))).toEqual([
+      await realpath(workspaceFolder(dir)),
+      await realpath(sessionWorktree(dir, "session", repo.path)),
+    ]);
   } finally {
     db.close();
   }
@@ -599,8 +605,16 @@ test("A blueprint made with New blueprint never asks for permission, and the gea
 
 const runInBuild = async (writes: Record<string, string> = {}) => {
   const repo = await tempRepo();
-  seedFlow(home, onMainFlow([at(agent("s1"), 80, 120)], []), repo.path);
-  const window = await launch(undefined, { s1: writes });
+  seedFlow(home, onWorkspaceMainFlow([at(agent("s1"), 80, 120)], []), repo.path);
+  const intoWorktree = relative(
+    workspaceFolder("/build"),
+    sessionWorktree("/build", "main", repo.path),
+  );
+  const window = await launch(undefined, {
+    s1: Object.fromEntries(
+      Object.entries(writes).map(([file, content]) => [join(intoWorktree, file), content]),
+    ),
+  });
   const buildId = await buildAndRun(window, home, "wt");
   const runId = await runIdOf(home, buildId);
   await expect(window.getByTestId(pageTestIds.runStageStatus(runId, "s1"))).toHaveAttribute(

@@ -459,6 +459,86 @@ describe("createActivityTracker", () => {
 
     expect(stored.activity(id).map((entry) => entry.id)).toEqual([7, 8]);
   });
+
+  describe("a run with a started session container", () => {
+    const android = "s-android";
+
+    const startedRun = () => {
+      const stored = new FakeStore();
+      const id = stored.createRun({
+        buildDir: "/b",
+        inputs: {},
+        nodeIds: ["coordinate", "android-plan", "android-build"],
+        session: { tmuxName: "fd-run-test", cwd: "/repo", claudeSessionId: session },
+        buildId: "b1",
+      }).id;
+      clock = 0;
+      const tracker = createActivityTracker({
+        runId: id,
+        now: () => clock,
+        publish: (push) => pushes.push(push),
+        log: () => undefined,
+        activity: stored,
+        turnNodes: new Set(),
+        place: { cwd: "/repo" },
+        sessionNodes: new Map([[android, new Set(["android-plan", "android-build"])]]),
+      });
+      const tracked = tracker.store(stored);
+      source = new FakeEventSource();
+      tracker.watch(source, session);
+      tracker.watch(source, android);
+      clock = 100;
+      tracked.append(id, "coordinate", { kind: "sent" });
+      return { id, tracked };
+    };
+
+    it("puts the session's tool call on its running node, not on the workspace's waiting node", () => {
+      const { id, tracked } = startedRun();
+      clock = 200;
+      tracked.append(id, "android-plan", { kind: "running" });
+
+      bash(250, android);
+      bash(260);
+
+      expect(activity().map((push) => push.value)).toMatchObject([
+        { entry: { nodeId: "android-plan", at: 250 } },
+        { entry: { nodeId: "coordinate", at: 260 } },
+      ]);
+    });
+
+    it("puts a session's call on its next node after an earlier node waited on the user and finished", () => {
+      const { id, tracked } = startedRun();
+      clock = 200;
+      tracked.append(id, "android-plan", { kind: "running" });
+      clock = 210;
+      tracked.append(id, "android-plan", { kind: "needs-you" });
+      clock = 220;
+      tracked.append(id, "android-plan", { kind: "running" });
+      clock = 300;
+      tracked.append(id, "android-plan", { kind: "done" });
+      clock = 400;
+      tracked.append(id, "android-build", { kind: "running" });
+
+      bash(450, android);
+
+      expect(activity().map((push) => push.value)).toMatchObject([
+        { entry: { nodeId: "android-build", at: 450 } },
+      ]);
+    });
+
+    it("puts nothing on the workspace for a session call outside its node's turn", () => {
+      const { id, tracked } = startedRun();
+      clock = 200;
+      tracked.append(id, "android-plan", { kind: "running" });
+      clock = 300;
+      tracked.append(id, "android-plan", { kind: "done" });
+
+      bash(150, android);
+      bash(350, android);
+
+      expect(activity()).toEqual([]);
+    });
+  });
 });
 
 describe("createBuildActivity", () => {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -29,20 +29,26 @@ import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { workspaceDir } from "../../../src/core/compiler/build.js";
 import { emit } from "../../../src/core/compiler/emit.js";
 import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
-import { lower } from "../../../src/core/compiler/lower.js";
+import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
+import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
+import { agentType } from "../../../src/core/nodes/agent/execute.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
 import { deleteBuildResultSchema } from "../../../src/core/run/delete-build.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import type { RepoState } from "../../../src/core/run/repo-state.js";
+import { nodeStatus } from "../../../src/core/run/run-events.js";
+import type { PipelineGroup } from "../../../src/core/run/pipeline.js";
+import { sessionFailureOf } from "../../../src/core/run/session-watch.js";
 import { sessionWorktree, workspaceFolder } from "../../../src/core/run/workspace.js";
 import type {
   BuildAgents,
   BuildAgentsOpenSpec,
   BuildTurnResult,
 } from "../../../src/ports/build-agents.js";
+import type { HookEventKind } from "../../../src/ports/event-source.js";
 import type { FileSystem } from "../../../src/ports/file-system.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
 import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
@@ -63,10 +69,10 @@ import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
   ask,
-  flow,
+  workspaceFlow,
   gate,
   loop,
-  onMainFlow,
+  onWorkspaceMainFlow,
   output,
   sessionsWorkflow,
   thenWire,
@@ -98,7 +104,7 @@ const gitAt = (...repos: string[]) =>
 const jira = { type: "http", url: "https://mcp.example.com/jira" };
 
 const savedFlow = () =>
-  flow(
+  workspaceFlow(
     [trigger("start"), agent("plan"), output("stop")],
     [thenWire("start", "plan"), thenWire("plan", "stop")],
   );
@@ -353,7 +359,7 @@ describe("createEngineHandler", async () => {
     it("saves, lists, renames and opens blueprints, each keeping its own versions", async () => {
       const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
       const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
-      const second = onMainFlow([agent("other")], []);
+      const second = onWorkspaceMainFlow([agent("other")], []);
 
       const savedA = await handler.handle({
         id: 3,
@@ -529,7 +535,7 @@ describe("createEngineHandler", async () => {
     it("opens the newest live blueprint when the newest one was deleted", async () => {
       const flows = new FakeFlowStore({ newId: ids("flow-a", "flow-b") });
       const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
-      const second = onMainFlow([agent("other")], []);
+      const second = onWorkspaceMainFlow([agent("other")], []);
       await handler.handle({
         id: 1,
         type: "save-flow",
@@ -642,7 +648,7 @@ describe("createEngineHandler", async () => {
 
   describe("runs", () => {
     const builtFlow = () =>
-      onMainFlow(
+      onWorkspaceMainFlow(
         [
           { ...agent("s1"), label: "Plan" },
           { ...agent("s2"), label: "Ship" },
@@ -651,7 +657,7 @@ describe("createEngineHandler", async () => {
       );
 
     const builtStages = {
-      session: { name: "main" },
+      session: { name: "workspace" },
       nodes: [
         { id: "start", type: "trigger", label: "start" },
         { id: "s1", type: "agent", label: "Plan" },
@@ -810,7 +816,7 @@ describe("createEngineHandler", async () => {
 
     it("lists what each gate and ask asked in a loaded run's digest, from their settings in the stored manifest", async () => {
       const { runs, runId } = seededRun(
-        onMainFlow(
+        onWorkspaceMainFlow(
           [
             gate("s1", { settings: { shown: "Approve the release notes", skippable: false } }),
             ask("s2", { settings: { question: "Which channel ships it?", options: ["a", "b"] } }),
@@ -832,7 +838,7 @@ describe("createEngineHandler", async () => {
 
     it("names a loaded run's branch and each Agent stage's instructions from the stored manifest in its digest", async () => {
       const { runs, runId } = seededRun(
-        onMainFlow(
+        onWorkspaceMainFlow(
           [
             agent("s1", { settings: { instructions: "Draft the release notes from merged PRs." } }),
             agent("s2", { settings: { instructions: "Post the notes to the release channel." } }),
@@ -907,8 +913,9 @@ describe("createEngineHandler", async () => {
       });
 
       expect(answered).toMatchObject({ id: 1, ok: true });
-      const stages = (answered as { value: { nodeId: string; label: string; status: string }[] })
-        .value;
+      const stages =
+        (answered as { value: { items: { nodeId: string; label: string; status: string }[] }[] })
+          .value[0]?.items ?? [];
       expect(stages.map(({ nodeId, label, status }) => ({ nodeId, label, status }))).toEqual([
         { nodeId: "start", label: "start", status: "waiting" },
         { nodeId: "s1", label: "Plan", status: "done" },
@@ -919,7 +926,7 @@ describe("createEngineHandler", async () => {
 
     it("answers a run's pipeline without its activity, while the run's story still lists each stage's steps", async () => {
       const { runs, runId } = seededRun(
-        onMainFlow(
+        onWorkspaceMainFlow(
           [{ ...agent("s1"), label: "Plan" }, loop("rounds"), agent("body", { parent: "rounds" })],
           [thenWire("s1", "rounds")],
         ),
@@ -963,7 +970,9 @@ describe("createEngineHandler", async () => {
           stage,
           ...(stage.rounds ?? []).flatMap((round) => stagesOf(round.items)),
         ]);
-      const stages = stagesOf((answered as { value: Stage[] }).value);
+      const stages = stagesOf(
+        (answered as { value: { items: Stage[] }[] }).value.flatMap((group) => group.items),
+      );
       expect(stages.map((stage) => stage.nodeId)).toEqual(
         expect.arrayContaining(["s1", "rounds", "body"]),
       );
@@ -1031,7 +1040,7 @@ describe("createEngineHandler", async () => {
 
     describe("a run outlives its build", () => {
       const askedFlow = () =>
-        onMainFlow(
+        onWorkspaceMainFlow(
           [
             { ...agent("s1"), label: "Plan" },
             gate("s2", { settings: { shown: "Approve the release notes", skippable: false } }),
@@ -1148,7 +1157,7 @@ describe("createEngineHandler", async () => {
           ok: true,
           value: {
             stages: {
-              session: { name: "main" },
+              session: { name: "workspace" },
               nodes: [
                 { id: "start", type: "trigger" },
                 { id: "s1", type: "agent", label: "Plan" },
@@ -1160,9 +1169,9 @@ describe("createEngineHandler", async () => {
           },
         });
         expect(
-          (pipeline as { value: { nodeId: string; status: string }[] | null }).value?.map(
-            ({ nodeId, status }) => ({ nodeId, status }),
-          ),
+          (
+            pipeline as { value: { items: { nodeId: string; status: string }[] }[] | null }
+          ).value?.[0]?.items.map(({ nodeId, status }) => ({ nodeId, status })),
         ).toEqual([
           { nodeId: "start", status: "waiting" },
           { nodeId: "s1", status: "done" },
@@ -1368,7 +1377,7 @@ describe("createEngineHandler", async () => {
   });
 
   describe("build-picture", () => {
-    const pictured = () => onMainFlow([agent("draw")], []);
+    const pictured = () => onWorkspaceMainFlow([agent("draw")], []);
 
     const pictureStores = () => {
       const runs = new FakeStore();
@@ -1477,7 +1486,7 @@ describe("createEngineHandler", async () => {
     let db: ReturnType<typeof openDatabase>;
     let store: SqliteStore;
     let flows: SqliteFlowStore;
-    const saved = () => onMainFlow([agent("old")], []);
+    const saved = () => onWorkspaceMainFlow([agent("old")], []);
 
     beforeEach(async () => {
       dir = await mkdtemp(join(tmpdir(), "fd-backfill-"));
@@ -1583,8 +1592,8 @@ describe("createEngineHandler", async () => {
 
     it("copies the manifest.json of a build whose folder still holds it as locked at engine start, and leaves one that changed", async () => {
       const runs = new FakeStore();
-      const kept = manifestText(onMainFlow([agent("old")], []), "h-kept");
-      const edited = manifestText(onMainFlow([agent("old")], []), "h-edited");
+      const kept = manifestText(onWorkspaceMainFlow([agent("old")], []), "h-kept");
+      const edited = manifestText(onWorkspaceMainFlow([agent("old")], []), "h-edited");
       await lockedEarlier(runs, "kept", kept, kept);
       await lockedEarlier(runs, "edited", `${edited}\n`, edited);
       const handler = createEngineHandler(
@@ -1752,9 +1761,9 @@ describe("createEngineHandler", async () => {
     const atRepo = (input: Flow): Flow => inFolder(input, { repo: repo.path });
 
     const twoAgents = () =>
-      atRepo(onMainFlow([agent("write"), agent("check")], [thenWire("write", "check")]));
+      atRepo(onWorkspaceMainFlow([agent("write"), agent("check")], [thenWire("write", "check")]));
 
-    const sleeper = () => atRepo(onMainFlow([agent("nap")], []));
+    const sleeper = () => atRepo(onWorkspaceMainFlow([agent("nap")], []));
 
     const collectInto = (sink: EnginePush[]) => (push: EnginePush) => {
       sink.push(push);
@@ -1982,7 +1991,7 @@ describe("createEngineHandler", async () => {
         });
         flows.save(
           atRepo(
-            onMainFlow(
+            onWorkspaceMainFlow(
               [
                 loop("rounds", { settings: { condition: "done", cap: 3, onCap: "fail" } }),
                 agent("body", { parent: "rounds" }),
@@ -2032,7 +2041,7 @@ describe("createEngineHandler", async () => {
       const v2 = twoAgents();
       flows.save(
         atRepo(
-          onMainFlow(
+          onWorkspaceMainFlow(
             v2.nodes.filter((node) => node.id === "write"),
             [],
           ),
@@ -2043,11 +2052,19 @@ describe("createEngineHandler", async () => {
       await untilFinished(second);
 
       expect(runs.builds()).toHaveLength(2);
-      expect(runs.findRun(second)?.nodeIds).toEqual(["start", "write", "stop"]);
+      expect(runs.findRun(second)?.nodeIds).toEqual([
+        "start",
+        "write",
+        "stop",
+        "session-1-start",
+        "session-1-stop",
+      ]);
       expect(Object.keys(snapshotsOf(second).at(-1)?.nodes ?? {})).toEqual([
         "start",
         "write",
         "stop",
+        "session-1-start",
+        "session-1-stop",
       ]);
     });
 
@@ -2068,14 +2085,28 @@ describe("createEngineHandler", async () => {
         value: {
           runId,
           status: "running",
-          nodes: { start: "waiting", write: "waiting", check: "waiting", stop: "waiting" },
+          nodes: {
+            start: "waiting",
+            write: "waiting",
+            check: "waiting",
+            stop: "waiting",
+            "session-1-start": "waiting",
+            "session-1-stop": "waiting",
+          },
         },
       });
       await untilFinished(runId);
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "done",
-        nodes: { start: "done", write: "done", check: "done", stop: "done" },
+        nodes: {
+          start: "done",
+          write: "done",
+          check: "done",
+          stop: "done",
+          "session-1-start": "waiting",
+          "session-1-stop": "waiting",
+        },
       });
       expect(runs.findRun(runId)?.status).toBe("done");
     });
@@ -2147,8 +2178,8 @@ describe("createEngineHandler", async () => {
         expect(await listedStatus(a)).toBe("running");
         expect(await listedStatus(b)).toBe("running");
         expect(runs.findRun(a)?.session.tmuxName).not.toBe(runs.findRun(b)?.session.tmuxName);
-        expect(runs.findRun(a)?.session.cwd).toBe(worktreeOf(first));
-        expect(runs.findRun(b)?.session.cwd).toBe(worktreeOf(second));
+        expect(runs.findRun(a)?.session.cwd).toBe(workspaceFolder(buildDirOf(first)));
+        expect(runs.findRun(b)?.session.cwd).toBe(workspaceFolder(buildDirOf(second)));
       });
 
       it("accepts only one of two run-builds of one build sent together", async () => {
@@ -2199,7 +2230,7 @@ describe("createEngineHandler", async () => {
 
       const promptAt = () =>
         inFolder(
-          flow(
+          workspaceFlow(
             [trigger("start"), agent("plan"), output("stop")],
             [thenWire("start", "plan"), thenWire("plan", "stop")],
           ),
@@ -2210,7 +2241,7 @@ describe("createEngineHandler", async () => {
         );
 
       const twoInSource = () =>
-        inFolder(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]), {
+        inFolder(onWorkspaceMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]), {
           repo: source.path,
           base: "main",
         });
@@ -2250,9 +2281,14 @@ describe("createEngineHandler", async () => {
         await source.cleanup();
       });
 
-      it("runs the session in the build's worktree with the workspace layout, adding no worktree", async () => {
-        const seen: OpenSessionOptions[] = [];
-        handler = withRealWorktree(seen);
+      const containerSessionCwds = (runId: string) =>
+        runs
+          .runSessions(runId)
+          .filter((row) => row.parent !== null)
+          .map((row) => row.cwd);
+
+      it("records the session container's session in the build's worktree, adding no worktree", async () => {
+        handler = withRealWorktree();
         flows.save(promptAt());
         const buildId = await builtId({ name: "fix-login" });
         const worktreesAtBuild = await worktreePaths(source.path);
@@ -2260,14 +2296,7 @@ describe("createEngineHandler", async () => {
         const runId = await startedOn(buildId);
         await untilFinished(runId);
 
-        const worktree = sourceWorktreeOf(buildId);
-        expect(seen).toHaveLength(1);
-        expect(seen[0]).toMatchObject({
-          cwd: worktree,
-          buildDir: runs.findBuild(buildId)?.dir,
-          layout: "workspace",
-        });
-        expect(runs.findRun(runId)?.session.cwd).toBe(worktree);
+        expect(containerSessionCwds(runId)).toEqual([sourceWorktreeOf(buildId)]);
         expect(await worktreePaths(source.path)).toEqual(worktreesAtBuild);
         expect(await flowdeckBranches()).toEqual([`flowdeck/fix-login-${buildId.slice(0, 8)}`]);
       });
@@ -2280,7 +2309,7 @@ describe("createEngineHandler", async () => {
         await untilFinished(await startedOn(buildId));
         await untilFinished(await startedOn(buildId));
 
-        expect(runs.runs.map((run) => run.session.cwd)).toEqual([
+        expect(runs.runs.flatMap((run) => containerSessionCwds(run.id))).toEqual([
           sourceWorktreeOf(buildId),
           sourceWorktreeOf(buildId),
         ]);
@@ -2365,7 +2394,9 @@ describe("createEngineHandler", async () => {
     });
 
     it("returns the validation problems of a flow that does not build, in plain words", async () => {
-      flows.save(atRepo(onMainFlow([loop("retry", { settings: { cap: 0, onCap: "fail" } })], [])));
+      flows.save(
+        atRepo(onWorkspaceMainFlow([loop("retry", { settings: { cap: 0, onCap: "fail" } })], [])),
+      );
 
       await expectErrorAndNoRun(/^retry: Loop cap 0 is not a whole number of at least 1\./);
       expect(runs.builds()).toEqual([]);
@@ -2374,7 +2405,7 @@ describe("createEngineHandler", async () => {
     it("lists every build problem with its node and field, and no rule ids", async () => {
       flows.save(
         atRepo(
-          onMainFlow(
+          onWorkspaceMainFlow(
             [
               loop("retry", { settings: { cap: 0, onCap: "fail" } }),
               agent("body", { parent: "retry", settings: { instructions: "" } }),
@@ -2463,6 +2494,18 @@ describe("createEngineHandler", async () => {
             flow: "flow-sql",
             version: 2,
             node_id: "stop",
+            type: "output",
+          }),
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
+            node_id: "session-1-start",
+            type: "trigger",
+          }),
+          expect.objectContaining({
+            flow: "flow-sql",
+            version: 2,
+            node_id: "session-1-stop",
             type: "output",
           }),
         ]);
@@ -2562,7 +2605,7 @@ describe("createEngineHandler", async () => {
         await untilFinished(runId);
         expect(runs.findRun(runId)).toMatchObject({
           buildId: id,
-          nodeIds: ["start", "write", "check", "stop"],
+          nodeIds: ["start", "write", "check", "stop", "session-1-start", "session-1-stop"],
           status: "done",
         });
       });
@@ -2623,26 +2666,36 @@ describe("createEngineHandler", async () => {
 
       it("leaves a loose node out of the workspace manifest and out of the run", async () => {
         const main = twoAgents();
-        const session = main.containers.find((container) => container.kind === "session");
-        if (session === undefined) throw new Error("twoAgents has no session container");
+        const workspace = main.containers.find((container) => container.kind === "workspace");
+        if (workspace === undefined) throw new Error("twoAgents has no workspace container");
         flows.save({
           ...main,
           nodes: [...main.nodes, agent("loose")] as Flow["nodes"],
           containers: main.containers.map((container) =>
-            container === session ? { ...session, nodes: [...session.nodes, "loose"] } : container,
+            container === workspace
+              ? { ...workspace, nodes: [...workspace.nodes, "loose"] }
+              : container,
           ),
         });
-        const mainIds = session.nodes;
+        const mainIds = workspace.nodes;
 
         const buildId = await builtId();
         const manifest = JSON.parse(
           await new NodeFileSystem().readFile(`${buildDirOf(buildId)}/manifest.json`),
-        ) as { nodes: { id: string }[] };
+        ) as { containers: { kind: string; nodes: { id: string }[] }[] };
         const runId = await startedOn(buildId);
         await untilFinished(runId);
 
-        expect(manifest.nodes.map((node) => node.id)).toEqual(mainIds);
-        expect(runs.findRun(runId)?.nodeIds).toEqual(mainIds);
+        expect(
+          manifest.containers
+            .find((container) => container.kind === "workspace")
+            ?.nodes.map((node) => node.id),
+        ).toEqual(mainIds);
+        expect(runs.findRun(runId)?.nodeIds).toEqual([
+          ...mainIds,
+          "session-1-start",
+          "session-1-stop",
+        ]);
       });
 
       it("answers an unsaved version, an unknown build and a bad payload with errors", async () => {
@@ -3144,8 +3197,8 @@ describe("createEngineHandler", async () => {
       });
 
       it("folds a build agent's own steps and report into its piece's Activity, and none into another piece", async () => {
-        const writePiece = "sessions/main/plugin/agents/write.md";
-        const checkPiece = "sessions/main/plugin/agents/check.md";
+        const writePiece = "workspace/plugin/agents/write.md";
+        const checkPiece = "workspace/plugin/agents/check.md";
         const read = {
           agent_id: "ag-write",
           agent_type: "general-purpose",
@@ -4563,6 +4616,8 @@ describe("createEngineHandler", async () => {
           "write",
           "check",
           "stop",
+          "session-1-start",
+          "session-1-stop",
         ]);
       });
 
@@ -4677,59 +4732,700 @@ describe("createEngineHandler", async () => {
         return pendingId;
       };
 
-      const seeingSessions = (seen: OpenSessionOptions[]) => ({
-        ...runEnvironment(new NodeFileSystem()),
-        openSession: async (opening: OpenSessionOptions): Promise<OpenedSession> => {
-          seen.push(opening);
-          throw new Error("seen");
-        },
-      });
+      describe("run workspace-first", () => {
+        type Group = PipelineGroup;
+        type Pushed = { container: string; tmuxName: string };
 
-      it("refuses to run a build of two session containers, starting no session and making no run", async () => {
-        const seen: OpenSessionOptions[] = [];
-        const worktree = new FakeWorktree();
-        handler = handlerWith({ worktree, run: seeingSessions(seen) });
-        flows.save(twoSessions());
-        const buildId = await builtId();
-        expect(worktree.calls.map((added) => added.path)).toEqual(containerWorktrees(buildId));
+        let claude: ReturnType<typeof fakeClaudeSession>;
+        let release: () => void;
+        let alive: Set<string>;
+        let ended: string[];
 
-        expect(await runBuild(buildId)).toEqual({
-          kind: "error",
-          message: "Running several sessions is not supported yet.",
+        const workspaceFirst = (): Flow => {
+          const built = sessionsWorkflow(
+            [
+              { name: "android", repo: repo.path, branch: "main", model: "haiku" },
+              { name: "ios", repo: repo.path, branch: "main", model: "sonnet" },
+            ],
+            { workspace: ["Wait"] },
+          );
+          return {
+            ...built,
+            containers: built.containers.map((container) =>
+              container.kind === "workspace" ? { ...container, model: "opus" } : container,
+            ),
+          };
+        };
+
+        const runHandler = (
+          overrides: Partial<EngineHandlerOptions> = {},
+          extra: { permissions?: FakePermissionSource; usage?: FakeUsageSource } = {},
+        ) => {
+          let released: () => void = () => undefined;
+          const workspaceWaits = new Promise<void>((resolve) => (released = resolve));
+          release = released;
+          claude = fakeClaudeSession(async (nodeId) => {
+            if (nodeId === "workspace-1-wait") await workspaceWaits;
+            return "done" as const;
+          });
+          handler = handlerWith({
+            run: {
+              ...runEnvironment(new NodeFileSystem()),
+              startEvents: async () => ({
+                events: claude.events,
+                ...(extra.permissions === undefined ? {} : { permissions: extra.permissions }),
+                stop: async () => undefined,
+              }),
+              openSession: claude.openSession,
+              ...(extra.usage === undefined ? {} : { usage: extra.usage }),
+            },
+            sessionAlive: async (name) => alive.has(name),
+            endSession: async (name) => {
+              ended.push(name);
+              alive.delete(name);
+            },
+            ...overrides,
+          });
+        };
+
+        const sessionOf = (env: Record<string, string>, slug: string) => ({
+          tmuxName: env[`FD_SESSION_${slug}_TMUX`] ?? "",
+          claudeSessionId: env[`FD_SESSION_${slug}_ID`] ?? "",
         });
-        expect(seen).toEqual([]);
-        expect(runs.runs).toEqual([]);
-      });
 
-      it("answers the run options of a two-session build with the refusal instead of failing the request", async () => {
-        flows.save(twoSessions());
-        const buildId = await builtId();
+        const startWorkspaceFirst = async () => {
+          flows.save(workspaceFirst());
+          const buildId = await builtId();
+          const runId = await startedOn(buildId);
+          await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+          const workspace = claude.opened[0];
+          if (workspace === undefined) throw new Error("no workspace session opened");
+          const env = (workspace as OpenSessionOptions & { env?: Record<string, string> }).env;
+          return {
+            buildId,
+            runId,
+            workspace,
+            env: env ?? {},
+            android: sessionOf(env ?? {}, "ANDROID"),
+            ios: sessionOf(env ?? {}, "IOS"),
+          };
+        };
 
-        expect(await answer("run-options", { buildId })).toEqual({
-          kind: "error",
-          message: "Running several sessions is not supported yet.",
+        const hook = (sessionId: string, kind: HookEventKind, payload: object = {}) =>
+          claude.events.publish({
+            kind,
+            sessionId,
+            payload: {
+              hook_event_name: kind,
+              session_id: sessionId,
+              flowdeck_hook_at: Date.now(),
+              ...payload,
+            },
+          });
+
+        const agentCall = (nodeId: string, type = "agent") => ({
+          tool_name: "Agent",
+          tool_input: { subagent_type: type, prompt: `NODE ${nodeId}\nGo` },
+          tool_use_id: `toolu-${nodeId}`,
         });
-      });
 
-      it("starts a one-session build's session with its container's model and the build's workspace folder", async () => {
-        const seen: OpenSessionOptions[] = [];
-        handler = handlerWith({ run: seeingSessions(seen) });
-        const blueprint = twoAgents();
-        flows.save({
-          ...blueprint,
-          containers: blueprint.containers.map((container) =>
-            container.kind === "session" ? { ...container, model: "haiku" } : container,
-          ),
+        const agentDone = (nodeId: string, type = "agent") => ({
+          ...agentCall(nodeId, type),
+          tool_response: {
+            status: "completed",
+            agentId: `agent-${nodeId}`,
+            agentType: type,
+            content: [{ type: "text", text: `${nodeId} done` }],
+          },
         });
-        const buildId = await builtId();
 
-        await untilFinished(await startedOn(buildId));
+        const statusOf = (runId: string, nodeId: string) =>
+          nodeStatus(runs.events(runId).filter((event) => event.nodeId === nodeId));
 
-        expect(seen).toHaveLength(1);
-        expect(seen[0]).toMatchObject({
-          cwd: worktreeOf(buildId),
-          model: "haiku",
-          workspaceFolder: workspaceFolder(buildDirOf(buildId)),
+        const endOf = async (runId: string) => {
+          await vi.waitFor(() => expect(runs.findRun(runId)?.status).not.toBe("running"), {
+            timeout: 5000,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          return runs.findRun(runId)?.status;
+        };
+
+        const groupsOf = async (runId: string) =>
+          (await answer("run-pipeline", { runId })) as Group[];
+
+        const groupOf = (groups: Group[], name: string) => {
+          const found = groups.find((group) => group.name === name);
+          if (found === undefined) throw new Error(`no ${name} group`);
+          return found;
+        };
+
+        const statusesOf = (group: Group) =>
+          Object.fromEntries(
+            group.items.flatMap((item) => ("nodeId" in item ? [[item.nodeId, item.status]] : [])),
+          );
+
+        const failedNodes = (runId: string) =>
+          runs
+            .events(runId)
+            .filter((event) => event.kind === "failed")
+            .map((event) => event.nodeId);
+
+        const startedSessionPushes = (runId: string) =>
+          pushes.flatMap((push) => {
+            const pushed = push as unknown as { push: string; runId?: string; sessions?: Pushed[] };
+            return pushed.push === "run-sessions" && pushed.runId === runId
+              ? [pushed.sessions]
+              : [];
+          });
+
+        const androidContainer = async (buildId: string) => {
+          const manifest = JSON.parse(
+            await readFile(join(buildDirOf(buildId), "manifest.json"), "utf8"),
+          ) as { containers: { name: string; prefix: string; nodes: ManifestNode[] }[] };
+          const android = manifest.containers.find((container) => container.name === "android");
+          if (android === undefined) throw new Error("no android container in the manifest");
+          return android;
+        };
+
+        beforeEach(() => {
+          alive = new Set();
+          ended = [];
+          runHandler();
+        });
+
+        it("offers Run for a two-session build", async () => {
+          flows.save(workspaceFirst());
+          const buildId = await builtId();
+
+          expect(await answer("run-options", { buildId })).toEqual({
+            kind: "choices",
+            automatic: false,
+          });
+        });
+
+        it("starts exactly one session, in the workspace folder on the workspace model, and none for the session containers", async () => {
+          const { buildId, runId } = await startWorkspaceFirst();
+          release();
+
+          expect(await endOf(runId)).toBe("done");
+          expect(claude.opened).toHaveLength(1);
+          expect(claude.opened[0]).toMatchObject({
+            cwd: workspaceFolder(buildDirOf(buildId)),
+            model: "opus",
+            layout: "workspace",
+            workspaceFolder: workspaceFolder(buildDirOf(buildId)),
+          });
+          expect(runs.findRun(runId)?.session.cwd).toBe(workspaceFolder(buildDirOf(buildId)));
+        });
+
+        it("gives the workspace session each session container's tmux name and session id, recorded as that container's session under the workspace", async () => {
+          const { buildId, runId, workspace, android, ios } = await startWorkspaceFirst();
+          const [androidWorktree, iosWorktree] = containerWorktrees(buildId);
+
+          expect(android.tmuxName).toMatch(/^fd-/);
+          expect(ios.tmuxName).toMatch(/^fd-/);
+          expect(new Set([workspace.sessionName, android.tmuxName, ios.tmuxName]).size).toBe(3);
+          expect(android.claudeSessionId).not.toBe("");
+          expect(ios.claudeSessionId).not.toBe("");
+          expect(
+            new Set([workspace.claudeSessionId, android.claudeSessionId, ios.claudeSessionId]).size,
+          ).toBe(3);
+          expect(runs.runSessions(runId)).toEqual([
+            {
+              tmuxName: workspace.sessionName,
+              cwd: workspaceFolder(buildDirOf(buildId)),
+              claudeSessionId: workspace.claudeSessionId,
+              parent: null,
+            },
+            { ...android, cwd: androidWorktree, parent: workspace.claudeSessionId },
+            { ...ios, cwd: iosWorktree, parent: workspace.claudeSessionId },
+          ]);
+          expect(runs.findRun(runId)?.nodeIds).toEqual(
+            expect.arrayContaining([
+              "workspace-1-start",
+              "workspace-1-wait",
+              "workspace-1-stop",
+              "session-1-start",
+              "session-1-plan",
+              "session-1-stop",
+              "session-2-start",
+              "session-2-plan",
+              "session-2-stop",
+            ]),
+          );
+          expect(runs.nodeSessions(runId)).toEqual({
+            "workspace-1-start": workspace.claudeSessionId,
+            "workspace-1-wait": workspace.claudeSessionId,
+            "workspace-1-stop": workspace.claudeSessionId,
+            "session-1-start": android.claudeSessionId,
+            "session-1-plan": android.claudeSessionId,
+            "session-1-stop": android.claudeSessionId,
+            "session-2-start": ios.claudeSessionId,
+            "session-2-plan": ios.claudeSessionId,
+            "session-2-stop": ios.claudeSessionId,
+          });
+        });
+
+        it("ends done when the workspace reaches its Stop without starting a session, showing both containers not started", async () => {
+          const { runId } = await startWorkspaceFirst();
+          release();
+
+          expect(await endOf(runId)).toBe("done");
+          const groups = await groupsOf(runId);
+          expect(groups.map((group) => group.name)).toEqual(["workspace", "android", "ios"]);
+          expect(groupOf(groups, "workspace").status).toBe("done");
+          expect(groupOf(groups, "android").status).toBe("not-started");
+          expect(groupOf(groups, "ios").status).toBe("not-started");
+          expect(failedNodes(runId)).toEqual([]);
+          expect(sessionFailureOf(groups)).toBeUndefined();
+        });
+
+        it("puts the nodes of a session the workspace started under that container, done, with its usage in the run's cost", async () => {
+          const usage = new FakeUsageSource();
+          runHandler({}, { usage });
+          const { buildId, runId, workspace, android } = await startWorkspaceFirst();
+          const container = await androidContainer(buildId);
+          const plan = container.nodes.find((node) => node.id === "session-1-plan");
+          if (plan === undefined) throw new Error("no android plan node");
+          const type = agentType(container.prefix, pieceOf(plan));
+          const spend = (messageId: string, agent?: string): UsageEntry => ({
+            messageId,
+            model: "claude-haiku-5-5",
+            inputTokens: 0,
+            outputTokens: 1000,
+            cacheWrite5mTokens: 0,
+            cacheWrite1hTokens: 0,
+            cacheReadTokens: 0,
+            at: Date.now(),
+            ...(agent === undefined ? {} : { agentType: agent }),
+          });
+          const workspaceSpend = spend("ws_main");
+          const androidSpend = spend("android_plan", type);
+          usage.setEntries(workspace.claudeSessionId, [workspaceSpend]);
+          usage.setEntries(android.claudeSessionId, [androidSpend]);
+
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan", type));
+          hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan", type));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("done"));
+          const live = (await answer("run-cost", { runId })) as {
+            nodes: { nodeId: string; cost: number }[];
+            total: { cost: number };
+          };
+          hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+          release();
+
+          expect(live.nodes.find((line) => line.nodeId === "session-1-plan")?.cost).toBe(
+            costOf([androidSpend]),
+          );
+          expect(live.total.cost).toBeCloseTo(costOf([workspaceSpend, androidSpend]), 12);
+          expect(await endOf(runId)).toBe("done");
+          const groups = await groupsOf(runId);
+          expect(groupOf(groups, "android").status).toBe("done");
+          expect(statusesOf(groupOf(groups, "android"))).toEqual({
+            "session-1-start": "done",
+            "session-1-plan": "done",
+            "session-1-stop": "done",
+          });
+          expect(statusesOf(groupOf(groups, "workspace"))).not.toHaveProperty("session-1-plan");
+          expect(groupOf(groups, "ios").status).toBe("not-started");
+          const afterEnd = (await answer("run-cost", { runId })) as { total: { cost: number } };
+          expect(afterEnd.total.cost).toBeCloseTo(costOf([workspaceSpend, androidSpend]), 12);
+        });
+
+        it("lists a started session's tool calls under its own node, not the workspace's waiting one", async () => {
+          const { runId, android } = await startWorkspaceFirst();
+
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+          hook(android.claudeSessionId, "PreToolUse", {
+            tool_name: "Bash",
+            tool_input: { command: "ls" },
+          });
+          release();
+          await endOf(runId);
+
+          expect(
+            runs
+              .activity(runId)
+              .filter(({ kind }) => kind === "subagent" || kind === "tool")
+              .map(({ nodeId, kind }) => ({ nodeId, kind })),
+          ).toEqual([
+            { nodeId: "session-1-plan", kind: "subagent" },
+            { nodeId: "session-1-plan", kind: "tool" },
+          ]);
+        });
+
+        it("ends a session still running at the workspace's Stop and shows its node stopped, leaving the unstarted one alone", async () => {
+          const { runId, android } = await startWorkspaceFirst();
+          alive.add(android.tmuxName);
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+
+          release();
+
+          expect(await endOf(runId)).toBe("done");
+          expect(ended).toEqual([android.tmuxName]);
+          const groups = await groupsOf(runId);
+          expect(groupOf(groups, "android").status).toBe("stopped");
+          expect(groupOf(groups, "ios").status).toBe("not-started");
+          expect(failedNodes(runId)).toEqual([]);
+        });
+
+        it("ends the run failed, naming the container and node, when a started session fails though the workspace reaches its Stop", async () => {
+          const { runId, android } = await startWorkspaceFirst();
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          hook(android.claudeSessionId, "StopFailure", { error: "rate_limit" });
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("failed"));
+
+          release();
+
+          expect(await endOf(runId)).toBe("failed");
+          const groups = await groupsOf(runId);
+          expect(groupOf(groups, "workspace").status).toBe("done");
+          expect(groupOf(groups, "android").status).toBe("failed");
+          expect(sessionFailureOf(groups)).toEqual({ container: "android", node: "Plan" });
+        });
+
+        it("ends the run failed, naming the container, when answering a started session's start dialogs fails", async () => {
+          const answered: string[] = [];
+          runHandler({
+            answerDialogs: async (name: string) => {
+              answered.push(name);
+              throw new Error("the trust dialog never appeared");
+            },
+          } as Partial<EngineHandlerOptions>);
+          const { runId, android, ios } = await startWorkspaceFirst();
+          alive.add(android.tmuxName);
+          await vi.waitFor(() => expect(answered).toEqual([android.tmuxName]), { timeout: 6000 });
+
+          release();
+
+          expect(await endOf(runId)).toBe("failed");
+          expect(answered).not.toContain(ios.tmuxName);
+          const groups = await groupsOf(runId);
+          expect(groupOf(groups, "android").status).toBe("failed");
+          expect(groupOf(groups, "ios").status).toBe("not-started");
+          expect(sessionFailureOf(groups)).toMatchObject({ container: "android" });
+        }, 10_000);
+
+        it("shows a started session's permission request as needing the user on its running node, and goes on once answered", async () => {
+          const permissions = new FakePermissionSource();
+          const waits = createAppWaiter({ push: collectInto(pushes) });
+          runHandler({ waits }, { permissions });
+          const { runId, android } = await startWorkspaceFirst();
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+
+          const decision = permissions.ask(android.claudeSessionId, {
+            hook_event_name: "PermissionRequest",
+            session_id: android.claudeSessionId,
+            tool_name: "Bash",
+            tool_input: { command: "echo hi" },
+          });
+
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("needs-you"));
+          const opened = pushes.findLast(
+            (push): push is Extract<EnginePush, { push: "wait" }> =>
+              push.push === "wait" && push.runId === runId && push.value !== null,
+          )?.value;
+          expect(opened?.request).toMatchObject({
+            nodeId: "session-1-plan",
+            kind: "permission",
+            tool: "Bash",
+          });
+          expect(
+            waits.answer({ waitId: opened?.waitId ?? "", reply: { decision: "approve" } }),
+          ).toBe(true);
+          expect(await decision).toEqual({ behavior: "allow" });
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+          release();
+        });
+
+        it("resumes the workspace and reopens each started session gone before its Stop with --resume, in its own tmux name and worktree", async () => {
+          runHandler();
+          const { buildId, runId, workspace, android, ios } = await startWorkspaceFirst();
+          const [androidWorktree] = containerWorktrees(buildId);
+          alive.add(android.tmuxName);
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("done"));
+          expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
+          expect(alive.has(android.tmuxName)).toBe(false);
+          const openedBefore = claude.opened.length;
+
+          expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
+
+          await vi.waitFor(() => expect(claude.opened.length).toBe(openedBefore + 2));
+          const reopened = claude.opened.slice(openedBefore);
+          expect(reopened).toContainEqual(
+            expect.objectContaining({
+              sessionName: workspace.sessionName,
+              claudeSessionId: workspace.claudeSessionId,
+            }),
+          );
+          expect(reopened).toContainEqual(
+            expect.objectContaining({
+              sessionName: android.tmuxName,
+              claudeSessionId: android.claudeSessionId,
+              cwd: androidWorktree,
+              resume: true,
+            }),
+          );
+          expect(reopened.map((opening) => opening.sessionName)).not.toContain(ios.tmuxName);
+          release();
+        });
+
+        describe("a started session found gone when Flowdeck picks the run up again", () => {
+          const androidPlansAndBuilds = (): Flow => {
+            const built = sessionsWorkflow(
+              [
+                {
+                  name: "android",
+                  repo: repo.path,
+                  branch: "main",
+                  model: "haiku",
+                  members: ["Plan", "Build"],
+                },
+                { name: "ios", repo: repo.path, branch: "main", model: "sonnet" },
+              ],
+              { workspace: ["Wait"] },
+            );
+            return built;
+          };
+
+          const pickedUpAgain = async (
+            beforeClosing: (androidId: string, runId: string) => Promise<void>,
+            { refusal }: { refusal?: string } = {},
+          ) => {
+            const held = fakeClaudeSession(() => "hold");
+            runHandler({
+              run: {
+                ...runEnvironment(new NodeFileSystem()),
+                startEvents: async () => ({ events: held.events, stop: async () => undefined }),
+                openSession: held.openSession,
+              },
+            });
+            claude = held;
+            flows.save(androidPlansAndBuilds());
+            const buildId = await builtId();
+            const runId = await startedOn(buildId);
+            await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+            const workspace = claude.opened[0];
+            if (workspace === undefined) throw new Error("no workspace session opened");
+            const env = (workspace as OpenSessionOptions & { env?: Record<string, string> }).env;
+            const android = sessionOf(env ?? {}, "ANDROID");
+            const container = await androidContainer(buildId);
+            const named = (id: string) =>
+              `NODE ${id} (${container.nodes.find((node) => node.id === id)?.label ?? ""})`;
+            await beforeClosing(android.claudeSessionId, runId);
+            await handler.detach();
+            alive.add(workspace.sessionName);
+            const prompts: { sessionName: string; text: string }[] = [];
+            runHandler({
+              run: {
+                ...runEnvironment(new NodeFileSystem()),
+                startEvents: async () => ({ events: claude.events, stop: async () => undefined }),
+                openSession: async (options) => {
+                  const opened = await claude.openSession(options);
+                  if (options.sessionName !== android.tmuxName) return opened;
+                  return {
+                    ...opened,
+                    prompts: {
+                      ...opened.prompts,
+                      sendPrompt: async (text) => {
+                        if (refusal !== undefined) throw new Error(refusal);
+                        prompts.push({ sessionName: options.sessionName, text });
+                      },
+                    },
+                  };
+                },
+              },
+            });
+            await handler.reattach();
+            const note = ((await answer("load-run", { runId })) as { note?: string }).note;
+            return {
+              runId,
+              androidId: android.claudeSessionId,
+              prefix: container.prefix,
+              named,
+              note,
+              toAndroid: () =>
+                prompts
+                  .filter((prompt) => prompt.sessionName === android.tmuxName)
+                  .map((prompt) => prompt.text),
+              reopened: () =>
+                claude.opened.filter((opening) => opening.sessionName === android.tmuxName),
+            };
+          };
+
+          const finishes = (nodeId: string) => async (androidId: string, runId: string) => {
+            hook(androidId, "PreToolUse", agentCall(nodeId));
+            hook(androidId, "PostToolUse", agentDone(nodeId));
+            await vi.waitFor(() => expect(statusOf(runId, nodeId)).toBe("done"));
+          };
+
+          it("reopens a session that died between nodes with one prompt to carry on from the first unfinished node, and finishes the run when its events arrive", async () => {
+            const { runId, androidId, prefix, named, note, toAndroid, reopened } =
+              await pickedUpAgain(finishes("session-1-plan"));
+            const carryOn = `/${prefix}:run Already done: ${named("session-1-start")}, ${named("session-1-plan")}. Carry on from ${named("session-1-build")}; do not redo the done steps.`;
+
+            expect(note).toBeUndefined();
+            await vi.waitFor(() => expect(toAndroid()).toEqual([carryOn]));
+            expect(reopened()).toEqual([expect.objectContaining({ resume: true })]);
+            hook(androidId, "PreToolUse", agentCall("session-1-build"));
+            hook(androidId, "PostToolUse", agentDone("session-1-build"));
+            hook(androidId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+
+            expect(await endOf(runId)).toBe("done");
+            expect(toAndroid()).toEqual([carryOn]);
+            expect(failedNodes(runId)).toEqual([]);
+          });
+
+          it("fails a node cut off mid-step with the workspace's cut-off message, reopens nothing, and ends the run failed naming it", async () => {
+            const { runId, note, toAndroid, reopened } = await pickedUpAgain(
+              async (androidId, id) => {
+                await finishes("session-1-plan")(androidId, id);
+                hook(androidId, "PreToolUse", agentCall("session-1-build"));
+                await vi.waitFor(() => expect(statusOf(id, "session-1-build")).toBe("running"));
+              },
+            );
+
+            expect(note).toBeUndefined();
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-build")).toBe("failed"));
+            expect(
+              runs
+                .events(runId)
+                .findLast((event) => event.nodeId === "session-1-build" && event.kind === "failed"),
+            ).toMatchObject({
+              payload: {
+                message:
+                  "session-1-build failed: its Claude session ended before the turn finished; Retry sends it again",
+              },
+            });
+            release();
+
+            expect(await endOf(runId)).toBe("failed");
+            expect(reopened()).toEqual([]);
+            expect(toAndroid()).toEqual([]);
+            expect(sessionFailureOf(await groupsOf(runId))).toEqual({
+              container: "android",
+              node: "Build",
+            });
+          });
+
+          it("fails the node it would carry on from with the error, and ends the run failed naming it, when the reopened session cannot be told to carry on", async () => {
+            const { runId, toAndroid } = await pickedUpAgain(finishes("session-1-plan"), {
+              refusal: "tmux: no server running",
+            });
+
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-build")).toBe("failed"));
+            expect(
+              runs
+                .events(runId)
+                .findLast((event) => event.nodeId === "session-1-build" && event.kind === "failed"),
+            ).toMatchObject({ payload: { message: "tmux: no server running" } });
+            release();
+
+            expect(await endOf(runId)).toBe("failed");
+            expect(toAndroid()).toEqual([]);
+            expect(sessionFailureOf(await groupsOf(runId))).toEqual({
+              container: "android",
+              node: "Build",
+            });
+          });
+
+          it("reopens a session with only its Stop left and tells it to carry on from Stop", async () => {
+            const { runId, androidId, prefix, named, note, toAndroid, reopened } =
+              await pickedUpAgain(async (androidId, id) => {
+                await finishes("session-1-plan")(androidId, id);
+                await finishes("session-1-build")(androidId, id);
+              });
+            const carryOn = `/${prefix}:run Already done: ${named("session-1-start")}, ${named("session-1-plan")}, ${named("session-1-build")}. Carry on from ${named("session-1-stop")}; do not redo the done steps.`;
+
+            expect(note).toBeUndefined();
+            await vi.waitFor(() => expect(toAndroid()).toEqual([carryOn]));
+            expect(reopened()).toEqual([expect.objectContaining({ resume: true })]);
+            hook(androidId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+
+            expect(await endOf(runId)).toBe("done");
+            expect(failedNodes(runId)).toEqual([]);
+          });
+        });
+
+        it("reads each started session's worktree for the repo state, never the workspace folder, and lists no build folder as another repo", async () => {
+          const gitState = gitAt(repo.path);
+          runHandler({ gitState, userHome: "/u" });
+          const phases = vi.spyOn(runs, "appendRepoState");
+          const { buildId, runId, android } = await startWorkspaceFirst();
+          const folder = workspaceFolder(buildDirOf(buildId));
+          const [androidWorktree = "", iosWorktree = ""] = containerWorktrees(buildId);
+          for (const path of [folder, androidWorktree, iosWorktree, "/x/web"]) {
+            gitState.tops.set(path, path);
+            gitState.repoStates.set(path, {
+              kind: "read",
+              branch: "main",
+              head: "abc1234",
+              upstream: { name: "origin/main", ahead: 0, behind: 0 },
+              staged: 0,
+              unstaged: 0,
+              untracked: 0,
+            });
+          }
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+          [folder, androidWorktree, iosWorktree, "/x/web"].forEach((path, index) =>
+            runs.recordActivity(runId, {
+              id: 900 + index,
+              nodeId: "session-1-plan",
+              at: 1,
+              summary: "Edit",
+              kind: "tool",
+              tool: "Edit",
+              input: JSON.stringify({ file_path: `${path}/a.ts` }),
+            }),
+          );
+          hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan"));
+          hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+          release();
+          await endOf(runId);
+          await vi.waitFor(() =>
+            expect(phases.mock.calls.map(([, phase]) => phase)).toContain("after"),
+          );
+
+          expect(gitState.repoStateCalls).toContain(androidWorktree);
+          expect(gitState.repoStateCalls).not.toContain(folder);
+          const otherRepos = phases.mock.calls.at(-1)?.[3] ?? [];
+          expect(otherRepos.map((other) => other.path)).toEqual(["/x/web"]);
+        });
+
+        it("pushes the started sessions for the terminal, the workspace first, adding a session once it starts", async () => {
+          const { runId, workspace, android, ios } = await startWorkspaceFirst();
+          await vi.waitFor(() =>
+            expect(startedSessionPushes(runId).at(-1)).toEqual([
+              { container: "workspace", tmuxName: workspace.sessionName },
+            ]),
+          );
+
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+
+          await vi.waitFor(() =>
+            expect(startedSessionPushes(runId).at(-1)).toEqual([
+              { container: "workspace", tmuxName: workspace.sessionName },
+              { container: "android", tmuxName: android.tmuxName },
+            ]),
+          );
+          expect(
+            startedSessionPushes(runId)
+              .flat()
+              .map((pushed) => pushed?.tmuxName),
+          ).not.toContain(ios.tmuxName);
+          release();
         });
       });
 
@@ -5565,23 +6261,25 @@ describe("createEngineHandler", async () => {
           "records the worktree before the first step and after a %s ending, before the story is told",
           async (ending) => {
             let beforeAtFirstStep: unknown;
-            handler = repoHandler((nodeId, opening) => {
+            let worktree = "";
+            handler = repoHandler((nodeId) => {
               if (nodeId === "write") {
                 beforeAtFirstStep = runs.repoStates(latestRunId()).before;
-                gitState.repoStates.set(opening.cwd, readState("def5678"));
+                gitState.repoStates.set(worktree, readState("def5678"));
               }
               return ending === "failed" && nodeId === "check" ? "fail" : "done";
             });
             flows.save(twoAgents());
             const buildId = await builtId();
-            gitState.repoStates.set(worktreeOf(buildId), readState("abc1234", 1));
+            worktree = worktreeOf(buildId);
+            gitState.repoStates.set(worktree, readState("abc1234", 1));
             const runId = await startedOn(buildId);
             await untilFinished(runId);
             await vi.waitFor(() => expect(appended()).toHaveLength(1));
 
             expect(runs.findRun(runId)?.status).toBe(ending);
-            expect(gitState.repoStateCalls[0]).toBe(worktreeOf(buildId));
-            expect(runs.findRun(runId)?.session.cwd).toBe(worktreeOf(buildId));
+            expect(gitState.repoStateCalls[0]).toBe(worktree);
+            expect(runs.findRun(runId)?.session.cwd).toBe(workspaceFolder(buildDirOf(buildId)));
             expect(beforeAtFirstStep).toEqual(readState("abc1234", 1));
             expect(recordedPhases()).toEqual(["before", "after"]);
             expect(narrator.calls[0]).toContain(
@@ -5620,8 +6318,9 @@ describe("createEngineHandler", async () => {
         it("records the after state of a run stopped while no run of it is going, then tells its story", async () => {
           handler = repoHandler();
           flows.save(sleeper());
-          const runId = leftRunning(await builtId());
-          gitState.repoStates.set(repo.path, readState("fee1234"));
+          const buildId = await builtId();
+          const runId = leftRunning(buildId);
+          gitState.repoStates.set(worktreeOf(buildId), readState("fee1234"));
 
           expect(await stopRunRequest(runId)).toMatchObject({ ok: true, value: { stopped: true } });
 
@@ -5989,7 +6688,7 @@ describe("createEngineHandler", async () => {
 
     const promptFlow = () =>
       atRepo(
-        flow(
+        workspaceFlow(
           [trigger("start"), agent("plan"), output("stop")],
           [thenWire("start", "plan"), thenWire("plan", "stop")],
         ),
@@ -6174,7 +6873,9 @@ describe("createEngineHandler", async () => {
 
     it("announces no session for a run with no Claude turn", async () => {
       flows.save(
-        atRepo(onMainFlow([gate("g1", { settings: { shown: "Check", skippable: true } })], [])),
+        atRepo(
+          onWorkspaceMainFlow([gate("g1", { settings: { shown: "Check", skippable: true } })], []),
+        ),
       );
 
       const started = await runBuild(await builtId(), { auto: true });
@@ -6416,7 +7117,7 @@ describe("createEngineHandler", async () => {
 
     const gated = () =>
       atRepo(
-        onMainFlow(
+        onWorkspaceMainFlow(
           [agent("s1"), gate("g1"), agent("s2")],
           [thenWire("s1", "g1"), thenWire("g1", "s2")],
         ),
@@ -6445,7 +7146,15 @@ describe("createEngineHandler", async () => {
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "running",
-        nodes: { start: "done", s1: "done", g1: "needs-you", s2: "waiting", stop: "waiting" },
+        nodes: {
+          start: "done",
+          s1: "done",
+          g1: "needs-you",
+          s2: "waiting",
+          stop: "waiting",
+          "session-1-start": "waiting",
+          "session-1-stop": "waiting",
+        },
       });
     };
 
@@ -6465,7 +7174,15 @@ describe("createEngineHandler", async () => {
       expect(snapshotsOf(runId).at(-1)).toEqual({
         runId,
         status: "done",
-        nodes: { start: "done", s1: "done", g1: "done", s2: "done", stop: "done" },
+        nodes: {
+          start: "done",
+          s1: "done",
+          g1: "done",
+          s2: "done",
+          stop: "done",
+          "session-1-start": "waiting",
+          "session-1-stop": "waiting",
+        },
       });
       expect(runs.events(runId)).toContainEqual(
         expect.objectContaining({

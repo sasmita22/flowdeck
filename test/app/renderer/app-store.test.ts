@@ -56,6 +56,7 @@ const bridge = (
   answerClose: vi.fn(),
   getRunState: vi.fn(),
   onRunState: vi.fn(() => () => {}),
+  onRunSessions: vi.fn(() => () => {}),
   openTerminal: vi.fn(),
   getTerminalStatus: vi.fn(),
   writeTerminal: vi.fn(),

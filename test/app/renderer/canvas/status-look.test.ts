@@ -33,6 +33,12 @@ describe("statusBadge", () => {
     expect(statusBadge("stopped").color).toMatch(/\S/);
     expect(statusBadge("stopped").color).not.toBe(statusBadge("needs you").color);
   });
+
+  it("labels not-started as not started, in a colour apart from failed", () => {
+    expect(statusBadge("not-started").label).toBe("not started");
+    expect(statusBadge("not-started").color).toMatch(/\S/);
+    expect(statusBadge("not-started").color).not.toBe(statusBadge("failed").color);
+  });
 });
 
 describe("issueSummary", () => {

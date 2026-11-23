@@ -174,7 +174,9 @@ function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard) {
   });
   ipcMain.handle(
     bridgeChannels.openTerminal,
-    windowGuard.handle((runId: string, size: unknown) => terminal.open(runId, size)),
+    windowGuard.handle((runId: string, size: unknown, tmuxName?: unknown) =>
+      terminal.open(runId, size, tmuxName),
+    ),
   );
   ipcMain.handle(
     bridgeChannels.getTerminalStatus,
@@ -198,7 +200,9 @@ function wireTerminal(window: BrowserWindow, windowGuard: WindowGuard) {
     runIds.add(runId);
     terminal.setSession(runId, name);
   };
-  return { setSession, dispose: () => terminal.dispose() };
+  const setContainerSessions = (runId: string, names: readonly string[]) =>
+    terminal.setContainerSessions(runId, names);
+  return { setSession, setContainerSessions, dispose: () => terminal.dispose() };
 }
 
 async function wireToolRelay(
@@ -311,6 +315,13 @@ void app.whenReady().then(async () => {
   const terminal = wireTerminal(window, windowGuard);
   client.onPush((push) => {
     if (push.push === "session") terminal.setSession(push.runId, push.value);
+    if (push.push === "run-sessions") {
+      terminal.setContainerSessions(
+        push.runId,
+        push.sessions.map(({ tmuxName }) => tmuxName),
+      );
+      toEveryWindow(bridgeChannels.runSessions, { runId: push.runId, sessions: push.sessions });
+    }
   });
   ipcMain.handle(
     bridgeChannels.getRunState,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createTerminalStore,
+  selectAttachTarget,
   selectOpenDisabled,
   type TerminalBridge,
 } from "../../../../src/app/renderer/terminal/store.js";
@@ -313,5 +314,48 @@ describe("pop out", () => {
 
     push("run-1", status(true, false));
     expect(terminal.getState().poppedOut).toBe(false);
+  });
+});
+
+describe("started sessions", () => {
+  const workspace = { container: "workspace", tmuxName: "fd-run-aaaa1111" };
+  const android = { container: "android", tmuxName: "fd-run-bbbb2222" };
+
+  it("defaults to the workspace session", async () => {
+    const { terminal } = await viewing("run-1");
+
+    terminal.getState().setSessions([workspace, android]);
+
+    expect(selectAttachTarget(terminal.getState())).toBe("fd-run-aaaa1111");
+  });
+
+  it("attaches to android's tmux session once android is chosen", async () => {
+    const { bridge, terminal } = await viewing("run-1");
+    terminal.getState().setSessions([workspace, android]);
+
+    terminal.getState().chooseSession("android");
+    await terminal.getState().attach({ cols: 80, rows: 24 });
+
+    expect(selectAttachTarget(terminal.getState())).toBe("fd-run-bbbb2222");
+    expect(bridge.openTerminal.mock.calls.at(-1)).toContain("fd-run-bbbb2222");
+  });
+
+  it("falls back to the workspace when the chosen session leaves the list", async () => {
+    const { terminal } = await viewing("run-1");
+    terminal.getState().setSessions([workspace, android]);
+    terminal.getState().chooseSession("android");
+
+    terminal.getState().setSessions([workspace]);
+
+    expect(selectAttachTarget(terminal.getState())).toBe("fd-run-aaaa1111");
+  });
+
+  it("falls back to the workspace when a session not in the list is chosen", async () => {
+    const { terminal } = await viewing("run-1");
+    terminal.getState().setSessions([workspace, android]);
+
+    terminal.getState().chooseSession("ios");
+
+    expect(selectAttachTarget(terminal.getState())).toBe("fd-run-aaaa1111");
   });
 });

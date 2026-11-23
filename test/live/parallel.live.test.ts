@@ -14,7 +14,7 @@ import type { RunStatus, StoredEvent } from "../../src/core/run/store.js";
 import type { HookEvent } from "../../src/ports/event-source.js";
 import {
   agent,
-  flow,
+  workspaceFlow,
   fork,
   join as joinNode,
   output,
@@ -49,7 +49,7 @@ const sleeper = (id: string, seconds: number) =>
 
 function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
   const branches = Object.keys(seconds);
-  const parsed = flow(
+  const parsed = workspaceFlow(
     [
       trigger("t"),
       fork("f"),
@@ -73,7 +73,7 @@ function parallelFlow(seconds: Record<string, number>, wait: "all" | "first") {
 }
 
 function missingReadThenEchoFlow(): Flow {
-  const parsed = flow(
+  const parsed = workspaceFlow(
     [
       trigger("t"),
       agent("a", {
