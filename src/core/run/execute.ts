@@ -1,13 +1,19 @@
-import type { Manifest } from "../compiler/lower.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
+import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
+import { workspaceFolder } from "./workspace.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
 import { chargeUsage, usageOwners } from "./cost.js";
 import type { PermissionAsks } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import type { ToolStarts } from "./tool-start.js";
-import { parseManifest, singleSession, type ParsedManifest } from "./manifest.js";
+import {
+  parseManifest,
+  sessionContainersOf,
+  workspaceOf,
+  type ParsedManifest,
+} from "./manifest.js";
 import { Runner, StructureError, structureProblems, type RunnerDeps } from "./runner.js";
 import type { RunStatus, Store } from "./store.js";
 import type { TurnEndEvent, TurnEvents } from "./turns.js";
@@ -23,6 +29,7 @@ export type OpenSessionOptions = {
   hooks: HookPaths;
   attach?: boolean;
   resume?: boolean;
+  env?: Record<string, string>;
 } & ({ layout: "legacy" } | { layout: "workspace"; workspaceFolder: string });
 
 export type OpenedSession = {
@@ -52,7 +59,13 @@ export type ExecuteDeps = {
 
 export type RunEnvironment = Omit<ExecuteDeps, "store" | "onChange" | "onInterrupt">;
 
-export type LoadedBuild = ParsedManifest & { worktree?: string };
+export type LoadedBuild = ParsedManifest & { cwd: string };
+
+export interface StartedSessionsView {
+  finish(): Promise<void>;
+  started(): string[];
+  failure(): { container: string; node: string } | undefined;
+}
 
 export type LoadBuildResult =
   { kind: "loaded"; build: LoadedBuild } | { kind: "error"; message: string };
@@ -66,6 +79,7 @@ export type Execution = {
   socketPath: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
+  startedSessions?: StartedSessionsView;
 };
 
 const maxSocketPath = 104;
@@ -107,21 +121,18 @@ export async function loadBuild(
     };
   }
   const manifest = parseManifest(await deps.fs.readFile(`${row.dir}/manifest.json`), row);
-  const session = singleSession(manifest);
-  if (!session.ok) return { kind: "error", message: session.reason };
-  const problems = structureProblems(manifest.nodes, manifest.wires);
+  const { nodes, wires } = workspaceOf(manifest);
+  const problems = structureProblems(nodes, wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
-  const worktree = session.container.worktree;
-  return {
-    kind: "loaded",
-    build: { ...manifest, ...(worktree === undefined ? {} : { worktree }) },
-  };
+  return { kind: "loaded", build: { ...manifest, cwd: workspaceFolder(row.dir) } };
 }
 
-const checksACondition = (node: LoadedBuild["nodes"][number]) =>
+type NodesView = { nodes: readonly ManifestNode[] };
+
+const checksACondition = (node: ManifestNode) =>
   node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
 
-export const needsClaude = (manifest: Required<Pick<Manifest, "nodes">>) =>
+export const needsClaude = (manifest: NodesView) =>
   manifest.nodes.some((node) => node.type === "agent" || checksACondition(node));
 
 type ResumeRead = { actions: ResumeActions; stop?: TurnEndEvent };
@@ -166,35 +177,56 @@ function completeWaitWith(
 
 const turnTypes = new Set(["agent", "fork", "hardstop"]);
 
-export const turnNodeIds = (manifest: Pick<LoadedBuild, "nodes">): Set<string> =>
+export const turnNodeIds = (manifest: NodesView): Set<string> =>
   new Set(manifest.nodes.filter((node) => turnTypes.has(node.type)).map((node) => node.id));
 
-export const parentsOf = (manifest: Pick<LoadedBuild, "nodes">): Record<string, string> =>
+export const parentsOf = (manifest: NodesView): Record<string, string> =>
   Object.fromEntries(
     manifest.nodes.flatMap((node) => (node.parent === undefined ? [] : [[node.id, node.parent]])),
   );
+
+const containerOfSession = (
+  store: Store,
+  runId: string,
+  manifest: LoadedBuild,
+  sessionId: string,
+): ManifestContainer => {
+  const cwd = store.runSessions(runId).find((row) => row.claudeSessionId === sessionId)?.cwd;
+  const session = sessionContainersOf(manifest).find(
+    (container) => cwd !== undefined && container.worktree === cwd,
+  );
+  return session ?? workspaceOf(manifest);
+};
 
 async function recordSpend(
   store: Store,
   runId: string,
   manifest: LoadedBuild,
   usage: UsageReader | undefined,
-  sessionId: string | undefined,
+  sessionIds: readonly string[],
   onChange: (line: string) => void,
 ): Promise<void> {
-  if (usage === undefined || sessionId === undefined || sessionId === "") return;
+  const ids = sessionIds.filter((id) => id !== "");
+  if (usage === undefined || ids.length === 0) return;
   try {
-    const entries = await usage.entries(sessionId);
+    const read = await Promise.all(
+      ids.map(async (id) => ({
+        container: containerOfSession(store, runId, manifest, id),
+        entries: await usage.entries(id),
+      })),
+    );
     const events = store.events(runId);
-    const charges = chargeUsage({
-      events,
-      entries,
-      turnNodes: turnNodeIds(manifest),
-      owners: usageOwners(manifest, events),
-      parents: parentsOf(manifest),
-    });
+    const charges = read.flatMap(({ container, entries }) =>
+      chargeUsage({
+        events,
+        entries,
+        turnNodes: turnNodeIds(container),
+        owners: usageOwners(container, events),
+        parents: parentsOf(container),
+      }),
+    );
     if (charges.length > 0) store.appendAll(runId, charges);
-    store.recordCost(runId, costOf(entries));
+    store.recordCost(runId, costOf(read.flatMap(({ entries }) => entries)));
   } catch (error) {
     onChange(`cost not recorded: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -204,6 +236,8 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
   return {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
+    runSessions: (runId) => store.runSessions(runId),
+    nodeSessions: (runId) => store.nodeSessions(runId),
     listRuns: () => store.listRuns(),
     findRunSummary: (id) => store.findRunSummary(id),
     events: (id) => store.events(id),
@@ -262,7 +296,8 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
-  const { store, runId, manifest, cwd, auto, socketPath } = execution;
+  const { store, runId, manifest, cwd, auto, socketPath, startedSessions } = execution;
+  const workspace = workspaceOf(manifest);
   const events = await deps.startEvents(socketPath);
   let opened: OpenedSession | undefined;
   let stopping: Promise<void> | undefined;
@@ -292,7 +327,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
         ? {}
         : completeWaitWith(
             await readUntilNoStop(events.events, opened.sessionId, execution.actions),
-            turnNodeIds(manifest),
+            turnNodeIds(workspace),
           );
     const session = opened;
     const whileRunning = async <T>(step: () => Promise<T>): Promise<T> => {
@@ -328,7 +363,15 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       ...(deps.usage === undefined ? {} : { usage: deps.usage }),
       ...(deps.compactions === undefined ? {} : { compactions: deps.compactions }),
     })
-      .run(manifest, { actions })
+      .run(
+        {
+          ...workspace,
+          hash: manifest.hash,
+          layout: manifest.layout,
+          ...(manifest.values === undefined ? {} : { values: manifest.values }),
+        },
+        { actions },
+      )
       .then((result) => (result.outcome === "done" ? 0 : 1));
     const code = await Promise.race([finished, interrupted]);
     if (code === 0) status = "done";
@@ -336,7 +379,10 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
   } finally {
     stopListening();
     await stopAll();
-    await recordSpend(store, runId, manifest, deps.usage, opened?.sessionId, deps.onChange);
+    await startedSessions?.finish();
+    const sessionIds = [opened?.sessionId ?? "", ...(startedSessions?.started() ?? [])];
+    await recordSpend(store, runId, manifest, deps.usage, sessionIds, deps.onChange);
+    if (status === "done" && startedSessions?.failure() !== undefined) status = "failed";
     store.finishRun(runId, wasInterrupted ? "stopped" : status);
   }
 }

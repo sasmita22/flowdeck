@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { agent, onMainFlow } from "../test/fixtures/flow-builders.js";
+import { agent, onWorkspaceMainFlow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -47,7 +47,7 @@ const tmuxAlive = async (name: string) => {
 };
 
 const oneAgent = () => {
-  const built = onMainFlow([agent("p1")], []);
+  const built = onWorkspaceMainFlow([agent("p1")], []);
   return {
     ...built,
     nodes: built.nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } })),

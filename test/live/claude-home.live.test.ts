@@ -41,7 +41,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a live run and the user's Cl
         repo: repo.path,
         sessionName: `fd-live-home-${process.pid}`,
       });
-      const parsed = builders.flow(
+      const parsed = builders.workspaceFlow(
         [
           builders.trigger("t"),
           builders.agent("p1", { settings: { instructions: "Reply ok.", model: "haiku" } }),

@@ -23,21 +23,24 @@ export async function openClaudeSession(
     hooks,
     attach,
     resume,
+    env,
     ...layout
-  }: OpenSessionOptions,
+  }: OpenSessionOptions & { env?: Record<string, string> },
   { sessions, claude, sessionId }: { sessions: SessionHost; claude: ClaudeCli; sessionId: string },
 ): Promise<OpenedSession> {
   if (attach === true && !(await sessions.has(sessionName))) {
     throw new SessionGoneError(sessionName);
   }
   const buildFiles =
-    layout.layout === "workspace"
-      ? {
-          settingsPath: "../settings.json",
-          pluginDirs: ["../plugin"],
-          addDir: ["..", ...(layout.workspaceFolder === cwd ? [] : [layout.workspaceFolder])],
-        }
-      : { settingsPath: join(buildDir, "settings.json"), pluginDirs: [buildDir] };
+    layout.layout === "legacy"
+      ? { settingsPath: join(buildDir, "settings.json"), pluginDirs: [buildDir] }
+      : layout.workspaceFolder === cwd
+        ? { settingsPath: "settings.json", pluginDirs: ["plugin"] }
+        : {
+            settingsPath: "../settings.json",
+            pluginDirs: ["../plugin"],
+            addDir: ["..", layout.workspaceFolder],
+          };
   let closed = false;
   let started = attach === true;
   let starting: Promise<void> | undefined;
@@ -50,6 +53,7 @@ export async function openClaudeSession(
         {
           ...buildFiles,
           env: {
+            ...env,
             FLOWDECK_SOCK: socketPath,
             CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
             ...hookEnvironment(hooks),

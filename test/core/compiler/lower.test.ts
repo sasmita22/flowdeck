@@ -5,6 +5,7 @@ import { validate } from "../../../src/core/compiler/validate.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
 import { sectionOf } from "../../fixtures/frontmatter.js";
+import { oneSession } from "../../fixtures/one-session.js";
 import {
   agent,
   flow,
@@ -41,7 +42,7 @@ const workspace = {
 
 const scope = { build: "fix-login-main", repo: "repo", workspace: "/fd-home/workspaces/b1" };
 
-const sessionNodes = (input: Flow) => lower(input, workspace).manifest.nodes ?? [];
+const sessionNodes = (input: Flow) => oneSession(lower(input, workspace).manifest).nodes;
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -166,7 +167,7 @@ describe("lower", () => {
     const { manifest } = lower(sample(), workspace);
 
     expect(manifest.version).toBe(1);
-    expect(manifest.wires).toStrictEqual([
+    expect(oneSession(manifest).wires).toStrictEqual([
       thenWire("start", "p"),
       thenWire("p", "a"),
       thenWire("a", "x"),
@@ -207,12 +208,12 @@ describe("lower", () => {
         },
       );
 
-    it("becomes the manifest's session: its name, repo and branch as the Build configuration, and its model", () => {
-      expect(lower(bridged(), workspace).manifest.session).toStrictEqual({
-        name: "review",
-        buildConfig: { repo: "/r", base: "release" },
-        model: "opus",
-      });
+    it("carries its name, repo, branch as the base, and model on its manifest container", () => {
+      const session = lower(bridged(), workspace).manifest.containers.find(
+        (container) => container.kind === "session",
+      );
+
+      expect(session).toMatchObject({ name: "review", repo: "/r", base: "release", model: "opus" });
     });
 
     it("compiles only its members and their body nodes, leaving the workspace's Start and Stop out", () => {
@@ -250,7 +251,7 @@ describe("lower", () => {
       values: { ticket: "FD-99", "proceed-e2e": true },
     });
 
-    expect(manifest.prefix).toBe("fix-login-main");
+    expect(oneSession(manifest).prefix).toBe("fix-login-main");
     expect(manifest.layout).toBe("workspace");
     expect(manifest.values).toStrictEqual({ ticket: "FD-99", "proceed-e2e": true });
     expect(manifest).not.toHaveProperty("inputs");
@@ -260,7 +261,7 @@ describe("lower", () => {
     const first = lower(sample(), workspace);
     const second = lower(sample(), { ...workspace, name: "fix-signup" });
 
-    expect(second.manifest.prefix).toBe("fix-signup-main");
+    expect(oneSession(second.manifest).prefix).toBe("fix-signup-main");
     expect(
       JSON.parse(JSON.stringify(second.manifest).replaceAll("fix-signup", "fix-login")),
     ).toStrictEqual(JSON.parse(JSON.stringify(first.manifest)));
@@ -318,7 +319,7 @@ describe("lower", () => {
     it("carries only the flow's Then wires in the manifest", () => {
       const input = handoff();
 
-      expect(lower(input, workspace).manifest.wires).toStrictEqual([
+      expect(oneSession(lower(input, workspace).manifest).wires).toStrictEqual([
         thenWire("plan", "build"),
         thenWire("build", "check"),
       ]);
@@ -390,6 +391,29 @@ describe("lower", () => {
       expect(named(input, "workspace-1-plan")).toBe("fix-login-workspace:plan");
       expect(named(input, "session-1-plan")).toBe("fix-login-android:plan");
     });
+
+    it.each([
+      [
+        "one session",
+        sessionsWorkflow([{ name: "android", repo: "/repos/android", branch: "main" }]),
+      ],
+      ["two sessions", twoSessionWorkflow()],
+    ])(
+      "keeps nodes, wires and prefix only on the containers, the workspace's included, for %s",
+      (_label, input) => {
+        const { manifest } = lower(input, workspace);
+
+        for (const field of ["nodes", "wires", "prefix", "session"]) {
+          expect(manifest, field).not.toHaveProperty(field);
+        }
+        for (const container of manifest.containers) {
+          expect(container.nodes.length, container.slug).toBeGreaterThan(0);
+          expect(container.wires.length, container.slug).toBeGreaterThan(0);
+          expect(container.prefix, container.slug).toBe(`fix-login-${container.slug}`);
+        }
+        expect(manifest.containers[0]?.kind).toBe("workspace");
+      },
+    );
 
     it("holds only each container's own nodes, in run order, and the wires between them", () => {
       const sets = containersOf(twoSessionWorkflow()).map((container) => ({

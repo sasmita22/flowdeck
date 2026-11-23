@@ -13,6 +13,7 @@ import {
 import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
+import type { PipelineGroup } from "../../../src/core/run/pipeline.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -28,7 +29,8 @@ import {
   fork,
   gate,
   join as joinNode,
-  onMainFlow,
+  onWorkspaceMainFlow,
+  sessionsWorkflow,
   thenWire,
   wire,
 } from "../../fixtures/flow-builders.js";
@@ -190,13 +192,13 @@ describe("run controls", () => {
 
   describe("run options", () => {
     const skippableGate = () =>
-      onMainFlow(
+      onWorkspaceMainFlow(
         [agent("s1"), gate("g1", { settings: { shown: "Check", skippable: true } }), agent("s2")],
         [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
 
     const branchOn = (variable: string) =>
-      onMainFlow(
+      onWorkspaceMainFlow(
         [branch("b", variable), agent("yes"), agent("no")],
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
@@ -244,7 +246,9 @@ describe("run controls", () => {
   describe("stop", () => {
     it("stops a run during an agent's turn and marks it stopped, writing nothing after", async () => {
       withClaude((nodeId) => (nodeId === "s1" ? "hold" : "done"));
-      const runId = await start(onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]));
+      const runId = await start(
+        onWorkspaceMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]),
+      );
       await vi.waitFor(() => expect(statusOf(runId, "s1")).toBe("sent"));
 
       expect(await call("stop-run", { runId })).toEqual({ stopped: true });
@@ -258,13 +262,140 @@ describe("run controls", () => {
       ]);
     });
 
+    it("ends the workspace and every session still alive, showing the started one stopped and the never-hooked one not started", async () => {
+      const claude = fakeClaudeSession((nodeId) =>
+        nodeId === "workspace-1-wait" ? "hold" : "done",
+      );
+      const stopped: string[] = [];
+      handler = handlerWith({
+        run: runEnvironment({
+          startEvents: claude.startEvents,
+          openSession: async (opening) => {
+            const session = await claude.openSession(opening);
+            return {
+              ...session,
+              stop: async () => {
+                stopped.push(opening.sessionName);
+              },
+            };
+          },
+        }),
+      });
+      const runId = await start(
+        sessionsWorkflow(
+          [
+            { name: "android", repo: repo.path, branch: "main" },
+            { name: "ios", repo: repo.path, branch: "main" },
+          ],
+          { workspace: ["Wait"] },
+        ),
+      );
+      await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+      const workspace = claude.opened[0];
+      const env = (workspace as (OpenSessionOptions & { env?: Record<string, string> }) | undefined)
+        ?.env;
+      const android = {
+        tmuxName: env?.["FD_SESSION_ANDROID_TMUX"] ?? "",
+        claudeSessionId: env?.["FD_SESSION_ANDROID_ID"] ?? "",
+      };
+      const iosTmux = env?.["FD_SESSION_IOS_TMUX"] ?? "";
+      alive.add(android.tmuxName);
+      alive.add(iosTmux);
+      claude.events.publish({
+        kind: "PreToolUse",
+        sessionId: android.claudeSessionId,
+        payload: {
+          hook_event_name: "PreToolUse",
+          session_id: android.claudeSessionId,
+          tool_name: "Agent",
+          tool_input: { subagent_type: "agent", prompt: "NODE session-1-plan\nGo" },
+          tool_use_id: "toolu-session-1-plan",
+        },
+      });
+      await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
+
+      expect(await call("stop-run", { runId })).toEqual({ stopped: true });
+
+      expect(runs.findRun(runId)?.status).toBe("stopped");
+      expect([...stopped, ...ended]).toContain(workspace?.sessionName);
+      expect(ended).toContain(android.tmuxName);
+      expect(alive.has(android.tmuxName)).toBe(false);
+      expect(iosTmux).toMatch(/^fd-/);
+      expect(ended).toContain(iosTmux);
+      expect(alive.has(iosTmux)).toBe(false);
+      const groups = (await call("run-pipeline", { runId })) as PipelineGroup[];
+      expect(groups.map(({ name, status }) => ({ name, status }))).toEqual([
+        { name: "workspace", status: "stopped" },
+        { name: "android", status: "stopped" },
+        { name: "ios", status: "not-started" },
+      ]);
+    });
+
+    it("shows a session still waiting on its start dialogs stopped, not failed, when the user stops the run", async () => {
+      const claude = fakeClaudeSession((nodeId) =>
+        nodeId === "workspace-1-wait" ? "hold" : "done",
+      );
+      const waitingDialogs = new Map<string, (error: Error) => void>();
+      handler = handlerWith({
+        run: runEnvironment({ startEvents: claude.startEvents, openSession: claude.openSession }),
+        answerDialogs: (name) =>
+          new Promise<void>((_, reject) => {
+            waitingDialogs.set(name, reject);
+          }),
+        endSession: async (name) => {
+          ended.push(name);
+          alive.delete(name);
+          waitingDialogs.get(name)?.(new Error(`Session "${name}" does not exist`));
+        },
+      });
+      const runId = await start(
+        sessionsWorkflow([{ name: "android", repo: repo.path, branch: "main" }], {
+          workspace: ["Wait"],
+        }),
+      );
+      await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+      const env = (
+        claude.opened[0] as (OpenSessionOptions & { env?: Record<string, string> }) | undefined
+      )?.env;
+      const android = {
+        tmuxName: env?.["FD_SESSION_ANDROID_TMUX"] ?? "",
+        claudeSessionId: env?.["FD_SESSION_ANDROID_ID"] ?? "",
+      };
+      alive.add(android.tmuxName);
+      claude.events.publish({
+        kind: "PreToolUse",
+        sessionId: android.claudeSessionId,
+        payload: {
+          hook_event_name: "PreToolUse",
+          session_id: android.claudeSessionId,
+          tool_name: "Agent",
+          tool_input: { subagent_type: "agent", prompt: "NODE session-1-plan\nGo" },
+          tool_use_id: "toolu-session-1-plan",
+        },
+      });
+      await vi.waitFor(() => expect(waitingDialogs.has(android.tmuxName)).toBe(true), {
+        timeout: 5000,
+      });
+
+      expect(await call("stop-run", { runId })).toEqual({ stopped: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(ended).toContain(android.tmuxName);
+      expect(runs.events(runId).filter((event) => event.kind === "failed")).toEqual([]);
+      const groups = (await call("run-pipeline", { runId })) as PipelineGroup[];
+      expect(groups.map(({ name, status }) => ({ name, status }))).toEqual([
+        { name: "workspace", status: "stopped" },
+        { name: "android", status: "stopped" },
+      ]);
+    });
+
     it("answers not stopped for a run it does not know", async () => {
       expect(await call("stop-run", { runId: "nope" })).toEqual({ stopped: false });
     });
 
     describe("on a run left interrupted", () => {
       const interrupted = async (tmuxName: string) => {
-        const buildId = await builtId(onMainFlow([agent("s1")], []));
+        const buildId = await builtId(onWorkspaceMainFlow([agent("s1")], []));
         const { id } = runs.createRun({
           buildDir: buildDirOf(buildId),
           inputs: {},
@@ -295,6 +426,25 @@ describe("run controls", () => {
         expect(ended).toEqual([]);
       });
 
+      it("ends every session of the run still alive, one that never delivered a hook included", async () => {
+        const buildId = await builtId(onWorkspaceMainFlow([agent("s1")], []));
+        const { id: runId } = runs.createRun({
+          buildDir: buildDirOf(buildId),
+          inputs: {},
+          nodeIds: ["s1"],
+          session: { tmuxName: "fd-run-left", cwd: repo.path, claudeSessionId: "c-left" },
+          sessions: [
+            { tmuxName: "fd-run-child", cwd: "/b/sessions/web/app", claudeSessionId: "c-child" },
+          ],
+          buildId,
+        });
+        alive.add("fd-run-child");
+
+        expect(await call("stop-run", { runId })).toEqual({ stopped: true });
+
+        expect(ended).toEqual(["fd-run-child"]);
+      });
+
       it("never ends a session that is not one of Flowdeck's own", async () => {
         const { runId } = await interrupted("work");
         alive.add("work");
@@ -308,7 +458,7 @@ describe("run controls", () => {
   });
 
   describe("retry", () => {
-    const twoAgents = () => onMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]);
+    const twoAgents = () => onWorkspaceMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]);
 
     it("sends a failed agent again, and the run goes on to done", async () => {
       let s1Turns = 0;
@@ -339,7 +489,7 @@ describe("run controls", () => {
         message: "s2 has not failed",
       });
 
-      const going = await start(onMainFlow([agent("nap")], []));
+      const going = await start(onWorkspaceMainFlow([agent("nap")], []));
       expect(await call("retry-node", { runId: going, nodeId: "nap" })).toMatchObject({
         kind: "error",
       });
@@ -407,7 +557,7 @@ describe("run controls", () => {
         }),
       });
       const runId = await start(
-        onMainFlow(
+        onWorkspaceMainFlow(
           [fork("f"), agent("a"), agent("b"), joinNode("j")],
           [thenWire("f", "a"), thenWire("f", "b"), thenWire("a", "j"), thenWire("b", "j")],
         ),
@@ -443,7 +593,7 @@ describe("run controls", () => {
 
   describe("resume", () => {
     const stoppable = () =>
-      onMainFlow(
+      onWorkspaceMainFlow(
         [agent("s1"), agent("s2"), agent("s3")],
         [thenWire("s1", "s2"), thenWire("s2", "s3")],
       );
@@ -464,7 +614,7 @@ describe("run controls", () => {
 
     it("refuses a stopped run while another run of its build is going, leaving it stopped", async () => {
       withClaude(() => "hold");
-      const buildId = await builtId(onMainFlow([agent("s1")], []));
+      const buildId = await builtId(onWorkspaceMainFlow([agent("s1")], []));
       const first = await startOn(buildId);
       await vi.waitFor(() => expect(statusOf(first, "s1")).toBe("sent"));
       await call("stop-run", { runId: first });
@@ -477,7 +627,7 @@ describe("run controls", () => {
     });
 
     it("refuses a run that is done", async () => {
-      const runId = await start(onMainFlow([agent("s1")], []));
+      const runId = await start(onWorkspaceMainFlow([agent("s1")], []));
       await finished(runId);
 
       expect(await call("resume-run", { runId })).toEqual({
@@ -503,7 +653,7 @@ describe("run controls", () => {
     it("starts Claude again with --resume when the run's Claude session is gone", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => false });
-      const runId = await start(onMainFlow([agent("p1")], []));
+      const runId = await start(onWorkspaceMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
 
@@ -517,7 +667,7 @@ describe("run controls", () => {
     it("refuses, changing nothing, when the session ends between the check and the attach", async () => {
       const opened: OpenSessionOptions[] = [];
       handler = handlerWith({ run: recordingSessions(opened), sessionAlive: async () => true });
-      const runId = await start(onMainFlow([agent("p1")], []));
+      const runId = await start(onWorkspaceMainFlow([agent("p1")], []));
       await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
       await call("stop-run", { runId });
       const before = runs.events(runId);
@@ -535,7 +685,7 @@ describe("run controls", () => {
 
   describe("activity and cost", () => {
     it("answers each node's tokens and cost, and a session total that is their sum", async () => {
-      const runId = await start(onMainFlow([agent("s1")], []));
+      const runId = await start(onWorkspaceMainFlow([agent("s1")], []));
       await finished(runId);
       runs.append(runId, "s1", {
         kind: "usage",
@@ -553,6 +703,8 @@ describe("run controls", () => {
         expect.objectContaining({ nodeId: "start", tokens: 0, cost: 0 }),
         expect.objectContaining({ nodeId: "s1", tokens: 7, cost: 0.25 }),
         expect.objectContaining({ nodeId: "stop", tokens: 0, cost: 0 }),
+        expect.objectContaining({ nodeId: "session-1-start", tokens: 0, cost: 0 }),
+        expect.objectContaining({ nodeId: "session-1-stop", tokens: 0, cost: 0 }),
       ]);
       expect(report.total).toMatchObject({ tokens: 7, cost: 0.25 });
     });

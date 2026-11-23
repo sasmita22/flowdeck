@@ -92,10 +92,10 @@ function sectionInterrupted(node: ManifestNode, status: NodeState, interrupted: 
   return interrupted && node.type === "agent" && inTurn(node, status);
 }
 
-const cutOff = (nodeId: string): ResumeAction => ({
-  kind: "fail",
-  message: `${nodeId} failed: its Claude session ended before the turn finished; Retry sends it again`,
-});
+export const cutOffMessage = (nodeId: string): string =>
+  `${nodeId} failed: its Claude session ended before the turn finished; Retry sends it again`;
+
+const cutOff = (nodeId: string): ResumeAction => ({ kind: "fail", message: cutOffMessage(nodeId) });
 
 export function decideResume({
   manifest,

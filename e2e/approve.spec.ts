@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agent, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import { agent, gate, onWorkspaceMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -16,7 +16,7 @@ let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
 
 const agentThenGateThenAgent = () => {
-  const built = onMainFlow(
+  const built = onWorkspaceMainFlow(
     [agent("s1"), gate("g1"), agent("s2")],
     [thenWire("s1", "g1"), thenWire("g1", "s2")],
   );

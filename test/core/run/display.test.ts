@@ -26,5 +26,24 @@ describe("displayStatus", () => {
     it.each<NodeState>(["waiting", "failed", "done", "skipped"])("shows %s as itself", (state) => {
       expect(displayStatus(state, run)).toBe(state);
     });
+
+    it("shows a waiting node of a session that never started as not started", () => {
+      expect(displayStatus("waiting", run, { started: false })).toBe("not-started");
+    });
+
+    it.each<NodeState>(["waiting", "failed", "done", "skipped"])(
+      "shows %s in a started session as itself",
+      (state) => {
+        expect(displayStatus(state, run, { started: true })).toBe(state);
+      },
+    );
+
+    it("shows a running node of a started session as stopped", () => {
+      expect(displayStatus("running", run, { started: true })).toBe("stopped");
+    });
+  });
+
+  it("shows a waiting node of a session not started yet as waiting while the run is running", () => {
+    expect(displayStatus("waiting", "running", { started: false })).toBe("waiting");
   });
 });

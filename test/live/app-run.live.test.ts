@@ -37,7 +37,7 @@ import type { RunSnapshot } from "../../src/core/run/snapshot.js";
 import type { TerminalStatus } from "../../src/core/run/terminal.js";
 import {
   agent,
-  flow as buildFlow,
+  workspaceFlow as buildFlow,
   output,
   thenWire,
   trigger,

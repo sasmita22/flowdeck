@@ -52,7 +52,7 @@
       }
     },
     {
-      "id": "workspace-1-start",
+      "id": "session-1-start",
       "label": "Start",
       "type": "trigger",
       "position": {
@@ -62,7 +62,7 @@
       "settings": {}
     },
     {
-      "id": "workspace-1-stop",
+      "id": "session-1-stop",
       "label": "Stop",
       "type": "output",
       "position": {
@@ -112,11 +112,11 @@
     {
       "kind": "then",
       "from": {
-        "node": "workspace-1-start",
+        "node": "session-1-start",
         "port": "out"
       },
       "to": {
-        "node": "workspace-1-stop",
+        "node": "session-1-stop",
         "port": "in"
       }
     }
@@ -126,7 +126,7 @@
       "id": "workspace-1",
       "kind": "workspace",
       "model": "sonnet",
-      "nodes": ["workspace-1-start", "workspace-1-stop"]
+      "nodes": ["start", "s1", "s2", "stop"]
     },
     {
       "id": "session-1",
@@ -135,7 +135,7 @@
       "repo": "/work/repo",
       "branch": "main",
       "model": "haiku",
-      "nodes": ["start", "s1", "s2", "stop"]
+      "nodes": ["session-1-start", "session-1-stop"]
     }
   ],
   "settings": {

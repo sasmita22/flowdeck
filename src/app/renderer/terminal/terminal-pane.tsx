@@ -2,8 +2,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, type CSSProperties } from "react";
+import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { TerminalState } from "./store.js";
+import { SessionPicker } from "./session-picker.js";
+import { selectAttachTarget, type TerminalState } from "./store.js";
 
 export function TerminalView({
   store,
@@ -43,9 +45,11 @@ export function TerminalView({
 }
 
 export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
+  const target = useStore(store, selectAttachTarget);
   return (
     <div>
       <div className="fd-terminal-head">
+        <SessionPicker store={store} />
         <button
           className="fd-btn"
           data-testid="terminal-close"
@@ -54,7 +58,7 @@ export function TerminalPane({ store }: { store: StoreApi<TerminalState> }) {
           Close terminal
         </button>
       </div>
-      <TerminalView store={store} style={{ width: "100%", height: "40vh" }} />
+      <TerminalView key={target ?? ""} store={store} style={{ width: "100%", height: "40vh" }} />
     </div>
   );
 }

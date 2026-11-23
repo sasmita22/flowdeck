@@ -237,12 +237,12 @@ export function runDigest(input: DigestInput): RunDigest {
   };
   const nodes = input.stages?.nodes ?? nodesFromEvents(input.events);
   const items = pipelineOf(
-    nodes,
-    input.stages?.wires ?? [],
+    [{ name: input.stages?.session.name ?? "", nodes, wires: input.stages?.wires ?? [] }],
     input.events,
     input.activity,
     input.cost,
-  );
+    input.status,
+  ).flatMap((group) => group.items);
   const pullRequests = [
     ...new Set(input.activity.flatMap((entry) => (entry.kind === "pr" ? [entry.url] : []))),
   ];

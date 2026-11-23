@@ -11,7 +11,14 @@ import {
   paletteTestId,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
-import { agent, flow, gate, onMainFlow, thenWire } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  flow,
+  gate,
+  onMainFlow,
+  onWorkspaceMainFlow,
+  thenWire,
+} from "../test/fixtures/flow-builders.js";
 import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
@@ -485,7 +492,7 @@ test("A run left running by an earlier session shows as interrupted, never live"
 test("The status bar takes you from the editor to the live run that needs you", async () => {
   seedFlow(
     home,
-    onMainFlow(
+    onWorkspaceMainFlow(
       [agent("s1"), gate("g1"), agent("s2")],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),

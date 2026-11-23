@@ -152,7 +152,7 @@ describe("layDown", () => {
 
   describe("AT-17: every reference stays inside the build", () => {
     it.each([alpha, beta])(
-      "writes every <name>:<piece> reference with the prefix of $name's container that holds it",
+      "writes every <name>:<piece> reference with the prefix of $name's container that holds it, but for the workspace's command that runs the session's orchestrator",
       async (named) => {
         const found = (await laidDown(named)).flatMap((file) =>
           references(file.content).map((reference) => ({ ...reference, path: file.path })),
@@ -163,7 +163,15 @@ describe("layDown", () => {
             expect.objectContaining({ prefix: `${named.name}-main`, piece: "review-the-draft" }),
           ]),
         );
-        expect(found.filter(({ prefix, path }) => prefix !== prefixOf(named, path))).toEqual([]);
+        const startsTheSession = ({ prefix, piece, path }: (typeof found)[number]) =>
+          path === "workspace/CLAUDE.md" && prefix === `${named.name}-main` && piece === "run";
+
+        expect(
+          found.filter(
+            (reference) =>
+              reference.prefix !== prefixOf(named, reference.path) && !startsTheSession(reference),
+          ),
+        ).toEqual([]);
       },
     );
 

@@ -160,7 +160,6 @@ describe("applyMerges", () => {
       expect(nodesOf(manifest).map((node) => node.id)).toEqual(
         nodesOf(before.manifest).map((node) => node.id),
       );
-      expect(manifest.nodes).toEqual(manifest.containers?.[1]?.nodes);
       expect(nodeOf(manifest, "b")).toEqual({
         ...nodeOf(before.manifest, "b"),
         piece: shared.piece,

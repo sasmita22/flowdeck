@@ -6,7 +6,12 @@ import { canonicalJson } from "./canonical-json.js";
 import { guardHookFiles } from "./guard-hooks.js";
 import { handoffTemplates } from "./handoff-templates.js";
 import { sha256Hex } from "./hash.js";
-import { buildHookCommand, hookSettings } from "./hook-settings.js";
+import {
+  buildHookCommand,
+  containerStartCommand,
+  hookSettings,
+  sessionEnvNames,
+} from "./hook-settings.js";
 import type { BuildFile, lower, Manifest, ManifestContainer } from "./lower.js";
 import { orchestratorSkill } from "./orchestrator.js";
 import { containerRoot } from "./pieces.js";
@@ -70,9 +75,51 @@ export function workspaceClaudeMd(
   ]);
 }
 
+export const sessionEntryHeading = (container: Pick<ManifestContainer, "name" | "slug">) =>
+  `### Session container ${container.name} (${container.slug})`;
+
+const sessionList = (containers: readonly ManifestContainer[], buildDir: string): string[] => {
+  const names = sessionEnvNames(containers);
+  const entries = containers.flatMap((container) => {
+    const env = names.get(container.slug);
+    if (container.kind !== "session" || env === undefined) return [];
+    const command = containerStartCommand({
+      container,
+      buildDir,
+      workspaceDir: workspaceFolder(buildDir),
+      env,
+    });
+    return [
+      "",
+      sessionEntryHeading(container),
+      "",
+      `- Name: ${container.name}`,
+      `- Repository: ${container.repo ?? ""}`,
+      `- Branch: ${container.branch ?? ""}`,
+      `- Worktree: ${container.worktree ?? ""}`,
+      `- Model: ${container.model}`,
+      `- Variables: ${env.tmux} holds its tmux name, ${env.id} its Claude session id`,
+      "",
+      "```sh",
+      command,
+      "```",
+    ];
+  });
+  if (entries.length === 0) return [];
+  return [
+    "",
+    "## Session containers",
+    "",
+    "- The workspace session's environment holds each container's variables below, set fresh for every run",
+    "- Run a container's start command as written, from a shell, at most once per run; it returns at once, and the container then runs its own Start to Stop in its own tmux session",
+    ...entries,
+  ];
+};
+
 const workspaceSessionClaudeMd = (
   build: { name: string; values: VariableValues },
-  target: Pick<EmitTarget, "blueprint">,
+  target: Pick<ContainerTarget, "blueprint" | "workspace">,
+  containers: readonly ManifestContainer[],
 ): string =>
   withRules([
     `# Build ${build.name}`,
@@ -81,6 +128,7 @@ const workspaceSessionClaudeMd = (
     "- This is the workspace session's folder; session containers read it but never write it",
     "- Plugin folder: plugin/ in this folder; run sessions reach it as ${CLAUDE_PLUGIN_ROOT}",
     ...sortedValues(build.values),
+    ...sessionList(containers, target.workspace),
   ]);
 
 export const reportPath = "build-report.json";
@@ -99,6 +147,7 @@ const containerFiles = (
   container: ManifestContainer,
   build: { values: VariableValues; permissionMode: string },
   target: ContainerTarget,
+  containers: readonly ManifestContainer[],
 ): BuildFile[] => {
   const root = containerRoot(container);
   const session = container.kind === "session";
@@ -128,7 +177,7 @@ const containerFiles = (
         repo: container.repo ?? "",
         base: container.base ?? target.base ?? "",
       })
-    : workspaceSessionClaudeMd(named, target);
+    : workspaceSessionClaudeMd(named, target, containers);
   const inRoot = (file: BuildFile): BuildFile => ({ ...file, path: `${root}/${file.path}` });
   return [
     ...handoffTemplates({ nodes: container.nodes }, repo).map(inRoot),
@@ -170,7 +219,7 @@ export function emit(lowered: ReturnType<typeof lower>, target: ContainerTarget)
   const build = { values, permissionMode: settings.permissionMode };
   const files: BuildFile[] = [
     ...lowered.nodeFiles,
-    ...containers.flatMap((container) => containerFiles(container, build, target)),
+    ...containers.flatMap((container) => containerFiles(container, build, target, containers)),
   ];
   const manifest: Manifest = {
     ...lowered.manifest,

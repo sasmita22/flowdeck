@@ -102,6 +102,144 @@ describe("SqliteStore", () => {
     await rm(folder, { recursive: true, force: true });
   });
 
+  describe("with session containers", () => {
+    const web = {
+      tmuxName: "fd-run-0000000a",
+      cwd: "/fd/workspaces/b1/sessions/web/web",
+      claudeSessionId: "c2",
+    };
+    const api = {
+      tmuxName: "fd-run-0000000b",
+      cwd: "/fd/workspaces/b1/sessions/api/api",
+      claudeSessionId: "c3",
+    };
+
+    it("stores each container's session under the workspace session, workspace first", () => {
+      const store = open();
+
+      const { id } = store.createRun({ ...newRun(), sessions: [web, api] });
+      store.recordBuild(another("b2", "other"));
+
+      store.createRun({
+        ...newRun(["p1"], "b2"),
+        sessions: [{ ...web, claudeSessionId: "x" }],
+      });
+
+      expect(store.runSessions(id)).toEqual([
+        { ...newRun().session, parent: null },
+        { ...web, parent: "c1" },
+        { ...api, parent: "c1" },
+      ]);
+      expect(store.findRun(id)?.session).toEqual(newRun().session);
+      const rows = raw()
+        .prepare("SELECT id, parent FROM run_sessions WHERE run_id = ? ORDER BY id")
+        .all(id) as { id: number; parent: number | null }[];
+      expect(rows.map((row) => row.parent)).toEqual([null, rows[0]?.id, rows[0]?.id]);
+    });
+
+    it("records each node under the session that names it, and every other node under the workspace session", () => {
+      const store = open();
+
+      const { id } = store.createRun({
+        ...newRun(["w1", "a1", "a2", "b1"]),
+        sessions: [
+          { ...web, nodeIds: ["a1", "a2"] },
+          { ...api, nodeIds: ["b1"] },
+        ],
+      });
+      store.recordBuild(another("b2", "other"));
+      store.createRun({
+        ...newRun(["a1"], "b2"),
+        sessions: [{ ...web, claudeSessionId: "x", nodeIds: ["a1"] }],
+      });
+
+      expect(store.nodeSessions(id)).toEqual({ w1: "c1", a1: "c2", a2: "c2", b1: "c3" });
+      expect(store.findRun(id)?.nodeIds).toEqual(["w1", "a1", "a2", "b1"]);
+      const rows = raw()
+        .prepare(
+          `SELECT run_nodes.node_id AS node, run_sessions.claude_session_id AS session
+             FROM run_nodes JOIN run_sessions ON run_sessions.id = run_nodes.session_id
+            WHERE run_nodes.run_id = ? ORDER BY run_nodes.rowid`,
+        )
+        .all(id);
+      expect(rows).toEqual([
+        { node: "w1", session: "c1" },
+        { node: "a1", session: "c2" },
+        { node: "a2", session: "c2" },
+        { node: "b1", session: "c3" },
+      ]);
+    });
+
+    it("records every node under the workspace session when no session names one, and none for an unknown run", () => {
+      const store = open();
+
+      const { id } = store.createRun({ ...newRun(), sessions: [web] });
+
+      expect(store.nodeSessions(id)).toEqual({ p1: "c1", p2: "c1", p3: "c1" });
+      expect(store.nodeSessions("nope")).toEqual({});
+    });
+
+    it("reads only the workspace session of a run made without them, and none for an unknown run", () => {
+      const store = open();
+
+      const { id } = store.createRun(newRun());
+
+      expect(store.runSessions(id)).toEqual([{ ...newRun().session, parent: null }]);
+      expect(store.runSessions("nope")).toEqual([]);
+    });
+
+    it.each([
+      ["sqlite", () => open()],
+      ["fake", () => new FakeStore()],
+    ])(
+      "%s: counts the workspace's nodes and a started session's, never a session that did not start",
+      (_, make) => {
+        const store = make();
+        const { id } = store.createRun({
+          ...newRun([
+            "w-start",
+            "w-agent",
+            "w-stop",
+            "web-start",
+            "web-stop",
+            "api-start",
+            "api-stop",
+          ]),
+          sessions: [
+            { ...web, nodeIds: ["web-start", "web-stop"] },
+            { ...api, nodeIds: ["api-start", "api-stop"] },
+          ],
+        });
+        for (const nodeId of ["w-start", "w-agent", "w-stop", "web-start"]) {
+          store.append(id, nodeId, { kind: "running" });
+          store.append(id, nodeId, { kind: "done" });
+        }
+
+        expect(store.findRunSummary(id)).toMatchObject({ nodeCount: 5, doneCount: 4 });
+        expect(store.listRuns()).toEqual([
+          expect.objectContaining({ id, nodeCount: 5, doneCount: 4 }),
+        ]);
+      },
+    );
+
+    it.each([
+      ["sqlite", () => open()],
+      ["fake", () => new FakeStore()],
+    ])("%s: counts only the workspace's nodes when no session started", (_, make) => {
+      const store = make();
+      const { id } = store.createRun({
+        ...newRun(["w-start", "w-agent", "w-stop", "web-start", "web-stop"]),
+        sessions: [{ ...web, nodeIds: ["web-start", "web-stop"] }],
+      });
+      for (const nodeId of ["w-start", "w-agent", "w-stop"]) {
+        store.append(id, nodeId, { kind: "running" });
+        store.append(id, nodeId, { kind: "done" });
+      }
+
+      expect(store.findRunSummary(id)).toMatchObject({ nodeCount: 3, doneCount: 3 });
+    });
+  });
+
   it("creates a missing folder and the database file in it", async () => {
     path = join(folder, "missing", "flowdeck.db");
 

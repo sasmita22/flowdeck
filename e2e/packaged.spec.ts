@@ -20,6 +20,7 @@ import {
   agent,
   flow,
   onMainFlow,
+  workspaceFlow,
   output,
   thenWire,
   trigger,
@@ -252,7 +253,10 @@ test("a copy launched with the minimal PATH runs a one-agent flow to done", asyn
   tempDirs.push(repo.path);
   seedFlow(
     home,
-    flow([trigger("t"), agent("s"), output("stop")], [thenWire("t", "s"), thenWire("s", "stop")]),
+    workspaceFlow(
+      [trigger("t"), agent("s"), output("stop")],
+      [thenWire("t", "s"), thenWire("s", "stop")],
+    ),
     repo.path,
   );
 

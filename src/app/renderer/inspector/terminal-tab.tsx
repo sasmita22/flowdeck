@@ -1,11 +1,13 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
-import type { TerminalState } from "../terminal/store.js";
+import { SessionPicker } from "../terminal/session-picker.js";
+import { selectAttachTarget, type TerminalState } from "../terminal/store.js";
 import { TerminalView } from "../terminal/terminal-pane.js";
 
 export function TerminalTab({ terminal }: { terminal: StoreApi<TerminalState> }) {
   const available = useStore(terminal, (state) => state.available);
   const poppedOut = useStore(terminal, (state) => state.poppedOut);
+  const target = useStore(terminal, selectAttachTarget);
   if (!available) {
     return (
       <p data-testid="terminal-unavailable">
@@ -18,7 +20,8 @@ export function TerminalTab({ terminal }: { terminal: StoreApi<TerminalState> })
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <SessionPicker store={terminal} />
         <button
           className="fd-btn"
           data-testid="terminal-pop-out"
@@ -28,7 +31,7 @@ export function TerminalTab({ terminal }: { terminal: StoreApi<TerminalState> })
           Pop out
         </button>
       </div>
-      <TerminalView store={terminal} style={{ flex: 1, minHeight: 240 }} />
+      <TerminalView key={target ?? ""} store={terminal} style={{ flex: 1, minHeight: 240 }} />
     </div>
   );
 }

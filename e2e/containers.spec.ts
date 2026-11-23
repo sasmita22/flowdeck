@@ -21,8 +21,9 @@ import { sessionsWorkflow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
-import { buildOnCanvas, buildWorktreePaths } from "./build-run.js";
+import { buildOnCanvas, buildWorktreePaths, runFromDetail, runIdOf } from "./build-run.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
+import { killRunSessions } from "./run-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -65,6 +66,7 @@ test.afterEach(async () => {
     await launched?.close();
   } finally {
     await killBuildSessions();
+    await killRunSessions(home);
     await rm(home, { recursive: true, force: true });
     await repo?.cleanup();
     await otherRepo?.cleanup();
@@ -278,12 +280,36 @@ test("Deleting the workspace makes a Library that can't be built, in the editor 
   await expect(window.getByTestId(pageTestIds.buildDisabledReason)).toHaveText(/cannot be built/i);
 });
 
+const finishedNodes = (runId: string): string[] => {
+  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
+  try {
+    return (
+      db
+        .prepare(
+          "SELECT node_id FROM run_nodes WHERE run_id = ? AND finished_at IS NOT NULL ORDER BY node_id",
+        )
+        .all(runId) as { node_id: string }[]
+    ).map(({ node_id }) => node_id);
+  } finally {
+    db.close();
+  }
+};
+
+const withInstructions = (flow: Flow, nodeId: string, instructions: string): Flow => ({
+  ...flow,
+  nodes: flow.nodes.map((node) =>
+    node.id === nodeId && node.type === "agent"
+      ? { ...node, settings: { ...node.settings, instructions } }
+      : node,
+  ),
+});
+
 const gitOut = async (cwd: string, ...args: string[]) =>
   (await git("git", ["-C", cwd, ...args])).stdout.trim();
 
 const identity = ["-c", "user.name=Flowdeck Test", "-c", "user.email=test@flowdeck.invalid"];
 
-test("Two session containers build a worktree each from their own repo and base, and Run refuses the build", async () => {
+test("Two session containers build a worktree each from their own repo and base, and a run no instruction starts leaves both not started", async () => {
   test.setTimeout(120_000);
   repo = await createTmpRepo({ commit: true });
   otherRepo = await createTmpRepo({ commit: true });
@@ -293,10 +319,19 @@ test("Two session containers build a worktree each from their own repo and base,
   const { flowId } = seedBlueprint(
     home,
     "Two apps",
-    sessionsWorkflow([
-      { name: "android", repo: repo.path, branch: "main", model: "haiku", members: ["Plan"] },
-      { name: "ios", repo: otherRepo.path, branch: "develop", model: "haiku", members: ["Review"] },
-    ]),
+    sessionsWorkflow(
+      [
+        { name: "android", repo: repo.path, branch: "main", model: "haiku", members: ["Plan"] },
+        {
+          name: "ios",
+          repo: otherRepo.path,
+          branch: "develop",
+          model: "haiku",
+          members: ["Review"],
+        },
+      ],
+      { workspace: ["Coordinate"] },
+    ),
   );
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
@@ -348,15 +383,132 @@ test("Two session containers build a worktree each from their own repo and base,
     `worktree ${await realpath(ios)}`,
   );
 
-  await window.getByTestId(pageTestIds.buildDetailRun).click();
-  const refusal = window.getByTestId("run-error");
-  await expect(refusal).toHaveText("Running several sessions is not supported yet.");
-  await expect(window.getByText("Error invoking remote method")).toHaveCount(0);
-  expect(existsSync(join(home, "flowdeck.db"))).toBe(true);
-  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
-  try {
-    expect(db.prepare("SELECT id FROM runs WHERE build_id = ?").all(buildId)).toEqual([]);
-  } finally {
-    db.close();
+  await runFromDetail(window);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 30_000,
+  });
+  for (const name of ["android", "ios"]) {
+    const status = window.getByTestId(pageTestIds.runContainerStatus(name));
+    await expect(status).toHaveAttribute("data-status", "not-started");
+    await expect(status).toHaveText("not started");
   }
+  expect(finishedNodes(await runIdOf(home, buildId))).toEqual([
+    "workspace-1-coordinate",
+    "workspace-1-start",
+    "workspace-1-stop",
+  ]);
+});
+
+test("A workspace instruction that starts and waits for android runs android's nodes to done", async () => {
+  test.setTimeout(120_000);
+  repo = await createTmpRepo({ commit: true });
+  const { flowId } = seedBlueprint(
+    home,
+    "Starts android",
+    withInstructions(
+      sessionsWorkflow(
+        [
+          { name: "android", repo: repo.path, branch: "main", model: "haiku", members: ["Plan"] },
+          { name: "ios", repo: repo.path, branch: "main", model: "haiku", members: ["Review"] },
+        ],
+        { workspace: ["Coordinate"] },
+      ),
+      "workspace-1-coordinate",
+      "fake: start android\nfake: wait android",
+    ),
+  );
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
+  await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+
+  const buildId = await buildOnCanvas(window, home, "starts-android");
+  await runFromDetail(window);
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
+    timeout: 60_000,
+  });
+  const runId = await runIdOf(home, buildId);
+  const android = window.getByTestId(pageTestIds.runContainerGroup("android"));
+  await expect(window.getByTestId(pageTestIds.runContainerStatus("android"))).toHaveAttribute(
+    "data-status",
+    "done",
+  );
+  for (const nodeId of ["session-1-start", "session-1-plan", "session-1-stop"]) {
+    await expect(android.getByTestId(pageTestIds.runStageStatus(runId, nodeId))).toHaveAttribute(
+      "data-status",
+      "done",
+    );
+  }
+  await expect(window.getByTestId(pageTestIds.runContainerStatus("ios"))).toHaveAttribute(
+    "data-status",
+    "not-started",
+  );
+  expect(finishedNodes(runId)).toEqual([
+    "session-1-plan",
+    "session-1-start",
+    "session-1-stop",
+    "workspace-1-coordinate",
+    "workspace-1-start",
+    "workspace-1-stop",
+  ]);
+});
+
+test("The run page's terminal switches between the workspace and a session it started", async () => {
+  test.setTimeout(120_000);
+  repo = await createTmpRepo({ commit: true });
+  const { flowId } = seedBlueprint(
+    home,
+    "Watch android",
+    withInstructions(
+      withInstructions(
+        sessionsWorkflow(
+          [
+            { name: "android", repo: repo.path, branch: "main", model: "haiku", members: ["Plan"] },
+            { name: "ios", repo: repo.path, branch: "main", model: "haiku", members: ["Review"] },
+          ],
+          { workspace: ["Coordinate"] },
+        ),
+        "workspace-1-coordinate",
+        "fake: start android\nfake: wait android",
+      ),
+      "session-1-plan",
+      "fake: hang",
+    ),
+  );
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
+  await window.getByTestId(pageTestIds.blueprintOpen(flowId)).click();
+
+  const buildId = await buildOnCanvas(window, home, "watch-android");
+  await runFromDetail(window);
+  const runId = await runIdOf(home, buildId);
+  await expect(
+    window
+      .getByTestId(pageTestIds.runContainerGroup("android"))
+      .getByTestId(pageTestIds.runStageStatus(runId, "session-1-plan")),
+  ).toHaveAttribute("data-status", "running", { timeout: 60_000 });
+
+  await window.getByTestId("run-tab-terminal").click();
+  const picker = window.getByTestId(pageTestIds.terminalSessionPicker);
+  const workspace = picker.getByTestId(pageTestIds.terminalSessionOption("workspace"));
+  const android = picker.getByTestId(pageTestIds.terminalSessionOption("android"));
+  await expect(workspace).toHaveAttribute("aria-pressed", "true");
+  await expect(window.getByTestId("terminal-view")).toContainText("Fake Claude in", {
+    timeout: 20_000,
+  });
+
+  await android.click();
+
+  await expect(android).toHaveAttribute("aria-pressed", "true");
+  await expect(workspace).toHaveAttribute("aria-pressed", "false");
+  await expect(window.getByTestId("terminal-view")).toContainText("NODE session-1-plan", {
+    timeout: 20_000,
+  });
+  await expect(window.getByTestId("terminal-view")).not.toContainText("Fake Claude in");
+
+  await window.getByTestId(pageTestIds.runStop).click();
+  await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("stopped", {
+    timeout: 20_000,
+  });
 });

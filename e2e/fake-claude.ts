@@ -103,10 +103,85 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
+const directivePattern = /fake: (start|wait|fail|hang)(?: ([A-Za-z0-9_-]+))?/g;
+const directivesIn = (text) => [...text.matchAll(directivePattern)].map(([, verb, slug]) => ({ verb, slug }));
+const pluginDirs = () => argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "")] : []));
+const pieceOfType = (agentType) => agentType.slice(agentType.indexOf(":") + 1);
+const agentFileText = (agentType) => {
+  const file = pluginDirs()
+    .map((dir) => resolve(dir, "agents", pieceOfType(agentType) + ".md"))
+    .find((path) => existsSync(path));
+  return file === undefined ? "" : readFileSync(file, "utf8");
+};
+const directivesOf = (text, agentType) => {
+  const inPrompt = directivesIn(text);
+  return inPrompt.length > 0 ? inPrompt : directivesIn(agentFileText(agentType));
+};
+const fence = "\\x60\\x60\\x60";
+const sessionEntry = (slug) => {
+  const lines = readFileSync(resolve(process.cwd(), "CLAUDE.md"), "utf8").split("\\n");
+  const heading = lines.findIndex((line) => line.startsWith("### Session container ") && line.endsWith(" (" + slug + ")"));
+  if (heading === -1) return undefined;
+  const rest = lines.slice(heading + 1);
+  const end = rest.findIndex((line) => line.startsWith("#"));
+  const body = end === -1 ? rest : rest.slice(0, end);
+  const variables = /Variables: (\\S+) holds its tmux name, (\\S+) its Claude session id/.exec(body.join("\\n"));
+  const command = body[body.indexOf(fence + "sh") + 1];
+  if (variables === null || command === undefined) return undefined;
+  return { command, tmuxVar: variables[1], idVar: variables[2] };
+};
+const claudeWord = / claude (?=--session-id )/;
+const fakeSessionWord = " " + JSON.stringify(process.execPath) + " " + JSON.stringify(__filename) + " session ";
+const startedLog = (record) => appendFileSync(resolve(__dirname, "started"), JSON.stringify(record) + "\\n");
+const startSession = (slug) =>
+  new Promise((done) => {
+    const entry = sessionEntry(slug);
+    if (entry === undefined || !claudeWord.test(entry.command)) {
+      startedLog({ slug, code: null, error: "no start command for " + slug + " in CLAUDE.md" });
+      return done();
+    }
+    const { spawn } = require("node:child_process");
+    const child = spawn("sh", ["-c", entry.command.replace(claudeWord, fakeSessionWord)], { stdio: ["ignore", "ignore", "pipe"] });
+    let error = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => (error += chunk));
+    child.on("error", (failure) => {
+      startedLog({ slug, code: null, error: failure.message });
+      done();
+    });
+    child.on("exit", (code) => {
+      startedLog({ slug, code, error });
+      done();
+    });
+  });
+const endedMarker = (id) => resolve(__dirname, "ended-" + id);
+const tmuxAlive = (name) => {
+  try {
+    require("node:child_process").execFileSync("tmux", ["-L", name, "has-session", "-t", name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const waitSession = async (slug) => {
+  const entry = sessionEntry(slug);
+  if (entry === undefined) return;
+  const name = process.env[entry.tmuxVar] ?? "";
+  const id = process.env[entry.idVar] ?? "";
+  while (name !== "" && !existsSync(endedMarker(id)) && tmuxAlive(name)) await pause(200);
+};
+const runDirectives = async (directives) => {
+  for (const { verb, slug } of directives) {
+    if (slug === undefined) continue;
+    if (verb === "start") await startSession(slug);
+    if (verb === "wait") await waitSession(slug);
+  }
+};
 const runTurn = async (text) => {
   const match = dispatched.exec(text);
   if (match === null) return setTimeout(stop, 50);
   const [, agentType, nodeId] = match;
+  const directives = directivesOf(text, agentType);
   appendFileSync(resolve(__dirname, "dispatched"), nodeId + "\\n");
   const outcome = outcomeOf(nodeId);
   if (outcome === "hold") return;
@@ -145,7 +220,10 @@ const runTurn = async (text) => {
   for (const hook of hooks) {
     if (hook.hook_event_name === "PreToolUse") await startTool(hook);
     else send({ ...hook, flowdeck_hook_at: Date.now() });
-    if (hook === stepStart) commitInOtherRepo();
+    if (hook === stepStart) {
+      commitInOtherRepo();
+      await runDirectives(directives);
+    }
     await pause(30);
   }
   await pause(100);
@@ -326,6 +404,51 @@ const blueprintTurns = () => {
   };
 };
 
+const post = (event) =>
+  new Promise((done) => {
+    const socket = connect(sock, () => socket.end(JSON.stringify({ session_id: sessionId, ...event, flowdeck_hook_at: Date.now() }) + "\\n", done));
+    socket.on("error", done);
+  });
+const say = (line) => process.stdout.write(line + "\\r\\n");
+const sessionTurn = async () => {
+  const skill = resolve(pluginDirs()[0] ?? "", "skills", "run", "SKILL.md");
+  const steps = existsSync(skill) ? readFileSync(skill, "utf8") : "";
+  const dispatchLine = /^\\d+\\. NODE (\\S+) .*?: dispatch \\x60([^\\x60]+)\\x60/gm;
+  const nodes = [...steps.matchAll(dispatchLine)].map(([, nodeId, agentType]) => ({ nodeId, agentType }));
+  const ended = () => writeFileSync(endedMarker(sessionId), "");
+  say("Fake Claude session " + sessionId);
+  writeUsage();
+  await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
+  for (const { nodeId, agentType } of nodes) {
+    const verbs = directivesIn(agentFileText(agentType)).map(({ verb }) => verb);
+    const call = {
+      tool_name: "Agent",
+      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+    };
+    await pause(50);
+    await post({ hook_event_name: "PreToolUse", ...call });
+    say("NODE " + nodeId + " running");
+    if (verbs.includes("hang")) return say("NODE " + nodeId + " hangs");
+    await pause(50);
+    if (verbs.includes("fail")) {
+      await post({ hook_event_name: "StopFailure", error: "Fake failure in " + nodeId + "." });
+      say("NODE " + nodeId + " failed");
+      return ended();
+    }
+    await post({
+      hook_event_name: "PostToolUse",
+      ...call,
+      tool_response: { agentType, status: "completed", content: [{ type: "text", text: "Fake report from " + nodeId + "." }] },
+    });
+    say("NODE " + nodeId + " done");
+  }
+  await pause(50);
+  await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
+  say("Stop");
+  ended();
+};
+
 if (argv.includes("-p")) {
   readFileSync(0, "utf8");
   if (process.env.FAKE_CLAUDE_NARRATE_FAIL === "1") process.exit(1);
@@ -339,7 +462,10 @@ if (argv.includes("-p")) {
 
 process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
-if (process.env.FLOWDECK_BP_SOCK) {
+if (argv[0] === "session") {
+  setInterval(() => undefined, 60000);
+  sessionTurn();
+} else if (process.env.FLOWDECK_BP_SOCK) {
   const bpSession = "fd-bp-" + process.cwd().slice(process.cwd().lastIndexOf("/") + 1);
   let answered = 0;
   const drawBlueprint = () =>

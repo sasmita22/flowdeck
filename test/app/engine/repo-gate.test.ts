@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRepoGate, repoGateDeadlineMs } from "../../../src/app/engine/repo-gate.js";
 import type { RepoState } from "../../../src/core/run/repo-state.js";
+import type { RunSessionRecord } from "../../../src/core/run/store.js";
 
 const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
 
@@ -250,5 +251,85 @@ describe("createRepoGate", () => {
     await expect(gate(touching({ file_path: "/b/x.ts" }))).resolves.toBeUndefined();
 
     expect(logs).toEqual([expect.stringContaining("store closed")]);
+  });
+});
+
+describe("createRepoGate in a run with session containers", () => {
+  const workspaceId = "00000000-0000-4000-8000-000000000000";
+  const androidId = "11111111-1111-4111-8111-111111111111";
+  const workspace = "/b/workspace";
+  const android = "/b/sessions/android/app";
+
+  const sessions: RunSessionRecord[] = [
+    { tmuxName: "fd-run-00000000", cwd: workspace, claudeSessionId: workspaceId, parent: null },
+    { tmuxName: "fd-run-aaaaaaaa", cwd: android, claudeSessionId: androidId, parent: workspaceId },
+  ];
+
+  const tops: Answers<string | null> = {
+    [workspace]: null,
+    [android]: android,
+    "/src/app": "/src",
+    [`${android}/src/a.ts`]: android,
+    "/b2/x.ts": "/b2",
+  };
+
+  const sessionGate = () => {
+    const calls: string[] = [];
+    const recorded: [string, RepoState][] = [];
+    const repoGate = createRepoGate({
+      own: ["/src/app"],
+      sessions,
+      seen: [],
+      home: "/u",
+      gitState: {
+        topLevel: (path) => {
+          calls.push(`topLevel ${path}`);
+          return answer(tops, path);
+        },
+      },
+      readState: (repo) => {
+        calls.push(`read ${repo}`);
+        return Promise.resolve(state(repo));
+      },
+      record: (repo, read) => {
+        recorded.push([repo, read]);
+      },
+      log: () => undefined,
+    });
+    return { gate: repoGate.check, calls, recorded };
+  };
+
+  const from = (sessionId: string, input: object) => ({
+    session_id: sessionId,
+    ...touching(input),
+  });
+
+  it("answers a call in the calling session's own worktree at once with no git call", async () => {
+    const { gate, calls, recorded } = sessionGate();
+
+    expect(await settledNow(gate(from(androidId, { file_path: `${android}/src/a.ts` })))).toBe(
+      true,
+    );
+    expect(calls).toEqual([]);
+    expect(recorded).toEqual([]);
+  });
+
+  it("skips another repo's path by the calling session's worktree, not the workspace folder", async () => {
+    const { gate, calls, recorded } = sessionGate();
+
+    await gate(from(androidId, { file_path: "/b2/x.ts" }));
+
+    expect(calls).toContain(`topLevel ${android}`);
+    expect(calls).not.toContain(`topLevel ${workspace}`);
+    expect(recorded).toEqual([["/b2", state("/b2")]]);
+  });
+
+  it("never treats the workspace folder as a repo for the workspace session's calls", async () => {
+    const { gate, calls, recorded } = sessionGate();
+
+    await gate(from(workspaceId, { file_path: "/b2/x.ts" }));
+
+    expect(calls).not.toContain(`topLevel ${workspace}`);
+    expect(recorded).toEqual([["/b2", state("/b2")]]);
   });
 });

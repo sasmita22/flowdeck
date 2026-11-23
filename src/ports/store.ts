@@ -14,6 +14,8 @@ export type {
   PendingBuildEnd,
   PendingBuildStart,
   RunRecord,
+  RunSession,
+  RunSessionRecord,
   RunStatus,
   RunStory,
   RunSummary,

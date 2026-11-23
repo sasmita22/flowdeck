@@ -2,12 +2,24 @@ import type { SnapshotStatus } from "./snapshot.js";
 import type { NodeState } from "./state.js";
 
 export type DisplayStatus =
-  "waiting" | "sent" | "running" | "needs you" | "stopped" | "failed" | "done" | "skipped";
+  | "waiting"
+  | "not-started"
+  | "sent"
+  | "running"
+  | "needs you"
+  | "stopped"
+  | "failed"
+  | "done"
+  | "skipped";
 
-export function displayStatus(state: NodeState, run: SnapshotStatus): DisplayStatus {
+export function displayStatus(
+  state: NodeState,
+  run: SnapshotStatus,
+  { started }: { started: boolean } = { started: true },
+): DisplayStatus {
   switch (state) {
     case "waiting":
-      return "waiting";
+      return started || run === "running" ? "waiting" : "not-started";
     case "sent":
     case "running":
       return run === "running" ? state : "stopped";

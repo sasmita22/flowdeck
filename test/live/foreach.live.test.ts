@@ -7,7 +7,7 @@ import type { TranscriptTurn } from "../../src/core/run/resume.js";
 import type { TurnEndEvent, TurnEvents } from "../../src/core/run/turns.js";
 import {
   agent,
-  flow,
+  workspaceFlow,
   forEach,
   output,
   thenWire,
@@ -31,7 +31,7 @@ const tokens = ["alpha-1", "bravo-2", "zulu-3"];
 const planText = `- alpha-1\n- bravo-2\n- ${longItem}\n`;
 
 function forEachFlow() {
-  const parsed = flow(
+  const parsed = workspaceFlow(
     [
       trigger("t"),
       forEach("each"),

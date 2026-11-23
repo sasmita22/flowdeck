@@ -25,6 +25,8 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
   return {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
+    runSessions: (runId) => store.runSessions(runId),
+    nodeSessions: (runId) => store.nodeSessions(runId),
     events: (id) => store.events(id),
     recordCost: (id, totalCost) => store.recordCost(id, totalCost),
     recordBuild: (build) => store.recordBuild(build),

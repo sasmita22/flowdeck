@@ -226,16 +226,23 @@ describe("build", () => {
     expect(result.record).toMatchObject({ hash: result.hash, dir: result.dir });
     expect(result.record).not.toHaveProperty("source");
     expect(result.record.nodes).toEqual(
-      manifest.nodes.map(
-        (node: { id: string; type: string; settings: unknown; file?: string }) => ({
+      manifest.containers
+        .flatMap((container: { nodes: unknown[] }) => container.nodes)
+        .map((node: { id: string; type: string; settings: unknown; file?: string }) => ({
           nodeId: node.id,
           type: node.type,
           config: node.settings,
           ...(node.file === undefined ? {} : { file: node.file }),
-        }),
-      ),
+        })),
     );
-    expect(result.record.nodes.map((node) => node.nodeId)).toEqual(["start", "p", "a", "stop"]);
+    expect(result.record.nodes.map((node) => node.nodeId)).toEqual([
+      "workspace-1-start",
+      "workspace-1-stop",
+      "start",
+      "p",
+      "a",
+      "stop",
+    ]);
   });
 
   it("names the saved flow version it was built from, so each version has its own hash", async () => {

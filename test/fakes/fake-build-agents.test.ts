@@ -8,6 +8,7 @@ import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
 import type { BuildStepEvent } from "../../src/ports/build-agents.js";
 import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
+import { oneSession } from "../fixtures/one-session.js";
 import { FakeBuildAgents, type FakeBuildScript } from "./fake-build-agents.js";
 import { FakeFileSystem } from "./fake-file-system.js";
 
@@ -52,13 +53,11 @@ const openSpec = {
   env: { FLOWDECK_SOCK: `${home}/sock/${sessionName}.sock` },
 };
 
-type OneSessionManifest = Manifest & Required<Pick<Manifest, "nodes">>;
-
 type Laid = {
   fs: FakeFileSystem;
   source: Flow;
   laidDown: BuildFile[];
-  manifest: OneSessionManifest;
+  manifest: Manifest;
 };
 
 const laid = async (): Promise<Laid> => {
@@ -68,23 +67,23 @@ const laid = async (): Promise<Laid> => {
   const laidDown = result.ok ? result.files : [];
   const manifest = JSON.parse(
     laidDown.find((file) => file.path === "manifest.json")?.content ?? "{}",
-  ) as OneSessionManifest;
+  ) as Manifest;
   const fs = new FakeFileSystem(
     Object.fromEntries(laidDown.map((file) => [join(workspaceDir, file.path), file.content])),
   );
   return { fs, source, laidDown, manifest };
 };
 
-const pieceFiles = (manifest: OneSessionManifest): string[] => [
+const pieceFiles = (manifest: Manifest): string[] => [
   ...new Set(
-    manifest.nodes.flatMap((node) =>
+    oneSession(manifest).nodes.flatMap((node) =>
       node.file !== undefined && node.type === "agent" ? [node.file] : [],
     ),
   ),
 ];
 
-const agentFile = (manifest: OneSessionManifest): string =>
-  manifest.nodes.find((node) => node.id === "a")?.file ?? "";
+const agentFile = (manifest: Manifest): string =>
+  oneSession(manifest).nodes.find((node) => node.id === "a")?.file ?? "";
 
 const turnText = (paths: readonly string[]) => paths.map(pieceMarker).join("\n\n");
 

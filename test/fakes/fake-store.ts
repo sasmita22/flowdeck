@@ -32,6 +32,7 @@ import type {
   PendingBuildEnd,
   PendingBuildStart,
   RunRecord,
+  RunSessionRecord,
   RunStatus,
   RunStory,
   RunSummary,
@@ -75,6 +76,8 @@ const keep = <T>(list: T[], kept: (item: T) => boolean) => {
 
 export class FakeStore implements Store {
   private readonly runRecords: RunRecord[] = [];
+  private readonly sessionsByRun = new Map<string, RunSessionRecord[]>();
+  private readonly nodeSessionsByRun = new Map<string, Record<string, string>>();
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
   private readonly buildRecords: RecordedBuild[] = [];
@@ -126,7 +129,7 @@ export class FakeStore implements Store {
     return copy(this.nodeEntries);
   }
 
-  createRun(run: NewRun): RunRecord {
+  createRun({ sessions = [], ...run }: NewRun): RunRecord {
     this.refuseWhileRunning(run.buildId);
     const record: RunRecord = {
       ...copy(run),
@@ -135,6 +138,25 @@ export class FakeStore implements Store {
       status: "running",
     };
     this.runRecords.push(record);
+    const parent = run.session.claudeSessionId;
+    this.sessionsByRun.set(record.id, [
+      { ...run.session, parent: null },
+      ...sessions.map(({ tmuxName, cwd, claudeSessionId }) => ({
+        tmuxName,
+        cwd,
+        claudeSessionId,
+        parent,
+      })),
+    ]);
+    const owners = new Map(
+      sessions.flatMap((session) =>
+        (session.nodeIds ?? []).map((nodeId) => [nodeId, session.claudeSessionId] as const),
+      ),
+    );
+    this.nodeSessionsByRun.set(
+      record.id,
+      Object.fromEntries(run.nodeIds.map((nodeId) => [nodeId, owners.get(nodeId) ?? parent])),
+    );
     const number = (this.lastRunNumbers.get(run.buildId) ?? 0) + 1;
     this.lastRunNumbers.set(run.buildId, number);
     this.runNumbers.set(record.id, number);
@@ -145,6 +167,14 @@ export class FakeStore implements Store {
   findRun(id: string): RunRecord | undefined {
     const record = this.runRecords.find((run) => run.id === id);
     return record && copy(record);
+  }
+
+  runSessions(runId: string): RunSessionRecord[] {
+    return copy(this.sessionsByRun.get(runId) ?? []);
+  }
+
+  nodeSessions(runId: string): Record<string, string> {
+    return { ...this.nodeSessionsByRun.get(runId) };
   }
 
   listRuns(): RunSummary[] {
@@ -171,6 +201,7 @@ export class FakeStore implements Store {
     ofOtherRuns(this.repoStateRows);
     ofOtherRuns(this.stepTextRows);
     this.activityByRun.delete(runId);
+    this.sessionsByRun.delete(runId);
     this.costs.delete(runId);
     this.runNumbers.delete(runId);
   }
@@ -192,7 +223,15 @@ export class FakeStore implements Store {
   private summaryOf(run: RunRecord, index: number): RunSummary {
     const events = this.events(run.id);
     const last = events.at(-1);
-    const doneCount = run.nodeIds.filter(
+    const owners = this.nodeSessionsByRun.get(run.id) ?? {};
+    const startedOwners = new Set(
+      events.filter((event) => stateMoving.has(event.kind)).map((event) => owners[event.nodeId]),
+    );
+    const counted = run.nodeIds.filter((nodeId) => {
+      const owner = owners[nodeId];
+      return owner === run.session.claudeSessionId || startedOwners.has(owner);
+    });
+    const doneCount = counted.filter(
       (nodeId) =>
         events.findLast((event) => event.nodeId === nodeId && stateMoving.has(event.kind))?.kind ===
         "done",
@@ -204,7 +243,7 @@ export class FakeStore implements Store {
       createdAt: new Date(index).toISOString(),
       endedAt: run.status === "running" ? null : (last?.time ?? null),
       totalCost: this.costs.get(run.id) ?? null,
-      nodeCount: run.nodeIds.length,
+      nodeCount: counted.length,
       ...(run.source === undefined ? {} : { source: copy(run.source) }),
       buildName: run.buildName,
       blueprintName: run.blueprintName,

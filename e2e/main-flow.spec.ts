@@ -114,9 +114,18 @@ test("Confirm before ignoring: Cancel builds nothing, Build anyway leaves the lo
 
   const manifest = JSON.parse(
     await readFile(join(home, "workspaces", buildId, "manifest.json"), "utf8"),
-  ) as { nodes: { id: string }[]; wires: { from: { node: string }; to: { node: string } }[] };
-  expect(manifest.nodes.map(({ id }) => id).sort()).toEqual(["a", "start", "stop"]);
-  const wired = manifest.wires.flatMap(({ from, to }) => [from.node, to.node]);
+  ) as {
+    containers: {
+      nodes: { id: string }[];
+      wires: { from: { node: string }; to: { node: string } }[];
+    }[];
+  };
+  const built = manifest.containers.flatMap(({ nodes }) => nodes.map(({ id }) => id));
+  expect(built).toEqual(expect.arrayContaining(["a", "start", "stop"]));
+  expect(built.filter((id) => ["b", "c", "d"].includes(id))).toEqual([]);
+  const wired = manifest.containers
+    .flatMap(({ wires }) => wires)
+    .flatMap(({ from, to }) => [from.node, to.node]);
   expect(wired.filter((id) => ["b", "c", "d"].includes(id))).toEqual([]);
 });
 

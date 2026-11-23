@@ -3,7 +3,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CostReport } from "../../src/core/run/cost.js";
-import { asWorkflow } from "../fixtures/flow-builders.js";
+import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -19,7 +19,7 @@ const then = (from: string, to: string) => ({
 });
 
 function twoRoundLoop() {
-  return asWorkflow(
+  return asWorkspaceWorkflow(
     {
       nodes: [
         { id: "t", label: "Start", type: "trigger", position: at(0), settings: {} },

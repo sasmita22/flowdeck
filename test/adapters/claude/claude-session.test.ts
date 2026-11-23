@@ -8,7 +8,11 @@ import {
 import { layDown, workspaceDir } from "../../../src/core/compiler/build.js";
 import { legacyBranchName } from "../../../src/core/run/branch-name.js";
 import { containerPrefix } from "../../../src/core/compiler/pieces.js";
-import { sessionFolder, sessionWorktree } from "../../../src/core/run/workspace.js";
+import {
+  sessionFolder,
+  sessionWorktree,
+  workspaceFolder,
+} from "../../../src/core/run/workspace.js";
 import { FakeSessionHost } from "../../fakes/fake-session-host.js";
 import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
@@ -257,7 +261,13 @@ describe("openClaudeSession", () => {
       { id: "b-beta-0003-4444", name: "beta" },
     ];
 
-    const launch = async (build: { id: string; name: string }) => {
+    const launch = async (
+      build: { id: string; name: string },
+      {
+        cwdOf = (dir: string) => sessionWorktree(dir, "main", repo),
+        env,
+      }: { cwdOf?: (dir: string) => string; env?: Record<string, string> } = {},
+    ) => {
       const branch = legacyBranchName(build.name, build.id);
       const laidDown = await layDown(blueprint, {
         home,
@@ -273,7 +283,7 @@ describe("openClaudeSession", () => {
       });
       if (!laidDown.ok) throw new Error(JSON.stringify(laidDown.errors));
       const dir = workspaceDir(home, build.id);
-      const cwd = sessionWorktree(dir, "main", repo);
+      const cwd = cwdOf(dir);
       const sessions = new SlowStartHost();
       const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
       const opened = await openClaudeSession(
@@ -283,15 +293,17 @@ describe("openClaudeSession", () => {
           buildDir: dir,
           cwd,
           workspaceFolder: `${dir}/workspace`,
+          ...(env === undefined ? {} : { env }),
         },
         { sessions, claude, sessionId: "s1" },
       );
       sessions.finishStart();
       await opened.session.ensureStarted();
-      const command = sessions.get(`fd-run-${build.name}`)?.command ?? "";
+      const started = sessions.get(`fd-run-${build.name}`);
+      const command = started?.command ?? "";
       await opened.stop();
       const files = new Map(laidDown.files.map((file) => [`${dir}/${file.path}`, file.content]));
-      return { dir, cwd, command, files };
+      return { dir, cwd, command, files, startedIn: started?.cwd, startedEnv: started?.env };
     };
 
     const pluginDirs = (command: string) =>
@@ -317,8 +329,34 @@ describe("openClaudeSession", () => {
       }
     });
 
+    it("opens the workspace session in the workspace folder with its own settings, plugin and env", async () => {
+      const sessionEnv = {
+        FD_SESSION_MAIN_TMUX: "fd-run-0000000a",
+        FD_SESSION_MAIN_ID: "c2",
+        CLAUDE_CONFIG_DIR: "/fd/claude-config",
+      };
+      for (const build of builds) {
+        const { dir, command, files, startedIn, startedEnv } = await launch(build, {
+          cwdOf: workspaceFolder,
+          env: sessionEnv,
+        });
+
+        const folder = workspaceFolder(dir);
+        const settings = command.match(/ --settings '([^']*)'/)?.[1] ?? "";
+        const [pluginDir = ""] = pluginDirs(command);
+        expect(startedIn).toBe(folder);
+        expect(resolve(folder, settings)).toBe(`${folder}/settings.json`);
+        expect(files.has(resolve(folder, settings))).toBe(true);
+        expect(pluginDirs(command)).toHaveLength(1);
+        expect(resolve(folder, pluginDir)).toBe(`${folder}/plugin`);
+        expect(files.has(resolve(folder, pluginDir, ".claude-plugin/plugin.json"))).toBe(true);
+        expect(startedEnv).toMatchObject(sessionEnv);
+        expect(startedEnv?.["FLOWDECK_SOCK"]).toBe(workspace.socketPath);
+      }
+    });
+
     it("never names the other build's workspace", async () => {
-      const [alpha, beta] = await Promise.all(builds.map(launch));
+      const [alpha, beta] = await Promise.all(builds.map((build) => launch(build)));
 
       expect(alpha?.command).not.toContain(beta?.dir);
       expect(alpha?.command).not.toContain(builds[1]?.id);

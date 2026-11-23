@@ -9,6 +9,7 @@ import {
   type NodeType,
 } from "../../../src/core/flow/schema.js";
 import { registry } from "../../../src/core/nodes/registry.js";
+import { oneSession } from "../../fixtures/one-session.js";
 
 type Landing =
   | { file: string; shows: string }
@@ -85,8 +86,8 @@ const inSession = (at: string[], value: unknown): Landing => ({ manifest: "sessi
 
 const session: Record<string, [unknown, Landing]> = {
   name: ["M-session-name", inSession(["name"], "M-session-name")],
-  repo: ["/M-session-repo", inSession(["buildConfig", "repo"], "/M-session-repo")],
-  branch: ["M-session-branch", inSession(["buildConfig", "base"], "M-session-branch")],
+  repo: ["/M-session-repo", inSession(["repo"], "/M-session-repo")],
+  branch: ["M-session-branch", inSession(["base"], "M-session-branch")],
   model: ["M-session-model", inSession(["model"], "M-session-model")],
 };
 
@@ -176,7 +177,7 @@ const landed = (
   }
   switch (landing.manifest) {
     case "node": {
-      const node = (manifest.nodes ?? []).find((each) => each.id === idOf[type as NodeType]);
+      const node = oneSession(manifest).nodes.find((each) => each.id === idOf[type as NodeType]);
       expect((node?.settings as Record<string, unknown>)[field], `${type}.${field}`).toEqual(
         landing.value,
       );
@@ -185,7 +186,7 @@ const landed = (
     case "session": {
       const value = landing.at.reduce<unknown>(
         (inside, key) => (inside as Record<string, unknown> | undefined)?.[key],
-        manifest.session,
+        manifest.containers.find((container) => container.kind === "session"),
       );
       expect(value, `session.${field}`).toEqual(landing.value);
       return;

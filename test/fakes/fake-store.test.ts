@@ -108,6 +108,73 @@ describe("FakeStore", () => {
     ]);
   });
 
+  describe("with session containers", () => {
+    const web = {
+      tmuxName: "fd-run-0000000a",
+      cwd: "/fd/workspaces/b1/sessions/web/web",
+      claudeSessionId: "c2",
+    };
+    const api = {
+      tmuxName: "fd-run-0000000b",
+      cwd: "/fd/workspaces/b1/sessions/api/api",
+      claudeSessionId: "c3",
+    };
+
+    it("stores each container's session under the workspace session, workspace first", () => {
+      const store = new FakeStore();
+
+      const { id } = store.createRun({ ...newRun(), sessions: [web, api] });
+      store.createRun({
+        ...newRun(["p1"], "b2"),
+        sessions: [{ ...web, claudeSessionId: "x" }],
+      });
+
+      expect(store.runSessions(id)).toEqual([
+        { ...newRun().session, parent: null },
+        { ...web, parent: "c1" },
+        { ...api, parent: "c1" },
+      ]);
+      expect(store.findRun(id)?.session).toEqual(newRun().session);
+    });
+
+    it("records each node under the session that names it, and every other node under the workspace session", () => {
+      const store = new FakeStore();
+
+      const { id } = store.createRun({
+        ...newRun(["w1", "a1", "a2", "b1"]),
+        sessions: [
+          { ...web, nodeIds: ["a1", "a2"] },
+          { ...api, nodeIds: ["b1"] },
+        ],
+      });
+      store.createRun({
+        ...newRun(["a1"], "b2"),
+        sessions: [{ ...web, claudeSessionId: "x", nodeIds: ["a1"] }],
+      });
+
+      expect(store.nodeSessions(id)).toEqual({ w1: "c1", a1: "c2", a2: "c2", b1: "c3" });
+      expect(store.findRun(id)?.nodeIds).toEqual(["w1", "a1", "a2", "b1"]);
+    });
+
+    it("records every node under the workspace session when no session names one, and none for an unknown run", () => {
+      const store = new FakeStore();
+
+      const { id } = store.createRun({ ...newRun(), sessions: [web] });
+
+      expect(store.nodeSessions(id)).toEqual({ p1: "c1", p2: "c1", p3: "c1" });
+      expect(store.nodeSessions("nope")).toEqual({});
+    });
+
+    it("reads only the workspace session of a run made without them, and none for an unknown run", () => {
+      const store = new FakeStore();
+
+      const { id } = store.createRun(newRun());
+
+      expect(store.runSessions(id)).toEqual([{ ...newRun().session, parent: null }]);
+      expect(store.runSessions("nope")).toEqual([]);
+    });
+  });
+
   it("returns appended events in order with increasing seq", () => {
     const store = new FakeStore();
     const { id } = store.createRun(newRun());

@@ -3,7 +3,12 @@ import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit } from "../../../src/core/compiler/emit.js";
 import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { parseManifest, singleSession, stageSourcesOf } from "../../../src/core/run/manifest.js";
+import {
+  parseManifest,
+  sessionContainersOf,
+  stageSourcesOf,
+  workspaceOf,
+} from "../../../src/core/run/manifest.js";
 import { agent, forEach, gate, loop, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const hash = "a".repeat(64);
@@ -23,7 +28,6 @@ const manifestText = (flow: Flow): string => {
 
 const legacyText = (flow: Flow): string => {
   const manifest: Partial<Manifest> = JSON.parse(manifestText(flow)) as Manifest;
-  delete manifest.prefix;
   delete manifest.layout;
   return canonicalJson(manifest);
 };
@@ -36,17 +40,15 @@ const legacy = { hash, name: null };
 describe("parseManifest", () => {
   it("reads a named build's manifest with its session's prefix and the workspace layout", () => {
     const manifest = parseManifest(manifestText(gates()), named);
+    const [session] = sessionContainersOf(manifest);
 
-    expect(manifest.nodes.map((node) => node.id)).toEqual(["start", "write", "check", "stop"]);
-    expect(manifest.prefix).toBe("fix-login-main");
+    expect(session?.nodes.map((node) => node.id)).toEqual(["start", "write", "check", "stop"]);
+    expect(session?.prefix).toBe("fix-login-main");
     expect(manifest.layout).toBe("workspace");
   });
 
-  it("gives an old build without a prefix the build hash as its prefix, in the legacy layout", () => {
-    const manifest = parseManifest(legacyText(gates()), legacy);
-
-    expect(manifest.prefix).toBe(hash);
-    expect(manifest.layout).toBe("legacy");
+  it("reads an old build in the legacy layout", () => {
+    expect(parseManifest(legacyText(gates()), legacy).layout).toBe("legacy");
   });
 
   it("refuses text that is not JSON", () => {
@@ -59,17 +61,22 @@ describe("parseManifest", () => {
 });
 
 describe("stageSourcesOf", () => {
-  it("keeps the session name, each node's id, type, label and parent, and the Then wires in order", () => {
+  it("keeps each node's id, type, label and parent, and the Then wires in order, under its container", () => {
     const flow = onMainFlow(
       [agent("plan"), loop("review"), agent("fix", { parent: "review" }), forEach("each")],
       [thenWire("plan", "review"), thenWire("review", "each")],
     );
     const manifest = parseManifest(manifestText(flow), named);
 
-    const sources = stageSourcesOf(manifest);
+    const [workspace, main, ...rest] = stageSourcesOf(manifest);
 
-    expect(sources.session).toEqual({ name: "main" });
-    expect(sources.nodes).toEqual([
+    expect(rest).toEqual([]);
+    expect(workspace?.nodes.map((node) => node.id)).toEqual([
+      "workspace-1-start",
+      "workspace-1-stop",
+    ]);
+    expect(main?.name).toBe("main");
+    expect(main?.nodes).toEqual([
       { id: "start", type: "trigger", label: "start" },
       { id: "plan", type: "agent", label: "plan" },
       { id: "review", type: "loop", label: "review" },
@@ -77,8 +84,7 @@ describe("stageSourcesOf", () => {
       { id: "each", type: "foreach", label: "each plan unit" },
       { id: "stop", type: "output", label: "stop" },
     ]);
-    expect(sources.wires).toEqual(manifest.wires.filter((wire) => wire.kind === "then"));
-    expect(sources.wires.map((wire) => [wire.from.node, wire.to.node])).toEqual([
+    expect(main?.wires.map((wire) => [wire.from.node, wire.to.node])).toEqual([
       ["start", "plan"],
       ["plan", "review"],
       ["review", "each"],
@@ -133,25 +139,8 @@ const sessionEntry = (slug: string, repo: string, base: string) => ({
 const android = sessionEntry("android", "/repos/android", "main");
 const ios = sessionEntry("ios", "/repos/ios", "develop");
 
-const manifestWith = (containers: Record<string, unknown>[]) => {
-  const sessions = containers.filter((container) => container.kind === "session");
-  const only = sessions.length === 1 ? sessions[0] : undefined;
-  return canonicalJson({
-    version: 1,
-    hash,
-    files: {},
-    containers,
-    ...(only === undefined
-      ? {}
-      : {
-          session: { name: only.name, model: only.model, buildConfig: {} },
-          prefix: only.prefix,
-          layout: "workspace",
-          nodes: only.nodes,
-          wires: only.wires,
-        }),
-  });
-};
+const manifestWith = (containers: Record<string, unknown>[]) =>
+  canonicalJson({ version: 1, hash, files: {}, containers });
 
 describe("parseManifest with containers", () => {
   it("keeps every container of a two-session build that has no top-level session", () => {
@@ -162,7 +151,7 @@ describe("parseManifest with containers", () => {
       "android",
       "ios",
     ]);
-    expect(manifest.session).toBeUndefined();
+    expect("session" in manifest).toBe(false);
   });
 
   it("reads a build with no session container", () => {
@@ -213,61 +202,89 @@ describe("parseManifest with containers", () => {
 });
 
 describe("stageSourcesOf with containers", () => {
-  it("takes every container's nodes and Then wires when there is no top-level session", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]), named);
+  it("gives one group per container, workspace first, each with its name, its own nodes and Then wires", () => {
+    const workspace = workspaceEntry([{ id: "workspace-plan", type: "agent", label: "Plan" }]);
+    const manifest = parseManifest(manifestWith([workspace, android, ios]), named);
 
-    const sources = stageSourcesOf(manifest);
+    const groups = stageSourcesOf(manifest);
 
-    expect(sources.nodes.map((node) => node.id)).toEqual([
-      "workspace-start",
-      "workspace-stop",
-      "android-start",
-      "android-plan",
-      "android-stop",
-      "ios-start",
-      "ios-plan",
-      "ios-stop",
-    ]);
-    expect(sources.wires.map((wire) => [wire.from.node, wire.to.node])).toEqual([
-      ["workspace-start", "workspace-stop"],
-      ["android-start", "android-plan"],
-      ["android-plan", "android-stop"],
-      ["ios-start", "ios-plan"],
-      ["ios-plan", "ios-stop"],
+    expect(
+      groups.map(({ name, nodes, wires }) => ({
+        name,
+        nodes: nodes.map((node) => node.id),
+        wires: wires.map((wire) => [wire.from.node, wire.to.node]),
+      })),
+    ).toEqual([
+      {
+        name: "workspace",
+        nodes: ["workspace-start", "workspace-plan", "workspace-stop"],
+        wires: [
+          ["workspace-start", "workspace-plan"],
+          ["workspace-plan", "workspace-stop"],
+        ],
+      },
+      {
+        name: "android",
+        nodes: ["android-start", "android-plan", "android-stop"],
+        wires: [
+          ["android-start", "android-plan"],
+          ["android-plan", "android-stop"],
+        ],
+      },
+      {
+        name: "ios",
+        nodes: ["ios-start", "ios-plan", "ios-stop"],
+        wires: [
+          ["ios-start", "ios-plan"],
+          ["ios-plan", "ios-stop"],
+        ],
+      },
     ]);
   });
 
-  it("names the session workspace when there is no top-level session", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]), named);
+  it("puts the workspace group first even when the workspace is not listed first", () => {
+    const manifest = parseManifest(manifestWith([android, workspaceEntry(), ios]), named);
 
-    expect(stageSourcesOf(manifest).session).toEqual({ name: "workspace" });
+    expect(stageSourcesOf(manifest).map((group) => group.name)).toEqual([
+      "workspace",
+      "android",
+      "ios",
+    ]);
   });
 });
 
-describe("singleSession", () => {
-  const refusal = { ok: false, reason: "Running several sessions is not supported yet." };
+describe("workspaceOf", () => {
+  it("gives the workspace container's own nodes, wires, prefix and model", () => {
+    const workspace = {
+      ...workspaceEntry([{ id: "workspace-plan", type: "agent", label: "Plan" }]),
+      model: "opus",
+    };
+    const manifest = parseManifest(manifestWith([android, workspace, ios]), named);
 
-  it("gives the session container of a one-session build whose workspace holds only Start and Stop", () => {
-    const result = singleSession(parseManifest(manifestWith([workspaceEntry(), android]), named));
+    const view = workspaceOf(manifest);
 
-    expect(result).toEqual({ ok: true, container: expect.objectContaining({ slug: "android" }) });
+    expect(view.nodes.map((node) => node.id)).toEqual([
+      "workspace-start",
+      "workspace-plan",
+      "workspace-stop",
+    ]);
+    expect(view.wires).toEqual(workspace.wires);
+    expect(view.prefix).toBe("fix-login-workspace");
+    expect(view.model).toBe("opus");
+  });
+});
+
+describe("sessionContainersOf", () => {
+  it("gives the session containers in the manifest's order, without the workspace", () => {
+    const manifest = parseManifest(manifestWith([workspaceEntry(), ios, android]), named);
+
+    expect(sessionContainersOf(manifest).map((container) => container.slug)).toEqual([
+      "ios",
+      "android",
+    ]);
   });
 
-  it("refuses a build with two session containers", () => {
-    expect(
-      singleSession(parseManifest(manifestWith([workspaceEntry(), android, ios]), named)),
-    ).toEqual(refusal);
-  });
-
-  it("refuses a build with no session container", () => {
-    expect(singleSession(parseManifest(manifestWith([workspaceEntry()]), named))).toEqual(refusal);
-  });
-
-  it("refuses a one-session build whose workspace holds an Agent", () => {
-    const workspace = workspaceEntry([{ id: "workspace-plan", type: "agent", label: "Plan" }]);
-
-    expect(singleSession(parseManifest(manifestWith([workspace, android]), named))).toEqual(
-      refusal,
-    );
+  it("gives none for a build with only the workspace", () => {
+    expect(sessionContainersOf(parseManifest(manifestWith([workspaceEntry()]), named))).toEqual([]);
   });
 });

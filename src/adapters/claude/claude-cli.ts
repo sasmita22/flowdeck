@@ -1,21 +1,14 @@
 import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { shellQuote } from "../../core/compiler/hook-settings.js";
+import { claudeCommand, type ClaudeSession } from "../../core/compiler/hook-settings.js";
 import type { SessionHost } from "../../ports/session-host.js";
 
-export const PARENT_SESSION_VARS = [
-  "CLAUDECODE",
-  "CLAUDE_CODE_SESSION_ID",
-  "CLAUDE_CODE_CHILD_SESSION",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_EXECPATH",
-  "CLAUDE_CODE_MESSAGING_SOCKET",
-  "CLAUDE_CODE_MESSAGING_TOKEN",
-  "CLAUDE_CODE_SESSION_ATTENDED",
-  "CLAUDE_PID",
-  "CLAUDE_EFFORT",
-] as const;
+export {
+  claudeCommand,
+  type ClaudeSession,
+  PARENT_SESSION_VARS,
+} from "../../core/compiler/hook-settings.js";
 
 const bypassDialog = /^\s*WARNING: Claude Code running in Bypass Permissions mode\s*$/m;
 
@@ -50,8 +43,6 @@ const folderDialogs = [trustDialog, addDirDialog];
 const rule = "────";
 const busy = "esc to interrupt";
 
-export type ClaudeSession = { sessionId: string; model?: string; resume?: boolean };
-
 export type ClaudeStartOptions = {
   settingsPath?: string;
   pluginDirs?: readonly string[];
@@ -59,26 +50,6 @@ export type ClaudeStartOptions = {
   addDir?: readonly string[];
   env?: Record<string, string>;
 };
-
-export function claudeCommand(
-  { sessionId, model, resume }: ClaudeSession,
-  settingsPath?: string,
-  pluginDirs: readonly string[] = [],
-  mcpConfigPath?: string,
-  addDir: readonly string[] = [],
-): string {
-  const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
-  const settings = settingsPath === undefined ? "" : ` --settings ${shellQuote(settingsPath)}`;
-  const plugin = pluginDirs.map((dir) => ` --plugin-dir ${shellQuote(dir)}`).join("");
-  const modelFlag = model === undefined ? "" : ` --model ${shellQuote(model)}`;
-  const mcp =
-    mcpConfigPath === undefined
-      ? ""
-      : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
-  const added = addDir.map((dir) => ` --add-dir ${shellQuote(dir)}`).join("");
-  const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
-  return `env ${unset} claude ${session}${modelFlag}${settings}${plugin}${added}${mcp}`;
-}
 
 function showsInputBox(pane: string): boolean {
   const lines = pane.split("\n");

@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { terminalStatusSchema, type TerminalSize } from "../../../core/run/terminal.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
+import type { StartedSession } from "../run-store.js";
 import { pushFor } from "../run-push.js";
 
 export type TerminalBridge = Pick<
@@ -21,6 +22,10 @@ export type TerminalState = {
   attached: boolean;
   visible: boolean;
   poppedOut: boolean;
+  sessions: StartedSession[];
+  chosen: string | null;
+  setSessions(sessions: StartedSession[]): void;
+  chooseSession(container: string): void;
   connect(): Promise<void>;
   view(runId: string): Promise<void>;
   popOut(): Promise<void>;
@@ -34,6 +39,14 @@ export type TerminalState = {
 
 export const selectOpenDisabled = (terminal: Pick<TerminalState, "available">): boolean =>
   !terminal.available;
+
+export const selectAttachTarget = (
+  terminal: Pick<TerminalState, "sessions" | "chosen">,
+): string | null => {
+  const { sessions, chosen } = terminal;
+  const session = sessions.find(({ container }) => container === chosen) ?? sessions[0];
+  return session?.tmuxName ?? null;
+};
 
 export const createTerminalStore = ({
   bridge,
@@ -63,6 +76,12 @@ export const createTerminalStore = ({
       attached: false,
       visible: false,
       poppedOut: false,
+      sessions: [],
+      chosen: null,
+
+      setSessions: (sessions) => set({ sessions }),
+
+      chooseSession: (container) => set({ chosen: container }),
 
       connect: async () => {
         bridge.onTerminalStatus((value) => {
@@ -77,7 +96,14 @@ export const createTerminalStore = ({
           bridge.closeTerminal(previous);
         }
         pushed = false;
-        set({ runId, available: false, attached: false, visible: false, poppedOut: false });
+        set({
+          runId,
+          available: false,
+          attached: false,
+          visible: false,
+          poppedOut: false,
+          ...(previous === runId ? {} : { sessions: [], chosen: null }),
+        });
         const current = await bridge.getTerminalStatus(runId);
         if (!pushed && get().runId === runId) apply(current);
       },
@@ -90,7 +116,12 @@ export const createTerminalStore = ({
       attach: async (size) => {
         const { runId } = get();
         if (runId === null) return;
-        if ((await bridge.openTerminal(runId, size)) !== true) set({ visible: false });
+        const target = selectAttachTarget(get());
+        const opened =
+          target === null
+            ? await bridge.openTerminal(runId, size)
+            : await bridge.openTerminal(runId, size, target);
+        if (opened !== true) set({ visible: false });
       },
 
       input: (data) => {

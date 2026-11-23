@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
-import { costReport } from "../../../src/core/run/cost.js";
+import { costReport, type CostReport } from "../../../src/core/run/cost.js";
 import { plainReason } from "../../../src/core/run/failure.js";
-import { pipelineOf, pipelineSchema, stageActivityOf } from "../../../src/core/run/pipeline.js";
+import {
+  pipelineOf,
+  pipelineSchema,
+  stageActivityOf,
+  type PipelineItem,
+} from "../../../src/core/run/pipeline.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
 
@@ -46,6 +51,20 @@ const tool = (id: number, nodeId: string): ActivityEntry => ({
   summary: `edit ${id}`,
 });
 
+type Group = Parameters<typeof pipelineOf>[0][number];
+
+const group = (name: string, nodes: Source[], wires: Link[]) =>
+  ({ name, nodes, wires }) as unknown as Group;
+
+const itemsOf = (
+  nodes: Source[],
+  wires: Link[],
+  events: StoredEvent[],
+  activity: ActivityEntry[],
+  cost: CostReport,
+): PipelineItem[] =>
+  pipelineOf([group("workspace", nodes, wires)], events, activity, cost, "running")[0]?.items ?? [];
+
 const pipeline = (
   nodes: Source[],
   wires: Link[],
@@ -53,9 +72,9 @@ const pipeline = (
   activity: ActivityEntry[] = [],
   now = at(60),
 ) =>
-  pipelineOf(
-    nodes as Parameters<typeof pipelineOf>[0],
-    wires as Parameters<typeof pipelineOf>[1],
+  itemsOf(
+    nodes,
+    wires,
     events,
     activity,
     costReport({ nodeIds: nodes.map((source) => source.id), events, pending: [], now }),
@@ -83,7 +102,7 @@ const shapeOf = (items: readonly unknown[]): Shape[] =>
     return item.nodeId ?? "";
   });
 
-type Stage = Extract<ReturnType<typeof pipelineOf>[number], { nodeId: string }>;
+type Stage = Extract<PipelineItem, { nodeId: string }>;
 
 const stageIn = (items: readonly unknown[], nodeId: string): Stage => {
   const found = items.find((item) => (item as Seen).nodeId === nodeId);
@@ -515,7 +534,7 @@ describe("pipelineOf", () => {
             cost: lines.reduce((sum, each) => sum + each.cost, 0),
             ms: 0,
           },
-        }) as Parameters<typeof pipelineOf>[4];
+        }) as CostReport;
 
       const loopNodes = [
         node("start", "trigger"),
@@ -557,9 +576,9 @@ describe("pipelineOf", () => {
         ],
       ]);
       const loopItems = () =>
-        pipelineOf(
-          loopNodes as Parameters<typeof pipelineOf>[0],
-          [then("start", "review"), then("fix", "check")] as Parameters<typeof pipelineOf>[1],
+        itemsOf(
+          loopNodes as Source[],
+          [then("start", "review"), then("fix", "check")] as Link[],
           loopEvents,
           [],
           report([
@@ -594,13 +613,13 @@ describe("pipelineOf", () => {
       });
 
       it("gives each For each round its total and its stage's cost for the round", () => {
-        const items = pipelineOf(
+        const items = itemsOf(
           [
             node("start", "trigger"),
             node("each", "foreach"),
             node("work", "agent", "each"),
-          ] as Parameters<typeof pipelineOf>[0],
-          [then("start", "each")] as Parameters<typeof pipelineOf>[1],
+          ] as Source[],
+          [then("start", "each")] as Link[],
           stored([
             ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two"] } }],
             ["work", 1, { kind: "sent" }],
@@ -630,7 +649,7 @@ describe("pipelineOf", () => {
       });
 
       it("adds the stages of a round's parallel lanes into the round total", () => {
-        const items = pipelineOf(
+        const items = itemsOf(
           [
             node("start", "trigger"),
             node("review", "loop"),
@@ -638,14 +657,14 @@ describe("pipelineOf", () => {
             node("a", "agent", "review"),
             node("b", "agent", "review"),
             node("meet", "join", "review"),
-          ] as Parameters<typeof pipelineOf>[0],
+          ] as Source[],
           [
             then("start", "review"),
             then("split", "a"),
             then("split", "b"),
             then("a", "meet"),
             then("b", "meet"),
-          ] as Parameters<typeof pipelineOf>[1],
+          ] as Link[],
           stored([["review", 0, { kind: "round", payload: { round: 1 } }]]),
           [],
           report([
@@ -791,5 +810,150 @@ describe("stage activity windows", () => {
     });
     expect(stageIn(first?.items ?? [], "work")).not.toHaveProperty("activityFrom");
     expect(stageIn(parsed, "each")).not.toHaveProperty("activityTo");
+  });
+});
+
+describe("pipelineOf per container", () => {
+  const chainOf = (prefix: string, middle: string[]) => {
+    const ids = [`${prefix}-start`, ...middle.map((id) => `${prefix}-${id}`), `${prefix}-stop`];
+    const nodes = ids.map((id, index) =>
+      index === 0 ? node(id, "trigger") : index === ids.length - 1 ? node(id, "output") : node(id),
+    );
+    const wires = ids.slice(1).map((id, index) => then(ids[index] ?? "", id));
+    return group(prefix, nodes, wires);
+  };
+
+  const workspace = chainOf("workspace", []);
+  const android = chainOf("android", ["a1"]);
+  const ios = chainOf("ios", ["a1"]);
+  const groups = [workspace, android, ios];
+
+  const nodeIdsOf = (container: Group) => container.nodes.map((source) => source.id);
+
+  const workspaceDone: [string, number, RunEvent][] = [
+    ["workspace-start", 0, { kind: "running" }],
+    ["workspace-start", 0, { kind: "done" }],
+    ["workspace-stop", 9, { kind: "running" }],
+    ["workspace-stop", 9, { kind: "done" }],
+  ];
+
+  const grouped = (
+    containers: Group[],
+    rows: [string, number, RunEvent][],
+    run: Parameters<typeof pipelineOf>[4],
+  ) => {
+    const events = stored(rows);
+    const nodeIds = containers.flatMap(nodeIdsOf);
+    return pipelineOf(
+      containers,
+      events,
+      [],
+      costReport({ nodeIds, events, pending: [], now: at(60) }),
+      run,
+    );
+  };
+
+  const androidIn = (rows: [string, number, RunEvent][], run: Parameters<typeof pipelineOf>[4]) =>
+    grouped(groups, [...workspaceDone, ...rows], run).find((each) => each.name === "android");
+
+  it("gives one group per container in the given order, each with its name and its own nodes", () => {
+    const result = grouped(groups, workspaceDone, "done");
+
+    expect(result.map((each) => ({ name: each.name, items: shapeOf(each.items) }))).toEqual([
+      { name: "workspace", items: ["workspace-start", "workspace-stop"] },
+      { name: "android", items: ["android-start", "android-a1", "android-stop"] },
+      { name: "ios", items: ["ios-start", "ios-a1", "ios-stop"] },
+    ]);
+  });
+
+  it("gives each node its status from its own events, under its own container", () => {
+    const result = grouped(
+      groups,
+      [
+        ...workspaceDone,
+        ["android-start", 1, { kind: "running" }],
+        ["android-start", 1, { kind: "done" }],
+        ["android-a1", 2, { kind: "running" }],
+      ],
+      "running",
+    );
+    const statusesOf = (name: string) =>
+      result
+        .find((each) => each.name === name)
+        ?.items.map((item) => [(item as Stage).nodeId, (item as Stage).status]);
+
+    expect(statusesOf("android")).toEqual([
+      ["android-start", "done"],
+      ["android-a1", "running"],
+      ["android-stop", "waiting"],
+    ]);
+    expect(statusesOf("ios")).toEqual([
+      ["ios-start", "waiting"],
+      ["ios-a1", "waiting"],
+      ["ios-stop", "waiting"],
+    ]);
+  });
+
+  const started: [string, number, RunEvent][] = [
+    ["android-start", 1, { kind: "running" }],
+    ["android-start", 1, { kind: "done" }],
+    ["android-a1", 2, { kind: "running" }],
+  ];
+
+  const finished: [string, number, RunEvent][] = [
+    ...started,
+    ["android-a1", 3, { kind: "done" }],
+    ["android-stop", 4, { kind: "running" }],
+    ["android-stop", 4, { kind: "done" }],
+  ];
+
+  const failed: [string, number, RunEvent][] = [
+    ...started,
+    ["android-a1", 3, { kind: "failed", payload: { message: "boom" } }],
+  ];
+
+  it.each<{
+    name: string;
+    rows: [string, number, RunEvent][];
+    run: Parameters<typeof pipelineOf>[4];
+    status: string;
+  }>([
+    { name: "no first event once the run ended", rows: [], run: "done", status: "not-started" },
+    { name: "a node running while the run runs", rows: started, run: "running", status: "running" },
+    { name: "its Stop node done", rows: finished, run: "done", status: "done" },
+    { name: "a node running when the run ended", rows: started, run: "done", status: "stopped" },
+    {
+      name: "a node running when the run stopped",
+      rows: started,
+      run: "stopped",
+      status: "stopped",
+    },
+    { name: "a failed node while the run runs", rows: failed, run: "running", status: "failed" },
+    { name: "a failed node once the run ended", rows: failed, run: "failed", status: "failed" },
+  ])("shows a session container with $name as $status", ({ rows, run, status }) => {
+    expect(androidIn(rows, run)?.status).toBe(status);
+  });
+
+  it("gives a one-container build one workspace group", () => {
+    const only = chainOf("workspace", ["a1"]);
+
+    const result = grouped(
+      [only],
+      [
+        ["workspace-start", 0, { kind: "running" }],
+        ["workspace-start", 0, { kind: "done" }],
+        ["workspace-a1", 1, { kind: "running" }],
+      ],
+      "running",
+    );
+
+    expect(result.map((each) => ({ name: each.name, status: each.status }))).toEqual([
+      { name: "workspace", status: "running" },
+    ]);
+    expect(shapeOf(result[0]?.items ?? [])).toEqual([
+      "workspace-start",
+      "workspace-a1",
+      "workspace-stop",
+    ]);
   });
 });

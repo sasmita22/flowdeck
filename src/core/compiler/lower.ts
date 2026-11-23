@@ -145,23 +145,6 @@ const lowerContainer = (
   };
 };
 
-const singleSessionFields = (lowered: readonly Lowered[]) => {
-  const sessions = lowered.filter(({ container }) => container.kind === "session");
-  const [single] = sessions;
-  if (sessions.length !== 1 || single === undefined) return {};
-  const { container: only } = single;
-  return {
-    prefix: only.prefix,
-    session: {
-      name: only.name,
-      buildConfig: { repo: only.repo, base: only.base },
-      model: only.model,
-    },
-    nodes: only.nodes,
-    wires: only.wires,
-  };
-};
-
 export function lower(
   flow: Flow,
   inputs: LowerInputs,
@@ -179,7 +162,6 @@ export function lower(
       layout: "workspace",
       values: inputs.values,
       ...(source === undefined ? {} : { source }),
-      ...singleSessionFields(lowered),
       ...(outputs.length === 0 ? {} : { outputs }),
       settings: flow.settings,
       containers: lowered.map(({ container }) => container),

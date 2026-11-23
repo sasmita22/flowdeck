@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
-import { agent, onMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
+import { agent, onWorkspaceMainFlow, thenWire, withSession } from "../fixtures/flow-builders.js";
 import { paneText, transcriptTail, withWatchdog } from "../fixtures/live-evidence.js";
 import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
@@ -122,7 +122,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")(
       "resumes a run interrupted during node 2 without resending it, and runs node 3",
       { timeout: watchdogMs + 30_000 },
       async () => {
-        const parsed = onMainFlow(
+        const parsed = onWorkspaceMainFlow(
           (["p1", "p2", "p3"] as const).map((id) =>
             agent(id, { settings: { instructions: `Reply with the single word ${words[id]}.` } }),
           ),

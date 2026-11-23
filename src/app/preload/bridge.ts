@@ -130,7 +130,12 @@ export type FlowdeckBridge = EngineCalls & {
   answerClose(answer: CloseAnswer): void;
   getRunState(runId: string): Promise<unknown>;
   onRunState(listener: (snapshot: unknown) => void): () => void;
-  openTerminal(session: string, size: { cols: number; rows: number }): Promise<unknown>;
+  onRunSessions(listener: (sessions: unknown) => void): () => void;
+  openTerminal(
+    session: string,
+    size: { cols: number; rows: number },
+    tmuxName?: string,
+  ): Promise<unknown>;
   getTerminalStatus(session: string): Promise<unknown>;
   writeTerminal(session: string, data: string): void;
   resizeTerminal(session: string, size: { cols: number; rows: number }): void;
@@ -162,6 +167,7 @@ export const bridgeChannels = {
   closeAnswer: "flowdeck:close-answer",
   getRunState: "flowdeck:get-run-state",
   runState: "flowdeck:run-state",
+  runSessions: "flowdeck:run-sessions",
   openTerminal: "flowdeck:open-terminal",
   getTerminalStatus: "flowdeck:get-terminal-status",
   terminalInput: "flowdeck:terminal-input",

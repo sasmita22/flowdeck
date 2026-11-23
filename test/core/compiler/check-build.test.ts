@@ -14,9 +14,14 @@ import { descriptionOf } from "../../../src/core/compiler/merge.js";
 import { scopeOf } from "../../../src/core/compiler/scope-line.js";
 import { applyShared, sharedPath } from "../../../src/core/compiler/shared.js";
 import type { BuildReport } from "../../../src/core/compiler/build-report.js";
+import {
+  containerStartCommand,
+  sessionEnvNames,
+} from "../../../src/core/compiler/hook-settings.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { agent, onMainFlow, thenWire, twoSessionWorkflow } from "../../fixtures/flow-builders.js";
+import { oneSession } from "../../fixtures/one-session.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -137,7 +142,7 @@ const workspace = async (source: Flow = sample()): Promise<BuildCheckInputs> => 
 };
 
 const fileOf = (inputs: BuildCheckInputs, nodeId: string): string => {
-  const file = (inputs.manifest.nodes ?? []).find((node) => node.id === nodeId)?.file;
+  const file = oneSession(inputs.manifest).nodes.find((node) => node.id === nodeId)?.file;
   expect(file, nodeId).toBeDefined();
   return file ?? "";
 };
@@ -177,10 +182,10 @@ const merged = async (): Promise<BuildCheckInputs & { kept: string }> => {
   const source = twoReviewers();
   const before = await laid(source);
   const original = manifestOf(before);
-  const keptPiece = (original.nodes ?? []).find((node) => node.id === "a")?.piece ?? "";
-  const keptFile = (original.nodes ?? []).find((node) => node.id === "a")?.file ?? "";
-  const absorbed = (original.nodes ?? []).find((node) => node.id === "b")?.file ?? "";
-  const nodes = (original.nodes ?? []).map((node) =>
+  const keptPiece = oneSession(original).nodes.find((node) => node.id === "a")?.piece ?? "";
+  const keptFile = oneSession(original).nodes.find((node) => node.id === "a")?.file ?? "";
+  const absorbed = oneSession(original).nodes.find((node) => node.id === "b")?.file ?? "";
+  const nodes = oneSession(original).nodes.map((node) =>
     node.id === "b" ? { ...node, piece: keptPiece, file: keptFile } : node,
   );
   const files = Object.fromEntries(
@@ -190,7 +195,7 @@ const merged = async (): Promise<BuildCheckInputs & { kept: string }> => {
     container.slug === "main" ? { ...container, nodes } : container,
   );
   const session = containers.find((container) => container.slug === "main");
-  const manifest: Manifest = { ...original, nodes, containers, files };
+  const manifest: Manifest = { ...original, containers, files };
   const laidDown = before
     .filter((file) => file.path !== absorbed)
     .map((file) => {
@@ -362,7 +367,8 @@ describe("checkBuild", () => {
       async (tools) => {
         const inputs = await workspace();
         const file = fileOf(inputs, "a");
-        const piece = (inputs.manifest.nodes ?? []).find((node) => node.id === "a")?.piece ?? "";
+        const piece =
+          oneSession(inputs.manifest).nodes.find((node) => node.id === "a")?.piece ?? "";
 
         const failures = checkBuild(
           edited(inputs, file, (content) => withField(content, "tools", tools)),
@@ -442,7 +448,7 @@ describe("checkBuild", () => {
     it("names a file that references a piece under another build's prefix", async () => {
       const inputs = await workspace();
       const file = fileOf(inputs, "a");
-      const shipIt = (inputs.manifest.nodes ?? []).find((node) => node.id === "s")?.piece;
+      const shipIt = oneSession(inputs.manifest).nodes.find((node) => node.id === "s")?.piece;
 
       expect(shipIt).toBe("ship-it");
       expectFailsOn(
@@ -518,7 +524,7 @@ describe("checkBuild", () => {
       expect(applied.accepted).toEqual([entry]);
       const users = new Set(
         entry.usedBy.flatMap(
-          (id) => (applied.manifest.nodes ?? []).find((node) => node.id === id)?.file ?? [],
+          (id) => oneSession(applied.manifest).nodes.find((node) => node.id === id)?.file ?? [],
         ),
       );
       const readBack = applied.files.map(filledOne).map((file) =>
@@ -724,6 +730,69 @@ describe("checkBuild per container", () => {
       expect.objectContaining({ file: path, rule: "code-owned", container: "ios" }),
     );
     expectOnlyIn(failures, "ios");
+  });
+
+  describe("the workspace CLAUDE.md's session list", () => {
+    const path = "workspace/CLAUDE.md";
+    const buildDir = `${home}/workspaces/${deps.workspace.id}`;
+
+    const commandOf = (inputs: BuildCheckInputs, slug: string) => {
+      const container = inputs.manifest.containers.find((candidate) => candidate.slug === slug);
+      const env = sessionEnvNames(inputs.manifest.containers).get(slug);
+      expect(container, slug).toBeDefined();
+      expect(env, slug).toBeDefined();
+      return container === undefined || env === undefined
+        ? ""
+        : containerStartCommand({
+            container,
+            buildDir,
+            workspaceDir: `${buildDir}/workspace`,
+            env,
+          });
+    };
+
+    const listed = async () => {
+      const inputs = await twoSessions();
+      const text = inputs.readBack.find((file) => file.path === path)?.content ?? "";
+      for (const slug of ["android", "ios"]) expect(text).toContain(commandOf(inputs, slug));
+      return inputs;
+    };
+
+    const failuresOn = (failures: readonly BuildCheckFailure[]) =>
+      failures.filter((failure) => failure.file === path).map(failureLine);
+
+    it("passes the session list as emitted, with notes added below it", async () => {
+      expect(checkBuild(await listed())).toEqual([]);
+    });
+
+    it("fails a workspace CLAUDE.md whose session list was removed, naming each session container", async () => {
+      const inputs = await listed();
+      const removed = edited(inputs, path, (content) =>
+        content
+          .split("\n")
+          .filter((line) => !line.includes("/sessions/") && !line.includes("FD_SESSION_"))
+          .join("\n"),
+      );
+
+      const lines = failuresOn(checkBuild(removed));
+
+      expect(lines.some((line) => line.includes("android"))).toBe(true);
+      expect(lines.some((line) => line.includes("ios"))).toBe(true);
+    });
+
+    it("fails a workspace CLAUDE.md whose android start command was altered, naming android and not ios", async () => {
+      const inputs = await listed();
+      const command = commandOf(inputs, "android");
+      const altered = edited(inputs, path, (content) =>
+        content.replace(command, command.replace("'/alpha-android:run'", "'/alpha-android:plan'")),
+      );
+
+      const lines = failuresOn(checkBuild(altered));
+
+      expect(lines).not.toEqual([]);
+      expect(lines.every((line) => line.includes("android"))).toBe(true);
+      expect(lines.some((line) => line.includes("ios"))).toBe(false);
+    });
   });
 
   it("names a file added to a container's plugin as extra", async () => {

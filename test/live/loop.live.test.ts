@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { defaultPermissionMode } from "../../src/core/flow/choices.js";
-import { asWorkflow } from "../fixtures/flow-builders.js";
+import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import type { StoredEvent } from "../../src/core/run/store.js";
 import type { TurnEvents } from "../../src/core/run/turns.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
@@ -42,7 +42,7 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow() {
-  return asWorkflow(
+  return asWorkspaceWorkflow(
     {
       nodes: [
         {

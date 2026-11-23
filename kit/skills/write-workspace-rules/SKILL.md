@@ -5,7 +5,7 @@ description: How to write a build container's CLAUDE.md - what the container's f
 
 # Write the Workspace Rules
 
-Each container has its own `CLAUDE.md`: `workspace/CLAUDE.md` for the workspace container, `sessions/<slug>/CLAUDE.md` for each session container. Every run session of that container reads it. Code wrote two parts: the build summary (`# Build <name>` and its `- …` lines) and `## Standard rules`. You add the container's flow part between them.
+Each container has its own `CLAUDE.md`: `workspace/CLAUDE.md` for the workspace container, `sessions/<slug>/CLAUDE.md` for each session container. Every run session of that container reads it. Code wrote two parts: the build summary (`# Build <name>` and its `- …` lines; in the workspace's `CLAUDE.md`, also its `## Session containers` list with each container's start command) and `## Standard rules`. You add the container's flow part between them.
 
 A session works in the session's own folder, `sessions/<slug>/`, with its worktree inside it at `sessions/<slug>/<repo folder>/`. It may only read the read-only workspace folder, `workspace/`, and never edits or writes in it. A session's summary carries this as its emitted read-only note, the line `- Workspace folder (read only): …; never edit or write files in it` and the line after it.
 
@@ -21,7 +21,7 @@ A session works in the session's own folder, `sessions/<slug>/`, with its worktr
 ## Hard limits
 
 - `## Standard rules` stays byte for byte as code wrote it, at the end of the file.
-- Never change the summary lines: the orchestrator reads variable values from them. In a session's `CLAUDE.md` this keeps the read-only workspace note as code wrote it.
+- Never change the summary lines: the orchestrator reads variable values from them. In a session's `CLAUDE.md` this keeps the read-only workspace note as code wrote it; in the workspace's, the `## Session containers` list and every start command stay byte for byte.
 - Add no rule that has a session edit or write in the read-only workspace folder, and no rule for another container's nodes.
 - Add no rule the flow or the repo does not have.
 
@@ -29,5 +29,5 @@ A session works in the session's own folder, `sessions/<slug>/`, with its worktr
 
 - [ ] What the flow does, its rules and the repo pointer are present.
 - [ ] Every flow rule names the nodes it governs, and appears in each piece that must follow it.
-- [ ] The summary and `## Standard rules` are unchanged; a session's read-only workspace note is still there.
+- [ ] The summary and `## Standard rules` are unchanged; a session's read-only workspace note and the workspace's `## Session containers` list are still there.
 - [ ] No rule has a session edit or write in the workspace folder.

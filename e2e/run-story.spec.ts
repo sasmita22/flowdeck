@@ -5,7 +5,14 @@ import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agent, flow, gate, output, thenWire, trigger } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  output,
+  thenWire,
+  trigger,
+  workspaceFlow,
+} from "../test/fixtures/flow-builders.js";
 import { controlTestIds, dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
@@ -41,7 +48,7 @@ const startRun = async (env: Record<string, string>, skippable: boolean) => {
   seedBlueprint(
     home,
     "Gate check",
-    flow(
+    workspaceFlow(
       [
         trigger("start"),
         gate("g1", { settings: { shown: "Check the plan", skippable } }),
@@ -281,7 +288,7 @@ test("A run whose agent commits in another repo names that repo and its branch i
   seedBlueprint(
     home,
     "Other repo",
-    flow(
+    workspaceFlow(
       [trigger("start"), agent("s1"), output("stop")],
       [thenWire("start", "s1"), thenWire("s1", "stop")],
     ),

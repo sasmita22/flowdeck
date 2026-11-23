@@ -14,14 +14,20 @@ import {
 } from "../src/app/renderer/test-ids.js";
 import { modelChoices } from "../src/core/flow/choices.js";
 import type { Flow, FlowContainer } from "../src/core/flow/schema.js";
-import { agent, gate, onMainFlow, thenWire, withSession } from "../test/fixtures/flow-builders.js";
+import {
+  agent,
+  gate,
+  onWorkspaceMainFlow,
+  thenWire,
+  withSession,
+} from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { waitForBuilt } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
-import { sessionWorktree } from "../src/core/run/workspace.js";
+import { workspaceFolder } from "../src/core/run/workspace.js";
 
 const run = promisify(execFile);
 
@@ -86,7 +92,7 @@ draw();
 const argvLog = () => join(bin, "argv.log");
 
 const blueprint = (): Flow => {
-  const built = onMainFlow(
+  const built = onWorkspaceMainFlow(
     [
       agent("p1", { settings: { instructions: "Work on {{ticket}}." } }),
       gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
@@ -133,7 +139,7 @@ const runOf = (buildId: string) =>
   rows<{ id: string; status: string; tmux_name: string }>(
     `SELECT runs.id, runs.status, run_sessions.tmux_name
        FROM runs JOIN run_sessions ON run_sessions.run_id = runs.id
-      WHERE runs.build_id = ?`,
+      WHERE runs.build_id = ? AND run_sessions.parent IS NULL`,
     buildId,
   );
 
@@ -294,11 +300,10 @@ test("A running build refuses another run, while a second build runs beside it i
   const launches = (await readFile(argvLog(), "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { cwd: string });
-  expect(launches.map(({ cwd }) => cwd).sort()).toEqual(
-    [first, second]
-      .map((id) => sessionWorktree(join(home, "workspaces", id), "main", repo.path))
-      .sort(),
+    .map((line) => JSON.parse(line) as { cwd: string } | string[])
+    .flatMap((launch) => (Array.isArray(launch) ? [] : [launch.cwd]));
+  expect(launches.sort()).toEqual(
+    [first, second].map((id) => workspaceFolder(join(home, "workspaces", id))).sort(),
   );
 });
 

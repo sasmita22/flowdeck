@@ -24,6 +24,7 @@ export type ActivityTrackerOptions = {
   activity: Pick<Store, "recordActivity" | "activity" | "appendStepText">;
   turnNodes: ReadonlySet<string>;
   place: WorkingPlace;
+  sessionNodes?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 export type ActivityTracker = {
@@ -33,6 +34,8 @@ export type ActivityTracker = {
 
 export function createActivityTracker(options: ActivityTrackerOptions): ActivityTracker {
   const { runId, now, publish, log, activity, turnNodes, place } = options;
+  const sessionNodes = options.sessionNodes ?? new Map<string, ReadonlySet<string>>();
+  const containerNodes = new Set([...sessionNodes.values()].flatMap((nodes) => [...nodes]));
   let windows: NodeWindow[] = [];
   let feed: ActivityFeed = feedOf(activity.activity(runId));
 
@@ -56,20 +59,33 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
     if (id !== runId) return;
     const at = now();
     for (const { nodeId, event } of entries) {
-      windows = trackWindow(windows, nodeId, event.kind, at);
+      const opens =
+        event.kind === "running" &&
+        containerNodes.has(nodeId) &&
+        !windows.some((window) => window.nodeId === nodeId && window.endedAt === undefined);
+      windows = trackWindow(windows, nodeId, opens ? "sent" : event.kind, at);
       apply((current) => foldNodeEvent(current, { nodeId, at, turnNodes }, event));
     }
   };
 
+  const windowsOf = (sessionId: string): NodeWindow[] => {
+    const own = sessionNodes.get(sessionId);
+    return windows.filter(({ nodeId }) =>
+      own === undefined ? !containerNodes.has(nodeId) : own.has(nodeId),
+    );
+  };
+
   const handlerFor =
-    (kind: ActivityHookEvent["kind"]) =>
+    (kind: ActivityHookEvent["kind"], sessionId: string) =>
     ({ payload }: { payload: Record<string, unknown> }): void =>
-      apply((current) => foldHookEvent(current, windows, { kind, payload }, place));
+      apply((current) => foldHookEvent(current, windowsOf(sessionId), { kind, payload }, place));
 
   return {
     store: (inner) => ({
       createRun: (run) => inner.createRun(run),
       findRun: (id) => inner.findRun(id),
+      runSessions: (runId) => inner.runSessions(runId),
+      nodeSessions: (runId) => inner.nodeSessions(runId),
       events: (id) => inner.events(id),
       finishRun: (id, status) => inner.finishRun(id, status),
       reopenRun: (id) => inner.reopenRun(id),
@@ -128,7 +144,7 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
     watch(events, sessionId) {
       const unsubscribes = (
         ["PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStop"] as const
-      ).map((kind) => events.subscribe(kind, sessionId, handlerFor(kind)));
+      ).map((kind) => events.subscribe(kind, sessionId, handlerFor(kind, sessionId)));
       return () => {
         for (const unsubscribe of unsubscribes) unsubscribe();
       };

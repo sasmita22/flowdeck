@@ -24,7 +24,8 @@ import {
   type BuildRequest,
   type BuildResume,
 } from "../../core/compiler/build-version.js";
-import { hookCommand, shellQuote } from "../../core/compiler/hook-settings.js";
+import { hookCommand, sessionEnvNames, shellQuote } from "../../core/compiler/hook-settings.js";
+import type { ManifestContainer } from "../../core/compiler/lower.js";
 import { plainProblems, type Problem } from "../../core/compiler/problems.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
 import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
@@ -57,6 +58,7 @@ import {
   type LoadedBuild,
   type OpenedSession,
   type RunEnvironment,
+  type StartedSessionsView,
 } from "../../core/run/execute.js";
 import { runChoices, storedAuto, storedOptions, type RunChoices } from "../../core/run/options.js";
 import {
@@ -69,7 +71,8 @@ import {
   worktreePreview,
   type DeleteBuildResult,
 } from "../../core/run/delete-build.js";
-import { decideResume, type TranscriptTurn } from "../../core/run/resume.js";
+import { cutOffMessage, decideResume, type TranscriptTurn } from "../../core/run/resume.js";
+import { carryOnNode, sessionContinuePrompt } from "../../core/run/session-continue.js";
 import { turnFailure } from "../../core/run/turns.js";
 import { retryEntries } from "../../core/run/retry.js";
 import { sha256Hex } from "../../core/compiler/hash.js";
@@ -77,11 +80,14 @@ import { backfillManifests } from "../../core/run/backfill-manifests.js";
 import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import {
   parseManifest,
-  singleSession,
+  sessionContainersOf,
   stageSourcesOf,
+  workspaceOf,
   type ParsedManifest,
+  type StageGroup,
 } from "../../core/run/manifest.js";
-import { pipelineOf, type PipelineItem } from "../../core/run/pipeline.js";
+import { nodeStatus } from "../../core/run/run-events.js";
+import { pipelineOf, type PipelineGroup } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
 import { candidatePaths } from "../../core/run/other-repos.js";
 import { branchOf, type OtherRepo, type RepoState } from "../../core/run/repo-state.js";
@@ -92,6 +98,7 @@ import type {
   BuildRecord,
   EventEntry,
   RunRecord,
+  RunSession,
   RunStatus,
   StepText,
   StoredEvent,
@@ -147,6 +154,7 @@ import type {
 } from "./protocol.js";
 import { createPublishingStore } from "./publishing-store.js";
 import { createRepoGate } from "./repo-gate.js";
+import { StartedSessions } from "./started-sessions.js";
 
 export type EngineStores = {
   runs: Store;
@@ -181,6 +189,7 @@ export type EngineHandlerOptions = {
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildSessionPollMs?: number;
   endSession?: (sessionName: string) => Promise<void>;
+  answerDialogs?: (tmuxName: string) => Promise<void>;
   homeLock?: { acquire(): Promise<boolean> };
   narrator?: RunNarrator;
   blueprint?:
@@ -289,6 +298,8 @@ function detachable(store: Store, detached: () => boolean): Store {
   return {
     createRun: (run) => store.createRun(run),
     findRun: (id) => store.findRun(id),
+    runSessions: (runId) => store.runSessions(runId),
+    nodeSessions: (runId) => store.nodeSessions(runId),
     listRuns: () => store.listRuns(),
     findRunSummary: (id) => store.findRunSummary(id),
     events: (id) => store.events(id),
@@ -421,11 +432,65 @@ const isOld = (build: BuildRecord) => build.name === null;
 
 type ProjectBuild = BuildRecord & { name: string; repo: string; base: string };
 
-const runModel = (manifest: LoadedBuild): string => {
-  const running = singleSession(manifest);
-  if (!running.ok) throw new Error(running.reason);
-  return running.container.model;
+type ContainerSession = { container: ManifestContainer; session: RunSession };
+
+const containerSessions = (
+  manifest: Pick<ParsedManifest, "containers">,
+  sessions: readonly RunSession[],
+): ContainerSession[] =>
+  sessionContainersOf(manifest).flatMap((container) => {
+    const session = sessions.find((row) => row.cwd === container.worktree);
+    return session === undefined ? [] : [{ container, session }];
+  });
+
+const sessionEnv = (
+  manifest: Pick<ParsedManifest, "containers">,
+  sessions: readonly RunSession[],
+): Record<string, string> => {
+  const names = sessionEnvNames(manifest.containers);
+  return Object.fromEntries(
+    containerSessions(manifest, sessions).flatMap(({ container, session }) => {
+      const name = names.get(container.slug);
+      return name === undefined
+        ? []
+        : [
+            [name.tmux, session.tmuxName],
+            [name.id, session.claudeSessionId],
+          ];
+    }),
+  );
 };
+
+const startedIn = (
+  manifest: Pick<ParsedManifest, "containers">,
+  sessions: readonly RunSession[],
+  events: readonly StoredEvent[],
+): ContainerSession[] => {
+  const touched = new Set(events.map((event) => event.nodeId));
+  return containerSessions(manifest, sessions).filter(({ container }) =>
+    container.nodes.some((node) => touched.has(node.id)),
+  );
+};
+
+const reachedStop = (container: ManifestContainer, events: readonly StoredEvent[]): boolean =>
+  container.nodes.some((node) => {
+    const status = nodeStatus(events.filter((event) => event.nodeId === node.id));
+    return status === "failed" || (node.type === "output" && status === "done");
+  });
+
+const allNodes = (manifest: Pick<ParsedManifest, "containers">) =>
+  manifest.containers.flatMap((container) => container.nodes);
+
+const ownFolders = (manifest: Pick<ParsedManifest, "containers">): string[] =>
+  sessionContainersOf(manifest).flatMap((container) =>
+    container.worktree === undefined ? [] : [container.worktree],
+  );
+
+const flatStages = (groups: readonly StageGroup[]) => ({
+  session: { name: groups[0]?.name ?? "" },
+  nodes: groups.flatMap((group) => group.nodes),
+  wires: groups.flatMap((group) => group.wires),
+});
 
 const hasProject = (build: BuildRecord): build is ProjectBuild =>
   build.name !== null && build.repo !== null && build.base !== null;
@@ -448,10 +513,15 @@ function announced(
   runId: string,
   sessionName: string,
   publish: (push: EnginePush) => void,
-  running = false,
+  running: boolean,
+  onShown: () => void,
 ): OpenedSession {
   let isAnnounced = running;
-  if (running) publish({ push: "session", runId, value: sessionName });
+  const show = () => {
+    publish({ push: "session", runId, value: sessionName });
+    onShown();
+  };
+  if (running) show();
   return {
     ...opened,
     session: {
@@ -459,7 +529,7 @@ function announced(
         await opened.session.ensureStarted();
         if (isAnnounced) return;
         isAnnounced = true;
-        publish({ push: "session", runId, value: sessionName });
+        show();
       },
     },
     async stop() {
@@ -967,9 +1037,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     nodeIds: readonly string[];
     cwd: string;
     socketPath: string;
+    sessionName: string;
     claudeSessionId: string;
     stored: Record<string, unknown>;
-    open: () => Promise<OpenedSession>;
+    open: (
+      failNode: (claudeSessionId: string, nodeId: string, message: string) => void,
+    ) => Promise<OpenedSession>;
+    attached?: boolean;
     actions?: () => Promise<ReturnType<typeof decideResume>>;
   };
 
@@ -994,13 +1068,50 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     };
     let eventsFailed = false;
     const continuesEarlierRun = launch.actions !== undefined;
+    const sessionRows = runs.runSessions(runId).filter((row) => row.parent !== null);
+    const alreadyStarted = startedIn(manifest, sessionRows, runs.events(runId)).map(
+      ({ session }) => session.claudeSessionId,
+    );
+    let supervisor: StartedSessions | undefined;
+    let workspaceShown = false;
+    const pushSessions = () => {
+      const started = new Set(supervisor?.started() ?? alreadyStarted);
+      options.publish({
+        push: "run-sessions",
+        runId,
+        sessions: [
+          ...(workspaceShown
+            ? [{ container: workspaceOf(manifest).name, tmuxName: launch.sessionName }]
+            : []),
+          ...containerSessions(manifest, sessionRows)
+            .filter(({ session }) => started.has(session.claudeSessionId))
+            .map(({ container, session }) => ({
+              container: container.name,
+              tmuxName: session.tmuxName,
+            })),
+        ],
+      });
+    };
+    const startedSessions: StartedSessionsView = {
+      finish: async () => {
+        if (!isDetached()) await supervisor?.finish();
+      },
+      started: () => supervisor?.started() ?? [],
+      failure: () => supervisor?.failure(),
+    };
     const tracker = createActivityTracker({
       runId,
       now: options.run.now,
       publish: options.publish,
       log: (line) => console.log(`engine: activity ${line}`),
       activity: runs,
-      turnNodes: turnNodeIds(manifest),
+      turnNodes: turnNodeIds({ nodes: allNodes(manifest) }),
+      sessionNodes: new Map(
+        containerSessions(manifest, sessionRows).map(({ container, session }) => [
+          session.claudeSessionId,
+          new Set(container.nodes.map((node) => node.id)),
+        ]),
+      ),
       place:
         options.userHome === undefined
           ? { cwd: launch.cwd }
@@ -1022,13 +1133,33 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             eventsFailed = true;
             throw error;
           });
-          const unwatch = tracker.watch(started.events, claudeSessionId);
-          const repoGate = repoGateOf(runs, runId, launch.cwd);
-          const ungate = started.toolStarts?.onToolStart(claudeSessionId, repoGate.check);
+          const sessionIds = [claudeSessionId, ...sessionRows.map((row) => row.claudeSessionId)];
+          const repoGate = repoGateOf(runs, runId, manifest);
+          const ungates = sessionIds.map((id) =>
+            started.toolStarts?.onToolStart(id, repoGate.check),
+          );
+          supervisor = new StartedSessions({
+            runId,
+            events: started.events,
+            ...(started.permissions === undefined ? {} : { permissions: started.permissions }),
+            store,
+            waiter: waiterFor(runId),
+            sessionAlive,
+            endSession: options.endSession ?? (async () => undefined),
+            ...(options.answerDialogs === undefined
+              ? {}
+              : { answerDialogs: options.answerDialogs }),
+            manifest,
+            sessions: sessionRows,
+            history: runs.events(runId),
+            onStart: pushSessions,
+          });
+          const unwatches = sessionIds.map((id) => tracker.watch(started.events, id));
           const stopEvents = async () => {
-            unwatch();
+            for (const unwatch of unwatches) unwatch();
             repoGate.close();
-            ungate?.();
+            for (const ungate of ungates) ungate?.();
+            supervisor?.halt();
             await started.stop();
           };
           run.stopEvents = stopEvents;
@@ -1050,8 +1181,25 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         cwd: launch.cwd,
         auto: storedAuto(launch.stored),
         socketPath: launch.socketPath,
+        startedSessions,
         open: async () => {
-          const opened = await launch.open();
+          const raw = await launch.open((claudeSessionId, nodeId, message) =>
+            supervisor?.failNode(claudeSessionId, nodeId, message),
+          );
+          const opened =
+            raw === noClaude
+              ? raw
+              : announced(
+                  raw,
+                  runId,
+                  launch.sessionName,
+                  options.publish,
+                  launch.attached === true,
+                  () => {
+                    workspaceShown = true;
+                    pushSessions();
+                  },
+                );
           return {
             ...opened,
             session: {
@@ -1100,12 +1248,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     buildDir: string,
     session: { sessionName: string; socketPath: string; cwd: string; claudeSessionId: string },
     hooks: Extract<HooksResult, { kind: "ok" }>,
+    model = workspaceOf(manifest).model,
   ) => ({
     ...session,
     buildDir,
     workspaceFolder: workspaceFolder(buildDir),
     layout: manifest.layout,
-    model: runModel(manifest),
+    model,
     hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
   });
 
@@ -1133,23 +1282,37 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
-    const cwd = manifest.worktree;
-    if (cwd === undefined || !options.isFolder(cwd)) {
-      return failure(`Working folder not found: ${cwd ?? built.dir}`);
-    }
+    const { cwd } = manifest;
+    if (!options.isFolder(cwd)) return failure(`Working folder not found: ${cwd}`);
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failure(hooks.message);
     const sessionName = newSessionName();
     const socket = runSocketPath(options.home, sessionName);
     if (socket.kind === "error") return failure(socket.message);
     const claudeSessionId = randomUUID();
-    const nodeIds = manifest.nodes.map((node) => node.id);
+    const workspace = workspaceOf(manifest);
+    const sessions = sessionContainersOf(manifest).flatMap((container) =>
+      container.worktree === undefined
+        ? []
+        : [
+            {
+              tmuxName: newSessionName(),
+              cwd: container.worktree,
+              claudeSessionId: randomUUID(),
+              nodeIds: container.nodes.map((node) => node.id),
+            },
+          ],
+    );
+    const nodeIds = [workspace, ...sessionContainersOf(manifest)].flatMap((container) =>
+      container.nodes.map((node) => node.id),
+    );
     const stored = storedOptions({ inputs: {}, flags: {}, auto: choices.auto ?? false });
     const { id: runId } = runs.createRun({
       buildDir: built.dir,
       inputs: stored,
       nodeIds,
       session: { tmuxName: sessionName, cwd, claudeSessionId },
+      sessions,
       buildId,
     });
     options.publish({
@@ -1157,7 +1320,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       value: runSnapshot({ runId, status: "running", nodeIds, events: [] }),
     });
     const session = { sessionName, socketPath: socket.path, cwd, claudeSessionId };
-    const recordedBefore = recordBefore(runs, runId, cwd);
+    const recordedBefore = recordBefore(runs, runId, ownFolders(manifest)[0] ?? cwd);
     return startExecution({
       stores,
       runId,
@@ -1166,17 +1329,16 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       nodeIds,
       cwd,
       socketPath: socket.path,
+      sessionName,
       claudeSessionId,
       stored,
       open: async () => {
         await recordedBefore;
-        return needsClaude(manifest)
-          ? announced(
-              await options.run.openSession(sessionOptions(manifest, built.dir, session, hooks)),
-              runId,
-              sessionName,
-              options.publish,
-            )
+        return needsClaude(workspace)
+          ? options.run.openSession({
+              ...sessionOptions(manifest, built.dir, session, hooks),
+              env: sessionEnv(manifest, sessions),
+            })
           : noClaude;
       },
     });
@@ -1213,19 +1375,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return failure(loaded.message);
     const manifest = loaded.build;
+    const workspace = workspaceOf(manifest);
     const events = runs.events(runId);
     let entries: EventEntry[];
     try {
-      entries = how.kind === "retry" ? retryEntries(manifest, events, how.nodeId) : [];
+      entries = how.kind === "retry" ? retryEntries(workspace, events, how.nodeId) : [];
     } catch (error) {
       return failure(messageOf(error));
     }
     const { tmuxName: sessionName, cwd, claudeSessionId } = record.session;
-    const sentBefore = needsClaude(manifest) && events.some((event) => event.kind === "sent");
+    const sentBefore = needsClaude(workspace) && events.some((event) => event.kind === "sent");
     const restart = sentBefore && !(await sessionAlive(sessionName));
     const decide = async (after: readonly StoredEvent[]) =>
       decideResume({
-        manifest,
+        manifest: { ...workspace, hash: manifest.hash },
         events: after,
         turns: await options.transcriptTurns(claudeSessionId),
         sessionRestarted: restart,
@@ -1241,34 +1404,79 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     } catch (error) {
       return failure(messageOf(error));
     }
+    const sessions = runs.runSessions(runId).filter((row) => row.parent !== null);
+    const reopening: ContainerSession[] = [];
+    for (const started of startedIn(manifest, sessions, events)) {
+      if (reachedStop(started.container, events)) continue;
+      if (await sessionAlive(started.session.tmuxName)) continue;
+      const cutOff = started.container.nodes.find(
+        (node) =>
+          node.type === "agent" &&
+          ["running", "needs-you"].includes(
+            nodeStatus(events.filter((event) => event.nodeId === node.id)),
+          ),
+      );
+      if (cutOff === undefined) {
+        reopening.push(started);
+        continue;
+      }
+      entries.push({
+        nodeId: cutOff.id,
+        event: { kind: "failed", payload: { message: cutOffMessage(cutOff.id) } },
+      });
+    }
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failure(hooks.message);
     const socket = runSocketPath(options.home, sessionName);
     if (socket.kind === "error") return failure(socket.message);
     let opened: OpenedSession = noClaude;
-    if (needsClaude(manifest)) {
-      const attach = sentBefore && !restart;
+    const attach = sentBefore && !restart;
+    if (needsClaude(workspace)) {
       try {
-        opened = announced(
-          await options.run.openSession({
-            ...sessionOptions(
-              manifest,
-              record.buildDir,
-              { sessionName, socketPath: socket.path, cwd, claudeSessionId },
-              hooks,
-            ),
-            ...(attach ? { attach: true } : {}),
-            ...(restart ? { resume: true } : {}),
-          }),
-          runId,
-          sessionName,
-          options.publish,
-          attach,
-        );
+        opened = await options.run.openSession({
+          ...sessionOptions(
+            manifest,
+            record.buildDir,
+            { sessionName, socketPath: socket.path, cwd, claudeSessionId },
+            hooks,
+          ),
+          env: sessionEnv(manifest, sessions),
+          ...(attach ? { attach: true } : {}),
+          ...(restart ? { resume: true } : {}),
+        });
       } catch (error) {
         return failure(error instanceof SessionGoneError ? sessionGone : messageOf(error));
       }
     }
+    const reopen = async (
+      failNode: (claudeSessionId: string, nodeId: string, message: string) => void,
+    ) => {
+      for (const { container, session } of reopening) {
+        try {
+          const resumed = await options.run.openSession({
+            ...sessionOptions(
+              manifest,
+              record.buildDir,
+              {
+                sessionName: session.tmuxName,
+                socketPath: socket.path,
+                cwd: session.cwd,
+                claudeSessionId: session.claudeSessionId,
+              },
+              hooks,
+              container.model,
+            ),
+            resume: true,
+          });
+          await resumed.session.ensureStarted();
+          await resumed.prompts.sendPrompt(sessionContinuePrompt(container, events));
+        } catch (error) {
+          const carryOn = carryOnNode(container, events);
+          if (carryOn !== undefined)
+            failNode(session.claudeSessionId, carryOn.id, messageOf(error));
+        }
+      }
+    };
     if (entries.length > 0) runs.appendAll(runId, entries);
     runs.reopenRun(runId);
     notes.delete(runId);
@@ -1289,9 +1497,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       nodeIds: record.nodeIds,
       cwd,
       socketPath: socket.path,
+      sessionName,
       claudeSessionId,
       stored: record.inputs,
-      open: async () => opened,
+      open: async (failNode) => {
+        await reopen(failNode);
+        return opened;
+      },
+      attached: attach,
       actions: () => decide(runs.events(runId)),
     });
   };
@@ -1367,7 +1580,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       return;
     }
     const sent = runs.events(runId).some((event) => event.kind === "sent");
-    if (needsClaude(loaded.build) && sent && !(await sessionAlive(record.session.tmuxName))) {
+    const workspace = workspaceOf(loaded.build);
+    if (needsClaude(workspace) && sent && !(await sessionAlive(record.session.tmuxName))) {
       console.log(`engine: run ${runId} interrupted, its session has ended`);
       notes.set(runId, sessionEndedNote);
       return;
@@ -1420,10 +1634,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const repoGateOf = (runs: Store, runId: string, cwd: string) => {
+  const repoGateOf = (runs: Store, runId: string, manifest: LoadedBuild) => {
     const repo = runs.findRun(runId)?.repo ?? null;
     return createRepoGate({
-      own: [cwd, ...(repo === null ? [] : [repo])],
+      own: [...ownFolders(manifest), ...(repo === null ? [] : [repo])],
+      sessions: runs.runSessions(runId),
       seen: runs
         .repoStates(runId)
         .otherRepos.filter((other) => other.before !== undefined)
@@ -1440,7 +1655,12 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const otherReposOf = async (runs: Store, record: RunRecord): Promise<OtherRepo[]> => {
     const { gitState, userHome } = options;
-    const own = [record.session.cwd, ...(record.repo === null ? [] : [record.repo])];
+    const manifest = manifestOf(record);
+    const own = [
+      record.session.cwd,
+      ...(manifest === undefined ? [] : ownFolders(manifest)),
+      ...(record.repo === null ? [] : [record.repo]),
+    ];
     const skipped = new Set(own);
     for (const path of own) skipped.add((await gitState.topLevel(path)) ?? path);
     const befores = new Map(
@@ -1474,7 +1694,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     try {
       const record = runs.findRun(runId);
       if (record === undefined) return;
-      const state = await readRepoState(record.session.cwd);
+      const manifest = manifestOf(record);
+      const folder = (manifest === undefined ? [] : ownFolders(manifest))[0] ?? record.session.cwd;
+      const state = await readRepoState(folder);
       const otherRepos = await otherReposOf(runs, record).catch((error: unknown) => {
         console.log(`engine: run ${runId} other repos not read (${messageOf(error)})`);
         return [];
@@ -1508,9 +1730,14 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     runs.stopRun(runId);
     await recordAfter(runs, runId);
     if (tell) void narrate(runs, runId);
-    const { tmuxName } = record.session;
-    if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
-      await options.endSession?.(tmuxName);
+    const children = runs
+      .runSessions(runId)
+      .filter((row) => row.parent !== null)
+      .map(({ tmuxName }) => tmuxName);
+    for (const tmuxName of [record.session.tmuxName, ...children]) {
+      if (tmuxName.startsWith("fd-") && (await sessionAlive(tmuxName))) {
+        await options.endSession?.(tmuxName);
+      }
     }
     return { stopped: true };
   };
@@ -1529,7 +1756,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return { kind: "error", message: loaded.message };
-    return runChoices(loaded.build);
+    return runChoices(workspaceOf(loaded.build));
   };
 
   const manifestOf = (run: RunRecord): ParsedManifest | undefined =>
@@ -1537,21 +1764,23 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       ? undefined
       : parseManifest(run.manifestJson, { hash: run.buildHash, name: run.buildName });
 
-  const questionOf = (node: ParsedManifest["nodes"][number]): string | undefined => {
+  type StoredNode = ManifestContainer["nodes"][number];
+
+  const questionOf = (node: StoredNode): string | undefined => {
     if (node.type === "gate") return gateSettings.safeParse(node.settings).data?.shown;
     if (node.type === "ask") return askSettings.safeParse(node.settings).data?.question;
     return undefined;
   };
 
-  const instructionsOf = (node: ParsedManifest["nodes"][number]): string | undefined =>
+  const instructionsOf = (node: StoredNode): string | undefined =>
     node.type === "agent"
       ? agentSettings.pick({ instructions: true }).safeParse(node.settings).data?.instructions
       : undefined;
 
   const digestStagesOf = (manifest: ParsedManifest) => {
-    const stages = stageSourcesOf(manifest);
+    const stages = flatStages(stageSourcesOf(manifest));
     const instructions = new Map(
-      manifest.nodes.flatMap((node) => {
+      allNodes(manifest).flatMap((node) => {
         const text = instructionsOf(node);
         return text === undefined ? [] : [[node.id, text] as const];
       }),
@@ -1567,7 +1796,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const questionsOf = (manifest: ParsedManifest): Record<string, string> =>
     Object.fromEntries(
-      manifest.nodes.flatMap((node) => {
+      allNodes(manifest).flatMap((node) => {
         const question = questionOf(node);
         return question === undefined ? [] : [[node.id, question]];
       }),
@@ -1676,16 +1905,31 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const pendingUsage = async (run: RunRecord, events: StoredEvent[], usage: UsageReader) => {
+  const pendingUsage = async (
+    runs: Store,
+    run: RunRecord,
+    events: StoredEvent[],
+    usage: UsageReader,
+  ) => {
     const manifest = manifestOf(run);
     if (manifest === undefined) throw new Error("manifest.json: missing");
-    return chargeUsage({
-      events,
-      entries: await usage.entries(run.session.claudeSessionId),
-      turnNodes: turnNodeIds(manifest),
-      owners: usageOwners(manifest, events),
-      parents: parentsOf(manifest),
-    });
+    const sessions = runs.runSessions(run.id).filter((row) => row.parent !== null);
+    const charged = [
+      { container: workspaceOf(manifest), session: run.session },
+      ...startedIn(manifest, sessions, events),
+    ];
+    const charges = await Promise.all(
+      charged.map(async ({ container, session }) =>
+        chargeUsage({
+          events,
+          entries: await usage.entries(session.claudeSessionId),
+          turnNodes: turnNodeIds(container),
+          owners: usageOwners(container, events),
+          parents: parentsOf(container),
+        }),
+      ),
+    );
+    return charges.flat();
   };
 
   const runCost = async ({ runs }: EngineStores, runId: string): Promise<CostReport> => {
@@ -1694,7 +1938,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const events = runs.events(runId);
     const live = isActive(runId);
     const usage = options.run.usage;
-    const pending = live && usage !== undefined ? await pendingUsage(record, events, usage) : [];
+    const pending =
+      live && usage !== undefined ? await pendingUsage(runs, record, events, usage) : [];
     const last = events.at(-1);
     const now = live || last === undefined ? options.run.now() : Date.parse(last.time);
     return costReport({ nodeIds: record.nodeIds, events, pending, now });
@@ -1703,14 +1948,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const runPipeline = async (
     stores: EngineStores,
     runId: string,
-  ): Promise<PipelineItem[] | null> => {
+  ): Promise<PipelineGroup[] | null> => {
     const { runs } = stores;
     const record = runs.findRun(runId);
-    if (record === undefined) throw new Error(`No run ${runId}`);
+    const summary = runs.findRunSummary(runId);
+    if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const manifest = manifestOf(record);
     if (manifest === undefined) return null;
-    const { nodes, wires } = stageSourcesOf(manifest);
-    return pipelineOf(nodes, wires, runs.events(runId), [], await runCost(stores, runId));
+    return pipelineOf(
+      stageSourcesOf(manifest),
+      runs.events(runId),
+      [],
+      await runCost(stores, runId),
+      listed(summary).status,
+    );
   };
 
   const buildFiles = async (stores: EngineStores, buildId: string): Promise<BuildFileContent[]> => {
@@ -1965,7 +2216,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           }),
       run,
       name: run.buildName,
-      stages: manifest === undefined ? null : stageSourcesOf(manifest),
+      stages: manifest === undefined ? null : flatStages(stageSourcesOf(manifest).slice(0, 1)),
       snapshot: runSnapshot({
         runId,
         status: run.status,

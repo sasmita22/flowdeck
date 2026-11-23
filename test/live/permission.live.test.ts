@@ -3,7 +3,7 @@ import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { asWorkflow } from "../fixtures/flow-builders.js";
+import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import type { HumanWaiter, WaitRequest } from "../../src/core/run/wait.js";
 import { transcriptTail } from "../fixtures/live-evidence.js";
 import {
@@ -29,7 +29,7 @@ const then = (from: string, to: string) => ({
 });
 
 function liveFlow(instructions: string) {
-  return asWorkflow(
+  return asWorkspaceWorkflow(
     {
       nodes: [
         {
