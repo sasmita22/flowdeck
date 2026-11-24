@@ -57,12 +57,16 @@ const withRules = (summary: readonly string[]) => `${summary.join("\n")}\n\n${st
 export const replyFallbackLine =
   "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.";
 
+export const namedSendLine =
+  "- Send each message only to the name in the variable given for its session. If a send fails, never send it to another address, even one ListAgents shows: write the failed send and the message into your output, and end your turn if you cannot go on without it.";
+
 const readOnlyWorkspace = (dir: string) => [
   `- Workspace folder (read only): ${workspaceFolder(dir)}; never edit or write files in it`,
   "- Changes the workspace needs go to the workspace session by message",
   "- Never ask or raise anything to the user; only the workspace session talks to the user",
   `- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable ${workspaceTmuxVariable}`,
   replyFallbackLine,
+  namedSendLine,
 ];
 
 export const connectedSessionsHeading = "## Connected sessions";
@@ -207,6 +211,7 @@ const workspaceSessionClaudeMd = (
     "- This is the workspace session's folder; session containers read it but never write it",
     "- Plugin folder: plugin/ in this folder; run sessions reach it as ${CLAUDE_PLUGIN_ROOT}",
     "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below",
+    namedSendLine,
     ...sortedValues(build.values),
     ...sessionList(containers, target.workspace, connections),
     ...sessionStatesSection(containers),

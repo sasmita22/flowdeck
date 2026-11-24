@@ -720,13 +720,22 @@ describe("emit per container", () => {
         : { connections: pairs.map((between, index) => ({ id: `c${index}`, between })) }),
     });
     const connected = () => laidDown(threeSessions(["session-1", "session-2"]));
+    const replyLine =
+      "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.";
     const sessionLines = [
       "- Never ask or raise anything to the user; only the workspace session talks to the user",
       "- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX",
-      "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.",
+      replyLine,
     ];
     const workspaceLine =
       "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below";
+    const sendLine =
+      "- Send each message only to the name in the variable given for its session. If a send fails, never send it to another address, even one ListAgents shows: write the failed send and the message into your output, and end your turn if you cannot go on without it.";
+    const lineAfter = (text: string, line: string) => {
+      const lines = summaryOf(text).summary.split("\n");
+      const at = lines.indexOf(line);
+      return at === -1 ? undefined : lines[at + 1];
+    };
     const peerSection = (line: string) =>
       [
         "## Connected sessions",
@@ -809,6 +818,33 @@ describe("emit per container", () => {
         }
         const { summary } = summaryOf(fileAt(files, "workspace/CLAUDE.md"));
         expect(summary.split("\n")).toContain(workspaceLine);
+      },
+    );
+
+    it.each<[string, [string, string] | undefined]>([
+      ["connected", ["session-1", "session-2"]],
+      ["unconnected", undefined],
+    ])(
+      "tells every session, right after its reply line, to send only to the named session (%s)",
+      async (_label, pair) => {
+        const files = await laidDown(pair === undefined ? threeSessions() : threeSessions(pair));
+
+        for (const slug of ["android", "ios", "web"])
+          expect(lineAfter(fileAt(files, `sessions/${slug}/CLAUDE.md`), replyLine), slug).toBe(
+            sendLine,
+          );
+      },
+    );
+
+    it.each<[string, Flow]>([
+      ["with sessions", threeSessions(["session-1", "session-2"])],
+      ["without sessions", sessionsWorkflow([])],
+    ])(
+      "tells the workspace session, right after its talk-to-the-user line, to send only to the named session (%s)",
+      async (_label, flow) => {
+        const text = fileAt(await laidDown(flow), "workspace/CLAUDE.md");
+
+        expect(lineAfter(text, workspaceLine)).toBe(sendLine);
       },
     );
 

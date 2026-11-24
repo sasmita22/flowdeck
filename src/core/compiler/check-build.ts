@@ -3,6 +3,7 @@ import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
 import {
   connectedSessionsHeading,
+  namedSendLine,
   replyFallbackLine,
   sessionEntryHeading,
   sessionStatesHeading,
@@ -272,15 +273,33 @@ const checkSessionStates = ({ back, laid, fail }: Check) => {
     );
 };
 
-const checkReplyFallback = (container: ManifestContainer, { back, laid, fail }: Check) => {
+const checkLine = (
+  container: ManifestContainer,
+  { back, laid, fail }: Check,
+  { line, rule, detail }: { line: string; rule: string; detail: string },
+) => {
   const path = `${containerRoot(container)}/CLAUDE.md`;
-  const isLine = (line: string) => line === replyFallbackLine;
+  const isLine = (candidate: string) => candidate === line;
   if (
     (laid.get(path) ?? "").split("\n").some(isLine) &&
     !(back.get(path) ?? "").split("\n").some(isLine)
   )
-    fail(path, "reply-fallback", `the reply rule of ${container.name} is missing or altered`);
+    fail(path, rule, detail);
 };
+
+const checkReplyFallback = (container: ManifestContainer, check: Check) =>
+  checkLine(container, check, {
+    line: replyFallbackLine,
+    rule: "reply-fallback",
+    detail: `the reply rule of ${container.name} is missing or altered`,
+  });
+
+const checkNamedSend = (container: ManifestContainer, check: Check) =>
+  checkLine(container, check, {
+    line: namedSendLine,
+    rule: "named-send",
+    detail: `the send rule of ${container.name} is missing or altered`,
+  });
 
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
   const { laidDown, readBack, manifest, flow, shared } = inputs;
@@ -300,6 +319,7 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
       checkReplyFallback(container, { back, laid, flow, fail });
     } else checkSessionStates({ back, laid, flow, fail });
     checkConnected(container, { back, laid, flow, fail });
+    checkNamedSend(container, { back, laid, flow, fail });
   }
 
   for (const [path, content] of back) {
