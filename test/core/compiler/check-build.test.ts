@@ -20,7 +20,14 @@ import {
 } from "../../../src/core/compiler/hook-settings.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
-import { agent, onMainFlow, thenWire, twoSessionWorkflow } from "../../fixtures/flow-builders.js";
+import {
+  agent,
+  hardstop,
+  loop,
+  onMainFlow,
+  thenWire,
+  twoSessionWorkflow,
+} from "../../fixtures/flow-builders.js";
 import { oneSession } from "../../fixtures/one-session.js";
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
@@ -481,6 +488,40 @@ describe("checkBuild", () => {
         expect.objectContaining({ file: orchestrator, rule: "missing" }),
       );
     });
+
+    const stopping = (): Flow =>
+      onMainFlow(
+        [
+          labelled(agent("p"), "Draft the spec"),
+          hardstop("h"),
+          loop("l"),
+          labelled(agent("la", { parent: "l" }), "Fix the tests"),
+          labelled(agent("s"), "Ship it"),
+        ],
+        [thenWire("p", "h"), thenWire("h", "l"), thenWire("l", "la"), thenWire("l", "s")],
+      );
+
+    const unmarked = (nodeId: string) => (content: string) =>
+      content.replace(`\`STOPPED NODE ${nodeId}\``, "a stop line");
+
+    it("passes an orchestrator whose hard stop and failing Loop keep their stop markers", async () => {
+      expect(checkBuild(await workspace(stopping()))).toEqual([]);
+    });
+
+    it.each(["h", "l"])(
+      "names the container when NODE %s's step line lost its stop marker",
+      async (nodeId) => {
+        const failures = checkBuild(
+          edited(await workspace(stopping()), orchestrator, unmarked(nodeId)),
+        );
+
+        expect(failures).toEqual([
+          expect.objectContaining({ file: orchestrator, rule: "stop-marker", container: "main" }),
+        ]);
+        expect(failures[0]?.detail).toContain(`NODE ${nodeId}`);
+        expect(failures[0]?.detail).toContain("main");
+      },
+    );
 
     it("names the orchestrator when a node's NODE marker is missing", async () => {
       expectFailsOn(

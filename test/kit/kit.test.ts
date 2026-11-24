@@ -358,6 +358,21 @@ describe("the build kit", () => {
     expect(content).not.toMatch(/fewest tools/i);
   });
 
+  it("agent piece-auditor fixes a stop-marker failure by restoring the marker exactly", () => {
+    const row = readKit("agents/piece-auditor.md")
+      .split("\n")
+      .find((line) => line.startsWith("| `stop-marker`"));
+
+    expect(row).toMatch(/restore[^|]*`STOPPED NODE <nodeId>`[^|]*exactly as code wrote it/i);
+  });
+
+  it("skill audit-orchestrator keeps every stop marker as written", () => {
+    const limits = skill("audit-orchestrator").split("## Hard limits")[1]?.split("\n## ")[0] ?? "";
+
+    expect(limits).toContain("`STOPPED NODE <nodeId>`");
+    expect(limits).toMatch(/keep[^\n]*`STOPPED NODE <nodeId>`[^\n]*exactly as written/i);
+  });
+
   it("agent piece-auditor fixes a tools failure by deleting the tools line", () => {
     const row = readKit("agents/piece-auditor.md")
       .split("\n")

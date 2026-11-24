@@ -80,6 +80,9 @@ const bash = (at: number, sessionId = ours) =>
 const stop = (at: number, sessionId = ours) =>
   hookEvent("Stop", at, { last_assistant_message: "all done" }, sessionId);
 
+const stopSaying = (message: string, at: number) =>
+  hookEvent("Stop", at, { last_assistant_message: message });
+
 const stopFailure = (at: number, sessionId = ours) =>
   hookEvent(
     "StopFailure",
@@ -298,6 +301,148 @@ describe("SessionWatch", () => {
 
       expect(emitted).toHaveLength(before);
       expect(statusOf(stopNode)).toBe("done");
+    });
+  });
+
+  describe("a session that stops the run from inside", () => {
+    const hard = "android-h";
+    const loop = "android-loop";
+    const inLoop = "android-la";
+    const hardStop = {
+      id: hard,
+      type: "hardstop" as const,
+      label: "Tests fail",
+      settings: { condition: "tests fail", shown: "the failures", locked: false, enabled: true },
+    };
+    const hardBefore = {
+      prefix,
+      nodes: [...container.nodes.slice(0, 2), hardStop, ...container.nodes.slice(2)],
+      wires: [then(start, a1), then(a1, hard), then(hard, a2), then(a2, stopNode)],
+    };
+    const hardLast = {
+      prefix,
+      nodes: [...container.nodes.slice(0, 2), hardStop, ...container.nodes.slice(3)],
+      wires: [then(start, a1), then(a1, hard), then(hard, stopNode)],
+    };
+    const looped = {
+      prefix,
+      nodes: [
+        { id: start, type: "trigger" as const, label: "Start" },
+        {
+          id: loop,
+          type: "loop" as const,
+          label: "Until green",
+          settings: { condition: "tests pass", cap: 4, onCap: "fail" as const },
+        },
+        { id: inLoop, type: "agent" as const, label: "Fix", parent: loop },
+        { id: stopNode, type: "output" as const, label: "Stop" },
+      ],
+      wires: [then(start, loop), then(loop, stopNode)],
+    };
+    const statusIn = (nodeIds: readonly string[]) =>
+      Object.fromEntries(nodeIds.map((id) => [id, statusOf(id)]));
+
+    it("fails a hard stop before an Agent at once and leaves the rest unrun", () => {
+      watch = new SessionWatch({ container: hardBefore, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+      accept(stopSaying(`The tests fail.\nSTOPPED NODE ${hard}`, 1300));
+
+      expect(statusIn([start, a1, hard, a2, stopNode])).toEqual({
+        [start]: "done",
+        [a1]: "done",
+        [hard]: "failed",
+        [a2]: "waiting",
+        [stopNode]: "waiting",
+      });
+      expect(emitted.at(-1)).toEqual({
+        nodeId: hard,
+        event: { kind: "failed", payload: { message: `${hard} failed: stopped by its hard stop` } },
+      });
+    });
+
+    it("fails a hard stop after the last Agent instead of finishing the Stop", () => {
+      watch = new SessionWatch({ container: hardLast, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+      accept(stopSaying(`The tests fail.\nSTOPPED NODE ${hard}`, 1300));
+
+      expect(statusOf(hard)).toBe("failed");
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("fails a loop at its cap with the rounds it ran", () => {
+      watch = new SessionWatch({ container: looped, sessionId: ours });
+
+      accept(bash(1000), agentCall(inLoop, 1100), agentDone(inLoop, 1200));
+      accept(stopSaying(`Still red.\nSTOPPED NODE ${loop}`, 1300));
+
+      expect(statusIn([loop, inLoop, stopNode])).toEqual({
+        [loop]: "failed",
+        [inLoop]: "done",
+        [stopNode]: "waiting",
+      });
+      expect(emitted.at(-1)).toEqual({
+        nodeId: loop,
+        event: {
+          kind: "failed",
+          payload: { message: `${loop} failed: cap reached after 4 rounds` },
+        },
+      });
+    });
+
+    it("ignores a marker naming a loop that asks at its cap", () => {
+      const asking = {
+        ...looped,
+        nodes: looped.nodes.map((node) =>
+          node.id === loop
+            ? { ...node, settings: { condition: "tests pass", cap: 4, onCap: "ask" as const } }
+            : node,
+        ),
+      };
+      watch = new SessionWatch({ container: asking, sessionId: ours });
+
+      accept(bash(1000), agentCall(inLoop, 1100), agentDone(inLoop, 1200));
+      accept(stopSaying(`Still red.\nSTOPPED NODE ${loop}`, 1300));
+
+      expect(statusOf(loop)).not.toBe("failed");
+    });
+
+    it("records nothing more after the stop, even its tmux session ending", () => {
+      watch = new SessionWatch({ container: hardBefore, sessionId: ours });
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+      accept(stopSaying(`STOPPED NODE ${hard}`, 1300));
+      const before = emitted.length;
+
+      died();
+      accept(agentCall(a2, 1400), agentDone(a2, 1500), stop(1600));
+
+      expect(emitted).toHaveLength(before);
+    });
+
+    it.each([
+      { name: "no marker", message: "all done" },
+      { name: "a marker naming an Agent node", message: `STOPPED NODE ${a1}` },
+      { name: "a marker naming an unknown node", message: "STOPPED NODE android-gone" },
+      { name: "a marker naming another container's node", message: `STOPPED NODE ${iosAgent}` },
+    ])("finishes the Stop as before on a Stop with $name", ({ message }) => {
+      watch = new SessionWatch({ container: hardLast, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200), stopSaying(message, 1300));
+
+      expect(statusIn([a1, hard, stopNode])).toEqual({
+        [a1]: "done",
+        [hard]: "waiting",
+        [stopNode]: "done",
+      });
+    });
+
+    it("records nothing for a Stop with no marker while a hard stop's next Agent is left", () => {
+      watch = new SessionWatch({ container: hardBefore, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+
+      expect(watch.accept(stop(1300))).toEqual([]);
     });
   });
 
