@@ -225,3 +225,62 @@ describe("createPublishingStore", () => {
     expect(inner.findRun(runId)?.status).toBe("done");
   });
 });
+
+describe("createPublishingStore with session groups", () => {
+  const then = (from: string, to: string) => ({
+    kind: "then" as const,
+    from: { node: from, port: "out" },
+    to: { node: to, port: "in" },
+  });
+
+  const forked = {
+    nodes: [
+      { id: "start", type: "trigger" as const },
+      { id: "f", type: "fork" as const },
+      { id: "a", type: "agent" as const },
+      { id: "b", type: "agent" as const },
+      { id: "j", type: "join" as const },
+      { id: "c", type: "agent" as const },
+      { id: "stop", type: "output" as const },
+    ],
+    wires: [
+      then("start", "f"),
+      then("f", "a"),
+      then("f", "b"),
+      then("a", "j"),
+      then("b", "j"),
+      then("j", "c"),
+      then("c", "stop"),
+    ],
+  };
+
+  const published = (sessionGroups?: (typeof forked)[]) => {
+    const inner = new FakeStore();
+    const nodeIds = forked.nodes.map((node) => node.id);
+    const { id: runId } = inner.createRun({ ...newRun(), nodeIds });
+    const pushes: { value: { nodes: Record<string, string> } }[] = [];
+    const store = createPublishingStore({
+      store: inner,
+      runId,
+      nodeIds,
+      publish: (push) => pushes.push(push as (typeof pushes)[number]),
+      ...(sessionGroups === undefined ? {} : { sessionGroups }),
+    });
+    store.appendAll(
+      runId,
+      ["start", "a", "b", "c", "stop"].flatMap((nodeId) => [
+        { nodeId, event: { kind: "running" as const } },
+        { nodeId, event: { kind: "done" as const } },
+      ]),
+    );
+    return pushes.at(-1)?.value.nodes;
+  };
+
+  it("publishes the session's Fork and Join done", () => {
+    expect(published([forked])).toMatchObject({ f: "done", j: "done" });
+  });
+
+  it("publishes raw states without session groups", () => {
+    expect(published()).toMatchObject({ f: "waiting", j: "waiting" });
+  });
+});

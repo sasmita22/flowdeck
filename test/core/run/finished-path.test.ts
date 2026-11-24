@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { hasFinishedPath } from "../../../src/core/run/finished-path.js";
+import {
+  hasFinishedPath,
+  sessionOverlayOf,
+  sessionStatesOf,
+} from "../../../src/core/run/finished-path.js";
+import type { RunEvent } from "../../../src/core/run/run-events.js";
 
-type Kind = "trigger" | "output" | "agent" | "branch" | "fork" | "join" | "loop" | "foreach";
+type Kind =
+  | "trigger"
+  | "output"
+  | "agent"
+  | "branch"
+  | "fork"
+  | "join"
+  | "loop"
+  | "foreach"
+  | "gate"
+  | "ask"
+  | "hardstop";
 
 const node = (id: string, type: Kind, parent?: string) => ({
   id,
@@ -175,5 +191,291 @@ describe("hasFinishedPath", () => {
     ];
 
     expect(passes(nodes, wires, "x")).toBe(true);
+  });
+});
+
+const ran = (...ids: string[]): (RunEvent & { nodeId: string })[] =>
+  ids.flatMap((nodeId) => [
+    { nodeId, kind: "running" as const },
+    { nodeId, kind: "done" as const },
+  ]);
+
+const forked = {
+  nodes: [
+    ...ends,
+    node("f", "fork"),
+    node("a", "agent"),
+    node("b", "agent"),
+    node("j", "join"),
+    node("c", "agent"),
+  ],
+  wires: [
+    then("start", "f"),
+    then("f", "a"),
+    then("f", "b"),
+    then("a", "j"),
+    then("b", "j"),
+    then("j", "c"),
+    then("c", "stop"),
+  ],
+};
+
+const branched = (untaken: ReturnType<typeof node>) => ({
+  nodes: [...ends, node("br", "branch"), node("a", "agent"), untaken],
+  wires: [
+    then("start", "br"),
+    then("br", "a", "yes"),
+    then("br", untaken.id, "no"),
+    then("a", "stop"),
+    then(untaken.id, "stop"),
+  ],
+});
+
+describe("sessionStatesOf", () => {
+  it("shows the Fork and Join of a finished forked session done", () => {
+    expect(sessionStatesOf(forked, ran("start", "a", "b", "c", "stop"))).toEqual({
+      f: "done",
+      j: "done",
+    });
+  });
+
+  it("shows the taken Branch done and the untaken Ask skipped", () => {
+    expect(sessionStatesOf(branched(node("ask", "ask")), ran("start", "a", "stop"))).toEqual({
+      br: "done",
+      ask: "skipped",
+    });
+  });
+
+  it("shows an Agent on the untaken side skipped", () => {
+    expect(sessionStatesOf(branched(node("a2", "agent")), ran("start", "a", "stop"))).toEqual({
+      br: "done",
+      a2: "skipped",
+    });
+  });
+
+  it("shows both Agent-free sides of a finished Branch done", () => {
+    const container = {
+      nodes: [...ends, node("br", "branch"), node("g", "gate"), node("ask", "ask")],
+      wires: [
+        then("start", "br"),
+        then("br", "g", "yes"),
+        then("br", "ask", "no"),
+        then("g", "stop"),
+        then("ask", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "stop"))).toEqual({
+      br: "done",
+      g: "done",
+      ask: "done",
+    });
+  });
+
+  it("shows the Fork done and leaves the Join waiting while the session runs", () => {
+    expect(sessionStatesOf(forked, ran("start", "a"))).toEqual({ f: "done" });
+  });
+
+  it("shows a Gate done only once a finished Agent lies after it", () => {
+    const container = {
+      nodes: [
+        ...ends,
+        node("g1", "gate"),
+        node("a", "agent"),
+        node("g2", "gate"),
+        node("b", "agent"),
+      ],
+      wires: [
+        then("start", "g1"),
+        then("g1", "a"),
+        then("a", "g2"),
+        then("g2", "b"),
+        then("b", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "a"))).toEqual({ g1: "done" });
+  });
+
+  it("shows a Gate between Agents in a Loop body done", () => {
+    const container = {
+      nodes: [
+        ...ends,
+        node("l", "loop"),
+        node("la", "agent", "l"),
+        node("lg", "gate", "l"),
+        node("lb", "agent", "l"),
+      ],
+      wires: [
+        then("start", "l"),
+        then("l", "la"),
+        then("la", "lg"),
+        then("lg", "lb"),
+        then("l", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "la", "lb", "stop"))).toEqual({
+      l: "done",
+      lg: "done",
+    });
+  });
+
+  describe.each(["loop", "foreach"] as const)("a %s body ending in a Gate", (frame) => {
+    const container = {
+      nodes: [...ends, node("l", frame), node("la", "agent", "l"), node("lg", "gate", "l")],
+      wires: [then("start", "l"), then("la", "lg"), then("l", "stop")],
+    };
+
+    it("shows the Gate done once the session ends", () => {
+      expect(sessionStatesOf(container, ran("start", "la", "stop"))).toEqual({
+        l: "done",
+        lg: "done",
+      });
+    });
+
+    it("shows the Gate done while an Agent after the frame runs", () => {
+      const running = {
+        nodes: [...container.nodes, node("b", "agent")],
+        wires: [then("start", "l"), then("la", "lg"), then("l", "b"), then("b", "stop")],
+      };
+
+      expect(sessionStatesOf(running, ran("start", "la", "b"))).toEqual({
+        l: "done",
+        lg: "done",
+      });
+    });
+  });
+
+  it.each(["loop", "foreach"] as const)(
+    "shows a Branch done in a %s body when its taken side has no wire",
+    (frame) => {
+      const container = {
+        nodes: [
+          ...ends,
+          node("l", frame),
+          node("la", "agent", "l"),
+          node("br", "branch", "l"),
+          node("lb", "agent", "l"),
+        ],
+        wires: [then("start", "l"), then("la", "br"), then("br", "lb", "yes"), then("l", "stop")],
+      };
+
+      expect(sessionStatesOf(container, ran("start", "la", "stop"))).toEqual({
+        l: "done",
+        br: "done",
+        lb: "skipped",
+      });
+    },
+  );
+
+  it("shows the Join ending a Loop body done", () => {
+    const container = {
+      nodes: [
+        ...ends,
+        node("l", "loop"),
+        node("f", "fork", "l"),
+        node("x", "agent", "l"),
+        node("y", "agent", "l"),
+        node("j", "join", "l"),
+      ],
+      wires: [
+        then("start", "l"),
+        then("f", "x"),
+        then("f", "y"),
+        then("x", "j"),
+        then("y", "j"),
+        then("l", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "x", "y", "stop"))).toEqual({
+      l: "done",
+      f: "done",
+      j: "done",
+    });
+  });
+
+  it("shows a Loop whose Agents never ran skipped on the untaken side", () => {
+    const container = {
+      nodes: [
+        ...ends,
+        node("br", "branch"),
+        node("l", "loop"),
+        node("la", "agent", "l"),
+        node("g", "gate"),
+        node("c", "agent"),
+      ],
+      wires: [
+        then("start", "br"),
+        then("br", "l", "yes"),
+        then("br", "g", "no"),
+        then("l", "c"),
+        then("g", "c"),
+        then("c", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "c", "stop"))).toEqual({
+      br: "done",
+      l: "skipped",
+      la: "skipped",
+      g: "done",
+    });
+  });
+
+  it("shows a Gate done on a side that rejoins a side with no step", () => {
+    const container = {
+      nodes: [...ends, node("br", "branch"), node("g", "gate"), node("c", "agent")],
+      wires: [
+        then("start", "br"),
+        then("br", "c", "yes"),
+        then("br", "g", "no"),
+        then("g", "c"),
+        then("c", "stop"),
+      ],
+    };
+
+    expect(sessionStatesOf(container, ran("start", "c", "stop"))).toEqual({
+      br: "done",
+      g: "done",
+    });
+  });
+
+  it("derives nothing for a node with a state of its own", () => {
+    const container = {
+      nodes: [...ends, node("a", "agent"), node("hs", "hardstop"), node("b", "agent")],
+      wires: [then("start", "a"), then("a", "hs"), then("hs", "b"), then("b", "stop")],
+    };
+    const events = [
+      ...ran("start", "a"),
+      { nodeId: "hs", kind: "running" as const },
+      { nodeId: "hs", kind: "failed" as const, payload: { message: "hs failed" } },
+    ];
+
+    expect(sessionStatesOf(container, events)).toEqual({});
+  });
+
+  it("derives nothing for a session that never started", () => {
+    expect(sessionStatesOf(forked, [])).toEqual({});
+  });
+});
+
+describe("sessionOverlayOf", () => {
+  it("merges the derived states of every session", () => {
+    const rename = (id: string) => `s2-${id}`;
+    const second = {
+      nodes: forked.nodes.map((each) => ({ ...each, id: rename(each.id) })),
+      wires: forked.wires.map((wire) =>
+        then(rename(wire.from.node), rename(wire.to.node), wire.from.port),
+      ),
+    };
+
+    expect(
+      sessionOverlayOf(
+        [forked, second],
+        [...ran("start", "a", "b", "c", "stop"), ...ran(...["start", "a"].map(rename))],
+      ),
+    ).toEqual({ f: "done", j: "done", "s2-f": "done" });
   });
 });

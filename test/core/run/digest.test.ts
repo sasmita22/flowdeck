@@ -878,3 +878,55 @@ describe("runDigest", () => {
     });
   });
 });
+
+describe("runDigest with session states", () => {
+  const forked: StageSources = {
+    session: { name: "all" },
+    nodes: [
+      { id: "start", type: "trigger", label: "Start" },
+      { id: "f", type: "fork", label: "Split" },
+      { id: "a", type: "agent", label: "Write the API" },
+      { id: "b", type: "agent", label: "Write the UI" },
+      { id: "j", type: "join", label: "Merge" },
+      { id: "c", type: "agent", label: "Review" },
+      { id: "stop", type: "output", label: "Finish" },
+    ],
+    wires: [
+      then("start", "f"),
+      then("f", "a"),
+      then("f", "b"),
+      then("a", "j"),
+      then("b", "j"),
+      then("j", "c"),
+      then("c", "stop"),
+    ],
+  };
+
+  const events = stored(
+    ["start", "a", "b", "c", "stop"].flatMap((id, index): [string, number, RunEvent][] => [
+      [id, index, { kind: "running" }],
+      [id, index, { kind: "done" }],
+    ]),
+  );
+
+  const headingOf = (text: string, label: string) =>
+    text.split("\n").find((line) => line.includes(`${label} (`));
+
+  const digestOf = (sessionStates?: Record<string, "done">) =>
+    runDigest(digestInput(events, { sources: forked, activity: [], status: "done" }), sessionStates)
+      .text;
+
+  it("shows the session's Fork and Join done", () => {
+    const text = digestOf({ f: "done", j: "done" });
+
+    expect(headingOf(text, "Split")).toMatch(/\(fork\): done$/);
+    expect(headingOf(text, "Merge")).toMatch(/\(join\): done$/);
+  });
+
+  it("keeps them as their events say without session states", () => {
+    const text = digestOf();
+
+    expect(headingOf(text, "Split")).not.toMatch(/: done$/);
+    expect(headingOf(text, "Merge")).not.toMatch(/: done$/);
+  });
+});

@@ -1,3 +1,4 @@
+import type { PathContainer } from "../../core/run/finished-path.js";
 import { runSnapshot } from "../../core/run/snapshot.js";
 import type { RunStatus, Store } from "../../ports/store.js";
 import type { EnginePush } from "./protocol.js";
@@ -6,11 +7,12 @@ export type PublishingStoreOptions = {
   store: Store;
   runId: string;
   nodeIds: readonly string[];
+  sessionGroups?: readonly PathContainer[];
   publish: (push: EnginePush) => void;
 };
 
 export function createPublishingStore(options: PublishingStoreOptions): Store {
-  const { store, runId, nodeIds, publish } = options;
+  const { store, runId, nodeIds, sessionGroups, publish } = options;
 
   let status: RunStatus = "running";
 
@@ -18,7 +20,7 @@ export function createPublishingStore(options: PublishingStoreOptions): Store {
     if (id !== runId) return;
     publish({
       push: "run-state",
-      value: runSnapshot({ runId, status, nodeIds, events: store.events(runId) }),
+      value: runSnapshot({ runId, status, nodeIds, events: store.events(runId) }, sessionGroups),
     });
   };
 

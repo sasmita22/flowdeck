@@ -90,6 +90,7 @@ import {
 import { nodeStatus } from "../../core/run/run-events.js";
 import { pipelineOf, type PipelineGroup } from "../../core/run/pipeline.js";
 import { runDigest, type RunDigest } from "../../core/run/digest.js";
+import { sessionOverlayOf } from "../../core/run/finished-path.js";
 import { candidatePaths } from "../../core/run/other-repos.js";
 import { branchOf, type OtherRepo, type RepoState } from "../../core/run/repo-state.js";
 import { settings as agentSettings } from "../../core/nodes/agent/settings.js";
@@ -494,6 +495,9 @@ const ownFolders = (manifest: Pick<ParsedManifest, "containers">): string[] =>
   sessionContainersOf(manifest).flatMap((container) =>
     container.worktree === undefined ? [] : [container.worktree],
   );
+
+const sessionGroupsOf = (manifest: Pick<ParsedManifest, "containers">) =>
+  stageSourcesOf(manifest).slice(1);
 
 const flatStages = (groups: readonly StageGroup[]) => ({
   session: { name: groups[0]?.name ?? "" },
@@ -1145,6 +1149,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       store: tracker.store(runs),
       runId,
       nodeIds,
+      sessionGroups: sessionGroupsOf(manifest),
       publish: options.publish,
     });
     run.done = execute(
@@ -1513,12 +1518,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     notes.delete(runId);
     options.publish({
       push: "run-state",
-      value: runSnapshot({
-        runId,
-        status: "running",
-        nodeIds: record.nodeIds,
-        events: runs.events(runId),
-      }),
+      value: runSnapshot(
+        {
+          runId,
+          status: "running",
+          nodeIds: record.nodeIds,
+          events: runs.events(runId),
+        },
+        sessionGroupsOf(manifest),
+      ),
     });
     return startExecution({
       stores,
@@ -1843,26 +1851,29 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const events = runs.events(runId);
     const last = events.at(-1);
     const now = isActive(runId) || last === undefined ? options.run.now() : Date.parse(last.time);
-    return runDigest({
-      build: {
-        name: record.buildName,
-        hash: record.buildHash,
-        blueprintName: record.blueprintName,
-        blueprintVersion: record.source?.version ?? null,
-        repo: record.repo,
-        branch: record.branch,
-        values: record.buildValues,
+    return runDigest(
+      {
+        build: {
+          name: record.buildName,
+          hash: record.buildHash,
+          blueprintName: record.blueprintName,
+          blueprintVersion: record.source?.version ?? null,
+          repo: record.repo,
+          branch: record.branch,
+          values: record.buildValues,
+        },
+        stages: manifest === undefined ? null : digestStagesOf(manifest),
+        events,
+        activity: runs.activity(runId),
+        cost: costReport({ nodeIds: record.nodeIds, events, pending: [], now }),
+        createdAt: summary.createdAt,
+        endedAt: summary.endedAt,
+        status: record.status,
+        questions: manifest === undefined ? {} : questionsOf(manifest),
+        repoStates: runs.repoStates(runId),
       },
-      stages: manifest === undefined ? null : digestStagesOf(manifest),
-      events,
-      activity: runs.activity(runId),
-      cost: costReport({ nodeIds: record.nodeIds, events, pending: [], now }),
-      createdAt: summary.createdAt,
-      endedAt: summary.endedAt,
-      status: record.status,
-      questions: manifest === undefined ? {} : questionsOf(manifest),
-      repoStates: runs.repoStates(runId),
-    });
+      manifest === undefined ? undefined : sessionOverlayOf(sessionGroupsOf(manifest), events),
+    );
   };
 
   const narrations = new Set<AbortController>();
@@ -2258,12 +2269,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       run,
       name: run.buildName,
       stages: manifest === undefined ? null : flatStages(stageSourcesOf(manifest).slice(0, 1)),
-      snapshot: runSnapshot({
-        runId,
-        status: run.status,
-        nodeIds: record.nodeIds,
-        events: runs.events(runId),
-      }),
+      snapshot: runSnapshot(
+        {
+          runId,
+          status: run.status,
+          nodeIds: record.nodeIds,
+          events: runs.events(runId),
+        },
+        manifest === undefined ? [] : sessionGroupsOf(manifest),
+      ),
       activity: runs.activity(runId),
     };
   };

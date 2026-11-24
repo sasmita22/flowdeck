@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { plainReason } from "./failure.js";
+import { sessionOverlayOf, type PathContainer } from "./finished-path.js";
 import { nodeStatus, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import type { RunStatus } from "./store.js";
@@ -19,13 +20,21 @@ function failureOf(nodeId: string, events: readonly RunEvent[]): string | undefi
   return failed?.kind === "failed" ? plainReason(nodeId, failed.payload.message) : undefined;
 }
 
-export function runSnapshot(input: {
-  runId: string;
-  status: SnapshotStatus;
-  nodeIds: readonly string[];
-  events: readonly (RunEvent & { nodeId: string })[];
-}): RunSnapshot {
+export function runSnapshot(
+  input: {
+    runId: string;
+    status: SnapshotStatus;
+    nodeIds: readonly string[];
+    events: readonly (RunEvent & { nodeId: string })[];
+  },
+  sessionGroups: readonly PathContainer[] = [],
+): RunSnapshot {
   const eventsOf = (id: string) => input.events.filter((event) => event.nodeId === id);
+  const derived = sessionOverlayOf(sessionGroups, input.events);
+  const shown = (id: string) => {
+    const raw = nodeStatus(eventsOf(id));
+    return raw === "waiting" ? (derived[id] ?? raw) : raw;
+  };
   const reasons = Object.fromEntries(
     input.nodeIds.flatMap((id) => {
       const reason = failureOf(id, eventsOf(id));
@@ -35,7 +44,7 @@ export function runSnapshot(input: {
   return {
     runId: input.runId,
     status: input.status,
-    nodes: Object.fromEntries(input.nodeIds.map((id) => [id, nodeStatus(eventsOf(id))])),
+    nodes: Object.fromEntries(input.nodeIds.map((id) => [id, shown(id)])),
     ...(Object.keys(reasons).length === 0 ? {} : { reasons }),
   };
 }

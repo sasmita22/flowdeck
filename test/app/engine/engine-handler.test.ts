@@ -5610,6 +5610,91 @@ describe("createEngineHandler", async () => {
           });
         });
 
+        describe("a session's Gate between two Agents, which has no events of its own", () => {
+          const gated = "session-1-check";
+
+          const planCheckBuild = (): Flow => {
+            const built = sessionsWorkflow(
+              [
+                {
+                  name: "android",
+                  repo: repo.path,
+                  branch: "main",
+                  model: "haiku",
+                  members: ["Plan", "Check", "Build"],
+                },
+                { name: "ios", repo: repo.path, branch: "main", model: "sonnet" },
+              ],
+              { workspace: ["Wait"] },
+            );
+            return {
+              ...built,
+              nodes: built.nodes.map((each) =>
+                each.id === gated ? { ...gate(gated), label: "Check" } : each,
+              ) as Flow["nodes"],
+            };
+          };
+
+          const startGated = async () => {
+            flows.save(planCheckBuild());
+            const buildId = await builtId();
+            const runId = await startedOn(buildId);
+            await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+            const env = (claude.opened[0] as OpenSessionOptions & { env?: Record<string, string> })
+              .env;
+            return { runId, android: sessionOf(env ?? {}, "ANDROID") };
+          };
+
+          const finishPlanAndBuild = async (androidId: string, runId: string) => {
+            for (const nodeId of ["session-1-plan", "session-1-build"]) {
+              hook(androidId, "PreToolUse", agentCall(nodeId));
+              hook(androidId, "PostToolUse", agentDone(nodeId));
+            }
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-build")).toBe("done"));
+          };
+
+          const runStates = (runId: string) =>
+            pushes.flatMap((push) =>
+              push.push === "run-state" && push.value.runId === runId ? [push.value] : [],
+            );
+
+          it("shows the finished session's Gate done live, on the loaded run page and in the narrator's digest", async () => {
+            const narrator = new FakeRunNarrator({ text: "Told.", cost: 0.25 });
+            runHandler({ narrator });
+            const { runId, android } = await startGated();
+            await finishPlanAndBuild(android.claudeSessionId, runId);
+            hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+            expect(await endOf(runId)).toBe("done");
+            await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+            const loaded = (await answer("load-run", { runId })) as {
+              snapshot: { nodes: Record<string, string> };
+            };
+
+            expect(statusOf(runId, gated)).toBe("waiting");
+            expect(runStates(runId).at(-1)?.nodes[gated]).toBe("done");
+            expect(loaded.snapshot.nodes[gated]).toBe("done");
+            expect(
+              narrator.calls[0]?.split("\n").find((line) => line.includes("Check (gate)")),
+            ).toMatch(/: done$/);
+          });
+
+          it("shows the Gate done in the snapshot it pushes when the run is resumed", async () => {
+            const { runId, android } = await startGated();
+            alive.add(android.tmuxName);
+            await finishPlanAndBuild(android.claudeSessionId, runId);
+            expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
+            const before = runStates(runId).length;
+
+            expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
+
+            expect(runStates(runId)[before]?.nodes[gated]).toBe("done");
+            release();
+          });
+        });
+
         it("reads each started session's worktree for the repo state, never the workspace folder, and lists no build folder as another repo", async () => {
           const gitState = gitAt(repo.path);
           runHandler({ gitState, userHome: "/u" });

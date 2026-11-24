@@ -87,6 +87,99 @@ describe("runSnapshot", () => {
   });
 });
 
+describe("runSnapshot with session groups", () => {
+  const then = (from: string, to: string, port = "out") => ({
+    kind: "then" as const,
+    from: { node: from, port },
+    to: { node: to, port: "in" },
+  });
+
+  const ran = (...ids: string[]): (RunEvent & { nodeId: string })[] =>
+    ids.flatMap((nodeId) => [
+      { nodeId, kind: "running" as const },
+      { nodeId, kind: "done" as const },
+    ]);
+
+  const forked = {
+    nodes: [
+      { id: "start", type: "trigger" as const },
+      { id: "f", type: "fork" as const },
+      { id: "a", type: "agent" as const },
+      { id: "b", type: "agent" as const },
+      { id: "j", type: "join" as const },
+      { id: "c", type: "agent" as const },
+      { id: "stop", type: "output" as const },
+    ],
+    wires: [
+      then("start", "f"),
+      then("f", "a"),
+      then("f", "b"),
+      then("a", "j"),
+      then("b", "j"),
+      then("j", "c"),
+      then("c", "stop"),
+    ],
+  };
+
+  const branched = {
+    nodes: [
+      { id: "start", type: "trigger" as const },
+      { id: "br", type: "branch" as const },
+      { id: "a", type: "agent" as const },
+      { id: "ask", type: "ask" as const },
+      { id: "stop", type: "output" as const },
+    ],
+    wires: [
+      then("start", "br"),
+      then("br", "a", "yes"),
+      then("br", "ask", "no"),
+      then("a", "stop"),
+      then("ask", "stop"),
+    ],
+  };
+
+  const snapshotOf = (
+    container: typeof forked | typeof branched,
+    events: (RunEvent & { nodeId: string })[],
+    sessionGroups?: (typeof forked | typeof branched)[],
+  ) =>
+    runSnapshot(
+      {
+        runId: "r",
+        status: "done",
+        nodeIds: container.nodes.map((node) => node.id),
+        events,
+      },
+      sessionGroups,
+    ).nodes;
+
+  it("shows every node of a finished forked session done", () => {
+    expect(snapshotOf(forked, ran("start", "a", "b", "c", "stop"), [forked])).toEqual({
+      start: "done",
+      f: "done",
+      a: "done",
+      b: "done",
+      j: "done",
+      c: "done",
+      stop: "done",
+    });
+  });
+
+  it("shows the taken Branch done and the untaken Ask skipped", () => {
+    expect(snapshotOf(branched, ran("start", "a", "stop"), [branched])).toMatchObject({
+      br: "done",
+      ask: "skipped",
+    });
+  });
+
+  it("keeps the raw states without session groups", () => {
+    expect(snapshotOf(forked, ran("start", "a", "b", "c", "stop"))).toMatchObject({
+      f: "waiting",
+      j: "waiting",
+    });
+  });
+});
+
 describe("runSnapshotSchema", () => {
   it("accepts a valid snapshot", () => {
     expect(runSnapshotSchema.parse(valid)).toEqual(valid);
