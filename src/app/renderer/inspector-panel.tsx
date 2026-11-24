@@ -1,5 +1,6 @@
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
+import type { Actions } from "./actions.js";
 import type { BranchState } from "./branch-store.js";
 import type { CanvasState } from "./canvas/store.js";
 import { Inspector, type RunLabels, type RunPageView } from "./inspector/inspector.js";
@@ -22,6 +23,7 @@ export function InspectorPanel({
   readOnly = false,
   page,
   branches,
+  actions,
 }: {
   shell: StoreApi<ShellState>;
   run: StoreApi<RunView>;
@@ -33,6 +35,7 @@ export function InspectorPanel({
   readOnly?: boolean;
   page?: RunPageView | undefined;
   branches?: StoreApi<BranchState> | undefined;
+  actions?: Pick<Actions, "openBlueprint"> | undefined;
 }) {
   const inspectorShown = useStore(shell, (state) => state.inspectorShown);
   const snapshot = useStore(run, (state) => state.snapshot);
@@ -68,6 +71,7 @@ export function InspectorPanel({
           readOnly={readOnly}
           page={page}
           branches={branches}
+          actions={actions}
         />
       </div>
     </>

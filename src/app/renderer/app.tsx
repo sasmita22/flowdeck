@@ -27,6 +27,7 @@ import { RunPage } from "./pages/run-page.js";
 import { RunsPage } from "./pages/runs-page.js";
 import { RunDialog } from "./run-dialog.js";
 import { selectLatestSnapshot, selectRunSummary, type RunState } from "./run-store.js";
+import { SavePrompt } from "./save-prompt.js";
 import type { SaveState } from "./save-store.js";
 import type { ShellState } from "./shell-store.js";
 import type { TerminalState } from "./terminal/store.js";
@@ -290,6 +291,7 @@ function Page({ page, stores }: { page: Page; stores: AppStores }) {
         branches={stores.branches}
         assistant={stores.assistant}
         blueprintTerminal={stores.blueprintTerminal}
+        actions={stores.actions}
       />
     );
   }
@@ -341,6 +343,7 @@ export function App(stores: AppStores) {
       />
       <ClosePrompt store={stores.save} />
       <LeavePrompt store={stores.save} />
+      <SavePrompt store={stores.save} />
     </main>
   );
 }

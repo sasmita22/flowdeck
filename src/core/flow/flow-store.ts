@@ -78,6 +78,7 @@ export interface FlowStore {
   pin(flowId: string, pinned: boolean): void;
   delete(flowId: string): void;
   isDeleted(flowId: string): boolean;
+  usedBy(flowId: string): FlowSummary[];
   /**
    * Appends the next version to the blueprint `target` names, or creates a blueprint named
    * `target.name` with this as its version 1, all or nothing. Without a target, appends to the

@@ -10,14 +10,16 @@ import {
   libraryLoop,
   libraryUses,
   loopReason,
+  usedBy,
   type BlueprintKind,
   type LibraryResolver,
 } from "../../../src/core/flow/libraries.js";
-import { blueprintFacts } from "../../../src/core/flow/flow-store.js";
+import { blueprintFacts, type FlowSummary } from "../../../src/core/flow/flow-store.js";
 import { rule as sessionConnections } from "../../../src/core/compiler/rules/session-connections.js";
 import { parseFlow, type Flow, type Node } from "../../../src/core/flow/schema.js";
 import { fillVariables } from "../../../src/core/flow/variables.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
+import { flowSummary as summary } from "../../fixtures/flow-summary.js";
 import {
   agent,
   branch,
@@ -328,6 +330,61 @@ describe("libraryLoop", () => {
 
   it("names a library it has no name for by its id", () => {
     expect(loopReason(["a", "gone", "a"], nameOf)).toBe("makes a loop: A → gone → A");
+  });
+});
+
+describe("usedBy", () => {
+  const ids = (summaries: readonly FlowSummary[]): string[] =>
+    summaries.map((found) => found.flowId);
+
+  const chained = [
+    summary("w1", "workflow", ["a"]),
+    summary("a", "node-library", ["b"]),
+    summary("b", "node-library", []),
+  ];
+
+  it("lists the blueprints that use a library directly and through another library", () => {
+    expect(ids(usedBy(chained, "b"))).toEqual(["w1", "a"]);
+    expect(ids(usedBy(chained, "a"))).toEqual(["w1"]);
+  });
+
+  it("lists a blueprint whose only use of the library is off the main flow", () => {
+    const host = onMainFlow([], []);
+    const offPath = parseFlow({
+      ...host,
+      nodes: [...host.nodes, libraryNode("stray", "b", "b")],
+    });
+    const facts = blueprintFacts(
+      offPath,
+      resolverOf({ b: nodeLibrary([agent("plan")], ["plan"]) }),
+    );
+
+    expect(facts.uses).toEqual(["b"]);
+    expect(
+      ids(
+        usedBy(
+          [{ ...summary("w", facts.kind, []), ...facts }, summary("b", "node-library", [])],
+          "b",
+        ),
+      ),
+    ).toEqual(["w"]);
+  });
+
+  it("ends on a loop without listing the library itself", () => {
+    const looped = [
+      summary("a", "node-library", ["b"]),
+      summary("b", "node-library", ["a"]),
+      summary("w", "workflow", ["a"]),
+    ];
+
+    expect(ids(usedBy(looped, "b"))).toEqual(["a", "w"]);
+  });
+
+  it.each([
+    ["a library nothing uses", "b", [summary("b", "node-library", [])]],
+    ["a workflow", "w1", chained],
+  ])("lists nothing for %s", (_, libraryId, summaries) => {
+    expect(usedBy(summaries, libraryId)).toEqual([]);
   });
 });
 

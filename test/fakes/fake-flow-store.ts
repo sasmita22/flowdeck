@@ -1,5 +1,5 @@
 import { blueprintFacts, noBlueprintFacts } from "../../src/core/flow/flow-store.js";
-import type { LibraryResolver } from "../../src/core/flow/libraries.js";
+import { usedBy, type LibraryResolver } from "../../src/core/flow/libraries.js";
 import type { BuildConfig, Flow } from "../../src/core/flow/schema.js";
 import { sessionBuildConfig } from "../../src/core/flow/structure.js";
 import type {
@@ -73,6 +73,10 @@ export class FakeFlowStore implements FlowStore {
 
   isDeleted(flowId: string): boolean {
     return this.deleted.has(flowId);
+  }
+
+  usedBy(flowId: string): FlowSummary[] {
+    return usedBy(this.list(), flowId);
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {

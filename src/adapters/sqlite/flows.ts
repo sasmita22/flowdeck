@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { blueprintFacts, noBlueprintFacts } from "../../core/flow/flow-store.js";
-import type { LibraryResolver } from "../../core/flow/libraries.js";
+import { usedBy, type LibraryResolver } from "../../core/flow/libraries.js";
 import { parseFlow, type BuildConfig, type Flow } from "../../core/flow/schema.js";
 import { sessionBuildConfig } from "../../core/flow/structure.js";
 import { registry } from "../../core/nodes/registry.js";
@@ -125,6 +125,10 @@ export class SqliteFlowStore implements FlowStore {
       this.db.prepare("SELECT 1 FROM flows WHERE id = ? AND deleted_at IS NOT NULL").get(flowId) !==
       undefined
     );
+  }
+
+  usedBy(flowId: string): FlowSummary[] {
+    return usedBy(this.list(), flowId);
   }
 
   save(flow: Flow, target?: string | NewBlueprint): SavedFlowRef {

@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { openedFlowSchema, saveFlowResultSchema } from "../../core/flow/flow-store.js";
+import { usedBy } from "../../core/flow/libraries.js";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 import { newCanvasFlow, selectDirty, type CanvasState } from "./canvas/store.js";
 
@@ -10,6 +11,8 @@ export type SaveBridge = Pick<
 
 export type CloseChoice = "save" | "discard" | "cancel";
 
+export type SaveWarningChoice = "save" | "cancel";
+
 export const untitled = "Untitled";
 
 export type SaveState = {
@@ -17,6 +20,8 @@ export type SaveState = {
   error: string | null;
   closePrompt: boolean;
   leavePrompt: boolean;
+  saveWarning: { count: number } | null;
+  saveCancelled: boolean;
   hasSavedVersion: boolean;
   flowId: string | null;
   name: string;
@@ -28,6 +33,7 @@ export type SaveState = {
   leave(next: () => Promise<void>): Promise<void>;
   answerLeave(answer: CloseChoice): Promise<void>;
   answerClose(answer: CloseChoice): Promise<void>;
+  answerSaveWarning(answer: SaveWarningChoice): void;
 };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -40,6 +46,7 @@ export const createSaveStore = ({
   canvas: StoreApi<CanvasState>;
 }): StoreApi<SaveState> => {
   let pendingLeave: (() => Promise<void>) | null = null;
+  let pendingWarning: ((answer: SaveWarningChoice) => void) | null = null;
 
   const store = createStore<SaveState>()((set, get) => {
     const fail = (message: string) => {
@@ -47,9 +54,24 @@ export const createSaveStore = ({
       return false;
     };
 
+    const usersOf = (flowId: string | null) =>
+      flowId === null ? 0 : usedBy(canvas.getState().librarySummaries, flowId).length;
+
+    const warn = (count: number) =>
+      new Promise<boolean>((resolve) => {
+        set({ saveWarning: { count } });
+        pendingWarning = (answer) => {
+          set({ saveWarning: null, saveCancelled: answer === "cancel" });
+          resolve(answer === "save");
+        };
+      });
+
     const save = async (options: { force?: boolean } = {}) => {
-      if (get().saving) return false;
+      if (get().saving || get().saveWarning !== null) return false;
+      set({ saveCancelled: false });
       if (options.force !== true && !selectDirty(canvas.getState())) return true;
+      const users = usersOf(get().flowId);
+      if (users > 0 && !(await warn(users))) return false;
       const sent = canvas.getState().flow;
       const { flowId, name } = get();
       set({ saving: true, error: null });
@@ -77,6 +99,8 @@ export const createSaveStore = ({
       error: null,
       closePrompt: false,
       leavePrompt: false,
+      saveWarning: null,
+      saveCancelled: false,
       hasSavedVersion: false,
       flowId: null,
       name: untitled,
@@ -140,6 +164,12 @@ export const createSaveStore = ({
         const saved = answer === "discard" || (await save());
         set({ leavePrompt: false });
         if (saved) await next();
+      },
+
+      answerSaveWarning: (answer) => {
+        const answered = pendingWarning;
+        pendingWarning = null;
+        answered?.(answer);
       },
 
       answerClose: async (answer) => {

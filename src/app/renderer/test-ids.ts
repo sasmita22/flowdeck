@@ -70,6 +70,8 @@ export const readoutTestIds = {
 const stageKey = (runId: string, nodeId: string, round?: number) =>
   round === undefined ? `${runId}-${nodeId}` : `${runId}-${nodeId}-${round}`;
 
+export type UsedByScope = "settings" | "card" | "delete";
+
 export const pageTestIds = {
   search: "menu-search",
   recent: (flowId: string) => `menu-recent-${flowId}`,
@@ -86,6 +88,11 @@ export const pageTestIds = {
   blueprintDeleteDialog: "blueprint-delete-dialog",
   blueprintDeleteConfirm: "blueprint-delete-confirm",
   blueprintDeleteCancel: "blueprint-delete-cancel",
+  blueprintDeleteInUse: "blueprint-delete-in-use",
+  usedByList: (scope: UsedByScope, libraryId: string) => `used-by-${scope}-${libraryId}`,
+  usedByNone: (scope: UsedByScope, libraryId: string) => `used-by-none-${scope}-${libraryId}`,
+  usedByOpen: (scope: UsedByScope, libraryId: string, flowId: string) =>
+    `used-by-open-${scope}-${libraryId}-${flowId}`,
   blueprintNameInput: (flowId: string) => `blueprint-name-input-${flowId}`,
   blueprintBuild: (flowId: string) => `blueprint-build-${flowId}`,
   blueprintKind: (flowId: string) => `blueprint-kind-${flowId}`,
@@ -187,6 +194,10 @@ export const pageTestIds = {
   leaveSave: "leave-save",
   leaveDiscard: "leave-discard",
   leaveCancel: "leave-cancel",
+  saveWarningDialog: "save-warning-dialog",
+  saveWarningText: "save-warning-text",
+  saveWarningSave: "save-warning-save",
+  saveWarningCancel: "save-warning-cancel",
   stopAgentDialog: "stop-agent-dialog",
   stopAgentConfirm: "stop-agent-confirm",
   stopAgentCancel: "stop-agent-cancel",
