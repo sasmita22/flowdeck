@@ -417,6 +417,9 @@ const sessionTurn = async () => {
   const nodes = [...steps.matchAll(dispatchLine)].map(([, nodeId, agentType]) => ({ nodeId, agentType }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
+  say("────────");
+  say("❯ ");
+  say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
   for (const { nodeId, agentType } of nodes) {
