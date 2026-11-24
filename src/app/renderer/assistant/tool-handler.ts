@@ -2,7 +2,12 @@ import { z } from "zod";
 import type { StoreApi } from "zustand/vanilla";
 import { blueprintSessionName } from "../../../core/compiler/blueprint-session.js";
 import { flowProblems } from "../../../core/compiler/flow-problems.js";
-import { checkEdit, newProblems, type BlueprintEdit } from "../../../core/flow/blueprint-edits.js";
+import {
+  checkEdit,
+  editProblems,
+  newProblems,
+  type BlueprintEdit,
+} from "../../../core/flow/blueprint-edits.js";
 import {
   searchBlueprints,
   toolCallSchema,
@@ -214,7 +219,13 @@ export function createToolHandler({
     askGroup = canvas.getState().undoStack.at(-1);
     structural ||= check.edit.tool === "add_node" || check.edit.tool === "wire";
     lastWasTidy = false;
-    const problems = newProblems(before, canvas.getState().flow, libraries);
+    const touched = nodeId ?? (check.edit.tool === "change_node" ? check.edit.nodeId : undefined);
+    const problems = editProblems(
+      before,
+      canvas.getState().flow,
+      touched === undefined ? [] : [touched],
+      libraries,
+    );
     return nodeId === undefined ? { ok: true, problems } : { ok: true, nodeId, problems };
   };
 
