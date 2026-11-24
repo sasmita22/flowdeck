@@ -21,7 +21,7 @@ export type SessionFailure = { container: string; node: string };
 export class SessionWatch {
   started = false;
   private stopped = false;
-  private open: string | undefined;
+  private readonly open = new Set<string>();
   private readonly finished = new Set<string>();
 
   constructor(private readonly deps: SessionWatchDeps) {}
@@ -50,12 +50,16 @@ export class SessionWatch {
       this.started = true;
       if (status === "done") this.finished.add(node.id);
       if (status === "failed" || (status === "done" && node.type === "output")) this.stopped = true;
-      if (status === "running" || status === "needs-you") this.open = node.id;
+      if (status === "running" || status === "needs-you") this.open.add(node.id);
     }
   }
 
   get openNode(): string | undefined {
-    return this.open;
+    return this.open.values().next().value;
+  }
+
+  isOpen(nodeId: string): boolean {
+    return this.open.has(nodeId);
   }
 
   died(): EventEntry[] {
@@ -87,24 +91,23 @@ export class SessionWatch {
 
   private onCall(event: SessionHookEvent): EventEntry[] {
     const nodeId = this.ownNode(event);
-    if (nodeId === undefined || this.finished.has(nodeId) || this.open === nodeId) return [];
-    this.open = nodeId;
+    if (nodeId === undefined || this.finished.has(nodeId) || this.open.has(nodeId)) return [];
+    this.open.add(nodeId);
     return [{ nodeId, event: { kind: "running" } }];
   }
 
   private onResult(event: SessionHookEvent): EventEntry[] {
     const nodeId = this.ownNode(event);
     if (nodeId === undefined || this.finished.has(nodeId)) return [];
-    const opening: EventEntry[] =
-      this.open === nodeId ? [] : [{ nodeId, event: { kind: "running" } }];
-    this.open = undefined;
+    const opening = this.opening(nodeId);
+    this.open.delete(nodeId);
     this.finished.add(nodeId);
     return [...opening, { nodeId, event: { kind: "done" } }];
   }
 
   private onStop(): EventEntry[] {
     const stop = this.stopNode;
-    if (stop === undefined || this.open !== undefined) return [];
+    if (stop === undefined || this.open.size > 0) return [];
     if (!hasFinishedPath(this.deps.container, this.finished)) return [];
     this.stopped = true;
     return this.finish(stop.id);
@@ -118,19 +121,29 @@ export class SessionWatch {
     ];
   }
 
+  private opening(nodeId: string): EventEntry[] {
+    return this.open.has(nodeId) ? [] : [{ nodeId, event: { kind: "running" } }];
+  }
+
   failAt(nodeId: string, message: string): EventEntry[] {
-    if (this.stopped) return [];
-    this.stopped = true;
-    const failed: RunEvent = { kind: "failed", payload: { message } };
-    const opening: EventEntry[] =
-      this.open === nodeId ? [] : [{ nodeId, event: { kind: "running" } }];
-    this.open = undefined;
-    return [...opening, { nodeId, event: failed }];
+    return this.failEach([nodeId], message);
   }
 
   fail(message: string): EventEntry[] {
-    const nodeId = this.open ?? this.stopNode?.id;
-    return nodeId === undefined ? [] : this.failAt(nodeId, message);
+    const stop = this.stopNode?.id;
+    const nodeIds = this.open.size > 0 ? [...this.open] : stop === undefined ? [] : [stop];
+    return nodeIds.length === 0 ? [] : this.failEach(nodeIds, message);
+  }
+
+  private failEach(nodeIds: readonly string[], message: string): EventEntry[] {
+    if (this.stopped) return [];
+    this.stopped = true;
+    const failed: RunEvent = { kind: "failed", payload: { message } };
+    return nodeIds.flatMap((nodeId) => {
+      const opening = this.opening(nodeId);
+      this.open.delete(nodeId);
+      return [...opening, { nodeId, event: failed }];
+    });
   }
 }
 

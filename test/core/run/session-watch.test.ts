@@ -301,6 +301,86 @@ describe("SessionWatch", () => {
     });
   });
 
+  describe("parallel Agent nodes dispatched in one message", () => {
+    const fork = "android-fork";
+    const join = "android-join";
+    const forked = {
+      prefix,
+      nodes: [
+        { id: start, type: "trigger" as const, label: "Start" },
+        { id: fork, type: "fork" as const, label: "Fork" },
+        { id: a1, type: "agent" as const, label: "Plan" },
+        { id: a2, type: "agent" as const, label: "Build" },
+        { id: join, type: "join" as const, label: "Join" },
+        { id: stopNode, type: "output" as const, label: "Stop" },
+      ],
+      wires: [
+        then(start, fork),
+        then(fork, a1),
+        then(fork, a2),
+        then(a1, join),
+        then(a2, join),
+        then(join, stopNode),
+      ],
+    };
+
+    beforeEach(() => {
+      watch = new SessionWatch({ container: forked, sessionId: ours });
+    });
+
+    it("finishes the first branch's node and keeps its sibling running", () => {
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200));
+
+      expect(statusOf(a1)).toBe("done");
+      expect(statusOf(a2)).toBe("running");
+      expect(emitted.filter((entry) => entry.nodeId === a1)).toEqual([
+        { nodeId: a1, event: { kind: "running" } },
+        { nodeId: a1, event: { kind: "done" } },
+      ]);
+    });
+
+    it("records nothing for a Stop while a sibling still runs, then finishes after it", () => {
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200));
+
+      expect(watch.accept(stop(1300))).toEqual([]);
+      expect(statusOf(stopNode)).toBe("waiting");
+
+      accept(agentDone(a2, 1400), stop(1500));
+      expect(statusOf(stopNode)).toBe("done");
+    });
+
+    it("fails the sibling still running when its tmux session is gone", () => {
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200));
+
+      died();
+
+      expect(statusOf(a2)).toBe("failed");
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("fails every node still running when its tmux session is gone", () => {
+      accept(agentCall(a1, 1100), agentCall(a2, 1110));
+
+      died();
+
+      expect(statusOf(a1)).toBe("failed");
+      expect(statusOf(a2)).toBe("failed");
+      expect(statusOf(stopNode)).toBe("waiting");
+    });
+
+    it("keeps every running node open for a session resumed from its history", () => {
+      const history = [
+        { nodeId: start, seq: 1, time: "t1", kind: "running" as const },
+        { nodeId: start, seq: 2, time: "t2", kind: "done" as const },
+        { nodeId: a1, seq: 3, time: "t3", kind: "running" as const },
+        { nodeId: a2, seq: 4, time: "t4", kind: "running" as const },
+      ];
+      watch.seed(history);
+
+      expect(watch.accept(agentDone(a1, 2000))).toEqual([{ nodeId: a1, event: { kind: "done" } }]);
+    });
+  });
+
   describe("events that are not its session's", () => {
     it.each([
       { name: "a Bash call", event: bash(1000, other) },
