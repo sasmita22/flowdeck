@@ -10,6 +10,7 @@ import {
   type ToolCall,
 } from "../../../core/flow/blueprint-tools.js";
 import { flowSummarySchema, openedFlowSchema } from "../../../core/flow/flow-store.js";
+import { labelIn, libraryRefusal } from "../../../core/flow/library-checks.js";
 import type { Flow, Node } from "../../../core/flow/schema.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 import {
@@ -164,19 +165,56 @@ export function createToolHandler({
     );
   };
 
+  const libraryUse = (
+    before: Flow,
+    edit: Exclude<BlueprintEdit, { tool: "tidy_layout" }>,
+  ): { nodeId: string; libraryId: string; refused: (name: string) => string } | undefined => {
+    if (edit.tool === "add_node" && edit.type === "library") {
+      const into = edit.parent === undefined ? "" : ` into ${labelIn(before, edit.parent)}`;
+      return {
+        nodeId: nextNodeId("library", before),
+        libraryId: String(edit.settings.libraryId),
+        refused: (name) => `Can't add ${name}${into}`,
+      };
+    }
+    if (edit.tool !== "change_node" || edit.settings === undefined) return undefined;
+    const node = before.nodes.find(({ id }) => id === edit.nodeId);
+    if (node?.type !== "library" || edit.settings.libraryId === node.settings.libraryId) {
+      return undefined;
+    }
+    return {
+      nodeId: node.id,
+      libraryId: String(edit.settings.libraryId),
+      refused: (name) => `Can't use ${name} here`,
+    };
+  };
+
   const applyEdit = async (session: string, name: string, input: unknown): Promise<Answer> => {
     if (!isOwnOpenBlueprint(session)) return refuse(offBlueprint);
-    const before = canvas.getState().flow;
-    const check = checkEdit(before, name, input);
+    const { flow: before, libraries, openFlowId } = canvas.getState();
+    const check = checkEdit(before, name, input, libraries);
     if (!check.ok) return check;
     if (check.edit.tool === "tidy_layout") return tidyLayout(session, before);
     const { command, nodeId } = commandFor(before, check.edit);
+    const use = libraryUse(before, check.edit);
+    const reason =
+      use &&
+      libraryRefusal({
+        before,
+        after: command.do(before),
+        nodeId: use.nodeId,
+        libraryId: use.libraryId,
+        libraries,
+        openFlowId,
+      });
+    if (use !== undefined && reason !== undefined) {
+      return refuse(`${use.refused(libraries(use.libraryId)?.name ?? "library")}: ${reason}`);
+    }
     if (!canvas.getState().applyAgent(command)) return refuse(notReady);
     askGroup = canvas.getState().undoStack.at(-1);
     structural ||= check.edit.tool === "add_node" || check.edit.tool === "wire";
     lastWasTidy = false;
-    const { flow: after, libraries } = canvas.getState();
-    const problems = newProblems(before, after, libraries);
+    const problems = newProblems(before, canvas.getState().flow, libraries);
     return nodeId === undefined ? { ok: true, problems } : { ok: true, nodeId, problems };
   };
 

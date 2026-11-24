@@ -90,6 +90,26 @@ export class LibraryLoopError extends LibraryError {}
 
 export const labelPrefix = (label: string): string => label.toLowerCase().replace(/\s+/g, "-");
 
+export const freeLabel = (base: string, taken: ReadonlySet<string>): string => {
+  if (!taken.has(base)) return base;
+  let count = 2;
+  while (taken.has(`${base}-${count}`)) count += 1;
+  return `${base}-${count}`;
+};
+
+const isLibraryNode = (node: Node): node is LibraryNode => node.type === "library";
+
+export const libraryLabelFor = (flow: Flow, name: string, exceptNodeId?: string): string =>
+  freeLabel(
+    labelPrefix(name),
+    new Set(
+      flow.nodes
+        .filter(isLibraryNode)
+        .filter((node) => node.id !== exceptNodeId)
+        .map((node) => labelPrefix(node.settings.label)),
+    ),
+  );
+
 const atCanvasLevel = (flow: Flow, node: Node): boolean =>
   node.parent === undefined && flowContainerOf(flow, node.id) === undefined;
 
@@ -157,14 +177,6 @@ export function libraryLookup(resolve: LibraryResolver): LibraryLookup {
   };
 }
 
-const firstFree = (base: string, taken: ReadonlySet<string>): string => {
-  if (!taken.has(base)) return base;
-  for (let count = 2; ; count++) {
-    const name = `${base}-${count}`;
-    if (!taken.has(name)) return name;
-  }
-};
-
 const prefixedText = (text: string, prefix: string): string =>
   fillVariables(
     text,
@@ -226,7 +238,7 @@ function splice(host: Flow, use: LibraryNode, library: Flow, prefix: string): Fl
   ]);
   const ids = new Map<string, string>();
   for (const id of [...members.map((node) => node.id), ...sessions.map((session) => session.id)]) {
-    const free = firstFree(`${prefix}-${id}`, taken);
+    const free = freeLabel(`${prefix}-${id}`, taken);
     taken.add(free);
     ids.set(id, free);
   }
@@ -235,7 +247,7 @@ function splice(host: Flow, use: LibraryNode, library: Flow, prefix: string): Fl
   const connections = (part.connections ?? [])
     .filter(({ between }) => between.every((session) => ids.has(session)))
     .map((connection): Connection => {
-      const id = firstFree(`${prefix}-${connection.id}`, connectionIds);
+      const id = freeLabel(`${prefix}-${connection.id}`, connectionIds);
       connectionIds.add(id);
       const [first, second] = connection.between;
       return { id, between: [rename(first), rename(second)] };

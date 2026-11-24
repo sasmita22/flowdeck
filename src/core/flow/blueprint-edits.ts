@@ -6,7 +6,7 @@ import { rule as portsRule } from "../compiler/rules/ports.js";
 import { nodeDefaults } from "../nodes/defaults.js";
 import { registry } from "../nodes/registry.js";
 import { toolInputs, type ToolName } from "./blueprint-tools.js";
-import type { LibraryLookup } from "./libraries.js";
+import { libraryLabelFor, unknownLibraries, type LibraryLookup } from "./libraries.js";
 import { Wire, type Flow, type NodeType } from "./schema.js";
 
 type Settings = Record<string, unknown>;
@@ -33,10 +33,17 @@ const settingsFor = (type: NodeType, settings: Settings): Settings | string =>
 const isEditTool = (name: string): name is ToolName & BlueprintEdit["tool"] =>
   ["add_node", "change_node", "wire", "delete_node", "tidy_layout"].includes(name);
 
-export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
+export function checkEdit(
+  flow: Flow,
+  name: string,
+  input: unknown,
+  libraries: LibraryLookup = unknownLibraries,
+): EditCheck {
   if (!isEditTool(name)) return refuse(`"${name}" is not a blueprint edit.`);
   const nodeOf = (id: string) => flow.nodes.find((node) => node.id === id);
   const missing = (id: string) => refuse(`No node "${id}" in the blueprint.`);
+  const libraryLabel = (libraryId: unknown, exceptNodeId?: string) =>
+    libraryLabelFor(flow, libraries(String(libraryId))?.name ?? "library", exceptNodeId);
 
   switch (name) {
     case "add_node": {
@@ -47,13 +54,14 @@ export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
         ...data.settings,
       });
       if (typeof settings === "string") return refuse(settings);
+      const label = data.type === "library" ? libraryLabel(settings.libraryId) : data.label;
       return {
         ok: true,
         edit: {
           tool: name,
           type: data.type,
-          label: data.label,
-          settings,
+          label,
+          settings: data.type === "library" ? { ...settings, label } : settings,
           ...(data.parent === undefined ? {} : { parent: data.parent }),
         },
       };
@@ -73,9 +81,17 @@ export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
         settings !== undefined &&
         settings.libraryId !== node.settings.libraryId
       ) {
-        return refuse(
-          `change_node cannot change the library "${node.label}" uses. Ask the user to drop the library they want onto the canvas.`,
-        );
+        const label = libraryLabel(settings.libraryId, node.id);
+        const overrides = data.settings?.overrides === undefined ? {} : settings.overrides;
+        return {
+          ok: true,
+          edit: {
+            tool: name,
+            nodeId: data.nodeId,
+            label,
+            settings: { ...settings, label, overrides },
+          },
+        };
       }
       return {
         ok: true,

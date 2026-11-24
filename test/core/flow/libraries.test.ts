@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   blueprintKind,
   expandLibraries,
+  freeLabel,
   kindResolver,
   labelPrefix,
   LibraryError,
+  libraryLabelFor,
   LibraryLoopError,
   libraryLookup,
   libraryLoop,
@@ -143,6 +145,55 @@ const instructionsOf = (flow: Flow, id: string): string | undefined => {
 describe("labelPrefix", () => {
   it("lowercases the label and turns spaces into dashes", () => {
     expect(labelPrefix("Android App")).toBe("android-app");
+  });
+});
+
+describe("freeLabel", () => {
+  it.each([
+    ["the base when it is free", [], "android-app-plan"],
+    ["the base with -2 when the base is taken", ["android-app-plan"], "android-app-plan-2"],
+    [
+      "the first free count after the taken ones",
+      ["android-app-plan", "android-app-plan-2"],
+      "android-app-plan-3",
+    ],
+    ["the base even when only a counted name is taken", ["android-app-plan-2"], "android-app-plan"],
+  ])("gives %s", (_, taken, expected) => {
+    expect(freeLabel("android-app-plan", new Set(taken))).toBe(expected);
+  });
+});
+
+describe("libraryLabelFor", () => {
+  const onCanvas = (...nodes: unknown[]): Flow => plain(nodes, []);
+
+  it("gives the library's prefix when no library node is on the canvas", () => {
+    expect(libraryLabelFor(onCanvas(), "Android App")).toBe(labelPrefix("Android App"));
+  });
+
+  it("counts a second node of the same library as -2, then -3", () => {
+    const one = libraryNode("one", "app", "android-app");
+    const two = libraryNode("two", "app", "android-app-2");
+
+    expect(libraryLabelFor(onCanvas(one), "Android App")).toBe("android-app-2");
+    expect(libraryLabelFor(onCanvas(one, two), "Android App")).toBe("android-app-3");
+  });
+
+  it("compares the prefixes of the taken labels", () => {
+    expect(libraryLabelFor(onCanvas(libraryNode("one", "app", "Android App")), "Android App")).toBe(
+      "android-app-2",
+    );
+  });
+
+  it("does not count a node that is not a library node", () => {
+    expect(libraryLabelFor(onCanvas(agent("android-app")), "Android App")).toBe("android-app");
+  });
+
+  it("does not count the node it is labelling", () => {
+    const one = libraryNode("one", "app", "android-app");
+    const two = libraryNode("two", "app", "android-app-2");
+
+    expect(libraryLabelFor(onCanvas(one), "Android App", "one")).toBe("android-app");
+    expect(libraryLabelFor(onCanvas(one, two), "Android App", "two")).toBe("android-app-2");
   });
 });
 

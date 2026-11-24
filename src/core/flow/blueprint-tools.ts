@@ -16,7 +16,7 @@ export const toolInputs = {
       .describe("The flow id of the blueprint to read. Leave it out for the open blueprint."),
   }),
   add_node: z.strictObject({
-    type: NodeType.exclude(["library"]),
+    type: NodeType,
     label: z.string(),
     parent: z
       .string()
@@ -47,8 +47,9 @@ const descriptions: Record<ToolName, string> = {
   read_blueprint:
     "Read a blueprint's nodes, wires, containers (the workspace and session containers with their settings), connections and current problems. Reading a deleted blueprint answers that it was deleted.",
   add_node:
-    "Add a node to a blueprint, inside a Loop or For each body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults.",
-  change_node: "Change a node's label or some of its settings.",
+    "Add a node to a blueprint, inside a Loop or For each body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults. A library node takes its libraryId in settings; its label is ignored and derived from the library's name, as the canvas derives it.",
+  change_node:
+    "Change a node's label or some of its settings. A new libraryId re-derives a library node's label and clears the overrides carried over from the old library.",
   wire: "Connect an output port of one node to an input port of another.",
   delete_node: "Delete a node and its wires.",
   list_builds: "List the builds made from blueprints.",

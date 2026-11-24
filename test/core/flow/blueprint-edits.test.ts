@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { checkEdit, newProblems } from "../../../src/core/flow/blueprint-edits.js";
-import { WireKind } from "../../../src/core/flow/schema.js";
+import { libraryLabelFor, type LibraryLookup } from "../../../src/core/flow/libraries.js";
+import { WireKind, type Flow } from "../../../src/core/flow/schema.js";
 import { defaultSettings as agentDefaults } from "../../../src/core/nodes/agent/defaults.js";
 import {
   agent,
@@ -144,7 +145,7 @@ describe("checkEdit on a wire across containers", () => {
 });
 
 describe("checkEdit on a library node", () => {
-  const withLibrary = () =>
+  const withLibrary = (overrides: Record<string, { model?: string; repo?: string }> = {}) =>
     flow(
       [
         trigger("start"),
@@ -153,20 +154,132 @@ describe("checkEdit on a library node", () => {
           type: "library",
           label: "Library",
           position: { x: 0, y: 0 },
-          settings: { libraryId: "flow-a", label: "android", overrides: {} },
+          settings: { libraryId: "flow-a", label: "android", overrides },
         },
       ],
       [thenWire("start", "lib")],
     );
 
-  it("refuses a change_node that changes its libraryId, pointing to the canvas", () => {
+  const libraries: LibraryLookup = (flowId) =>
+    ({
+      "flow-a": { name: "Android", kind: "node-library" as const, sessions: [], uses: [] },
+      "flow-b": { name: "iOS App", kind: "node-library" as const, sessions: [], uses: [] },
+    })[flowId];
+
+  const addLibrary = (before: Flow, libraryId: string) =>
+    checkEdit(
+      before,
+      "add_node",
+      { type: "library", label: "Given", settings: { libraryId } },
+      libraries,
+    );
+
+  it("adds a library node labelled from its library's name, ignoring the given label", () => {
+    const before = blueprint();
+    const label = libraryLabelFor(before, "Android");
+
+    expect(addLibrary(before, "flow-a")).toEqual({
+      ok: true,
+      edit: expect.objectContaining({
+        type: "library",
+        label,
+        settings: { libraryId: "flow-a", label, overrides: {} },
+      }),
+    });
+    expect(label).toBe("android");
+  });
+
+  it("labels a second use of a library with the next free suffix", () => {
     const before = withLibrary();
-    const untouched = structuredClone(before);
+    const label = libraryLabelFor(before, "Android");
+
+    expect(addLibrary(before, "flow-a")).toMatchObject({
+      ok: true,
+      edit: { label, settings: { label } },
+    });
+    expect(label).toBe("android-2");
+  });
+
+  it("labels a library it cannot find from the name fallback, leaving the refusal to the caller", () => {
+    const before = blueprint();
+    const label = libraryLabelFor(before, "library");
+
+    expect(addLibrary(before, "ghost")).toMatchObject({
+      ok: true,
+      edit: { label, settings: { libraryId: "ghost", label } },
+    });
+  });
+
+  it("re-derives the label from a new libraryId, not counting the node itself", () => {
+    const before = withLibrary();
+    const label = libraryLabelFor(before, "Android", "lib");
 
     expect(
-      checkEdit(before, "change_node", { nodeId: "lib", settings: { libraryId: "ghost" } }),
-    ).toEqual({ ok: false, reason: expect.stringContaining("canvas") });
-    expect(before).toEqual(untouched);
+      checkEdit(
+        before,
+        "change_node",
+        { nodeId: "lib", settings: { libraryId: "flow-a-copy" } },
+        (id) => (id === "flow-a-copy" ? libraries("flow-a") : undefined),
+      ),
+    ).toMatchObject({ ok: true, edit: { label, settings: { libraryId: "flow-a-copy", label } } });
+    expect(label).toBe("android");
+  });
+
+  it("supersedes a label given with a new libraryId", () => {
+    const label = libraryLabelFor(withLibrary(), "iOS App", "lib");
+
+    expect(
+      checkEdit(
+        withLibrary(),
+        "change_node",
+        { nodeId: "lib", label: "Mine", settings: { libraryId: "flow-b" } },
+        libraries,
+      ),
+    ).toMatchObject({ ok: true, edit: { label, settings: { label } } });
+  });
+
+  it("drops the old library's overrides on a new libraryId", () => {
+    const result = checkEdit(
+      withLibrary({ s1: { model: "opus" } }),
+      "change_node",
+      { nodeId: "lib", settings: { libraryId: "flow-b" } },
+      libraries,
+    );
+
+    expect(result).toMatchObject({ ok: true, edit: { settings: { overrides: {} } } });
+  });
+
+  it("keeps the overrides given with a new libraryId", () => {
+    const result = checkEdit(
+      withLibrary({ s1: { model: "opus" } }),
+      "change_node",
+      { nodeId: "lib", settings: { libraryId: "flow-b", overrides: { s2: { repo: "web" } } } },
+      libraries,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      edit: { settings: { overrides: { s2: { repo: "web" } } } },
+    });
+  });
+
+  it("leaves the label and overrides alone when the libraryId stays the same", () => {
+    const result = checkEdit(
+      withLibrary({ s1: { model: "opus" } }),
+      "change_node",
+      { nodeId: "lib", label: "Mine", settings: { libraryId: "flow-a" } },
+      libraries,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      edit: {
+        tool: "change_node",
+        nodeId: "lib",
+        label: "Mine",
+        settings: { libraryId: "flow-a", label: "android", overrides: { s1: { model: "opus" } } },
+      },
+    });
   });
 
   it.each([
@@ -174,6 +287,12 @@ describe("checkEdit on a library node", () => {
     ["its node label alone", { nodeId: "lib", label: "iOS app" }],
   ])("accepts a change_node to %s", (_, input) => {
     expect(checkEdit(withLibrary(), "change_node", input)).toMatchObject({ ok: true });
+  });
+
+  it("applies a label-only change_node as given", () => {
+    expect(
+      checkEdit(withLibrary(), "change_node", { nodeId: "lib", label: "iOS app" }, libraries),
+    ).toEqual({ ok: true, edit: { tool: "change_node", nodeId: "lib", label: "iOS app" } });
   });
 });
 

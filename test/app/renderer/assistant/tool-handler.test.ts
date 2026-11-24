@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../../../../src/app/preload/bridge.js";
 import { createToolHandler } from "../../../../src/app/renderer/assistant/tool-handler.js";
+import { labelIn } from "../../../../src/core/flow/library-checks.js";
+import { flowSummary } from "../../../fixtures/flow-summary.js";
 import { moveNodes } from "../../../../src/app/renderer/canvas/commands.js";
 import { tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
 import {
@@ -12,9 +14,17 @@ import {
 } from "../../../../src/app/renderer/canvas/store.js";
 import type { NavState, Page } from "../../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
+import { reasonNaming } from "../../../../src/core/compiler/problems.js";
+import { rule as libraryUse } from "../../../../src/core/compiler/rules/library-use.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
-import type { Flow } from "../../../../src/core/flow/schema.js";
+import {
+  libraryLabelFor,
+  loopReason,
+  type BlueprintKind,
+  type LibraryLookup,
+} from "../../../../src/core/flow/libraries.js";
+import type { Flow, Node } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
@@ -998,5 +1008,329 @@ describe("tool handler and library nodes", () => {
     const result = await call("read_blueprint", {});
 
     expect(messagesOf(result)).toContainEqual(expect.stringMatching(missing));
+  });
+});
+
+describe("tool handler adds and changes library nodes", () => {
+  const library = (flowId: string, name: string, kind: BlueprintKind, uses: string[] = []) => ({
+    ...flowSummary(flowId, kind, uses),
+    name,
+  });
+
+  const libraries = [
+    library("flow-1", "Plan", "workflow"),
+    library("f-review", "Review", "node-library"),
+    library("f-other", "Other", "node-library"),
+    library("f-sessions", "Sessions", "session-library"),
+    library("f-draft", "Draft", "incomplete"),
+    library("f-flow", "Whole flow", "workflow"),
+    library("f-outer", "Outer", "node-library", ["flow-1"]),
+    library("f-shared", "Shared", "node-library", ["f-review"]),
+    library("f-unsafe", "Android/App", "node-library"),
+  ];
+
+  const libraryAt = (id: string, libraryId: string, label: string) => ({
+    id,
+    type: "library",
+    label,
+    position: { x: 200, y: 0 },
+    settings: { libraryId, label, overrides: { "session-9": { model: "opus" } } },
+  });
+
+  const ready = async (openFlowId: string | null = "flow-1") => {
+    const handler = await setup();
+    handler.canvas.getState().setLibraries(libraries, openFlowId);
+    return handler;
+  };
+
+  const withUseIn = async (libraryId: string, label: string, inSession = true) => {
+    const handler = await ready();
+    const use = libraryAt("use", libraryId, label);
+    handler.canvas.getState().load(
+      inSession
+        ? flow([trigger("start"), use, agent("agent-1")], [thenWire("start", "use")])
+        : flow([trigger("go"), use, output("end")], [thenWire("go", "use")], flowSettings, {
+            containers: [],
+          }),
+    );
+    return handler;
+  };
+
+  const nameOf = (lookup: LibraryLookup) => (id: string) => lookup(id)?.name;
+
+  const useReason = (after: Flow, nodeId: string, lookup: LibraryLookup) => {
+    const problem = libraryUse
+      .check(after, { libraries: lookup })
+      .find(({ node }) => node === nodeId);
+    if (problem === undefined) return expect.fail(`no library-use problem for ${nodeId}`);
+    return reasonNaming(problem.node, problem.message, labelIn(after, nodeId));
+  };
+
+  const placed = (before: Flow, libraryId: string, name: string, parent?: string): Flow => {
+    const id = nextNodeId("library", before);
+    const label = libraryLabelFor(before, name);
+    const node = {
+      ...libraryAt(id, libraryId, label),
+      settings: { libraryId, label, overrides: {} },
+    };
+    return {
+      ...before,
+      nodes: [...before.nodes, node as Node],
+      containers: before.containers.map((container) =>
+        container.id === parent ? { ...container, nodes: [...container.nodes, id] } : container,
+      ),
+    };
+  };
+
+  const changed = (before: Flow, libraryId: string, name: string): Flow => ({
+    ...before,
+    nodes: before.nodes.map((node) => {
+      if (node.id !== "use") return node;
+      const label = libraryLabelFor(before, name, "use");
+      return { ...node, label, settings: { libraryId, label, overrides: {} } } as Node;
+    }),
+  });
+
+  const unchanged = (canvas: Awaited<ReturnType<typeof setup>>["canvas"]) => {
+    const { flow: kept, undoStack } = canvas.getState();
+    return () => {
+      expect(canvas.getState().flow).toBe(kept);
+      expect(canvas.getState().undoStack).toEqual(undoStack);
+    };
+  };
+
+  const nodeIn = (current: Flow, id: string) => current.nodes.find((node) => node.id === id);
+
+  it("adds a node library inside a session with the canvas's label, and a second with -2", async () => {
+    const { call, canvas } = await ready();
+    const before = canvas.getState().flow;
+
+    const first = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId: "f-review" },
+    });
+    const middle = canvas.getState().flow;
+    const second = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId: "f-review" },
+    });
+
+    const firstLabel = libraryLabelFor(before, "Review");
+    const secondLabel = libraryLabelFor(middle, "Review");
+    expect(first).toMatchObject({ ok: true, nodeId: "library-1" });
+    expect(second).toMatchObject({ ok: true, nodeId: "library-2" });
+    const after = canvas.getState().flow;
+    expect(nodeIn(after, "library-1")).toMatchObject({
+      label: firstLabel,
+      settings: { libraryId: "f-review", label: firstLabel, overrides: {} },
+    });
+    expect(nodeIn(after, "library-2")).toMatchObject({
+      label: secondLabel,
+      settings: { label: secondLabel },
+    });
+    expect(secondLabel).toBe(`${firstLabel}-2`);
+    expect(after.containers.find(({ id }) => id === "session-1")?.nodes).toContain("library-2");
+  });
+
+  it.each([
+    ["a session library", "f-sessions", "Sessions"],
+    ["an incomplete library", "f-draft", "Draft"],
+    ["a workflow", "f-flow", "Whole flow"],
+    ["a library that does not exist", "ghost", "library"],
+  ])(
+    "refuses to add %s inside a session with the canvas's reason, changing nothing",
+    async (_, libraryId, name) => {
+      const { call, canvas } = await ready();
+      const before = canvas.getState().flow;
+      const expectUnchanged = unchanged(canvas);
+
+      const result = await call("add_node", {
+        type: "library",
+        label: "Given",
+        parent: "session-1",
+        settings: { libraryId },
+      });
+
+      const { libraries: lookup } = canvas.getState();
+      const reason = useReason(placed(before, libraryId, name, "session-1"), "library-1", lookup);
+      expect(result).toEqual({
+        ok: false,
+        reason: `Can't add ${name} into ${labelIn(before, "session-1")}: ${reason}`,
+      });
+      expectUnchanged();
+    },
+  );
+
+  it.each([
+    ["the open blueprint itself", "flow-1", "Plan", ["flow-1", "flow-1"]],
+    ["a library that uses the open blueprint", "f-outer", "Outer", ["flow-1", "f-outer", "flow-1"]],
+  ])("refuses to add %s, naming the loop", async (_, libraryId, name, path) => {
+    const { call, canvas } = await ready();
+    const before = canvas.getState().flow;
+    const expectUnchanged = unchanged(canvas);
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId },
+    });
+
+    const reason = loopReason(path, nameOf(canvas.getState().libraries));
+    expect(result).toEqual({
+      ok: false,
+      reason: `Can't add ${name} into ${labelIn(before, "session-1")}: ${reason}`,
+    });
+    expectUnchanged();
+  });
+
+  it.each([
+    ["a node library inside the workspace", "f-review", "workspace-1"],
+    ["a session library loose in a workflow", "f-sessions", undefined],
+    ["a library other libraries also use", "f-review", "session-1"],
+    ["a library that uses another library", "f-shared", "session-1"],
+  ])("adds %s", async (_, libraryId, parent) => {
+    const { call, canvas } = await ready();
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      settings: { libraryId },
+      ...(parent === undefined ? {} : { parent }),
+    });
+
+    expect(result).toMatchObject({ ok: true, nodeId: "library-1" });
+    expect(nodeIn(canvas.getState().flow, "library-1")).toMatchObject({ settings: { libraryId } });
+  });
+
+  it("adds a node library loose in a blueprint with no workspace", async () => {
+    const { call, canvas } = await ready();
+    canvas.getState().load(
+      flow([trigger("go"), output("end")], [thenWire("go", "end")], flowSettings, {
+        containers: [],
+      }),
+    );
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      settings: { libraryId: "f-review" },
+    });
+
+    expect(result).toMatchObject({ ok: true, nodeId: "library-1" });
+  });
+
+  it("finds no loop back to the open blueprint when none is open", async () => {
+    const { call, canvas } = await ready(null);
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId: "f-outer" },
+    });
+
+    expect(result).toMatchObject({ ok: true, nodeId: "library-1" });
+    expect(canvas.getState().flow.nodes.some(({ id }) => id === "library-1")).toBe(true);
+  });
+
+  it("applies a library whose name makes an unsafe label, reporting the label problem", async () => {
+    const { call, canvas } = await ready();
+    canvas.getState().load(flow([agent("a1")], []));
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId: "f-unsafe" },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      nodeId: "library-1",
+      problems: expect.arrayContaining([expect.objectContaining({ rule: "library-labels" })]),
+    });
+  });
+
+  it("changes a library node's libraryId, re-deriving its label and clearing old overrides", async () => {
+    const { call, canvas } = await withUseIn("f-review", "review");
+    const before = canvas.getState().flow;
+
+    const result = await call("change_node", { nodeId: "use", settings: { libraryId: "f-other" } });
+
+    const label = libraryLabelFor(before, "Other", "use");
+    expect(result).toMatchObject({ ok: true });
+    expect(nodeIn(canvas.getState().flow, "use")).toMatchObject({
+      label,
+      settings: { libraryId: "f-other", label, overrides: {} },
+    });
+  });
+
+  it.each([
+    ["a session library", "f-sessions", "Sessions"],
+    ["an incomplete library", "f-draft", "Draft"],
+    ["a workflow", "f-flow", "Whole flow"],
+  ])(
+    "refuses to change a node in a session to %s with the canvas's reason",
+    async (_, libraryId, name) => {
+      const { call, canvas } = await withUseIn("f-review", "review");
+      const before = canvas.getState().flow;
+      const expectUnchanged = unchanged(canvas);
+
+      const result = await call("change_node", { nodeId: "use", settings: { libraryId } });
+
+      const reason = useReason(
+        changed(before, libraryId, name),
+        "use",
+        canvas.getState().libraries,
+      );
+      expect(result).toEqual({ ok: false, reason: `Can't use ${name} here: ${reason}` });
+      expectUnchanged();
+    },
+  );
+
+  it("refuses a libraryId that makes a loop, naming it", async () => {
+    const { call, canvas } = await withUseIn("f-review", "review");
+    const expectUnchanged = unchanged(canvas);
+
+    const result = await call("change_node", { nodeId: "use", settings: { libraryId: "f-outer" } });
+
+    const reason = loopReason(["flow-1", "f-outer", "flow-1"], nameOf(canvas.getState().libraries));
+    expect(result).toEqual({ ok: false, reason: `Can't use Outer here: ${reason}` });
+    expectUnchanged();
+  });
+
+  it("changes a loose node library to a session library", async () => {
+    const { call, canvas } = await withUseIn("f-review", "review", false);
+
+    const result = await call("change_node", {
+      nodeId: "use",
+      settings: { libraryId: "f-sessions" },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(nodeIn(canvas.getState().flow, "use")).toMatchObject({
+      settings: { libraryId: "f-sessions" },
+    });
+  });
+
+  it("runs no library check and keeps overrides when the libraryId stays the same", async () => {
+    const { call, canvas } = await withUseIn("f-sessions", "sessions");
+
+    const result = await call("change_node", {
+      nodeId: "use",
+      label: "Mine",
+      settings: { libraryId: "f-sessions" },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(nodeIn(canvas.getState().flow, "use")).toMatchObject({
+      label: "Mine",
+      settings: { libraryId: "f-sessions", overrides: { "session-9": { model: "opus" } } },
+    });
   });
 });
