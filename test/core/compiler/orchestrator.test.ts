@@ -273,6 +273,30 @@ describe("orchestratorSkill", () => {
     expect(lineOf(skill().content, "h")).toMatch(/hard rule.*tests fail/i);
   });
 
+  it("tells a hard stop to end its reply with the line naming its node", () => {
+    expect(lineOf(skill().content, "h")).toContain(
+      "show report, end your reply with the line `STOPPED NODE h` and end your turn.",
+    );
+  });
+
+  it("tells a Loop that fails at its cap to end its reply with the line naming its node, and one that asks not to", () => {
+    const failing = sample();
+    const failingLoop = lineOf(
+      skill({
+        ...failing,
+        nodes: failing.nodes.map((node) =>
+          node.type === "loop" ? { ...node, settings: { ...node.settings, onCap: "fail" } } : node,
+        ),
+      }).content,
+      "l",
+    );
+
+    expect(failingLoop).toContain(
+      "at the cap, stop the run as failed: end your reply with the line `STOPPED NODE l` and end your turn.",
+    );
+    expect(lineOf(skill().content, "l")).not.toContain("STOPPED NODE");
+  });
+
   it("states a Stop's output as the run's result handed back to the user, not a file a step writes", () => {
     const stopped = flow(
       [

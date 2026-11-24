@@ -817,6 +817,33 @@ describe("StartedSessions", () => {
       expect(writes.at(-1)).toBe(states("failed", "not-started"));
     });
 
+    it("writes a session failed at once when it stops at its hard stop, naming the hard stop", () => {
+      const android = container("session", "android", "/b/sessions/android/app", ["a1", "h"]);
+      const hardStop = node("android-h", "hardstop", "Tests fail");
+      const stopping = {
+        ...manifest,
+        containers: manifest.containers.map((each) =>
+          each.slug === "android"
+            ? { ...android, nodes: android.nodes.map((n) => (n.id === hardStop.id ? hardStop : n)) }
+            : each,
+        ),
+      } as LoadedBuild;
+      store = new FakeStore();
+      const sessionsView = supervisor({ build: stopping });
+
+      events.publish(bash(androidId));
+      events.publish(agentDone("android", androidId));
+      events.publish(
+        hookEvent("Stop", androidId, {
+          last_assistant_message: "Failing.\nSTOPPED NODE android-h",
+        }),
+      );
+
+      expect(writes.at(-1)).toBe(states("failed", "not-started"));
+      expect(statusOf("android-stop")).toBe("waiting");
+      expect(sessionsView.failure()).toEqual({ container: "android", node: "Tests fail" });
+    });
+
     it("writes a session waiting while a permission is asked on its open node, then running", async () => {
       let decide: (reply: WaitReply) => void = () => undefined;
       supervisor({ replies: [new Promise<WaitReply>((resolve) => (decide = resolve))] });

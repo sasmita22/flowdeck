@@ -3,12 +3,14 @@ import { agentCallOf, type AgentCallEvent } from "./agent-calls.js";
 import { hasFinishedPath } from "./finished-path.js";
 import type { PipelineItem, PipelineStage } from "./pipeline.js";
 import { nodeStatus, type RunEvent } from "./run-events.js";
+import { stoppedNodeOf, stopsTheRun } from "./stop-marker.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 import { turnFailure } from "./turns.js";
 
 export type WatchedContainer = {
   prefix: string;
-  nodes: readonly Pick<ManifestNode, "id" | "type" | "label" | "parent">[];
+  nodes: readonly (Pick<ManifestNode, "id" | "type" | "label" | "parent"> &
+    Partial<Pick<ManifestNode, "settings">>)[];
   wires: ManifestContainer["wires"];
 };
 
@@ -40,7 +42,7 @@ export class SessionWatch {
       case "PostToolUse":
         return [...entries, ...this.onResult(event)];
       case "Stop":
-        return [...entries, ...this.onStop()];
+        return [...entries, ...this.onStop(event)];
       case "StopFailure":
         return [...entries, ...this.fail(turnFailure(event).message)];
       default:
@@ -138,12 +140,29 @@ export class SessionWatch {
     return [...opening, { nodeId, event: { kind: "done" } }];
   }
 
-  private onStop(): EventEntry[] {
+  private onStop(event: SessionHookEvent): EventEntry[] {
+    const stoppedAt = this.stoppedAt(event);
+    if (stoppedAt !== undefined) return this.failAt(stoppedAt.nodeId, stoppedAt.message);
     const stop = this.stopNode;
     if (stop === undefined || this.open.size > 0) return [];
     if (!hasFinishedPath(this.deps.container, this.finished)) return [];
     this.stopped = true;
     return this.finish(stop.id);
+  }
+
+  private stoppedAt(event: SessionHookEvent): { nodeId: string; message: string } | undefined {
+    const message = event.payload["last_assistant_message"];
+    const nodeId = stoppedNodeOf(typeof message === "string" ? message : undefined);
+    const node = this.deps.container.nodes.find(({ id }) => id === nodeId);
+    if (node === undefined || !stopsTheRun(node)) return undefined;
+    if (node.type === "hardstop") {
+      return { nodeId: node.id, message: `${node.id} failed: stopped by its hard stop` };
+    }
+    if (node.type === "loop") {
+      const cap = (node.settings as { cap?: number } | undefined)?.cap;
+      return { nodeId: node.id, message: `${node.id} failed: cap reached after ${cap} rounds` };
+    }
+    return undefined;
   }
 
   private finish(nodeId: string): EventEntry[] {
