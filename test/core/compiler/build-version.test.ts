@@ -592,6 +592,61 @@ describe("buildVersion", () => {
       expectNothingDone(store, fs, worktree);
     });
 
+    const connectedSessions = (...pairs: [string, string][]): Flow => ({
+      ...twoSessionWorkflow(),
+      connections: pairs.map((between, index) => ({ id: `c${index + 1}`, between })),
+    });
+
+    const sessionRepos: Record<string, FolderState> = {
+      "/repos/android": { kind: "branch", name: "main" },
+      "/repos/ios": { kind: "branch", name: "develop" },
+    };
+
+    it("starts a build whose sessions are connected once", async () => {
+      const { deps } = setup({ states: sessionRepos });
+
+      const started = await startBuild(
+        connectedSessions(["session-1", "session-2"]),
+        request,
+        deps,
+      );
+
+      expect(started).toEqual({ kind: "started", pendingId: expect.any(String) });
+    });
+
+    it.each<[string, [string, string][]]>([
+      ["a connection from a session to the workspace", [["session-1", "workspace-1"]]],
+      ["a connection from the workspace to a session", [["workspace-1", "session-1"]]],
+      ["a connection from a session to a node", [["session-1", "session-2-start"]]],
+      ["a connection from a session to an unknown id", [["session-1", "missing"]]],
+      ["a connection from a session to itself", [["session-1", "session-1"]]],
+      [
+        "a second connection between the same pair",
+        [
+          ["session-1", "session-2"],
+          ["session-1", "session-2"],
+        ],
+      ],
+      [
+        "the reversed connection after the first",
+        [
+          ["session-1", "session-2"],
+          ["session-2", "session-1"],
+        ],
+      ],
+    ])("refuses %s and reserves nothing", async (_label, pairs) => {
+      const { store, fs, worktree, deps } = setup({ states: sessionRepos });
+
+      const result = await startBuild(connectedSessions(...pairs), request, deps);
+
+      expect(result).toEqual({
+        ok: false,
+        errors: [expect.objectContaining({ rule: "session-connections" })],
+      });
+      expect(store.listPendingBuilds()).toEqual([]);
+      expectNothingDone(store, fs, worktree);
+    });
+
     const answers: BuildAnswer[] = [
       { nodeId: "p1", text: "Which ticket tracker?", answer: "Jira, project FD." },
     ];
@@ -2961,6 +3016,34 @@ describe("buildVersion", () => {
           ]),
         );
       }
+    });
+
+    it("writes android–ios peers into their CLAUDE.md files, the pair into the workspace's and the manifest, and nothing into web's", async () => {
+      const saved: Flow = {
+        ...sessionsWorkflow([
+          { name: "android", repo: android, branch: "main" },
+          { name: "ios", repo: ios, branch: "develop" },
+          { name: "web", repo: web, branch: "main" },
+        ]),
+        connections: [{ id: "c1", between: ["session-1", "session-2"] }],
+      };
+      const { fs, result, dir } = await built(saved);
+      const read = (path: string) => fs.readFile(`${dir}/${path}`);
+
+      expect(errorMessages(result as BuildResult)).toEqual([]);
+      const androidMd = await read("sessions/android/CLAUDE.md");
+      expect(androidMd).toContain("\n## Connected sessions\n");
+      expect(androidMd).toContain("\n- ios (ios): FD_SESSION_IOS_TMUX\n");
+      expect(androidMd).not.toContain("web (web)");
+      const iosMd = await read("sessions/ios/CLAUDE.md");
+      expect(iosMd).toContain("\n- android (android): FD_SESSION_ANDROID_TMUX\n");
+      expect(await read("sessions/web/CLAUDE.md")).not.toContain("## Connected sessions");
+      const workspaceMd = await read("workspace/CLAUDE.md");
+      expect(workspaceMd).toContain("\n## Connected sessions\n");
+      expect(workspaceMd.split("\n").filter((line) => line.includes(") and "))).toEqual([
+        "- android (android) and ios (ios)",
+      ]);
+      expect(JSON.parse(await read("manifest.json")).connections).toEqual([["android", "ios"]]);
     });
 
     it("builds a workspace with no session container, cutting no worktree", async () => {

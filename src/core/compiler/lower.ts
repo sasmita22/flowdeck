@@ -50,6 +50,7 @@ export type Manifest = {
   nodes?: ManifestNode[];
   wires?: Wire[];
   containers: ManifestContainer[];
+  connections?: [string, string][];
   files: Record<string, string>;
 };
 
@@ -145,6 +146,15 @@ const lowerContainer = (
   };
 };
 
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+const sortedPair = (a: string, b: string): [string, string] => (a <= b ? [a, b] : [b, a]);
+
+const slugPairs = (flow: Flow, slugs: ReadonlyMap<string, string>): [string, string][] =>
+  (flow.connections ?? [])
+    .map(({ between: [a, b] }) => sortedPair(slugs.get(a) ?? a, slugs.get(b) ?? b))
+    .sort(([a1, b1], [a2, b2]) => byText(a1, a2) || byText(b1, b2));
+
 export function lower(
   flow: Flow,
   inputs: LowerInputs,
@@ -155,6 +165,7 @@ export function lower(
     lowerContainer(flow, container, slugs.get(container.id) ?? container.kind, inputs),
   );
   const outputs = lowered.flatMap((part) => part.outputs);
+  const connections = slugPairs(flow, slugs);
   return {
     manifest: {
       version: 1,
@@ -165,6 +176,7 @@ export function lower(
       ...(outputs.length === 0 ? {} : { outputs }),
       settings: flow.settings,
       containers: lowered.map(({ container }) => container),
+      ...(connections.length === 0 ? {} : { connections }),
     },
     nodeFiles: lowered.flatMap(({ files }) => files),
   };

@@ -33,10 +33,12 @@ import {
   withPositions,
 } from "./frames.js";
 import {
+  addConnection,
   addItems,
   addNode,
   addNote,
   addWire,
+  deleteConnections,
   deleteFlowContainer,
   deleteNodes as deleteNodesCommand,
   deleteWires,
@@ -51,7 +53,7 @@ import {
   type Move,
 } from "./commands.js";
 import { tidyMoves } from "./layout.js";
-import { edgeId } from "./view.js";
+import { connectionEdgeId, edgeId } from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
 
@@ -107,6 +109,7 @@ export interface CanvasState {
   resizeNoteLive(id: string, box: NoteBox): void;
   resizeNote(id: string, box: NoteBox): void;
   connect(from: WireEnd, to: WireEnd): boolean;
+  connectSessions(a: string, b: string): boolean;
   refuseConnection(): void;
   deleteNodes(ids: readonly string[]): void;
   deleteSelection(): void;
@@ -379,6 +382,41 @@ const wrongWay =
 
 const alreadyJoined = "they are already joined.";
 
+const sessionLabel = (flow: Flow, id: string) => {
+  const container = flow.containers.find((candidate) => candidate.id === id);
+  return container?.kind === "session" ? container.name : id;
+};
+
+const alreadyConnected = (flow: Flow, [a, b]: readonly [string, string]) =>
+  `${sessionLabel(flow, a)} and ${sessionLabel(flow, b)} are already connected.`;
+
+const selfConnection = "A session cannot connect to itself.";
+
+const connectionJoining = (flow: Flow, a: string, b: string) =>
+  flow.connections?.find(({ between }) => between.includes(a) && between.includes(b));
+
+const connectionRefusal = (
+  flow: Flow,
+  a: string,
+  b: string,
+  command: Command,
+): string | undefined => {
+  if (a === b) return selfConnection;
+  const existing = connectionJoining(flow, a, b);
+  if (existing !== undefined) return alreadyConnected(flow, existing.between);
+  const [problem] = newProblems(flow, command.do(flow)).filter(
+    ({ rule }) => rule === "session-connections",
+  );
+  return problem?.message;
+};
+
+const nextConnectionId = (flow: Flow): string => {
+  const used = new Set((flow.connections ?? []).map(({ id }) => id));
+  let n = 1;
+  while (used.has(`c${n}`)) n += 1;
+  return `c${n}`;
+};
+
 const kept = (selection: readonly string[], flow: Flow) => {
   const ids = new Set(
     [...flow.nodes, ...(flow.notes ?? []), ...flow.containers].map(({ id }) => id),
@@ -397,7 +435,10 @@ export const selectCanDelete = (state: Pick<CanvasState, "selection" | "selected
   state.selection.length > 0 || state.selectedWires.length > 0;
 
 const keptWires = (selected: readonly string[], flow: Flow) => {
-  const present = new Set(flow.wires.map(edgeId));
+  const present = new Set([
+    ...flow.wires.map(edgeId),
+    ...(flow.connections ?? []).map(({ id }) => connectionEdgeId(id)),
+  ]);
   return selected.filter((id) => present.has(id));
 };
 
@@ -469,6 +510,14 @@ export function createCanvasStore(
       return places.length > 0 ? deleteWires(flow, places) : undefined;
     };
 
+    const connectionDeletion = (flow: Flow, edgeIds: readonly string[]): Command | undefined => {
+      const doomed = new Set(edgeIds);
+      const ids = (flow.connections ?? [])
+        .filter(({ id }) => doomed.has(connectionEdgeId(id)))
+        .map(({ id }) => id);
+      return ids.length > 0 ? deleteConnections(flow, ids) : undefined;
+    };
+
     const deletion = (
       flow: Flow,
       ids: readonly string[],
@@ -481,6 +530,7 @@ export function createCanvasStore(
         ),
         (current: Flow) => nodeDeletion(current, ids),
         (current: Flow) => wireDeletion(current, edgeIds),
+        (current: Flow) => connectionDeletion(current, edgeIds),
       ];
       let current = flow;
       let command: Command | undefined;
@@ -746,6 +796,19 @@ export function createCanvasStore(
       connect: (from, to) => {
         if (!ready()) return false;
         return addChecked({ kind: "then", from: { ...from }, to: { ...to } });
+      },
+
+      connectSessions: (a, b) => {
+        if (!ready()) return false;
+        const { flow } = get();
+        const command = addConnection({ id: nextConnectionId(flow), between: [a, b] });
+        const refused = connectionRefusal(flow, a, b, command);
+        if (refused !== undefined) {
+          set({ message: refused });
+          return false;
+        }
+        run(command);
+        return true;
       },
 
       refuseConnection: () => {

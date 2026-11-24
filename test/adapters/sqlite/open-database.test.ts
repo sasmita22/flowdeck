@@ -60,6 +60,7 @@ const allMigrations = [
   { name: "022_clean_start.sql" },
   { name: "023_containers_clean_start.sql" },
   { name: "024_build_worktrees_clean_start.sql" },
+  { name: "025_connections.sql" },
 ];
 
 const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");

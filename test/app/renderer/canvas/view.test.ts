@@ -2,6 +2,7 @@ import { MarkerType } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 import {
   alignedEnds,
+  connectionPorts,
   edgeId,
   FRAME_PADDING,
   toViewEdges,
@@ -856,5 +857,65 @@ describe("containerText", () => {
 
   it.each(["", "   "])("leaves out a blank label %j", (label) => {
     expect(containerText("loop", label, "max 3")).toBe("LOOP · max 3");
+  });
+});
+
+describe("toViewEdges with connections", () => {
+  const connected = (): Flow => ({
+    ...flow(
+      [
+        trigger("w-start"),
+        output("w-stop"),
+        trigger("a1"),
+        output("a2"),
+        trigger("i1"),
+        output("i2"),
+      ],
+      [thenWire("w-start", "w-stop"), thenWire("a1", "a2"), thenWire("i1", "i2")],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["a1", "a2"], { id: "android", name: "android" }),
+          sessionContainer(["i1", "i2"], { id: "ios", name: "ios" }),
+          sessionContainer([], { id: "web", name: "web" }),
+        ],
+      },
+    ),
+    connections: [
+      { id: "c1", between: ["android", "ios"] },
+      { id: "c2", between: ["ios", "web"] },
+    ],
+  });
+
+  const connectionEdges = (source: Flow) =>
+    toViewEdges(source).filter((edge) => edge.type === "connection");
+
+  it("draws one dashed connection edge with a head at each end between the two frames", () => {
+    const [edge, ...rest] = connectionEdges(connected());
+
+    expect(rest).toEqual([]);
+    expect(edge).toMatchObject({
+      id: "connection-c1",
+      type: "connection",
+      source: "container-frame-android",
+      sourceHandle: connectionPorts.source,
+      target: "container-frame-ios",
+      targetHandle: connectionPorts.target,
+      markerStart: { type: MarkerType.ArrowClosed },
+      markerEnd: { type: MarkerType.ArrowClosed },
+      style: { strokeDasharray: expect.any(String) },
+    });
+  });
+
+  it("draws no connection edge to a container whose frame is not drawn", () => {
+    expect(connectionEdges(connected()).map(({ id }) => id)).not.toContain("connection-c2");
+  });
+
+  it("gives no other edge a dash array", () => {
+    const others = toViewEdges(connected()).filter((edge) => edge.type !== "connection");
+
+    expect(others).toHaveLength(3);
+    for (const edge of others) expect(edge.style?.strokeDasharray).toBeUndefined();
   });
 });

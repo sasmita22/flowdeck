@@ -51,18 +51,18 @@ Turn one draft that code laid down into a finished piece. Code owns the structur
 
 Fix exactly the failures listed, by rule:
 
-| Rule                                           | Fix                                                                                                             |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `frontmatter`, `scope-line`                    | Restore `name`, and the scope line at the start of `description`, exactly as the draft had them.                |
-| `description`                                  | After the scope line, say what the piece does and when to use it: at least 60 characters, never the node label. |
-| `tools`                                        | Delete the `tools:` line: every agent uses every tool.                                                          |
-| `shared`                                       | Run the shared piece the detail names, as `<prefix>:<name>` with the Skill tool, in a step.                     |
-| `body`                                         | Write real content; the draft's text alone does not pass.                                                       |
-| `unfilled`                                     | Delete the draft marker line.                                                                                   |
-| `reference`                                    | Name pieces as `<prefix>:<piece>`, and only pieces or shared pieces of the piece's own container.               |
-| `code-owned`, `standard-rules`, `session-list` | Undo your edit to that text exactly. If you cannot, leave the piece as drafted.                                 |
-| `missing` on a shared piece                    | Write its content, as `extract-shared` says.                                                                    |
-| `missing`, `extra`, `template`, `orchestrator` | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
+| Rule                                                                               | Fix                                                                                                             |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `frontmatter`, `scope-line`                                                        | Restore `name`, and the scope line at the start of `description`, exactly as the draft had them.                |
+| `description`                                                                      | After the scope line, say what the piece does and when to use it: at least 60 characters, never the node label. |
+| `tools`                                                                            | Delete the `tools:` line: every agent uses every tool.                                                          |
+| `shared`                                                                           | Run the shared piece the detail names, as `<prefix>:<name>` with the Skill tool, in a step.                     |
+| `body`                                                                             | Write real content; the draft's text alone does not pass.                                                       |
+| `unfilled`                                                                         | Delete the draft marker line.                                                                                   |
+| `reference`                                                                        | Name pieces as `<prefix>:<piece>`, and only pieces or shared pieces of the piece's own container.               |
+| `code-owned`, `standard-rules`, `session-list`, `session-peers`, `connected-pairs` | Undo your edit to that text exactly. If you cannot, leave the piece as drafted.                                 |
+| `missing` on a shared piece                                                        | Write its content, as `extract-shared` says.                                                                    |
+| `missing`, `extra`, `template`, `orchestrator`                                     | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
 
 ## build-report.json
 

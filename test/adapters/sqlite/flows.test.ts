@@ -21,7 +21,7 @@ import {
   trigger,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
-import { roundTripFlow } from "../../fixtures/round-trip-flow.js";
+import { roundTripFlow, unconnectedRoundTripFlow } from "../../fixtures/round-trip-flow.js";
 
 const notes: CanvasNote[] = [
   {
@@ -103,6 +103,27 @@ describe("SqliteFlowStore", () => {
       const eventWire = flow?.wires.find((wire) => wire.kind === "event");
       expect(eventWire).toBeDefined();
       expect(Object.hasOwn(eventWire ?? {}, "file")).toBe(false);
+    });
+
+    it("reopens a flow's connections exactly", () => {
+      open().save(roundTripFlow());
+
+      expect(open().loadLatest()?.flow.connections).toEqual([
+        { id: "c1", between: ["session-1", "session-2"] },
+      ]);
+    });
+
+    it("reopens a flow saved without connections with no connections key", () => {
+      open().save(unconnectedRoundTripFlow());
+
+      expect(open().loadLatest()?.flow).toEqual(unconnectedRoundTripFlow());
+      expect(open().loadLatest()?.flow).not.toHaveProperty("connections");
+    });
+
+    it("reopens a flow saved with an empty connections list with no connections key", () => {
+      open().save({ ...unconnectedRoundTripFlow(), connections: [] });
+
+      expect(open().loadLatest()?.flow).toEqual(unconnectedRoundTripFlow());
     });
 
     it("reopens a flow's notes exactly, in order", () => {
@@ -829,6 +850,7 @@ describe("SqliteFlowStore", () => {
       { name: "022_clean_start.sql" },
       { name: "023_containers_clean_start.sql" },
       { name: "024_build_worktrees_clean_start.sql" },
+      { name: "025_connections.sql" },
     ]);
   });
 });

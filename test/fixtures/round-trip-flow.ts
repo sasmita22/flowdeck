@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 
 type RawFlow = {
+  containers: unknown[];
   nodes: { id: string; type: string; settings: Record<string, unknown> }[];
   wires: {
     kind: string;
@@ -51,5 +52,26 @@ export function roundTripFlow(): Flow {
     to: { node: "done", port: "in" },
   });
 
-  return parseFlow(flow);
+  return parseFlow({
+    ...flow,
+    containers: [
+      ...flow.containers,
+      {
+        id: "session-2",
+        kind: "session",
+        name: "ios",
+        repo: "",
+        branch: "main",
+        model: "sonnet",
+        nodes: [],
+      },
+    ],
+    connections: [{ id: "c1", between: ["session-1", "session-2"] }],
+  });
+}
+
+export function unconnectedRoundTripFlow(): Flow {
+  const flow = roundTripFlow();
+  delete flow.connections;
+  return flow;
 }

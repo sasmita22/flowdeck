@@ -15,6 +15,7 @@ import {
 import { lower, type ManifestContainer } from "../../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
+import type { Flow } from "../../../src/core/flow/schema.js";
 import { newCanvasFlow } from "../../../src/app/renderer/canvas/store.js";
 import {
   agent,
@@ -657,6 +658,134 @@ describe("emit per container", () => {
       expect(text).not.toContain(".sock");
       expect(text).not.toContain("fd-run-");
       expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    });
+  });
+
+  describe("connections", () => {
+    const threeSessions = (...pairs: [string, string][]): Flow => ({
+      ...sessionsWorkflow([
+        { name: "android", repo: "/repos/android", branch: "main" },
+        { name: "ios", repo: "/repos/ios", branch: "main" },
+        { name: "web", repo: "/repos/web", branch: "main" },
+      ]),
+      ...(pairs.length === 0
+        ? {}
+        : { connections: pairs.map((between, index) => ({ id: `c${index}`, between })) }),
+    });
+    const connected = () => laidDown(threeSessions(["session-1", "session-2"]));
+    const sessionLines = [
+      "- Never ask or raise anything to the user; only the workspace session talks to the user",
+      "- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX, then wait for its reply before going on",
+    ];
+    const workspaceLine =
+      "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below";
+    const peerSection = (line: string) =>
+      [
+        "## Connected sessions",
+        "",
+        "- You may message these sessions directly with SendMessage, addressed to the name in the environment variable given for each",
+        line,
+        "",
+        "",
+      ].join("\n");
+    const startCommandOf = (text: string, tmux: string) =>
+      text.split("\n").find((line) => line.includes(`-L "$${tmux}"`)) ?? "";
+
+    it("lists android's one peer, ios, by its tmux variable, and not web", async () => {
+      const { summary } = summaryOf(fileAt(await connected(), "sessions/android/CLAUDE.md"));
+
+      expect(summary).toContain(`\n\n${peerSection("- ios (ios): FD_SESSION_IOS_TMUX")}`);
+      expect(summary).not.toContain("web (web)");
+    });
+
+    it("lists ios's one peer, android, by its tmux variable", async () => {
+      const { summary } = summaryOf(fileAt(await connected(), "sessions/ios/CLAUDE.md"));
+
+      expect(summary).toContain(
+        `\n\n${peerSection("- android (android): FD_SESSION_ANDROID_TMUX")}`,
+      );
+    });
+
+    it("gives a session with no connection no peer section", async () => {
+      expect(fileAt(await connected(), "sessions/web/CLAUDE.md")).not.toContain(
+        "## Connected sessions",
+      );
+    });
+
+    it("lists exactly the android–ios pair in the workspace CLAUDE.md, after the session containers", async () => {
+      const { summary } = summaryOf(fileAt(await connected(), "workspace/CLAUDE.md"));
+      const pairs = [
+        "",
+        "## Connected sessions",
+        "",
+        "- Session containers joined by a connection may message each other directly",
+        "- android (android) and ios (ios)",
+        "",
+        "",
+      ].join("\n");
+
+      expect(summary.endsWith(pairs)).toBe(true);
+      expect(summary.indexOf("## Session containers")).toBeLessThan(summary.indexOf(pairs));
+      expect(summary.split("\n").filter((line) => line.includes(") and "))).toHaveLength(1);
+    });
+
+    it("forwards ios's tmux variable into android's start command, and no peer variable into web's", async () => {
+      const text = fileAt(await connected(), "workspace/CLAUDE.md");
+
+      expect(startCommandOf(text, "FD_SESSION_ANDROID_TMUX")).toContain(
+        ' -e FD_SESSION_IOS_TMUX="$FD_SESSION_IOS_TMUX" ',
+      );
+      expect(startCommandOf(text, "FD_SESSION_IOS_TMUX")).toContain(
+        ' -e FD_SESSION_ANDROID_TMUX="$FD_SESSION_ANDROID_TMUX" ',
+      );
+      const web = startCommandOf(text, "FD_SESSION_WEB_TMUX");
+      expect(web).not.toBe("");
+      expect(web).not.toContain("-e FD_SESSION_");
+    });
+
+    it("records the pair in the manifest", async () => {
+      expect(json(await connected(), "manifest.json").connections).toEqual([["android", "ios"]]);
+    });
+
+    it.each<[string, [string, string] | undefined]>([
+      ["connected", ["session-1", "session-2"]],
+      ["unconnected", undefined],
+    ])(
+      "tells every session to raise nothing to the user and send everything to the workspace session (%s)",
+      async (_label, pair) => {
+        const files = await laidDown(pair === undefined ? threeSessions() : threeSessions(pair));
+
+        for (const slug of ["android", "ios", "web"]) {
+          const { summary } = summaryOf(fileAt(files, `sessions/${slug}/CLAUDE.md`));
+          for (const line of sessionLines) expect(summary.split("\n"), slug).toContain(line);
+        }
+        const { summary } = summaryOf(fileAt(files, "workspace/CLAUDE.md"));
+        expect(summary.split("\n")).toContain(workspaceLine);
+      },
+    );
+
+    it("writes no peer section, pair list, forwarded peer variable or manifest key without connections", async () => {
+      const files = await laidDown(threeSessions());
+      const text = fileAt(files, "workspace/CLAUDE.md");
+
+      for (const path of [
+        "workspace/CLAUDE.md",
+        "sessions/android/CLAUDE.md",
+        "sessions/ios/CLAUDE.md",
+        "sessions/web/CLAUDE.md",
+      ]) {
+        expect(fileAt(files, path), path).not.toContain("## Connected sessions");
+      }
+      for (const tmux of [
+        "FD_SESSION_ANDROID_TMUX",
+        "FD_SESSION_IOS_TMUX",
+        "FD_SESSION_WEB_TMUX",
+      ]) {
+        const command = startCommandOf(text, tmux);
+        expect(command, tmux).not.toBe("");
+        expect(command, tmux).not.toContain("-e FD_SESSION_");
+      }
+      expect(json(files, "manifest.json")).not.toHaveProperty("connections");
     });
   });
 

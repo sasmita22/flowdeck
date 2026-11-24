@@ -45,7 +45,7 @@ const descriptions: Record<ToolName, string> = {
   search_blueprints:
     "Find blueprints whose name or any node label contains the query. Deleted blueprints are left out.",
   read_blueprint:
-    "Read a blueprint's nodes, wires, containers (the workspace and session containers with their settings) and current problems. Reading a deleted blueprint answers that it was deleted.",
+    "Read a blueprint's nodes, wires, containers (the workspace and session containers with their settings), connections and current problems. Reading a deleted blueprint answers that it was deleted.",
   add_node:
     "Add a node to a blueprint, inside a Loop or For each body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults.",
   change_node: "Change a node's label or some of its settings.",

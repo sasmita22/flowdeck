@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { hookEnvironment } from "../../core/compiler/hook-settings.js";
+import { hookEnvironment, workspaceTmuxVariable } from "../../core/compiler/hook-settings.js";
 import type { ClaudeCli } from "./claude-cli.js";
 import type { SessionHost } from "../../ports/session-host.js";
 import type { OpenedSession, OpenSessionOptions } from "../../core/run/execute.js";
@@ -49,12 +49,13 @@ export async function openClaudeSession(
       .start(
         sessionName,
         cwd,
-        { sessionId, model, ...(resume === true ? { resume } : {}) },
+        { sessionId, name: sessionName, model, ...(resume === true ? { resume } : {}) },
         {
           ...buildFiles,
           env: {
             ...env,
             FLOWDECK_SOCK: socketPath,
+            [workspaceTmuxVariable]: sessionName,
             CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
             ...hookEnvironment(hooks),
           },

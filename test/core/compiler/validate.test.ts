@@ -62,6 +62,7 @@ describe("validate", () => {
     "one-stop",
     "session-settings",
     "session-names",
+    "session-connections",
     "outside-container",
   ])("reports exactly %s for its broken fixture", (ruleId) => {
     const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));

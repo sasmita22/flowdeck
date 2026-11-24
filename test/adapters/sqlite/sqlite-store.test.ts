@@ -314,9 +314,10 @@ describe("SqliteStore", () => {
       { name: "022_clean_start.sql" },
       { name: "023_containers_clean_start.sql" },
       { name: "024_build_worktrees_clean_start.sql" },
+      { name: "025_connections.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 24]);
+    expect(before).toEqual([1, 1, 3, 1, 25]);
   });
 
   it("writes one run, one session and one row per node", () => {
@@ -1143,7 +1144,10 @@ describe("SqliteStore", () => {
         await copyFile(join(allMigrations, file), join(to023, file));
       }
       const old = openDatabase({ path, migrationsDir: to023 });
-      new SqliteFlowStore({ db: old, newId: () => "flow-1" }).save(flow([agent("s1")], []));
+      old.exec(`
+        INSERT INTO flows (id, name, created_at) VALUES ('flow-1', 'A', 't');
+        INSERT INTO flow_versions (flow_id, version, session, saved_at) VALUES ('flow-1', 1, '{}', 't');
+      `);
       const oldStore = new SqliteStore({ db: old });
       oldStore.recordBuild(build);
       oldStore.createRun(newRun());

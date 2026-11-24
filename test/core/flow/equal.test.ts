@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { flowsEqual } from "../../../src/core/flow/equal.js";
-import type { Flow, FlowContainer } from "../../../src/core/flow/schema.js";
+import { parseFlow, type Flow, type FlowContainer } from "../../../src/core/flow/schema.js";
 import { agent, flow, flowSettings, thenWire } from "../../fixtures/flow-builders.js";
 
 const nth = <T>(list: T[], index: number): T => {
@@ -140,5 +140,21 @@ describe("flowsEqual", () => {
     expect(flowsEqual(withoutParent, base())).toBe(false);
     expect(flowsEqual(base(), withExpectedOutput)).toBe(false);
     expect(flowsEqual(withExpectedOutput, base())).toBe(false);
+  });
+
+  it("tells flows apart by their connections", () => {
+    const connected = edited((f) => (f.connections = [{ id: "c1", between: ["s-a", "s-b"] }]));
+    const reconnected = edited((f) => (f.connections = [{ id: "c1", between: ["s-a", "s-c"] }]));
+
+    expect(flowsEqual(base(), connected)).toBe(false);
+    expect(flowsEqual(connected, base())).toBe(false);
+    expect(flowsEqual(connected, reconnected)).toBe(false);
+  });
+
+  it("treats a flow without connections as equal to its parsed copy", () => {
+    const reloaded = parseFlow(JSON.parse(JSON.stringify(base())));
+
+    expect(reloaded).not.toHaveProperty("connections");
+    expect(flowsEqual(base(), reloaded)).toBe(true);
   });
 });

@@ -88,10 +88,10 @@ export const PARENT_SESSION_VARS = [
   "CLAUDE_EFFORT",
 ] as const;
 
-export type ClaudeSession = { sessionId: string; model?: string; resume?: boolean };
+export type ClaudeSession = { sessionId: string; model?: string; resume?: boolean; name?: string };
 
 export function claudeCommand(
-  { sessionId, model, resume }: ClaudeSession,
+  { sessionId, model, resume, name }: ClaudeSession,
   settingsPath?: string,
   pluginDirs: readonly string[] = [],
   mcpConfigPath?: string,
@@ -107,7 +107,8 @@ export function claudeCommand(
       : ` --mcp-config ${shellQuote(mcpConfigPath)} --strict-mcp-config`;
   const added = addDir.map((dir) => ` --add-dir ${shellQuote(dir)}`).join("");
   const session = resume === true ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
-  return `env ${unset} claude ${session}${modelFlag}${settings}${plugin}${added}${mcp}`;
+  const nameFlag = name === undefined ? "" : ` --name ${name}`;
+  return `env ${unset} claude ${session}${nameFlag}${modelFlag}${settings}${plugin}${added}${mcp}`;
 }
 
 export type SessionEnvNames = { tmux: string; id: string };
@@ -130,29 +131,38 @@ export function sessionEnvNames(
   return names;
 }
 
-const forwardedVariables = ["FLOWDECK_SOCK", nodeVariable, scriptVariable] as const;
+export const workspaceTmuxVariable = "FD_WORKSPACE_TMUX";
+
+const forwardedVariables = [
+  "FLOWDECK_SOCK",
+  nodeVariable,
+  scriptVariable,
+  workspaceTmuxVariable,
+] as const;
 
 export function containerStartCommand({
   container,
   buildDir,
   workspaceDir,
   env,
+  peers = [],
 }: {
   container: ManifestContainer;
   buildDir: string;
   workspaceDir: string;
   env: SessionEnvNames;
+  peers?: readonly string[];
 }): string {
   const folder = sessionFolder(buildDir, container.slug);
   const worktree =
     container.worktree ?? sessionWorktree(buildDir, container.slug, container.repo ?? "");
   const tmux = `"$${env.tmux}"`;
   const forwarded = [
-    ...forwardedVariables.map((name) => `-e ${name}="$${name}"`),
+    ...[...forwardedVariables, ...[...peers].sort()].map((name) => `-e ${name}="$${name}"`),
     "-e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
   ].join(" ");
   const claude = claudeCommand(
-    { sessionId: `"$${env.id}"`, model: container.model },
+    { sessionId: `"$${env.id}"`, name: tmux, model: container.model },
     `${folder}/settings.json`,
     [`${folder}/plugin`],
     undefined,

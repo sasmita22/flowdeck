@@ -1,7 +1,7 @@
 import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
-import { sessionEntryHeading } from "./emit.js";
+import { connectedSessionsHeading, sessionEntryHeading } from "./emit.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { containerRoot, pieceOf } from "./pieces.js";
@@ -235,6 +235,28 @@ const checkSessionList = (container: ManifestContainer, { back, laid, fail }: Ch
     );
 };
 
+const connectedBlock = (claudeMd: string): string | undefined => {
+  const lines = claudeMd.split("\n");
+  const start = lines.indexOf(connectedSessionsHeading);
+  if (start === -1) return undefined;
+  let end = start + 2;
+  while (lines[end]?.startsWith("- ") === true) end += 1;
+  return lines.slice(start, end).join("\n");
+};
+
+const checkConnected = (container: ManifestContainer, { back, laid, fail }: Check) => {
+  const path = `${containerRoot(container)}/CLAUDE.md`;
+  const block = connectedBlock(laid.get(path) ?? "");
+  if (block === undefined || (back.get(path) ?? "").includes(block)) return;
+  if (container.kind === "session")
+    fail(
+      path,
+      "session-peers",
+      `the connected sessions of ${container.name} are missing or altered`,
+    );
+  else fail(path, "connected-pairs", "the list of connected session pairs is missing or altered");
+};
+
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
   const { laidDown, readBack, manifest, flow, shared } = inputs;
   const laid = new Map(laidDown.map((file) => [file.path, file.content]));
@@ -249,6 +271,7 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     const own = shared.filter((entry) => sharedContainer(containers, entry) === container);
     checkContainer(container, own, { back, laid, flow, fail });
     if (container.kind === "session") checkSessionList(container, { back, laid, flow, fail });
+    checkConnected(container, { back, laid, flow, fail });
   }
 
   for (const [path, content] of back) {
