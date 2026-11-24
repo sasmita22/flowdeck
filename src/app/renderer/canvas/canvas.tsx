@@ -33,24 +33,19 @@ import { RenameField } from "./rename-field.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
-import { routeConnection, toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
+import {
+  frameOwnerId,
+  routeConnection,
+  toViewEdges,
+  toViewNodes,
+  type ViewEdge,
+  type ViewNode,
+} from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
 const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge, connection: ConnectionEdge };
 
-const containerOfFrame = (node: ViewNode): string | undefined => {
-  switch (node.type) {
-    case "loop-frame":
-      return node.data.loopId;
-    case "foreach-frame":
-      return node.data.forEachId;
-    case "container-frame":
-      return node.data.containerId;
-    default:
-      return undefined;
-  }
-};
 const viewing = {
   deleteKeyCode: null,
   nodesDraggable: false,
@@ -427,7 +422,7 @@ function Board({
             defaultViewport={startViewport}
             proOptions={proOptions}
             onNodeClick={(_, node) => {
-              const container = containerOfFrame(node);
+              const container = frameOwnerId(node.id);
               if (container !== undefined) {
                 if (readOnly) return;
                 store.getState().select([container]);

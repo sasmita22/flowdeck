@@ -2384,6 +2384,99 @@ describe("the canvas path", () => {
   });
 });
 
+describe("deleting from a frame's menu", () => {
+  const deleteFromMenu = (store: Store, viewId: string) => {
+    store.getState().openNodeMenu(viewId, { x: 10, y: 20 });
+    store.getState().deleteNodes([store.getState().menu?.nodeId ?? ""]);
+  };
+
+  const ids = (items: { id: string }[]) => items.map(({ id }) => id);
+
+  it("deletes a session with its members, wires and connections, and one undo brings all back", () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    expect(store.getState().connectSessions("session-1", "session-2")).toBe(true);
+    const before = store.getState().flow;
+    const steps = store.getState().undoStack.length;
+
+    deleteFromMenu(store, "container-frame-session-1");
+
+    const after = store.getState().flow;
+    expect(ids(after.containers)).toEqual(["workspace-1", "session-2"]);
+    expect(ids(after.nodes)).toEqual(["w-start", "w-stop", "u", "v", "X"]);
+    expect(after.wires.map(({ from, to }) => `${from.node}>${to.node}`)).toEqual([
+      "w-start>w-stop",
+      "u>v",
+    ]);
+    expect(after).not.toHaveProperty("connections");
+    expect(store.getState().undoStack).toHaveLength(steps + 1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("deletes a workspace with its members and its canvas-path wires, and one undo brings all back", () => {
+    const store = loadedCanvas(canvasPath(twoSessionsOnCanvas()));
+    const before = store.getState().flow;
+
+    deleteFromMenu(store, "container-frame-workspace-1");
+
+    const after = store.getState().flow;
+    expect(ids(after.containers)).not.toContain("workspace-1");
+    expect(ids(after.nodes)).not.toContain("w-start");
+    expect(ids(after.nodes)).not.toContain("w-stop");
+    expect(
+      after.wires.filter((each) => [each.from.node, each.to.node].includes("workspace-1")),
+    ).toEqual([]);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it.each([
+    ["loop", loop("L"), "L", "loop-frame-L"],
+    ["for-each", forEach("F"), "F", "foreach-frame-F"],
+  ])("deletes a %s as the toolbar Delete does, in one undo step", (_name, owner, id, viewId) => {
+    const source = flow(
+      [
+        placedAt(owner, 0, 0),
+        placedAt(agent("B", { parent: id }), 0, 80),
+        placedAt(agent("S"), 400, 0),
+      ],
+      [],
+    );
+    const oracle = loadedCanvas(source);
+    oracle.getState().select([id]);
+    oracle.getState().deleteSelection();
+    const store = loadedCanvas(source);
+    const loaded = store.getState().flow;
+
+    deleteFromMenu(store, viewId);
+
+    expect(store.getState().flow).toEqual(oracle.getState().flow);
+    expect(ids(store.getState().flow.nodes)).not.toContain(id);
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(loaded);
+  });
+
+  it("deletes a plain node as before", () => {
+    const store = guarded();
+    const before = store.getState().flow;
+
+    store.getState().openNodeMenu("P", { x: 10, y: 20 });
+    expect(store.getState().menu?.nodeId).toBe("P");
+    deleteFromMenu(store, "P");
+
+    expect(ids(store.getState().flow.nodes)).not.toContain("P");
+    expect(store.getState().undoStack).toHaveLength(1);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+});
+
 describe("libraries", () => {
   const summary = (
     flowId: string,
