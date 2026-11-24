@@ -419,6 +419,9 @@ const sessionTurn = async () => {
   const hardStops = [...steps.matchAll(hardStopLine)].map((match) => ({ marker: match[1], at: match.index }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
+  say("────────");
+  say("❯ ");
+  say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
   for (const { nodeId, agentType, at } of nodes) {
