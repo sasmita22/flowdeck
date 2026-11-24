@@ -3,6 +3,7 @@ import {
   blueprintKind,
   expandedOrAsIs,
   kindResolver,
+  libraryUses,
   reachedSessions,
   type LibraryResolver,
 } from "./libraries.js";
@@ -38,11 +39,12 @@ export const flowSummarySchema = z.object({
   sessions: z.array(
     SessionContainer.pick({ id: true, name: true, repo: true, branch: true, model: true }),
   ),
+  uses: z.array(z.string()),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;
 
-type BlueprintFacts = Pick<FlowSummary, "kind" | "variables" | "sessions">;
+type BlueprintFacts = Pick<FlowSummary, "kind" | "variables" | "sessions" | "uses">;
 
 export function blueprintFacts(flow: Flow, resolve: LibraryResolver): BlueprintFacts {
   const kind = blueprintKind(flow, kindResolver(resolve));
@@ -52,10 +54,16 @@ export function blueprintFacts(flow: Flow, resolve: LibraryResolver): BlueprintF
     variables: groupVariables(foundVariables(expanded.flow), expanded.uses),
     sessions:
       kind === "node-library" || kind === "session-library" ? reachedSessions(expanded.flow) : [],
+    uses: libraryUses(flow),
   };
 }
 
-export const noBlueprintFacts: BlueprintFacts = { kind: "incomplete", variables: [], sessions: [] };
+export const noBlueprintFacts: BlueprintFacts = {
+  kind: "incomplete",
+  variables: [],
+  sessions: [],
+  uses: [],
+};
 
 /**
  * Keeps named blueprints and their saved versions. Saved versions are never changed or deleted;

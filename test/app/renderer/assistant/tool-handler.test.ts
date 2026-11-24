@@ -60,6 +60,7 @@ const summary = ({ flowId, name }: Saved) => ({
   pinned: false,
   kind: "workflow",
   sessions: [],
+  uses: [],
 });
 
 const openBlueprint = (): Saved => ({
@@ -911,6 +912,7 @@ describe("tool handler and library nodes", () => {
     pinned: false,
     kind: "node-library" as const,
     sessions: [],
+    uses: [],
   };
 
   const use = {

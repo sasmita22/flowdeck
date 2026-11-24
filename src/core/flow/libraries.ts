@@ -12,7 +12,53 @@ export type LibrarySession = Pick<SessionContainer, "id" | "name" | "repo" | "br
 
 export type LibraryLookup = (
   flowId: string,
-) => { name: string; kind: BlueprintKind; sessions: LibrarySession[] } | undefined;
+) =>
+  | { name: string; kind: BlueprintKind; sessions: LibrarySession[]; uses: readonly string[] }
+  | undefined;
+
+export const libraryUses = (flow: Flow): string[] => [
+  ...new Set(
+    flow.nodes.flatMap((node) =>
+      node.type === "library" && node.settings.libraryId !== "" ? [node.settings.libraryId] : [],
+    ),
+  ),
+];
+
+export function libraryLoop(
+  usesOf: (id: string) => readonly string[] | undefined,
+  hostId: string | undefined,
+  libraryId: string,
+): string[] | undefined {
+  if (libraryId === hostId) return [hostId, hostId];
+  const visiting: string[] = [];
+  const finished = new Set<string>();
+  const walk = (id: string): string[] | undefined => {
+    visiting.push(id);
+    for (const used of usesOf(id) ?? []) {
+      if (used === hostId) return [hostId, ...visiting, hostId];
+      const repeat = visiting.indexOf(used);
+      if (repeat >= 0) return [...visiting.slice(repeat), used];
+      if (finished.has(used)) continue;
+      const path = walk(used);
+      if (path !== undefined) return path;
+    }
+    visiting.pop();
+    finished.add(id);
+    return undefined;
+  };
+  return walk(libraryId);
+}
+
+export const loopReason = (
+  path: readonly string[],
+  nameOf: (id: string) => string | undefined,
+): string => `makes a loop: ${path.map((id) => nameOf(id) ?? id).join(" → ")}`;
+
+export const libraryLoopReason = (
+  libraryId: string,
+  path: readonly string[],
+  nameOf: (id: string) => string | undefined,
+): string => `${nameOf(libraryId) ?? libraryId} ${loopReason(path, nameOf)}`;
 
 export const unknownLibraries: LibraryLookup = () => undefined;
 
@@ -70,16 +116,15 @@ export function kindResolver(resolve: LibraryResolver): KindOf {
     const repeat = visiting.indexOf(flowId);
     if (repeat >= 0) {
       for (const id of visiting.slice(repeat)) looped.add(id);
-      return "incomplete";
+      return undefined;
     }
     const library = resolve(flowId);
     if (library === undefined) return undefined;
     visiting.push(flowId);
     const kind = blueprintKind(library.flow, kindOf);
     visiting.pop();
-    const settled = looped.has(flowId) ? "incomplete" : kind;
-    known.set(flowId, settled);
-    return settled;
+    if (!looped.has(flowId)) known.set(flowId, kind);
+    return kind;
   };
   return kindOf;
 }
@@ -94,7 +139,7 @@ export function libraryLookup(resolve: LibraryResolver): LibraryLookup {
       kind === "node-library" || kind === "session-library"
         ? reachedSessions(expandedOrAsIs(library.flow, resolve).flow)
         : [];
-    return { name: library.name, kind, sessions };
+    return { name: library.name, kind, sessions, uses: libraryUses(library.flow) };
   };
 }
 
@@ -240,7 +285,16 @@ function expandOne(
 ): Expanded {
   const { libraryId, label, overrides } = use.settings;
   if (chain.includes(libraryId)) {
-    throw new LibraryLoopError(`${label} uses a library that uses it again`);
+    const [root = libraryId] = chain;
+    const path = libraryLoop(
+      (id) => {
+        const used = resolve(id);
+        return used && libraryUses(used.flow);
+      },
+      undefined,
+      root,
+    ) ?? [...chain.slice(chain.indexOf(libraryId)), libraryId];
+    throw new LibraryLoopError(libraryLoopReason(root, path, (id) => resolve(id)?.name));
   }
   const library = resolve(libraryId);
   if (library === undefined) throw new LibraryError(`${label} names a library that does not exist`);

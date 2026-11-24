@@ -4,7 +4,13 @@ import { flowProblems } from "../../../core/compiler/flow-problems.js";
 import { validate, type ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
-import { labelPrefix, unknownLibraries, type LibraryLookup } from "../../../core/flow/libraries.js";
+import {
+  labelPrefix,
+  libraryLoop,
+  loopReason,
+  unknownLibraries,
+  type LibraryLookup,
+} from "../../../core/flow/libraries.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import { defaultPermissionMode } from "../../../core/flow/choices.js";
 import {
@@ -394,7 +400,14 @@ export const summaryLookup =
   (summaries: readonly FlowSummary[]): LibraryLookup =>
   (flowId) => {
     const summary = summaries.find((candidate) => candidate.flowId === flowId);
-    return summary && { name: summary.name, kind: summary.kind, sessions: summary.sessions };
+    return (
+      summary && {
+        name: summary.name,
+        kind: summary.kind,
+        sessions: summary.sessions,
+        uses: summary.uses,
+      }
+    );
   };
 
 type LibraryNode = Extract<Node, { type: "library" }>;
@@ -792,8 +805,24 @@ export function createCanvasStore(
       return { nodes, wires, notes, members };
     };
 
+    const loopOf = (flowId: string): string | undefined => {
+      const { libraries, openFlowId } = get();
+      const path = libraryLoop((id) => libraries(id)?.uses, openFlowId ?? undefined, flowId);
+      return path && loopReason(path, (id) => libraries(id)?.name);
+    };
+
     const pasteItems = (items: Items, offset: Position): boolean => {
-      const { flow } = get();
+      const { flow, libraries } = get();
+      const [loop] = items.nodes.filter(isLibraryNode).flatMap(({ settings: { libraryId } }) => {
+        const reason = loopOf(libraryId);
+        return reason === undefined
+          ? []
+          : [`${libraries(libraryId)?.name ?? "library"}: ${reason}`];
+      });
+      if (loop !== undefined) {
+        set({ message: `Can't paste ${loop}` });
+        return false;
+      }
       const target = selectSelectedNode({ flow, selection: get().selection });
       const pasted = placed(flow, items, offset);
       const command = addItems(pasted);
@@ -861,6 +890,13 @@ export function createCanvasStore(
         ...(parent === undefined ? {} : { parent }),
         settings: { libraryId: flowId, label, overrides: {} },
       };
+      const host = member ?? parent;
+      const into = host === undefined ? "" : ` into ${labelOf(flow, host)}`;
+      const loop = loopOf(flowId);
+      if (loop !== undefined) {
+        set({ message: `Can't drop ${name}${into}: ${loop}` });
+        return;
+      }
       const command = addNode(node, member);
       const after = command.do(flow);
       const [refused] = [
@@ -870,8 +906,6 @@ export function createCanvasStore(
         ),
       ];
       if (refused !== undefined) {
-        const host = member ?? parent;
-        const into = host === undefined ? "" : ` into ${labelOf(flow, host)}`;
         set({ message: `Can't drop ${name}${into}: ${reasonOf(after, refused)}` });
         return;
       }

@@ -6,6 +6,7 @@ import {
   groupPalette,
   libraryItems,
   nodeTitle,
+  type LibraryItem,
   noteTitle,
   paletteGroups,
   paletteItems,
@@ -328,7 +329,12 @@ describe("flowContainerItems", () => {
 });
 
 describe("libraryItems", () => {
-  const summary = (flowId: string, name: string, kind: FlowSummary["kind"]): FlowSummary => ({
+  const summary = (
+    flowId: string,
+    name: string,
+    kind: FlowSummary["kind"],
+    uses: string[] = [],
+  ): FlowSummary => ({
     flowId,
     name,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -339,6 +345,7 @@ describe("libraryItems", () => {
     pinned: false,
     kind,
     sessions: [],
+    uses,
   });
 
   const summaries = [
@@ -357,6 +364,7 @@ describe("libraryItems", () => {
         label: "Review",
         kind: "node-library",
         kindLabel: "Node library",
+        loop: null,
       },
       {
         flowId: "f-android",
@@ -364,8 +372,41 @@ describe("libraryItems", () => {
         label: "Android",
         kind: "session-library",
         kindLabel: "Session library",
+        loop: null,
       },
     ]);
+  });
+
+  const loopOf = (items: readonly LibraryItem[], flowId: string) =>
+    items.find((item) => item.flowId === flowId)?.loop;
+
+  it("gives a library that uses the open blueprint the loop path as its reason", () => {
+    const items = libraryItems(
+      [
+        summary("b", "LibB", "node-library"),
+        summary("a", "LibA", "node-library", ["b"]),
+        summary("c", "LibC", "node-library"),
+      ],
+      "b",
+    );
+
+    expect(loopOf(items, "a")).toBe("makes a loop: LibB → LibA → LibB");
+    expect(loopOf(items, "c")).toBeNull();
+    expect(items.map(({ flowId }) => flowId)).toEqual(["a", "c"]);
+  });
+
+  it("keeps a library already in a loop listed for an unrelated blueprint, with its loop", () => {
+    const items = libraryItems(
+      [
+        summary("p", "LoopP", "node-library", ["q"]),
+        summary("q", "LoopQ", "node-library", ["p"]),
+        summary("y", "Plain", "workflow"),
+      ],
+      "y",
+    );
+
+    expect(loopOf(items, "p")).toBe("makes a loop: LoopP → LoopQ → LoopP");
+    expect(loopOf(items, "q")).toBe("makes a loop: LoopQ → LoopP → LoopQ");
   });
 
   it("leaves out the open blueprint itself", () => {
@@ -392,6 +433,7 @@ describe("filterLibraries", () => {
       label: "Review",
       kind: "node-library" as const,
       kindLabel: "Node library",
+      loop: null,
     },
     {
       flowId: "f-android",
@@ -399,6 +441,7 @@ describe("filterLibraries", () => {
       label: "Android",
       kind: "session-library" as const,
       kindLabel: "Session library",
+      loop: null,
     },
   ];
 

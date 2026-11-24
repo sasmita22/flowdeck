@@ -1,4 +1,5 @@
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
+import { libraryLoop, loopReason } from "../../../core/flow/libraries.js";
 import type { NodeType } from "../../../core/flow/schema.js";
 import { blueprintKindLabel } from "../library-store.js";
 import { nodeLook } from "../nodes/look.js";
@@ -111,6 +112,7 @@ export interface LibraryItem {
   label: string;
   kind: LibraryKind;
   kindLabel: string;
+  loop: string | null;
 }
 
 const isLibraryKind = (kind: FlowSummary["kind"]): kind is LibraryKind =>
@@ -119,8 +121,13 @@ const isLibraryKind = (kind: FlowSummary["kind"]): kind is LibraryKind =>
 export const libraryItems = (
   summaries: readonly FlowSummary[],
   openFlowId: string | null,
-): LibraryItem[] =>
-  summaries.flatMap(({ flowId, name, kind }) =>
+): LibraryItem[] => {
+  const byId = new Map(summaries.map((summary) => [summary.flowId, summary]));
+  const loopOf = (flowId: string): string | null => {
+    const path = libraryLoop((id) => byId.get(id)?.uses, openFlowId ?? undefined, flowId);
+    return path === undefined ? null : loopReason(path, (id) => byId.get(id)?.name);
+  };
+  return summaries.flatMap(({ flowId, name, kind }) =>
     isLibraryKind(kind) && flowId !== openFlowId
       ? [
           {
@@ -129,10 +136,12 @@ export const libraryItems = (
             label: name,
             kind,
             kindLabel: blueprintKindLabel[kind],
+            loop: loopOf(flowId),
           },
         ]
       : [],
   );
+};
 
 export const filterLibraries = (
   items: readonly LibraryItem[],

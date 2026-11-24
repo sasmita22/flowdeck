@@ -24,6 +24,7 @@ const report = {
   buildConfig: { repo: "/code/shop" },
   variables: [],
   sessions: [],
+  uses: [],
   pinned: false,
 };
 
@@ -637,6 +638,7 @@ describe("pinnedFirst", () => {
     buildConfig: null,
     variables: [],
     sessions: [],
+    uses: [],
     pinned,
   });
 

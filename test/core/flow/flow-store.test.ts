@@ -1,5 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { flowSummarySchema, saveFlowResultSchema } from "../../../src/core/flow/flow-store.js";
+import {
+  blueprintFacts,
+  flowSummarySchema,
+  noBlueprintFacts,
+  saveFlowResultSchema,
+} from "../../../src/core/flow/flow-store.js";
+import { parseFlow } from "../../../src/core/flow/schema.js";
+import { flowSettings, output, thenWire, trigger } from "../../fixtures/flow-builders.js";
+
+const libraryNode = (id: string, libraryId: string) => ({
+  id,
+  label: "Library",
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label: id, overrides: {} },
+});
+
+describe("blueprintFacts", () => {
+  it("lists the libraries the blueprint uses, on its path and off it", () => {
+    const flow = parseFlow({
+      nodes: [
+        trigger("canvas-start"),
+        libraryNode("use", "on-path"),
+        output("canvas-stop"),
+        libraryNode("stray", "off-path"),
+      ],
+      wires: [thenWire("canvas-start", "use"), thenWire("use", "canvas-stop")],
+      containers: [],
+      settings: flowSettings,
+    });
+
+    expect(blueprintFacts(flow, () => undefined).uses).toEqual(["on-path", "off-path"]);
+  });
+
+  it("uses no libraries when there is no saved blueprint", () => {
+    expect(noBlueprintFacts.uses).toEqual([]);
+  });
+});
 
 describe("saveFlowResultSchema", () => {
   it.each([
@@ -33,6 +70,7 @@ describe("flowSummarySchema", () => {
     variables: [],
     kind: "workflow",
     sessions: [],
+    uses: ["lib-a"],
   };
 
   it("keeps the latest version's Build configuration and the variables it finds", () => {
@@ -94,6 +132,12 @@ describe("flowSummarySchema", () => {
     };
 
     expect(flowSummarySchema.parse(library)).toEqual(library);
+  });
+
+  it("rejects a summary with no uses", () => {
+    expect(
+      flowSummarySchema.safeParse({ ...summary, buildConfig: null, uses: undefined }).success,
+    ).toBe(false);
   });
 
   it("rejects a summary with no sessions", () => {

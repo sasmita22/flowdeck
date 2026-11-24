@@ -52,6 +52,7 @@ import { containerRoot, containerSlugs } from "./pieces.js";
 import { applyShared, sharedContainer, sharedPath } from "./shared.js";
 import { buildRecord } from "./record.js";
 import { rule as libraryLabels } from "./rules/library-labels.js";
+import { rule as libraryLoops } from "./rules/library-loops.js";
 import { rule as libraryUse } from "./rules/library-use.js";
 import { validate, type ValidationError } from "./validate.js";
 import { workspaceListing, workspaceRootFiles } from "./verify.js";
@@ -317,16 +318,20 @@ export type StartedBuild = { kind: "started"; pendingId: string };
 export type StartBuildResult =
   { ok: false; errors: ValidationError[] } | (StartedBuild & { flow: Flow });
 
-const libraryRules = new Set([libraryUse.id, libraryLabels.id]);
+const libraryRules = new Set([libraryUse.id, libraryLabels.id, libraryLoops.id]);
 
 type Expansion = { ok: false; errors: ValidationError[] } | { ok: true; flow: Flow };
 
 const expandedHost = (saved: Flow, deps: BuildFlowDeps): Expansion => {
   const host = mainFlowOnly(saved);
   const resolve = latestLibraries(deps.flows);
-  const errors = validate(host, libraryLookup(resolve)).filter((error) =>
-    libraryRules.has(error.rule),
-  );
+  const lookup = libraryLookup(resolve);
+  const errors = [
+    ...validate(saved, lookup).filter((error) => error.rule === libraryLoops.id),
+    ...validate(host, lookup).filter(
+      (error) => libraryRules.has(error.rule) && error.rule !== libraryLoops.id,
+    ),
+  ];
   if (errors.length > 0) return { ok: false, errors };
   try {
     return { ok: true, flow: expandLibraries(host, resolve).flow };

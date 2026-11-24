@@ -7,6 +7,9 @@ import {
   LibraryError,
   LibraryLoopError,
   libraryLookup,
+  libraryLoop,
+  libraryUses,
+  loopReason,
   type BlueprintKind,
   type LibraryResolver,
 } from "../../../src/core/flow/libraries.js";
@@ -214,7 +217,7 @@ describe("kindResolver", () => {
     expect(kindOf("missing")).toBeUndefined();
   });
 
-  it("gives incomplete for a loop instead of recursing forever", () => {
+  it("gives each library in a loop its own kind instead of recursing forever", () => {
     const kindOf = kindResolver(
       resolverOf({
         a: nodeLibrary([libraryNode("use-b", "b", "b")], ["use-b"]),
@@ -222,8 +225,109 @@ describe("kindResolver", () => {
       }),
     );
 
-    expect(kindOf("a")).toBe("incomplete");
-    expect(kindOf("b")).toBe("incomplete");
+    expect(kindOf("a")).toBe("node-library");
+    expect(kindOf("b")).toBe("node-library");
+  });
+
+  it("gives a library in a loop the kind it reaches through the rest of the loop", () => {
+    const kindOf = kindResolver(
+      resolverOf({
+        a: nodeLibrary(
+          [libraryNode("use-b", "b", "b"), libraryNode("use-s", "s", "s")],
+          ["use-b", "use-s"],
+        ),
+        b: nodeLibrary([libraryNode("use-a", "a", "a")], ["use-a"]),
+        s: sessionLibrary(),
+      }),
+    );
+
+    expect(kindOf("a")).toBe("session-library");
+    expect(kindOf("b")).toBe("session-library");
+  });
+});
+
+describe("libraryUses", () => {
+  it("lists every library a flow's library nodes name, on or off the path, once each", () => {
+    const flow = plain(
+      [
+        trigger("canvas-start"),
+        libraryNode("use-b", "b", "b"),
+        output("canvas-stop"),
+        libraryNode("stray", "c", "c"),
+        libraryNode("blank", "", "library"),
+        trigger("s-start"),
+        libraryNode("inner", "d", "d"),
+        output("s-stop"),
+        libraryNode("again", "b", "again"),
+      ],
+      [
+        ...chain(["canvas-start", "use-b", "canvas-stop"]),
+        ...chain(["s-start", "inner", "s-stop"]),
+      ],
+      [sessionContainer(["s-start", "inner", "s-stop"])],
+    );
+
+    expect(libraryUses(flow)).toEqual(["b", "c", "d"]);
+  });
+});
+
+describe("libraryLoop", () => {
+  const usesOf =
+    (graph: Record<string, string[]>) =>
+    (id: string): readonly string[] | undefined =>
+      graph[id];
+
+  const names: Record<string, string> = { a: "A", b: "B", c: "C" };
+  const nameOf = (id: string): string | undefined => names[id];
+
+  it("finds the loop of adding a library to a blueprint it uses", () => {
+    const path = libraryLoop(usesOf({ a: ["b"], b: [] }), "b", "a");
+
+    expect(path).toEqual(["b", "a", "b"]);
+    expect(loopReason(path ?? [], nameOf)).toBe("makes a loop: B → A → B");
+  });
+
+  it("finds a loop through a library the added one uses in turn", () => {
+    expect(libraryLoop(usesOf({ a: ["b"], b: ["c"], c: [] }), "c", "a")).toEqual([
+      "c",
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("finds the loop of adding a library to itself", () => {
+    expect(libraryLoop(usesOf({ a: [] }), "a", "a")).toEqual(["a", "a"]);
+  });
+
+  it.each([
+    ["to A", "a"],
+    ["to B", "b"],
+  ])("finds no loop adding a library two others share %s", (_, host) => {
+    expect(libraryLoop(usesOf({ a: ["c"], b: ["c"], c: [] }), host, "c")).toBeUndefined();
+  });
+
+  it("finds no loop in a diamond added to an unrelated blueprint", () => {
+    expect(
+      libraryLoop(usesOf({ a: ["b", "c"], b: ["c"], c: [], y: [] }), "y", "a"),
+    ).toBeUndefined();
+  });
+
+  it("finds the loop a library already sits in, added to an unrelated blueprint", () => {
+    expect(libraryLoop(usesOf({ p: ["q"], q: ["p"], y: [] }), "y", "p")).toEqual(["p", "q", "p"]);
+  });
+
+  it("follows no uses of a library it does not know", () => {
+    expect(libraryLoop(usesOf({ a: ["gone"] }), "b", "a")).toBeUndefined();
+  });
+
+  it("reports only loops inside what the library uses when there is no host", () => {
+    expect(libraryLoop(usesOf({ a: ["b"], b: [] }), undefined, "a")).toBeUndefined();
+    expect(libraryLoop(usesOf({ a: ["b"], b: ["a"] }), undefined, "a")).toEqual(["a", "b", "a"]);
+  });
+
+  it("names a library it has no name for by its id", () => {
+    expect(loopReason(["a", "gone", "a"], nameOf)).toBe("makes a loop: A → gone → A");
   });
 });
 
@@ -243,8 +347,29 @@ describe("libraryLookup", () => {
           model: "sonnet",
         },
       ],
+      uses: [],
     });
     expect(lookup("missing")).toBeUndefined();
+  });
+
+  it("gives the libraries a library uses", () => {
+    const lookup = libraryLookup(
+      resolverOf({
+        outer: plain(
+          [
+            trigger("canvas-start"),
+            libraryNode("use", "sessions", "sessions"),
+            output("canvas-stop"),
+            libraryNode("stray", "spare", "spare"),
+          ],
+          chain(["canvas-start", "use", "canvas-stop"]),
+        ),
+        sessions: sessionLibrary(),
+      }),
+    );
+
+    expect(lookup("outer")?.uses).toEqual(["sessions", "spare"]);
+    expect(lookup("sessions")?.uses).toEqual([]);
   });
 
   it("lists the sessions of the expanded library, under the ids its overrides use", () => {
@@ -271,7 +396,7 @@ describe("blueprintFacts", () => {
   it("reads a host whose library is missing as if it used none", () => {
     const facts = blueprintFacts(loosePath(libraryNode("use", "missing", "use")), () => undefined);
 
-    expect(facts).toEqual({ kind: "workflow", variables: [], sessions: [] });
+    expect(facts).toEqual({ kind: "workflow", variables: [], sessions: [], uses: ["missing"] });
   });
 
   it("lets an error that is not a library error through", () => {
@@ -549,7 +674,9 @@ describe("expandLibraries", () => {
     const host = onMainFlow([libraryNode("use", "a", "a")], []);
 
     expect(() => expandLibraries(host, resolve)).toThrow(LibraryLoopError);
-    expect(() => expandLibraries(host, resolve)).toThrow("a uses a library that uses it again");
+    expect(() => expandLibraries(host, resolve)).toThrow(
+      "a lib makes a loop: a lib → b lib → a lib",
+    );
   });
 
   it.each([

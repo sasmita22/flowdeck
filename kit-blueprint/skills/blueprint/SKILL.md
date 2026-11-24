@@ -129,6 +129,7 @@ A `wire` edit that breaks `ports`, `references` or `container-wires` is refused,
 - `container-wires`: a wire stays inside its workspace or session, or at canvas level; it enters a container only at its `flow-in` and leaves only from its `flow-out`.
 - `library-use`: a library node names a node or session library that exists, and sits where that kind fits.
 - `library-labels`: each library node's `label` uses letters, digits, spaces, dashes and underscores, and no other library node's evens out to the same.
+- `library-loops`: a library node's library never reaches back to itself through the libraries it uses; the problem names the path.
 
 ## Tools
 

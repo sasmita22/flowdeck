@@ -2839,6 +2839,76 @@ describe("buildVersion", () => {
       expect(errorMessages(started)).toEqual([libraryBuildReason]);
       expectNothingDone(store, fs, worktree);
     });
+
+    describe("libraries that loop", () => {
+      const using = (id: string, usedId: string, label: string) => ({
+        ...libraryNode(label),
+        id,
+        settings: { libraryId: usedId, label, overrides: {} },
+      });
+
+      const usingLibrary = (usedId: string): Flow =>
+        parseFlow({
+          nodes: [trigger("canvas-start"), using("inner", usedId, "Inner"), output("canvas-stop")],
+          wires: [thenWire("canvas-start", "inner"), thenWire("inner", "canvas-stop")],
+          containers: [],
+          settings: flowSettings,
+        });
+
+      const looped = (saved: Flow) => {
+        const t = setup({ flows: [saved], flowIds: ids("flow-1", "flow-2", "flow-3") });
+        t.flows.save(nodeLibrary("Planner"), { name: "Loop A" });
+        t.flows.save(usingLibrary("flow-2"), { name: "Loop B" });
+        t.flows.save(usingLibrary("flow-3"), "flow-2");
+        return t;
+      };
+
+      const loopMessage = "Loop A makes a loop: Loop A → Loop B → Loop A";
+
+      it("is refused with one library-loops problem naming the path", async () => {
+        const t = looped(host());
+
+        const started = await startBuild(host(), request, t.deps);
+
+        expect("errors" in started ? started.errors.map(({ rule }) => rule) : []).toEqual([
+          "library-loops",
+        ]);
+        expect(errorMessages(started)).toEqual([loopMessage]);
+        expectNothingDone(t.store, t.fs, t.worktree);
+      });
+
+      it("is refused when the loop is only through a library node off the main flow", async () => {
+        const offPath = withConfig(
+          intoSession(onMainFlow([agent("p1")], []), [libraryNode("Android App")] as Flow["nodes"]),
+          ticketConfig,
+        );
+        const t = looped(offPath);
+
+        const started = await startBuild(offPath, request, t.deps);
+
+        expect(errorMessages(started)).toEqual([loopMessage]);
+        expectNothingDone(t.store, t.fs, t.worktree);
+      });
+
+      it("builds a host whose two libraries share a third", async () => {
+        const shared = withConfig(
+          onMainFlow(
+            [using("android", "flow-2", "Android App"), using("ios", "flow-3", "iOS App")],
+            [thenWire("android", "ios")],
+          ),
+          ticketConfig,
+        );
+        const t = setup({ flows: [shared], flowIds: ids("flow-1", "flow-4", "flow-2", "flow-3") });
+        t.flows.save(nodeLibrary("Planner"), { name: "Shared" });
+        t.flows.save(usingLibrary("flow-4"), { name: "Android" });
+        t.flows.save(usingLibrary("flow-4"), { name: "iOS" });
+
+        const result = await buildVersion(v1, request, t.deps);
+
+        if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+        expect(result.ok).toBe(true);
+      });
+    });
   });
 
   describe("only the main flow", () => {

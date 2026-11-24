@@ -72,12 +72,20 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemTyp
 }
 
 function LibraryEntry({ item, onAdd }: { item: LibraryItem; onAdd: (flowId: string) => void }) {
+  const loops = item.loop !== null;
+  const add = () => {
+    if (!loops) onAdd(item.flowId);
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    onAdd(item.flowId);
+    add();
   };
   const onLibraryDragStart = (event: DragEvent<HTMLDivElement>) => {
+    if (loops) {
+      event.preventDefault();
+      return;
+    }
     event.dataTransfer.setData(libraryMimeType, item.flowId);
     event.dataTransfer.effectAllowed = "move";
   };
@@ -86,9 +94,11 @@ function LibraryEntry({ item, onAdd }: { item: LibraryItem; onAdd: (flowId: stri
       className="fd-palette-item"
       data-testid={item.testId}
       tabIndex={0}
-      draggable
+      draggable={!loops}
+      aria-disabled={loops}
+      title={item.loop ?? undefined}
       onDragStart={onLibraryDragStart}
-      onDoubleClick={() => onAdd(item.flowId)}
+      onDoubleClick={add}
       onKeyDown={onKeyDown}
     >
       <span className="fd-palette-preview">

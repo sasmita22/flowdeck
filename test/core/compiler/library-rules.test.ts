@@ -31,7 +31,9 @@ const kinds: Record<string, BlueprintKind> = {
 
 const lookup: LibraryLookup = (flowId) => {
   const kind = kinds[flowId];
-  return kind === undefined ? undefined : { name: `${flowId} blueprint`, kind, sessions: [] };
+  return kind === undefined
+    ? undefined
+    : { name: `${flowId} blueprint`, kind, sessions: [], uses: [] };
 };
 
 const chain = (ids: string[]) =>
@@ -92,8 +94,8 @@ const workflow = (use: ReturnType<typeof libraryNode>, where: "workspace" | "loo
   });
 };
 
-const ruleProblems = (flow: Flow, rule: string) =>
-  validate(flow, lookup)
+const ruleProblems = (flow: Flow, rule: string, libraries: LibraryLookup = lookup) =>
+  validate(flow, libraries)
     .filter((problem) => problem.rule === rule)
     .map(({ node, field }) => ({ node, field }));
 
@@ -179,6 +181,66 @@ describe("library-labels", () => {
     expect(ruleProblems(loose(libraryNode("use", "nodes", label)), "library-labels")).toEqual([
       { node: "use", field: "label" },
     ]);
+  });
+});
+
+describe("library-loops", () => {
+  const usesOf: Record<string, { name: string; uses: string[] }> = {
+    a: { name: "Loop A", uses: ["b"] },
+    b: { name: "Loop B", uses: ["a"] },
+    left: { name: "Left", uses: ["shared"] },
+    right: { name: "Right", uses: ["shared"] },
+    shared: { name: "Shared", uses: [] },
+  };
+
+  const looping: LibraryLookup = (flowId) => {
+    const library = usesOf[flowId];
+    return library === undefined
+      ? undefined
+      : { name: library.name, kind: "node-library", sessions: [], uses: library.uses };
+  };
+
+  const offPath = (use: ReturnType<typeof libraryNode>): Flow =>
+    parseFlow({
+      nodes: [trigger("canvas-start"), use, output("canvas-stop")],
+      wires: chain(["canvas-start", "canvas-stop"]),
+      containers: [],
+      settings: flowSettings,
+    });
+
+  it("refuses a library that reaches back to itself, naming the path", () => {
+    const problems = validate(loose(libraryNode("use", "a")), looping).filter(
+      ({ rule }) => rule === "library-loops",
+    );
+
+    expect(problems).toEqual([
+      {
+        rule: "library-loops",
+        node: "use",
+        message: "Loop A makes a loop: Loop A → Loop B → Loop A",
+      },
+    ]);
+  });
+
+  it("refuses a loop through a library node off the main flow", () => {
+    expect(ruleProblems(offPath(libraryNode("use", "a")), "library-loops", looping)).toEqual([
+      { node: "use", field: undefined },
+    ]);
+  });
+
+  it("accepts one library shared by two library nodes", () => {
+    const flow = loose(libraryNode("l", "left"), libraryNode("r", "right"));
+
+    expect(ruleProblems(flow, "library-loops", looping)).toEqual([]);
+  });
+
+  it.each([
+    ["no library", ""],
+    ["an unknown library", "gone"],
+  ])("says nothing about a library node naming %s", (_, libraryId) => {
+    expect(ruleProblems(loose(libraryNode("use", libraryId)), "library-loops", looping)).toEqual(
+      [],
+    );
   });
 });
 
