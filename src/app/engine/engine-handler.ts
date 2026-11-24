@@ -167,6 +167,11 @@ const isCleanStart = (migration: string): boolean => migration.endsWith("clean_s
 
 const cleanStartFolders = ["workspaces", "runs", "build-sessions", "worktrees"];
 
+const runFolder = (home: string, runId: string) => join(home, "runs", runId);
+
+const sessionStatesPath = (home: string, runId: string) =>
+  join(runFolder(home, runId), "session-states");
+
 export type EngineHandlerOptions = {
   version: string;
   openStores: () => EngineStores;
@@ -1053,6 +1058,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     actions?: () => Promise<ReturnType<typeof decideResume>>;
   };
 
+  const statesWriter = (runId: string) => {
+    const path = sessionStatesPath(options.home, runId);
+    let written = Promise.resolve();
+    return (text: string) => {
+      written = written
+        .then(() => options.fs.writeFile(path, text))
+        .catch((error: unknown) => {
+          console.log(`engine: run ${runId} session states not written: ${messageOf(error)}`);
+        });
+    };
+  };
+
   const startExecution = (launch: Execution): StartRunResult => {
     const run: ActiveRun = {
       runId: launch.runId,
@@ -1155,6 +1172,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             ...(options.answerDialogs === undefined
               ? {}
               : { answerDialogs: options.answerDialogs }),
+            writeStates: sessionRows.length === 0 ? () => undefined : statesWriter(runId),
             manifest,
             sessions: sessionRows,
             history: runs.events(runId),
@@ -1344,6 +1362,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           ? options.run.openSession({
               ...sessionOptions(manifest, built.dir, session, hooks),
               env: sessionEnv(manifest, sessions),
+              ...(sessions.length === 0
+                ? {}
+                : { sessionStatesPath: sessionStatesPath(options.home, runId) }),
             })
           : noClaude;
       },
@@ -1447,6 +1468,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             hooks,
           ),
           env: sessionEnv(manifest, sessions),
+          ...(sessions.length === 0
+            ? {}
+            : { sessionStatesPath: sessionStatesPath(options.home, runId) }),
           ...(attach ? { attach: true } : {}),
           ...(restart ? { resume: true } : {}),
         });
@@ -1757,6 +1781,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const removeRun = async (runId: string): Promise<void> => {
     await stopForDelete(runId);
     storesOrThrow().runs.deleteRun(runId);
+    await options.fs.removeTree(runFolder(options.home, runId));
   };
 
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {

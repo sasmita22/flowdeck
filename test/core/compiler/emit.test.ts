@@ -661,6 +661,53 @@ describe("emit per container", () => {
     });
   });
 
+  describe("session states", () => {
+    const stateLines = [
+      "## Session states",
+      "",
+      '- `$FD_SESSION_STATES` names a file with one line per session container: its tmux name (the value of its `FD_SESSION_<SLUG>_TMUX`), then its state. Read it with `cat "$FD_SESSION_STATES"`.',
+      "- States: `not-started`, `running`, `waiting` (it waits for a permission answer), `done` (it reached its Stop), `failed` (it failed or its tmux ended before its Stop).",
+      "- A session that sent you a question and ended its turn reads `running`; your reply wakes it.",
+      "",
+    ].join("\n");
+
+    it("tells the workspace session where each session's state is and what the states mean", async () => {
+      const { summary } = summaryOf(fileAt(await laidDown(), "workspace/CLAUDE.md"));
+
+      expect(summary).toContain(`\n\n${stateLines}`);
+    });
+
+    it("writes no session states section in a build without session containers", async () => {
+      const text = fileAt(await laidDown(sessionsWorkflow([])), "workspace/CLAUDE.md");
+
+      expect(text).not.toContain("## Session states");
+      expect(text).not.toContain("FD_SESSION_STATES");
+    });
+
+    it.each(["android", "ios"])(
+      "tells the %s session to end its turn with the open question instead of waiting for a reply",
+      async (slug) => {
+        const text = fileAt(await laidDown(), `sessions/${slug}/CLAUDE.md`);
+
+        expect(text.split("\n")).toContain(
+          "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.",
+        );
+        expect(text).not.toContain("then wait for its reply before going on");
+      },
+    );
+
+    it("keeps each session's Variables line as the e2e fake parses it", async () => {
+      const text = fileAt(await laidDown(), "workspace/CLAUDE.md");
+
+      expect(text.split("\n")).toEqual(
+        expect.arrayContaining([
+          "- Variables: FD_SESSION_ANDROID_TMUX holds its tmux name, FD_SESSION_ANDROID_ID its Claude session id",
+          "- Variables: FD_SESSION_IOS_TMUX holds its tmux name, FD_SESSION_IOS_ID its Claude session id",
+        ]),
+      );
+    });
+  });
+
   describe("connections", () => {
     const threeSessions = (...pairs: [string, string][]): Flow => ({
       ...sessionsWorkflow([
@@ -675,7 +722,8 @@ describe("emit per container", () => {
     const connected = () => laidDown(threeSessions(["session-1", "session-2"]));
     const sessionLines = [
       "- Never ask or raise anything to the user; only the workspace session talks to the user",
-      "- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX, then wait for its reply before going on",
+      "- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX",
+      "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.",
     ];
     const workspaceLine =
       "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below";

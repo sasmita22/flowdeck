@@ -12,6 +12,7 @@ import {
   type SessionHookEvent,
 } from "../../core/run/session-watch.js";
 import { nodeStatus } from "../../core/run/run-events.js";
+import { sessionState } from "../../core/run/session-state.js";
 import type { EventEntry, RunSession, StoredEvent } from "../../core/run/store.js";
 import type { TurnEvents } from "../../core/run/turns.js";
 import type { HookEventKind } from "../../ports/event-source.js";
@@ -39,6 +40,7 @@ export type StartedSessionsOptions = {
   sessionAlive: (tmuxName: string) => Promise<boolean>;
   endSession: (tmuxName: string) => Promise<void>;
   answerDialogs?: (tmuxName: string) => Promise<void>;
+  writeStates: (text: string) => void;
   manifest: LoadedBuild;
   sessions: readonly RunSession[];
   history?: readonly StoredEvent[];
@@ -52,9 +54,13 @@ type Watched = {
   dialogsAnswered: boolean;
   gone: boolean;
   openAsks: Map<string, number>;
+  events: EventEntry[];
 };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const entriesOf = (history: readonly StoredEvent[]): EventEntry[] =>
+  history.map((event) => ({ nodeId: event.nodeId, event }));
 
 const failedIn = (
   container: ManifestContainer,
@@ -83,13 +89,24 @@ export class StartedSessions implements StartedSessionsView {
       if (container === undefined) return [];
       const watch = new SessionWatch({ container, sessionId: session.claudeSessionId });
       watch.seed(options.history ?? []);
+      const nodeIds = new Set(container.nodes.map(({ id }) => id));
+      const events = entriesOf(options.history ?? []).filter(({ nodeId }) => nodeIds.has(nodeId));
       return [
-        { session, container, watch, dialogsAnswered: false, gone: false, openAsks: new Map() },
+        {
+          session,
+          container,
+          watch,
+          dialogsAnswered: false,
+          gone: false,
+          openAsks: new Map(),
+          events,
+        },
       ];
     });
     this.recordedFailure = this.watched
       .map(({ container }) => failedIn(container, options.history ?? []))
       .find((failure) => failure !== undefined);
+    this.writeStates();
     for (const watched of this.watched) this.listen(watched);
     this.timer = setInterval(() => void this.poll(), sessionPollMs);
   }
@@ -179,13 +196,25 @@ export class StartedSessions implements StartedSessionsView {
     }
   }
 
-  private append({ container }: Watched, entries: readonly EventEntry[]): void {
+  private append(watched: Watched, entries: readonly EventEntry[]): void {
     if (this.halted || entries.length === 0) return;
     this.options.store.appendAll(this.options.runId, entries);
+    watched.events.push(...entries);
+    this.writeStates();
+    const { container } = watched;
     const failed = entries.find(({ event }) => event.kind === "failed");
     if (failed === undefined || this.recordedFailure !== undefined) return;
     const node = container.nodes.find(({ id }) => id === failed.nodeId);
     this.recordedFailure = { container: container.name, node: node?.label ?? failed.nodeId };
+  }
+
+  private writeStates(): void {
+    const lines = this.watched.map(({ session, container, events }) => {
+      const nodeIds = container.nodes.map(({ id }) => id);
+      const stopNode = container.nodes.find(({ type }) => type === "output")?.id;
+      return `${session.tmuxName} ${sessionState({ nodeIds, stopNode }, events)}\n`;
+    });
+    this.options.writeStates(lines.join(""));
   }
 
   private async poll(): Promise<void> {

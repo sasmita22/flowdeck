@@ -1,7 +1,12 @@
 import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
 import type { BuildReport } from "./build-report.js";
-import { connectedSessionsHeading, sessionEntryHeading } from "./emit.js";
+import {
+  connectedSessionsHeading,
+  replyFallbackLine,
+  sessionEntryHeading,
+  sessionStatesHeading,
+} from "./emit.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { containerRoot, pieceOf } from "./pieces.js";
@@ -235,9 +240,9 @@ const checkSessionList = (container: ManifestContainer, { back, laid, fail }: Ch
     );
 };
 
-const connectedBlock = (claudeMd: string): string | undefined => {
+const blockUnder = (heading: string, claudeMd: string): string | undefined => {
   const lines = claudeMd.split("\n");
-  const start = lines.indexOf(connectedSessionsHeading);
+  const start = lines.indexOf(heading);
   if (start === -1) return undefined;
   let end = start + 2;
   while (lines[end]?.startsWith("- ") === true) end += 1;
@@ -246,7 +251,7 @@ const connectedBlock = (claudeMd: string): string | undefined => {
 
 const checkConnected = (container: ManifestContainer, { back, laid, fail }: Check) => {
   const path = `${containerRoot(container)}/CLAUDE.md`;
-  const block = connectedBlock(laid.get(path) ?? "");
+  const block = blockUnder(connectedSessionsHeading, laid.get(path) ?? "");
   if (block === undefined || (back.get(path) ?? "").includes(block)) return;
   if (container.kind === "session")
     fail(
@@ -255,6 +260,26 @@ const checkConnected = (container: ManifestContainer, { back, laid, fail }: Chec
       `the connected sessions of ${container.name} are missing or altered`,
     );
   else fail(path, "connected-pairs", "the list of connected session pairs is missing or altered");
+};
+
+const checkSessionStates = ({ back, laid, fail }: Check) => {
+  const block = blockUnder(sessionStatesHeading, laid.get(workspaceClaudeMdPath) ?? "");
+  if (block !== undefined && !(back.get(workspaceClaudeMdPath) ?? "").includes(block))
+    fail(
+      workspaceClaudeMdPath,
+      "session-states",
+      "the session states section is missing or altered",
+    );
+};
+
+const checkReplyFallback = (container: ManifestContainer, { back, laid, fail }: Check) => {
+  const path = `${containerRoot(container)}/CLAUDE.md`;
+  const isLine = (line: string) => line === replyFallbackLine;
+  if (
+    (laid.get(path) ?? "").split("\n").some(isLine) &&
+    !(back.get(path) ?? "").split("\n").some(isLine)
+  )
+    fail(path, "reply-fallback", `the reply rule of ${container.name} is missing or altered`);
 };
 
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
@@ -270,7 +295,10 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
     };
     const own = shared.filter((entry) => sharedContainer(containers, entry) === container);
     checkContainer(container, own, { back, laid, flow, fail });
-    if (container.kind === "session") checkSessionList(container, { back, laid, flow, fail });
+    if (container.kind === "session") {
+      checkSessionList(container, { back, laid, flow, fail });
+      checkReplyFallback(container, { back, laid, flow, fail });
+    } else checkSessionStates({ back, laid, flow, fail });
     checkConnected(container, { back, laid, flow, fail });
   }
 

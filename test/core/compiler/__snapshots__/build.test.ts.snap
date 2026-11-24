@@ -143,7 +143,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     }
   ],
   "files": {
-    "sessions/main/CLAUDE.md": "e6e72231270a6ffc4063e193b798d1830b1f5cf0bebdc82835134c8cd7fc69b3",
+    "sessions/main/CLAUDE.md": "eee2cf251c2af158a3d675ee2b58d82284ead73392bd40dd2cf97db8addba1e5",
     "sessions/main/plugin/.claude-plugin/plugin.json": "889a5055dba69a8ba5e084f8f72077de21b44af9adee44d90d0e68ecb918dc9c",
     "sessions/main/plugin/agents/a.md": "4fb165349608524a0a063300f21296dd834dc034040a6d645ae4d59c06fa23df",
     "sessions/main/plugin/agents/p.md": "e61281fb41103f42d043ddeaa3e971584f033408f9bfc09f4642fed7710041d9",
@@ -152,7 +152,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
     "sessions/main/plugin/skills/run/SKILL.md": "baafa9f89779ce89bd32ddf47d52051ea2816d2c70d4bf5d471d3f52815113a6",
     "sessions/main/settings.json": "f02589aad666d56d676f6c45832f3a56efcad63a5a8c18f86dd79e36acc21d61",
-    "workspace/CLAUDE.md": "b5e1d52487a32c035f583e3fc28c1ae6d5faa77807811d540cfc34380dcaded6",
+    "workspace/CLAUDE.md": "28b76962b551d70c863d941dd96cd49c0648e66dfc3e3aa0502ce4b07fad0905",
     "workspace/plugin/.claude-plugin/plugin.json": "8e0ed1032a519a50555f09a3c50972864cfe372b93977cffffb9b142c2e5baa9",
     "workspace/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "workspace/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
@@ -160,7 +160,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "workspace/plugin/skills/run/SKILL.md": "77446319989affd5a82c039d4a8a797a163a915198b1e14f4903bc02edf7c6b4",
     "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "7f0ef5bf9746f5223007920396bc59b77d4772e56e708d417cdde0d7b9f6c161",
+  "hash": "8cccc0cc7ee3bdf9e6b014be16ea29f3a83a11bc3bc799fc0dfc5af221fbb2ee",
   "layout": "workspace",
   "outputs": [
     {
@@ -193,7 +193,8 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
 - Workspace folder (read only): /fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace; never edit or write files in it
 - Changes the workspace needs go to the workspace session by message
 - Never ask or raise anything to the user; only the workspace session talks to the user
-- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX, then wait for its reply before going on
+- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable FD_WORKSPACE_TMUX
+- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.
 
 ## Standard rules
 
@@ -442,6 +443,12 @@ Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\
 \`\`\`sh
 tmux -L "$FD_SESSION_MAIN_TMUX" new-session -d -s "$FD_SESSION_MAIN_TMUX" -c '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo' -e FLOWDECK_SOCK="$FLOWDECK_SOCK" -e FLOWDECK_HOOK_NODE="$FLOWDECK_HOOK_NODE" -e FLOWDECK_HOOK_SCRIPT="$FLOWDECK_HOOK_SCRIPT" -e FD_WORKSPACE_TMUX="$FD_WORKSPACE_TMUX" -e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID -u CLAUDE_EFFORT claude --session-id "$FD_SESSION_MAIN_ID" --name "$FD_SESSION_MAIN_TMUX" --model 'sonnet' --settings '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/settings.json' --plugin-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/plugin' --add-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace' '/fix-login-main:run'
 \`\`\`
+
+## Session states
+
+- \`$FD_SESSION_STATES\` names a file with one line per session container: its tmux name (the value of its \`FD_SESSION_<SLUG>_TMUX\`), then its state. Read it with \`cat "$FD_SESSION_STATES"\`.
+- States: \`not-started\`, \`running\`, \`waiting\` (it waits for a permission answer), \`done\` (it reached its Stop), \`failed\` (it failed or its tmux ended before its Stop).
+- A session that sent you a question and ended its turn reads \`running\`; your reply wakes it.
 
 ## Standard rules
 

@@ -200,6 +200,33 @@ describe("openClaudeSession", () => {
     },
   );
 
+  it("publishes the session state file as FD_SESSION_STATES beside FD_WORKSPACE_TMUX", async () => {
+    const sessions = new SlowStartHost();
+    const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+    const opened = await openClaudeSession(
+      { ...options, sessionStatesPath: "/fd/runs/r1/session-states" },
+      { sessions, claude, sessionId: "s1" },
+    );
+    sessions.finishStart();
+
+    await opened.session.ensureStarted();
+
+    expect(sessions.get("fd-run")?.env?.["FD_WORKSPACE_TMUX"]).toBe("fd-run");
+    expect(sessions.get("fd-run")?.env?.["FD_SESSION_STATES"]).toBe("/fd/runs/r1/session-states");
+    await opened.stop();
+  });
+
+  it("sets no FD_SESSION_STATES when no session state file is given", async () => {
+    const sessions = new SlowStartHost();
+    const opened = await open(sessions);
+    sessions.finishStart();
+
+    await opened.session.ensureStarted();
+
+    expect(sessions.get("fd-run")?.env).not.toHaveProperty("FD_SESSION_STATES");
+    await opened.stop();
+  });
+
   describe("for a workspace build", () => {
     const openWorkspace = (overrides: { resume?: boolean } = {}) => {
       const sessions = new SlowStartHost();

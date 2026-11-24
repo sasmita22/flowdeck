@@ -30,6 +30,7 @@ export type OpenSessionOptions = {
   attach?: boolean;
   resume?: boolean;
   env?: Record<string, string>;
+  sessionStatesPath?: string;
 } & ({ layout: "legacy" } | { layout: "workspace"; workspaceFolder: string });
 
 export type OpenedSession = {

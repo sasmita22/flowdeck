@@ -12,6 +12,7 @@ import {
   hookSettings,
   sessionEnvNames,
   type SessionEnvNames,
+  sessionStatesVariable,
   workspaceTmuxVariable,
 } from "./hook-settings.js";
 import type { BuildFile, lower, Manifest, ManifestContainer } from "./lower.js";
@@ -53,11 +54,15 @@ const blueprintLine = (target: Pick<EmitTarget, "blueprint">) =>
 
 const withRules = (summary: readonly string[]) => `${summary.join("\n")}\n\n${standardRules.text}`;
 
+export const replyFallbackLine =
+  "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.";
+
 const readOnlyWorkspace = (dir: string) => [
   `- Workspace folder (read only): ${workspaceFolder(dir)}; never edit or write files in it`,
   "- Changes the workspace needs go to the workspace session by message",
   "- Never ask or raise anything to the user; only the workspace session talks to the user",
-  `- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable ${workspaceTmuxVariable}, then wait for its reply before going on`,
+  `- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable ${workspaceTmuxVariable}`,
+  replyFallbackLine,
 ];
 
 export const connectedSessionsHeading = "## Connected sessions";
@@ -175,6 +180,20 @@ const pairList = (containers: readonly ManifestContainer[], connections: Connect
       ];
 };
 
+export const sessionStatesHeading = "## Session states";
+
+const sessionStatesSection = (containers: readonly ManifestContainer[]) =>
+  containers.some((container) => container.kind === "session")
+    ? [
+        "",
+        sessionStatesHeading,
+        "",
+        `- \`$${sessionStatesVariable}\` names a file with one line per session container: its tmux name (the value of its \`FD_SESSION_<SLUG>_TMUX\`), then its state. Read it with \`cat "$${sessionStatesVariable}"\`.`,
+        "- States: `not-started`, `running`, `waiting` (it waits for a permission answer), `done` (it reached its Stop), `failed` (it failed or its tmux ended before its Stop).",
+        "- A session that sent you a question and ended its turn reads `running`; your reply wakes it.",
+      ]
+    : [];
+
 const workspaceSessionClaudeMd = (
   build: { name: string; values: VariableValues },
   target: Pick<ContainerTarget, "blueprint" | "workspace">,
@@ -190,6 +209,7 @@ const workspaceSessionClaudeMd = (
     "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below",
     ...sortedValues(build.values),
     ...sessionList(containers, target.workspace, connections),
+    ...sessionStatesSection(containers),
     ...pairList(containers, connections),
   ]);
 

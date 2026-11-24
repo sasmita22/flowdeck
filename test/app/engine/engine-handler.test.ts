@@ -5366,6 +5366,62 @@ describe("createEngineHandler", async () => {
           release();
         });
 
+        describe("session states", () => {
+          const statesPath = (runId: string) => join(home, "runs", runId, "session-states");
+
+          const statesOf = (runId: string) => readFile(statesPath(runId), "utf8").catch(() => "");
+
+          const lines = (...entries: [string, string][]) =>
+            entries.map(([tmuxName, state]) => `${tmuxName} ${state}\n`).join("");
+
+          it("writes both sessions not-started under the run's folder, then done for a session whose Stop is recorded, and gives the workspace that path", async () => {
+            const { runId, workspace, android, ios } = await startWorkspaceFirst();
+
+            await vi.waitFor(async () =>
+              expect(await statesOf(runId)).toBe(
+                lines([android.tmuxName, "not-started"], [ios.tmuxName, "not-started"]),
+              ),
+            );
+            expect(workspace.sessionStatesPath).toBe(statesPath(runId));
+
+            hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+
+            await vi.waitFor(async () =>
+              expect(await statesOf(runId)).toBe(
+                lines([android.tmuxName, "done"], [ios.tmuxName, "not-started"]),
+              ),
+            );
+            release();
+            await endOf(runId);
+          });
+
+          it("rewrites the file from the stored events when the run is resumed", async () => {
+            const { runId, workspace, android, ios } = await startWorkspaceFirst();
+            alive.add(android.tmuxName);
+            hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+            hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan"));
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("done"));
+            expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
+            await rm(statesPath(runId), { force: true });
+            const openedBefore = claude.opened.length;
+
+            expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
+
+            await vi.waitFor(async () =>
+              expect(await statesOf(runId)).toBe(
+                lines([android.tmuxName, "running"], [ios.tmuxName, "not-started"]),
+              ),
+            );
+            expect(
+              claude.opened
+                .slice(openedBefore)
+                .find((opening) => opening.sessionName === workspace.sessionName)
+                ?.sessionStatesPath,
+            ).toBe(statesPath(runId));
+            release();
+          });
+        });
+
         describe("a started session found gone when Flowdeck picks the run up again", () => {
           const androidPlansAndBuilds = (): Flow => {
             const built = sessionsWorkflow(
@@ -5894,6 +5950,19 @@ describe("createEngineHandler", async () => {
         expect(narrator.calls).toEqual([]);
         expect(pushes).not.toContainEqual({ push: "story", runId });
         expect(await runBuild(buildId)).toMatchObject({ kind: "started" });
+      });
+
+      it("removes the run's folder", async () => {
+        blueprints.save(twoAgents());
+        const runId = await startedOn(await builtId());
+        await untilFinished(runId);
+        const folder = join(home, "runs", runId);
+        await mkdir(folder, { recursive: true });
+        await writeFile(join(folder, "session-states"), "fd-run-a done\n");
+
+        await deleteRun(runId);
+
+        await expect(stat(folder)).rejects.toThrow(/ENOENT/);
       });
 
       it("does not pick a deleted run up again when the engine reattaches", async () => {
