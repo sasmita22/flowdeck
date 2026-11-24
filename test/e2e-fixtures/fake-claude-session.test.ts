@@ -16,6 +16,7 @@ import {
   agent,
   flow,
   fork,
+  hardstop,
   join as joinNode,
   output,
   thenWire,
@@ -23,7 +24,11 @@ import {
 } from "../fixtures/flow-builders.js";
 import { killTmuxServer } from "../fixtures/live-claude.js";
 
-type HookEvent = { hook_event_name: string; tool_input?: { prompt?: string } };
+type HookEvent = {
+  hook_event_name: string;
+  tool_input?: { prompt?: string };
+  last_assistant_message?: string;
+};
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -47,6 +52,18 @@ const forkFlow = (): Flow =>
       thenWire("j", "c"),
       thenWire("c", "o"),
     ],
+  );
+
+const hardStopFlow = (): Flow =>
+  flow(
+    [
+      labelled(trigger("t"), "Start"),
+      labelled(agent("a"), "A"),
+      labelled(hardstop("h"), "Guard"),
+      labelled(agent("b"), "B"),
+      labelled(output("o"), "Stop"),
+    ],
+    [thenWire("t", "a"), thenWire("a", "h"), thenWire("h", "b"), thenWire("b", "o")],
   );
 
 const runSkillOf = (input: Flow) => {
@@ -119,13 +136,19 @@ describe("the fake Claude session", () => {
     await expect(cli.waitUntilReady(name)).resolves.toBeUndefined();
   });
 
-  it("dispatches a Fork's branches as one batch before the steps after the Join", async () => {
+  const runFake = async (input: Flow, agentFiles: Record<string, string> = {}) => {
     dir = await mkdtemp(join(tmpdir(), "fd-fake-session-"));
     const bin = join(dir, "bin");
     await writeFakeClaude(bin);
-    const skill = runSkillOf(forkFlow());
+    const skill = runSkillOf(input);
     await mkdir(dirname(join(dir, skill.path)), { recursive: true });
     await writeFile(join(dir, skill.path), skill.content);
+    const pieces = pieceNames(input);
+    for (const [nodeId, text] of Object.entries(agentFiles)) {
+      const agents = join(dir, "plugin", "agents");
+      await mkdir(agents, { recursive: true });
+      await writeFile(join(agents, `${pieces.get(nodeId) ?? nodeId}.md`), text);
+    }
     const sessions = new TmuxSessionHost({ socketName: name });
     const command = [
       process.execPath,
@@ -149,6 +172,12 @@ describe("the fake Claude session", () => {
     await expect
       .poll(() => events.some((event) => event.hook_event_name === "Stop"), { timeout: 10_000 })
       .toBe(true);
+    return events;
+  };
+
+  it("dispatches a Fork's branches as one batch before the steps after the Join", async () => {
+    const events = await runFake(forkFlow());
+
     expect(
       events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
     ).toEqual([
@@ -160,5 +189,14 @@ describe("the fake Claude session", () => {
       "PostToolUse c",
       "Stop",
     ]);
+  });
+
+  it("stops at the hard stop after a node holding the hardstop verb", async () => {
+    const events = await runFake(hardStopFlow(), { a: "fake: hardstop" });
+
+    expect(
+      events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
+    ).toEqual(["PreToolUse a", "PostToolUse a", "Stop"]);
+    expect(events.at(-1)?.last_assistant_message?.split("\n").at(-1)).toBe("STOPPED NODE h");
   });
 });

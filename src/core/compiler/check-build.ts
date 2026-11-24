@@ -1,5 +1,6 @@
 import { handoffPairs } from "../flow/handoff.js";
 import type { Flow } from "../flow/schema.js";
+import { stopMarker } from "../run/stop-marker.js";
 import type { BuildReport } from "./build-report.js";
 import {
   connectedSessionsHeading,
@@ -10,6 +11,7 @@ import {
 } from "./emit.js";
 import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
+import { stopsTheRun } from "../run/stop-marker.js";
 import { containerRoot, pieceOf } from "./pieces.js";
 import { scopeLine, scopeOf } from "./scope-line.js";
 import { sharedContainer, sharedPath } from "./shared.js";
@@ -211,13 +213,25 @@ const checkContainer = (
 
   const orchestratorPath = container.orchestrator;
   const orchestrator = back.get(orchestratorPath);
-  const marked = (orchestrator ?? "")
-    .split("\n")
-    .flatMap((line) => /^\d+\. NODE (\S+) /.exec(line)?.[1] ?? []);
+  const stepLines = (orchestrator ?? "").split("\n").flatMap((line) => {
+    const id = /^\d+\. NODE (\S+) /.exec(line)?.[1];
+    return id === undefined ? [] : [{ id, line }];
+  });
+  const marked = stepLines.map((step) => step.id);
   const expected = container.nodes.map((node) => node.id);
   if (orchestrator === undefined) fail(orchestratorPath, "missing", "the orchestrator is missing");
   else if (marked.join("\n") !== expected.join("\n"))
     fail(orchestratorPath, "orchestrator", "NODE markers do not follow the manifest's order");
+  for (const node of container.nodes.filter(stopsTheRun)) {
+    const marker = `\`${stopMarker(node.id)}\``;
+    const step = stepLines.find((candidate) => candidate.id === node.id);
+    if (step !== undefined && !step.line.includes(marker))
+      fail(
+        orchestratorPath,
+        "stop-marker",
+        `the step line of NODE ${node.id} in ${container.name} lost its ${marker} line`,
+      );
+  }
 };
 
 const workspaceClaudeMdPath = `${containerRoot({ kind: "workspace", slug: "workspace" })}/CLAUDE.md`;

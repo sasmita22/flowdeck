@@ -103,7 +103,7 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
-const directivePattern = /fake: (start|wait|fail|hang|pause)(?: ([A-Za-z0-9_-]+))?/g;
+const directivePattern = /fake: (start|wait|fail|hang|pause|hardstop)(?: ([A-Za-z0-9_-]+))?/g;
 const directivesIn = (text) => [...text.matchAll(directivePattern)].map(([, verb, slug]) => ({ verb, slug }));
 const pluginDirs = () => argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "")] : []));
 const pieceOfType = (agentType) => agentType.slice(agentType.indexOf(":") + 1);
@@ -422,7 +422,11 @@ const sessionTurn = async () => {
     const match = dispatchLine.exec(line);
     return match === null ? [] : [{ nodeId: match[1], agentType: match[2] }];
   };
-  const batches = [...steps.matchAll(stepLine)].map(([line]) => batchOf(line)).filter((batch) => batch.length > 0);
+  const batches = [...steps.matchAll(stepLine)]
+    .map((match) => ({ calls: batchOf(match[0]), at: match.index }))
+    .filter(({ calls }) => calls.length > 0);
+  const hardStopLine = /^\\d+\\. NODE \\S+ .*?: hard rule: .*\\x60(STOPPED NODE \\S+)\\x60/gm;
+  const hardStops = [...steps.matchAll(hardStopLine)].map((match) => ({ marker: match[1], at: match.index }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
   say("────────");
@@ -430,7 +434,7 @@ const sessionTurn = async () => {
   say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
-  for (const batch of batches) {
+  for (const { calls: batch, at } of batches) {
     const calls = batch.map(({ nodeId, agentType }) => ({
       nodeId,
       agentType,
@@ -465,6 +469,13 @@ const sessionTurn = async () => {
       await pause(50);
       await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
       return say("Stop");
+    }
+    if (calls.some(({ verbs }) => verbs.includes("hardstop"))) {
+      const marker = hardStops.find((hardStop) => hardStop.at > at)?.marker;
+      await pause(50);
+      await post({ hook_event_name: "Stop", last_assistant_message: marker === undefined ? "ok" : "Hard stop.\\n" + marker });
+      say(marker ?? "Stop");
+      return ended();
     }
   }
   await pause(50);
