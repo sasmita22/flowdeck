@@ -217,9 +217,9 @@ void handler
 
 process.on("SIGTERM", () => {
   void handler
-    .then((ready) => ready.detach())
+    .then((ready) => ready.shutDown())
     .catch((error: unknown) => {
-      console.log(`engine: detach error ${errorText(error)}`);
+      console.log(`engine: shutdown error ${errorText(error)}`);
     })
     .finally(() => process.exit(0));
 });

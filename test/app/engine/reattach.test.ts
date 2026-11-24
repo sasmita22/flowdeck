@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -18,10 +18,13 @@ import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { PendingWait } from "../../../src/core/run/wait.js";
+import { blueprintSessionFolder } from "../../../src/core/compiler/blueprint-session.js";
+import { FakeBlueprintSessions } from "../../fakes/fake-blueprint-sessions.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
+import { FakeGithubTokenSource } from "../../fakes/fake-github-token.js";
 import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
@@ -360,6 +363,61 @@ describe("an app restart", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("shutting down", () => {
+    it("waits for a prompt still being sent before letting go of the run", async () => {
+      let release: () => void = () => undefined;
+      sending.held = new Promise((resolve) => (release = resolve));
+      const first = newHandler();
+      await start(first, onWorkspaceMainFlow([agent("p1")], []));
+      await vi.waitFor(() => expect(sending.started).toBe(1));
+      let shutDown = false;
+
+      const shuttingDown = first.shutDown().then(() => (shutDown = true));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(shutDown).toBe(false);
+      release();
+      await shuttingDown;
+
+      expect(shutDown).toBe(true);
+    });
+
+    it("still stops blueprint sessions when letting go of a run fails", async () => {
+      const sessions = new FakeBlueprintSessions();
+      await mkdir(blueprintSessionFolder(home, "flow-a"), { recursive: true });
+      await sessions.start({
+        session: "fd-bp-flow-a",
+        cwd: blueprintSessionFolder(home, "flow-a"),
+        settingsPath: "settings.json",
+        mcpConfigPath: "mcp.json",
+        kitDir: "/kit",
+        socketPath: "/bp.sock",
+      });
+      const first = newHandler(
+        {
+          blueprint: {
+            sessions,
+            kitDir: "/kit",
+            mcpScript: { nodePath: process.execPath, scriptPath: "/flowdeck-mcp.cjs" },
+            githubToken: new FakeGithubTokenSource(undefined),
+          },
+        },
+        {
+          startEvents: async () => ({
+            events,
+            stop: async () => {
+              throw new Error("socket gone");
+            },
+          }),
+        },
+      );
+      await start(first, askedAtGate());
+
+      await first.shutDown();
+
+      expect(await sessions.alive("fd-bp-flow-a")).toBe(false);
     });
   });
 
