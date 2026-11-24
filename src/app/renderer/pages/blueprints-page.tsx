@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
@@ -13,6 +13,8 @@ import { PinButton } from "../pin-button.js";
 import type { RunState } from "../run-store.js";
 import type { SaveState } from "../save-store.js";
 import { pageTestIds } from "../test-ids.js";
+import { UsedByList } from "../used-by-list.js";
+import { libraryUsers } from "../used-by.js";
 import { DeleteBlueprintPrompt } from "./delete-blueprint-prompt.js";
 import { Empty, PageHead } from "./page-head.js";
 
@@ -35,6 +37,8 @@ function BlueprintCard({
   const busy = useStore(run, (state) => state.starting);
   const building = useStore(buildProgress, selectFlowBuilding(flow.flowId));
   const isLibrary = flow.kind !== "workflow";
+  const flows = useStore(library, (state) => state.flows);
+  const users = useMemo(() => libraryUsers(flows, flow.flowId), [flows, flow.flowId]);
 
   const commit = async () => {
     if (draft === null) return;
@@ -108,6 +112,17 @@ function BlueprintCard({
         <p className="fd-hint" data-testid={pageTestIds.blueprintBuildReason(flow.flowId)}>
           {libraryBuildReason}
         </p>
+      )}
+      {users !== null && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span className="fd-hint">Used by</span>
+          <UsedByList
+            scope="card"
+            libraryId={flow.flowId}
+            users={users}
+            onOpen={(flowId) => void actions.openBlueprint(flowId)}
+          />
+        </div>
       )}
       <div className="fd-card-actions">
         <button

@@ -2382,6 +2382,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
               .some((pending) => pending.flowId === flowId && pending.endedAt === undefined);
             if (building)
               throw new Error("This blueprint is being built. Wait for the build to end first.");
+            const users = stores.flows.usedBy(flowId);
+            if (users.length > 0)
+              throw new Error(
+                `This library is used by ${users.map(({ name }) => name).join(", ")}. Remove it from those blueprints before deleting it.`,
+              );
             stores.flows.delete(flowId);
             if (options.blueprint !== undefined) {
               await stopBlueprintSession(options.blueprint.sessions, flowId);

@@ -1,3 +1,4 @@
+import type { FlowSummary } from "./flow-store.js";
 import { decidedByValue } from "../nodes/branch/settings.js";
 import { canvasStart, mainFlow, mainFlowOnly } from "./main-flow.js";
 import type { Connection, Flow, FlowContainer, Node, SessionContainer, Wire } from "./schema.js";
@@ -23,6 +24,19 @@ export const libraryUses = (flow: Flow): string[] => [
     ),
   ),
 ];
+
+export function usedBy(summaries: readonly FlowSummary[], libraryId: string): FlowSummary[] {
+  const reached = new Set<string>([libraryId]);
+  const pending = [libraryId];
+  for (let used = pending.pop(); used !== undefined; used = pending.pop()) {
+    for (const user of summaries) {
+      if (reached.has(user.flowId) || !user.uses.includes(used)) continue;
+      reached.add(user.flowId);
+      pending.push(user.flowId);
+    }
+  }
+  return summaries.filter((summary) => summary.flowId !== libraryId && reached.has(summary.flowId));
+}
 
 export function libraryLoop(
   usesOf: (id: string) => readonly string[] | undefined,

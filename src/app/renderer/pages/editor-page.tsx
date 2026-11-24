@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { AssistantState } from "../assistant/assistant-store.js";
 import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
+import type { Actions } from "../actions.js";
 import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
@@ -168,6 +169,7 @@ export function EditorPage({
   branches,
   assistant,
   blueprintTerminal,
+  actions,
 }: {
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;
@@ -179,6 +181,7 @@ export function EditorPage({
   branches?: StoreApi<BranchState>;
   assistant: StoreApi<AssistantState>;
   blueprintTerminal: StoreApi<TerminalState>;
+  actions: Pick<Actions, "openBlueprint">;
 }) {
   const ready = useStore(canvas, (state) => state.ready);
   const agentVisible = useStore(assistant, (state) => state.visible);
@@ -234,6 +237,7 @@ export function EditorPage({
             onSelectNode={highlight}
             inspector={inspector}
             branches={branches}
+            actions={actions}
           />
         )}
       </div>

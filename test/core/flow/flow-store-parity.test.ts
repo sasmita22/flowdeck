@@ -300,3 +300,33 @@ describe.each(kinds)("%s summary", (_name, kind) => {
     ]);
   });
 });
+
+describe.each(kinds)("%s usedBy", (_name, kind) => {
+  const open = withStores(kind);
+
+  const chain = () => {
+    const store = open();
+    store.save(throughCanvas([agent("plan")]), { name: "B" });
+    store.save(throughCanvas([libraryNode("use-b", "flow-a", "B")]), { name: "A" });
+    store.save(onMainFlow([libraryNode("use-a", "flow-b", "A")], []), { name: "W1" });
+    return store;
+  };
+
+  const userIds = (store: FlowStore, flowId: string) =>
+    store
+      .usedBy(flowId)
+      .map(({ flowId: id }) => id)
+      .sort();
+
+  it("lists the blueprints that use a library directly and through another library", () => {
+    expect(userIds(chain(), "flow-a")).toEqual(["flow-b", "flow-c"]);
+  });
+
+  it("leaves a deleted blueprint out of a library's users", () => {
+    const store = chain();
+
+    store.delete("flow-c");
+
+    expect(userIds(store, "flow-a")).toEqual(["flow-b"]);
+  });
+});

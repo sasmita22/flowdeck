@@ -8,6 +8,7 @@ import {
 import { createNavStore } from "../../../src/app/renderer/nav-store.js";
 import { createSaveStore } from "../../../src/app/renderer/save-store.js";
 import { agent, flow } from "../../fixtures/flow-builders.js";
+import { flowSummary as summary } from "../../fixtures/flow-summary.js";
 
 type SaveBridge = Pick<
   FlowdeckBridge,
@@ -641,5 +642,120 @@ describe("leaving the editor asks once", () => {
     expect(nav.getState().page).toEqual({ name: "editor" });
     expect(selectDirty(canvas.getState())).toBe(false);
     expect(prompts()).toBe(1);
+  });
+});
+
+describe("saving a library in use", () => {
+  const openLibrary = async (summaries: ReturnType<typeof summary>[]) => {
+    const ctx = await setup({ latest: () => Promise.resolve(savedFlow()) });
+    ctx.canvas.getState().setLibraries(summaries, "flow-1");
+    makeDirty(ctx.canvas);
+    return ctx;
+  };
+
+  const inUse = () =>
+    openLibrary([
+      summary("w1", "workflow", ["a"]),
+      summary("a", "node-library", ["flow-1"]),
+      summary("flow-1", "node-library", []),
+    ]);
+
+  it("asks first, naming every blueprint it changes, and cancel saves nothing", async () => {
+    const { bridge, canvas, store } = await inUse();
+
+    const saving = store.getState().save();
+
+    expect(store.getState().saveWarning).toEqual({ count: 2 });
+    expect(bridge.saveFlow).not.toHaveBeenCalled();
+
+    store.getState().answerSaveWarning("cancel");
+
+    await expect(saving).resolves.toBe(false);
+    expect(bridge.saveFlow).not.toHaveBeenCalled();
+    expect(selectDirty(canvas.getState())).toBe(true);
+    expect(store.getState()).toMatchObject({
+      saveWarning: null,
+      saveCancelled: true,
+      error: null,
+    });
+  });
+
+  it("saves once the warning is answered with save", async () => {
+    const { bridge, canvas, store } = await inUse();
+
+    const saving = store.getState().save();
+    store.getState().answerSaveWarning("save");
+
+    await expect(saving).resolves.toBe(true);
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(selectDirty(canvas.getState())).toBe(false);
+    expect(store.getState()).toMatchObject({ saveWarning: null, saveCancelled: false });
+  });
+
+  it("asks only once when save is pressed again while the warning is open", async () => {
+    const { bridge, store } = await inUse();
+
+    const first = store.getState().save();
+    await expect(store.getState().save()).resolves.toBe(false);
+    store.getState().answerSaveWarning("save");
+
+    await expect(first).resolves.toBe(true);
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a library nothing uses without asking", async () => {
+    const { bridge, store } = await openLibrary([
+      summary("w1", "workflow", ["a"]),
+      summary("a", "node-library", []),
+      summary("flow-1", "node-library", []),
+    ]);
+
+    await expect(store.getState().save()).resolves.toBe(true);
+
+    expect(store.getState().saveWarning).toBeNull();
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a new blueprint without asking", async () => {
+    const { bridge, canvas, store } = await setup();
+    canvas.getState().setLibraries([summary("w1", "workflow", ["a"])], null);
+    makeDirty(canvas);
+
+    await expect(store.getState().save()).resolves.toBe(true);
+
+    expect(store.getState().saveWarning).toBeNull();
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before saving on the way out, and cancel stays without saving", async () => {
+    const { bridge, canvas, store } = await inUse();
+    const next = vi.fn(async () => undefined);
+
+    void store.getState().leave(next);
+    const answering = store.getState().answerLeave("save");
+    await vi.waitFor(() => expect(store.getState().saveWarning).toEqual({ count: 2 }));
+
+    store.getState().answerSaveWarning("cancel");
+    await answering;
+
+    expect(bridge.saveFlow).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(selectDirty(canvas.getState())).toBe(true);
+    expect(store.getState()).toMatchObject({ leavePrompt: false, error: null });
+  });
+
+  it("asks before saving on close, and cancel keeps the window open", async () => {
+    const { bridge, requestClose, store } = await inUse();
+    requestClose();
+
+    const answering = store.getState().answerClose("save");
+    await vi.waitFor(() => expect(store.getState().saveWarning).toEqual({ count: 2 }));
+
+    store.getState().answerSaveWarning("cancel");
+    await answering;
+
+    expect(bridge.saveFlow).not.toHaveBeenCalled();
+    expect(bridge.answerClose.mock.calls).toEqual([["cancel"]]);
+    expect(store.getState()).toMatchObject({ closePrompt: false, error: null });
   });
 });

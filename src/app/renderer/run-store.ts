@@ -487,7 +487,8 @@ export const createRunStore = ({
 
     const savedSource = async (): Promise<BuildSource | null> => {
       if (!(await saveFirst())) {
-        set({ error: save.getState().error ?? "The blueprint could not be saved" });
+        const { saveCancelled, error } = save.getState();
+        if (!saveCancelled) set({ error: error ?? "The blueprint could not be saved" });
         return null;
       }
       const { flowId, version } = save.getState();

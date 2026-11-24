@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ActivityEntry } from "../../../core/run/activity.js";
+import type { Actions } from "../actions.js";
 import type { BranchState } from "../branch-store.js";
 import { selectSelectedNode, type CanvasState } from "../canvas/store.js";
 import { statusBadge } from "../canvas/status-look.js";
@@ -226,11 +227,13 @@ function CanvasSettings({
   canvas,
   shell,
   branches,
+  actions,
   children,
 }: {
   canvas: StoreApi<CanvasState>;
   shell: StoreApi<ShellState>;
   branches: StoreApi<BranchState> | undefined;
+  actions: Pick<Actions, "openBlueprint"> | undefined;
   children: ReactNode;
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
@@ -244,7 +247,7 @@ function CanvasSettings({
     return (
       <>
         <h2 style={headingStyle}>Blueprint settings</h2>
-        <BlueprintSettingsSection canvas={canvas} />
+        <BlueprintSettingsSection canvas={canvas} actions={actions} />
       </>
     );
   }
@@ -272,6 +275,7 @@ export function Inspector({
   readOnly = false,
   page,
   branches,
+  actions,
 }: {
   inspector: StoreApi<InspectorState>;
   run: StoreApi<RunView>;
@@ -283,6 +287,7 @@ export function Inspector({
   readOnly?: boolean;
   page?: RunPageView | undefined;
   branches?: StoreApi<BranchState> | undefined;
+  actions?: Pick<Actions, "openBlueprint"> | undefined;
 }) {
   const width = useShownWidth(shell, run, "inspector");
   const runBody =
@@ -324,7 +329,7 @@ export function Inspector({
       {canvas === undefined || readOnly ? (
         runBody
       ) : (
-        <CanvasSettings canvas={canvas} shell={shell} branches={branches}>
+        <CanvasSettings canvas={canvas} shell={shell} branches={branches} actions={actions}>
           {runBody}
         </CanvasSettings>
       )}

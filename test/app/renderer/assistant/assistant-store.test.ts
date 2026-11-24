@@ -4,6 +4,7 @@ import { createAssistantStore } from "../../../../src/app/renderer/assistant/ass
 import { createCanvasStore } from "../../../../src/app/renderer/canvas/store.js";
 import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { agent, flow } from "../../../fixtures/flow-builders.js";
+import { flowSummary } from "../../../fixtures/flow-summary.js";
 
 type SaveReply =
   { kind: "saved"; flowId: string; version: number } | { kind: "error"; message: string };
@@ -40,7 +41,7 @@ const setup = async (options: { saved?: boolean; saveReply?: SaveReply } = {}) =
   const save = createSaveStore({ bridge: saveBridge, canvas });
   await save.getState().open();
   const assistant = createAssistantStore({ bridge, save });
-  return { assistant, bridge, saveBridge, save };
+  return { assistant, bridge, saveBridge, save, canvas };
 };
 
 describe("createAssistantStore", () => {
@@ -90,6 +91,21 @@ describe("createAssistantStore", () => {
       bridge.startBlueprintSession.mock.invocationCallOrder[0] ?? 0,
     );
     expect(assistant.getState()).toMatchObject({ flowId: "flow-new", session: "fd-bp-flow-new" });
+  });
+
+  it("saves a never-saved blueprint without the in-use warning, even with a library in use", async () => {
+    const { assistant, saveBridge, save, canvas } = await setup({ saved: false });
+    canvas
+      .getState()
+      .setLibraries(
+        [flowSummary("w1", "workflow", ["lib-b"]), flowSummary("lib-b", "node-library", [])],
+        null,
+      );
+
+    await assistant.getState().show();
+
+    expect(save.getState().saveWarning).toBeNull();
+    expect(saveBridge.saveFlow).toHaveBeenCalledTimes(1);
   });
 
   it("starts nothing when saving a never-saved blueprint fails", async () => {

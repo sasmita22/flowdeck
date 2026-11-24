@@ -407,4 +407,44 @@ describe("test ids", () => {
   it("names a blueprint card's reason its Build is disabled by the blueprint", () => {
     expect(pageTestIds.blueprintBuildReason("flow-a")).toBe("blueprint-build-reason-flow-a");
   });
+  it.each(["settings", "card", "delete"] as const)(
+    "names the %s Used by list, its empty line and each user's open link by the library",
+    (scope) => {
+      expect([
+        pageTestIds.usedByList(scope, "lib-b"),
+        pageTestIds.usedByNone(scope, "lib-b"),
+        pageTestIds.usedByOpen(scope, "lib-b", "flow-a"),
+      ]).toEqual([
+        `used-by-${scope}-lib-b`,
+        `used-by-none-${scope}-lib-b`,
+        `used-by-open-${scope}-lib-b-flow-a`,
+      ]);
+    },
+  );
+
+  it("gives the Used by list on the card and in the delete dialog over it their own ids", () => {
+    const ids = (["settings", "card", "delete"] as const).flatMap((scope) => [
+      pageTestIds.usedByList(scope, "lib-b"),
+      pageTestIds.usedByNone(scope, "lib-b"),
+      pageTestIds.usedByOpen(scope, "lib-b", "flow-a"),
+    ]);
+
+    expect(new Set(ids).size).toBe(9);
+  });
+
+  it("names the save warning's dialog, text and answers, and the in-use delete message", () => {
+    expect([
+      pageTestIds.saveWarningDialog,
+      pageTestIds.saveWarningText,
+      pageTestIds.saveWarningSave,
+      pageTestIds.saveWarningCancel,
+      pageTestIds.blueprintDeleteInUse,
+    ]).toEqual([
+      "save-warning-dialog",
+      "save-warning-text",
+      "save-warning-save",
+      "save-warning-cancel",
+      "blueprint-delete-in-use",
+    ]);
+  });
 });

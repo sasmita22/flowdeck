@@ -141,6 +141,7 @@ const unreadableFlows = (): FlowStore => ({
   pin: unreadable,
   delete: unreadable,
   isDeleted: unreadable,
+  usedBy: unreadable,
   save: unreadable,
   loadLatest: unreadable,
   load: unreadable,
@@ -724,6 +725,52 @@ describe("createEngineHandler", async () => {
         await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-a" } }),
       ).toEqual({ id: 1, ok: true, value: null });
       expect(flows.isDeleted("flow-a")).toBe(true);
+    });
+
+    it("refuses to delete a library a blueprint uses, naming that blueprint", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-b", "flow-a") });
+      flows.save(nodeLibrary("Planner"), { name: "B" });
+      flows.save(onWorkspaceMainFlow([libraryUse("flow-b")], []), { name: "A" });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+      expect(
+        await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-b" } }),
+      ).toEqual({
+        id: 1,
+        ok: false,
+        error: "This library is used by A. Remove it from those blueprints before deleting it.",
+      });
+      expect(flows.list().map(({ flowId }) => flowId)).toContain("flow-b");
+    });
+
+    it("refuses to delete a library whose only use is off the main flow", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-b", "flow-w") });
+      flows.save(nodeLibrary("Planner"), { name: "B" });
+      const off = savedFlow();
+      flows.save(parseFlow({ ...off, nodes: [...off.nodes, libraryUse("flow-b")] }), {
+        name: "W",
+      });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+      expect(
+        await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-b" } }),
+      ).toEqual({ id: 1, ok: false, error: expect.stringContaining("used by W.") });
+      expect(flows.list().map(({ flowId }) => flowId)).toContain("flow-b");
+    });
+
+    it("deletes a library once no blueprint uses it", async () => {
+      const flows = new FakeFlowStore({ newId: ids("flow-b", "flow-a") });
+      flows.save(nodeLibrary("Planner"), { name: "B" });
+      flows.save(onWorkspaceMainFlow([libraryUse("flow-b")], []), { name: "A" });
+      const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+      await handler.handle({ id: 1, type: "delete-flow", payload: { flowId: "flow-b" } });
+
+      flows.save(onWorkspaceMainFlow([agent("plan")], []), "flow-a");
+
+      expect(
+        await handler.handle({ id: 2, type: "delete-flow", payload: { flowId: "flow-b" } }),
+      ).toEqual({ id: 2, ok: true, value: null });
+      expect(flows.list().map(({ flowId }) => flowId)).toEqual(["flow-a"]);
     });
 
     it("names the blueprint of each build in the progress list, going or ended", async () => {

@@ -40,6 +40,7 @@ import {
   trigger,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
+import { flowSummary } from "../../fixtures/flow-summary.js";
 
 type RunBridge = Pick<
   FlowdeckBridge,
@@ -406,6 +407,26 @@ describe("the Build dialog", () => {
 
     expect(run.getState().buildDialog).toBeNull();
     expect(run.getState().error).toBe("disk full");
+  });
+
+  it("opens nothing and shows no error when the save warning is cancelled", async () => {
+    const { saveBridge, canvas, save, run } = await setup({ latest: configured(shopRepo) });
+    canvas
+      .getState()
+      .setLibraries(
+        [flowSummary("w1", "workflow", ["flow-1"]), flowSummary("flow-1", "node-library", [])],
+        "flow-1",
+      );
+    makeDirty(canvas);
+
+    const opening = run.getState().openBuild();
+    await vi.waitFor(() => expect(save.getState().saveWarning).toEqual({ count: 1 }));
+    save.getState().answerSaveWarning("cancel");
+    await opening;
+
+    expect(saveBridge.saveFlow).not.toHaveBeenCalled();
+    expect(run.getState().buildDialog).toBeNull();
+    expect(run.getState().error).toBeNull();
   });
 
   it("opens for a blueprint's latest version, starting from the repo's default branch when it names no base", async () => {
