@@ -6,6 +6,7 @@ import type { CostReport } from "./cost.js";
 import { displayStatus } from "./display.js";
 import type { StageNode, StageSources } from "./manifest.js";
 import { pipelineOf, type PipelineItem, type PipelineStage } from "./pipeline.js";
+import type { NodeState } from "./state.js";
 import { otherReposText, repoStateText, type OtherRepo, type RunRepoStates } from "./repo-state.js";
 import type { BuildRecord, RunStatus, StoredEvent } from "./store.js";
 import type { HumanDecision } from "./wait.js";
@@ -223,7 +224,10 @@ function itemLines(
   });
 }
 
-export function runDigest(input: DigestInput): RunDigest {
+export function runDigest(
+  input: DigestInput,
+  sessionStates?: Readonly<Record<string, NodeState>>,
+): RunDigest {
   const { build } = input;
   const otherRepos = input.repoStates?.otherRepos ?? [];
   const header: RunHeader = {
@@ -242,6 +246,7 @@ export function runDigest(input: DigestInput): RunDigest {
     input.activity,
     input.cost,
     input.status,
+    sessionStates,
   ).flatMap((group) => group.items);
   const pullRequests = [
     ...new Set(input.activity.flatMap((entry) => (entry.kind === "pr" ? [entry.url] : []))),

@@ -28,9 +28,9 @@ const node = (id: string, type = "agent", parent?: string): Source => ({
   ...(parent === undefined ? {} : { parent }),
 });
 
-const then = (from: string, to: string): Link => ({
+const then = (from: string, to: string, port = "out"): Link => ({
   kind: "then",
-  from: { node: from, port: "out" },
+  from: { node: from, port },
   to: { node: to, port: "in" },
 });
 
@@ -955,5 +955,170 @@ describe("pipelineOf per container", () => {
       "workspace-a1",
       "workspace-stop",
     ]);
+  });
+
+  describe("a session's steps that have no events of their own", () => {
+    const statusesIn = (items: readonly PipelineItem[]): Record<string, string> =>
+      Object.fromEntries(
+        items.flatMap((item) =>
+          "lanes" in item
+            ? item.lanes.flatMap((lane) => Object.entries(statusesIn(lane)))
+            : [
+                [item.nodeId, item.status],
+                ...(item.rounds ?? []).flatMap((round) =>
+                  Object.entries(statusesIn(round.items)).map(([id, status]) => [
+                    `${id}@${round.round}`,
+                    status,
+                  ]),
+                ),
+              ],
+        ),
+      );
+
+    const ran = (...ids: string[]): [string, number, RunEvent][] =>
+      ids.flatMap((id, index) => [
+        [id, index + 1, { kind: "running" }],
+        [id, index + 1, { kind: "done" }],
+      ]);
+
+    const forked = group(
+      "fs",
+      [
+        node("fs-start", "trigger"),
+        node("fs-f", "fork"),
+        node("fs-a"),
+        node("fs-b"),
+        node("fs-j", "join"),
+        node("fs-c"),
+        node("fs-stop", "output"),
+      ],
+      [
+        then("fs-start", "fs-f"),
+        then("fs-f", "fs-a"),
+        then("fs-f", "fs-b"),
+        then("fs-a", "fs-j"),
+        then("fs-b", "fs-j"),
+        then("fs-j", "fs-c"),
+        then("fs-c", "fs-stop"),
+      ],
+    );
+
+    const branched = group(
+      "bs",
+      [
+        node("bs-start", "trigger"),
+        node("bs-br", "branch"),
+        node("bs-a"),
+        node("bs-ask", "ask"),
+        node("bs-stop", "output"),
+      ],
+      [
+        then("bs-start", "bs-br"),
+        then("bs-br", "bs-a", "yes"),
+        then("bs-br", "bs-ask", "no"),
+        then("bs-a", "bs-stop"),
+        then("bs-ask", "bs-stop"),
+      ],
+    );
+
+    const sessionIn = (
+      session: Group,
+      rows: [string, number, RunEvent][],
+      run: Parameters<typeof pipelineOf>[4],
+    ) => grouped([workspace, session], [...workspaceDone, ...rows], run)[1];
+
+    it("shows every step of a finished forked session done", () => {
+      const result = sessionIn(forked, ran("fs-start", "fs-a", "fs-b", "fs-c", "fs-stop"), "done");
+
+      expect(result?.status).toBe("done");
+      expect(statusesIn(result?.items ?? [])).toEqual({
+        "fs-start": "done",
+        "fs-f": "done",
+        "fs-a": "done",
+        "fs-b": "done",
+        "fs-j": "done",
+        "fs-c": "done",
+        "fs-stop": "done",
+      });
+    });
+
+    it("shows the taken Branch done and the untaken Ask skipped", () => {
+      const result = sessionIn(branched, ran("bs-start", "bs-a", "bs-stop"), "done");
+
+      expect(statusesIn(result?.items ?? [])).toMatchObject({
+        "bs-br": "done",
+        "bs-ask": "skipped",
+      });
+    });
+
+    it("shows the Fork done and the Join waiting while the session runs", () => {
+      const result = sessionIn(forked, ran("fs-start", "fs-a"), "running");
+
+      expect(statusesIn(result?.items ?? [])).toMatchObject({
+        "fs-f": "done",
+        "fs-j": "waiting",
+      });
+    });
+
+    it("shows a Loop's round stages with the derived state of their node", () => {
+      const looped = group(
+        "ls",
+        [
+          node("ls-start", "trigger"),
+          node("ls-l", "loop"),
+          node("ls-la", "agent", "ls-l"),
+          node("ls-g", "gate", "ls-l"),
+          node("ls-lb", "agent", "ls-l"),
+          node("ls-stop", "output"),
+        ],
+        [
+          then("ls-start", "ls-l"),
+          then("ls-l", "ls-la"),
+          then("ls-la", "ls-g"),
+          then("ls-g", "ls-lb"),
+          then("ls-l", "ls-stop"),
+        ],
+      );
+
+      const result = sessionIn(looped, ran("ls-start", "ls-la", "ls-lb", "ls-stop"), "done");
+
+      expect(statusesIn(result?.items ?? [])).toMatchObject({
+        "ls-l": "done",
+        "ls-g@1": "done",
+      });
+    });
+
+    it("leaves a workspace step with no events waiting", () => {
+      const gated = group(
+        "workspace",
+        [node("w-start", "trigger"), node("w-g", "gate"), node("w-stop", "output")],
+        [then("w-start", "w-g"), then("w-g", "w-stop")],
+      );
+
+      const result = grouped([gated], ran("w-start", "w-stop"), "done");
+
+      expect(statusesIn(result[0]?.items ?? [])).toMatchObject({ "w-g": "waiting" });
+    });
+
+    it("applies given session states by node to steps that read waiting", () => {
+      const events = stored(ran("fs-start", "fs-a"));
+      const flat = { ...forked, name: "all" } as Group;
+
+      const result = pipelineOf(
+        [flat],
+        events,
+        [],
+        costReport({ nodeIds: [], events, pending: [], now: at(60) }),
+        "running",
+        { "fs-f": "done", "fs-a": "skipped", "fs-j": "skipped" },
+      );
+
+      expect(statusesIn(result[0]?.items ?? [])).toMatchObject({
+        "fs-f": "done",
+        "fs-a": "done",
+        "fs-j": "skipped",
+        "fs-c": "waiting",
+      });
+    });
   });
 });

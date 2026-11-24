@@ -5,6 +5,7 @@ import { activityEntrySchema, type ActivityEntry } from "./activity.js";
 import type { CostReport } from "./cost.js";
 import { plainReason } from "./failure.js";
 import type { DisplayStatus } from "./display.js";
+import { sessionOverlayOf } from "./finished-path.js";
 import type { StageGroup, StageNode } from "./manifest.js";
 import { decisionsOf, donePayload, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
 import { nodeStateSchema, type SnapshotStatus } from "./snapshot.js";
@@ -189,12 +190,13 @@ export function pipelineOf(
   activity: readonly ActivityEntry[],
   cost: CostReport,
   runStatus: SnapshotStatus,
+  sessionStates: Readonly<Record<string, NodeState>> = sessionOverlayOf(groups.slice(1), events),
 ): PipelineGroup[] {
   const eventsOf = grouped([...events].sort((a, b) => a.seq - b.seq));
   return groups.map((group) => ({
     name: group.name,
     status: containerStatusOf(group.nodes, eventsOf, runStatus),
-    items: itemsOfGroup(group.nodes, group.wires, events, activity, cost),
+    items: itemsOfGroup(group.nodes, group.wires, events, activity, cost, sessionStates),
   }));
 }
 
@@ -218,6 +220,7 @@ function itemsOfGroup(
   events: readonly StoredEvent[],
   activity: readonly ActivityEntry[],
   cost: CostReport,
+  sessionStates: Readonly<Record<string, NodeState>>,
 ): PipelineItem[] {
   const ids = order({ nodes, wires });
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -236,7 +239,8 @@ function itemsOfGroup(
   const stageOf = (node: StageNode, window: Window): PipelineStage => {
     const history = (eventsOf.get(node.id) ?? []).filter((event) => event.seq < window.toSeq);
     const own = history.filter((event) => event.seq >= window.fromSeq);
-    const status = nodeStatus(history);
+    const raw = nodeStatus(history);
+    const status = raw === "waiting" ? (sessionStates[node.id] ?? raw) : raw;
     const started = own.find((event) => startKinds.has(event.kind));
     const finished = finishedStates.has(status)
       ? own.findLast((event) => endKinds.has(event.kind))

@@ -24,9 +24,11 @@ import {
   type RunView,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
-import type { BuildConfig, Flow } from "../../../src/core/flow/schema.js";
+import type { BuildConfig, Flow, NodeType } from "../../../src/core/flow/schema.js";
 import type { FoundVariable } from "../../../src/core/flow/variables.js";
 import { recommendedBranch } from "../../../src/core/run/branch-name.js";
+import type { RunEvent } from "../../../src/core/run/run-events.js";
+import { runSnapshot } from "../../../src/core/run/snapshot.js";
 import type { NodeState } from "../../../src/core/run/state.js";
 import {
   agent,
@@ -2114,6 +2116,77 @@ describe("selectRunSummary", () => {
     expect(selectRunSummary({ snapshot: snapshot("done", nodes), pipeline } as RunView)).toBe(
       "Done · 3 of 4 nodes done",
     );
+  });
+});
+
+describe("selectRunSummary of a session run's snapshot", () => {
+  const then = (from: string, to: string, port = "out") => ({
+    kind: "then" as const,
+    from: { node: from, port },
+    to: { node: to, port: "in" },
+  });
+
+  const ran = (...ids: string[]): (RunEvent & { nodeId: string })[] =>
+    ids.flatMap((nodeId) => [
+      { nodeId, kind: "running" as const },
+      { nodeId, kind: "done" as const },
+    ]);
+
+  const summaryOf = (
+    session: { nodes: { id: string; type: NodeType }[]; wires: ReturnType<typeof then>[] },
+    events: (RunEvent & { nodeId: string })[],
+  ) =>
+    selectRunSummary({
+      snapshot: runSnapshot(
+        { runId: "r", status: "done", nodeIds: session.nodes.map((node) => node.id), events },
+        [session],
+      ),
+    });
+
+  it("counts every step of a finished forked session done", () => {
+    const forked = {
+      nodes: [
+        { id: "start", type: "trigger" as const },
+        { id: "f", type: "fork" as const },
+        { id: "a", type: "agent" as const },
+        { id: "b", type: "agent" as const },
+        { id: "j", type: "join" as const },
+        { id: "c", type: "agent" as const },
+        { id: "stop", type: "output" as const },
+      ],
+      wires: [
+        then("start", "f"),
+        then("f", "a"),
+        then("f", "b"),
+        then("a", "j"),
+        then("b", "j"),
+        then("j", "c"),
+        then("c", "stop"),
+      ],
+    };
+
+    expect(summaryOf(forked, ran("start", "a", "b", "c", "stop"))).toBe("Done · 7 of 7 nodes done");
+  });
+
+  it("does not count the skipped side of a finished Branch session", () => {
+    const branched = {
+      nodes: [
+        { id: "start", type: "trigger" as const },
+        { id: "br", type: "branch" as const },
+        { id: "a", type: "agent" as const },
+        { id: "ask", type: "ask" as const },
+        { id: "stop", type: "output" as const },
+      ],
+      wires: [
+        then("start", "br"),
+        then("br", "a", "yes"),
+        then("br", "ask", "no"),
+        then("a", "stop"),
+        then("ask", "stop"),
+      ],
+    };
+
+    expect(summaryOf(branched, ran("start", "a", "stop"))).toBe("Done · 4 of 5 nodes done");
   });
 });
 
