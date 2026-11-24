@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { TranscriptUsage } from "../../src/adapters/claude/transcript-usage.js";
@@ -8,6 +6,7 @@ import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { sessionEnvNames } from "../../src/core/compiler/hook-settings.js";
 import { costOf, usd } from "../../src/core/run/budget.js";
 import { findClaudeTranscript, useTempClaudeConfig } from "../fixtures/claude-config.js";
+import { paneText } from "../fixtures/live-evidence.js";
 import {
   killTmuxServer,
   readLines,
@@ -16,7 +15,6 @@ import {
 } from "../fixtures/live-claude.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 
-const run = promisify(execFile);
 const model = "haiku";
 
 describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a message between connected sessions", () => {
@@ -51,12 +49,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a message between connected 
     return cli;
   };
 
-  const transcriptText = async (sessionId: string) => {
-    const path = await findClaudeTranscript(sessionId);
-    if (path === undefined) return "";
-    return (await readLines<unknown>(path)).map((entry) => JSON.stringify(entry)).join("\n");
-  };
-
   type Block = {
     type?: string;
     id?: string;
@@ -66,16 +58,21 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a message between connected 
     content?: unknown;
   };
 
-  const blocksOf = async (sessionId: string): Promise<Block[]> => {
+  const entriesOf = async (sessionId: string): Promise<TranscriptEntry[]> => {
     const path = await findClaudeTranscript(sessionId);
-    if (path === undefined) return [];
-    return (await readLines<TranscriptEntry>(path)).flatMap(({ message }) =>
-      Array.isArray(message?.content) ? (message.content as Block[]) : [],
-    );
+    return path === undefined ? [] : readLines<TranscriptEntry>(path);
   };
 
-  const deliveredTo = async (sessionId: string, recipient: string) => {
-    const blocks = await blocksOf(sessionId);
+  const received = (entries: readonly TranscriptEntry[], token: string) =>
+    entries.some((entry) => {
+      const text = JSON.stringify(entry);
+      return text.includes("cross-session-message") && text.includes(token);
+    });
+
+  const deliveredTo = (entries: readonly TranscriptEntry[], recipient: string) => {
+    const blocks = entries.flatMap(({ message }) =>
+      Array.isArray(message?.content) ? (message.content as Block[]) : [],
+    );
     const sends = blocks.filter(
       (block) =>
         block.type === "tool_use" && block.name === "SendMessage" && block.input?.to === recipient,
@@ -87,9 +84,6 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a message between connected 
         JSON.stringify(block.content).includes('\\"success\\":true'),
     );
   };
-
-  const paneText = async (name: string) =>
-    (await run("tmux", ["-L", name, "capture-pane", "-p", "-J", "-S", "-200", "-t", name])).stdout;
 
   const costOfSession = async (sessionId: string) =>
     costOf(await new TranscriptUsage({ findTranscript: findClaudeTranscript }).entries(sessionId));
@@ -109,20 +103,17 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a message between connected 
     try {
       await vi.waitFor(
         async () => {
-          const received = (await transcriptText(ios.sessionId))
-            .split("\n")
-            .find((line) => line.includes("cross-session-message") && line.includes(token));
-          expect(received).toBeDefined();
+          expect(received(await entriesOf(ios.sessionId), token)).toBe(true);
         },
         { timeout: 180_000, interval: 2000 },
       );
-      expect(await paneText(ios.name)).toContain(token);
-      expect(await deliveredTo(android.sessionId, ios.name)).toBe(true);
+      expect(await paneText(ios.name, ios.name)).toContain(token);
+      expect(deliveredTo(await entriesOf(android.sessionId), ios.name)).toBe(true);
     } finally {
       const androidCost = await costOfSession(android.sessionId);
       const iosCost = await costOfSession(ios.sessionId);
       process.stderr.write(
-        `session message cost: android ${usd(androidCost)}, ios ${usd(iosCost)}, total ${(androidCost + iosCost).toFixed(3)}\n`,
+        `session message cost: android ${usd(androidCost)}, ios ${usd(iosCost)}, total ${usd(androidCost + iosCost)}\n`,
       );
     }
   });
