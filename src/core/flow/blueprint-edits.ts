@@ -149,3 +149,23 @@ export function newProblems(
   );
   return flowProblems(after, libraries).filter((error) => !known.has(problemKey(after, error)));
 }
+
+export function editProblems(
+  before: Flow,
+  after: Flow,
+  nodeIds: readonly string[],
+  libraries?: LibraryLookup,
+): ValidationError[] {
+  const onMainFlow = newProblems(before, after, libraries);
+  const known = new Set([
+    ...validate(before, libraries).map((error) => problemKey(before, error)),
+    ...onMainFlow.map((error) => problemKey(after, error)),
+  ]);
+  const onTouched = validate(after, libraries).filter(
+    (error) =>
+      error.node !== undefined &&
+      nodeIds.includes(error.node) &&
+      !known.has(problemKey(after, error)),
+  );
+  return [...onMainFlow, ...onTouched];
+}
