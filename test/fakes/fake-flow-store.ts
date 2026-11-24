@@ -1,6 +1,7 @@
+import { blueprintFacts, noBlueprintFacts } from "../../src/core/flow/flow-store.js";
+import type { LibraryResolver } from "../../src/core/flow/libraries.js";
 import type { BuildConfig, Flow } from "../../src/core/flow/schema.js";
-import { flowKind, sessionBuildConfig } from "../../src/core/flow/structure.js";
-import { foundVariables } from "../../src/core/flow/variables.js";
+import { sessionBuildConfig } from "../../src/core/flow/structure.js";
 import type {
   FlowStore,
   FlowSummary,
@@ -142,6 +143,11 @@ export class FakeFlowStore implements FlowStore {
     return found;
   }
 
+  private readonly resolveLibrary: LibraryResolver = (flowId) => {
+    const library = this.loadLatest(flowId);
+    return library === null ? undefined : { name: library.name, flow: library.flow };
+  };
+
   private summary(blueprint: Blueprint): FlowSummary {
     const saved = this.versions.filter((version) => version.flowId === blueprint.flowId);
     const latest = saved.at(-1);
@@ -152,9 +158,10 @@ export class FakeFlowStore implements FlowStore {
       versions: saved.length,
       lastSavedAt: latest === undefined ? null : blueprint.createdAt,
       buildConfig: latest === undefined ? null : buildConfigOf(latest.flow),
-      variables: latest === undefined ? [] : foundVariables(latest.flow),
+      ...(latest === undefined
+        ? noBlueprintFacts
+        : blueprintFacts(latest.flow, this.resolveLibrary)),
       pinned: blueprint.pinned,
-      kind: latest === undefined ? "library" : flowKind(latest.flow),
     };
   }
 }

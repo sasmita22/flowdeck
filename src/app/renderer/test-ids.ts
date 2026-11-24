@@ -44,7 +44,19 @@ export const containerTestIds = {
   field: (id: string, field: ContainerField) => `container-${id}-${field}`,
   frameSource: (id: string) => `container-frame-${id}-source`,
   frameTarget: (id: string) => `container-frame-${id}-target`,
+  frameFlowIn: (id: string) => `container-frame-${id}-flow-in`,
+  frameFlowOut: (id: string) => `container-frame-${id}-flow-out`,
   connection: (id: string) => `connection-${id}`,
+} as const;
+
+export type LibraryOverrideField = "repo" | "branch" | "model";
+
+export const libraryTestIds = {
+  paletteItem: (flowId: string) => `palette-lib-${flowId}`,
+  name: (nodeId: string) => `library-name-${nodeId}`,
+  label: "library-label",
+  override: (sessionId: string, field: LibraryOverrideField) =>
+    `library-override-${sessionId}-${field}`,
 } as const;
 
 export const blueprintTerminalTestId = "blueprint-terminal";
@@ -210,6 +222,7 @@ export const buildDialogTestIds = {
   sessionRepo: (name: string) => `build-dialog-session-repo-${name}`,
   sessionBranch: (name: string) => `build-dialog-session-branch-${name}`,
   variable: (name: string) => `build-dialog-variable-${name}`,
+  group: (path: string) => `build-dialog-group-${path}`,
   refusal: "build-dialog-refusal",
   confirm: "build-dialog-confirm",
   cancel: "build-dialog-cancel",

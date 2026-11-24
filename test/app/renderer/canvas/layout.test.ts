@@ -10,6 +10,7 @@ import {
 import { LAYER_GAP, tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
 import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Node } from "../../../../src/core/flow/schema.js";
+import { flowContainerOf } from "../../../../src/core/flow/structure.js";
 import {
   agent,
   flow,
@@ -19,7 +20,9 @@ import {
   join,
   loop,
   onMainFlow,
+  output,
   thenWire,
+  trigger,
 } from "../../../fixtures/flow-builders.js";
 
 const canvas = { width: 1600, height: 1000 };
@@ -167,14 +170,14 @@ const nestedFrames = () =>
   );
 
 const sessionOnly = (source: Flow): Flow => {
-  const workspace = new Set(
-    source.containers.flatMap((container) =>
-      container.kind === "workspace" ? container.nodes : [],
-    ),
+  const inSession = new Set(
+    source.nodes
+      .filter((node) => flowContainerOf(source, node.id)?.kind === "session")
+      .map((node) => node.id),
   );
   return inOneSession(
-    source.nodes.filter((node) => !workspace.has(node.id)),
-    source.wires.filter((wire) => !workspace.has(wire.from.node) && !workspace.has(wire.to.node)),
+    source.nodes.filter((node) => inSession.has(node.id)),
+    source.wires.filter((wire) => inSession.has(wire.from.node) && inSession.has(wire.to.node)),
   );
 };
 
@@ -429,6 +432,31 @@ describe("tidyMoves", () => {
     const after = await tidied(source);
 
     expect(clashes(after)).toEqual([]);
+  });
+
+  it("lays the canvas Start out left of the workspace's frame and the canvas Stop right of it", async () => {
+    const after = await tidied(parallelAndLoop());
+    const frame = flowContainerBounds(after, "workspace-1");
+    const start = nodeOf(after, "canvas-start");
+
+    expect(boundsOf(start).right + sideLabelSpan(start.label)).toBeLessThan(frame.left);
+    expect(positionOf(after, "canvas-stop").x).toBeGreaterThan(frame.right);
+  });
+
+  it("keeps a session that fits the canvas on one row when the canvas path is wider than the canvas", async () => {
+    const source = flow(
+      [
+        { ...trigger("start"), label: "When the report is due" },
+        { ...agent("a"), label: "Write" },
+        { ...output("stop"), label: "Report summary" },
+      ],
+      [thenWire("start", "a"), thenWire("a", "stop")],
+    );
+
+    const after = await tidied(source, { width: 1000, height: 700 });
+
+    expect(rowsOf(after, ["start", "a", "stop"])).toBe(1);
+    expect(rowsOf(after, ["workspace-1-start", "workspace-1-stop"])).toBe(1);
   });
 
   it("never moves a note and never sets a parent", async () => {

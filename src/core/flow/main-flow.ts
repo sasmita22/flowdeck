@@ -1,7 +1,14 @@
 import type { Flow, FlowContainer, Node } from "./schema.js";
-import { flowContainerMembers, flowContainerNodesOfType } from "./structure.js";
+import {
+  flowContainerMembers,
+  flowContainerNodesOfType,
+  flowContainerOf,
+  isWorkflow,
+} from "./structure.js";
 
-export type MainFlow = { reached: ReadonlySet<string>; ignored: readonly Node[] };
+export type CanvasReach = { reached: ReadonlySet<string>; containers: ReadonlySet<string> };
+
+export type MainFlow = CanvasReach & { ignored: readonly Node[] };
 
 const frameTypes = new Set(["loop", "foreach"]);
 
@@ -10,34 +17,82 @@ const soleStart = (flow: Flow, container: FlowContainer): string | undefined => 
   return otherStarts.length > 0 ? undefined : start;
 };
 
-export function mainFlow(flow: Flow): MainFlow | undefined {
+export function canvasStart(flow: Flow): string | undefined {
+  const [start, ...others] = flow.nodes.filter(
+    (node) =>
+      node.type === "trigger" &&
+      node.parent === undefined &&
+      flowContainerOf(flow, node.id) === undefined,
+  );
+  return others.length > 0 ? undefined : start?.id;
+}
+
+function walk(flow: Flow, seeds: readonly string[]): CanvasReach {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
-  const starts = flow.containers.flatMap((container) => soleStart(flow, container) ?? []);
-  if (starts.length === 0) return undefined;
-
+  const containerById = new Map(flow.containers.map((container) => [container.id, container]));
   const reached = new Set<string>();
-  const queue = [...starts];
+  const containers = new Set<string>();
+  const queue = [...seeds];
 
-  const neighbours = (id: string): string[] => {
-    const node = byId.get(id);
-    const along = flow.wires
+  const along = (id: string) =>
+    flow.wires
       .filter((wire) => wire.kind !== "event" && wire.from.node === id)
       .map((wire) => wire.to.node);
+
+  const neighbours = (id: string): string[] => {
+    const container = containerById.get(id);
+    if (container !== undefined) {
+      const start = soleStart(flow, container);
+      return [...(start === undefined ? [] : [start]), ...along(id)];
+    }
+    const node = byId.get(id);
     const frame = node?.parent === undefined ? [] : [node.parent];
     const body =
       node !== undefined && frameTypes.has(node.type)
         ? flow.nodes.filter((child) => child.parent === id).map((child) => child.id)
         : [];
-    return [...along, ...frame, ...body];
+    return [...along(id), ...frame, ...body];
   };
 
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-    if (reached.has(id)) continue;
-    reached.add(id);
+    const seen = containerById.has(id) ? containers : reached;
+    if (seen.has(id)) continue;
+    seen.add(id);
     queue.push(...neighbours(id));
   }
 
-  return { reached, ignored: flow.nodes.filter((node) => !reached.has(node.id)) };
+  return { reached, containers };
+}
+
+export function canvasReach(flow: Flow): CanvasReach | undefined {
+  const start = canvasStart(flow);
+  return start === undefined ? undefined : walk(flow, [start]);
+}
+
+export const reachFrom = (flow: Flow, id: string): CanvasReach => walk(flow, [id]);
+
+export function mainFlow(flow: Flow): MainFlow | undefined {
+  const start = canvasStart(flow);
+  const containerSeeds = isWorkflow(flow)
+    ? flow.containers
+        .filter((container) => soleStart(flow, container) !== undefined)
+        .map((container) => container.id)
+    : [];
+  const librarySeeds = isWorkflow(flow)
+    ? flow.nodes
+        .filter(
+          (node) =>
+            node.type === "library" &&
+            node.parent === undefined &&
+            flowContainerOf(flow, node.id) === undefined,
+        )
+        .map((node) => node.id)
+    : [];
+  const seeds = [...containerSeeds, ...librarySeeds, ...(start === undefined ? [] : [start])];
+  if (seeds.length === 0) return undefined;
+
+  const { reached, containers } = walk(flow, seeds);
+  return { reached, containers, ignored: flow.nodes.filter((node) => !reached.has(node.id)) };
 }
 
 export function mainFlowOnly(flow: Flow): Flow {
@@ -45,6 +100,7 @@ export function mainFlowOnly(flow: Flow): Flow {
   if (found === undefined) return flow;
   const kept = new Set([
     ...found.reached,
+    ...found.containers,
     ...flow.containers
       .filter((container) => soleStart(flow, container) === undefined)
       .flatMap((container) => flowContainerMembers(flow, container.id)),

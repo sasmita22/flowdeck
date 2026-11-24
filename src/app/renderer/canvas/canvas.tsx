@@ -28,18 +28,12 @@ import { BranchEdge } from "./branch-edge.js";
 import { ConnectionEdge } from "./connection-edge.js";
 import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
-import { nodeMimeType, Palette } from "./palette.js";
+import { libraryMimeType, nodeMimeType, Palette } from "./palette.js";
 import { RenameField } from "./rename-field.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
-import {
-  containerOfFrameId,
-  toViewEdges,
-  toViewNodes,
-  type ViewEdge,
-  type ViewNode,
-} from "./view.js";
+import { routeConnection, toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
@@ -367,17 +361,11 @@ function Board({
     if (selectionChanged) selectWires([...selected]);
   };
 
-  const onConnect = ({ source, sourceHandle, target, targetHandle }: Connection) => {
-    const from = containerOfFrameId(source);
-    const to = containerOfFrameId(target);
-    if (from !== undefined && to !== undefined) {
-      store.getState().connectSessions(from, to);
-      return;
-    }
-    if (sourceHandle === null || targetHandle === null) return;
-    store
-      .getState()
-      .connect({ node: source, port: sourceHandle }, { node: target, port: targetHandle });
+  const onConnect = (connection: Connection) => {
+    const route = routeConnection(connection);
+    if (route === null) return;
+    if (route.kind === "sessions") store.getState().connectSessions(route.from, route.to);
+    else store.getState().connect(route.from, route.to);
   };
 
   const onConnectEnd = (_event: MouseEvent | TouchEvent, connection: FinalConnectionState) => {
@@ -391,10 +379,15 @@ function Board({
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const type = event.dataTransfer.getData(nodeMimeType);
-    if (!isCanvasItemType(type)) return;
     const { x, y } = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    store.getState().drop(type, { x: Math.round(x), y: Math.round(y) });
+    const at = { x: Math.round(x), y: Math.round(y) };
+    const library = event.dataTransfer.getData(libraryMimeType);
+    if (library !== "") {
+      store.getState().dropLibrary(library, at);
+      return;
+    }
+    const type = event.dataTransfer.getData(nodeMimeType);
+    if (isCanvasItemType(type)) store.getState().drop(type, at);
   };
 
   const editing: Partial<ReactFlowProps<ViewNode, ViewEdge>> = {

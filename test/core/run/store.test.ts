@@ -152,6 +152,26 @@ describe.each(kinds)("%s build snapshots", (_name, kind) => {
     });
   });
 
+  it("keeps the flow a snapshot froze, read by pending id and then by build id", () => {
+    const store = open();
+    const frozen = flow([{ ...agent("a1"), label: "Planner" }], []);
+    const locked = started(
+      store,
+      pending("nightly", "flow-1", { snapshot: { ...snapshot(), flow: frozen } }),
+    );
+
+    expect(store.buildSnapshot({ pendingId: locked })?.flow).toEqual(frozen);
+    store.endPendingBuild(locked, { outcome: "built", endedAt: 2_000, buildId: "b1" });
+    expect(store.buildSnapshot({ buildId: "b1" })?.flow).toEqual(frozen);
+  });
+
+  it("reads no flow from a snapshot written without one", () => {
+    const store = open();
+    const locked = started(store, pending("nightly", "flow-1", { snapshot: snapshot() }));
+
+    expect(store.buildSnapshot({ pendingId: locked })).not.toHaveProperty("flow");
+  });
+
   it("reads no snapshot of a build once the build is deleted", () => {
     const store = open();
     store.recordBuild(build("b1", "fix-login"));

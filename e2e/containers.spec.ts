@@ -268,7 +268,7 @@ test("Deleting the workspace makes a Library that can't be built, in the editor 
   await window.getByTestId(controlTestIds.back).click();
   await expect(window.getByTestId(pageTestIds.title)).toHaveText("Blueprints");
   const card = window.getByTestId(pageTestIds.blueprintCard(flowId));
-  await expect(card.getByTestId(pageTestIds.blueprintKind(flowId))).toHaveText("Library");
+  await expect(card.getByTestId(pageTestIds.blueprintKind(flowId))).toHaveText("Incomplete");
   const cardBuild = card.getByTestId(pageTestIds.blueprintBuild(flowId));
   await expect(cardBuild).toBeDisabled();
   await expect

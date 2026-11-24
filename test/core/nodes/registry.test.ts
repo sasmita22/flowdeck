@@ -11,6 +11,7 @@ import { settings as fork } from "../../../src/core/nodes/fork/settings.js";
 import { settings as gate } from "../../../src/core/nodes/gate/settings.js";
 import { settings as hardstop } from "../../../src/core/nodes/hardstop/settings.js";
 import { settings as join } from "../../../src/core/nodes/join/settings.js";
+import { settings as library } from "../../../src/core/nodes/library/settings.js";
 import { settings as loop } from "../../../src/core/nodes/loop/settings.js";
 import { settings as output } from "../../../src/core/nodes/output/settings.js";
 import { registry } from "../../../src/core/nodes/registry.js";
@@ -29,6 +30,7 @@ const folderSettings = {
   join,
   foreach,
   branch,
+  library,
 };
 const entries: Partial<Record<string, { settings: unknown; ports: unknown }>> = registry;
 

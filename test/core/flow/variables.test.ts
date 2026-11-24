@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   fillVariables,
   foundVariables,
+  groupVariables,
   isVariableName,
   referencedVariables,
 } from "../../../src/core/flow/variables.js";
@@ -23,6 +24,13 @@ const instructed = (id: string, instructions: string) => agent(id, { settings: {
 describe("referencedVariables", () => {
   it("returns each distinct name once, in the order first used", () => {
     expect(referencedVariables("Fix {{ticket}} and {{ticket}} {{ x }}")).toEqual(["ticket", "x"]);
+  });
+
+  it("returns a dotted library name whole", () => {
+    expect(referencedVariables("Fix {{android-app.ticket}} and {{ a.b.c }}")).toEqual([
+      "android-app.ticket",
+      "a.b.c",
+    ]);
   });
 
   it("returns nothing for text without a variable", () => {
@@ -157,6 +165,15 @@ describe("fillVariables", () => {
     expect(fillVariables("Fix {{ ticket }}", { ticket: "FD-99" })).toBe("Fix FD-99");
   });
 
+  it("fills a dotted library name with its own value, not the host's", () => {
+    expect(
+      fillVariables("{{ticket}} / {{android-app.ticket}}", {
+        ticket: "FD-1",
+        "android-app.ticket": "FD-2",
+      }),
+    ).toBe("FD-1 / FD-2");
+  });
+
   it.each([
     [true, "Run e2e: true"],
     [false, "Run e2e: false"],
@@ -166,11 +183,53 @@ describe("fillVariables", () => {
 });
 
 describe("isVariableName", () => {
-  it.each(["proceed-e2e", "ticket", "step_2", "A1"])("accepts %j", (name) => {
-    expect(isVariableName(name)).toBe(true);
+  it.each(["proceed-e2e", "ticket", "step_2", "A1", "a.b", "android-app.e2e-tests.isFullScan"])(
+    "accepts %j",
+    (name) => {
+      expect(isVariableName(name)).toBe(true);
+    },
+  );
+
+  it.each(["-x", "a b", "", "_x", "{{x}}", ".a", "a.", "a..b", "a.-b", "a. b"])(
+    "rejects %j",
+    (name) => {
+      expect(isVariableName(name)).toBe(false);
+    },
+  );
+});
+
+describe("groupVariables", () => {
+  const uses = [
+    { path: "android-app", name: "Android", kind: "node-library" as const },
+    { path: "android-app.e2e-tests", name: "E2E tests", kind: "node-library" as const },
+    { path: "android-app-2", name: "Android", kind: "node-library" as const },
+  ];
+  const text = (name: string) => ({ name, kind: "text" as const, nodeIds: ["n"] as [string] });
+
+  it("puts each variable in the use with the longest matching path", () => {
+    expect(
+      groupVariables(
+        [
+          text("android-app.ticket"),
+          text("android-app.e2e-tests.isFullScan"),
+          text("android-app-2.ticket"),
+        ],
+        uses,
+      ),
+    ).toEqual([
+      { ...text("android-app.ticket"), group: { path: "android-app", name: "Android" } },
+      {
+        ...text("android-app.e2e-tests.isFullScan"),
+        group: { path: "android-app.e2e-tests", name: "E2E tests" },
+      },
+      { ...text("android-app-2.ticket"), group: { path: "android-app-2", name: "Android" } },
+    ]);
   });
 
-  it.each(["-x", "a b", "", "_x", "a.b", "{{x}}"])("rejects %j", (name) => {
-    expect(isVariableName(name)).toBe(false);
+  it("leaves the host's own variables, and a name only sharing a prefix, without a group", () => {
+    expect(groupVariables([text("ticket"), text("android-apple.x")], uses)).toEqual([
+      text("ticket"),
+      text("android-apple.x"),
+    ]);
   });
 });

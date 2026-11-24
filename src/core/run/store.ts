@@ -1,3 +1,4 @@
+import type { Flow } from "../flow/schema.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { ActivityEntry } from "./activity.js";
 import type { BuildEvent, BuildOutcome, PendingBuild, StoredBuildEvent } from "./build-progress.js";
@@ -121,7 +122,12 @@ export type StoredEvent = RunEvent & { nodeId: string; seq: number; time: string
 
 export type EventEntry = { nodeId: string; event: RunEvent };
 
-export type NewBuildSnapshot = { blueprintName: string; version: number; svg: string };
+export type NewBuildSnapshot = {
+  blueprintName: string;
+  version: number;
+  svg: string;
+  flow?: Flow;
+};
 
 export type BuildSnapshot = NewBuildSnapshot & { pendingId: string | null; buildId: string | null };
 

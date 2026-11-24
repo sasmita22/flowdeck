@@ -113,6 +113,70 @@ describe("checkEdit refuses", () => {
   });
 });
 
+describe("checkEdit on a wire across containers", () => {
+  const twoSessions = () =>
+    flow([agent("a"), agent("a2"), agent("b"), agent("c")], [], flowSettings, {
+      containers: [
+        sessionContainer(["a", "a2"]),
+        sessionContainer(["b"], { id: "session-2", name: "review" }),
+      ],
+    });
+
+  it.each([
+    ["a member of one session to a member of another", "a", "b"],
+    ["a canvas-level node to a session member", "c", "a"],
+  ])("refuses a wire from %s", (_, from, to) => {
+    const before = twoSessions();
+    const untouched = structuredClone(before);
+
+    expect(checkEdit(before, "wire", wire(from, "out", to, "in"))).toEqual({
+      ok: false,
+      reason: expect.stringContaining("crosses a container's edge"),
+    });
+    expect(before).toEqual(untouched);
+  });
+
+  it("accepts a wire between two members of one session", () => {
+    expect(checkEdit(twoSessions(), "wire", wire("a", "out", "a2", "in"))).toMatchObject({
+      ok: true,
+    });
+  });
+});
+
+describe("checkEdit on a library node", () => {
+  const withLibrary = () =>
+    flow(
+      [
+        trigger("start"),
+        {
+          id: "lib",
+          type: "library",
+          label: "Library",
+          position: { x: 0, y: 0 },
+          settings: { libraryId: "flow-a", label: "android", overrides: {} },
+        },
+      ],
+      [thenWire("start", "lib")],
+    );
+
+  it("refuses a change_node that changes its libraryId, pointing to the canvas", () => {
+    const before = withLibrary();
+    const untouched = structuredClone(before);
+
+    expect(
+      checkEdit(before, "change_node", { nodeId: "lib", settings: { libraryId: "ghost" } }),
+    ).toEqual({ ok: false, reason: expect.stringContaining("canvas") });
+    expect(before).toEqual(untouched);
+  });
+
+  it.each([
+    ["its label setting", { nodeId: "lib", settings: { label: "ios" } }],
+    ["its node label alone", { nodeId: "lib", label: "iOS app" }],
+  ])("accepts a change_node to %s", (_, input) => {
+    expect(checkEdit(withLibrary(), "change_node", input)).toMatchObject({ ok: true });
+  });
+});
+
 describe("checkEdit accepts", () => {
   it("add_node, merging the given settings over the type's defaults", () => {
     const result = checkEdit(blueprint(), "add_node", {

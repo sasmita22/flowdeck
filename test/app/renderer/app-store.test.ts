@@ -10,6 +10,7 @@ const bridge = (
   storeStatus,
   saveFlow: vi.fn(),
   openFlow: vi.fn(),
+  expandFlow: vi.fn(),
   listFlows: vi.fn(),
   renameFlow: vi.fn(),
   pinFlow: vi.fn(),

@@ -23,9 +23,12 @@ import {
 } from "../../../src/core/compiler/build-version.js";
 import { sha256Hex } from "../../../src/core/compiler/hash.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
+import { mainFlowOnly } from "../../../src/core/flow/main-flow.js";
+import { parseFlow } from "../../../src/core/flow/schema.js";
 import { applyShared } from "../../../src/core/compiler/shared.js";
 import type { Manifest } from "../../../src/core/compiler/lower.js";
 import { verify } from "../../../src/core/compiler/verify.js";
+import { libraryBuildReason } from "../../../src/core/flow/structure.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import type { BuildEvent } from "../../../src/core/run/build-progress.js";
 import type { NewBuild, PendingBuildEnd } from "../../../src/core/run/store.js";
@@ -53,6 +56,7 @@ import {
   twoSessionWorkflow,
   wire,
   workspaceContainer,
+  canvasPath,
 } from "../../fixtures/flow-builders.js";
 import { oneSession } from "../../fixtures/one-session.js";
 
@@ -208,9 +212,10 @@ describe("buildVersion", () => {
       worktree?: FakeWorktree;
       newId?: () => string;
       script?: FakeBuildScript;
+      flowIds?: () => string;
     } = {},
   ) => {
-    const flows = new FakeFlowStore({ newId: () => "flow-1" });
+    const flows = new FakeFlowStore({ newId: options.flowIds ?? (() => "flow-1") });
     for (const saved of options.flows ?? [ticketFlow()]) flows.save(saved);
     const store = new FakeStore();
     const fs = new FakeFileSystem();
@@ -467,7 +472,11 @@ describe("buildVersion", () => {
 
       const started = await startBuild(saved, request, deps, origin);
 
-      expect(started).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(started).toEqual({
+        kind: "started",
+        pendingId: expect.any(String),
+        flow: mainFlowOnly(saved),
+      });
       if (!("kind" in started)) throw new Error("not started");
       expect(store.listPendingBuilds()).toEqual([
         expect.objectContaining({
@@ -542,7 +551,11 @@ describe("buildVersion", () => {
       const result = await startBuild(saved, request, deps, origin);
       const again = await startBuild(saved, { ...request, name: "other" }, deps, origin);
 
-      expect(result).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(result).toEqual({
+        kind: "started",
+        pendingId: expect.any(String),
+        flow: expect.any(Object),
+      });
       expect(errorMessages(again)).toEqual(["A build named other is already building."]);
       expect(store.listPendingBuilds().map((pending) => pending.name)).toEqual([
         "other",
@@ -560,7 +573,11 @@ describe("buildVersion", () => {
       const result = await startBuild(withConnector, request, deps);
 
       expect(errorMessages(result)).toEqual([]);
-      expect(result).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(result).toEqual({
+        kind: "started",
+        pendingId: expect.any(String),
+        flow: expect.any(Object),
+      });
       expect(store.listPendingBuilds()).toHaveLength(1);
     });
 
@@ -611,7 +628,11 @@ describe("buildVersion", () => {
         deps,
       );
 
-      expect(started).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(started).toEqual({
+        kind: "started",
+        pendingId: expect.any(String),
+        flow: expect.any(Object),
+      });
     });
 
     it.each<[string, [string, string][]]>([
@@ -991,7 +1012,11 @@ describe("buildVersion", () => {
 
       const again = await startBuild(ticketFlow(), request, base.deps);
 
-      expect(again).toEqual({ kind: "started", pendingId: expect.any(String) });
+      expect(again).toEqual({
+        kind: "started",
+        pendingId: expect.any(String),
+        flow: expect.any(Object),
+      });
       expectWorktreeFailed(base.store, pending.pendingId, cutAt(), "git said no");
     });
   });
@@ -1962,6 +1987,7 @@ describe("buildVersion", () => {
         expect(await startBuild(agentsFlow(), request, t.deps)).toEqual({
           kind: "started",
           pendingId: expect.any(String),
+          flow: expect.any(Object),
         });
       },
     );
@@ -2612,6 +2638,7 @@ describe("buildVersion", () => {
         blueprintName: saved.name,
         version: 1,
         svg: flowSvg(labelled("Planner")),
+        flow: mainFlowOnly(labelled("Planner")),
       });
     });
 
@@ -2627,9 +2654,9 @@ describe("buildVersion", () => {
           buildId: result.record.id,
           version: 1,
           svg: flowSvg(labelled("Planner")),
+          flow: mainFlowOnly(labelled("Planner")),
         }),
       );
-      expect(snapshot).not.toHaveProperty("flow");
     });
 
     it("records the build with the manifest exactly as it was locked", async () => {
@@ -2671,6 +2698,146 @@ describe("buildVersion", () => {
 
       if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
       expect(store.buildSnapshot({ pendingId: started.pendingId })).toBeNull();
+    });
+  });
+
+  describe("a host that uses a library", () => {
+    const request = { name: "fix-login", repo, base: "main", values: {} };
+    const libraryId = "flow-2";
+
+    const libraryNode = (label: string) => ({
+      id: "use",
+      label: "Library",
+      position: { x: 0, y: 0 },
+      type: "library",
+      settings: { libraryId, label, overrides: {} },
+    });
+
+    const nodeLibrary = (label: string): Flow =>
+      parseFlow({
+        nodes: [trigger("canvas-start"), { ...agent("plan"), label }, output("canvas-stop")],
+        wires: [thenWire("canvas-start", "plan"), thenWire("plan", "canvas-stop")],
+        containers: [],
+        settings: { ...flowSettings, buildModel: "opus" },
+      });
+
+    const host = (label = "Android App") =>
+      withConfig(onMainFlow([libraryNode(label)], []), ticketConfig);
+
+    const withLibrary = (library: Flow, saved = host()) => {
+      const t = setup({ flows: [saved], flowIds: ids("flow-1", libraryId) });
+      t.flows.save(library, { name: "Android" });
+      return t;
+    };
+
+    const nodeIn = (flow: Flow | undefined, id: string) =>
+      flow?.nodes.find((node) => node.id === id);
+
+    it("builds the expanded flow, with the host's settings, not the library's", async () => {
+      const t = withLibrary(nodeLibrary("Planner"));
+      const saved = t.flows.load(v1);
+      if (saved === null) throw new Error("nothing saved");
+
+      const started = await startBuild(saved.flow, request, t.deps, {
+        source: v1,
+        blueprint: { name: saved.name, version: saved.version },
+      });
+
+      if (!("kind" in started)) throw new Error(errorMessages(started).join("; "));
+      const frozen = t.store.buildSnapshot({ pendingId: started.pendingId })?.flow;
+      expect(nodeIn(frozen, "android-app-plan")?.label).toBe("Planner");
+      expect(frozen?.nodes.filter((node) => node.type === "library")).toEqual([]);
+      expect(frozen?.settings).toEqual(flowSettings);
+    });
+
+    it("keeps the old Agent label in the build after the library is changed and saved", async () => {
+      const t = withLibrary(nodeLibrary("Planner"));
+      const result = await buildVersion(v1, request, t.deps);
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+
+      t.flows.save(nodeLibrary("Reviewer"), libraryId);
+
+      const frozen = t.store.buildSnapshot({ buildId: result.record.id })?.flow;
+      const manifest = JSON.parse(t.store.buildManifest(result.record.id) ?? "{}") as Manifest;
+      expect(t.flows.loadLatest(libraryId)?.version).toBe(2);
+      expect(nodeIn(frozen, "android-app-plan")?.label).toBe("Planner");
+      expect(oneSession(manifest).nodes.find((node) => node.id === "android-app-plan")?.label).toBe(
+        "Planner",
+      );
+    });
+
+    it("is refused with the library-use problem when its library is a workflow", async () => {
+      const t = withLibrary(ticketFlow());
+
+      const started = await startBuild(host(), request, t.deps);
+
+      expect(errorMessages(started)).toEqual([
+        'Android App names "Android", which is a workflow; only node and session libraries can be used.',
+      ]);
+      expectNothingDone(t.store, t.fs, t.worktree);
+    });
+
+    it("gives the dialog's repo to no session once a session library adds a second", async () => {
+      const web = "/repos/web";
+      const android = "/repos/android";
+      const sessionLibrary = parseFlow({
+        nodes: [
+          trigger("canvas-start"),
+          trigger("s-start"),
+          agent("plan"),
+          output("s-stop"),
+          output("canvas-stop"),
+        ],
+        wires: [
+          wire("canvas-start", "out", "session-1", "flow-in"),
+          thenWire("s-start", "plan"),
+          thenWire("plan", "s-stop"),
+          wire("session-1", "flow-out", "canvas-stop", "in"),
+        ],
+        containers: [
+          sessionContainer(["s-start", "plan", "s-stop"], {
+            name: "android",
+            repo: android,
+            branch: "main",
+          }),
+        ],
+        settings: flowSettings,
+      });
+      const own = withConfig(onMainFlow([agent("p1")], []), { repo: web, base: "main" });
+      const atCanvasLevel = parseFlow({
+        ...own,
+        nodes: [...own.nodes, libraryNode("Android App")],
+        wires: [
+          ...own.wires.filter(
+            (each) => !(each.from.node === "workspace-1" && each.to.node === "canvas-stop"),
+          ),
+          wire("workspace-1", "flow-out", "use", "in"),
+          thenWire("use", "canvas-stop"),
+        ],
+      });
+      const t = withLibrary(sessionLibrary, atCanvasLevel);
+      const gitState = new FakeGitState(
+        {
+          [repo]: { kind: "branch", name: "main" },
+          [web]: { kind: "branch", name: "main" },
+          [android]: { kind: "branch", name: "main" },
+        },
+        { branches: { [repo]: ["main"], [web]: ["main"], [android]: ["main"] } },
+      );
+
+      const result = await buildVersion(v1, request, { ...t.deps, gitState });
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      expect(t.worktree.calls.map((call) => call.repo).sort()).toEqual([android, web]);
+    });
+
+    it("still refuses a blueprint without a workspace", async () => {
+      const { store, fs, worktree, deps } = setup();
+
+      const started = await startBuild(nodeLibrary("Planner"), request, deps);
+
+      expect(errorMessages(started)).toEqual([libraryBuildReason]);
+      expectNothingDone(store, fs, worktree);
     });
   });
 
@@ -3095,13 +3262,17 @@ describe("buildVersion", () => {
 
     type Part = { nodes: unknown[]; wires: unknown[]; container: unknown };
 
-    const shaped = (...parts: Part[]): Flow =>
-      flow(
+    const shaped = (...parts: Part[]): Flow => {
+      const built = flow(
         parts.flatMap((part) => part.nodes),
         parts.flatMap((part) => part.wires),
         flowSettings,
         { containers: parts.map((part) => part.container) },
       );
+      return built.containers.some((container) => container.kind === "workspace")
+        ? canvasPath(built)
+        : built;
+    };
 
     const refusedWith = async (source: Flow) => {
       const { store, fs, worktree, gitState, deps } = setup();

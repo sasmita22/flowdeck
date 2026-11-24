@@ -45,6 +45,13 @@ type RunSummary = z.infer<typeof runSummarySchema>;
 
 export type DeleteQuestion = Pick<FlowSummary, "flowId" | "name">;
 
+export const blueprintKindLabel: Record<FlowSummary["kind"], string> = {
+  workflow: "Workflow",
+  "node-library": "Node library",
+  "session-library": "Session library",
+  incomplete: "Incomplete",
+};
+
 export type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
 
 export type OpenTree = BuildTree & { buildId: string };

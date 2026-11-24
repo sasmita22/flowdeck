@@ -84,6 +84,8 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
           : `continue once every branch has returned (${nodeList(into(node.id))}).`;
       case "hardstop":
         return `hard rule: if ${text(settings.condition)}, stop the run at once and show ${text(settings.shown)}.`;
+      case "library":
+        throw new Error("library nodes are expanded before the build");
       case "output":
         return `the run ends here; its result is \`${text(settings.name)}\` (${text(settings.type)}), handed back to the user, not a file any step writes.`;
     }

@@ -1,7 +1,9 @@
+import type { FlowSummary } from "../../../core/flow/flow-store.js";
 import type { NodeType } from "../../../core/flow/schema.js";
+import { blueprintKindLabel } from "../library-store.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
-import { paletteTestId } from "../test-ids.js";
+import { libraryTestIds, paletteTestId } from "../test-ids.js";
 import { nodeDefaults, type CanvasItemType, type FlowContainerKind } from "./store.js";
 
 export { flowContainerItems } from "./store.js";
@@ -100,6 +102,48 @@ export const paletteItems: readonly PaletteItem[] = [
   ...containerItems,
   noteItem,
 ];
+
+export type LibraryKind = "node-library" | "session-library";
+
+export interface LibraryItem {
+  flowId: string;
+  testId: string;
+  label: string;
+  kind: LibraryKind;
+  kindLabel: string;
+}
+
+const isLibraryKind = (kind: FlowSummary["kind"]): kind is LibraryKind =>
+  kind === "node-library" || kind === "session-library";
+
+export const libraryItems = (
+  summaries: readonly FlowSummary[],
+  openFlowId: string | null,
+): LibraryItem[] =>
+  summaries.flatMap(({ flowId, name, kind }) =>
+    isLibraryKind(kind) && flowId !== openFlowId
+      ? [
+          {
+            flowId,
+            testId: libraryTestIds.paletteItem(flowId),
+            label: name,
+            kind,
+            kindLabel: blueprintKindLabel[kind],
+          },
+        ]
+      : [],
+  );
+
+export const filterLibraries = (
+  items: readonly LibraryItem[],
+  query: string,
+): readonly LibraryItem[] => {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return items;
+  return items.filter((item) =>
+    [item.label, item.kindLabel, "libraries"].some((text) => text.toLowerCase().includes(needle)),
+  );
+};
 
 export const filterPalette = (
   items: readonly PaletteItem[],

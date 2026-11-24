@@ -9,7 +9,9 @@ type Position = { x: number; y: number };
 
 type Size = { width: number; height: number };
 
-type Laid = { width: number; boxes: Map<string, Position & Size> };
+type Laid = { width: number; boxes: Map<string, Position & Size>; wide: Set<string> };
+
+type Wraps = (elkId: string) => boolean;
 
 type ElkClass = new () => ELK;
 
@@ -65,10 +67,48 @@ const containerOptions: LayoutOptions = {
   "elk.padding": `[top=${FRAME_PADDING},left=${FRAME_PADDING},bottom=${FRAME_PADDING},right=${FRAME_PADDING}]`,
 };
 
+const connectedGroups = (
+  children: readonly ElkNode[],
+  edges: readonly ElkExtendedEdge[],
+): ElkNode[] => {
+  const topOf = new Map<string, string>();
+  const claim = (node: ElkNode, top: string) => {
+    topOf.set(node.id, top);
+    for (const child of node.children ?? []) claim(child, top);
+  };
+  for (const child of children) claim(child, child.id);
+  const leader = new Map(children.map(({ id }) => [id, id]));
+  const find = (id: string): string => {
+    const up = leader.get(id) ?? id;
+    return up === id ? id : find(up);
+  };
+  for (const { sources, targets } of edges) {
+    const a = topOf.get(sources[0] ?? "");
+    const b = topOf.get(targets[0] ?? "");
+    if (a !== undefined && b !== undefined) leader.set(find(a), find(b));
+  }
+  const groups = new Map<string, ElkNode[]>();
+  for (const child of children) {
+    const key = find(child.id);
+    groups.set(key, [...(groups.get(key) ?? []), child]);
+  }
+  if (groups.size < 2) return [...children];
+  return [...groups.values()].map((members, index) => {
+    const [only, ...rest] = members;
+    if (only !== undefined && rest.length === 0) return only;
+    return { id: `k${index}`, layoutOptions: sectionOptions, children: members };
+  });
+};
+
 const layoutWidthOf = (node: Node): number =>
   hasSideLabel(node) ? widthOf(node) + sideLabelSpan(node.label) : widthOf(node);
 
-const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions): ElkNode => {
+const graphOf = (
+  flow: Flow,
+  elkIds: Map<string, string>,
+  options: LayoutOptions,
+  wraps: Wraps,
+): ElkNode => {
   const childrenOf = new Map<string | undefined, Node[]>();
   for (const node of flow.nodes) {
     const parent = node.parent !== undefined && elkIds.has(node.parent) ? node.parent : undefined;
@@ -94,7 +134,7 @@ const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions
   }
   const frames: ElkNode[] = flow.containers.map((_, index) => ({
     id: `c${index}`,
-    layoutOptions: { ...containerOptions, ...options },
+    layoutOptions: { ...containerOptions, ...(wraps(`c${index}`) ? options : {}) },
     children: [],
   }));
   const frameOf = new Map(
@@ -128,13 +168,21 @@ const graphOf = (flow: Flow, elkIds: Map<string, string>, options: LayoutOptions
       section.children?.push(elkNode(node));
     }
   }
-  const children = [...frames.filter((frame) => frame.children?.length !== 0), ...root];
+  const drawn = frames.filter((frame) => frame.children?.length !== 0);
+  const frameIds = new Map(
+    flow.containers.flatMap(({ id }, index) => {
+      const frame = frames[index];
+      return frame !== undefined && drawn.includes(frame) ? [[id, frame.id] as const] : [];
+    }),
+  );
+  const elkIdOf = (id: string) => elkIds.get(id) ?? frameIds.get(id);
   const edges: ElkExtendedEdge[] = flow.wires.flatMap(({ kind, from, to }, index) => {
-    const source = elkIds.get(from.node);
-    const target = elkIds.get(to.node);
+    const source = elkIdOf(from.node);
+    const target = elkIdOf(to.node);
     if (kind !== "then" || source === undefined || target === undefined) return [];
     return [{ id: `e${index}`, sources: [source], targets: [target] }];
   });
+  const children = connectedGroups([...drawn, ...root], edges);
   return { id: "root", layoutOptions: { ...rootOptions, ...options }, children, edges };
 };
 
@@ -151,9 +199,14 @@ const absoluteBoxes = (
   }
 };
 
-const layOut = async (flow: Flow, options: LayoutOptions = {}): Promise<Laid> => {
+const layOut = async (
+  flow: Flow,
+  canvas: Size,
+  options: LayoutOptions = {},
+  wraps: Wraps = () => true,
+): Promise<Laid> => {
   const elkIds = new Map(flow.nodes.map((node, index) => [node.id, `n${index}`]));
-  const laid = await (await loadEngine()).layout(graphOf(flow, elkIds, options));
+  const laid = await (await loadEngine()).layout(graphOf(flow, elkIds, options, wraps));
   const elkBoxes = new Map<string, Position & Size>();
   absoluteBoxes(laid.children ?? [], { x: 0, y: 0 }, elkBoxes);
   const boxes = new Map<string, Position & Size>();
@@ -161,7 +214,10 @@ const layOut = async (flow: Flow, options: LayoutOptions = {}): Promise<Laid> =>
     const found = elkBoxes.get(elkId);
     if (found !== undefined) boxes.set(id, found);
   }
-  return { width: laid.width ?? 0, boxes };
+  const wide = new Set(
+    [...elkBoxes].flatMap(([id, { width }]) => (width > canvas.width ? [id] : [])),
+  );
+  return { width: laid.width ?? 0, boxes, wide };
 };
 
 const ELK_DEFAULT_LAYER_GAP = 20;
@@ -176,11 +232,16 @@ const wrapRatio = (flow: Flow, canvas: Size): number => {
   return ((canvas.width / canvas.height) * (width + ELK_DEFAULT_LAYER_GAP)) / (width + LAYER_GAP);
 };
 
-const wrapped = (flow: Flow, canvas: Size): Promise<Laid> =>
-  layOut(flow, {
-    "elk.layered.wrapping.strategy": "MULTI_EDGE",
-    "elk.aspectRatio": String(wrapRatio(flow, canvas)),
-  });
+const wrapped = (flow: Flow, canvas: Size, wide: ReadonlySet<string>): Promise<Laid> =>
+  layOut(
+    flow,
+    canvas,
+    {
+      "elk.layered.wrapping.strategy": "MULTI_EDGE",
+      "elk.aspectRatio": String(wrapRatio(flow, canvas)),
+    },
+    (id) => wide.has(id),
+  );
 
 const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";
 
@@ -210,8 +271,11 @@ const placeOf = (flow: Flow, node: Node, laid: Laid): Position | undefined => {
 
 export async function tidyMoves(flow: Flow, canvasSize: Size): Promise<Move[]> {
   if (flow.nodes.length === 0) return [];
-  const unwrapped = await layOut(flow);
-  const laid = unwrapped.width <= canvasSize.width ? unwrapped : await wrapped(flow, canvasSize);
+  const unwrapped = await layOut(flow, canvasSize);
+  const laid =
+    unwrapped.width <= canvasSize.width
+      ? unwrapped
+      : await wrapped(flow, canvasSize, unwrapped.wide);
   return flow.nodes.flatMap((node) => {
     const to = placeOf(flow, node, laid);
     if (to === undefined || (to.x === node.position.x && to.y === node.position.y)) return [];

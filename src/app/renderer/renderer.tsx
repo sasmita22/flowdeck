@@ -68,6 +68,14 @@ function renderApp(root: HTMLElement) {
   const buildProgress = createBuildProgressStore(window.flowdeck);
   void buildProgress.getState().connect();
   void library.getState().refresh();
+  const syncLibraries = () =>
+    canvas.getState().setLibraries(library.getState().flows, save.getState().flowId);
+  library.subscribe((next, previous) => {
+    if (next.flows !== previous.flows) syncLibraries();
+  });
+  save.subscribe((next, previous) => {
+    if (next.flowId !== previous.flowId) syncLibraries();
+  });
   run.subscribe((next, previous) => {
     const moved = Object.values(next.snapshots).some(
       (snapshot) => previous.snapshots[snapshot.runId]?.status !== snapshot.status,

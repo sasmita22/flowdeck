@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { FlowStore, SavedFlowRef } from "../flow/flow-store.js";
+import { latestLibraries, type FlowStore, type SavedFlowRef } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
+import { expandLibraries, LibraryError, libraryLookup } from "../flow/libraries.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
 import type { Flow, SessionContainer } from "../flow/schema.js";
 import { isWorkflow, libraryBuildReason } from "../flow/structure.js";
@@ -50,6 +51,8 @@ import { applyMerges } from "./merge.js";
 import { containerRoot, containerSlugs } from "./pieces.js";
 import { applyShared, sharedContainer, sharedPath } from "./shared.js";
 import { buildRecord } from "./record.js";
+import { rule as libraryLabels } from "./rules/library-labels.js";
+import { rule as libraryUse } from "./rules/library-use.js";
 import { validate, type ValidationError } from "./validate.js";
 import { workspaceListing, workspaceRootFiles } from "./verify.js";
 
@@ -111,9 +114,10 @@ export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
   hookCommand: string;
   onEvent?: (pendingId: string, event: BuildEvent) => void;
   signal?: AbortSignal;
+  flows: Pick<FlowStore, "loadLatest">;
 };
 
-export type BuildVersionDeps = BuildFlowDeps & { flows: Pick<FlowStore, "load"> };
+export type BuildVersionDeps = BuildFlowDeps & { flows: Pick<FlowStore, "load" | "loadLatest"> };
 
 const kebabCase = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -310,18 +314,42 @@ const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
 
 export type StartedBuild = { kind: "started"; pendingId: string };
 
-export type StartBuildResult = { ok: false; errors: ValidationError[] } | StartedBuild;
+export type StartBuildResult =
+  { ok: false; errors: ValidationError[] } | (StartedBuild & { flow: Flow });
+
+const libraryRules = new Set([libraryUse.id, libraryLabels.id]);
+
+type Expansion = { ok: false; errors: ValidationError[] } | { ok: true; flow: Flow };
+
+const expandedHost = (saved: Flow, deps: BuildFlowDeps): Expansion => {
+  const host = mainFlowOnly(saved);
+  const resolve = latestLibraries(deps.flows);
+  const errors = validate(host, libraryLookup(resolve)).filter((error) =>
+    libraryRules.has(error.rule),
+  );
+  if (errors.length > 0) return { ok: false, errors };
+  try {
+    return { ok: true, flow: expandLibraries(host, resolve).flow };
+  } catch (error) {
+    if (!(error instanceof LibraryError)) throw error;
+    return { ok: false, errors: [{ rule: libraryUse.id, message: error.message }] };
+  }
+};
 
 export async function startBuild(
   saved: Flow,
   request: BuildRequest,
   deps: BuildFlowDeps,
   origin?: BuildOrigin,
+  frozen?: Flow,
 ): Promise<StartBuildResult> {
   if (!isWorkflow(saved)) {
     return { ok: false, errors: [{ rule: "build-library", message: libraryBuildReason }] };
   }
-  const flow = mainFlowOnly(withRequestTarget(saved, request));
+  const expanded: Expansion =
+    frozen === undefined ? expandedHost(saved, deps) : { ok: true, flow: frozen };
+  if (!expanded.ok) return expanded;
+  const flow = mainFlowOnly(withRequestTarget(expanded.flow, request));
   const errors = validate(flow);
   if (errors.length > 0) return { ok: false, errors };
   const problems = await requestProblems(request, flow, deps).catch((error: unknown) => {
@@ -344,6 +372,7 @@ export async function startBuild(
             blueprintName: origin.blueprint.name,
             version: origin.blueprint.version,
             svg: flowSvg(saved),
+            flow: expanded.flow,
           },
         }),
   });
@@ -353,7 +382,7 @@ export async function startBuild(
       errors: [{ rule: `build-${start.reason}`, message: busy[start.reason](request.name) }],
     };
   }
-  return start;
+  return { ...start, flow: expanded.flow };
 }
 
 const manifestPath = "manifest.json";
@@ -888,7 +917,7 @@ export async function buildFlow(
 ): Promise<BuildResult> {
   const started = await startBuild(saved, request, deps, origin);
   if ("errors" in started) return started;
-  return runBuild(started, saved, request, deps, origin);
+  return runBuild(started, started.flow, request, deps, origin);
 }
 
 export async function buildVersion(

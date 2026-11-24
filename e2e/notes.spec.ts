@@ -207,8 +207,15 @@ test("Cmd+A on the empty canvas selects every node and every note", async () => 
     .poll(async () =>
       JSON.parse((await window.getByTestId(readoutTestIds.selection).textContent()) ?? ""),
     )
-    .toEqual(["plan", "workspace-1-start", "workspace-1-stop", "n1"]);
-  await expect(window.locator(".react-flow__node.selected")).toHaveCount(4);
+    .toEqual([
+      "plan",
+      "workspace-1-start",
+      "workspace-1-stop",
+      "canvas-start",
+      "canvas-stop",
+      "n1",
+    ]);
+  await expect(window.locator(".react-flow__node.selected")).toHaveCount(6);
 });
 
 test("A canvas holding only a note shows no start hint", async () => {

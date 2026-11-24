@@ -18,11 +18,12 @@ const labelStyle: CSSProperties = { display: "flex", flexDirection: "column", ga
 export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> }) {
   const node = useStore(canvas, selectSelectedNode);
   const flow = useStore(canvas, (state) => state.flow);
+  const libraries = useStore(canvas, (state) => state.libraries);
   if (node === null) return null;
   const item = paletteItems.find((entry) => entry.type === node.type);
   const fields = describeNodeFields(node.type, flow, node.settings);
-  const issues = selectFieldIssues(flow, node.id);
-  const problems = selectNodeIssues(flow)[node.id] ?? [];
+  const issues = selectFieldIssues(flow, node.id, libraries);
+  const problems = selectNodeIssues(flow, libraries)[node.id] ?? [];
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {

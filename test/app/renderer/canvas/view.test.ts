@@ -5,12 +5,19 @@ import {
   connectionPorts,
   edgeId,
   FRAME_PADDING,
+  routeConnection,
   toViewEdges,
   toViewNodes,
 } from "../../../../src/app/renderer/canvas/view.js";
 import { containerText, sideLabelSpan } from "../../../../src/app/renderer/canvas/frames.js";
 import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
-import type { Flow, NodeType, Wire } from "../../../../src/core/flow/schema.js";
+import {
+  parseFlow,
+  type Flow,
+  type NodeType,
+  type Wire,
+} from "../../../../src/core/flow/schema.js";
+import { flowIn, flowOut } from "../../../../src/core/flow/structure.js";
 import {
   agent,
   ask,
@@ -117,11 +124,29 @@ describe("toViewNodes", () => {
 const ignoredOf = (source: Flow) =>
   nodeViews(source, [], {}, null).map((node) => [node.id, node.data.ignored]);
 
+const throughSession = (source: Flow, session = "session-1"): Flow =>
+  parseFlow({
+    ...source,
+    nodes: [...source.nodes, trigger("canvas-start"), output("canvas-stop")],
+    wires: [
+      ...source.wires,
+      wire("canvas-start", "out", session, flowIn),
+      wire(session, flowOut, "canvas-stop", "in"),
+    ],
+  });
+
+const onCanvasPath: [string, boolean][] = [
+  ["canvas-start", false],
+  ["canvas-stop", false],
+];
+
 describe("toViewNodes and the main flow", () => {
   it("marks ignored the nodes off the main flow, and only those", () => {
-    const source = inOneSession(
-      [trigger("start"), agent("a"), output("stop"), agent("b"), agent("c"), agent("d")],
-      [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
+    const source = throughSession(
+      inOneSession(
+        [trigger("start"), agent("a"), output("stop"), agent("b"), agent("c"), agent("d")],
+        [thenWire("start", "a"), thenWire("a", "stop"), thenWire("c", "d")],
+      ),
     );
 
     expect(ignoredOf(source)).toEqual([
@@ -131,20 +156,23 @@ describe("toViewNodes and the main flow", () => {
       ["b", true],
       ["c", true],
       ["d", true],
+      ...onCanvasPath,
     ]);
   });
 
   it("marks ignored a loose Loop's frame and its body, and keeps a wired For each", () => {
-    const source = inOneSession(
-      [
-        trigger("start"),
-        forEach("E"),
-        agent("x", { parent: "E" }),
-        output("stop"),
-        loop("L"),
-        agent("y", { parent: "L" }),
-      ],
-      [thenWire("start", "x"), thenWire("x", "stop")],
+    const source = throughSession(
+      inOneSession(
+        [
+          trigger("start"),
+          forEach("E"),
+          agent("x", { parent: "E" }),
+          output("stop"),
+          loop("L"),
+          agent("y", { parent: "L" }),
+        ],
+        [thenWire("start", "x"), thenWire("x", "stop")],
+      ),
     );
 
     expect(ignoredOf(source)).toEqual([
@@ -156,20 +184,23 @@ describe("toViewNodes and the main flow", () => {
       ["stop", false],
       ["L", true],
       ["y", true],
+      ...onCanvasPath,
     ]);
   });
 
   it("marks ignored a loose For each frame and a loose Fork bar", () => {
-    const source = inOneSession(
-      [
-        trigger("start"),
-        output("stop"),
-        forEach("E"),
-        agent("x", { parent: "E" }),
-        fork("F"),
-        agent("p"),
-      ],
-      [thenWire("start", "stop"), thenWire("F", "p")],
+    const source = throughSession(
+      inOneSession(
+        [
+          trigger("start"),
+          output("stop"),
+          forEach("E"),
+          agent("x", { parent: "E" }),
+          fork("F"),
+          agent("p"),
+        ],
+        [thenWire("start", "stop"), thenWire("F", "p")],
+      ),
     );
 
     expect(ignoredOf(source)).toEqual([
@@ -180,10 +211,11 @@ describe("toViewNodes and the main flow", () => {
       ["x", true],
       ["F", true],
       ["p", true],
+      ...onCanvasPath,
     ]);
   });
 
-  it("marks nothing ignored when there is no Start", () => {
+  it("marks nothing ignored when there is no canvas Start", () => {
     const source = inOneSession(
       [agent("a"), output("stop"), loop("L"), agent("y", { parent: "L" })],
       [thenWire("a", "stop")],
@@ -917,5 +949,155 @@ describe("toViewEdges with connections", () => {
 
     expect(others).toHaveLength(3);
     for (const edge of others) expect(edge.style?.strokeDasharray).toBeUndefined();
+  });
+});
+
+describe("toViewNodes and container frames on the canvas path", () => {
+  const twoSessions = (): Flow =>
+    throughSession(
+      parseFlow({
+        nodes: [trigger("s"), output("t"), trigger("u"), output("v")],
+        wires: [thenWire("s", "t"), thenWire("u", "v")],
+        settings: flowSettings,
+        containers: [
+          sessionContainer(["s", "t"]),
+          sessionContainer(["u", "v"], { id: "session-2", name: "web" }),
+        ],
+      }),
+    );
+
+  const frameIgnored = (source: Flow) =>
+    toViewNodes(source, [], {}, null)
+      .filter((node) => node.type === "container-frame")
+      .map((node) => [node.data.containerId, node.data.ignored]);
+
+  it("greys the frame of a session the canvas path does not reach, and only that one", () => {
+    expect(frameIgnored(twoSessions())).toEqual([
+      ["session-1", false],
+      ["session-2", true],
+    ]);
+  });
+
+  it("greys the members of a session the canvas path does not reach", () => {
+    expect(ignoredOf(twoSessions()).filter(([, ignored]) => ignored === true)).toEqual([
+      ["u", true],
+      ["v", true],
+    ]);
+  });
+
+  it("greys no frame in a workflow, whose workspace reaches every session", () => {
+    expect(frameIgnored(containersOnCanvas())).toEqual([
+      ["workspace-1", false],
+      ["session-1", false],
+      ["session-2", false],
+    ]);
+  });
+
+  it("greys no frame when there is no canvas Start", () => {
+    const { nodes, wires, ...rest } = twoSessions();
+    const noStart = parseFlow({
+      ...rest,
+      nodes: nodes.filter((node) => node.id !== "canvas-start"),
+      wires: wires.filter((each) => each.from.node !== "canvas-start"),
+    });
+
+    expect(frameIgnored(noStart)).toEqual([
+      ["session-1", false],
+      ["session-2", false],
+    ]);
+  });
+});
+
+describe("toViewEdges with container ends", () => {
+  const source = () =>
+    throughSession(inOneSession([trigger("s"), output("t")], [thenWire("s", "t")]));
+
+  const edgeFrom = (node: string) =>
+    toViewEdges(source()).find((edge) => edge.id.startsWith(`${node}:`));
+
+  it("ends a wire into a container on its frame's flow-in handle", () => {
+    expect(edgeFrom("canvas-start")).toMatchObject({
+      id: `canvas-start:out->session-1:${flowIn}`,
+      source: "canvas-start",
+      sourceHandle: "out",
+      target: "container-frame-session-1",
+      targetHandle: flowIn,
+    });
+  });
+
+  it("starts a wire out of a container on its frame's flow-out handle", () => {
+    expect(edgeFrom("session-1")).toMatchObject({
+      id: `session-1:${flowOut}->canvas-stop:in`,
+      source: "container-frame-session-1",
+      sourceHandle: flowOut,
+      target: "canvas-stop",
+      targetHandle: "in",
+    });
+  });
+
+  it("draws a container wire as a plain wire, not a dashed connection", () => {
+    const edge = edgeFrom("session-1");
+
+    expect(edge?.type).toBeUndefined();
+    expect(edge?.style).toBeUndefined();
+  });
+});
+
+describe("routeConnection", () => {
+  const drag = (
+    source: string,
+    sourceHandle: string | null,
+    target: string,
+    targetHandle: string | null,
+  ) => ({ source, sourceHandle, target, targetHandle });
+
+  it("connects two sessions when the drag runs between their connection handles", () => {
+    expect(
+      routeConnection(
+        drag(
+          "container-frame-android",
+          connectionPorts.source,
+          "container-frame-ios",
+          connectionPorts.target,
+        ),
+      ),
+    ).toEqual({ kind: "sessions", from: "android", to: "ios" });
+  });
+
+  it("wires two frames when the drag runs from a flow-out to a flow-in", () => {
+    expect(
+      routeConnection(drag("container-frame-android", flowOut, "container-frame-ios", flowIn)),
+    ).toEqual({
+      kind: "wire",
+      from: { node: "android", port: flowOut },
+      to: { node: "ios", port: flowIn },
+    });
+  });
+
+  it.each([
+    [
+      "a node to a frame",
+      drag("start", "out", "container-frame-workspace-1", flowIn),
+      "start",
+      "workspace-1",
+    ],
+    [
+      "a frame to a node",
+      drag("container-frame-workspace-1", flowOut, "stop", "in"),
+      "workspace-1",
+      "stop",
+    ],
+    ["two nodes", drag("a", "out", "b", "in"), "a", "b"],
+  ])("wires %s, naming a frame by its container", (_name, connection, from, to) => {
+    expect(routeConnection(connection)).toEqual({
+      kind: "wire",
+      from: { node: from, port: connection.sourceHandle },
+      to: { node: to, port: connection.targetHandle },
+    });
+  });
+
+  it("routes nothing when a handle is missing", () => {
+    expect(routeConnection(drag("a", null, "b", "in"))).toBeNull();
+    expect(routeConnection(drag("a", "out", "b", null))).toBeNull();
   });
 });

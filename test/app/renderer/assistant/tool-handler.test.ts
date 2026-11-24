@@ -59,6 +59,7 @@ const summary = ({ flowId, name }: Saved) => ({
   variables: [],
   pinned: false,
   kind: "workflow",
+  sessions: [],
 });
 
 const openBlueprint = (): Saved => ({
@@ -220,9 +221,13 @@ describe("tool handler edits", () => {
       "agent-1",
       "workspace-1-start",
       "workspace-1-stop",
+      "canvas-start",
+      "canvas-stop",
     ]);
     expect(after.wires.map(({ from, to }) => `${from.node}>${to.node}`)).toEqual([
       "workspace-1-start>workspace-1-stop",
+      "canvas-start>workspace-1",
+      "workspace-1>canvas-stop",
     ]);
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
@@ -273,6 +278,8 @@ describe("tool handler edits", () => {
       "agent-1",
       "workspace-1-start",
       "workspace-1-stop",
+      "canvas-start",
+      "canvas-stop",
       "One",
       "Two",
       "Three",
@@ -889,5 +896,105 @@ describe("tool handler tidy", () => {
       added.nodes.map(({ position }) => position),
     );
     expect(canvas.getState().undoStack).toHaveLength(2);
+  });
+});
+
+describe("tool handler and library nodes", () => {
+  const review = {
+    flowId: "f-review",
+    name: "Review",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    versions: 1,
+    lastSavedAt: "2026-01-01T00:00:00.000Z",
+    buildConfig: null,
+    variables: [],
+    pinned: false,
+    kind: "node-library" as const,
+    sessions: [],
+  };
+
+  const use = {
+    id: "use",
+    type: "library",
+    label: "review",
+    position: { x: 200, y: 0 },
+    settings: { libraryId: "f-review", label: "review", overrides: {} },
+  };
+
+  const missing = /no longer exists/;
+
+  const messagesOf = (result: Record<string, unknown>) =>
+    (result["problems"] as { message: string }[]).map(({ message }) => message);
+
+  it("read_blueprint does not report a known library as missing", async () => {
+    const { call, canvas } = await setup();
+    canvas.getState().setLibraries([review], "flow-1");
+    canvas
+      .getState()
+      .load(
+        flow(
+          [trigger("go"), use, output("end")],
+          [thenWire("go", "use"), thenWire("use", "end")],
+          flowSettings,
+          { containers: [] },
+        ),
+      );
+
+    const result = await call("read_blueprint", {});
+
+    expect(messagesOf(result)).not.toContainEqual(expect.stringMatching(missing));
+  });
+
+  it("an edit that puts a known library on the main flow reports no missing library", async () => {
+    const { call, canvas } = await setup();
+    canvas.getState().setLibraries([review], "flow-1");
+    canvas.getState().load(
+      flow([trigger("go"), use, output("end")], [thenWire("use", "end")], flowSettings, {
+        containers: [],
+      }),
+    );
+
+    const result = await call("wire", thenWire("go", "use"));
+
+    expect(result).toMatchObject({ ok: true });
+    expect(messagesOf(result)).not.toContainEqual(expect.stringMatching(missing));
+  });
+
+  it("read_blueprint of another saved blueprint does not report a known library as missing", async () => {
+    const { call, canvas, blueprints } = await setup();
+    canvas.getState().setLibraries([review], "flow-1");
+    blueprints.push({
+      flowId: "flow-host",
+      name: "Host",
+      flow: flow(
+        [trigger("go"), use, output("end")],
+        [thenWire("go", "use"), thenWire("use", "end")],
+        flowSettings,
+        { containers: [] },
+      ),
+    });
+
+    const result = await call("read_blueprint", { blueprint: "flow-host" });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(messagesOf(result)).not.toContainEqual(expect.stringMatching(missing));
+  });
+
+  it("still reports a library the lookup does not know", async () => {
+    const { call, canvas } = await setup();
+    canvas
+      .getState()
+      .load(
+        flow(
+          [trigger("go"), use, output("end")],
+          [thenWire("go", "use"), thenWire("use", "end")],
+          flowSettings,
+          { containers: [] },
+        ),
+      );
+
+    const result = await call("read_blueprint", {});
+
+    expect(messagesOf(result)).toContainEqual(expect.stringMatching(missing));
   });
 });

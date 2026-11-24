@@ -169,12 +169,11 @@ const deleting = (flow: Flow, ids: readonly string[], dropped?: ReadonlySet<stri
   const doomed = new Set(ids);
   const nodes = indexed(flow.nodes, (node) => doomed.has(node.id));
   const notes = indexed(notesOf(flow), (note) => doomed.has(note.id));
-  const wires = indexed(
-    flow.wires,
-    (wire) => doomed.has(wire.from.node) || doomed.has(wire.to.node),
-  );
   const containers = containerRemoval(flow.containers, doomed, dropped);
-  const connections = touching(flow, new Set(containers.containers.map(({ item }) => item.id)));
+  const removed = new Set(containers.containers.map(({ item }) => item.id));
+  const gone = (id: string) => doomed.has(id) || removed.has(id);
+  const wires = indexed(flow.wires, (wire) => gone(wire.from.node) || gone(wire.to.node));
+  const connections = touching(flow, removed);
   return {
     do: (current) =>
       withConnections(

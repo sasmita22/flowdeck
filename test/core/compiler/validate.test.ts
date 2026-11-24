@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { rules, validate } from "../../../src/core/compiler/validate.js";
+import type { LibraryLookup } from "../../../src/core/flow/libraries.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 import {
   agent,
@@ -19,11 +20,16 @@ const examplesDir = new URL("../../../examples/", import.meta.url);
 const readJson = (dir: URL, name: string): unknown =>
   JSON.parse(readFileSync(new URL(name, dir), "utf8"));
 
+const knownLibrary: LibraryLookup = (flowId) =>
+  flowId === "known-library" ? { name: "Known", kind: "node-library", sessions: [] } : undefined;
+
 const brokenFixtures = readdirSync(brokenDir).filter((name) => name.endsWith(".json"));
 
 describe("validate", () => {
   it.each(brokenFixtures)("reports only its own rule for broken/%s", (name) => {
-    const ruleIds = validate(parseFlow(readJson(brokenDir, name))).map((error) => error.rule);
+    const ruleIds = validate(parseFlow(readJson(brokenDir, name)), knownLibrary).map(
+      (error) => error.rule,
+    );
     expect(new Set(ruleIds)).toEqual(new Set([name.replace(/\.json$/, "")]));
   });
 
@@ -40,6 +46,10 @@ describe("validate", () => {
         "session-settings",
         "session-names",
         "outside-container",
+        "workflow-path",
+        "container-wires",
+        "library-use",
+        "library-labels",
       ]),
     );
     expect(ids).not.toContain("repo-required");
@@ -64,8 +74,12 @@ describe("validate", () => {
     "session-names",
     "session-connections",
     "outside-container",
+    "workflow-path",
+    "container-wires",
+    "library-use",
+    "library-labels",
   ])("reports exactly %s for its broken fixture", (ruleId) => {
-    const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)));
+    const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)), knownLibrary);
 
     expect(errors.length).toBeGreaterThan(0);
     expect(new Set(errors.map((error) => error.rule))).toEqual(new Set([ruleId]));

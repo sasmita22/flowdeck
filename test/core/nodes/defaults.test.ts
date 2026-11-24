@@ -9,6 +9,7 @@ import * as fork from "../../../src/core/nodes/fork/defaults.js";
 import * as gate from "../../../src/core/nodes/gate/defaults.js";
 import * as hardstop from "../../../src/core/nodes/hardstop/defaults.js";
 import * as join from "../../../src/core/nodes/join/defaults.js";
+import * as library from "../../../src/core/nodes/library/defaults.js";
 import * as loop from "../../../src/core/nodes/loop/defaults.js";
 import * as output from "../../../src/core/nodes/output/defaults.js";
 import { labelFor, nodeDefaults } from "../../../src/core/nodes/defaults.js";
@@ -43,6 +44,7 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["join", join, "Join", ["parallel-section"]],
   ["foreach", foreach, "For each", ["loop-body"]],
   ["branch", branch, "Branch", ["branch-variable"]],
+  ["library", library, "Library", ["library-use"]],
 ];
 
 describe("defaults for every node type", () => {

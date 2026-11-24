@@ -1,6 +1,13 @@
 import { z } from "zod";
-import { BuildConfig, Flow } from "./schema.js";
-import { FoundVariable } from "./variables.js";
+import {
+  blueprintKind,
+  expandedOrAsIs,
+  kindResolver,
+  reachedSessions,
+  type LibraryResolver,
+} from "./libraries.js";
+import { BuildConfig, Flow, SessionContainer } from "./schema.js";
+import { FoundVariable, foundVariables, groupVariables } from "./variables.js";
 
 export interface SavedFlowRef {
   flowId: string;
@@ -27,10 +34,28 @@ export const flowSummarySchema = z.object({
   buildConfig: BuildConfig.nullable(),
   variables: z.array(FoundVariable),
   pinned: z.boolean(),
-  kind: z.enum(["workflow", "library"]),
+  kind: z.enum(["workflow", "node-library", "session-library", "incomplete"]),
+  sessions: z.array(
+    SessionContainer.pick({ id: true, name: true, repo: true, branch: true, model: true }),
+  ),
 });
 
 export type FlowSummary = z.infer<typeof flowSummarySchema>;
+
+type BlueprintFacts = Pick<FlowSummary, "kind" | "variables" | "sessions">;
+
+export function blueprintFacts(flow: Flow, resolve: LibraryResolver): BlueprintFacts {
+  const kind = blueprintKind(flow, kindResolver(resolve));
+  const expanded = expandedOrAsIs(flow, resolve);
+  return {
+    kind,
+    variables: groupVariables(foundVariables(expanded.flow), expanded.uses),
+    sessions:
+      kind === "node-library" || kind === "session-library" ? reachedSessions(expanded.flow) : [],
+  };
+}
+
+export const noBlueprintFacts: BlueprintFacts = { kind: "incomplete", variables: [], sessions: [] };
 
 /**
  * Keeps named blueprints and their saved versions. Saved versions are never changed or deleted;
@@ -56,6 +81,13 @@ export interface FlowStore {
   loadLatest(flowId?: string): LoadedFlow | null;
   load(ref: SavedFlowRef): LoadedFlow | null;
 }
+
+export const latestLibraries =
+  (flows: Pick<FlowStore, "loadLatest">): LibraryResolver =>
+  (flowId) => {
+    const library = flows.loadLatest(flowId);
+    return library === null ? undefined : { name: library.name, flow: library.flow };
+  };
 
 export const saveFlowResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("saved"), flowId: z.string(), version: z.number() }),

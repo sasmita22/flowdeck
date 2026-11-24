@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { activityEntrySchema, type ActivityEntry } from "../../core/run/activity.js";
+import type { Flow } from "../../core/flow/schema.js";
 import type { VariableValues } from "../../core/flow/variables.js";
 import { stateMovingKinds, type RunEvent } from "../../core/run/run-events.js";
 import type {
@@ -312,12 +313,14 @@ type SnapshotRow = {
   blueprint_name: string;
   version: number;
   svg: string;
+  flow_json: string | null;
 };
 
 const toSnapshot = (row: SnapshotRow): BuildSnapshot => ({
   blueprintName: row.blueprint_name,
   version: row.version,
   svg: row.svg,
+  ...(row.flow_json === null ? {} : { flow: JSON.parse(row.flow_json) as Flow }),
   pendingId: row.pending_id,
   buildId: row.build_id,
 });
@@ -966,7 +969,7 @@ export class SqliteStore implements Store {
       "pendingId" in key ? ["pending_id", key.pendingId] : ["build_id", key.buildId];
     const row = this.db
       .prepare(
-        `SELECT pending_id, build_id, blueprint_name, version, svg FROM build_snapshots WHERE ${column} = ?`,
+        `SELECT pending_id, build_id, blueprint_name, version, svg, flow_json FROM build_snapshots WHERE ${column} = ?`,
       )
       .get(id) as SnapshotRow | undefined;
     return row === undefined ? null : toSnapshot(row);
@@ -1059,8 +1062,8 @@ export class SqliteStore implements Store {
   ): boolean {
     const inserted = this.db
       .prepare(
-        `INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, created_at)
-         SELECT @pendingId, @buildId, @blueprintName, @version, @svg, @createdAt
+        `INSERT INTO build_snapshots (pending_id, build_id, blueprint_name, version, svg, flow_json, created_at)
+         SELECT @pendingId, @buildId, @blueprintName, @version, @svg, @flowJson, @createdAt
           WHERE NOT EXISTS (
             SELECT 1 FROM build_snapshots WHERE pending_id = @pendingId OR build_id = @buildId)`,
       )
@@ -1070,6 +1073,7 @@ export class SqliteStore implements Store {
         blueprintName: snapshot.blueprintName,
         version: snapshot.version,
         svg: snapshot.svg,
+        flowJson: snapshot.flow === undefined ? null : JSON.stringify(snapshot.flow),
         createdAt,
       });
     return inserted.changes > 0;

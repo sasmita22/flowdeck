@@ -6,7 +6,7 @@ import { BlueprintTerminalPane } from "../assistant/blueprint-terminal-pane.js";
 import type { BranchState } from "../branch-store.js";
 import { Canvas } from "../canvas/canvas.js";
 import { selectDirty, type CanvasState } from "../canvas/store.js";
-import { flowKind, libraryBuildReason } from "../../../core/flow/structure.js";
+import { isWorkflow, libraryBuildReason } from "../../../core/flow/structure.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 import { InspectorPanel } from "../inspector-panel.js";
 import type { InspectorState } from "../inspector/store.js";
@@ -98,7 +98,7 @@ function EditorTitleRow({
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
   const starting = useStore(run, (state) => state.starting);
-  const library = useStore(canvas, (state) => flowKind(state.flow) === "library");
+  const library = useStore(canvas, (state) => !isWorkflow(state.flow));
   return (
     <header className="fd-title-row">
       <nav className="fd-crumbs" aria-label="Breadcrumb">

@@ -9,7 +9,8 @@ export const safeName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 const reference = /\{\{\s*([^{}]*?)\s*\}\}/g;
 
-export const isVariableName = (name: string): boolean => safeName.test(name);
+export const isVariableName = (name: string): boolean =>
+  name.split(".").every((segment) => safeName.test(segment));
 
 export const referencedVariables = (text: string): string[] => [
   ...new Set(Array.from(text.matchAll(reference), ([, name]) => name ?? "")),
@@ -25,9 +26,30 @@ export const FoundVariable = z.object({
   name: z.string(),
   kind: z.enum(["yes-no", "text"]),
   nodeIds: z.tuple([z.string()]).rest(z.string()),
+  group: z.object({ path: z.string(), name: z.string() }).optional(),
 });
 
 export type FoundVariable = z.infer<typeof FoundVariable>;
+
+export type LibraryUse = {
+  path: string;
+  name: string;
+  kind: "node-library" | "session-library";
+};
+
+export const groupVariables = (
+  found: readonly FoundVariable[],
+  uses: readonly LibraryUse[],
+): FoundVariable[] =>
+  found.map((variable) => {
+    const owner = uses
+      .filter(({ path }) => variable.name.startsWith(`${path}.`))
+      .reduce<LibraryUse | undefined>(
+        (longest, use) => (longest && longest.path.length >= use.path.length ? longest : use),
+        undefined,
+      );
+    return owner ? { ...variable, group: { path: owner.path, name: owner.name } } : variable;
+  });
 
 export function foundVariables(flow: Flow): FoundVariable[] {
   const found = new Map<string, FoundVariable>();

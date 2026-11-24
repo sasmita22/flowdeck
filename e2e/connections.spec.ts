@@ -109,3 +109,28 @@ test("A drawn session connection is dashed with a head at each end, and one undo
   await expect(path).toHaveCount(0);
   expect(await readout(window)).not.toHaveProperty("connections");
 });
+
+test("A drag from a frame's flow-out to another frame's flow-in draws a solid wire, not a connection", async () => {
+  seedFlow(home, twoSessions());
+  const window = await launch();
+
+  await drag(
+    window,
+    window.getByTestId(containerTestIds.frameFlowOut("android")),
+    window.getByTestId(containerTestIds.frameFlowIn("ios")),
+  );
+
+  const wire = {
+    kind: "then",
+    from: { node: "android", port: "flow-out" },
+    to: { node: "ios", port: "flow-in" },
+  };
+  await expect.poll(async () => (await readout(window)).wires).toContainEqual(wire);
+  expect(await readout(window)).not.toHaveProperty("connections");
+  const edge = window.locator(
+    `[data-id="android:flow-out->ios:flow-in"] path.react-flow__edge-path`,
+  );
+  await expect(edge).toHaveCount(1);
+  expect(await edge.evaluate((element) => getComputedStyle(element).strokeDasharray)).toBe("none");
+  await window.screenshot({ path: test.info().outputPath("wired.png") });
+});

@@ -15,6 +15,7 @@ export type EngineRequest = {
     | "pin-flow"
     | "delete-flow"
     | "open-flow"
+    | "expand-flow"
     | "list-runs"
     | "load-run"
     | "step-full-text"

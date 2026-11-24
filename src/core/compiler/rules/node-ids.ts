@@ -9,10 +9,21 @@ export const rule: Rule = {
     "Node ids must be unique and use only letters, digits, dashes and underscores, starting with a letter or digit.",
   check: (flow) => {
     const seen = new Set<string>();
+    const containerIds = new Set(flow.containers.map((container) => container.id.toLowerCase()));
     return flow.nodes.flatMap((node): ValidationError[] => {
       const key = node.id.toLowerCase();
       const repeated = seen.has(key);
       seen.add(key);
+      if (containerIds.has(key)) {
+        return [
+          {
+            rule: id,
+            node: node.id,
+            field: "id",
+            message: `Node id "${node.id}" is already the id of a workspace or session.`,
+          },
+        ];
+      }
       if (repeated) {
         return [
           {

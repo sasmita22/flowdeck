@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, workspace and session containers, container and blueprint settings, variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
+description: How Flowdeck blueprints work and how to change them with the flowdeck tools - node types and settings, wires and hand-offs, workspace and session containers, the canvas path, libraries, container and blueprint settings, variables, validator rules, and the ten tools. Read before answering any question about a blueprint or changing one.
 ---
 
 # Blueprints
@@ -25,37 +25,46 @@ Nodes sit in containers, drawn as frames on the canvas:
 - The workspace container: at most one per blueprint, with a `model`.
 - Session containers: any number, each one Claude Code session with a `name` no other session uses, a `repo`, a `branch` and a `model`. Its nodes run inside that session, one turn after another; an Agent node runs as a subagent inside it and can use every tool the session has.
 
-Each container holds exactly one Start and one Stop, and its Start reaches its Stop. A blueprint with a workspace is a workflow: every node in it sits in the workspace or a session. A blueprint with no workspace is a library, and a library cannot be built. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
+Each container holds exactly one Start and one Stop of its own, and its Start reaches its Stop.
+
+The canvas path joins the frames. The canvas has a canvas-level Start and Stop, outside every frame, and each frame has a `flow-in` port on its left and a `flow-out` port on its right. `then` wires run from the canvas Start into a frame's `flow-in`, out of its `flow-out` to the next frame or canvas-level node, and on to the canvas Stop.
+
+A blueprint with a workspace is a workflow: its canvas path runs from the canvas Start through the workspace to the canvas Stop, and every other node sits in the workspace or a session. A blueprint with no workspace is a library, and a library cannot be built. A library's kind comes from its canvas path: a session library when the path passes a session container or a session library, a node library when it does not, and incomplete when there is no single canvas Start or its path never reaches a canvas Stop. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
 
 A connection joins two session containers so their sessions may message each other directly. `read_blueprint` answers the `connections`, each with the two container ids it is `between`.
 
-The tools cannot add, delete or change a container or a connection; the user draws a connection on the canvas between two session frames. For a container's settings, the build model or the permission mode, tell the user to set them on the canvas: a container's settings by selecting its frame, the blueprint settings from the gear. Connectors are not set in the blueprint: each session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
+The tools cannot add, delete or change a container or a connection, and cannot wire a frame's `flow-in` or `flow-out`; the user draws those wires, and a connection between two session frames, on the canvas. For a container's settings, the build model or the permission mode, tell the user to set them on the canvas: a container's settings by selecting its frame, the blueprint settings from the gear. Connectors are not set in the blueprint: each session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
 
 ## Nodes
 
 Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent` (the Loop or For each whose body holds it), and settings for its type. Settings you leave out when adding a node take the type's defaults.
 
-| Type       | What it does                                                                                                                                                                                 | Settings (default)                                                                                                                                 | Ports                               |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `trigger`  | Start: where its container starts                                                                                                                                                            | none                                                                                                                                               | out `out` (then)                    |
-| `agent`    | A subagent the session calls                                                                                                                                                                 | `role` (""), `instructions` (""), `model` ("sonnet"), `given` and `writes` (optional lists of files), `produces` (optional name of a yes/no value) | in `in`, out `out` (then)           |
-| `gate`     | Stops for the user to look before going on                                                                                                                                                   | `shown` (""), `skippable` (false)                                                                                                                  | in `in`, out `out` (then)           |
-| `ask`      | Asks the user a question                                                                                                                                                                     | `question` (""), `options` ([])                                                                                                                    | in `in`, out `out` (then)           |
-| `hardstop` | A stop that cannot be skipped                                                                                                                                                                | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                                                  | in `in`, out `out` (then)           |
-| `loop`     | Repeats its body until its condition holds                                                                                                                                                   | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                                                            | in `in`, out `out` (then)           |
-| `foreach`  | Runs its body once per item of a list file                                                                                                                                                   | `file` ("items.txt"; relative to the session folder, no `..`)                                                                                      | in `in`, out `out` (then)           |
-| `fork`     | Parallel start                                                                                                                                                                               | none                                                                                                                                               | in `in`, out `out` (then)           |
-| `join`     | Parallel end                                                                                                                                                                                 | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                             | in `in`, out `out` (then)           |
-| `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                              | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                        | in `in`; out `yes`, out `no` (then) |
-| `output`   | Stop: where its container ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
+| Type       | What it does                                                                                                                                                                                                                          | Settings (default)                                                                                                                                 | Ports                               |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `trigger`  | Start: where its container starts, or, outside every frame, where the canvas path starts                                                                                                                                              | none                                                                                                                                               | out `out` (then)                    |
+| `agent`    | A subagent the session calls                                                                                                                                                                                                          | `role` (""), `instructions` (""), `model` ("sonnet"), `given` and `writes` (optional lists of files), `produces` (optional name of a yes/no value) | in `in`, out `out` (then)           |
+| `gate`     | Stops for the user to look before going on                                                                                                                                                                                            | `shown` (""), `skippable` (false)                                                                                                                  | in `in`, out `out` (then)           |
+| `ask`      | Asks the user a question                                                                                                                                                                                                              | `question` (""), `options` ([])                                                                                                                    | in `in`, out `out` (then)           |
+| `hardstop` | A stop that cannot be skipped                                                                                                                                                                                                         | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                                                  | in `in`, out `out` (then)           |
+| `loop`     | Repeats its body until its condition holds                                                                                                                                                                                            | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                                                            | in `in`, out `out` (then)           |
+| `foreach`  | Runs its body once per item of a list file                                                                                                                                                                                            | `file` ("items.txt"; relative to the session folder, no `..`)                                                                                      | in `in`, out `out` (then)           |
+| `fork`     | Parallel start                                                                                                                                                                                                                        | none                                                                                                                                               | in `in`, out `out` (then)           |
+| `join`     | Parallel end                                                                                                                                                                                                                          | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                             | in `in`, out `out` (then)           |
+| `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                                                                       | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                        | in `in`; out `yes`, out `no` (then) |
+| `output`   | Stop: where its container, or outside every frame the canvas path, ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
+| `library`  | Uses another blueprint, a node or session library, as one node; see Libraries. The tools cannot add one                                                                                                                               | `libraryId` (""), `label` ("library"), `overrides` ({})                                                                                            | in `in`, out `out` (then)           |
 
 A Loop or For each holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
 
-Start and Stop are drawn as circles, Stop with a heavy ring. Each container has exactly one Start and one Stop, and its Start reaches its Stop.
+Start and Stop are drawn as circles, Stop with a heavy ring. Each container has exactly one Start and one Stop, and its Start reaches its Stop. The canvas-level Start and Stop sit outside every frame.
 
 ## Main flow
 
-The main flow is every node reached along `then` wires from the Start of its own container. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
+The main flow is every node reached along `then` wires from the canvas Start, and in a workflow also from each container's own Start. A wire into a frame's `flow-in` reaches that container and its Start; the frame's `flow-out` wires lead on. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
+
+## Libraries
+
+A `library` node uses a node or session library, named by its flow id in `libraryId`. When the blueprint is opened or built, the node stands for the library's latest saved nodes; a build keeps the copy it was made from, so later edits to the library never reach it. A node library's node sits in the workspace or a session; a session library's node sits on the canvas path, outside every frame. Its `label` setting names the use: the library's variables are asked for as `<label>.<name>`, with the label in lower case and spaces as dashes, so `Android app` asks for `android-app.ticket`. `overrides` sets a session library's sessions' `repo`, `branch` or `model`, keyed by session id. The tools cannot add a `library` node or change the library it uses: `add_node` does not take that type and `change_node` refuses a new `libraryId`, so tell the user to drop the library onto the canvas.
 
 ## Wires
 
@@ -86,20 +95,20 @@ The blueprint's settings hold:
 
 The user sets a container's settings by selecting its frame, and the blueprint's settings from the gear.
 
-Variables are found, never declared. A Branch decided by a variable makes the name in its `variable` a yes/no variable, and `{{name}}` in an Agent's `instructions` makes `name` a text variable. The user gives a value for each when building. A Branch is decided by a yes/no variable, or, with `decidedBy` "value", by the yes/no value named in its `value` that an earlier Agent `produces`. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on. Variable names use letters, digits, dashes and underscores, starting with a letter or digit, and one name is either yes/no or text, never both.
+Variables are found, never declared. A Branch decided by a variable makes the name in its `variable` a yes/no variable, and `{{name}}` in an Agent's `instructions` makes `name` a text variable. The user gives a value for each when building. A Branch is decided by a yes/no variable, or, with `decidedBy` "value", by the yes/no value named in its `value` that an earlier Agent `produces`. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on. Variable names use letters, digits, dashes and underscores, in parts joined by single dots, each part starting with a letter or digit, and one name is either yes/no or text, never both.
 
 ## Validator rules
 
-A `wire` edit that breaks `ports` or `references` is refused, and so is a `change_node` or `delete_node` that names a node not in the blueprint; a refused edit changes nothing. Any other edit that fits its tool's input and the node type's settings is applied even if it breaks a rule below, so a blueprint can be built up step by step. Its answer lists the problems it added, each with its `rule`. `read_blueprint` lists all current problems.
+A `wire` edit that breaks `ports`, `references` or `container-wires` is refused, and so is a `change_node` or `delete_node` that names a node not in the blueprint, or a `change_node` that changes a library node's `libraryId`; a refused edit changes nothing. Any other edit that fits its tool's input and the node type's settings is applied even if it breaks a rule below, so a blueprint can be built up step by step. Its answer lists the problems it added, each with its `rule`. `read_blueprint` lists all current problems.
 
 - `loop-cap`: a Loop needs a whole-number `cap` of at least 1 and an `onCap` action.
 - `hardstop-locked`: a hard stop stays `enabled` and `locked`. Never turn either off.
 - `required-settings`: Agents need `instructions`, Loops a `condition`, Asks a `question`, and Stops an output `name` and `type`.
-- `ports`: a wire leaves from an output port and arrives at an input port of its node's type, and both take its kind.
-- `references`: wires and parents name nodes that are in the blueprint.
+- `ports`: a wire leaves from an output port and arrives at an input port of its node's type, or a frame's `flow-out` and `flow-in`, and both take its kind.
+- `references`: wires name nodes or containers in the blueprint, and parents name nodes in it.
 - `no-cycle`: then wires and parents do not form a cycle outside a loop.
 - `loop-single-entry`: a Loop or For each body has exactly one entry.
-- `node-ids`: node ids are unique and use letters, digits, dashes and underscores.
+- `node-ids`: node ids are unique, differ from every container id, and use letters, digits, dashes and underscores.
 - `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop or For each.
 - `loop-body`: a Loop or For each needs an Agent in its body, cannot sit inside another, and only they hold a body.
 - `body-nodes`: a Start or Stop cannot sit inside a Loop or For each body.
@@ -107,7 +116,7 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 - `branch-value`: a Branch decided by a value reads one an Agent produces, and that Agent runs before it on every path.
 - `handoffs`: a hand-off file is inside the working folder, and an Agent that writes it runs before every Agent given it, on every path and never beside it.
 - `variable-kind`: a variable is either a yes/no a Branch decides on or text an Agent uses, never both.
-- `variable-names`: variable names use only letters, digits, dashes and underscores.
+- `variable-names`: variable names use only letters, digits, dashes and underscores, in parts joined by single dots.
 - `workspace-count`: a blueprint has at most one workspace.
 - `one-start`: each container has exactly one Start.
 - `stop-required`: each container has a Stop its Start reaches.
@@ -115,26 +124,30 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 - `session-settings`: each session has a `repo`, a `branch` and a `model`, and the workspace a `model`.
 - `session-names`: each session has a name no other session uses.
 - `session-connections`: a connection joins two different sessions, at most once per pair.
-- `outside-container`: in a workflow, every node sits in the workspace or a session.
+- `outside-container`: in a workflow, every node except the canvas Start, the canvas Stop and library nodes sits in the workspace or a session.
+- `workflow-path`: a workflow runs from its canvas Start through the workspace to a canvas Stop.
+- `container-wires`: a wire stays inside its workspace or session, or at canvas level; it enters a container only at its `flow-in` and leaves only from its `flow-out`.
+- `library-use`: a library node names a node or session library that exists, and sits where that kind fits.
+- `library-labels`: each library node's `label` uses letters, digits, spaces, dashes and underscores, and no other library node's evens out to the same.
 
 ## Tools
 
 Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved blueprint; leave it out for the open one. Reading a deleted blueprint answers that it was deleted. Edits apply only to the blueprint you were opened on, and only while it is open in the editor; an edit at any other time is refused. When asked to change another blueprint, reply that you can edit only the open one, and that the user can open that blueprint's own Agent pane.
 
-| Tool                | Does                                                                                                 | Input                                 |
-| ------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                                | none                                  |
-| `search_blueprints` | Finds blueprints whose name or any node label contains the query                                     | `query`                               |
-| `read_blueprint`    | Reads nodes, wires, containers, connections, whether there are unsaved changes, and current problems | `blueprint`                           |
-| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId`        | `type`, `label`, `parent`, `settings` |
+| Tool                | Does                                                                                                 | Input                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                                | none                                            |
+| `search_blueprints` | Finds blueprints whose name or any node label contains the query                                     | `query`                                         |
+| `read_blueprint`    | Reads nodes, wires, containers, connections, whether there are unsaved changes, and current problems | `blueprint`                                     |
+| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId`        | `type`, `label`, `parent`, `settings`           |
+| `change_node`       | Changes a node's label or some of its settings; settings given are merged over the current ones      | `nodeId`, `label`, `settings`                   |
+| `wire`              | Connects an output port to an input port                                                             | `kind`, `from` and `to` (each `{ node, port }`) |
+| `delete_node`       | Deletes a node and its wires                                                                         | `nodeId`                                        |
+| `tidy_layout`       | Lays out the open blueprint; the last edit of an ask that added nodes or wires                       | none                                            |
+| `list_builds`       | Lists the builds made from blueprints                                                                | none                                            |
+| `read_build`        | Reads one build                                                                                      | `id`                                            |
 
-`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`.
-| `change_node` | Changes a node's label or some of its settings; settings given are merged over the current ones | `nodeId`, `label`, `settings` |
-| `wire` | Connects an output port to an input port | `kind`, `from` and `to` (each `{ node, port }`) |
-| `delete_node` | Deletes a node and its wires | `nodeId` |
-| `tidy_layout` | Lays out the open blueprint; the last edit of an ask that added nodes or wires | none |
-| `list_builds` | Lists the builds made from blueprints | none |
-| `read_build` | Reads one build | `id` |
+`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`; only the canvas Start and Stop go without one.
 
 The build tools only read. There is no tool to build, run or delete; tell the user where to do that in the app.
 

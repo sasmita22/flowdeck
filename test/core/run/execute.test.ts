@@ -37,6 +37,7 @@ import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
 import {
   agent,
+  canvasPath,
   flow,
   flowSettings,
   gate,
@@ -53,16 +54,18 @@ const fs = new NodeFileSystem();
 
 const inWorkspace = (nodes: { id: string }[]): Flow => {
   const ids = ["start", ...nodes.map((node) => node.id), "stop"];
-  return flow(
-    [trigger("start"), ...nodes, output("stop"), trigger("main-start"), output("main-stop")],
-    [
-      ...ids.slice(1).map((id, index) => thenWire(ids[index] as string, id)),
-      thenWire("main-start", "main-stop"),
-    ],
-    flowSettings,
-    {
-      containers: [workspaceContainer(ids), sessionContainer(["main-start", "main-stop"])],
-    },
+  return canvasPath(
+    flow(
+      [trigger("start"), ...nodes, output("stop"), trigger("main-start"), output("main-stop")],
+      [
+        ...ids.slice(1).map((id, index) => thenWire(ids[index] as string, id)),
+        thenWire("main-start", "main-stop"),
+      ],
+      flowSettings,
+      {
+        containers: [workspaceContainer(ids), sessionContainer(["main-start", "main-stop"])],
+      },
+    ),
   );
 };
 

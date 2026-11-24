@@ -7,6 +7,7 @@ import { settings as fork } from "../nodes/fork/settings.js";
 import { settings as gate } from "../nodes/gate/settings.js";
 import { settings as hardstop } from "../nodes/hardstop/settings.js";
 import { settings as join } from "../nodes/join/settings.js";
+import { settings as library } from "../nodes/library/settings.js";
 import { settings as loop } from "../nodes/loop/settings.js";
 import { settings as output } from "../nodes/output/settings.js";
 import { settings as trigger } from "../nodes/trigger/settings.js";
@@ -23,6 +24,7 @@ export const NodeType = z.enum([
   "join",
   "foreach",
   "branch",
+  "library",
 ]);
 
 export const WireKind = z.enum(["then", "event"]);
@@ -95,6 +97,7 @@ export const Node = z.discriminatedUnion("type", [
   NodeBase.extend({ type: z.literal("join"), settings: join }),
   NodeBase.extend({ type: z.literal("foreach"), settings: foreach }),
   NodeBase.extend({ type: z.literal("branch"), settings: branch }),
+  NodeBase.extend({ type: z.literal("library"), settings: library }),
 ]);
 
 export const CanvasNote = z.object({

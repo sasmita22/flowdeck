@@ -7,10 +7,20 @@ import { ResizeHandle, useShownWidth } from "../resize-handle.js";
 import type { RunView } from "../run-store.js";
 import type { ShellState } from "../shell-store.js";
 import { controlTestIds } from "../test-ids.js";
-import { filterPalette, groupPalette, paletteItems, type PaletteItem } from "./palette-items.js";
+import {
+  filterLibraries,
+  filterPalette,
+  groupPalette,
+  libraryItems,
+  paletteItems,
+  type LibraryItem,
+  type PaletteItem,
+} from "./palette-items.js";
 import type { CanvasItemType, CanvasState } from "./store.js";
 
 export const nodeMimeType = "application/flowdeck-node";
+
+export const libraryMimeType = "application/flowdeck-library";
 
 const onDragStart = (type: CanvasItemType) => (event: DragEvent<HTMLDivElement>) => {
   event.dataTransfer.setData(nodeMimeType, type);
@@ -61,6 +71,37 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemTyp
   );
 }
 
+function LibraryEntry({ item, onAdd }: { item: LibraryItem; onAdd: (flowId: string) => void }) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    onAdd(item.flowId);
+  };
+  const onLibraryDragStart = (event: DragEvent<HTMLDivElement>) => {
+    event.dataTransfer.setData(libraryMimeType, item.flowId);
+    event.dataTransfer.effectAllowed = "move";
+  };
+  return (
+    <div
+      className="fd-palette-item"
+      data-testid={item.testId}
+      tabIndex={0}
+      draggable
+      onDragStart={onLibraryDragStart}
+      onDoubleClick={() => onAdd(item.flowId)}
+      onKeyDown={onKeyDown}
+    >
+      <span className="fd-palette-preview">
+        <NodePreview type="library" />
+      </span>
+      <span className="fd-palette-text">
+        <span className="fd-palette-head">{item.label}</span>
+        <span className="fd-palette-description">{item.kindLabel}</span>
+      </span>
+    </div>
+  );
+}
+
 export function Palette({
   canvas,
   shell,
@@ -72,10 +113,14 @@ export function Palette({
 }) {
   const open = useStore(shell, (state) => state.sidebarOpen);
   const width = useShownWidth(shell, run, "sidebar");
+  const summaries = useStore(canvas, (state) => state.librarySummaries);
+  const openFlowId = useStore(canvas, (state) => state.openFlowId);
   const [query, setQuery] = useState("");
   if (!open) return null;
   const groups = groupPalette(filterPalette(paletteItems, query));
+  const libraries = filterLibraries(libraryItems(summaries, openFlowId), query);
   const onAdd = (type: CanvasItemType) => canvas.getState().addNext(type);
+  const onAddLibrary = (flowId: string) => canvas.getState().addLibrary(flowId);
   return (
     <>
       <aside className="fd-sidebar" aria-label="Nodes" style={{ width }}>
@@ -98,7 +143,9 @@ export function Palette({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        {groups.length === 0 && <p className="fd-palette-empty">No node matches “{query}”.</p>}
+        {groups.length === 0 && libraries.length === 0 && (
+          <p className="fd-palette-empty">No node matches “{query}”.</p>
+        )}
         {groups.map(({ group, items }) => (
           <Fragment key={group}>
             {group !== "" && <h2 className="fd-group-heading">{group}</h2>}
@@ -106,6 +153,10 @@ export function Palette({
               <Entry key={item.type} item={item} onAdd={onAdd} />
             ))}
           </Fragment>
+        ))}
+        {libraries.length > 0 && <h2 className="fd-group-heading">Libraries</h2>}
+        {libraries.map((item) => (
+          <LibraryEntry key={item.flowId} item={item} onAdd={onAddLibrary} />
         ))}
       </aside>
       <ResizeHandle

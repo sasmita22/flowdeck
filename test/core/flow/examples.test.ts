@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { order } from "../../../src/core/flow/order.js";
 import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import { validate } from "../../../src/core/compiler/validate.js";
+import type { LibraryLookup } from "../../../src/core/flow/libraries.js";
 
 const readExample = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
@@ -42,12 +43,14 @@ describe("examples", () => {
       ...expected,
       "workspace-1-start",
       "workspace-1-stop",
+      "canvas-start",
+      "canvas-stop",
     ]);
   });
 
-  it("uses every node type in all-types.json", () => {
+  it("uses every node type but library in all-types.json", () => {
     const types = parseFlow(readExample("all-types.json")).nodes.map((node) => node.type);
-    expect(new Set(types)).toEqual(new Set(NodeType.options));
+    expect(new Set(types)).toEqual(new Set(NodeType.options.filter((type) => type !== "library")));
   });
 });
 
@@ -103,6 +106,9 @@ const brokenFolder = "test/fixtures/broken/";
 const workingFlows = storedFlows.filter(({ file }) => !file.startsWith(brokenFolder));
 const brokenFlows = storedFlows.filter(({ file }) => file.startsWith(brokenFolder));
 
+const knownLibrary: LibraryLookup = (flowId) =>
+  flowId === "known-library" ? { name: "Known", kind: "node-library", sessions: [] } : undefined;
+
 describe("stored flows", () => {
   it("finds the example, fixture and e2e flows", () => {
     expect(storedFlows.map(({ file }) => file)).toEqual(
@@ -125,7 +131,9 @@ describe("stored flows", () => {
       const parsed = parseFlow(structuredClone(raw));
 
       expect(parsed).toMatchObject(raw as object);
-      expect(new Set(validate(parsed).map((error) => error.rule))).toEqual(new Set([name]));
+      expect(new Set(validate(parsed, knownLibrary).map((error) => error.rule))).toEqual(
+        new Set([name]),
+      );
     },
   );
 });

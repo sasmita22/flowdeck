@@ -32,6 +32,7 @@ describe("flowSummarySchema", () => {
     pinned: false,
     variables: [],
     kind: "workflow",
+    sessions: [],
   };
 
   it("keeps the latest version's Build configuration and the variables it finds", () => {
@@ -67,15 +68,44 @@ describe("flowSummarySchema", () => {
     expect(parsed).not.toHaveProperty("workingFolder");
   });
 
-  it("keeps a library's kind", () => {
-    const library = { ...summary, kind: "library", buildConfig: null };
+  it.each(["workflow", "node-library", "session-library", "incomplete"])(
+    "keeps the kind %s",
+    (kind) => {
+      const kept = { ...summary, kind, buildConfig: null };
+
+      expect(flowSummarySchema.parse(kept)).toEqual(kept);
+    },
+  );
+
+  it("keeps a library's sessions and the group of each variable a library asks for", () => {
+    const library = {
+      ...summary,
+      kind: "session-library",
+      buildConfig: null,
+      sessions: [{ id: "s1", name: "android", repo: "/r/a", branch: "main", model: "haiku" }],
+      variables: [
+        {
+          name: "android-app.isFullScan",
+          kind: "yes-no",
+          nodeIds: ["android-app-scan"],
+          group: { path: "android-app", name: "Android" },
+        },
+      ],
+    };
 
     expect(flowSummarySchema.parse(library)).toEqual(library);
+  });
+
+  it("rejects a summary with no sessions", () => {
+    expect(
+      flowSummarySchema.safeParse({ ...summary, buildConfig: null, sessions: undefined }).success,
+    ).toBe(false);
   });
 
   it.each([
     ["no kind", undefined],
     ["an unknown kind", "group"],
+    ["the old library kind", "library"],
   ])("rejects a summary with %s", (_, kind) => {
     expect(flowSummarySchema.safeParse({ ...summary, buildConfig: null, kind }).success).toBe(
       false,

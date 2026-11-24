@@ -225,7 +225,7 @@ describe("parseFlow", () => {
     expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
   });
 
-  it("lists the eleven node types", () => {
+  it("lists the twelve node types", () => {
     expect(NodeType.options).toEqual([
       "agent",
       "gate",
@@ -238,6 +238,7 @@ describe("parseFlow", () => {
       "join",
       "foreach",
       "branch",
+      "library",
     ]);
   });
 });

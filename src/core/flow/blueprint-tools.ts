@@ -16,7 +16,7 @@ export const toolInputs = {
       .describe("The flow id of the blueprint to read. Leave it out for the open blueprint."),
   }),
   add_node: z.strictObject({
-    type: NodeType,
+    type: NodeType.exclude(["library"]),
     label: z.string(),
     parent: z
       .string()

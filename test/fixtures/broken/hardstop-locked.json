@@ -60,6 +60,29 @@
         "name": "result",
         "type": "text"
       }
+    },
+    {
+      "id": "canvas-start",
+      "label": "Start",
+      "type": "trigger",
+      "position": {
+        "x": -240,
+        "y": -240
+      },
+      "settings": {}
+    },
+    {
+      "id": "canvas-stop",
+      "label": "Stop",
+      "type": "output",
+      "position": {
+        "x": 480,
+        "y": -240
+      },
+      "settings": {
+        "name": "result",
+        "type": "text"
+      }
     }
   ],
   "wires": [
@@ -93,6 +116,28 @@
       },
       "to": {
         "node": "workspace-1-stop",
+        "port": "in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "canvas-start",
+        "port": "out"
+      },
+      "to": {
+        "node": "workspace-1",
+        "port": "flow-in"
+      }
+    },
+    {
+      "kind": "then",
+      "from": {
+        "node": "workspace-1",
+        "port": "flow-out"
+      },
+      "to": {
+        "node": "canvas-stop",
         "port": "in"
       }
     }

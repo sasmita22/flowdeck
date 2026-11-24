@@ -32,6 +32,7 @@ const looks: Record<NodeType, { tag: string; width: number; height: number }> = 
   join: { tag: "PARALLEL END", width: 28, height: 112 },
   foreach: { tag: "EACH", width: 170, height: 48 },
   branch: { tag: "IF", width: 116, height: 48 },
+  library: { tag: "LIB", width: 170, height: 48 },
 };
 
 const fixedWidth = new Set<NodeType>(["trigger", "output", "fork", "join"]);
@@ -176,12 +177,16 @@ export function flowSvg(flow: Flow): string {
       ),
     );
 
+  const frameById = new Map(containerFrames.map(({ container, box }) => [container.id, box]));
+  const endOf = (id: string): Bounds | undefined => {
+    const node = byId.get(id);
+    return node === undefined ? frameById.get(id) : boundsOf(node);
+  };
+
   for (const wire of flow.wires) {
-    const from = byId.get(wire.from.node);
-    const to = byId.get(wire.to.node);
-    if (from === undefined || to === undefined) continue;
-    const start = boundsOf(from);
-    const end = boundsOf(to);
+    const start = endOf(wire.from.node);
+    const end = endOf(wire.to.node);
+    if (start === undefined || end === undefined) continue;
     const x1 = round(start.right);
     const y1 = round((start.top + start.bottom) / 2);
     const x2 = round(end.left);

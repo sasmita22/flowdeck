@@ -155,6 +155,7 @@ const wireProbes = (): WireProbe[] => {
     wire("a1", "nope", "p1", "in"),
     { ...thenWire("a1", "p1"), kind: "event" },
     thenWire("p1", "a1"),
+    thenWire("a1", "workspace-1-stop"),
   ].map((candidate) => ({
     refused: !checkEdit(base, "wire", candidate).ok,
     broken: validate({ ...base, wires: [...base.wires, candidate as Wire] })
@@ -336,6 +337,23 @@ describe("the blueprint kit", () => {
     expect(content).toMatch(/workspace container/i);
     expect(content).toMatch(/session containers?/i);
     expect(content).toMatch(/each container[^.\n]*\bStart\b[^.\n]*\bStop\b/i);
+  });
+
+  it("describes the canvas path from the canvas Start through the frames' flow ports to the Stop", () => {
+    const content = skill();
+
+    expect(content).toMatch(/canvas[- ]level Start/i);
+    expect(content).toContain("`flow-in`");
+    expect(content).toContain("`flow-out`");
+    expect(content).toMatch(/Start[^.\n]*workspace[^.\n]*Stop/);
+  });
+
+  it("says the tools cannot add a library node", () => {
+    const sentence = skill()
+      .split(/(?<=\.)\s+/)
+      .find((text) => text.includes("`library`") && /`add_node`/.test(text));
+
+    expect(sentence).toMatch(/cannot|can't|never/i);
   });
 
   it("says a blueprint with a workspace is a workflow and one without is a library", () => {

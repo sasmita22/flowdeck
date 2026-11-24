@@ -32,7 +32,7 @@ import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
 import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { agentType } from "../../../src/core/nodes/agent/execute.js";
 import { markerOf } from "../../../src/core/run/agent-calls.js";
 import { costOf, type UsageEntry } from "../../../src/core/run/budget.js";
@@ -110,6 +110,25 @@ const savedFlow = () =>
   );
 
 const newBlueprint = () => ({ flowId: null, flow: savedFlow() });
+
+const libraryUse = (libraryId: string) => ({
+  id: "use",
+  label: "Library",
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label: "Android App", overrides: {} },
+});
+
+const nodeLibrary = (label: string): Flow =>
+  parseFlow({
+    nodes: [trigger("canvas-start"), { ...agent("plan"), label }, output("canvas-stop")],
+    wires: [thenWire("canvas-start", "plan"), thenWire("plan", "canvas-stop")],
+    containers: [],
+    settings: savedFlow().settings,
+  });
+
+const labelOf = (flow: Flow | null | undefined, nodeId: string) =>
+  flow?.nodes.find((node) => node.id === nodeId)?.label;
 
 const unreadable = (): never => {
   throw new Error("blueprints unreadable");
@@ -454,6 +473,61 @@ describe("createEngineHandler", async () => {
         id: 3,
         ok: true,
         value: { flowId: "flow-a", name: "Fresh", version: null, flow: null },
+      });
+    });
+
+    describe("expand-flow", () => {
+      const expand = (handler: ReturnType<typeof createEngineHandler>, flow: unknown) =>
+        handler.handle({ id: 1, type: "expand-flow" as never, payload: { flow } });
+
+      it("answers the flow with each library spliced in, and the libraries it used", async () => {
+        const flows = new FakeFlowStore({ newId: ids("flow-lib") });
+        flows.save(nodeLibrary("Planner"), { name: "Android" });
+        const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+        const answered = await expand(handler, onWorkspaceMainFlow([libraryUse("flow-lib")], []));
+
+        const { flow, uses } = (answered as { value: { flow: Flow; uses: unknown } }).value;
+        expect(labelOf(flow, "android-app-plan")).toBe("Planner");
+        expect(flow.nodes.filter((node) => node.type === "library")).toEqual([]);
+        expect(uses).toEqual([{ path: "android-app", name: "Android", kind: "node-library" }]);
+      });
+
+      it("answers the problem instead when a library cannot be spliced in", async () => {
+        const handler = createEngineHandler(options({ openStores: () => stores() }));
+
+        expect(await expand(handler, onWorkspaceMainFlow([libraryUse("gone")], []))).toMatchObject({
+          ok: true,
+          value: { problem: "Android App names a library that does not exist" },
+        });
+      });
+
+      it("shows a library's later save the next time its user is opened, keeping only the library node in the blueprint", async () => {
+        const flows = new FakeFlowStore({ newId: ids("flow-lib", "flow-host") });
+        flows.save(nodeLibrary("Planner"), { name: "Android" });
+        flows.save(onWorkspaceMainFlow([libraryUse("flow-lib")], []), { name: "Host" });
+        const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+        const openHost = async () =>
+          (
+            (await handler.handle({
+              id: 2,
+              type: "open-flow",
+              payload: { flowId: "flow-host" },
+            })) as { value: { flow: Flow } }
+          ).value.flow;
+        const expandedLabel = async (flow: Flow) =>
+          labelOf(
+            ((await expand(handler, flow)) as { value: { flow: Flow } }).value.flow,
+            "android-app-plan",
+          );
+
+        expect(await expandedLabel(await openHost())).toBe("Planner");
+        flows.save(nodeLibrary("Reviewer"), "flow-lib");
+        const reopened = await openHost();
+
+        expect(await expandedLabel(reopened)).toBe("Reviewer");
+        expect(labelOf(reopened, "android-app-plan")).toBeUndefined();
+        expect(reopened.nodes.filter((node) => node.type === "library")).toHaveLength(1);
       });
     });
 
@@ -4072,6 +4146,43 @@ describe("createEngineHandler", async () => {
             },
           });
           expect(stepThreeTurnOf(1)).toContain(firstAnswer.answer);
+        });
+
+        it("rebuilds from the flow the asked build froze, not from the library's later save", async () => {
+          asking();
+          const library = flows.save(nodeLibrary("Planner"), { name: "Android" });
+          const host = atRepo(
+            onWorkspaceMainFlow(
+              [agent("write"), agent("check"), libraryUse(library.flowId)],
+              [thenWire("write", "check"), thenWire("check", "use")],
+            ),
+          );
+          const { version } = flows.save(host, "flow-1");
+          const answered = await handler.handle({
+            id: nextId++,
+            type: "build-version",
+            payload: {
+              flowId: "flow-1",
+              version,
+              name: "fix-login",
+              values: {},
+              ...firstRequest(),
+            },
+          });
+          expect(answered).toMatchObject({ ok: true, value: { kind: "started" } });
+          const asked = (answered as { value: { pendingId: string } }).value.pendingId;
+          expect((await endPush(asked)).progress.chip).toBe("Needs you");
+          flows.save(nodeLibrary("Reviewer"), library.flowId);
+
+          const first = await rebuiltPendingId(asked, [firstAnswer]);
+          await endPush(first);
+
+          expect(labelOf(runs.buildSnapshot({ pendingId: asked })?.flow, "android-app-plan")).toBe(
+            "Planner",
+          );
+          expect(labelOf(runs.buildSnapshot({ pendingId: first })?.flow, "android-app-plan")).toBe(
+            "Planner",
+          );
         });
 
         it.each([
