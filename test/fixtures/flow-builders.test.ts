@@ -3,6 +3,7 @@ import { validate } from "../../src/core/compiler/validate.js";
 import { mainFlow } from "../../src/core/flow/main-flow.js";
 import {
   agent,
+  canvasPath,
   flow,
   flowSettings,
   loop,
@@ -10,8 +11,10 @@ import {
   onWorkspaceMainFlow,
   output,
   sessionContainer,
+  sessionsWorkflow,
   thenWire,
   trigger,
+  wire,
   workspaceContainer,
   workspaceFlow,
 } from "./flow-builders.js";
@@ -37,6 +40,8 @@ describe("onMainFlow", () => {
       "a",
       "b",
       "c",
+      "canvas-start",
+      "canvas-stop",
       "start",
       "stop",
       "workspace-1-start",
@@ -53,6 +58,8 @@ describe("onMainFlow", () => {
     expect(reachedIds(mainFlow(result))).toEqual([
       "a",
       "b",
+      "canvas-start",
+      "canvas-stop",
       "l",
       "start",
       "stop",
@@ -102,7 +109,7 @@ describe("flow", () => {
     ]);
   });
 
-  it("appends the workspace's Start and Stop and the Then wire between them", () => {
+  it("appends the workspace's Start and Stop, the Then wire between them and the canvas path", () => {
     const result = flow([agent("a"), agent("b")], [thenWire("a", "b")]);
 
     expect(result.nodes.map(({ id, type }) => ({ id, type }))).toEqual([
@@ -110,10 +117,14 @@ describe("flow", () => {
       { id: "b", type: "agent" },
       { id: "workspace-1-start", type: "trigger" },
       { id: "workspace-1-stop", type: "output" },
+      { id: "canvas-start", type: "trigger" },
+      { id: "canvas-stop", type: "output" },
     ]);
     expect(result.wires).toEqual([
       thenWire("a", "b"),
       thenWire("workspace-1-start", "workspace-1-stop"),
+      wire("canvas-start", "out", "workspace-1", "flow-in"),
+      wire("workspace-1", "flow-out", "canvas-stop", "in"),
     ]);
   });
 
@@ -186,7 +197,7 @@ describe("workspaceFlow", () => {
     ]);
   });
 
-  it("appends the session container's Start and Stop and the Then wire between them", () => {
+  it("appends the session container's Start and Stop, the Then wire between them and the canvas path", () => {
     const result = workspaceFlow([agent("a"), agent("b")], [thenWire("a", "b")]);
 
     expect(result.nodes.map(({ id, type }) => ({ id, type }))).toEqual([
@@ -194,10 +205,14 @@ describe("workspaceFlow", () => {
       { id: "b", type: "agent" },
       { id: "session-1-start", type: "trigger" },
       { id: "session-1-stop", type: "output" },
+      { id: "canvas-start", type: "trigger" },
+      { id: "canvas-stop", type: "output" },
     ]);
     expect(result.wires).toEqual([
       thenWire("a", "b"),
       thenWire("session-1-start", "session-1-stop"),
+      wire("canvas-start", "out", "workspace-1", "flow-in"),
+      wire("workspace-1", "flow-out", "canvas-stop", "in"),
     ]);
   });
 
@@ -301,5 +316,45 @@ describe("workspaceContainer and sessionContainer", () => {
       model: "haiku",
       nodes: ["a"],
     });
+  });
+});
+
+describe("canvas path", () => {
+  const throughWorkspace = [
+    wire("canvas-start", "out", "workspace-1", "flow-in"),
+    wire("workspace-1", "flow-out", "canvas-stop", "in"),
+  ];
+
+  it.each([
+    ["flow", () => flow([agent("a")], [])],
+    ["workspaceFlow", () => workspaceFlow([agent("a")], [])],
+    ["onMainFlow", () => onMainFlow([agent("a")], [])],
+    ["onWorkspaceMainFlow", () => onWorkspaceMainFlow([agent("a")], [])],
+    ["sessionsWorkflow", () => sessionsWorkflow([{ name: "a", repo: "/r/a", branch: "main" }])],
+  ])("%s wires a canvas Start through the workspace to a canvas Stop", (_, build) => {
+    const result = build();
+
+    expect(result.nodes.slice(-2).map(({ id, type }) => ({ id, type }))).toEqual([
+      { id: "canvas-start", type: "trigger" },
+      { id: "canvas-stop", type: "output" },
+    ]);
+    expect(result.wires.slice(-2)).toEqual(throughWorkspace);
+    expect(validate(result).filter((error) => error.rule === "workflow-path")).toEqual([]);
+  });
+
+  it("canvasPath adds the same path to an inline workflow", () => {
+    const inline = flow(
+      [trigger("w-start"), output("w-stop")],
+      [thenWire("w-start", "w-stop")],
+      flowSettings,
+      {
+        containers: [workspaceContainer(["w-start", "w-stop"])],
+      },
+    );
+
+    const result = canvasPath(inline);
+
+    expect(result.wires.slice(-2)).toEqual(throughWorkspace);
+    expect(validate(result)).toEqual([]);
   });
 });

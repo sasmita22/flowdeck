@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FlowdeckBridge } from "../../../src/app/preload/bridge.js";
 import {
+  blueprintKindLabel,
   createLibraryStore,
   filterRunsByBuild,
   pinnedFirst,
@@ -22,6 +23,7 @@ const report = {
   kind: "workflow" as const,
   buildConfig: { repo: "/code/shop" },
   variables: [],
+  sessions: [],
   pinned: false,
 };
 
@@ -634,6 +636,7 @@ describe("pinnedFirst", () => {
     kind: "workflow" as const,
     buildConfig: null,
     variables: [],
+    sessions: [],
     pinned,
   });
 
@@ -824,5 +827,16 @@ describe("build tree and project", () => {
     await library.getState().loadPendingTree("pending-1");
 
     expect(library.getState()).toMatchObject({ pendingTrees: {}, error: "engine exited" });
+  });
+});
+
+describe("blueprintKindLabel", () => {
+  it("names each of the four kinds in plain words", () => {
+    expect(blueprintKindLabel).toEqual({
+      workflow: "Workflow",
+      "node-library": "Node library",
+      "session-library": "Session library",
+      incomplete: "Incomplete",
+    });
   });
 });

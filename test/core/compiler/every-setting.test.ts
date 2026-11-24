@@ -22,7 +22,9 @@ const inFile = (file: string, shows: string): Landing => ({ file, shows });
 const sessionRoot = "sessions/m-session-name";
 const atRunTime = (value: unknown): Landing => ({ manifest: "node", value });
 
-const settings: Record<NodeType, Record<string, [unknown, Landing]>> = {
+type Lowered = Exclude<NodeType, "library">;
+
+const settings: Record<Lowered, Record<string, [unknown, Landing]>> = {
   agent: {
     role: ["M-agent-role", inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-role")],
     instructions: [
@@ -101,7 +103,7 @@ const blueprintSettings: Record<string, [unknown, Landing]> = {
   ],
 };
 
-const idOf: Record<NodeType, string> = {
+const idOf: Record<Lowered, string> = {
   agent: "a",
   gate: "g",
   ask: "k",
@@ -121,7 +123,7 @@ const valuesOf = (entries: Record<string, [unknown, Landing]>) =>
 const everyNode = () =>
   parseFlow({
     nodes: Object.entries(settings).map(([type, fields]) => ({
-      id: idOf[type as NodeType],
+      id: idOf[type as Lowered],
       type,
       label: `label-${type}`,
       position: { x: 0, y: 0 },
@@ -177,7 +179,7 @@ const landed = (
   }
   switch (landing.manifest) {
     case "node": {
-      const node = oneSession(manifest).nodes.find((each) => each.id === idOf[type as NodeType]);
+      const node = oneSession(manifest).nodes.find((each) => each.id === idOf[type as Lowered]);
       expect((node?.settings as Record<string, unknown>)[field], `${type}.${field}`).toEqual(
         landing.value,
       );
@@ -207,7 +209,10 @@ const landed = (
 
 describe("every setting lands in the build", () => {
   it("covers every field of every node type, of the session container and of the blueprint's settings", () => {
-    for (const type of Object.keys(registry) as NodeType[]) {
+    const lowered = (Object.keys(registry) as NodeType[]).filter(
+      (type): type is Lowered => type !== "library",
+    );
+    for (const type of lowered) {
       expect(Object.keys(settings[type]).sort(), type).toEqual(
         fieldsOf(registry[type].settings).sort(),
       );

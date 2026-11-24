@@ -682,7 +682,10 @@ describe("branchSkips with several Branches", () => {
       .filter((node) => node.parent === undefined)
       .map((node) => new Set(membersOf(node.id)));
     const unitHolding = (id: string) => units.find((unit) => unit.has(id)) ?? new Set<string>();
-    const thenWires = parsed.wires.filter((each) => each.kind === "then");
+    const nodeIds = new Set(parsed.nodes.map((node) => node.id));
+    const thenWires = parsed.wires.filter(
+      (each) => each.kind === "then" && nodeIds.has(each.from.node) && nodeIds.has(each.to.node),
+    );
     const enteredFromOutside = (unit: Set<string>) =>
       thenWires.some((each) => unit.has(each.to.node) && !unit.has(each.from.node));
     const reached = new Set<string>();

@@ -1,16 +1,24 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { FrameRect } from "../nodes/shape.js";
+import { flowIn, flowOut } from "../../../core/flow/structure.js";
+import { FrameRect, ignoredMarks } from "../nodes/shape.js";
 import { frameLook } from "../nodes/outlines.js";
 import { containerTestIds } from "../test-ids.js";
 import { connectionPorts } from "./view.js";
 
-type ContainerFrameNode = Node<{ containerId?: string; label?: string; session?: boolean }>;
+type ContainerFrameNode = Node<{
+  containerId?: string;
+  label?: string;
+  session?: boolean;
+  ignored?: boolean;
+}>;
 
 export function ContainerFrame({ data, width, height, selected }: NodeProps<ContainerFrameNode>) {
+  const id = data.containerId ?? "";
   return (
     <div
-      data-testid={containerTestIds.frame(data.containerId ?? "")}
+      data-testid={containerTestIds.frame(id)}
       data-selected={selected}
+      {...ignoredMarks(data.ignored)}
       style={{
         position: "relative",
         width,
@@ -35,19 +43,31 @@ export function ContainerFrame({ data, width, height, selected }: NodeProps<Cont
       >
         {data.label}
       </span>
+      <Handle
+        id={flowIn}
+        type="target"
+        position={Position.Left}
+        data-testid={containerTestIds.frameFlowIn(id)}
+      />
+      <Handle
+        id={flowOut}
+        type="source"
+        position={Position.Right}
+        data-testid={containerTestIds.frameFlowOut(id)}
+      />
       {data.session === true && (
         <>
           <Handle
             id={connectionPorts.target}
             type="target"
-            position={Position.Left}
-            data-testid={containerTestIds.frameTarget(data.containerId ?? "")}
+            position={Position.Top}
+            data-testid={containerTestIds.frameTarget(id)}
           />
           <Handle
             id={connectionPorts.source}
             type="source"
-            position={Position.Right}
-            data-testid={containerTestIds.frameSource(data.containerId ?? "")}
+            position={Position.Bottom}
+            data-testid={containerTestIds.frameSource(id)}
           />
         </>
       )}

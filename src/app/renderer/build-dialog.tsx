@@ -13,6 +13,7 @@ import {
   selectBuildRefusal,
   selectCanBuild,
   selectExistingBranches,
+  variableGroups,
   type BranchMode,
   type BuildDialog as Dialog,
   type RunState,
@@ -290,13 +291,22 @@ function BuildForm({
         testId={controlTestIds.buildModel}
         onChange={(buildModel) => edit({ buildModel })}
       />
-      {dialog.variables.map((variable) => (
-        <VariableField
-          key={variable.name}
-          variable={variable}
-          value={dialog.values[variable.name]}
-          onChange={(value) => run.getState().setValue(variable.name, value)}
-        />
+      {variableGroups(dialog.variables).map(({ path, heading, variables }) => (
+        <div
+          key={path ?? ""}
+          data-testid={path === null ? undefined : buildDialogTestIds.group(path)}
+          style={{ display: "contents" }}
+        >
+          {heading !== null && <h3 className="fd-group-heading">{heading}</h3>}
+          {variables.map((variable) => (
+            <VariableField
+              key={variable.name}
+              variable={variable}
+              value={dialog.values[variable.name]}
+              onChange={(value) => run.getState().setValue(variable.name, value)}
+            />
+          ))}
+        </div>
       ))}
       {refusal !== null && (
         <p data-testid={buildDialogTestIds.refusal} role="status" style={errorStyle}>

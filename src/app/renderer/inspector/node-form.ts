@@ -107,6 +107,7 @@ const forms: Record<NodeType, Form> = {
       fallbacks: { decidedBy: defaultDecidedBy },
     },
   ),
+  library: typeForm({}, { hidden: ["libraryId", "label", "overrides"] }),
 };
 
 const lockedMessage = "Hard stop is locked";

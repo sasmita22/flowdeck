@@ -20,6 +20,7 @@ import {
   selectRunSummary,
   selectSessionFailure,
   selectStartedSessions,
+  variableGroups,
   type RunView,
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
@@ -63,6 +64,7 @@ type RunBridge = Pick<
   | "listBranches"
   | "checkedOutBranches"
   | "openFlow"
+  | "expandFlow"
 >;
 
 type Status = "running" | "done" | "failed" | "stopped" | "interrupted";
@@ -134,6 +136,7 @@ const setup = async (
     built?: Flow;
     branches?: string[];
     checkedOut?: Record<string, string>;
+    expanded?: (flow: unknown) => unknown;
   } = {},
 ) => {
   const calls: string[] = [];
@@ -216,6 +219,9 @@ const setup = async (
     listBranches: vi.fn<FlowdeckBridge["listBranches"]>(async () => options.branches ?? ["main"]),
     checkedOutBranches: vi.fn<FlowdeckBridge["checkedOutBranches"]>(
       async () => options.checkedOut ?? {},
+    ),
+    expandFlow: vi.fn<FlowdeckBridge["expandFlow"]>(async ({ flow: sent }) =>
+      options.expanded === undefined ? { flow: sent, uses: [] } : options.expanded(sent),
     ),
     openFlow: vi.fn<FlowdeckBridge["openFlow"]>(async ({ flowId }) => ({
       flowId,
@@ -369,6 +375,7 @@ describe("the Build dialog", () => {
       branchNameEdited: false,
       existingBranch: null,
       error: null,
+      problem: null,
       ignored: [],
       target: {
         repoOverride: true,
@@ -402,7 +409,10 @@ describe("the Build dialog", () => {
   });
 
   it("opens for a blueprint's latest version, starting from the repo's default branch when it names no base", async () => {
-    const { bridge, canvas, run, calls } = await setup({ defaultBranch: "trunk" });
+    const { bridge, canvas, run, calls } = await setup({
+      defaultBranch: "trunk",
+      built: configured(shopRepo),
+    });
     makeDirty(canvas);
 
     await run.getState().openBuild(fromCard);
@@ -420,7 +430,7 @@ describe("the Build dialog", () => {
   });
 
   it("leaves the base empty when the blueprint names no repo", async () => {
-    const { bridge, run } = await setup();
+    const { bridge, run } = await setup({ built: configured({}) });
 
     await run
       .getState()
@@ -456,7 +466,7 @@ describe("the Build dialog", () => {
   });
 
   it("builds with the name, repo, base and values, and closes", async () => {
-    const { bridge, run } = await setup();
+    const { bridge, run } = await setup({ built: configured(shopRepo) });
     await run.getState().openBuild(fromCard);
     run.getState().editBuild({ name: "fix-login" });
     run.getState().setValue("ticket", "FD-1");
@@ -848,7 +858,7 @@ describe("the Build dialog's repository", () => {
   const settle = () => new Promise((done) => setTimeout(done, 0));
 
   const opened = async () => {
-    const ready = await setup();
+    const ready = await setup({ built: configured({ repo: "/a", base: "dev" }) });
     await ready.run.getState().openBuild({
       flowId: "flow-b",
       version: 4,
@@ -936,7 +946,7 @@ describe("the Build dialog's branch", () => {
     branches: string[] = ["main", "feat-y", "flowdeck/fix-login"],
     checkedOut: Record<string, string> = { main: "/code/shop" },
   ) => {
-    const ready = await setup({ branches, checkedOut });
+    const ready = await setup({ branches, checkedOut, built: configured(shopRepo) });
     await ready.run.getState().openBuild(fromCard);
     return ready;
   };
@@ -1122,7 +1132,10 @@ describe("the Build dialog's branch", () => {
   });
 
   it("opens offering no branches to pick, and the plain recommendation, when the repository's branches cannot be read", async () => {
-    const { run, bridge } = await setup({ branches: ["main", "flowdeck/fix-login"] });
+    const { run, bridge } = await setup({
+      branches: ["main", "flowdeck/fix-login"],
+      built: configured(shopRepo),
+    });
     bridge.checkedOutBranches.mockRejectedValueOnce(
       new Error("/code/shop is not a git repository"),
     );
@@ -2092,5 +2105,270 @@ describe("selectLiveBadge", () => {
     expect(selectLiveBadge(snapshot("done", { a: "done" }))).toBeNull();
     expect(selectLiveBadge(snapshot("stopped", { a: "done", gate: "needs-you" }))).toBeNull();
     expect(selectLiveBadge(null)).toBeNull();
+  });
+});
+
+describe("the Build dialog for a host that uses libraries", () => {
+  const library = (id: string, label: string) => ({
+    id,
+    type: "library",
+    label,
+    position: { x: 0, y: 0 },
+    settings: { libraryId: "f-review", label, overrides: {} },
+  });
+
+  const host = (): Flow =>
+    onMainFlow(
+      [
+        agent("plan", { settings: { instructions: "Say {{ticket}}." } }),
+        library("lib-1", "android-app"),
+      ],
+      [thenWire("plan", "lib-1")],
+    );
+
+  const expandedWith = (names: string[], paths: string[]) => () => {
+    const uses = names.map((name, index) =>
+      agent(`use-${index}`, { settings: { instructions: `Check {{${name}}}.` } }),
+    );
+    return {
+      flow: onMainFlow(
+        uses,
+        uses.slice(1).map((use, index) => thenWire(uses[index]?.id ?? "", use.id)),
+      ),
+      uses: paths.map((path) => ({ path, name: "Android library", kind: "node-library" })),
+    };
+  };
+
+  it("asks for the canvas flow's expansion and lists its variables grouped by use", async () => {
+    const { bridge, canvas, run } = await setup({
+      latest: host(),
+      expanded: () => ({
+        flow: onMainFlow(
+          [
+            agent("plan", { settings: { instructions: "Say {{ticket}}." } }),
+            branch("android-app.decide", "android-app.isFullScan"),
+          ],
+          [thenWire("plan", "android-app.decide")],
+        ),
+        uses: [{ path: "android-app", name: "Android library", kind: "node-library" }],
+      }),
+    });
+
+    await run.getState().openBuild();
+
+    expect(bridge.expandFlow).toHaveBeenCalledWith({ flow: canvas.getState().flow });
+    expect(run.getState().buildDialog?.variables).toEqual([
+      {
+        name: "android-app.isFullScan",
+        kind: "yes-no",
+        nodeIds: ["android-app.decide"],
+        group: { path: "android-app", name: "Android library" },
+      },
+      { name: "ticket", kind: "text", nodeIds: ["plan"] },
+    ]);
+    expect(run.getState().buildDialog?.values).toEqual({ "android-app.isFullScan": false });
+    expect(run.getState().buildDialog?.problem).toBeNull();
+  });
+
+  it("refuses to build, naming the problem, when the expansion fails", async () => {
+    const { run } = await setup({
+      latest: host(),
+      expanded: () => ({ problem: "android-app names a library that does not exist" }),
+    });
+
+    await run.getState().openBuild();
+
+    expect(run.getState().buildDialog?.problem).toBe(
+      "android-app names a library that does not exist",
+    );
+    expect(selectBuildRefusal(run.getState())).toBe(
+      "android-app names a library that does not exist",
+    );
+    run.getState().editBuild({ name: "x" });
+    expect(selectCanBuild(run.getState())).toBe(false);
+  });
+
+  it("targets the sessions of the expanded version, the library's sessions too", async () => {
+    const ownSession = flow(
+      [trigger("s"), agent("a"), output("t"), library("lib-1", "ios-app")],
+      [thenWire("s", "a"), thenWire("a", "t")],
+      flowSettings,
+      { containers: [sessionContainer(["s", "a", "t"], { repo: "/code/shop", branch: "dev" })] },
+    );
+    const withLibrarySession = flow(
+      [trigger("s"), agent("a"), output("t"), trigger("i-s"), output("i-t")],
+      [thenWire("s", "a"), thenWire("a", "t"), thenWire("i-s", "i-t")],
+      flowSettings,
+      {
+        containers: [
+          sessionContainer(["s", "a", "t"], { repo: "/code/shop", branch: "dev" }),
+          sessionContainer(["i-s", "i-t"], {
+            id: "ios-app-session-1",
+            name: "ios-app-ios",
+            repo: "/code/ios",
+            branch: "main",
+          }),
+        ],
+      },
+    );
+    const { run } = await setup({
+      built: ownSession,
+      expanded: () => ({
+        flow: withLibrarySession,
+        uses: [{ path: "ios-app", name: "iOS library", kind: "session-library" }],
+      }),
+    });
+
+    await run.getState().openBuild(fromCard);
+
+    expect(run.getState().buildDialog?.target).toEqual({
+      repoOverride: false,
+      existingBranch: false,
+      branch: true,
+      sessions: [
+        { name: "main", repo: "/code/shop", branch: "dev" },
+        { name: "ios-app-ios", repo: "/code/ios", branch: "main" },
+      ],
+    });
+  });
+
+  describe("whose only session comes from a session library", () => {
+    const workspaceHost = (): Flow =>
+      flow(
+        [trigger("w-start"), output("w-stop"), library("lib-1", "android-app")],
+        [thenWire("w-start", "w-stop")],
+        flowSettings,
+        { containers: [workspaceContainer(["w-start", "w-stop"])] },
+      );
+    const expandedHost = (): Flow =>
+      flow(
+        [trigger("w-start"), output("w-stop"), trigger("a-s"), output("a-t")],
+        [thenWire("w-start", "w-stop"), thenWire("a-s", "a-t")],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["w-start", "w-stop"]),
+            sessionContainer(["a-s", "a-t"], {
+              id: "android-app-session-1",
+              name: "android-app-android",
+              repo: "/code/android",
+              branch: "mc-branch",
+            }),
+          ],
+        },
+      );
+    const opened = async () => {
+      const ready = await setup({
+        built: workspaceHost(),
+        expanded: () => ({
+          flow: expandedHost(),
+          uses: [{ path: "android-app", name: "Android", kind: "session-library" }],
+        }),
+      });
+      await ready.run
+        .getState()
+        .openBuild({ flowId: "flow-b", version: 4, buildConfig: {}, variables: [] });
+      return ready;
+    };
+
+    it("prefills the library session's repo and its override branch as the base", async () => {
+      const { bridge, run } = await opened();
+
+      expect(bridge.defaultBranch).not.toHaveBeenCalled();
+      expect(run.getState().buildDialog).toMatchObject({
+        repo: "/code/android",
+        base: "mc-branch",
+      });
+    });
+
+    it("builds from the override branch unless another base is typed", async () => {
+      const { bridge, run } = await opened();
+      run.getState().editBuild({ name: "fix-login" });
+      await run.getState().confirmBuild();
+
+      expect(bridge.buildVersion.mock.calls[0]?.[0]).toMatchObject({
+        repo: "/code/android",
+        base: "mc-branch",
+        branch: { mode: "new", name: "flowdeck/fix-login", base: "mc-branch" },
+      });
+
+      await run
+        .getState()
+        .openBuild({ flowId: "flow-b", version: 4, buildConfig: {}, variables: [] });
+      run.getState().editBuild({ name: "fix-login", base: "dev" });
+      await run.getState().confirmBuild();
+
+      expect(bridge.buildVersion.mock.calls[1]?.[0]).toMatchObject({
+        base: "dev",
+        branch: { mode: "new", name: "flowdeck/fix-login", base: "dev" },
+      });
+    });
+  });
+
+  it("refuses to build when the expansion answer cannot be read", async () => {
+    const { run } = await setup({ latest: host(), expanded: () => null });
+
+    await run.getState().openBuild();
+
+    expect(run.getState().buildDialog?.problem).toBe("The libraries could not be expanded");
+  });
+
+  it("keeps the two uses of one library apart, each with its own field (AT-7)", async () => {
+    const { run } = await setup({
+      latest: host(),
+      expanded: expandedWith(
+        ["android-app.isFullScan", "android-app-2.isFullScan"],
+        ["android-app", "android-app-2"],
+      ),
+    });
+
+    await run.getState().openBuild();
+
+    const groups = variableGroups(run.getState().buildDialog?.variables ?? []);
+    expect(
+      groups.map(({ path, heading, variables }) => ({
+        path,
+        heading,
+        names: variables.map(({ name }) => name),
+      })),
+    ).toEqual([
+      { path: null, heading: null, names: [] },
+      {
+        path: "android-app",
+        heading: "android-app · Android library",
+        names: ["android-app.isFullScan"],
+      },
+      {
+        path: "android-app-2",
+        heading: "android-app-2 · Android library",
+        names: ["android-app-2.isFullScan"],
+      },
+    ]);
+  });
+});
+
+describe("variableGroups", () => {
+  const own = { name: "ticket", kind: "text" as const, nodeIds: ["plan"] as [string] };
+  const used = (name: string, path: string) => ({
+    name,
+    kind: "yes-no" as const,
+    nodeIds: ["n"] as [string],
+    group: { path, name: "Android library" },
+  });
+
+  it("puts the host's own variables first, then one group per use ordered by its path", () => {
+    expect(variableGroups([used("b.x", "b"), own, used("a.y", "a"), used("b.z", "b")])).toEqual([
+      { path: null, heading: null, variables: [own] },
+      { path: "a", heading: "a · Android library", variables: [used("a.y", "a")] },
+      {
+        path: "b",
+        heading: "b · Android library",
+        variables: [used("b.x", "b"), used("b.z", "b")],
+      },
+    ]);
+  });
+
+  it("has only the host's group when no library is used", () => {
+    expect(variableGroups([own])).toEqual([{ path: null, heading: null, variables: [own] }]);
   });
 });

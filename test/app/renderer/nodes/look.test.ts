@@ -17,6 +17,7 @@ const groups: Record<NodeType, string> = {
   join: "var(--c-ctrl)",
   foreach: "var(--c-ctrl)",
   branch: "var(--c-ctrl)",
+  library: "var(--c-work)",
 };
 
 const tags: Record<NodeType, string> = {
@@ -31,6 +32,7 @@ const tags: Record<NodeType, string> = {
   join: "PARALLEL END",
   foreach: "EACH",
   branch: "IF",
+  library: "LIB",
 };
 
 const outlines: Record<NodeType, string> = {
@@ -45,6 +47,7 @@ const outlines: Record<NodeType, string> = {
   join: "var(--c-ctrl)",
   foreach: "none",
   branch: "var(--c-ctrl)",
+  library: "var(--c-work)",
 };
 
 describe("nodeLook", () => {

@@ -18,6 +18,7 @@ import { ActivityFeed } from "./activity-feed.js";
 import { Ask } from "./ask.js";
 import { CostTab } from "./cost-tab.js";
 import { FilesTab } from "./files-tab.js";
+import { LibrarySettings } from "./library-settings.js";
 import { NodeSettingsSection } from "./node-settings.js";
 import { BlueprintSettingsSection } from "./blueprint-settings.js";
 import { ContainerSettings } from "./container-settings.js";
@@ -234,6 +235,10 @@ function CanvasSettings({
 }) {
   const sessionSettingsOpen = useStore(shell, (state) => state.sessionSettingsOpen);
   const nodeSelected = useStore(canvas, (state) => selectSelectedNode(state) !== null);
+  const libraryNodeSelected = useStore(
+    canvas,
+    (state) => selectSelectedNode(state)?.type === "library",
+  );
   const container = useStore(canvas, selectedFlowContainer);
   if (sessionSettingsOpen) {
     return (
@@ -251,6 +256,7 @@ function CanvasSettings({
       </>
     );
   }
+  if (libraryNodeSelected) return <LibrarySettings canvas={canvas} branches={branches} />;
   if (nodeSelected) return <NodeSettingsSection canvas={canvas} />;
   return children;
 }

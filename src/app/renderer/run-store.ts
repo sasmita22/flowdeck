@@ -3,8 +3,8 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Problem } from "../../core/compiler/problems.js";
 import { openedFlowSchema } from "../../core/flow/flow-store.js";
 import { mainFlow } from "../../core/flow/main-flow.js";
-import type { BuildConfig } from "../../core/flow/schema.js";
-import { foundVariables, type FoundVariable } from "../../core/flow/variables.js";
+import { Flow, type BuildConfig } from "../../core/flow/schema.js";
+import { foundVariables, groupVariables, type FoundVariable } from "../../core/flow/variables.js";
 import {
   isValidBranchName,
   recommendedBranch,
@@ -62,6 +62,7 @@ export type RunBridge = Pick<
   | "listBranches"
   | "checkedOutBranches"
   | "openFlow"
+  | "expandFlow"
 >;
 
 export type RunChoice = { auto: boolean };
@@ -93,6 +94,7 @@ export type BuildDialog = {
   target: BuildTarget;
   step: "form" | "confirm";
   error: string | null;
+  problem: string | null;
 };
 
 type BuildDialogEdit = Partial<
@@ -107,7 +109,49 @@ export type BuildSource = {
   version: number;
   buildConfig: BuildConfig;
   variables: FoundVariable[];
+  problem?: string;
 };
+
+export type VariableGroup = {
+  path: string | null;
+  heading: string | null;
+  variables: FoundVariable[];
+};
+
+export const variableGroups = (variables: readonly FoundVariable[]): VariableGroup[] => {
+  const used = new Map<string, VariableGroup>();
+  for (const variable of variables) {
+    if (variable.group === undefined) continue;
+    const { path, name } = variable.group;
+    const group = used.get(path) ?? { path, heading: `${path} · ${name}`, variables: [] };
+    group.variables.push(variable);
+    used.set(path, group);
+  }
+  return [
+    {
+      path: null,
+      heading: null,
+      variables: variables.filter((variable) => variable.group === undefined),
+    },
+    ...[...used.values()].sort((a, b) => (a.path ?? "").localeCompare(b.path ?? "")),
+  ];
+};
+
+const expandAnswerSchema = z.union([
+  z.object({ problem: z.string() }),
+  z.object({
+    flow: Flow,
+    uses: z.array(
+      z.object({
+        path: z.string(),
+        name: z.string(),
+        kind: z.enum(["node-library", "session-library"]),
+      }),
+    ),
+  }),
+]);
+
+const unexpandable = "The libraries could not be expanded";
 
 export type BuildCardRun = {
   old: boolean;
@@ -282,6 +326,7 @@ const emptyTextValues = ({ variables, values }: BuildDialog): string[] =>
     .map(({ name }) => name);
 
 export const selectBuildRefusal = (run: Pick<RunState, "buildDialog">): string | null => {
+  if (run.buildDialog?.problem != null) return run.buildDialog.problem;
   const empty = run.buildDialog === null ? [] : emptyTextValues(run.buildDialog);
   return empty.length === 0 ? null : `Give a value for ${empty.join(", ")}`;
 };
@@ -291,6 +336,7 @@ export const selectCanBuild = (run: Pick<RunState, "buildDialog">): boolean => {
   if (dialog === null) return false;
   const { repoOverride } = dialog.target;
   return (
+    dialog.problem === null &&
     dialog.name.trim() !== "" &&
     (!repoOverride || dialog.repo !== "") &&
     (!repoOverride || dialog.branchMode === "existing" || dialog.base !== "") &&
@@ -450,12 +496,16 @@ export const createRunStore = ({
         return null;
       }
       const { flow } = canvas.getState();
-      return {
-        flowId,
-        version,
-        buildConfig: sessionFolder(flow),
-        variables: foundVariables(flow),
-      };
+      const source = { flowId, version, buildConfig: sessionFolder(flow) };
+      const answer = expandAnswerSchema.safeParse(await bridge.expandFlow({ flow }));
+      if (!answer.success) {
+        return { ...source, variables: foundVariables(flow), problem: unexpandable };
+      }
+      if ("problem" in answer.data) {
+        return { ...source, variables: foundVariables(flow), problem: answer.data.problem };
+      }
+      const { flow: expanded, uses } = answer.data;
+      return { ...source, variables: groupVariables(foundVariables(expanded), uses) };
     };
 
     const startingBase = async ({ repo, base }: BuildConfig): Promise<string> => {
@@ -484,15 +534,27 @@ export const createRunStore = ({
         ? dialog
         : { ...dialog, branchName: recommendedBranch(dialog.name, dialog.branches) };
 
+    const expandedOrSaved = async (flow: Flow): Promise<Flow> => {
+      const answer = expandAnswerSchema.safeParse(await bridge.expandFlow({ flow }));
+      return answer.success && "flow" in answer.data ? answer.data.flow : flow;
+    };
+
     const openedVersion = async (
       flowId: string,
-    ): Promise<{ ignored: IgnoredNode[]; buildModel: string; target: BuildTarget }> => {
+    ): Promise<{
+      ignored: IgnoredNode[];
+      buildModel: string;
+      target: BuildTarget;
+      buildConfig: BuildConfig | null;
+    }> => {
       const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
       const main = flow ? mainFlow(flow) : undefined;
+      const expanded = flow ? await expandedOrSaved(flow) : undefined;
       return {
         ignored: (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
         buildModel: flow?.settings.buildModel ?? "",
-        target: flow ? buildTarget(flow) : oneSessionTarget,
+        target: expanded ? buildTarget(expanded) : oneSessionTarget,
+        buildConfig: expanded ? sessionFolder(expanded) : null,
       };
     };
 
@@ -589,11 +651,14 @@ export const createRunStore = ({
       openBuild: async (source) => {
         const opened = source ?? (await savedSource());
         if (opened === null) return;
-        const { flowId, version, buildConfig, variables } = opened;
-        const repo = buildConfig.repo ?? "";
-        const [base, { ignored, buildModel, target }, { branches, checkedOut }] = await Promise.all(
-          [startingBase(buildConfig), openedVersion(flowId), repoBranches(repo)],
-        );
+        const { flowId, version, variables, problem = null } = opened;
+        const { ignored, buildModel, target, buildConfig } = await openedVersion(flowId);
+        const prefill = buildConfig ?? opened.buildConfig;
+        const repo = prefill.repo ?? "";
+        const [base, { branches, checkedOut }] = await Promise.all([
+          startingBase(prefill),
+          repoBranches(repo),
+        ]);
         set({
           error: null,
           buildDialog: {
@@ -615,6 +680,7 @@ export const createRunStore = ({
             target,
             step: "form",
             error: null,
+            problem,
           },
         });
       },

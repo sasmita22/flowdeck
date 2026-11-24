@@ -52,7 +52,7 @@ const closeWindow = (launched: LaunchedApp) =>
     BrowserWindow.getAllWindows()[0]?.close();
   });
 
-const seededTypes = ["trigger", "output", "trigger", "output"];
+const seededTypes = ["trigger", "output", "trigger", "output", "trigger", "output"];
 
 const edit = async ({ window }: LaunchedApp) => {
   expect((await readout(window)).nodes.map((node) => node.type)).toEqual(seededTypes);

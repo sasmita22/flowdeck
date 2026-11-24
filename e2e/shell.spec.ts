@@ -34,6 +34,8 @@ import { killRunSessions } from "./run-sessions.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
 
+const placeable = NodeType.exclude(["library"]).options;
+
 let home: string;
 let repo: TmpRepo;
 let launched: LaunchedApp | undefined;
@@ -212,7 +214,7 @@ test("Readouts hidden, still readable", async () => {
 test("Each sidebar entry previews its node's shape left of its name", async () => {
   const { window } = await launch();
 
-  for (const type of NodeType.options) {
+  for (const type of placeable) {
     const entry = window.getByTestId(paletteTestId(type));
     await entry.scrollIntoViewIfNeeded();
     const preview = entry.locator("svg");
@@ -229,7 +231,7 @@ test("Controls keep their test ids", async () => {
   const { window } = target;
   await sizeTo(target, shot.size);
 
-  for (const type of NodeType.options) {
+  for (const type of placeable) {
     await expect(window.getByTestId(paletteTestId(type))).toHaveCount(1);
     await expect(window.getByTestId(paletteTestId(type))).toBeVisible();
   }
@@ -280,7 +282,7 @@ test("Every node type drops", async () => {
   const { window } = target;
   await sizeTo(target, shot.size);
 
-  for (const [index, type] of NodeType.options.entries()) {
+  for (const [index, type] of placeable.entries()) {
     await drop(
       window,
       paletteTestId(type),
@@ -291,7 +293,7 @@ test("Every node type drops", async () => {
   }
 
   const readout = (await window.getByTestId(readoutTestIds.flow).textContent()) ?? "";
-  for (const type of NodeType.options) {
+  for (const type of placeable) {
     expect(readout).toContain(`"id":"${type}-1"`);
     await expect(window.getByTestId(`node-${type}-1`)).toBeVisible();
   }

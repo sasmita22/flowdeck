@@ -28,7 +28,8 @@ import { hookCommand, sessionEnvNames, shellQuote } from "../../core/compiler/ho
 import type { ManifestContainer } from "../../core/compiler/lower.js";
 import { plainProblems, type Problem } from "../../core/compiler/problems.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
-import type { LoadedFlow, OpenedFlow } from "../../core/flow/flow-store.js";
+import { latestLibraries, type LoadedFlow, type OpenedFlow } from "../../core/flow/flow-store.js";
+import { expandLibraries, LibraryError } from "../../core/flow/libraries.js";
 import { BuildConfig, parseFlow, type Flow } from "../../core/flow/schema.js";
 import {
   progressOf,
@@ -266,6 +267,8 @@ const renameFlowPayload = z.object({ flowId: z.string(), name: z.string() });
 const pinFlowPayload = z.object({ flowId: z.string(), pinned: z.boolean() });
 
 const openFlowPayload = z.object({ flowId: z.string().optional() });
+
+const expandFlowPayload = z.object({ flow: z.unknown() });
 
 const loadRunPayload = z.object({ runId: z.string() });
 
@@ -630,6 +633,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     sessionName: string,
   ): Promise<BuildFlowDeps> => ({
     store: stores.runs,
+    flows: stores.flows,
     fs: options.fs,
     home: options.home,
     gitState: options.gitState,
@@ -844,6 +848,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     saved: Omit<LoadedFlow, "flowId">,
     { flowId, version, buildModel, ...request }: z.infer<typeof buildVersionPayload>,
     answers?: readonly BuildAnswer[],
+    frozen?: Flow,
   ): Promise<BuiltVersion> => {
     const buildRequest = {
       name: request.name,
@@ -871,19 +876,19 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       return refusedBuild({ ok: false, errors: [{ rule: "hooks", message: hooks.message }] });
     }
     const deps = await buildDeps(stores, hooks, newBuildSessionName(randomUUID));
-    const started = await startBuild(saved.flow, buildRequest, deps, origin);
+    const started = await startBuild(saved.flow, buildRequest, deps, origin, frozen);
     if ("errors" in started) return refusedBuild(started);
     const pending = stores.runs.listPendingBuilds().find((open) => open.id === started.pendingId);
     if (pending === undefined) throw new Error(`No pending build ${started.pendingId}`);
     runPendingBuild({
       stores,
       pending,
-      flow: saved.flow,
+      flow: started.flow,
       request: buildRequest,
       origin,
       deps,
     });
-    return started;
+    return { kind: "started", pendingId: started.pendingId };
   };
 
   const buildFlowVersion = async (
@@ -931,6 +936,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       { name: snapshot.blueprintName, version: snapshot.version, flow: saved.flow },
       { flowId: asked.flowId, version: asked.version, name: asked.name, ...inputs },
       [...answeredBefore, ...answers],
+      snapshot.flow,
     );
   };
 
@@ -989,7 +995,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     runPendingBuild({
       stores,
       pending,
-      flow: saved.flow,
+      flow: snapshot.flow ?? saved.flow,
       request: {
         ...resumeRequest(pending.name, session),
         ...keptAnswersOf(pending),
@@ -1996,6 +2002,15 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return { flowId, name: found.name, version: null, flow: null };
   };
 
+  const expandFlow = ({ flows }: EngineStores, flow: Flow) => {
+    try {
+      return expandLibraries(flow, latestLibraries(flows));
+    } catch (error) {
+      if (!(error instanceof LibraryError)) throw error;
+      return { problem: error.message };
+    }
+  };
+
   const isActive = (runId: string) => activeRun(runId) !== undefined;
 
   const listBuilds = (runs: Store): ListedBuild[] =>
@@ -2375,6 +2390,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "open-flow":
           return parsedAnswer(request, openFlowPayload, ({ flowId }) =>
             openFlow(storesOrThrow(), flowId),
+          );
+        case "expand-flow":
+          return parsedAnswer(request, expandFlowPayload, ({ flow }) =>
+            expandFlow(storesOrThrow(), parseFlow(flow)),
           );
         case "list-runs":
           return answer(request.id, () => listRuns(storesOrThrow().runs));

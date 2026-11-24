@@ -157,7 +157,7 @@ test("Tidy moves overlapping nodes and marks the blueprint unsaved, and one Undo
   const window = await launch();
   const page = playwrightPage(window);
   for (let added = 0; added < 3; added++) {
-    await page.drag("palette-agent", "canvas", { x: 200, y: 150 });
+    await page.drag("palette-agent", "canvas", { x: 200, y: 450 });
   }
   const nodes = window.locator(".react-flow__node-agent");
   await expect(nodes).toHaveCount(3);

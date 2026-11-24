@@ -10,6 +10,7 @@ import { ForkNode } from "./fork.js";
 import { GateNode } from "./gate.js";
 import { HardstopNode } from "./hardstop.js";
 import { JoinNode } from "./join.js";
+import { LibraryNode } from "./library.js";
 import { LoopNode } from "./loop.js";
 import { NoteNode } from "./note.js";
 import { OutputNode } from "./output.js";
@@ -26,6 +27,7 @@ export const nodeTypes: NodeTypes = {
   fork: ForkNode,
   join: JoinNode,
   branch: BranchNode,
+  library: LibraryNode,
   output: OutputNode,
   "loop-frame": LoopFrame,
   "foreach-frame": ForEachFrame,

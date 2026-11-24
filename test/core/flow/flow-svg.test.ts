@@ -1,7 +1,7 @@
 import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "vitest";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
@@ -14,6 +14,7 @@ import {
   sessionContainer,
   thenWire,
   trigger,
+  wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
@@ -118,8 +119,10 @@ describe("flowSvg", () => {
     const nodes = drawn(svg, "node");
     const frames = drawn(svg, "frame");
 
-    expect(nodes).toHaveLength(6);
+    expect(nodes).toHaveLength(8);
     expect(drawn(svg, "wire").map((wire) => wire.localName)).toEqual([
+      "path",
+      "path",
       "path",
       "path",
       "path",
@@ -221,6 +224,38 @@ describe("flowSvg", () => {
       const frame = byId(drawn(flowSvg(containers()), "container-frame"), id);
 
       expect(frame.textContent).toMatch(label);
+    });
+
+    const wireEnds = (element: Element) => {
+      const numbers = (element.getAttribute("d") ?? "").match(/-?\d+/g)?.map(Number) ?? [];
+      return { x1: numbers[0], y1: numbers[1], x2: numbers.at(-1) };
+    };
+
+    it("draws the canvas path's wires to and from the workspace frame", () => {
+      const base = containers();
+      const svg = flowSvg(
+        parseFlow({
+          ...base,
+          nodes: [
+            ...base.nodes,
+            at(trigger("canvas-start"), -300, -400),
+            at(output("canvas-stop"), 600, -400),
+          ],
+          wires: [
+            ...base.wires,
+            wire("canvas-start", "out", "workspace-1", "flow-in"),
+            wire("workspace-1", "flow-out", "canvas-stop", "in"),
+          ],
+        }),
+      );
+      const frame = boxOf(byId(drawn(svg, "container-frame"), "workspace-1"));
+      const nodes = drawn(svg, "node");
+      const start = boxOf(byId(nodes, "canvas-start"));
+      const stop = boxOf(byId(nodes, "canvas-stop"));
+      const ends = drawn(svg, "wire").map(wireEnds);
+
+      expect(ends).toContainEqual({ x1: start.right, y1: expect.any(Number), x2: frame.left });
+      expect(ends).toContainEqual({ x1: frame.right, y1: expect.any(Number), x2: stop.left });
     });
 
     it("keeps every container frame inside the picture", () => {

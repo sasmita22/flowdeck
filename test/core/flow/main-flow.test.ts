@@ -10,6 +10,7 @@ import {
   sessionContainer,
   thenWire,
   trigger,
+  wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
 
@@ -20,6 +21,16 @@ const eventWire = (from: string, to: string) => ({
 });
 
 const reachedIds = (found: ReturnType<typeof mainFlow>) => [...(found?.reached ?? [])].sort();
+const containerIds = (found: ReturnType<typeof mainFlow>) => [...(found?.containers ?? [])].sort();
+
+const canvasStart = trigger("canvas-start");
+const canvasStop = output("canvas-stop");
+const intoContainer = (from: string, container: string) => wire(from, "out", container, "flow-in");
+const outOfContainer = (container: string, to: string) => wire(container, "flow-out", to, "in");
+const throughSession = [
+  intoContainer("canvas-start", "session-1"),
+  outOfContainer("session-1", "canvas-stop"),
+];
 
 const workspaceNodes = [trigger("ws-start"), output("ws-stop")];
 const workspaceWire = thenWire("ws-start", "ws-stop");
@@ -33,7 +44,7 @@ const twoContainers = (sessionNodes: { id: string }[], sessionWires: unknown[]) 
   });
 
 const oneSession = (nodes: { id: string; parent?: string }[], wires: unknown[]) =>
-  flow(nodes, wires, flowSettings, {
+  flow([canvasStart, ...nodes, canvasStop], [...throughSession, ...wires], flowSettings, {
     containers: [
       sessionContainer(nodes.filter((node) => node.parent === undefined).map((node) => node.id)),
     ],
@@ -48,11 +59,11 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["a", "start", "stop"]);
+    expect(reachedIds(found)).toEqual(["a", "canvas-start", "canvas-stop", "start", "stop"]);
     expect(found?.ignored.map((node) => node.id)).toEqual(["b", "c", "d"]);
   });
 
-  it("is undefined with no containers", () => {
+  it("is undefined with no workspace and no canvas Start", () => {
     const input = flow([agent("a"), output("stop")], [thenWire("a", "stop")], flowSettings, {
       containers: [],
     });
@@ -75,7 +86,16 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["a", "l", "start", "stop", "x", "y"]);
+    expect(reachedIds(found)).toEqual([
+      "a",
+      "canvas-start",
+      "canvas-stop",
+      "l",
+      "start",
+      "stop",
+      "x",
+      "y",
+    ]);
     expect(found?.ignored).toEqual([]);
   });
 
@@ -93,7 +113,15 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["l", "start", "stop", "x", "y"]);
+    expect(reachedIds(found)).toEqual([
+      "canvas-start",
+      "canvas-stop",
+      "l",
+      "start",
+      "stop",
+      "x",
+      "y",
+    ]);
   });
 
   it("reaches both nested frames and both bodies from an inner body node", () => {
@@ -113,7 +141,17 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["inner", "ix", "iy", "outer", "ox", "start", "stop"]);
+    expect(reachedIds(found)).toEqual([
+      "canvas-start",
+      "canvas-stop",
+      "inner",
+      "ix",
+      "iy",
+      "outer",
+      "ox",
+      "start",
+      "stop",
+    ]);
     expect(found?.ignored.map((node) => node.id)).toEqual(["loose"]);
   });
 
@@ -125,7 +163,14 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["each", "p", "start", "stop"]);
+    expect(reachedIds(found)).toEqual([
+      "canvas-start",
+      "canvas-stop",
+      "each",
+      "p",
+      "start",
+      "stop",
+    ]);
   });
 
   it("does not follow event wires", () => {
@@ -136,8 +181,118 @@ describe("mainFlow", () => {
       ),
     );
 
-    expect(reachedIds(found)).toEqual(["a", "b", "start", "stop"]);
+    expect(reachedIds(found)).toEqual(["a", "b", "canvas-start", "canvas-stop", "start", "stop"]);
     expect(found?.ignored.map((node) => node.id)).toEqual(["c"]);
+  });
+});
+
+describe("mainFlow from the canvas Start", () => {
+  const sessionBeside = [trigger("s-start"), output("s-stop")];
+  const sessionBesideWire = thenWire("s-start", "s-stop");
+
+  it("reaches the canvas path and ignores an unwired session without a workspace", () => {
+    const found = mainFlow(
+      flow(
+        [canvasStart, agent("a"), canvasStop, ...sessionBeside],
+        [thenWire("canvas-start", "a"), thenWire("a", "canvas-stop"), sessionBesideWire],
+        flowSettings,
+        { containers: [sessionContainer(["s-start", "s-stop"])] },
+      ),
+    );
+
+    expect(reachedIds(found)).toEqual(["a", "canvas-start", "canvas-stop"]);
+    expect(found?.ignored.map((node) => node.id)).toEqual(["s-start", "s-stop"]);
+    expect(containerIds(found)).toEqual([]);
+  });
+
+  it("steps into a session through its flow-in and on through its flow-out", () => {
+    const found = mainFlow(
+      flow(
+        [canvasStart, ...sessionBeside, canvasStop],
+        [...throughSession, sessionBesideWire],
+        flowSettings,
+        { containers: [sessionContainer(["s-start", "s-stop"])] },
+      ),
+    );
+
+    expect(reachedIds(found)).toEqual(["canvas-start", "canvas-stop", "s-start", "s-stop"]);
+    expect(found?.ignored).toEqual([]);
+    expect(containerIds(found)).toEqual(["session-1"]);
+  });
+
+  it("is undefined for a session alone with no canvas Start", () => {
+    const input = flow(sessionBeside, [sessionBesideWire], flowSettings, {
+      containers: [sessionContainer(["s-start", "s-stop"])],
+    });
+
+    expect(mainFlow(input)).toBeUndefined();
+  });
+
+  it("is undefined with two canvas Starts and no workspace", () => {
+    const input = flow(
+      [canvasStart, trigger("other-start"), agent("a"), canvasStop],
+      [thenWire("canvas-start", "a"), thenWire("other-start", "a"), thenWire("a", "canvas-stop")],
+      flowSettings,
+      { containers: [] },
+    );
+
+    expect(mainFlow(input)).toBeUndefined();
+  });
+
+  it("adds the canvas Start and Stop to a workflow's containers", () => {
+    const found = mainFlow(
+      flow(
+        [canvasStart, ...workspaceNodes, ...sessionBeside, canvasStop],
+        [
+          intoContainer("canvas-start", "workspace-1"),
+          outOfContainer("workspace-1", "canvas-stop"),
+          workspaceWire,
+          sessionBesideWire,
+        ],
+        flowSettings,
+        {
+          containers: [
+            workspaceContainer(["ws-start", "ws-stop"]),
+            sessionContainer(["s-start", "s-stop"]),
+          ],
+        },
+      ),
+    );
+
+    expect(reachedIds(found)).toEqual([
+      "canvas-start",
+      "canvas-stop",
+      "s-start",
+      "s-stop",
+      "ws-start",
+      "ws-stop",
+    ]);
+    expect(containerIds(found)).toEqual(["session-1", "workspace-1"]);
+  });
+
+  it("reaches a workflow's canvas-level library node unwired, like a session container", () => {
+    const loose = {
+      id: "use",
+      type: "library",
+      label: "Library",
+      position: { x: 0, y: 0 },
+      settings: { libraryId: "sessions", label: "sessions", overrides: {} },
+    };
+    const found = mainFlow(
+      flow(
+        [canvasStart, ...workspaceNodes, loose, canvasStop],
+        [
+          intoContainer("canvas-start", "workspace-1"),
+          outOfContainer("workspace-1", "canvas-stop"),
+          workspaceWire,
+        ],
+        flowSettings,
+        { containers: [workspaceContainer(["ws-start", "ws-stop"])] },
+      ),
+    );
+
+    expect(found?.reached.has("use")).toBe(true);
+    expect(found?.ignored).toEqual([]);
   });
 });
 
@@ -204,6 +359,30 @@ describe("mainFlowOnly", () => {
     expect(only.containers).toEqual(input.containers);
   });
 
+  it("keeps a container wire only when the container is reached", () => {
+    const sessionTwo = [trigger("t-start"), output("t-stop")];
+    const input = flow(
+      [canvasStart, trigger("s-start"), output("s-stop"), ...sessionTwo, canvasStop],
+      [
+        ...throughSession,
+        thenWire("s-start", "s-stop"),
+        thenWire("t-start", "t-stop"),
+        outOfContainer("session-2", "canvas-stop"),
+      ],
+      flowSettings,
+      {
+        containers: [
+          sessionContainer(["s-start", "s-stop"]),
+          sessionContainer(["t-start", "t-stop"], { id: "session-2", name: "other" }),
+        ],
+      },
+    );
+
+    const only = mainFlowOnly(input);
+
+    expect(only.wires).toEqual([...throughSession, thenWire("s-start", "s-stop")]);
+  });
+
   it("drops ignored nodes and every wire with an ignored end", () => {
     const input = oneSession(
       [trigger("start"), agent("a"), agent("b"), agent("c"), output("stop")],
@@ -212,8 +391,14 @@ describe("mainFlowOnly", () => {
 
     const only = mainFlowOnly(input);
 
-    expect(only.nodes.map((node) => node.id)).toEqual(["start", "a", "stop"]);
-    expect(only.wires).toEqual([thenWire("start", "a"), thenWire("a", "stop")]);
+    expect(only.nodes.map((node) => node.id)).toEqual([
+      "canvas-start",
+      "start",
+      "a",
+      "stop",
+      "canvas-stop",
+    ]);
+    expect(only.wires).toEqual([...throughSession, thenWire("start", "a"), thenWire("a", "stop")]);
     expect(only.containers).toEqual(input.containers);
   });
 

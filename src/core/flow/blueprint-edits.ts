@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { flowProblems } from "../compiler/flow-problems.js";
 import { validate, type ValidationError } from "../compiler/validate.js";
+import { rule as containerWiresRule } from "../compiler/rules/container-wires.js";
 import { rule as portsRule } from "../compiler/rules/ports.js";
 import { nodeDefaults } from "../nodes/defaults.js";
 import { registry } from "../nodes/registry.js";
 import { toolInputs, type ToolName } from "./blueprint-tools.js";
+import type { LibraryLookup } from "./libraries.js";
 import { Wire, type Flow, type NodeType } from "./schema.js";
 
 type Settings = Record<string, unknown>;
@@ -66,6 +68,15 @@ export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
           ? undefined
           : settingsFor(node.type, { ...node.settings, ...data.settings });
       if (typeof settings === "string") return refuse(settings);
+      if (
+        node.type === "library" &&
+        settings !== undefined &&
+        settings.libraryId !== node.settings.libraryId
+      ) {
+        return refuse(
+          `change_node cannot change the library "${node.label}" uses. Ask the user to drop the library they want onto the canvas.`,
+        );
+      }
       return {
         ok: true,
         edit: {
@@ -85,6 +96,8 @@ export function checkEdit(flow: Flow, name: string, input: unknown): EditCheck {
       if (absent !== undefined) return missing(absent);
       const [portError] = portsRule.check({ ...flow, wires: [wire] });
       if (portError !== undefined) return refuse(portError.message);
+      const [crossing] = containerWiresRule.check({ ...flow, wires: [wire] });
+      if (crossing !== undefined) return refuse(crossing.message);
       return { ok: true, edit: { tool: name, wire } };
     }
     case "delete_node": {
@@ -107,11 +120,16 @@ const problemKey = (flow: Flow, error: ValidationError) => {
   return JSON.stringify([error.rule, error.node, error.field, ends]);
 };
 
-export function newProblems(before: Flow, after: Flow): ValidationError[] {
+export function newProblems(
+  before: Flow,
+  after: Flow,
+  libraries?: LibraryLookup,
+): ValidationError[] {
   const known = new Set(
-    [...validate(before).filter((error) => error.field !== undefined), ...flowProblems(before)].map(
-      (error) => problemKey(before, error),
-    ),
+    [
+      ...validate(before, libraries).filter((error) => error.field !== undefined),
+      ...flowProblems(before, libraries),
+    ].map((error) => problemKey(before, error)),
   );
-  return flowProblems(after).filter((error) => !known.has(problemKey(after, error)));
+  return flowProblems(after, libraries).filter((error) => !known.has(problemKey(after, error)));
 }

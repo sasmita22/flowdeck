@@ -1,8 +1,9 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { blueprintFacts, noBlueprintFacts } from "../../core/flow/flow-store.js";
+import type { LibraryResolver } from "../../core/flow/libraries.js";
 import { parseFlow, type BuildConfig, type Flow } from "../../core/flow/schema.js";
-import { flowKind, sessionBuildConfig } from "../../core/flow/structure.js";
-import { foundVariables } from "../../core/flow/variables.js";
+import { sessionBuildConfig } from "../../core/flow/structure.js";
 import { registry } from "../../core/nodes/registry.js";
 import type {
   FlowStore,
@@ -289,11 +290,15 @@ export class SqliteFlowStore implements FlowStore {
       versions: row.versions,
       lastSavedAt: row.last_saved_at,
       buildConfig: latest === null ? null : buildConfigOf(latest.flow),
-      variables: latest === null ? [] : foundVariables(latest.flow),
+      ...(latest === null ? noBlueprintFacts : blueprintFacts(latest.flow, this.resolveLibrary)),
       pinned: row.pinned === 1,
-      kind: latest === null ? "library" : flowKind(latest.flow),
     };
   }
+
+  private readonly resolveLibrary: LibraryResolver = (flowId) => {
+    const library = this.loadLatest(flowId);
+    return library === null ? undefined : { name: library.name, flow: library.flow };
+  };
 
   private currentFlowId(): string | undefined {
     const row = this.db

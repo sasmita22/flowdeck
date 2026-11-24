@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterLibraries,
   filterPalette,
   flowContainerItems,
   groupPalette,
+  libraryItems,
   nodeTitle,
   noteTitle,
   paletteGroups,
@@ -15,9 +17,12 @@ import {
   type CanvasItemType,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
-import { paletteTestId } from "../../../../src/app/renderer/test-ids.js";
+import { libraryTestIds, paletteTestId } from "../../../../src/app/renderer/test-ids.js";
+import type { FlowSummary } from "../../../../src/core/flow/flow-store.js";
 import { NodeType, type Flow } from "../../../../src/core/flow/schema.js";
 import { agent, flow, flowSettings, sessionContainer } from "../../../fixtures/flow-builders.js";
+
+const placeable = NodeType.exclude(["library"]).options;
 
 const itemOf = (type: CanvasItemType) => {
   const item = paletteItems.find((entry) => entry.type === type);
@@ -26,20 +31,24 @@ const itemOf = (type: CanvasItemType) => {
 };
 
 describe("nodeTitle", () => {
-  it.each(NodeType.options)("names %s and says what it does, as the sidebar does", (type) => {
+  it.each(placeable)("names %s and says what it does, as the sidebar does", (type) => {
     const { label, description } = itemOf(type);
     expect(nodeTitle(type)).toBe(`${label}: ${description}`);
   });
 });
 
 describe("paletteItems", () => {
-  it("has one entry per node type, the two containers, and the note", () => {
+  it("has one entry per node type but library, the two containers, and the note", () => {
     expect(paletteItems.map((item) => item.type).sort()).toEqual(
-      [...NodeType.options, "workspace", "session", "note"].sort(),
+      [...placeable, "workspace", "session", "note"].sort(),
     );
   });
 
-  it.each(NodeType.options)("draws %s from its test id, defaults and look", (type) => {
+  it("offers no bare library entry; libraries come from saved blueprints", () => {
+    expect(paletteItems.map((item) => item.type)).not.toContain("library");
+  });
+
+  it.each(placeable)("draws %s from its test id, defaults and look", (type) => {
     expect(itemOf(type)).toMatchObject({
       testId: paletteTestId(type),
       label: nodeDefaults[type].label,
@@ -48,11 +57,11 @@ describe("paletteItems", () => {
     });
   });
 
-  it.each(NodeType.options)("puts %s in one of the design's six node groups", (type) => {
+  it.each(placeable)("puts %s in one of the design's six node groups", (type) => {
     expect(paletteGroups.slice(0, 6)).toContain(itemOf(type).group);
   });
 
-  it.each(NodeType.options)("describes %s in one non-empty line", (type) => {
+  it.each(placeable)("describes %s in one non-empty line", (type) => {
     const { description } = itemOf(type);
     expect(description.trim()).not.toBe("");
     expect(description).not.toMatch(/\n/);
@@ -315,5 +324,94 @@ describe("flowContainerItems", () => {
       nodes: onlyContainer(items).nodes,
     });
     wiredStartAndStop(source, items);
+  });
+});
+
+describe("libraryItems", () => {
+  const summary = (flowId: string, name: string, kind: FlowSummary["kind"]): FlowSummary => ({
+    flowId,
+    name,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    versions: 1,
+    lastSavedAt: "2026-01-01T00:00:00.000Z",
+    buildConfig: null,
+    variables: [],
+    pinned: false,
+    kind,
+    sessions: [],
+  });
+
+  const summaries = [
+    summary("f-review", "Review", "node-library"),
+    summary("f-android", "Android", "session-library"),
+    summary("f-host", "Host", "workflow"),
+    summary("f-empty", "Empty", "incomplete"),
+    summary("f-open", "Open one", "node-library"),
+  ];
+
+  it("lists node and session libraries by name and kind, each with its palette id", () => {
+    expect(libraryItems(summaries, "f-open")).toEqual([
+      {
+        flowId: "f-review",
+        testId: libraryTestIds.paletteItem("f-review"),
+        label: "Review",
+        kind: "node-library",
+        kindLabel: "Node library",
+      },
+      {
+        flowId: "f-android",
+        testId: libraryTestIds.paletteItem("f-android"),
+        label: "Android",
+        kind: "session-library",
+        kindLabel: "Session library",
+      },
+    ]);
+  });
+
+  it("leaves out the open blueprint itself", () => {
+    expect(libraryItems(summaries, "f-review").map(({ flowId }) => flowId)).toEqual([
+      "f-android",
+      "f-open",
+    ]);
+  });
+
+  it("lists every library when no blueprint is open", () => {
+    expect(libraryItems(summaries, null).map(({ flowId }) => flowId)).toEqual([
+      "f-review",
+      "f-android",
+      "f-open",
+    ]);
+  });
+});
+
+describe("filterLibraries", () => {
+  const items = [
+    {
+      flowId: "f-review",
+      testId: libraryTestIds.paletteItem("f-review"),
+      label: "Review",
+      kind: "node-library" as const,
+      kindLabel: "Node library",
+    },
+    {
+      flowId: "f-android",
+      testId: libraryTestIds.paletteItem("f-android"),
+      label: "Android",
+      kind: "session-library" as const,
+      kindLabel: "Session library",
+    },
+  ];
+
+  it.each(["", "  ", "libraries"])("keeps every library for %j", (query) => {
+    expect(filterLibraries(items, query)).toEqual(items);
+  });
+
+  it("matches a library's name or kind without regard to case", () => {
+    expect(filterLibraries(items, "ANDROID").map(({ flowId }) => flowId)).toEqual(["f-android"]);
+    expect(filterLibraries(items, "node lib").map(({ flowId }) => flowId)).toEqual(["f-review"]);
+  });
+
+  it("returns nothing when nothing matches", () => {
+    expect(filterLibraries(items, "zzz")).toEqual([]);
   });
 });

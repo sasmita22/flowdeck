@@ -30,8 +30,10 @@ import {
   agent,
   gate,
   onWorkspaceMainFlow,
+  output,
   sessionsWorkflow,
   thenWire,
+  trigger,
 } from "../../fixtures/flow-builders.js";
 import { createTmpRepo, type TmpRepo } from "../../fixtures/tmp-repo.js";
 import { fakeEngineBuildOptions } from "../../fixtures/fake-build-deps.js";
@@ -790,6 +792,43 @@ describe("an app restart", () => {
       expect(claudeMd.split("\n").filter((line) => line.startsWith("- Blueprint: "))).toEqual([
         `- Blueprint: ${snapshot.blueprintName}, version ${snapshot.version}`,
       ]);
+    });
+
+    it("finishes a build left going from the flow it froze, not from its library's later save", async () => {
+      const nodeLibrary = (label: string): Flow =>
+        parseFlow({
+          nodes: [trigger("canvas-start"), { ...agent("plan"), label }, output("canvas-stop")],
+          wires: [thenWire("canvas-start", "plan"), thenWire("plan", "canvas-stop")],
+          containers: [],
+          settings: onWorkspaceMainFlow([], []).settings,
+        });
+      const library = flows.save(nodeLibrary("Planner"), { name: "Android" });
+      flows.save(onWorkspaceMainFlow([agent("p1")], []), { name: "Host" });
+      const use = {
+        id: "use",
+        label: "Library",
+        position: { x: 0, y: 0 },
+        type: "library",
+        settings: { libraryId: library.flowId, label: "Android App", overrides: {} },
+      };
+      const { name, spec } = await leftMidTurn(
+        {},
+        repo.path,
+        {},
+        onWorkspaceMainFlow([agent("p1"), use], [thenWire("p1", "use")]),
+      );
+      flows.save(nodeLibrary("Reviewer"), library.flowId);
+
+      const built = await finishedAfterRestart(spec, name);
+
+      const manifest = JSON.parse(runs.buildManifest(built.id) ?? "{}") as {
+        containers: { nodes: { id: string; label: string }[] }[];
+      };
+      expect(
+        manifest.containers
+          .flatMap((container) => container.nodes)
+          .find((node) => node.id === "android-app-plan")?.label,
+      ).toBe("Planner");
     });
 
     it.each([

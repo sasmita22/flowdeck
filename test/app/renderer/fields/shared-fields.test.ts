@@ -70,6 +70,21 @@ describe("same setting, same field", () => {
     },
   );
 
+  it.each(["inspector/container-settings.tsx", "inspector/library-settings.tsx"])(
+    "%s loads the branches of the repository its branch field shows",
+    (file) => {
+      const source = sourceOf(file);
+      const shown = /<BranchField\b[^>]*?\brepo=\{(?<repo>\w+)\}/.exec(source)?.groups?.repo;
+
+      expect(shown).toBeDefined();
+      expect(source).toMatch(
+        new RegExp(
+          `useEffect\\(\\(\\) => \\{\\s*void branches\\.getState\\(\\)\\.load\\(${shown}\\);`,
+        ),
+      );
+    },
+  );
+
   it("Blueprint settings draws the build model with the same model field as the Build dialog, under its own test id", () => {
     const files = blueprintSettingsFiles();
     expect(files).toHaveLength(1);

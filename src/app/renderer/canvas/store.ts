@@ -1,11 +1,19 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
 import { flowProblems } from "../../../core/compiler/flow-problems.js";
-import type { ValidationError } from "../../../core/compiler/validate.js";
+import { validate, type ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
+import type { FlowSummary } from "../../../core/flow/flow-store.js";
+import { labelPrefix, unknownLibraries, type LibraryLookup } from "../../../core/flow/libraries.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
 import { defaultPermissionMode } from "../../../core/flow/choices.js";
-import { bodyProblems, flowContainerName } from "../../../core/flow/structure.js";
+import {
+  bodyProblems,
+  flowContainerName,
+  flowContainerOf,
+  flowIn,
+  flowOut,
+} from "../../../core/flow/structure.js";
 import {
   NodeType,
   parseFlow,
@@ -85,6 +93,9 @@ export const defaultCanvasSize: CanvasSize = { width: 1600, height: 1000 };
 
 export interface CanvasState {
   flow: Flow;
+  libraries: LibraryLookup;
+  librarySummaries: readonly FlowSummary[];
+  openFlowId: string | null;
   saved: Flow;
   ready: boolean;
   selection: string[];
@@ -105,6 +116,9 @@ export interface CanvasState {
   fitSeq: number;
   drop(type: CanvasItemType, position: Position): void;
   addNext(type: CanvasItemType): void;
+  setLibraries(summaries: readonly FlowSummary[], openFlowId: string | null): void;
+  dropLibrary(flowId: string, position: Position): void;
+  addLibrary(flowId: string): void;
   editNoteText(id: string, text: string): void;
   resizeNoteLive(id: string, box: NoteBox): void;
   resizeNote(id: string, box: NoteBox): void;
@@ -196,6 +210,82 @@ export const flowContainerItems = (
   };
 };
 
+const canvasLevel = (flow: Flow, type: "trigger" | "output") =>
+  flow.nodes.filter(
+    (node) =>
+      node.type === type &&
+      node.parent === undefined &&
+      flowContainerOf(flow, node.id) === undefined,
+  );
+
+const canvasPathItems = (
+  flow: Flow,
+  workspace: string,
+  at: Position,
+  nextId: (type: NodeType, flow: Flow) => string,
+): Items => {
+  const starts = canvasLevel(flow, "trigger");
+  const stops = canvasLevel(flow, "output");
+  const added: Node[] = [];
+  if (starts.length === 0) {
+    added.push(newNode("trigger", nextId("trigger", flow), { x: at.x - startToStop, y: at.y }));
+  }
+  if (stops.length === 0) {
+    const withStart = { ...flow, nodes: [...flow.nodes, ...added] };
+    added.push({
+      ...newNode("output", nextId("output", withStart), { x: at.x + 2 * startToStop, y: at.y }),
+      settings: { ...newStopSettings },
+    } as Node);
+  }
+  const ends = [...starts, ...stops, ...added];
+  const from = ends.find(
+    (node) => node.type === "trigger" && !flow.wires.some((wire) => wire.from.node === node.id),
+  );
+  const to = ends.find(
+    (node) => node.type === "output" && !flow.wires.some((wire) => wire.to.node === node.id),
+  );
+  return {
+    nodes: added,
+    wires: [
+      ...(from === undefined
+        ? []
+        : [
+            {
+              kind: "then",
+              from: { node: from.id, port: "out" },
+              to: { node: workspace, port: flowIn },
+            },
+          ]),
+      ...(to === undefined
+        ? []
+        : [
+            {
+              kind: "then",
+              from: { node: workspace, port: flowOut },
+              to: { node: to.id, port: "in" },
+            },
+          ]),
+    ] as Wire[],
+    notes: [],
+  };
+};
+
+const withCanvasPath = (
+  flow: Flow,
+  items: Items & { containers: FlowContainer[] },
+  at: Position,
+  nextId: (type: NodeType, flow: Flow) => string,
+): Items & { containers: FlowContainer[] } => {
+  const [workspace] = items.containers.filter(({ kind }) => kind === "workspace");
+  if (workspace === undefined) return items;
+  const path = canvasPathItems(withItems(flow, items), workspace.id, at, nextId);
+  return {
+    ...items,
+    nodes: [...items.nodes, ...path.nodes],
+    wires: [...items.wires, ...path.wires],
+  };
+};
+
 const withItems = (flow: Flow, items: Items): Flow => addItems(items).do(flow);
 
 const seedGap = 160;
@@ -207,14 +297,13 @@ export const newCanvasFlow = (): Flow => {
     containers: [],
     settings: { buildModel: "sonnet", permissionMode: defaultPermissionMode },
   };
-  const withWorkspace = withItems(empty, flowContainerItems("workspace", empty, firstPosition));
-  return withItems(
+  const at = { x: firstPosition.x + startToStop, y: firstPosition.y };
+  const withWorkspace = withItems(empty, flowContainerItems("workspace", empty, at));
+  const withSession = withItems(
     withWorkspace,
-    flowContainerItems("session", withWorkspace, {
-      x: firstPosition.x,
-      y: firstPosition.y + seedGap,
-    }),
+    flowContainerItems("session", withWorkspace, { x: at.x, y: at.y + seedGap }),
   );
+  return withItems(withSession, canvasPathItems(withSession, "workspace-1", at, nextNodeId));
 };
 
 export const nextNoteId = (flow: Flow): string => {
@@ -301,12 +390,53 @@ const nextTo = (flow: Flow, selection: readonly string[]): Position => {
     : { x: rightEdge(anchor) + gap, y: anchor.position.y };
 };
 
-const issuesByFlow = new WeakMap<Flow, Record<string, string[]>>();
+export const summaryLookup =
+  (summaries: readonly FlowSummary[]): LibraryLookup =>
+  (flowId) => {
+    const summary = summaries.find((candidate) => candidate.flowId === flowId);
+    return summary && { name: summary.name, kind: summary.kind, sessions: summary.sessions };
+  };
+
+type LibraryNode = Extract<Node, { type: "library" }>;
+
+const isLibraryNode = (node: Node): node is LibraryNode => node.type === "library";
+
+const freeLabel = (base: string, taken: ReadonlySet<string>): string => {
+  if (!taken.has(base)) return base;
+  let count = 2;
+  while (taken.has(`${base}-${count}`)) count += 1;
+  return `${base}-${count}`;
+};
+
+const libraryLabelFor = (flow: Flow, name: string): string =>
+  freeLabel(
+    labelPrefix(name),
+    new Set(flow.nodes.filter(isLibraryNode).map((node) => labelPrefix(node.settings.label))),
+  );
+
+const byLibrariesAndFlow = <T>(compute: (flow: Flow, libraries: LibraryLookup) => T) => {
+  const caches = new WeakMap<LibraryLookup, WeakMap<Flow, T>>();
+  return (flow: Flow, libraries: LibraryLookup): T => {
+    let byFlow = caches.get(libraries);
+    if (byFlow === undefined) {
+      byFlow = new WeakMap();
+      caches.set(libraries, byFlow);
+    }
+    const cached = byFlow.get(flow);
+    if (cached !== undefined) return cached;
+    const computed = compute(flow, libraries);
+    byFlow.set(flow, computed);
+    return computed;
+  };
+};
 
 const reasonOf = (flow: Flow, error: ValidationError) =>
   reasonNaming(error.node, error.message, labelOf(flow, error.node ?? ""));
 
-const labelOf = (flow: Flow, id: string) => nodeLabel(flow.nodes, id);
+const labelOf = (flow: Flow, id: string) => {
+  const container = flow.containers.find((candidate) => candidate.id === id);
+  return container === undefined ? nodeLabel(flow.nodes, id) : flowContainerName(container);
+};
 
 export const nodeLabel = (nodes: readonly Node[], nodeId?: string): string => {
   if (nodeId === undefined) return labelFor(undefined);
@@ -314,52 +444,51 @@ export const nodeLabel = (nodes: readonly Node[], nodeId?: string): string => {
   return node ? labelFor(node) : nodeId;
 };
 
-export const selectNodeIssues = (flow: Flow): Record<string, string[]> => {
-  const cached = issuesByFlow.get(flow);
-  if (cached !== undefined) return cached;
+const nodeIssues = byLibrariesAndFlow((flow, libraries) => {
   const issues: Record<string, string[]> = {};
-  for (const error of flowProblems(flow)) {
+  for (const error of flowProblems(flow, libraries)) {
     if (error.node !== undefined)
       (issues[error.node] ??= []).push(plainReason(error.node, error.message));
   }
-  issuesByFlow.set(flow, issues);
   return issues;
-};
+});
 
-const fieldIssuesByFlow = new WeakMap<Flow, Record<string, Record<string, string>>>();
+export const selectNodeIssues = (
+  flow: Flow,
+  libraries: LibraryLookup = unknownLibraries,
+): Record<string, string[]> => nodeIssues(flow, libraries);
 
-export const selectFieldIssues = (flow: Flow, nodeId: string): Record<string, string> => {
-  let byNode = fieldIssuesByFlow.get(flow);
-  if (byNode === undefined) {
-    byNode = {};
-    for (const error of flowProblems(flow)) {
-      if (error.node === undefined || error.field === undefined) continue;
-      const fields = (byNode[error.node] ??= {});
-      if (!(error.field in fields)) fields[error.field] = plainReason(error.node, error.message);
-    }
-    fieldIssuesByFlow.set(flow, byNode);
+const fieldIssues = byLibrariesAndFlow((flow, libraries) => {
+  const byNode: Record<string, Record<string, string>> = {};
+  for (const error of flowProblems(flow, libraries)) {
+    if (error.node === undefined || error.field === undefined) continue;
+    const fields = (byNode[error.node] ??= {});
+    if (!(error.field in fields)) fields[error.field] = plainReason(error.node, error.message);
   }
-  return byNode[nodeId] ?? {};
-};
+  return byNode;
+});
 
-const containerIssuesByFlow = new WeakMap<Flow, Record<string, Record<string, string>>>();
+export const selectFieldIssues = (
+  flow: Flow,
+  nodeId: string,
+  libraries: LibraryLookup = unknownLibraries,
+): Record<string, string> => fieldIssues(flow, libraries)[nodeId] ?? {};
+
+const containerIssues = byLibrariesAndFlow((flow, libraries) => {
+  const byContainer: Record<string, Record<string, string>> = {};
+  for (const { container, node, field, message } of flowProblems(flow, libraries)) {
+    if (container === undefined || node !== undefined || field === undefined) continue;
+    const fields = (byContainer[container] ??= {});
+    if (!(field in fields)) fields[field] = message;
+  }
+  return byContainer;
+});
 
 export const selectFlowContainerIssues = (
   flow: Flow,
   containerId: string,
-): Record<string, string> => {
-  let byContainer = containerIssuesByFlow.get(flow);
-  if (byContainer === undefined) {
-    byContainer = {};
-    for (const { container, node, field, message } of flowProblems(flow)) {
-      if (container === undefined || node !== undefined || field === undefined) continue;
-      const fields = (byContainer[container] ??= {});
-      if (!(field in fields)) fields[field] = message;
-    }
-    containerIssuesByFlow.set(flow, byContainer);
-  }
-  return byContainer[containerId] ?? {};
-};
+  libraries: LibraryLookup = unknownLibraries,
+): Record<string, string> => containerIssues(flow, libraries)[containerId] ?? {};
 
 export const selectSelectedNode = (state: Pick<CanvasState, "flow" | "selection">): Node | null => {
   const [id, ...more] = state.selection;
@@ -400,11 +529,12 @@ const connectionRefusal = (
   a: string,
   b: string,
   command: Command,
+  libraries: LibraryLookup,
 ): string | undefined => {
   if (a === b) return selfConnection;
   const existing = connectionJoining(flow, a, b);
   if (existing !== undefined) return alreadyConnected(flow, existing.between);
-  const [problem] = newProblems(flow, command.do(flow)).filter(
+  const [problem] = newProblems(flow, command.do(flow), libraries).filter(
     ({ rule }) => rule === "session-connections",
   );
   return problem?.message;
@@ -563,7 +693,7 @@ export function createCanvasStore(
       if (others.some((existing) => sameWire(existing, wire))) {
         return cannotConnect(flow, wire.from, wire.to, alreadyJoined);
       }
-      const [error] = newProblems(flow, command.do(flow));
+      const [error] = newProblems(flow, command.do(flow), get().libraries);
       return error === undefined
         ? null
         : cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error));
@@ -703,17 +833,58 @@ export function createCanvasStore(
         });
         return;
       }
-      const items = flowContainerItems(kind, flow, position, nextId);
+      const items = withCanvasPath(
+        flow,
+        flowContainerItems(kind, flow, position, nextId),
+        position,
+        nextId,
+      );
       run(
         addItems(items),
         items.containers.map(({ id }) => id),
       );
     };
 
+    const dropLibrary = (flowId: string, position: Position) => {
+      const { flow, libraries } = get();
+      const name = libraries(flowId)?.name ?? "library";
+      const label = libraryLabelFor(flow, name);
+      const id = nextId("library", flow);
+      const parent = containerAt(flow, position);
+      const at = placeNode(flow, "library", position, parent);
+      const member = parent === undefined ? flowContainerAt(flow, position) : undefined;
+      const node: LibraryNode = {
+        id,
+        type: "library",
+        label,
+        position: at,
+        ...(parent === undefined ? {} : { parent }),
+        settings: { libraryId: flowId, label, overrides: {} },
+      };
+      const command = addNode(node, member);
+      const after = command.do(flow);
+      const [refused] = [
+        ...newProblems(flow, after, libraries).filter(({ rule }) => rule === "body-nodes"),
+        ...validate(after, libraries).filter(
+          (error) => error.rule === "library-use" && error.node === id,
+        ),
+      ];
+      if (refused !== undefined) {
+        const host = member ?? parent;
+        const into = host === undefined ? "" : ` into ${labelOf(flow, host)}`;
+        set({ message: `Can't drop ${name}${into}: ${reasonOf(after, refused)}` });
+        return;
+      }
+      run(command, [id]);
+    };
+
     const start = newCanvasFlow();
 
     return {
       flow: start,
+      libraries: unknownLibraries,
+      librarySummaries: [],
+      openFlowId: null,
       saved: start,
       ready: deps.ready ?? true,
       selection: [],
@@ -750,7 +921,7 @@ export function createCanvasStore(
         const at = placeNode(flow, type, position, parent);
         const member = parent === undefined ? flowContainerAt(flow, position) : undefined;
         const command = addNode(newNode(type, id, at, parent), member);
-        const [misplaced] = newProblems(flow, command.do(flow)).filter(
+        const [misplaced] = newProblems(flow, command.do(flow), get().libraries).filter(
           (error) => error.rule === "body-nodes",
         );
         if (misplaced !== undefined) {
@@ -763,6 +934,15 @@ export function createCanvasStore(
       },
 
       addNext: (type) => get().drop(type, nextTo(get().flow, get().selection)),
+
+      setLibraries: (summaries, openFlowId) =>
+        set({ libraries: summaryLookup(summaries), librarySummaries: summaries, openFlowId }),
+
+      dropLibrary: (flowId, position) => {
+        if (ready()) dropLibrary(flowId, position);
+      },
+
+      addLibrary: (flowId) => get().dropLibrary(flowId, nextTo(get().flow, get().selection)),
 
       editNoteText: (id, text) => {
         if (!ready()) return;
@@ -802,7 +982,7 @@ export function createCanvasStore(
         if (!ready()) return false;
         const { flow } = get();
         const command = addConnection({ id: nextConnectionId(flow), between: [a, b] });
-        const refused = connectionRefusal(flow, a, b, command);
+        const refused = connectionRefusal(flow, a, b, command, get().libraries);
         if (refused !== undefined) {
           set({ message: refused });
           return false;
@@ -945,7 +1125,7 @@ export function createCanvasStore(
         const command = moveNodes(moves);
         const nested = moves.find((move) => move.parent !== undefined);
         if (nested?.parent !== undefined) {
-          const [error] = newProblems(flow, command.do(flow)).filter(
+          const [error] = newProblems(flow, command.do(flow), get().libraries).filter(
             (candidate) => candidate.rule !== "loop-body",
           );
           if (error !== undefined) {

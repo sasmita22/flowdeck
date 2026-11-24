@@ -197,7 +197,7 @@ describe("FakeFlowStore", () => {
     expect(
       store.list().map(({ name, kind, buildConfig }) => ({ name, kind, buildConfig })),
     ).toEqual([
-      { name: "Library", kind: "library", buildConfig: { repo: "/r/lib", base: "main" } },
+      { name: "Library", kind: "incomplete", buildConfig: { repo: "/r/lib", base: "main" } },
       { name: "Workflow", kind: "workflow", buildConfig: { repo: "/r/shop", base: "dev" } },
     ]);
   });

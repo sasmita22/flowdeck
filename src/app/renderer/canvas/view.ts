@@ -121,10 +121,12 @@ const frameView = (
 
 type IsIgnored = (id: string) => boolean;
 
-const ignoredIn = (flow: Flow): IsIgnored => {
+type Ignoring = { node: IsIgnored; container: IsIgnored };
+
+const ignoredIn = (flow: Flow): Ignoring => {
   const found = mainFlow(flow);
-  if (found === undefined) return () => false;
-  return (id) => !found.reached.has(id);
+  if (found === undefined) return { node: () => false, container: () => false };
+  return { node: (id) => !found.reached.has(id), container: (id) => !found.containers.has(id) };
 };
 
 const toLoopFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
@@ -158,7 +160,44 @@ export const containerOfFrameId = (nodeId: string): string | undefined =>
 
 const hasFrame = (container: FlowContainer) => container.nodes.length > 0;
 
-const toFlowContainerFrameViewNodes = (flow: Flow, selection: readonly string[]): ViewNode[] =>
+type End = { node: string; port: string };
+
+export type ConnectionRoute =
+  { kind: "sessions"; from: string; to: string } | { kind: "wire"; from: End; to: End };
+
+type Drag = {
+  source: string;
+  sourceHandle: string | null;
+  target: string;
+  targetHandle: string | null;
+};
+
+export const routeConnection = ({
+  source,
+  sourceHandle,
+  target,
+  targetHandle,
+}: Drag): ConnectionRoute | null => {
+  if (sourceHandle === null || targetHandle === null) return null;
+  const from = containerOfFrameId(source);
+  const to = containerOfFrameId(target);
+  const betweenSessions =
+    sourceHandle === connectionPorts.source && targetHandle === connectionPorts.target;
+  if (betweenSessions && from !== undefined && to !== undefined) {
+    return { kind: "sessions", from, to };
+  }
+  return {
+    kind: "wire",
+    from: { node: from ?? source, port: sourceHandle },
+    to: { node: to ?? target, port: targetHandle },
+  };
+};
+
+const toFlowContainerFrameViewNodes = (
+  flow: Flow,
+  selection: readonly string[],
+  isIgnored: IsIgnored,
+): ViewNode[] =>
   flow.containers.filter(hasFrame).map((container) => ({
     ...frameView(
       containerFrameId(container.id),
@@ -168,6 +207,7 @@ const toFlowContainerFrameViewNodes = (flow: Flow, selection: readonly string[])
         containerId: container.id,
         label: container.kind === "workspace" ? "Workspace" : container.name,
         ...(container.kind === "session" && { session: true }),
+        ignored: isIgnored(container.id),
       },
     ),
     selected: selection.includes(container.id),
@@ -211,9 +251,10 @@ export const toViewNodes = (
 ): ViewNode[] => {
   const live = withPositions(flow, followed(flow, dragPositions));
   const framing = withPositions(flow, containerMoves(flow, dragPositions));
-  const isIgnored = ignoredIn(flow);
+  const ignoring = ignoredIn(flow);
+  const isIgnored = ignoring.node;
   return [
-    ...toFlowContainerFrameViewNodes(framing, selection),
+    ...toFlowContainerFrameViewNodes(framing, selection, ignoring.container),
     ...toLoopFrameViewNodes(framing, isIgnored),
     ...toForEachFrameViewNodes(framing, isIgnored),
     ...(flow.notes ?? []).map((note) =>
@@ -278,6 +319,8 @@ const toConnectionEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] 
 
 const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
   const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
+  const containerIds = new Set(flow.containers.map(({ id }) => id));
+  const viewId = (id: string) => (containerIds.has(id) ? containerFrameId(id) : id);
   return flow.wires.map((wire) => {
     const align = alignOf(types, wire);
     const id = edgeId(wire);
@@ -285,9 +328,9 @@ const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
     const isSelected = selected.includes(id);
     return {
       id,
-      source: wire.from.node,
+      source: viewId(wire.from.node),
       sourceHandle: wire.from.port,
-      target: wire.to.node,
+      target: viewId(wire.to.node),
       targetHandle: wire.to.port,
       markerEnd: {
         type: MarkerType.ArrowClosed,

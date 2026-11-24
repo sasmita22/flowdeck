@@ -508,9 +508,10 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
-          kind: "library",
+          kind: "incomplete",
           buildConfig: null,
           variables: [],
+          sessions: [],
           pinned: false,
         },
         {
@@ -519,9 +520,10 @@ describe("SqliteFlowStore", () => {
           createdAt: times[0],
           versions: 0,
           lastSavedAt: null,
-          kind: "library",
+          kind: "incomplete",
           buildConfig: null,
           variables: [],
+          sessions: [],
           pinned: false,
         },
       ]);
@@ -592,6 +594,7 @@ describe("SqliteFlowStore", () => {
             { name: "ship", kind: "yes-no", nodeIds: ["decide"] },
             { name: "ticket", kind: "text", nodeIds: ["say"] },
           ],
+          sessions: [],
           pinned: false,
         },
         {
@@ -600,15 +603,16 @@ describe("SqliteFlowStore", () => {
           createdAt: times[1],
           versions: 0,
           lastSavedAt: null,
-          kind: "library",
+          kind: "incomplete",
           buildConfig: null,
           variables: [],
+          sessions: [],
           pinned: false,
         },
       ]);
     });
 
-    it("lists a library as a library, its Build configuration from its first session container", () => {
+    it("lists a blueprint with no workspace and no canvas path as incomplete, its Build configuration from its first session container", () => {
       const store = open(ids("flow-a"));
       const library = flow(
         [trigger("a-start"), output("a-stop"), trigger("b-start"), output("b-stop")],
@@ -629,7 +633,10 @@ describe("SqliteFlowStore", () => {
       store.save(library, { name: "Parts" });
 
       expect(store.list()).toEqual([
-        expect.objectContaining({ kind: "library", buildConfig: { repo: "/first", base: "one" } }),
+        expect.objectContaining({
+          kind: "incomplete",
+          buildConfig: { repo: "/first", base: "one" },
+        }),
       ]);
     });
 
@@ -851,6 +858,7 @@ describe("SqliteFlowStore", () => {
       { name: "023_containers_clean_start.sql" },
       { name: "024_build_worktrees_clean_start.sql" },
       { name: "025_connections.sql" },
+      { name: "026_build_snapshot_flow.sql" },
     ]);
   });
 });

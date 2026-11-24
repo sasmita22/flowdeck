@@ -56,6 +56,7 @@ describe("preload run-state wiring", () => {
 
   it.each([
     ["openFlow", "flowdeck:open-flow", { flowId: "flow-a" }],
+    ["expandFlow", "flowdeck:expand-flow", { flow: { nodes: [], wires: [], containers: [] } }],
     ["listFlows", "flowdeck:list-flows", undefined],
     ["renameFlow", "flowdeck:rename-flow", { flowId: "flow-a", name: "Weekly" }],
     ["pinFlow", "flowdeck:pin-flow", { flowId: "flow-a", pinned: true }],
@@ -130,6 +131,7 @@ describe("preload run-state wiring", () => {
   );
 
   it.each([
+    ["expand-flow", "expandFlow"],
     ["pin-flow", "pinFlow"],
     ["delete-flow", "deleteFlow"],
     ["delete-build", "deleteBuild"],

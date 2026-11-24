@@ -11,6 +11,7 @@ export type BuildAnswerPayload = {
 
 export const engineCalls = {
   openFlow: { channel: "flowdeck:open-flow", request: "open-flow" },
+  expandFlow: { channel: "flowdeck:expand-flow", request: "expand-flow" },
   listFlows: { channel: "flowdeck:list-flows", request: "list-flows" },
   renameFlow: { channel: "flowdeck:rename-flow", request: "rename-flow" },
   pinFlow: { channel: "flowdeck:pin-flow", request: "pin-flow" },
@@ -70,6 +71,7 @@ export const engineCalls = {
 
 export type EngineCalls = {
   openFlow(payload: { flowId?: string }): Promise<unknown>;
+  expandFlow(payload: { flow: unknown }): Promise<unknown>;
   listFlows(): Promise<unknown>;
   renameFlow(payload: { flowId: string; name: string }): Promise<unknown>;
   pinFlow(payload: { flowId: string; pinned: boolean }): Promise<unknown>;

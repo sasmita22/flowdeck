@@ -1,9 +1,13 @@
+import { unknownLibraries, type LibraryLookup } from "../flow/libraries.js";
 import type { Flow } from "../flow/schema.js";
 import { rule as bodyNodes } from "./rules/body-nodes.js";
 import { rule as branchValue } from "./rules/branch-value.js";
 import { rule as branchVariable } from "./rules/branch-variable.js";
+import { rule as containerWires } from "./rules/container-wires.js";
 import { rule as handoffs } from "./rules/handoffs.js";
 import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
+import { rule as libraryLabels } from "./rules/library-labels.js";
+import { rule as libraryUse } from "./rules/library-use.js";
 import { rule as loopBody } from "./rules/loop-body.js";
 import { rule as loopCap } from "./rules/loop-cap.js";
 import { rule as loopSingleEntry } from "./rules/loop-single-entry.js";
@@ -22,6 +26,7 @@ import { rule as sessionSettings } from "./rules/session-settings.js";
 import { rule as stopRequired } from "./rules/stop-required.js";
 import { rule as variableKind } from "./rules/variable-kind.js";
 import { rule as variableNames } from "./rules/variable-names.js";
+import { rule as workflowPath } from "./rules/workflow-path.js";
 import { rule as workspaceCount } from "./rules/workspace-count.js";
 
 export type ValidationError = {
@@ -33,10 +38,12 @@ export type ValidationError = {
   container?: string;
 };
 
+export type RuleContext = { libraries: LibraryLookup };
+
 export type Rule = {
   id: string;
   message: string;
-  check(flow: Flow): ValidationError[];
+  check(flow: Flow, context?: RuleContext): ValidationError[];
 };
 
 export const rules = [
@@ -61,11 +68,18 @@ export const rules = [
   sessionNames,
   sessionConnections,
   outsideContainer,
+  workflowPath,
+  containerWires,
+  libraryUse,
+  libraryLabels,
   oneStart,
   stopRequired,
   oneStop,
 ] satisfies readonly Rule[];
 
-export function validate(flow: Flow): ValidationError[] {
-  return rules.flatMap((rule) => rule.check(flow));
+export function validate(
+  flow: Flow,
+  libraries: LibraryLookup = unknownLibraries,
+): ValidationError[] {
+  return rules.flatMap((rule) => rule.check(flow, { libraries }));
 }

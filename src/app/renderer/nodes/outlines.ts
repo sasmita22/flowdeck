@@ -105,6 +105,7 @@ const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
       `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
       8,
     ),
+  library: (w) => outline(roundedRect(w, h, 6), 10, { strokeWidth: 1.6 }),
   loop: container,
   foreach: container,
   branch: (w) =>

@@ -121,7 +121,9 @@ describe("orchestratorSkill", () => {
   it("lists every node of the session once, in the order the runner uses, each with its node marker", () => {
     const ids = stepLines(skill().content).map((line) => /NODE (\S+) /.exec(line)?.[1]);
 
-    expect(ids).toEqual(order(sample()).filter((id) => !id.startsWith("workspace-")));
+    expect(ids).toEqual(
+      order(sample()).filter((id) => !id.startsWith("workspace-") && !id.startsWith("canvas-")),
+    );
     expect(ids).toEqual(manifestOf(sample()).nodes.map((node) => node.id));
   });
 
@@ -287,6 +289,26 @@ describe("orchestratorSkill", () => {
     expect(line).toContain("handed back to the user");
     expect(line).toContain("not a file any step writes");
     expect(line).not.toContain("is ready");
+  });
+
+  it("refuses a library node, which is expanded before the build", () => {
+    const manifest = {
+      prefix: "fix-login",
+      orchestrator: "run",
+      wires: [],
+      nodes: [
+        {
+          id: "lib",
+          type: "library" as const,
+          label: "android-app",
+          settings: { libraryId: "lib-1", label: "android-app", overrides: {} },
+        },
+      ],
+    };
+
+    expect(() => orchestratorSkill(manifest, scope)).toThrow(
+      "library nodes are expanded before the build",
+    );
   });
 
   it("changes when a wire changes, and is the same for the same flow", () => {

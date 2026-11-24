@@ -3,6 +3,7 @@ import { flowProblems } from "../../../src/core/compiler/flow-problems.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import {
   agent,
+  canvasPath,
   flow,
   flowSettings,
   output,
@@ -77,26 +78,28 @@ describe("flowProblems", () => {
 
   describe("a workspace and a session, each Start wired to its Stop", () => {
     const seeded = (sessionNodes: string[]) =>
-      flow(
-        [
-          trigger("workspace-start"),
-          output("workspace-stop"),
-          trigger("start"),
-          agent("a"),
-          ...(sessionNodes.includes("stop") ? [output("stop")] : []),
-        ],
-        [
-          thenWire("workspace-start", "workspace-stop"),
-          thenWire("start", "a"),
-          ...(sessionNodes.includes("stop") ? [thenWire("a", "stop")] : []),
-        ],
-        flowSettings,
-        {
-          containers: [
-            workspaceContainer(["workspace-start", "workspace-stop"]),
-            sessionContainer(sessionNodes),
+      canvasPath(
+        flow(
+          [
+            trigger("workspace-start"),
+            output("workspace-stop"),
+            trigger("start"),
+            agent("a"),
+            ...(sessionNodes.includes("stop") ? [output("stop")] : []),
           ],
-        },
+          [
+            thenWire("workspace-start", "workspace-stop"),
+            thenWire("start", "a"),
+            ...(sessionNodes.includes("stop") ? [thenWire("a", "stop")] : []),
+          ],
+          flowSettings,
+          {
+            containers: [
+              workspaceContainer(["workspace-start", "workspace-stop"]),
+              sessionContainer(sessionNodes),
+            ],
+          },
+        ),
       );
 
     it("raises nothing with every setting set", () => {

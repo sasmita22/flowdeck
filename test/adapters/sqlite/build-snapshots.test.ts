@@ -10,6 +10,7 @@ import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import { backfillSnapshots } from "../../../src/core/run/backfill-snapshots.js";
 import type { NewBuild } from "../../../src/ports/store.js";
+import type { Flow } from "../../../src/core/flow/schema.js";
 import { agent, flow } from "../../fixtures/flow-builders.js";
 
 const migrationsDir = fileURLToPath(
@@ -142,6 +143,7 @@ describe("build snapshots", () => {
       ["blueprint_name", "'Other'"],
       ["version", "9"],
       ["svg", "'<svg/>'"],
+      ["flow_json", "'{}'"],
       ["created_at", "9"],
     ])("refuses setting the build id together with %s", (column, value) => {
       const { db } = seeded();
@@ -184,20 +186,47 @@ describe("build snapshots", () => {
     });
   });
 
-  it("keeps no frozen flow", () => {
-    const { db } = stores();
+  describe("the frozen flow", () => {
+    const frozen = flow([{ ...agent("a1"), label: "Planner" }, agent("a2")], []);
 
-    const columns = db.prepare("PRAGMA table_info(build_snapshots)").all() as { name: string }[];
+    const startedWith = (snapshot: { flow?: Flow }) => {
+      const { db, runs } = stores();
+      const start = runs.startPendingBuild({
+        flowId: "flow-1",
+        version: 1,
+        name: "fix-login",
+        origin: null,
+        startedAt: 1_000,
+        snapshot: { blueprintName: "Report", version: 1, svg: "<svg/>", ...snapshot },
+      });
+      if (start.kind !== "started") throw new Error(`expected a start, got ${start.reason}`);
+      return { db, runs, pendingId: start.pendingId };
+    };
 
-    expect(columns.map(({ name }) => name).sort()).toEqual([
-      "blueprint_name",
-      "build_id",
-      "created_at",
-      "id",
-      "pending_id",
-      "svg",
-      "version",
-    ]);
+    it("refuses a change to the flow once written", () => {
+      const { db, runs, pendingId } = startedWith({ flow: frozen });
+
+      refused(() => db.prepare("UPDATE build_snapshots SET flow_json = '{}'").run());
+
+      expect(runs.buildSnapshot({ pendingId })?.flow).toEqual(frozen);
+    });
+
+    it("is a column beside the picture", () => {
+      const { db } = stores();
+
+      const columns = db.prepare("PRAGMA table_info(build_snapshots)").all() as { name: string }[];
+
+      expect(columns.map(({ name }) => name).sort()).toEqual([
+        "blueprint_name",
+        "build_id",
+        "created_at",
+        "flow_json",
+        "id",
+        "pending_id",
+        "svg",
+        "version",
+      ]);
+    });
   });
 
   describe("migrating a database whose snapshots froze the flow", () => {

@@ -2,9 +2,20 @@ import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
-import type { Flow } from "../../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
+import {
+  agent,
+  branch,
+  flowSettings,
+  onMainFlow,
+  output,
+  sessionContainer,
+  thenWire,
+  trigger,
+  wire,
+} from "../../fixtures/flow-builders.js";
 import { roundTripFlow, unconnectedRoundTripFlow } from "../../fixtures/round-trip-flow.js";
 
 const kinds = [
@@ -25,7 +36,7 @@ const withStores = (kind: (typeof kinds)[number][1]) => {
   });
 
   return (): FlowStore => {
-    const queue = ["flow-a", "flow-b"];
+    const queue = ["flow-a", "flow-b", "flow-c"];
     const newId = () => queue.shift() ?? "spare";
     if (kind === "fake") return new FakeFlowStore({ newId });
     const db = openDatabase({ path: ":memory:" });
@@ -138,5 +149,138 @@ describe.each(kinds)("%s connections", (_name, kind) => {
 
     expect(store.loadLatest()?.flow).toEqual(unconnectedRoundTripFlow());
     expect(store.loadLatest()?.flow).not.toHaveProperty("connections");
+  });
+});
+
+const libraryNode = (id: string, libraryId: string, label: string) => ({
+  id,
+  label: "Library",
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label, overrides: {} },
+});
+
+const loose = (nodes: unknown[], wires: unknown[], containers: unknown[] = []): Flow =>
+  parseFlow({ nodes, wires, containers, settings: flowSettings });
+
+const throughCanvas = (members: unknown[]): Flow => {
+  const ids = (members as { id: string }[]).map(({ id }) => id);
+  const path = ["canvas-start", ...ids, "canvas-stop"];
+  return loose(
+    [trigger("canvas-start"), ...members, output("canvas-stop")],
+    path.slice(1).map((id, index) => thenWire(path[index] as string, id)),
+  );
+};
+
+const sessionLibrary = (): Flow =>
+  loose(
+    [trigger("canvas-start"), trigger("s-start"), output("s-stop"), output("canvas-stop")],
+    [
+      wire("canvas-start", "out", "session-1", "flow-in"),
+      thenWire("s-start", "s-stop"),
+      wire("session-1", "flow-out", "canvas-stop", "in"),
+    ],
+    [
+      sessionContainer(["s-start", "s-stop"], {
+        name: "android",
+        repo: "/repos/android",
+        branch: "main",
+        model: "haiku",
+      }),
+      sessionContainer([], { id: "session-off", name: "off the path" }),
+    ],
+  );
+
+describe.each(kinds)("%s summary", (_name, kind) => {
+  const open = withStores(kind);
+
+  const summaryOf = (store: FlowStore, flowId: string) =>
+    store.list().find((summary) => summary.flowId === flowId);
+
+  it("tells a workflow, a node library, a session library and an incomplete blueprint apart", () => {
+    const store = open();
+    store.save(onMainFlow([agent("plan")], []), { name: "Workflow" });
+    store.save(throughCanvas([agent("plan")]), { name: "Nodes" });
+    store.save(sessionLibrary(), { name: "Sessions" });
+    store.create("Empty");
+
+    expect(store.list().map(({ name, kind }) => ({ name, kind }))).toEqual([
+      { name: "Empty", kind: "incomplete" },
+      { name: "Sessions", kind: "session-library" },
+      { name: "Nodes", kind: "node-library" },
+      { name: "Workflow", kind: "workflow" },
+    ]);
+  });
+
+  it("calls a blueprint a session library when a library it uses is one", () => {
+    const store = open();
+    store.save(sessionLibrary(), { name: "Sessions" });
+    store.save(throughCanvas([libraryNode("use", "flow-a", "Android")]), { name: "Wrapper" });
+
+    expect(summaryOf(store, "flow-b")?.kind).toBe("session-library");
+  });
+
+  it("lists the session containers a session library reaches, and none for other kinds", () => {
+    const store = open();
+    store.save(sessionLibrary(), { name: "Sessions" });
+    store.save(throughCanvas([agent("plan")]), { name: "Nodes" });
+
+    expect(summaryOf(store, "flow-a")?.sessions).toEqual([
+      { id: "session-1", name: "android", repo: "/repos/android", branch: "main", model: "haiku" },
+    ]);
+    expect(summaryOf(store, "flow-b")?.sessions).toEqual([]);
+  });
+
+  it("lists the variables of the libraries a host uses, grouped by the library that asks", () => {
+    const store = open();
+    store.save(throughCanvas([branch("scan", "isFullScan")]), { name: "E2E" });
+    store.save(throughCanvas([libraryNode("use-e2e", "flow-a", "E2E tests")]), {
+      name: "Android",
+    });
+    store.save(
+      onMainFlow(
+        [
+          agent("say", { settings: { instructions: "Ship {{ticket}}" } }),
+          libraryNode("use-android", "flow-b", "Android App"),
+        ],
+        [thenWire("say", "use-android")],
+      ),
+      { name: "Host" },
+    );
+
+    expect(summaryOf(store, "flow-c")?.variables).toEqual([
+      {
+        name: "android-app.e2e-tests.isFullScan",
+        kind: "yes-no",
+        nodeIds: ["android-app-e2e-tests-scan"],
+        group: { path: "android-app.e2e-tests", name: "E2E" },
+      },
+      { name: "ticket", kind: "text", nodeIds: ["say"] },
+    ]);
+  });
+
+  it("still lists a host whose library is gone, with its own variables only", () => {
+    const store = open();
+    store.save(throughCanvas([branch("scan", "isFullScan")]), { name: "E2E" });
+    store.save(
+      onMainFlow(
+        [
+          agent("say", { settings: { instructions: "Ship {{ticket}}" } }),
+          libraryNode("use-e2e", "flow-a", "E2E tests"),
+        ],
+        [thenWire("say", "use-e2e")],
+      ),
+      { name: "Host" },
+    );
+
+    store.delete("flow-a");
+
+    expect(store.list()).toEqual([
+      expect.objectContaining({
+        name: "Host",
+        kind: "workflow",
+        variables: [{ name: "ticket", kind: "text", nodeIds: ["say"] }],
+      }),
+    ]);
   });
 });

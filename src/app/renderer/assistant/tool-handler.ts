@@ -142,7 +142,8 @@ export function createToolHandler({
       bumpFit();
     }
     lastWasTidy = true;
-    return { ok: true, problems: newProblems(before, canvas.getState().flow) };
+    const { flow: after, libraries } = canvas.getState();
+    return { ok: true, problems: newProblems(before, after, libraries) };
   };
 
   const tidyAtTurnEnd = () => {
@@ -174,24 +175,25 @@ export function createToolHandler({
     askGroup = canvas.getState().undoStack.at(-1);
     structural ||= check.edit.tool === "add_node" || check.edit.tool === "wire";
     lastWasTidy = false;
-    const problems = newProblems(before, canvas.getState().flow);
+    const { flow: after, libraries } = canvas.getState();
+    const problems = newProblems(before, after, libraries);
     return nodeId === undefined ? { ok: true, problems } : { ok: true, nodeId, problems };
   };
 
   const readBlueprint = async (input: unknown): Promise<Answer> => {
     const blueprint = targetOf(input);
     if (blueprint === undefined || isOpen(blueprint)) {
-      const { flow } = canvas.getState();
+      const { flow, libraries } = canvas.getState();
       return {
         ok: true,
         flow,
         unsaved: selectDirty(canvas.getState()),
-        problems: flowProblems(flow),
+        problems: flowProblems(flow, libraries),
       };
     }
     const saved = await readSaved(blueprint);
     if (saved?.flow == null) return refuse(`No blueprint "${blueprint}".`);
-    return { ok: true, ...saved, problems: flowProblems(saved.flow) };
+    return { ok: true, ...saved, problems: flowProblems(saved.flow, canvas.getState().libraries) };
   };
 
   const searchSaved = async (input: unknown): Promise<Answer> => {

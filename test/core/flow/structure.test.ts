@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   flowContainerMembers,
   flowContainerOf,
-  flowKind,
   isWorkflow,
   sessionBuildConfig,
 } from "../../../src/core/flow/structure.js";
@@ -77,19 +76,17 @@ describe("flowContainerMembers", () => {
   });
 });
 
-describe("flowKind", () => {
-  it("is a workflow with a workspace", () => {
-    expect(flowKind(workflow)).toBe("workflow");
+describe("isWorkflow", () => {
+  it("is true with a workspace", () => {
     expect(isWorkflow(workflow)).toBe(true);
   });
 
   it.each([
     ["only session containers", [sessionContainer(["a"]), sessionContainer(["b"], { id: "s2" })]],
     ["no containers", []],
-  ])("is a library with %s", (_, containers) => {
+  ])("is false with %s", (_, containers) => {
     const library = libraryOf(containers);
 
-    expect(flowKind(library)).toBe("library");
     expect(isWorkflow(library)).toBe(false);
   });
 });

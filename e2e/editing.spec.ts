@@ -472,7 +472,7 @@ test("A new blueprint with one Agent asks for its repository at Build, then runs
   await window.keyboard.press("Delete");
   await expect
     .poll(async () => (await readout(window)).wires.map(({ from }) => from.node))
-    .toEqual(["trigger-2"]);
+    .toEqual(["trigger-2", "trigger-3", "workspace-1"]);
   const canvas = await boxOf(window.getByTestId("canvas"));
   const workspace = await boxOf(window.getByTestId(containerTestIds.frame("workspace-1")));
   await window.getByTestId(paletteTestId("agent")).dragTo(window.getByTestId("canvas"), {

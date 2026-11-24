@@ -16,7 +16,7 @@ describe("variable-names", () => {
     ).toEqual([]);
   });
 
-  it.each(["a b", "-x", "a.b"])("reports the bad name {{%s}} in an Agent, naming it", (name) => {
+  it.each(["a b", "-x", "a..b"])("reports the bad name {{%s}} in an Agent, naming it", (name) => {
     const errors = rule.check(
       onMainFlow([instructed("plan", `Plan {{ticket}} and {{${name}}}.`)], []),
     );
@@ -25,7 +25,14 @@ describe("variable-names", () => {
     expect(errors[0]?.message).toContain(`"${name}"`);
   });
 
-  it.each(["a b", "-x", "a.b"])("reports the bad Branch variable name %j, naming it", (name) => {
+  it("says a name may join parts with dots, in the rule and in each report", () => {
+    const errors = rule.check(onMainFlow([branch("decide", "a..b")], []));
+
+    expect(rule.message).toMatch(/\bdots?\b/);
+    expect(errors[0]?.message).toMatch(/\bdots?\b/);
+  });
+
+  it.each(["a b", "-x", "a..b"])("reports the bad Branch variable name %j, naming it", (name) => {
     const errors = rule.check(onMainFlow([branch("decide", name)], []));
 
     expect(errors.map(({ rule }) => rule)).toEqual(["variable-names"]);

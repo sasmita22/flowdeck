@@ -289,7 +289,12 @@ test("agent add_node and wire reach the open canvas unsaved", async () => {
     [
       {
         name: "add_node",
-        input: { type: "agent", label: "Tests", settings: { instructions: "Run npm test." } },
+        input: {
+          type: "agent",
+          label: "Tests",
+          parent: "session-1",
+          settings: { instructions: "Run npm test." },
+        },
       },
       { name: "wire", input: thenWire("p1", "agent-1") },
       { name: "read_blueprint", input: {} },
@@ -330,8 +335,8 @@ test("three edits from one ask are undone by one Undo", async () => {
   const before = await readout(window);
   await writeBlueprintAsks(home, [
     [
-      { name: "add_node", input: { type: "agent", label: "Lint" } },
-      { name: "add_node", input: { type: "agent", label: "Tests" } },
+      { name: "add_node", input: { type: "agent", label: "Lint", parent: "session-1" } },
+      { name: "add_node", input: { type: "agent", label: "Tests", parent: "session-1" } },
       { name: "wire", input: thenWire("p1", "agent-1") },
     ],
   ]);
@@ -395,9 +400,9 @@ test("an ask that adds nodes without tidy_layout ends tidied, and one Undo rever
   const before = await readout(window);
   await writeBlueprintAsks(home, [
     [
-      { name: "add_node", input: { type: "agent", label: "Lint" } },
-      { name: "add_node", input: { type: "agent", label: "Tests" } },
-      { name: "add_node", input: { type: "agent", label: "Docs" } },
+      { name: "add_node", input: { type: "agent", label: "Lint", parent: "session-1" } },
+      { name: "add_node", input: { type: "agent", label: "Tests", parent: "session-1" } },
+      { name: "add_node", input: { type: "agent", label: "Docs", parent: "session-1" } },
       { name: "wire", input: thenWire("p1", "agent-1") },
       { name: "wire", input: thenWire("agent-1", "agent-2") },
       { name: "wire", input: thenWire("agent-2", "agent-3") },
@@ -408,10 +413,15 @@ test("an ask that adds nodes without tidy_layout ends tidied, and one Undo rever
 
   await expect(window.getByTestId(paneId)).toContainText("asks done: 1", { timeout: 20_000 });
   const chain = ["p1", "agent-1", "agent-2", "agent-3"];
+  const seededAt = positionsOf(before)["p1"];
   const inFlowOrder = async () => {
     const at = positionsOf(await readout(window));
-    return chain.every(
-      (id, index) => index === 0 || (at[id]?.x ?? 0) > (at[chain[index - 1] ?? ""]?.x ?? 0),
+    const tidyMovedP1 = at["p1"]?.x !== seededAt?.x || at["p1"]?.y !== seededAt?.y;
+    return (
+      tidyMovedP1 &&
+      chain.every(
+        (id, index) => index === 0 || (at[id]?.x ?? 0) > (at[chain[index - 1] ?? ""]?.x ?? 0),
+      )
     );
   };
   await expect.poll(inFlowOrder, { timeout: 10_000 }).toBe(true);

@@ -53,7 +53,9 @@ export function bodyProblems(nodes: readonly StructureNode[]): BodyProblem[] {
   });
 }
 
-export type FlowKind = "workflow" | "library";
+export const flowIn = "flow-in";
+
+export const flowOut = "flow-out";
 
 export function flowContainerOf(flow: Flow, nodeId: string): FlowContainer | undefined {
   const listing = flow.containers.find((container) => container.nodes.includes(nodeId));
@@ -72,10 +74,8 @@ export function flowContainerMembers(flow: Flow, containerId: string): string[] 
   return withBodies(direct);
 }
 
-export const flowKind = (flow: Flow): FlowKind =>
-  flow.containers.some((container) => container.kind === "workspace") ? "workflow" : "library";
-
-export const isWorkflow = (flow: Flow): boolean => flowKind(flow) === "workflow";
+export const isWorkflow = (flow: Flow): boolean =>
+  flow.containers.some((container) => container.kind === "workspace");
 
 export const libraryBuildReason =
   "A library cannot be built: add a workspace to make it a workflow.";

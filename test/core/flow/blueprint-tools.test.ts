@@ -108,6 +108,15 @@ describe("blueprintToolDefinitions", () => {
     expect(toolInputs.add_node.safeParse({ type, label: "Old" }).success).toBe(false);
   });
 
+  it("leaves the library node out of the types add_node takes", () => {
+    const [branch] = inputBranches("add_node");
+    const types = (branch?.properties?.type as { enum?: string[] } | undefined)?.enum ?? [];
+
+    expect(types).toContain("agent");
+    expect(types).not.toContain("library");
+    expect(toolInputs.add_node.safeParse({ type: "library", label: "Lib" }).success).toBe(false);
+  });
+
   it("offers Agent among the node types add_node takes, and no Prompt or Script", () => {
     const add = definition("add_node");
     const [branch] = inputBranches("add_node");

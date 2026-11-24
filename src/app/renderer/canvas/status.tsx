@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { issueSummary } from "./status-look.js";
+import { unknownLibraries } from "../../../core/flow/libraries.js";
 import { newCanvasFlow, selectNodeIssues, type CanvasState } from "./store.js";
 
 export const CanvasStoreContext = createContext<StoreApi<CanvasState> | null>(null);
@@ -10,9 +11,14 @@ export const CanvasEditingContext = createContext(false);
 
 const emptyFlow = newCanvasFlow();
 
-const emptyCanvasStore: StoreApi<Pick<CanvasState, "flow">> = {
-  getState: () => ({ flow: emptyFlow }),
-  getInitialState: () => ({ flow: emptyFlow }),
+const emptyState: Pick<CanvasState, "flow" | "libraries"> = {
+  flow: emptyFlow,
+  libraries: unknownLibraries,
+};
+
+export const emptyCanvasStore: StoreApi<Pick<CanvasState, "flow" | "libraries">> = {
+  getState: () => emptyState,
+  getInitialState: () => emptyState,
   setState: () => undefined,
   subscribe: () => () => undefined,
 };
@@ -21,7 +27,7 @@ export function NodeIssueMarker({ nodeId, width }: { nodeId: string; width: numb
   const store = useContext(CanvasStoreContext);
   const issues = useStore(
     store ?? emptyCanvasStore,
-    (state) => selectNodeIssues(state.flow)[nodeId],
+    (state) => selectNodeIssues(state.flow, state.libraries)[nodeId],
   );
   if (issues === undefined) return null;
   const { text, title } = issueSummary(issues);

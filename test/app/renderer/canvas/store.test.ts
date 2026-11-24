@@ -16,7 +16,15 @@ import {
 } from "../../../../src/app/renderer/canvas/store.js";
 import { flowProblems } from "../../../../src/core/compiler/flow-problems.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
-import { nodeWidth } from "../../../../src/app/renderer/canvas/frames.js";
+import type { FlowSummary } from "../../../../src/core/flow/flow-store.js";
+import {
+  boundsOf,
+  flowContainerBounds,
+  nodeWidth,
+  sideLabelSpan,
+} from "../../../../src/app/renderer/canvas/frames.js";
+import { canvasStart } from "../../../../src/core/flow/main-flow.js";
+import { flowContainerOf, flowIn, flowOut } from "../../../../src/core/flow/structure.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { addNode, moveNodes, updateNode } from "../../../../src/app/renderer/canvas/commands.js";
@@ -31,6 +39,7 @@ import { defaultPermissionMode, modelChoices } from "../../../../src/core/flow/c
 import { NodeType, parseFlow, type Flow, type Node } from "../../../../src/core/flow/schema.js";
 import {
   agent,
+  canvasPath,
   flow,
   flowSettings,
   forEach,
@@ -901,6 +910,38 @@ describe("newCanvasFlow", () => {
       { rule: "session-settings", container: "session-1", field: "repo" },
       { rule: "session-settings", container: "session-1", field: "branch" },
     ]);
+  });
+
+  const looseIn = (current: Flow) =>
+    current.nodes.filter((node) => flowContainerOf(current, node.id) === undefined);
+
+  it("wires a canvas Start through the workspace to a canvas Stop", () => {
+    const current = newCanvasFlow();
+    const [start, stop, ...rest] = looseIn(current);
+
+    expect(rest).toEqual([]);
+    expect([start?.type, stop?.type]).toEqual(["trigger", "output"]);
+    expect(canvasStart(current)).toBe(start?.id);
+    expect(current.wires).toContainEqual({
+      kind: "then",
+      from: { node: start?.id, port: "out" },
+      to: { node: "workspace-1", port: flowIn },
+    });
+    expect(current.wires).toContainEqual({
+      kind: "then",
+      from: { node: "workspace-1", port: flowOut },
+      to: { node: stop?.id, port: "in" },
+    });
+  });
+
+  it("sets the canvas Start left of the workspace's frame and the canvas Stop right of it", () => {
+    const current = newCanvasFlow();
+    const [start, stop] = looseIn(current);
+    if (start === undefined || stop === undefined) throw new Error("expected a canvas path");
+    const frame = flowContainerBounds(current, "workspace-1");
+
+    expect(boundsOf(start).right + sideLabelSpan(start.label)).toBeLessThan(frame.left);
+    expect(stop.position.x).toBeGreaterThan(frame.right);
   });
 
   it("starts with default settings: a build model to pick from, and never asking for permission", () => {
@@ -2212,5 +2253,305 @@ describe("connecting session containers", () => {
 
     store.getState().undo();
     expect(store.getState().flow).toEqual(before);
+  });
+});
+
+describe("the canvas path", () => {
+  const withLoose = (current: Flow, ...nodes: unknown[]): Flow =>
+    parseFlow({ ...current, nodes: [...current.nodes, ...nodes] });
+
+  const touchingWorkspace = (current: Flow) =>
+    current.wires.filter((each) => [each.from.node, each.to.node].includes("workspace-1"));
+
+  it("connects a canvas Start to the workspace's flow-in with one then wire", () => {
+    const store = loadedCanvas(withLoose(twoSessionsOnCanvas(), placedAt(trigger("go"), -400, 0)));
+
+    const accepted = store.getState().connect(end("go", "out"), end("workspace-1", flowIn));
+
+    expect(store.getState().message).toBeNull();
+    expect(accepted).toBe(true);
+    expect(store.getState().flow.wires.at(-1)).toEqual({
+      kind: "then",
+      from: end("go", "out"),
+      to: end("workspace-1", flowIn),
+    });
+    expect(store.getState().undoStack).toHaveLength(1);
+  });
+
+  it("names a container by its name, not its id, when it refuses a wire to it", () => {
+    const store = loadedCanvas(canvasPath(twoSessionsOnCanvas()));
+
+    store.getState().connect(end("canvas-start", "out"), end("workspace-1", flowIn));
+
+    expect(store.getState().message).toMatch(/^Can't connect \S+ to The workspace: /);
+  });
+
+  it("names a container by its name when it refuses a wire from its wrong handle", () => {
+    const store = loadedCanvas(canvasPath(twoSessionsOnCanvas()));
+
+    const accepted = store.getState().connect(end("session-1", flowIn), end("canvas-stop", "in"));
+
+    expect(accepted).toBe(false);
+    expect(store.getState().message).toMatch(/^Can't connect Session "main" to /);
+  });
+
+  describe("dropping a workspace", () => {
+    const loose = (current: Flow) =>
+      current.nodes.filter((node) => flowContainerOf(current, node.id) === undefined);
+
+    it("adds a canvas Start and Stop wired through it, as one undoable step", () => {
+      const store = loadedCanvas(emptyFlow());
+
+      store.getState().drop("workspace", { x: 400, y: 100 });
+
+      const after = store.getState().flow;
+      const [start, stop, ...rest] = loose(after);
+      expect(rest).toEqual([]);
+      expect([start?.type, stop?.type]).toEqual(["trigger", "output"]);
+      expect(touchingWorkspace(after)).toEqual([
+        { kind: "then", from: end(start?.id ?? "", "out"), to: end("workspace-1", flowIn) },
+        { kind: "then", from: end("workspace-1", flowOut), to: end(stop?.id ?? "", "in") },
+      ]);
+      expect(flowProblems(after).map(({ rule }) => rule)).not.toContain("workflow-path");
+      expect(store.getState().undoStack).toHaveLength(1);
+
+      store.getState().undo();
+      expect(store.getState().flow).toEqual(emptyFlow());
+    });
+
+    it("wires a canvas Start whose out is free and a Stop whose in is free instead of adding", () => {
+      const store = loadedCanvas(
+        withLoose(emptyFlow(), placedAt(trigger("go"), 0, 0), placedAt(output("end"), 1200, 0)),
+      );
+
+      store.getState().drop("workspace", { x: 400, y: 0 });
+
+      const after = store.getState().flow;
+      expect(loose(after).map(({ id }) => id)).toEqual(["go", "end"]);
+      expect(touchingWorkspace(after)).toEqual([
+        { kind: "then", from: end("go", "out"), to: end("workspace-1", flowIn) },
+        { kind: "then", from: end("workspace-1", flowOut), to: end("end", "in") },
+      ]);
+    });
+
+    it("adds no second canvas Start or Stop when the ones there are already wired", () => {
+      const store = loadedCanvas(
+        parseFlow({
+          ...withLoose(
+            emptyFlow(),
+            placedAt(trigger("go"), 0, 0),
+            placedAt(agent("a"), 200, 0),
+            placedAt(output("end"), 400, 0),
+          ),
+          wires: [thenWire("go", "a"), thenWire("a", "end")],
+        }),
+      );
+
+      store.getState().drop("workspace", { x: 400, y: 600 });
+
+      const after = store.getState().flow;
+      expect(loose(after).map(({ id }) => id)).toEqual(["go", "a", "end"]);
+      expect(touchingWorkspace(after)).toEqual([]);
+    });
+  });
+
+  describe("deleting a container on it", () => {
+    it("removes the wires into and out of a deleted workspace, and undo restores them", () => {
+      const store = loadedCanvas(canvasPath(twoSessionsOnCanvas()));
+      const before = store.getState().flow;
+      store.getState().select(["workspace-1"]);
+
+      store.getState().deleteSelection();
+
+      expect(touchingWorkspace(store.getState().flow)).toEqual([]);
+      expect(store.getState().undoStack).toHaveLength(1);
+      store.getState().undo();
+      expect(store.getState().flow).toEqual(before);
+    });
+
+    it("removes them when the workspace's last members are deleted", () => {
+      const store = loadedCanvas(canvasPath(twoSessionsOnCanvas()));
+      const before = store.getState().flow;
+      store.getState().select(["w-start", "w-stop"]);
+
+      store.getState().deleteSelection();
+
+      expect(store.getState().flow.containers.map(({ id }) => id)).not.toContain("workspace-1");
+      expect(touchingWorkspace(store.getState().flow)).toEqual([]);
+      store.getState().undo();
+      expect(store.getState().flow).toEqual(before);
+    });
+  });
+});
+
+describe("libraries", () => {
+  const summary = (
+    flowId: string,
+    name: string,
+    kind: FlowSummary["kind"],
+    sessions: FlowSummary["sessions"] = [],
+  ): FlowSummary => ({
+    flowId,
+    name,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    versions: 1,
+    lastSavedAt: "2026-01-01T00:00:00.000Z",
+    buildConfig: null,
+    variables: [],
+    pinned: false,
+    kind,
+    sessions,
+  });
+
+  const androidSession = {
+    id: "android",
+    name: "android",
+    repo: "/repos/android",
+    branch: "main",
+    model: "sonnet",
+  };
+
+  const summaries = [
+    summary("f-review", "Android App", "node-library"),
+    summary("f-android", "Android", "session-library", [androidSession]),
+    summary("f-host", "Host", "workflow"),
+    summary("f-empty", "Empty", "incomplete"),
+  ];
+
+  const inSession = { x: 300, y: 420 };
+  const loose = { x: 1200, y: -400 };
+
+  const withLibraries = () => {
+    const store = loadedCanvas(twoSessionsOnCanvas());
+    store.getState().setLibraries(summaries, "f-open");
+    return store;
+  };
+
+  const libraryNodes = (current: Flow) => current.nodes.filter((node) => node.type === "library");
+
+  it("answers each saved blueprint's name, kind and sessions once given the summaries", () => {
+    const store = withLibraries();
+
+    expect(store.getState().libraries("f-android")).toEqual({
+      name: "Android",
+      kind: "session-library",
+      sessions: [androidSession],
+    });
+    expect(store.getState().libraries("f-gone")).toBeUndefined();
+    expect(store.getState().librarySummaries).toEqual(summaries);
+    expect(store.getState().openFlowId).toBe("f-open");
+  });
+
+  it("knows no library before it is given any", () => {
+    expect(createCanvasStore().getState().libraries("f-review")).toBeUndefined();
+  });
+
+  it("drops a node library into a session as a library node labelled after its name, selected, in one undoable step", () => {
+    const store = withLibraries();
+    const before = store.getState().flow;
+
+    store.getState().dropLibrary("f-review", inSession);
+
+    const [use, ...more] = libraryNodes(store.getState().flow);
+    expect(more).toEqual([]);
+    expect(use).toMatchObject({
+      id: "library-1",
+      type: "library",
+      label: "android-app",
+      settings: { libraryId: "f-review", label: "android-app", overrides: {} },
+    });
+    expect(flowContainerOf(store.getState().flow, "library-1")?.id).toBe("session-1");
+    expect(store.getState().selection).toEqual(["library-1"]);
+    expect(store.getState().message).toBeNull();
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it("labels a second use of the same library with the next free number", () => {
+    const store = withLibraries();
+
+    store.getState().dropLibrary("f-review", inSession);
+    store.getState().dropLibrary("f-review", { x: 300, y: 820 });
+
+    expect(libraryNodes(store.getState().flow).map((node) => node.settings)).toEqual([
+      { libraryId: "f-review", label: "android-app", overrides: {} },
+      { libraryId: "f-review", label: "android-app-2", overrides: {} },
+    ]);
+  });
+
+  it("drops a session library loose on the canvas", () => {
+    const store = withLibraries();
+
+    store.getState().dropLibrary("f-android", loose);
+
+    expect(store.getState().message).toBeNull();
+    expect(libraryNodes(store.getState().flow).map((node) => node.settings.label)).toEqual([
+      "android",
+    ]);
+  });
+
+  it.each([
+    ["an incomplete library", "f-empty", inSession, /"Empty", which is incomplete/],
+    ["a session library into a session", "f-android", inSession, /cannot sit inside/],
+    ["a workflow", "f-host", inSession, /"Host", which is a workflow/],
+  ])("refuses %s, naming why, and changes nothing", (_, flowId, at, reason) => {
+    const store = withLibraries();
+    const before = store.getState().flow;
+
+    store.getState().dropLibrary(flowId, at);
+
+    expect(store.getState().message).toMatch(/^Can't drop /);
+    expect(store.getState().message).toMatch(reason);
+    expect(store.getState().flow).toBe(before);
+    expect(store.getState().undoStack).toEqual([]);
+  });
+
+  it("refuses a blueprint it does not know", () => {
+    const store = withLibraries();
+    const before = store.getState().flow;
+
+    store.getState().dropLibrary("f-gone", inSession);
+
+    expect(store.getState().message).toMatch(/no longer exists/);
+    expect(store.getState().flow).toBe(before);
+  });
+
+  it("adds a library next to the selection, as the palette's Enter does", () => {
+    const store = withLibraries();
+    store.getState().select(["A"]);
+
+    store.getState().addLibrary("f-review");
+
+    expect(libraryNodes(store.getState().flow)).toHaveLength(1);
+    expect(flowContainerOf(store.getState().flow, "library-1")?.id).toBe("session-1");
+  });
+
+  it("reports a known library's node without a missing-library problem, given the lookup", () => {
+    const use = {
+      id: "use",
+      type: "library",
+      label: "android-app",
+      position: { x: 200, y: 0 },
+      settings: { libraryId: "f-review", label: "android-app", overrides: {} },
+    };
+    const store = loadedCanvas(
+      flow(
+        [trigger("go"), use, output("end")],
+        [thenWire("go", "use"), thenWire("use", "end")],
+        flowSettings,
+        {
+          containers: [],
+        },
+      ),
+    );
+    store.getState().setLibraries(summaries, null);
+    const { flow: current, libraries } = store.getState();
+
+    expect(selectNodeIssues(current, libraries)["use"] ?? []).not.toContainEqual(
+      expect.stringMatching(/no longer exists/),
+    );
+    expect(selectNodeIssues(current)["use"]).toContainEqual(
+      expect.stringMatching(/no longer exists/),
+    );
   });
 });

@@ -7,6 +7,7 @@ import * as forkDefaults from "./fork/defaults.js";
 import * as gateDefaults from "./gate/defaults.js";
 import * as hardstopDefaults from "./hardstop/defaults.js";
 import * as joinDefaults from "./join/defaults.js";
+import * as libraryDefaults from "./library/defaults.js";
 import * as loopDefaults from "./loop/defaults.js";
 import * as outputDefaults from "./output/defaults.js";
 import * as triggerDefaults from "./trigger/defaults.js";
@@ -25,6 +26,7 @@ export const nodeDefaults: { [T in NodeType]: { label: string; settings: Setting
   join: { label: joinDefaults.defaultLabel, settings: joinDefaults.defaultSettings },
   foreach: { label: foreachDefaults.defaultLabel, settings: foreachDefaults.defaultSettings },
   branch: { label: branchDefaults.defaultLabel, settings: branchDefaults.defaultSettings },
+  library: { label: libraryDefaults.defaultLabel, settings: libraryDefaults.defaultSettings },
 };
 
 export const labelFor = (node: Pick<Node, "type" | "label"> | undefined): string => {

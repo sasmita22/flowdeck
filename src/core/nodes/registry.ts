@@ -16,6 +16,8 @@ import { ports as hardstopPorts } from "./hardstop/ports.js";
 import { settings as hardstopSettings } from "./hardstop/settings.js";
 import { ports as joinPorts } from "./join/ports.js";
 import { settings as joinSettings } from "./join/settings.js";
+import { ports as libraryPorts } from "./library/ports.js";
+import { settings as librarySettings } from "./library/settings.js";
 import { ports as loopPorts } from "./loop/ports.js";
 import { settings as loopSettings } from "./loop/settings.js";
 import { ports as outputPorts } from "./output/ports.js";
@@ -37,4 +39,5 @@ export const registry = {
   join: { settings: joinSettings, ports: joinPorts },
   foreach: { settings: foreachSettings, ports: foreachPorts },
   branch: { settings: branchSettings, ports: branchPorts },
+  library: { settings: librarySettings, ports: libraryPorts },
 } satisfies Record<NodeType, NodeDefinition>;

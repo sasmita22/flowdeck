@@ -369,6 +369,21 @@ describe("test ids", () => {
     },
   );
 
+  it("names a frame's flow-in and flow-out handles apart from its connection handles", () => {
+    const ids = [
+      containerTestIds.frameFlowIn("session-2"),
+      containerTestIds.frameFlowOut("session-2"),
+      containerTestIds.frameTarget("session-2"),
+      containerTestIds.frameSource("session-2"),
+    ];
+
+    expect(ids.slice(0, 2)).toEqual([
+      "container-frame-session-2-flow-in",
+      "container-frame-session-2-flow-out",
+    ]);
+    expect(new Set(ids).size).toBe(4);
+  });
+
   it("names a container's frame by the container", () => {
     expect(containerTestIds.frame("session-2")).toBe("container-frame-session-2");
     expect(containerTestIds.frame("workspace-1")).toBe("container-frame-workspace-1");

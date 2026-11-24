@@ -94,6 +94,7 @@ describe("describeNodeFields", () => {
       ],
     ],
     ["foreach", [["text", "file", "node-setting-file"]]],
+    ["library", []],
     [
       "branch",
       [

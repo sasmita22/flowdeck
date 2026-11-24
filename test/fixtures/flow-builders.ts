@@ -91,6 +91,20 @@ export const withSession = (
   ),
 });
 
+export const canvasPath = (flow: Flow): Flow => {
+  const workspace = flow.containers.find((container) => container.kind === "workspace");
+  if (workspace === undefined) throw new Error("canvasPath needs a workspace");
+  return parseFlow({
+    ...flow,
+    nodes: [...flow.nodes, trigger("canvas-start"), output("canvas-stop")],
+    wires: [
+      ...flow.wires,
+      wire("canvas-start", "out", workspace.id, "flow-in"),
+      wire(workspace.id, "flow-out", "canvas-stop", "in"),
+    ],
+  });
+};
+
 const workspaceStart = "workspace-1-start";
 const workspaceStop = "workspace-1-stop";
 
@@ -117,15 +131,17 @@ export const flow = (
     return parseFlow({ nodes, wires, settings, containers: options.containers });
   }
   const topLevel = topLevelIds(nodes);
-  return parseFlow({
-    nodes: [...nodes, trigger(workspaceStart), output(workspaceStop)],
-    wires: [...wires, thenWire(workspaceStart, workspaceStop)],
-    settings,
-    containers: [
-      workspaceContainer([workspaceStart, workspaceStop]),
-      sessionContainer(topLevel, options.session),
-    ],
-  });
+  return canvasPath(
+    parseFlow({
+      nodes: [...nodes, trigger(workspaceStart), output(workspaceStop)],
+      wires: [...wires, thenWire(workspaceStart, workspaceStop)],
+      settings,
+      containers: [
+        workspaceContainer([workspaceStart, workspaceStop]),
+        sessionContainer(topLevel, options.session),
+      ],
+    }),
+  );
 };
 
 const sessionStart = "session-1-start";
@@ -141,15 +157,17 @@ export const workspaceFlow = (
     return parseFlow({ nodes, wires, settings, containers: options.containers });
   }
   const topLevel = topLevelIds(nodes);
-  return parseFlow({
-    nodes: [...nodes, trigger(sessionStart), output(sessionStop)],
-    wires: [...wires, thenWire(sessionStart, sessionStop)],
-    settings,
-    containers: [
-      workspaceContainer(topLevel),
-      sessionContainer([sessionStart, sessionStop], options.session),
-    ],
-  });
+  return canvasPath(
+    parseFlow({
+      nodes: [...nodes, trigger(sessionStart), output(sessionStop)],
+      wires: [...wires, thenWire(sessionStart, sessionStop)],
+      settings,
+      containers: [
+        workspaceContainer(topLevel),
+        sessionContainer([sessionStart, sessionStop], options.session),
+      ],
+    }),
+  );
 };
 
 export const bareFlow = (nodes: unknown[] = [], wires: unknown[] = []): Flow =>
@@ -201,12 +219,14 @@ export const sessionsWorkflow = (
       container: sessionContainer(chain.ids, { model: "sonnet", ...session, id }),
     };
   });
-  return parseFlow({
-    nodes: [...workspace.nodes, ...chains.flatMap(({ chain }) => chain.nodes)],
-    wires: [...workspace.wires, ...chains.flatMap(({ chain }) => chain.wires)],
-    settings: flowSettings,
-    containers: [workspaceContainer(workspace.ids), ...chains.map(({ container }) => container)],
-  });
+  return canvasPath(
+    parseFlow({
+      nodes: [...workspace.nodes, ...chains.flatMap(({ chain }) => chain.nodes)],
+      wires: [...workspace.wires, ...chains.flatMap(({ chain }) => chain.wires)],
+      settings: flowSettings,
+      containers: [workspaceContainer(workspace.ids), ...chains.map(({ container }) => container)],
+    }),
+  );
 };
 
 export const twoSessionWorkflow = (): Flow =>

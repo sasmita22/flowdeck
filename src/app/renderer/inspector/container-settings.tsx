@@ -20,7 +20,7 @@ const noBranchState: BranchState = {
   browse: async () => undefined,
 };
 
-const noBranches: StoreApi<BranchState> = {
+export const noBranches: StoreApi<BranchState> = {
   getState: () => noBranchState,
   getInitialState: () => noBranchState,
   setState: () => undefined,
@@ -52,7 +52,8 @@ export function ContainerSettings({
     state.flow.containers.find(({ id }) => id === containerId),
   );
   const flow = useStore(canvas, (state) => state.flow);
-  const issues = selectFlowContainerIssues(flow, containerId);
+  const libraries = useStore(canvas, (state) => state.libraries);
+  const issues = selectFlowContainerIssues(flow, containerId, libraries);
   const repo = sessionSetting(container, "repo");
 
   useEffect(() => {
