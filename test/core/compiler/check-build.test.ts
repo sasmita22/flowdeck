@@ -836,6 +836,8 @@ describe("checkBuild per container", () => {
       expect(rules).not.toEqual([]);
       expect(rules).not.toContain("session-peers");
       expect(rules).not.toContain("connected-pairs");
+      expect(rules).not.toContain("session-states");
+      expect(rules).not.toContain("reply-fallback");
     });
 
     it.each([
@@ -875,6 +877,57 @@ describe("checkBuild per container", () => {
 
       expect(checkBuild(inputs)).toEqual([]);
     });
+  });
+
+  describe("session states and the reply fallback", () => {
+    const workspacePath = "workspace/CLAUDE.md";
+    const androidPath = "sessions/android/CLAUDE.md";
+    const stateLine =
+      "- A session that sent you a question and ended its turn reads `running`; your reply wakes it.";
+    const replyLine =
+      "- If you cannot go on without the reply, write the open question into your output and end your turn; the workspace's reply wakes you. Never wait inside a turn.";
+    const rulesOf = (failures: readonly BuildCheckFailure[]) =>
+      failures.map((failure) => [failure.file, failure.rule, failure.container]);
+
+    it("passes the session states section and the reply line as emitted", async () => {
+      const inputs = await twoSessions();
+      expect(inputs.laidDown.find((file) => file.path === workspacePath)?.content).toContain(
+        stateLine,
+      );
+      expect(inputs.laidDown.find((file) => file.path === androidPath)?.content).toContain(
+        replyLine,
+      );
+
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+
+    it.each([
+      ["edits a line of", (content: string) => content.replace(stateLine, "- Ask each session.")],
+      [
+        "removes the heading of",
+        (content: string) => content.replace("## Session states\n", "## States\n"),
+      ],
+    ])("fails a build agent that %s the session states section", async (_label, change) => {
+      const inputs = edited(await twoSessions(), workspacePath, change);
+
+      expect(rulesOf(checkBuild(inputs))).toEqual([[workspacePath, "session-states", "workspace"]]);
+    });
+
+    it.each([
+      [
+        "edits",
+        (content: string) =>
+          content.replace(replyLine, replyLine.replace(" Never wait inside a turn.", "")),
+      ],
+      ["removes", (content: string) => content.replace(`${replyLine}\n`, "")],
+    ])(
+      "fails a build agent that %s android's reply line, naming android only",
+      async (_label, change) => {
+        const inputs = edited(await twoSessions(), androidPath, change);
+
+        expect(rulesOf(checkBuild(inputs))).toEqual([[androidPath, "reply-fallback", "android"]]);
+      },
+    );
   });
 
   it("names a file added to a container's plugin as extra", async () => {

@@ -133,6 +133,8 @@ export function sessionEnvNames(
 
 export const workspaceTmuxVariable = "FD_WORKSPACE_TMUX";
 
+export const sessionStatesVariable = "FD_SESSION_STATES";
+
 const forwardedVariables = [
   "FLOWDECK_SOCK",
   nodeVariable,

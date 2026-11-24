@@ -4,7 +4,7 @@ import type { ManifestContainer, ManifestNode } from "../../../src/core/compiler
 import type { LoadedBuild, StartedSessionsView } from "../../../src/core/run/execute.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { NodeState } from "../../../src/core/run/state.js";
-import type { RunSession } from "../../../src/core/run/store.js";
+import type { RunSession, StoredEvent } from "../../../src/core/run/store.js";
 import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
 import type { WaitReply } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -99,13 +99,16 @@ describe("StartedSessions", () => {
   let aliveChecks: string[];
   let ended: string[];
   let answered: string[];
+  let writes: string[];
 
   const supervisor = ({
     dialogs = false,
     replies = [],
+    history,
   }: {
     dialogs?: boolean | "fail" | Promise<void>;
     replies?: (WaitReply | Promise<WaitReply>)[];
+    history?: StoredEvent[];
   } = {}) => {
     waiter = new FakeWaiter(replies);
     return new StartedSessions({
@@ -131,8 +134,10 @@ describe("StartedSessions", () => {
               if (dialogs !== true) await dialogs;
             },
           }),
+      writeStates: (text) => writes.push(text),
       manifest,
       sessions,
+      ...(history === undefined ? {} : { history }),
     });
   };
 
@@ -159,6 +164,7 @@ describe("StartedSessions", () => {
     aliveChecks = [];
     ended = [];
     answered = [];
+    writes = [];
   });
 
   afterEach(() => {
@@ -481,6 +487,106 @@ describe("StartedSessions", () => {
       await vi.advanceTimersByTimeAsync(longEnough);
 
       expect(answered).not.toContain(iosTmux);
+    });
+  });
+
+  describe("session states", () => {
+    const states = (android: string, ios: string) =>
+      `${androidTmux} ${android}\n${iosTmux} ${ios}\n`;
+
+    it("writes every session not-started when it begins watching", () => {
+      supervisor();
+
+      expect(writes).toEqual([states("not-started", "not-started")]);
+    });
+
+    it("writes a resumed session's state from its stored events", () => {
+      const stored = (nodeId: string, kinds: ("running" | "done")[], from: number): StoredEvent[] =>
+        kinds.map((kind, index) => ({ nodeId, kind, seq: from + index, time: "t" }));
+
+      supervisor({
+        history: [
+          ...stored("android-start", ["running", "done"], 1),
+          ...stored("android-a1", ["running", "done"], 3),
+          ...stored("android-stop", ["running", "done"], 5),
+          ...stored("ios-start", ["running", "done"], 7),
+        ],
+      });
+
+      expect(writes).toEqual([states("done", "running")]);
+    });
+
+    it("writes a session done once its Stop is done, leaving the other unchanged", () => {
+      supervisor();
+
+      events.publish(bash(androidId));
+      events.publish(stop(androidId));
+
+      expect(writes.at(-1)).toBe(states("done", "not-started"));
+    });
+
+    it("writes a session failed on a StopFailure", () => {
+      supervisor();
+
+      events.publish(bash(iosId));
+      events.publish(hookEvent("StopFailure", iosId, { error: "authentication_failed" }));
+
+      expect(writes.at(-1)).toBe(states("not-started", "failed"));
+    });
+
+    it("writes a session failed when its tmux session is gone before its Stop", async () => {
+      supervisor();
+      alive[androidTmux] = true;
+      events.publish(bash(androidId));
+      events.publish(agentCall("android", androidId));
+      await vi.advanceTimersByTimeAsync(longEnough);
+      expect(writes.at(-1)).toBe(states("running", "not-started"));
+
+      alive[androidTmux] = false;
+      await vi.advanceTimersByTimeAsync(longEnough);
+
+      expect(writes.at(-1)).toBe(states("failed", "not-started"));
+    });
+
+    it("writes a session waiting while a permission is asked on its open node, then running", async () => {
+      let decide: (reply: WaitReply) => void = () => undefined;
+      supervisor({ replies: [new Promise<WaitReply>((resolve) => (decide = resolve))] });
+      events.publish(agentCall("android", androidId));
+
+      const decision = permissions.ask(androidId, {
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writes.at(-1)).toBe(states("waiting", "not-started"));
+
+      decide({ decision: "approve" });
+      await decision;
+
+      expect(writes.at(-1)).toBe(states("running", "not-started"));
+    });
+
+    it("writes nothing for an event that appends nothing", () => {
+      supervisor();
+      events.publish(agentCall("android", androidId));
+      const before = writes.length;
+
+      events.publish(stop(androidId));
+
+      expect(writes).toHaveLength(before);
+    });
+
+    it("writes nothing after halt, and finish writes nothing", async () => {
+      const sessionsView = supervisor();
+      alive[androidTmux] = true;
+      events.publish(bash(androidId));
+      const before = writes.length;
+
+      sessionsView.halt();
+      sessionsView.failNode(androidId, "android-a1", "The run was stopped");
+      await sessionsView.finish();
+
+      expect(writes).toHaveLength(before);
     });
   });
 });
