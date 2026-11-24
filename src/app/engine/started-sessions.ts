@@ -175,7 +175,13 @@ export class StartedSessions implements StartedSessionsView {
     if (open !== undefined) {
       const asks = openAsks.get(open) ?? 0;
       openAsks.set(open, asks + 1);
-      if (asks === 0) this.append(watched, [{ nodeId: open, event: { kind: "needs-you" } }]);
+      const waitingForYou =
+        nodeStatus(
+          watched.events.filter(({ nodeId }) => nodeId === open).map(({ event }) => event),
+        ) === "needs-you";
+      if (asks === 0 && !waitingForYou) {
+        this.append(watched, [{ nodeId: open, event: { kind: "needs-you" } }]);
+      }
     }
     try {
       return permissionDecision(

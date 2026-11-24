@@ -4,7 +4,7 @@ import type { ManifestContainer, ManifestNode } from "../../../src/core/compiler
 import type { LoadedBuild, StartedSessionsView } from "../../../src/core/run/execute.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { NodeState } from "../../../src/core/run/state.js";
-import type { RunSession, StoredEvent } from "../../../src/core/run/store.js";
+import type { EventEntry, RunSession, StoredEvent } from "../../../src/core/run/store.js";
 import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
 import type { WaitReply } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -123,10 +123,12 @@ describe("StartedSessions", () => {
     dialogs = false,
     replies = [],
     history,
+    build = manifest,
   }: {
     dialogs?: boolean | "fail" | Promise<void>;
     replies?: (WaitReply | Promise<WaitReply>)[];
     history?: StoredEvent[];
+    build?: LoadedBuild;
   } = {}) => {
     waiter = new FakeWaiter(replies);
     return new StartedSessions({
@@ -153,7 +155,7 @@ describe("StartedSessions", () => {
             },
           }),
       writeStates: (text) => writes.push(text),
-      manifest,
+      manifest: build,
       sessions,
       ...(history === undefined ? {} : { history }),
     });
@@ -165,17 +167,20 @@ describe("StartedSessions", () => {
   const nodeEventsFor = (slug: string) =>
     store.events(runId).filter((event) => event.nodeId.startsWith(`${slug}-`));
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    store = new FakeStore();
-    runId = store.createRun({
+  const createRun = (build: LoadedBuild) =>
+    store.createRun({
       buildDir: "/b",
       inputs: {},
-      nodeIds: manifest.containers.flatMap((each) => each.nodes.map(({ id }) => id)),
+      nodeIds: build.containers.flatMap((each) => each.nodes.map(({ id }) => id)),
       session: { tmuxName: "fd-run-00000000", cwd: "/b/workspace", claudeSessionId: workspaceId },
       sessions,
       buildId: "b1",
     }).id;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new FakeStore();
+    runId = createRun(manifest);
     events = new FakeEventSource();
     permissions = new FakePermissionSource();
     alive = {};
@@ -275,6 +280,34 @@ describe("StartedSessions", () => {
 
       expect(await decision).toEqual({ behavior: "allow" });
       expect(statusOf("ios-a2")).toBe("running");
+    });
+
+    it("adds no second needs-you when a node restored waiting for you gets a new ask", async () => {
+      const restored: EventEntry[] = [
+        { nodeId: "android-start", event: { kind: "running" } },
+        { nodeId: "android-start", event: { kind: "done" } },
+        { nodeId: "android-a1", event: { kind: "running" } },
+        { nodeId: "android-a1", event: { kind: "needs-you" } },
+      ];
+      store.appendAll(runId, restored);
+      let decide: (reply: WaitReply) => void = () => undefined;
+      supervisor({
+        replies: [new Promise<WaitReply>((resolve) => (decide = resolve))],
+        history: store.events(runId),
+      });
+
+      const decision = permissions.ask(androidId, {
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusOf("android-a1")).toBe("needs-you");
+
+      decide({ decision: "approve" });
+
+      expect(await decision).toEqual({ behavior: "allow" });
+      expect(statusOf("android-a1")).toBe("running");
     });
 
     it("writes nothing when a permission wait settles after halt", async () => {
@@ -609,6 +642,34 @@ describe("StartedSessions", () => {
       await vi.advanceTimersByTimeAsync(longEnough);
 
       expect(writes.at(-1)).toBe(states("failed", "not-started"));
+    });
+
+    it("writes a session failed at once when it stops at its hard stop, naming the hard stop", () => {
+      const android = container("session", "android", "/b/sessions/android/app", ["a1", "h"]);
+      const hardStop = node("android-h", "hardstop", "Tests fail");
+      const stopping = {
+        ...manifest,
+        containers: manifest.containers.map((each) =>
+          each.slug === "android"
+            ? { ...android, nodes: android.nodes.map((n) => (n.id === hardStop.id ? hardStop : n)) }
+            : each,
+        ),
+      } as LoadedBuild;
+      store = new FakeStore();
+      runId = createRun(stopping);
+      const sessionsView = supervisor({ build: stopping });
+
+      events.publish(bash(androidId));
+      events.publish(agentDone("android", androidId));
+      events.publish(
+        hookEvent("Stop", androidId, {
+          last_assistant_message: "Failing.\nSTOPPED NODE android-h",
+        }),
+      );
+
+      expect(writes.at(-1)).toBe(states("failed", "not-started"));
+      expect(statusOf("android-stop")).toBe("waiting");
+      expect(sessionsView.failure()).toEqual({ container: "android", node: "Tests fail" });
     });
 
     it("writes a session waiting while a permission is asked on its open node, then running", async () => {
