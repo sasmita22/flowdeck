@@ -5569,6 +5569,37 @@ describe("createEngineHandler", async () => {
             });
           });
 
+          it("fails every node cut off mid-step in the gone session, not only the first", async () => {
+            const { runId, reopened } = await pickedUpAgain(async (androidId, id) => {
+              hook(androidId, "PreToolUse", agentCall("session-1-plan"));
+              hook(androidId, "PreToolUse", agentCall("session-1-build"));
+              await vi.waitFor(() => {
+                expect(statusOf(id, "session-1-plan")).toBe("running");
+                expect(statusOf(id, "session-1-build")).toBe("running");
+              });
+            });
+
+            await vi.waitFor(() => {
+              expect(statusOf(runId, "session-1-plan")).toBe("failed");
+              expect(statusOf(runId, "session-1-build")).toBe("failed");
+            });
+            for (const nodeId of ["session-1-plan", "session-1-build"]) {
+              expect(
+                runs
+                  .events(runId)
+                  .findLast((event) => event.nodeId === nodeId && event.kind === "failed"),
+              ).toMatchObject({
+                payload: {
+                  message: `${nodeId} failed: its Claude session ended before the turn finished; Retry sends it again`,
+                },
+              });
+            }
+            release();
+
+            expect(await endOf(runId)).toBe("failed");
+            expect(reopened()).toEqual([]);
+          });
+
           it("fails the node it would carry on from with the error, and ends the run failed naming it, when the reopened session cannot be told to carry on", async () => {
             const { runId, toAndroid } = await pickedUpAgain(finishes("session-1-plan"), {
               refusal: "tmux: no server running",
