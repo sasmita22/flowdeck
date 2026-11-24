@@ -1438,21 +1438,23 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     for (const started of startedIn(manifest, sessions, events)) {
       if (reachedStop(started.container, events)) continue;
       if (await sessionAlive(started.session.tmuxName)) continue;
-      const cutOff = started.container.nodes.find(
+      const cutOff = started.container.nodes.filter(
         (node) =>
           node.type === "agent" &&
           ["running", "needs-you"].includes(
             nodeStatus(events.filter((event) => event.nodeId === node.id)),
           ),
       );
-      if (cutOff === undefined) {
+      if (cutOff.length === 0) {
         reopening.push(started);
         continue;
       }
-      entries.push({
-        nodeId: cutOff.id,
-        event: { kind: "failed", payload: { message: cutOffMessage(cutOff.id) } },
-      });
+      for (const node of cutOff) {
+        entries.push({
+          nodeId: node.id,
+          event: { kind: "failed", payload: { message: cutOffMessage(node.id) } },
+        });
+      }
     }
     const hooks = options.prepareHooks();
     if (hooks.kind === "error") return failure(hooks.message);

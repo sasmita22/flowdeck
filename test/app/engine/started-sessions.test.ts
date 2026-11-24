@@ -4,7 +4,7 @@ import type { ManifestContainer, ManifestNode } from "../../../src/core/compiler
 import type { LoadedBuild, StartedSessionsView } from "../../../src/core/run/execute.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import type { NodeState } from "../../../src/core/run/state.js";
-import type { RunSession, StoredEvent } from "../../../src/core/run/store.js";
+import type { EventEntry, RunSession, StoredEvent } from "../../../src/core/run/store.js";
 import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
 import type { WaitReply } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -288,6 +288,34 @@ describe("StartedSessions", () => {
 
       expect(await decision).toEqual({ behavior: "allow" });
       expect(statusOf("ios-a2")).toBe("running");
+    });
+
+    it("adds no second needs-you when a node restored waiting for you gets a new ask", async () => {
+      const restored: EventEntry[] = [
+        { nodeId: "android-start", event: { kind: "running" } },
+        { nodeId: "android-start", event: { kind: "done" } },
+        { nodeId: "android-a1", event: { kind: "running" } },
+        { nodeId: "android-a1", event: { kind: "needs-you" } },
+      ];
+      store.appendAll(runId, restored);
+      let decide: (reply: WaitReply) => void = () => undefined;
+      supervisor({
+        replies: [new Promise<WaitReply>((resolve) => (decide = resolve))],
+        history: store.events(runId),
+      });
+
+      const decision = permissions.ask(androidId, {
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusOf("android-a1")).toBe("needs-you");
+
+      decide({ decision: "approve" });
+
+      expect(await decision).toEqual({ behavior: "allow" });
+      expect(statusOf("android-a1")).toBe("running");
     });
 
     describe("from one of two parallel Agents", () => {
