@@ -122,7 +122,7 @@ import {
   type WriteStoryResult,
 } from "../../core/run/listing.js";
 import { repoFolder, workspaceFolder } from "../../core/run/workspace.js";
-import { runSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
+import { runSnapshot, type RunSnapshot, type StartRunResult } from "../../core/run/snapshot.js";
 import { waitAnswerSchema, type HumanWaiter } from "../../core/run/wait.js";
 import type { BlueprintSessions } from "../../ports/blueprint-sessions.js";
 import type { GithubTokenSource } from "../../ports/github-token.js";
@@ -2234,8 +2234,43 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       ? { ...summary, status: "interrupted" }
       : summary;
 
+  const doneIn = (snapshot: RunSnapshot) =>
+    Object.values(snapshot.nodes).filter((state) => state === "done").length;
+
+  const runShapes = new Map<string, { nodeIds: readonly string[]; groups: StageGroup[] }>();
+  const shapeOf = (runs: Store, runId: string) => {
+    const known = runShapes.get(runId);
+    if (known !== undefined) return known;
+    const record = runs.findRun(runId);
+    const manifest = record === undefined ? undefined : manifestOf(record);
+    const shape = {
+      nodeIds: record?.nodeIds ?? [],
+      groups: manifest === undefined ? [] : sessionGroupsOf(manifest),
+    };
+    runShapes.set(runId, shape);
+    return shape;
+  };
+
+  const doneCounts = new Map<string, { key: string; count: number }>();
+  const withDoneCount = (runs: Store, run: ListedRun): ListedRun => {
+    if (isActive(run.id)) return run;
+    const { nodeIds, groups } = shapeOf(runs, run.id);
+    if (groups.length === 0) return run;
+    const key = `${run.status}|${run.endedAt}`;
+    const cached = doneCounts.get(run.id);
+    if (cached?.key === key) return { ...run, doneCount: cached.count };
+    const count = doneIn(
+      runSnapshot(
+        { runId: run.id, status: run.status, nodeIds, events: runs.events(run.id) },
+        groups,
+      ),
+    );
+    doneCounts.set(run.id, { key, count });
+    return { ...run, doneCount: count };
+  };
+
   const listRuns = (runs: Store): ListedRun[] => {
-    const all = runs.listRuns().map(listed);
+    const all = runs.listRuns().map((summary) => withDoneCount(runs, listed(summary)));
     const rest = all
       .filter((run) => !isActive(run.id))
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -2246,8 +2281,19 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const record = runs.findRun(runId);
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
-    const run = listed(summary);
+    const listedRun = listed(summary);
     const manifest = manifestOf(record);
+    const groups = manifest === undefined ? [] : sessionGroupsOf(manifest);
+    const snapshot = runSnapshot(
+      {
+        runId,
+        status: listedRun.status,
+        nodeIds: record.nodeIds,
+        events: runs.events(runId),
+      },
+      groups,
+    );
+    const run = groups.length === 0 ? listedRun : { ...listedRun, doneCount: doneIn(snapshot) };
     const digest = digestOf(runs, runId);
     const written = runs.latestRunStory(runId);
     return {
@@ -2272,15 +2318,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       run,
       name: run.buildName,
       stages: manifest === undefined ? null : flatStages(stageSourcesOf(manifest).slice(0, 1)),
-      snapshot: runSnapshot(
-        {
-          runId,
-          status: run.status,
-          nodeIds: record.nodeIds,
-          events: runs.events(runId),
-        },
-        manifest === undefined ? [] : sessionGroupsOf(manifest),
-      ),
+      snapshot,
       activity: runs.activity(runId),
     };
   };
