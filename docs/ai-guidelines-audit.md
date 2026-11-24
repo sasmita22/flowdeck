@@ -147,7 +147,7 @@ Files the detection rule matches that hold no text a model reads.
 | `src/core/run/retry.ts`                         | Retry bookkeeping only                                                                                                                                                                                                             |
 | `src/core/run/run-events.ts`                    | Run event schemas only                                                                                                                                                                                                             |
 | `src/core/run/section-watch.ts`                 | Watches parallel sections; no text                                                                                                                                                                                                 |
-| `src/core/run/finished-path.ts`                 | Decides whether a session's Stop ends it; holds no text                                                                                                                                                                            |
+| `src/core/run/finished-path.ts`                 | Decides whether a session's Stop ends it and which node a reopened session carries on from; holds no text                                                                                                                          |
 | `src/core/run/session-watch.ts`                 | Turns a started session's hook events into node events; its failure messages (`session <id> ended before its Stop`, a `StopFailure`'s message) are shown in the app, and the digest (row 28) carries no failure message            |
 | `src/core/run/snapshot.ts`                      | Run snapshot for the app                                                                                                                                                                                                           |
 | `src/core/run/state.ts`                         | Node state machine; its error is for developers                                                                                                                                                                                    |
@@ -935,6 +935,15 @@ Row 7's open note on the `## Session states` `running` line is closed. No model-
 | `kit/skills/write-workspace-rules/SKILL.md` | Changed          | The send rule stays as code wrote it                                  |
 | `kit/agents/piece-auditor.md`               | Changed          | The second-round table gives `named-send` its fix                     |
 | `test/live/session-message.live.test.ts`    | Changed          | G18 closed: a send that fails goes to no other session                |
+
+### Carry on from the right node
+
+| Skill or file                      | Added or changed | Why                                                                                     |
+| ---------------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `src/core/run/session-continue.ts` | Changed          | Row 32: the template is unchanged; only the node it names after `Carry on from` changes |
+| `src/core/run/finished-path.ts`    | Changed          | Not model-facing: the then-wire walk that picks that node, shared with the Stop rule    |
+
+Row 32's judgment still holds: the prompt still names every done step, one step to carry on from as `NODE <id> (<label>)`, and not to redo the done ones. The named step is now the one the run is heading to: an open Agent first; otherwise the first node reached from the finished path, which can be a Gate, an undecided Branch, a Fork, a For each or a Loop, all of which the orchestrator's step lines name the same way; otherwise Stop.
 
 ### Edit answers off the main flow
 
