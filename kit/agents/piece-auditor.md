@@ -63,6 +63,7 @@ Fix exactly the failures listed, by rule:
 | `code-owned`, `standard-rules`, `session-list`, `session-peers`, `connected-pairs` | Undo your edit to that text exactly. If you cannot, leave the piece as drafted.                                 |
 | `session-states`                                                                   | Restore the workspace `CLAUDE.md`'s `## Session states` section exactly as code wrote it.                       |
 | `reply-fallback`                                                                   | Restore the session `CLAUDE.md`'s reply line exactly as code wrote it.                                          |
+| `named-send`                                                                       | Restore the send rule in the `CLAUDE.md` the failure names, exactly as code wrote it.                           |
 | `missing` on a shared piece                                                        | Write its content, as `extract-shared` says.                                                                    |
 | `missing`, `extra`, `template`, `orchestrator`                                     | Structure is code's. Leave the piece as drafted or fix it within the node's portion; never a question.          |
 

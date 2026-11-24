@@ -838,6 +838,7 @@ describe("checkBuild per container", () => {
       expect(rules).not.toContain("connected-pairs");
       expect(rules).not.toContain("session-states");
       expect(rules).not.toContain("reply-fallback");
+      expect(rules).not.toContain("named-send");
     });
 
     it.each([
@@ -926,6 +927,49 @@ describe("checkBuild per container", () => {
         const inputs = edited(await twoSessions(), androidPath, change);
 
         expect(rulesOf(checkBuild(inputs))).toEqual([[androidPath, "reply-fallback", "android"]]);
+      },
+    );
+  });
+
+  describe("the send rule", () => {
+    const sendLine =
+      "- Send each message only to the name in the variable given for its session. If a send fails, never send it to another address, even one ListAgents shows: write the failed send and the message into your output, and end your turn if you cannot go on without it.";
+    const rulesOf = (failures: readonly BuildCheckFailure[]) =>
+      failures.map((failure) => [failure.file, failure.rule, failure.container]);
+    const changes: [string, (content: string) => string][] = [
+      [
+        "edits",
+        (content) => content.replace(sendLine, sendLine.replace(", even one ListAgents shows", "")),
+      ],
+      ["removes", (content) => content.replace(`${sendLine}\n`, "")],
+    ];
+
+    it("passes the send rule as emitted in every container", async () => {
+      const inputs = await twoSessions();
+      for (const path of [
+        "workspace/CLAUDE.md",
+        "sessions/android/CLAUDE.md",
+        "sessions/ios/CLAUDE.md",
+      ])
+        expect(
+          inputs.laidDown.find((file) => file.path === path)?.content.split("\n"),
+          path,
+        ).toContain(sendLine);
+
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+
+    it.each([
+      ["sessions/android/CLAUDE.md", "android"],
+      ["workspace/CLAUDE.md", "workspace"],
+    ])(
+      "fails a build agent that edits or removes the send rule of %s, naming %s only",
+      async (path, container) => {
+        for (const [label, change] of changes) {
+          const inputs = edited(await twoSessions(), path, change);
+
+          expect(rulesOf(checkBuild(inputs)), label).toEqual([[path, "named-send", container]]);
+        }
       },
     );
   });
