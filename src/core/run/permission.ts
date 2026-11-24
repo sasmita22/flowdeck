@@ -25,6 +25,7 @@ function inputOf(tool: string, toolInput: Record<string, unknown>): string {
 export function permissionRequest(
   nodeId: string,
   payload: Record<string, unknown>,
+  candidates: readonly string[] = [],
 ): PermissionWait {
   const toolName = payload["tool_name"];
   const toolInput = payload["tool_input"];
@@ -33,7 +34,13 @@ export function permissionRequest(
     typeof toolInput === "object" && toolInput !== null
       ? inputOf(tool, toolInput as Record<string, unknown>)
       : "";
-  return { nodeId, kind: "permission", tool, input };
+  return {
+    nodeId,
+    kind: "permission",
+    tool,
+    input,
+    ...(candidates.length > 1 ? { candidates: [...candidates] } : {}),
+  };
 }
 
 export function permissionDecision(reply: WaitReply): PermissionDecision {

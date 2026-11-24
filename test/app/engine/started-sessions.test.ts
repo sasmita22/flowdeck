@@ -8,6 +8,7 @@ import type { EventEntry, RunSession, StoredEvent } from "../../../src/core/run/
 import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
 import type { WaitReply } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
@@ -52,18 +53,21 @@ const container = (
   };
 };
 
-const manifest = {
-  version: 1,
-  hash: "h1",
-  layout: "workspace",
-  cwd: "/b/workspace",
-  containers: [
-    container("workspace", "workspace"),
-    container("session", "android", "/b/sessions/android/app"),
-    container("session", "ios", "/b/sessions/ios/app", ["a1", "a2"]),
-  ],
-  files: {},
-} as unknown as LoadedBuild;
+const buildWith = (hash: string, iosAgents: string[]) =>
+  ({
+    version: 1,
+    hash,
+    layout: "workspace",
+    cwd: "/b/workspace",
+    containers: [
+      container("workspace", "workspace"),
+      container("session", "android", "/b/sessions/android/app"),
+      container("session", "ios", "/b/sessions/ios/app", iosAgents),
+    ],
+    files: {},
+  }) as unknown as LoadedBuild;
+
+const manifest = buildWith("h1", ["a1", "a2"]);
 
 const sessions: RunSession[] = [
   { tmuxName: androidTmux, cwd: "/b/sessions/android/app", claudeSessionId: androidId },
@@ -123,14 +127,17 @@ describe("StartedSessions", () => {
     dialogs = false,
     replies = [],
     history,
+    fs,
     build = manifest,
   }: {
     dialogs?: boolean | "fail" | Promise<void>;
     replies?: (WaitReply | Promise<WaitReply>)[];
     history?: StoredEvent[];
+    fs?: FakeFileSystem;
     build?: LoadedBuild;
   } = {}) => {
     waiter = new FakeWaiter(replies);
+    if (build !== manifest) runId = runOf(build);
     return new StartedSessions({
       runId,
       events,
@@ -158,8 +165,19 @@ describe("StartedSessions", () => {
       manifest: build,
       sessions,
       ...(history === undefined ? {} : { history }),
+      ...(fs === undefined ? {} : { fs }),
     });
   };
+
+  const runOf = (build: LoadedBuild) =>
+    store.createRun({
+      buildDir: "/b",
+      inputs: {},
+      nodeIds: (build.containers ?? []).flatMap((each) => each.nodes.map(({ id }) => id)),
+      session: { tmuxName: "fd-run-00000000", cwd: "/b/workspace", claudeSessionId: workspaceId },
+      sessions,
+      buildId: build.hash,
+    }).id;
 
   const statusOf = (nodeId: string): NodeState =>
     nodeStatus(store.events(runId).filter((event) => event.nodeId === nodeId));
@@ -167,20 +185,10 @@ describe("StartedSessions", () => {
   const nodeEventsFor = (slug: string) =>
     store.events(runId).filter((event) => event.nodeId.startsWith(`${slug}-`));
 
-  const createRun = (build: LoadedBuild) =>
-    store.createRun({
-      buildDir: "/b",
-      inputs: {},
-      nodeIds: build.containers.flatMap((each) => each.nodes.map(({ id }) => id)),
-      session: { tmuxName: "fd-run-00000000", cwd: "/b/workspace", claudeSessionId: workspaceId },
-      sessions,
-      buildId: "b1",
-    }).id;
-
   beforeEach(() => {
     vi.useFakeTimers();
     store = new FakeStore();
-    runId = createRun(manifest);
+    runId = runOf(manifest);
     events = new FakeEventSource();
     permissions = new FakePermissionSource();
     alive = {};
@@ -308,6 +316,199 @@ describe("StartedSessions", () => {
 
       expect(await decision).toEqual({ behavior: "allow" });
       expect(statusOf("android-a1")).toBe("running");
+    });
+
+    describe("from one of two parallel Agents", () => {
+      const subagentId = "a2acfd3c49ca63d33";
+      const transcripts = "/home/.claude/projects/-b-sessions-ios-app";
+      const metaPath = `${transcripts}/${iosId}/subagents/agent-${subagentId}.meta.json`;
+      const shared = "fix-login-ios:shared";
+      const sharedCall = (agent: string) =>
+        hookEvent("PreToolUse", iosId, {
+          tool_name: "Agent",
+          tool_input: { ...agentInput("ios", agent), subagent_type: shared },
+          tool_use_id: `toolu-ios-${agent}`,
+        });
+      const subagentAsk = (agentType: string) => ({
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+        session_id: iosId,
+        transcript_path: `${transcripts}/${iosId}.jsonl`,
+        agent_id: subagentId,
+        agent_type: agentType,
+      });
+      const pendingAsk = async (payload: Record<string, unknown>) => {
+        void permissions.ask(iosId, payload);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+
+      it("holds the Agent of the asking subagent's type at needs-you and leaves its sibling running", async () => {
+        supervisor({ replies: [new Promise<WaitReply>(() => undefined)] });
+        events.publish(agentCall("ios", iosId, "a1"));
+        events.publish(agentCall("ios", iosId, "a2"));
+
+        await pendingAsk(subagentAsk("fix-login-ios:ios-a2"));
+
+        expect(waiter.calls).toEqual([
+          expect.objectContaining({ kind: "permission", nodeId: "ios-a2", tool: "Bash" }),
+        ]);
+        expect(statusOf("ios-a2")).toBe("needs-you");
+        expect(statusOf("ios-a1")).toBe("running");
+      });
+
+      it("finds the asking Agent of a shared type from its subagent's meta file, once", async () => {
+        const fs = new FakeFileSystem({
+          [metaPath]: JSON.stringify({ agentType: shared, toolUseId: "toolu-ios-a2" }),
+        });
+        supervisor({ replies: [{ decision: "approve" }, { decision: "approve" }], fs });
+        events.publish(sharedCall("a1"));
+        events.publish(sharedCall("a2"));
+
+        await pendingAsk(subagentAsk(shared));
+        await pendingAsk(subagentAsk(shared));
+
+        expect(waiter.calls).toEqual([
+          expect.objectContaining({ kind: "permission", nodeId: "ios-a2" }),
+          expect.objectContaining({ kind: "permission", nodeId: "ios-a2" }),
+        ]);
+        expect(waiter.calls[0]).not.toHaveProperty("candidates");
+        expect(fs.calls.filter(({ path }) => path === metaPath)).toHaveLength(1);
+        expect(nodeEventsFor("ios").filter(({ nodeId }) => nodeId === "ios-a1")).toEqual([
+          expect.objectContaining({ kind: "running" }),
+        ]);
+      });
+
+      it("holds the first open Agent at needs-you for an ask from the main thread", async () => {
+        supervisor({ replies: [new Promise<WaitReply>(() => undefined)] });
+        events.publish(agentCall("ios", iosId, "a1"));
+        events.publish(agentCall("ios", iosId, "a2"));
+
+        await pendingAsk({ tool_name: "Bash", tool_input: { command: "git push" } });
+
+        expect(waiter.calls).toEqual([
+          expect.objectContaining({ kind: "permission", nodeId: "ios-a1" }),
+        ]);
+        expect(waiter.calls[0]).not.toHaveProperty("candidates");
+        expect(statusOf("ios-a1")).toBe("needs-you");
+        expect(statusOf("ios-a2")).toBe("running");
+      });
+
+      it("records no needs-you for an ask whose Agents failed while its meta file was read", async () => {
+        const fs = new FakeFileSystem();
+        let release: (content: string) => void = () => undefined;
+        vi.spyOn(fs, "readFile").mockReturnValue(
+          new Promise<string>((resolve) => {
+            release = resolve;
+          }),
+        );
+        supervisor({ replies: [{ decision: "approve" }], fs });
+        alive[iosTmux] = true;
+        events.publish(sharedCall("a1"));
+        events.publish(sharedCall("a2"));
+        const decision = permissions.ask(iosId, subagentAsk(shared));
+        await vi.advanceTimersByTimeAsync(0);
+
+        alive[iosTmux] = false;
+        await vi.advanceTimersByTimeAsync(longEnough);
+        release(JSON.stringify({ toolUseId: "toolu-ios-a2" }));
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(decision).resolves.toBeDefined();
+        expect(statusOf("ios-a1")).toBe("failed");
+        expect(statusOf("ios-a2")).toBe("failed");
+        expect(nodeEventsFor("ios").filter(({ kind }) => kind === "needs-you")).toEqual([]);
+      });
+
+      it("records no needs-you for an ask withdrawn while its meta file was read", async () => {
+        const fs = new FakeFileSystem();
+        let release: (content: string) => void = () => undefined;
+        vi.spyOn(fs, "readFile").mockReturnValue(
+          new Promise<string>((resolve) => {
+            release = resolve;
+          }),
+        );
+        supervisor({ replies: [{ decision: "approve" }], fs });
+        events.publish(sharedCall("a1"));
+        events.publish(sharedCall("a2"));
+        const withdrawn = new AbortController();
+        const decision = permissions.ask(iosId, subagentAsk(shared), withdrawn.signal);
+        await vi.advanceTimersByTimeAsync(0);
+
+        withdrawn.abort();
+        release(JSON.stringify({ toolUseId: "toolu-ios-a2" }));
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(decision).resolves.toBeDefined();
+        expect(nodeEventsFor("ios").filter(({ kind }) => kind === "needs-you")).toEqual([]);
+      });
+
+      it("looks again for a subagent whose cached Agent has finished while two siblings run", async () => {
+        const fs = new FakeFileSystem({
+          [metaPath]: JSON.stringify({ agentType: shared, toolUseId: "toolu-ios-a2" }),
+        });
+        supervisor({
+          replies: [{ decision: "approve" }, new Promise<WaitReply>(() => undefined)],
+          fs,
+          build: buildWith("h3", ["a1", "a2", "a3"]),
+        });
+        events.publish(sharedCall("a1"));
+        events.publish(sharedCall("a2"));
+        events.publish(sharedCall("a3"));
+        await pendingAsk(subagentAsk(shared));
+
+        events.publish(
+          hookEvent("PostToolUse", iosId, {
+            tool_name: "Agent",
+            tool_input: { ...agentInput("ios", "a2"), subagent_type: shared },
+            tool_use_id: "toolu-ios-a2",
+          }),
+        );
+        await pendingAsk(subagentAsk(shared));
+
+        expect(waiter.calls[1]).toEqual(
+          expect.objectContaining({
+            kind: "permission",
+            nodeId: "ios-a1",
+            candidates: ["ios-a1", "ios-a3"],
+          }),
+        );
+        expect(fs.calls.filter(({ path }) => path === metaPath)).toHaveLength(2);
+        expect(statusOf("ios-a2")).toBe("done");
+        expect(statusOf("ios-a1")).toBe("needs-you");
+      });
+
+      it.each([
+        { name: "no file reader", files: undefined },
+        { name: "no meta file", files: {} },
+        { name: "a meta file that is not JSON", files: { [metaPath]: "{not json" } },
+        { name: "a meta file without a toolUseId", files: { [metaPath]: "[]" } },
+        {
+          name: "a meta file naming no open Agent",
+          files: { [metaPath]: JSON.stringify({ toolUseId: "toolu-elsewhere" }) },
+        },
+      ])(
+        "holds the first open Agent at needs-you and names every candidate with $name",
+        async ({ files }) => {
+          supervisor({
+            replies: [new Promise<WaitReply>(() => undefined)],
+            ...(files === undefined ? {} : { fs: new FakeFileSystem(files) }),
+          });
+          events.publish(sharedCall("a1"));
+          events.publish(sharedCall("a2"));
+
+          await pendingAsk(subagentAsk(shared));
+
+          expect(waiter.calls).toEqual([
+            expect.objectContaining({
+              kind: "permission",
+              nodeId: "ios-a1",
+              candidates: ["ios-a1", "ios-a2"],
+            }),
+          ]);
+          expect(statusOf("ios-a1")).toBe("needs-you");
+          expect(statusOf("ios-a2")).toBe("running");
+        },
+      );
     });
 
     it("writes nothing when a permission wait settles after halt", async () => {
@@ -656,7 +857,6 @@ describe("StartedSessions", () => {
         ),
       } as LoadedBuild;
       store = new FakeStore();
-      runId = createRun(stopping);
       const sessionsView = supervisor({ build: stopping });
 
       events.publish(bash(androidId));
