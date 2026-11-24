@@ -191,7 +191,7 @@ export class StartedSessions implements StartedSessionsView {
   private answered(watched: Watched, nodeId: string): void {
     const asks = (watched.openAsks.get(nodeId) ?? 1) - 1;
     watched.openAsks.set(nodeId, asks);
-    if (asks === 0 && watched.watch.openNode === nodeId) {
+    if (asks === 0 && watched.watch.isOpen(nodeId)) {
       this.append(watched, [{ nodeId, event: { kind: "running" } }]);
     }
   }

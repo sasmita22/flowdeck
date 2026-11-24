@@ -252,6 +252,31 @@ describe("StartedSessions", () => {
       expect(nodeEventsFor("ios")).toEqual([]);
     });
 
+    it("holds a sibling still running at needs-you once the first of two parallel nodes is done", async () => {
+      let decide: (reply: WaitReply) => void = () => undefined;
+      supervisor({ replies: [new Promise<WaitReply>((resolve) => (decide = resolve))] });
+      events.publish(agentCall("ios", iosId, "a1"));
+      events.publish(agentCall("ios", iosId, "a2"));
+      expect(() => events.publish(agentDone("ios", iosId, "a1"))).not.toThrow();
+
+      const decision = permissions.ask(iosId, {
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(waiter.calls).toEqual([
+        expect.objectContaining({ kind: "permission", nodeId: "ios-a2", tool: "Bash" }),
+      ]);
+      expect(statusOf("ios-a1")).toBe("done");
+      expect(statusOf("ios-a2")).toBe("needs-you");
+
+      decide({ decision: "approve" });
+
+      expect(await decision).toEqual({ behavior: "allow" });
+      expect(statusOf("ios-a2")).toBe("running");
+    });
+
     it("writes nothing when a permission wait settles after halt", async () => {
       let decide: (reply: WaitReply) => void = () => undefined;
       const sessionsView = supervisor({
