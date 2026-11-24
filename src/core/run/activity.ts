@@ -214,6 +214,9 @@ const followedBy = (first: FoldResult, next: (feed: ActivityFeed) => FoldResult)
   };
 };
 
+const openWindowOf = (windows: readonly NodeWindow[], nodeId: string | undefined) =>
+  windows.find((window) => window.nodeId === nodeId && window.endedAt === undefined)?.nodeId;
+
 function addEntry(
   feed: ActivityFeed,
   windows: readonly NodeWindow[],
@@ -231,7 +234,7 @@ function addEntry(
   const call = agentCallOf({ kind: "PreToolUse", payload });
   const nodeId = inSubagent
     ? subagentStepNode(feed, windows, agentId, payload["agent_type"], at)
-    : attribute(windows, at, call?.nodeId);
+    : (openWindowOf(windows, call?.nodeId) ?? attribute(windows, at, call?.nodeId));
   if (nodeId === undefined) return unchanged;
   const common = { id: feed.nextId, nodeId, at };
   if (tool === "Agent" && !inSubagent) {

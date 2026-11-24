@@ -356,6 +356,21 @@ describe("Activity by node", () => {
     );
   });
 
+  it("credits an Agent call stamped just before its named node's window opened to that node", () => {
+    const { changes } = foldOn([{ nodeId: "n", sentAt: 101 }], [call("n", "toolu_n", 100)]);
+
+    expect(changes[0]).toMatchObject([{ kind: "subagent", nodeId: "n" }]);
+  });
+
+  it("never credits an Agent call to the node it names once that node's window has closed", () => {
+    const { changes } = foldOn(
+      [{ nodeId: "n", sentAt: 101, endedAt: 102 }],
+      [call("n", "toolu_n", 100)],
+    );
+
+    expect(changes[0]).not.toContainEqual(expect.objectContaining({ nodeId: "n" }));
+  });
+
   describe("two parallel calls of one piece", () => {
     const section = (["f", "b1", "b2"] as const).reduce<NodeWindow[]>(
       (all, nodeId) => trackWindow(all, nodeId, "sent", 1000),

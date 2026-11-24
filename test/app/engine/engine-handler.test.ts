@@ -5223,7 +5223,10 @@ describe("createEngineHandler", async () => {
         it("lists a started session's tool calls under its own node, not the workspace's waiting one", async () => {
           const { runId, android } = await startWorkspaceFirst();
 
-          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          hook(android.claudeSessionId, "PreToolUse", {
+            ...agentCall("session-1-plan"),
+            flowdeck_hook_at: Date.now() - 5,
+          });
           await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("running"));
           hook(android.claudeSessionId, "PreToolUse", {
             tool_name: "Bash",
