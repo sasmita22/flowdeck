@@ -144,8 +144,8 @@ describe("dirty reporting", () => {
 });
 
 describe("save", () => {
-  it("does nothing when the canvas is clean", async () => {
-    const { bridge, store } = await setup();
+  it("does nothing when a saved blueprint's canvas is clean", async () => {
+    const { bridge, store } = await setup({ latest: () => Promise.resolve(savedFlow()) });
 
     await store.getState().save();
 
@@ -309,13 +309,16 @@ describe("forced save", () => {
     expect(store.getState().hasSavedVersion).toBe(false);
   });
 
-  it("leaves a plain save of a clean canvas sending nothing", async () => {
-    const { bridge, store } = await setup({ latest: () => Promise.resolve(null) });
+  it("saves a clean canvas that has no saved version as version 1", async () => {
+    const { bridge, canvas, store } = await setup({ latest: () => Promise.resolve(null) });
+    const sent = canvas.getState().flow;
 
     await expect(store.getState().save()).resolves.toBe(true);
 
-    expect(bridge.saveFlow).not.toHaveBeenCalled();
-    expect(store.getState().hasSavedVersion).toBe(false);
+    expect(bridge.saveFlow).toHaveBeenCalledTimes(1);
+    expect(bridge.saveFlow).toHaveBeenCalledWith({ flowId: null, name: "Untitled", flow: sent });
+    expect(canvas.getState().saved).toEqual(sent);
+    expect(store.getState()).toMatchObject({ hasSavedVersion: true, flowId: "flow-1", version: 1 });
   });
 
   it("resolves false without an error for a save made while one is in flight", async () => {
