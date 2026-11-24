@@ -69,8 +69,10 @@ import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
   ask,
+  fork,
   workspaceFlow,
   gate,
+  join as joinNode,
   loop,
   onWorkspaceMainFlow,
   output,
@@ -5057,6 +5059,18 @@ describe("createEngineHandler", async () => {
             .filter((event) => event.kind === "failed")
             .map((event) => event.nodeId);
 
+        type Loaded = { run: { doneCount: number }; snapshot: { nodes: Record<string, string> } };
+
+        const loadedRun = async (runId: string) => (await answer("load-run", { runId })) as Loaded;
+
+        const doneIn = (snapshot: Loaded["snapshot"]) =>
+          Object.values(snapshot.nodes).filter((state) => state === "done").length;
+
+        const listedDone = async (runId: string) =>
+          ((await answer("list-runs", undefined)) as { id: string; doneCount: number }[]).find(
+            (run) => run.id === runId,
+          )?.doneCount;
+
         const startedSessionPushes = (runId: string) =>
           pushes.flatMap((push) => {
             const pushed = push as unknown as { push: string; runId?: string; sessions?: Pushed[] };
@@ -5723,6 +5737,109 @@ describe("createEngineHandler", async () => {
 
             expect(runStates(runId)[before]?.nodes[gated]).toBe("done");
             release();
+          });
+
+          it("lists the ended run, and loads its summary, with as many steps done as its page counts", async () => {
+            runHandler();
+            const { runId, android } = await startGated();
+            await finishPlanAndBuild(android.claudeSessionId, runId);
+            hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+            expect(await endOf(runId)).toBe("done");
+
+            const loaded = await loadedRun(runId);
+
+            expect(loaded.snapshot.nodes[gated]).toBe("done");
+            expect(await listedDone(runId)).toBe(doneIn(loaded.snapshot));
+            expect(loaded.run.doneCount).toBe(doneIn(loaded.snapshot));
+          });
+
+          it("lists the resumed run with the steps it finished after the resume", async () => {
+            const { runId, android } = await startGated();
+            alive.add(android.tmuxName);
+            await finishPlanAndBuild(android.claudeSessionId, runId);
+            expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
+            const stopped = await listedDone(runId);
+            expect(stopped).toBe(doneIn((await loadedRun(runId)).snapshot));
+
+            expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
+            hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+            expect(await endOf(runId)).toBe("done");
+
+            const finished = doneIn((await loadedRun(runId)).snapshot);
+            expect(finished).toBeGreaterThan(stopped ?? 0);
+            expect(await listedDone(runId)).toBe(finished);
+          });
+        });
+
+        describe("a session's Fork and Join around two Agents, which have no events of their own", () => {
+          const forked = (): Flow => {
+            const built = sessionsWorkflow(
+              [
+                {
+                  name: "android",
+                  repo: repo.path,
+                  branch: "main",
+                  model: "haiku",
+                  members: ["Fork", "Plan", "Build", "Join"],
+                },
+                { name: "ios", repo: repo.path, branch: "main", model: "sonnet" },
+              ],
+              { workspace: ["Wait"] },
+            );
+            const replaced: Record<string, Flow["nodes"][number]> = {
+              "session-1-fork": {
+                ...fork("session-1-fork"),
+                label: "Fork",
+              } as Flow["nodes"][number],
+              "session-1-join": {
+                ...joinNode("session-1-join"),
+                label: "Join",
+              } as Flow["nodes"][number],
+            };
+            const planToBuild = (each: Flow["wires"][number]) =>
+              each.from.node === "session-1-plan" && each.to.node === "session-1-build";
+            return {
+              ...built,
+              nodes: built.nodes.map((each) => replaced[each.id] ?? each),
+              wires: [
+                ...built.wires.filter((each) => !planToBuild(each)),
+                thenWire("session-1-fork", "session-1-build"),
+                thenWire("session-1-plan", "session-1-join"),
+              ] as Flow["wires"],
+            };
+          };
+
+          it("lists the ended run, and loads its summary, with as many steps done as its page counts", async () => {
+            runHandler();
+            flows.save(forked());
+            const buildId = await builtId();
+            const runId = await startedOn(buildId);
+            await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
+            const env = (claude.opened[0] as OpenSessionOptions & { env?: Record<string, string> })
+              .env;
+            const android = sessionOf(env ?? {}, "ANDROID").claudeSessionId;
+            hook(android, "PreToolUse", agentCall("session-1-plan"));
+            hook(android, "PreToolUse", agentCall("session-1-build"));
+            hook(android, "PostToolUse", agentDone("session-1-plan"));
+            hook(android, "PostToolUse", agentDone("session-1-build"));
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-build")).toBe("done"));
+            hook(android, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+            expect(await endOf(runId)).toBe("done");
+
+            const loaded = await loadedRun(runId);
+
+            expect(statusOf(runId, "session-1-fork")).toBe("waiting");
+            expect(statusOf(runId, "session-1-join")).toBe("waiting");
+            expect(loaded.snapshot.nodes["session-1-fork"]).toBe("done");
+            expect(loaded.snapshot.nodes["session-1-join"]).toBe("done");
+            expect(await listedDone(runId)).toBe(doneIn(loaded.snapshot));
+            expect(loaded.run.doneCount).toBe(doneIn(loaded.snapshot));
           });
         });
 
