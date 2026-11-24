@@ -199,3 +199,44 @@ test("One node library used in two sessions builds one piece per use, each with 
   expect(files.every((file) => file !== undefined)).toBe(true);
   expect(new Set(files).size).toBe(2);
 });
+
+test("A library that would make a loop is a disabled button with its reason", async () => {
+  const loopA = seedBlueprint(home, "Loop A", reviewLibrary());
+  const use = {
+    id: "use",
+    label: "Library",
+    position: { x: 0, y: 0 },
+    type: "library",
+    settings: { libraryId: loopA.flowId, label: "use", overrides: {} },
+  };
+  const loopB = seedBlueprint(
+    home,
+    "Loop B",
+    flow(
+      [trigger("start"), use, output("stop")],
+      [thenWire("start", "use"), thenWire("use", "stop")],
+      flowSettings,
+      { containers: [] },
+    ),
+  );
+  const plain = seedBlueprint(home, "Plain", reviewLibrary());
+  launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
+  const { window } = launched;
+  await window.getByTestId(controlTestIds.back).or(window.getByTestId("menu-blueprints")).click();
+  await window.getByTestId(pageTestIds.blueprintOpen(loopA.flowId)).click();
+  await expect(window.getByTestId(controlTestIds.build)).toBeVisible();
+
+  const entry = window.getByTestId(libraryTestIds.paletteItem(loopB.flowId));
+  const reason = (await entry.getAttribute("title")) ?? "";
+  expect(reason).toMatch(/^makes a loop: /);
+  const snapshot = await entry.ariaSnapshot();
+  expect(snapshot).toMatch(/^- button "Loop B" \[disabled\]/);
+  expect(snapshot).toContain(reason);
+  await expect(entry).toHaveAccessibleDescription(reason);
+  const describedBy = (await entry.getAttribute("aria-describedby")) ?? "";
+  await expect(window.locator(`[id="${describedBy}"]`)).toHaveText(reason);
+
+  expect(await window.getByTestId(libraryTestIds.paletteItem(plain.flowId)).ariaSnapshot()).toMatch(
+    /^- button "Plain"(?! \[disabled\])/,
+  );
+});

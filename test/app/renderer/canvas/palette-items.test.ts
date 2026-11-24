@@ -4,10 +4,13 @@ import {
   filterPalette,
   flowContainerItems,
   groupPalette,
+  libraryEntryAria,
   libraryItems,
+  libraryReasonId,
   nodeTitle,
   type LibraryItem,
   noteTitle,
+  paletteEntryAria,
   paletteGroups,
   paletteItems,
 } from "../../../../src/app/renderer/canvas/palette-items.js";
@@ -104,6 +107,13 @@ describe("paletteItems", () => {
         description: "Canvas-only text. It never runs.",
       },
     ]);
+  });
+});
+
+describe("paletteEntryAria", () => {
+  it.each(paletteItems)("makes $label a button named by its label", (item) => {
+    expect(item.label.trim()).not.toBe("");
+    expect(paletteEntryAria(item)).toEqual({ role: "button", "aria-label": item.label });
   });
 });
 
@@ -393,6 +403,40 @@ describe("libraryItems", () => {
     expect(loopOf(items, "a")).toBe("makes a loop: LibB → LibA → LibB");
     expect(loopOf(items, "c")).toBeNull();
     expect(items.map(({ flowId }) => flowId)).toEqual(["a", "c"]);
+  });
+
+  const loopCase = () =>
+    libraryItems(
+      [
+        summary("b", "LibB", "node-library"),
+        summary("a", "LibA", "node-library", ["b"]),
+        summary("c", "LibC", "node-library"),
+      ],
+      "b",
+    );
+
+  const entryOf = (items: readonly LibraryItem[], flowId: string) => {
+    const item = items.find((entry) => entry.flowId === flowId);
+    if (item === undefined) throw new Error(`no library item for ${flowId}`);
+    return item;
+  };
+
+  it("makes a library that is not greyed an enabled button named by its label, with no description", () => {
+    expect(libraryEntryAria(entryOf(loopCase(), "c"))).toEqual({
+      role: "button",
+      "aria-label": "LibC",
+      "aria-disabled": false,
+    });
+  });
+
+  it("makes a greyed library a disabled button described by its loop reason", () => {
+    expect(libraryEntryAria(entryOf(loopCase(), "a"))).toEqual({
+      role: "button",
+      "aria-label": "LibA",
+      "aria-disabled": true,
+      "aria-describedby": libraryReasonId("a"),
+    });
+    expect(libraryReasonId("a")).toBe("palette-lib-reason-a");
   });
 
   it("keeps a library already in a loop listed for an unrelated blueprint, with its loop", () => {
