@@ -17,7 +17,7 @@ import { createSaveStore } from "../../../../src/app/renderer/save-store.js";
 import { reasonNaming } from "../../../../src/core/compiler/problems.js";
 import { rule as libraryUse } from "../../../../src/core/compiler/rules/library-use.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
-import { checkEdit, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
+import { checkEdit, editProblems, newProblems } from "../../../../src/core/flow/blueprint-edits.js";
 import {
   libraryLabelFor,
   loopReason,
@@ -191,7 +191,11 @@ describe("tool handler edits", () => {
     expect(added?.id).toBe("agent-2");
     if (added === undefined) return;
     expect(placeNode(before, "agent", added.position)).toEqual(added.position);
-    expect(result).toEqual({ ok: true, nodeId: "agent-2", problems: newProblems(before, after) });
+    expect(result).toEqual({
+      ok: true,
+      nodeId: "agent-2",
+      problems: editProblems(before, after, ["agent-2"]),
+    });
     expect(canvas.getState().undoStack).toHaveLength(1);
   });
 
@@ -1253,6 +1257,23 @@ describe("tool handler adds and changes library nodes", () => {
       ok: true,
       nodeId: "library-1",
       problems: expect.arrayContaining([expect.objectContaining({ rule: "library-labels" })]),
+    });
+  });
+
+  it("reports the label problem of an unsafe library added unwired into a session with a Start", async () => {
+    const { call } = await ready();
+
+    const result = await call("add_node", {
+      type: "library",
+      label: "Given",
+      parent: "session-1",
+      settings: { libraryId: "f-unsafe" },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      nodeId: "library-1",
+      problems: [expect.objectContaining({ rule: "library-labels", node: "library-1" })],
     });
   });
 

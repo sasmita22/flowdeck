@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { checkEdit, newProblems } from "../../../src/core/flow/blueprint-edits.js";
+import { checkEdit, editProblems, newProblems } from "../../../src/core/flow/blueprint-edits.js";
 import { libraryLabelFor, type LibraryLookup } from "../../../src/core/flow/libraries.js";
 import { WireKind, type Flow } from "../../../src/core/flow/schema.js";
 import { defaultSettings as agentDefaults } from "../../../src/core/nodes/agent/defaults.js";
@@ -527,5 +527,40 @@ describe("newProblems", () => {
 
       expect(newProblems(before, after)).toEqual([portProblem(1)]);
     });
+  });
+});
+
+describe("editProblems", () => {
+  const blank = (id: string) => agent(id, { settings: { instructions: "" } });
+  const mainNodes = [trigger("s-start"), agent("a1"), output("s-stop")];
+  const mainWires = [thenWire("s-start", "a1"), thenWire("a1", "s-stop")];
+  const withStray = flow([...mainNodes, blank("stray")], mainWires);
+
+  it("reports the problem on a node added off its session's main flow", () => {
+    const after = flow([...mainNodes, blank("agent-2")], mainWires);
+
+    expect(editProblems(flow(mainNodes, mainWires), after, ["agent-2"])).toEqual([
+      expect.objectContaining({ rule: "required-settings", node: "agent-2" }),
+    ]);
+  });
+
+  it("reports nothing on a blank node off the main flow when another node is added", () => {
+    const after = flow([...mainNodes, blank("stray"), agent("agent-2")], mainWires);
+
+    expect(editProblems(withStray, after, ["agent-2"])).toEqual([]);
+  });
+
+  it("reports nothing for a cycle drawn between untouched nodes off the main flow", () => {
+    const nodes = [...mainNodes, agent("x"), agent("y")];
+    const loose = flow(nodes, [...mainWires, thenWire("x", "y")]);
+    const cycle = flow(nodes, [...mainWires, thenWire("x", "y"), thenWire("y", "x")]);
+
+    expect(editProblems(loose, cycle, [])).toEqual([]);
+  });
+
+  it("reports nothing when a change keeps a problem the node already had", () => {
+    const relabelled = flow([...mainNodes, { ...blank("stray"), label: "Renamed" }], mainWires);
+
+    expect(editProblems(withStray, relabelled, ["stray"])).toEqual([]);
   });
 });
