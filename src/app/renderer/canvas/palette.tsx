@@ -11,7 +11,10 @@ import {
   filterLibraries,
   filterPalette,
   groupPalette,
+  libraryEntryAria,
   libraryItems,
+  libraryReasonId,
+  paletteEntryAria,
   paletteItems,
   type LibraryItem,
   type PaletteItem,
@@ -37,6 +40,7 @@ function Entry({ item, onAdd }: { item: PaletteItem; onAdd: (type: CanvasItemTyp
     <div
       className="fd-palette-item"
       data-testid={item.testId}
+      {...paletteEntryAria(item)}
       tabIndex={0}
       draggable
       onDragStart={onDragStart(item.type)}
@@ -95,7 +99,7 @@ function LibraryEntry({ item, onAdd }: { item: LibraryItem; onAdd: (flowId: stri
       data-testid={item.testId}
       tabIndex={0}
       draggable={!loops}
-      aria-disabled={loops}
+      {...libraryEntryAria(item)}
       title={item.loop ?? undefined}
       onDragStart={onLibraryDragStart}
       onDoubleClick={add}
@@ -108,6 +112,11 @@ function LibraryEntry({ item, onAdd }: { item: LibraryItem; onAdd: (flowId: stri
         <span className="fd-palette-head">{item.label}</span>
         <span className="fd-palette-description">{item.kindLabel}</span>
       </span>
+      {item.loop !== null && (
+        <span id={libraryReasonId(item.flowId)} className="fd-visually-hidden">
+          {item.loop}
+        </span>
+      )}
     </div>
   );
 }

@@ -143,6 +143,20 @@ export const libraryItems = (
   );
 };
 
+export const libraryReasonId = (flowId: string) => `palette-lib-reason-${flowId}`;
+
+export const paletteEntryAria = (item: PaletteItem) => ({
+  role: "button" as const,
+  "aria-label": item.label,
+});
+
+export const libraryEntryAria = (item: LibraryItem) => ({
+  role: "button" as const,
+  "aria-label": item.label,
+  "aria-disabled": item.loop !== null,
+  ...(item.loop !== null && { "aria-describedby": libraryReasonId(item.flowId) }),
+});
+
 export const filterLibraries = (
   items: readonly LibraryItem[],
   query: string,
