@@ -332,6 +332,30 @@ describe("engine blueprint sessions", () => {
     });
   });
 
+  describe("shutDown", () => {
+    it("stops every blueprint session of this home and removes its folder", async () => {
+      const handler = handlerAt(home);
+      await call(handler, "blueprint-session-start", { flowId: "flow-1" });
+      await leftover(home, "deleted-flow");
+
+      await handler.shutDown();
+
+      expect([...sessions.stopped].sort()).toEqual(["fd-bp-deleted-flow", "fd-bp-flow-1"]);
+      expect(existsSync(blueprintSessionFolder(home, "flow-1"))).toBe(false);
+      expect(existsSync(blueprintSessionFolder(home, "deleted-flow"))).toBe(false);
+    });
+
+    it("leaves every session running while another Flowdeck holds the home", async () => {
+      await leftover(home, "flow-a");
+      const handler = handlerAt(home, { homeLock: { acquire: async () => false } });
+
+      await handler.shutDown();
+
+      expect(await sessions.alive("fd-bp-flow-a")).toBe(true);
+      expect(isFolder(blueprintSessionFolder(home, "flow-a"))).toBe(true);
+    });
+  });
+
   describe("startUp", () => {
     it("still reattaches when the sweep fails", async () => {
       await leftover(home, "flow-a");

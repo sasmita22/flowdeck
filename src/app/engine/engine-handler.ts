@@ -215,6 +215,7 @@ export type EngineHandler = {
   reattach(): Promise<void>;
   sweepBlueprintSessions(): Promise<void>;
   startUp(): Promise<void>;
+  shutDown(): Promise<void>;
 };
 
 type ActiveRun = {
@@ -2360,10 +2361,18 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return answer(request.id, () => work(parsed.data));
   };
 
+  const shutDown = async (): Promise<void> => {
+    await detach().catch((error: unknown) => {
+      console.log(`engine: detach error ${messageOf(error)}`);
+    });
+    await sweepBlueprintSessions();
+  };
+
   return {
     detach,
     reattach,
     sweepBlueprintSessions,
+    shutDown,
     async startUp() {
       await sweepBlueprintSessions().catch((error: unknown) => {
         console.log(`engine: blueprint sweep error ${messageOf(error)}`);
