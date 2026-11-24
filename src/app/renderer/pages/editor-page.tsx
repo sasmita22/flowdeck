@@ -98,6 +98,7 @@ function EditorTitleRow({
   const ready = useStore(canvas, (state) => state.ready);
   const dirty = useStore(canvas, selectDirty);
   const saving = useStore(save, (state) => state.saving);
+  const hasSavedVersion = useStore(save, (state) => state.hasSavedVersion);
   const starting = useStore(run, (state) => state.starting);
   const library = useStore(canvas, (state) => !isWorkflow(state.flow));
   return (
@@ -124,7 +125,7 @@ function EditorTitleRow({
           <button
             className="fd-btn"
             data-testid={controlTestIds.save}
-            disabled={!dirty || saving}
+            disabled={(!dirty && hasSavedVersion) || saving}
             onClick={() => void save.getState().save()}
           >
             Save

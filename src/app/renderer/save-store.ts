@@ -69,7 +69,8 @@ export const createSaveStore = ({
     const save = async (options: { force?: boolean } = {}) => {
       if (get().saving || get().saveWarning !== null) return false;
       set({ saveCancelled: false });
-      if (options.force !== true && !selectDirty(canvas.getState())) return true;
+      if (options.force !== true && !selectDirty(canvas.getState()) && get().hasSavedVersion)
+        return true;
       const users = usersOf(get().flowId);
       if (users > 0 && !(await warn(users))) return false;
       const sent = canvas.getState().flow;
