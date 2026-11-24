@@ -5403,6 +5403,11 @@ describe("createEngineHandler", async () => {
             await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("done"));
             expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
             await rm(statesPath(runId), { force: true });
+            const publish = claude.events.publish.bind(claude.events);
+            claude.events.publish = (event) => {
+              if (event.kind !== "Stop" || event.sessionId !== android.claudeSessionId)
+                publish(event);
+            };
             const openedBefore = claude.opened.length;
 
             expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
