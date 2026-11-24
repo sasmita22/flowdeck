@@ -11,6 +11,8 @@ import {
   containerStartCommand,
   hookSettings,
   sessionEnvNames,
+  type SessionEnvNames,
+  workspaceTmuxVariable,
 } from "./hook-settings.js";
 import type { BuildFile, lower, Manifest, ManifestContainer } from "./lower.js";
 import { orchestratorSkill } from "./orchestrator.js";
@@ -54,11 +56,48 @@ const withRules = (summary: readonly string[]) => `${summary.join("\n")}\n\n${st
 const readOnlyWorkspace = (dir: string) => [
   `- Workspace folder (read only): ${workspaceFolder(dir)}; never edit or write files in it`,
   "- Changes the workspace needs go to the workspace session by message",
+  "- Never ask or raise anything to the user; only the workspace session talks to the user",
+  `- Send every issue, question and change the workspace needs to the workspace session with SendMessage, addressed to the name in the environment variable ${workspaceTmuxVariable}, then wait for its reply before going on`,
 ];
+
+export const connectedSessionsHeading = "## Connected sessions";
+
+type Peer = { name: string; slug: string; tmux: string };
+
+type Connections = readonly (readonly [string, string])[];
+
+const peersOf = (
+  slug: string,
+  connections: Connections,
+  containers: readonly ManifestContainer[],
+  names: ReadonlyMap<string, SessionEnvNames>,
+): Peer[] =>
+  connections
+    .flatMap(([a, b]) => (a === slug ? [b] : b === slug ? [a] : []))
+    .sort()
+    .flatMap((peer) => {
+      const container = containers.find((candidate) => candidate.slug === peer);
+      const env = names.get(peer);
+      return container === undefined || env === undefined
+        ? []
+        : [{ name: container.name, slug: peer, tmux: env.tmux }];
+    });
+
+const peerSection = (peers: readonly Peer[]) =>
+  peers.length === 0
+    ? []
+    : [
+        "",
+        connectedSessionsHeading,
+        "",
+        "- You may message these sessions directly with SendMessage, addressed to the name in the environment variable given for each",
+        ...peers.map((peer) => `- ${peer.name} (${peer.slug}): ${peer.tmux}`),
+      ];
 
 export function workspaceClaudeMd(
   build: { name: string; values: VariableValues },
   target: SessionTarget,
+  peers: readonly Peer[] = [],
 ): string {
   const branchMode = target.branchCreated ? `new from ${target.base}` : "existing";
   return withRules([
@@ -72,13 +111,18 @@ export function workspaceClaudeMd(
     `- Branch: ${target.branch} (${branchMode})`,
     ...(target.workspace === undefined ? [] : readOnlyWorkspace(target.workspace)),
     ...sortedValues(build.values),
+    ...peerSection(peers),
   ]);
 }
 
 export const sessionEntryHeading = (container: Pick<ManifestContainer, "name" | "slug">) =>
   `### Session container ${container.name} (${container.slug})`;
 
-const sessionList = (containers: readonly ManifestContainer[], buildDir: string): string[] => {
+const sessionList = (
+  containers: readonly ManifestContainer[],
+  buildDir: string,
+  connections: Connections,
+): string[] => {
   const names = sessionEnvNames(containers);
   const entries = containers.flatMap((container) => {
     const env = names.get(container.slug);
@@ -88,6 +132,7 @@ const sessionList = (containers: readonly ManifestContainer[], buildDir: string)
       buildDir,
       workspaceDir: workspaceFolder(buildDir),
       env,
+      peers: peersOf(container.slug, connections, containers, names).map((peer) => peer.tmux),
     });
     return [
       "",
@@ -116,10 +161,25 @@ const sessionList = (containers: readonly ManifestContainer[], buildDir: string)
   ];
 };
 
+const pairList = (containers: readonly ManifestContainer[], connections: Connections) => {
+  const label = (slug: string) =>
+    `${containers.find((container) => container.slug === slug)?.name ?? slug} (${slug})`;
+  return connections.length === 0
+    ? []
+    : [
+        "",
+        connectedSessionsHeading,
+        "",
+        "- Session containers joined by a connection may message each other directly",
+        ...connections.map(([a, b]) => `- ${label(a)} and ${label(b)}`),
+      ];
+};
+
 const workspaceSessionClaudeMd = (
   build: { name: string; values: VariableValues },
   target: Pick<ContainerTarget, "blueprint" | "workspace">,
   containers: readonly ManifestContainer[],
+  connections: Connections,
 ): string =>
   withRules([
     `# Build ${build.name}`,
@@ -127,8 +187,10 @@ const workspaceSessionClaudeMd = (
     ...blueprintLine(target),
     "- This is the workspace session's folder; session containers read it but never write it",
     "- Plugin folder: plugin/ in this folder; run sessions reach it as ${CLAUDE_PLUGIN_ROOT}",
+    "- Only this session talks to the user: raise every issue the sessions send here, coordinate the user and all sessions, and send each decision back to the session with SendMessage, addressed to the name in its tmux variable below",
     ...sortedValues(build.values),
-    ...sessionList(containers, target.workspace),
+    ...sessionList(containers, target.workspace, connections),
+    ...pairList(containers, connections),
   ]);
 
 export const reportPath = "build-report.json";
@@ -148,6 +210,7 @@ const containerFiles = (
   build: { values: VariableValues; permissionMode: string },
   target: ContainerTarget,
   containers: readonly ManifestContainer[],
+  connections: Connections,
 ): BuildFile[] => {
   const root = containerRoot(container);
   const session = container.kind === "session";
@@ -171,13 +234,17 @@ const containerFiles = (
   };
   const named = { name: container.prefix, values: build.values };
   const claudeMd = session
-    ? workspaceClaudeMd(named, {
-        ...target,
-        ...branchOf(container, target),
-        repo: container.repo ?? "",
-        base: container.base ?? target.base ?? "",
-      })
-    : workspaceSessionClaudeMd(named, target, containers);
+    ? workspaceClaudeMd(
+        named,
+        {
+          ...target,
+          ...branchOf(container, target),
+          repo: container.repo ?? "",
+          base: container.base ?? target.base ?? "",
+        },
+        peersOf(container.slug, connections, containers, sessionEnvNames(containers)),
+      )
+    : workspaceSessionClaudeMd(named, target, containers, connections);
   const inRoot = (file: BuildFile): BuildFile => ({ ...file, path: `${root}/${file.path}` });
   return [
     ...handoffTemplates({ nodes: container.nodes }, repo).map(inRoot),
@@ -219,7 +286,9 @@ export function emit(lowered: ReturnType<typeof lower>, target: ContainerTarget)
   const build = { values, permissionMode: settings.permissionMode };
   const files: BuildFile[] = [
     ...lowered.nodeFiles,
-    ...containers.flatMap((container) => containerFiles(container, build, target, containers)),
+    ...containers.flatMap((container) =>
+      containerFiles(container, build, target, containers, lowered.manifest.connections ?? []),
+    ),
   ];
   const manifest: Manifest = {
     ...lowered.manifest,

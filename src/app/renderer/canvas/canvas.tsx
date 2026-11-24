@@ -25,6 +25,7 @@ import { emptyCanvasHint, selectInspectorOpen, type ShellState } from "../shell-
 import { controlTestIds, readoutTestIds } from "../test-ids.js";
 import { AlignedEdge } from "./aligned-edge.js";
 import { BranchEdge } from "./branch-edge.js";
+import { ConnectionEdge } from "./connection-edge.js";
 import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
 import { nodeMimeType, Palette } from "./palette.js";
@@ -32,11 +33,17 @@ import { RenameField } from "./rename-field.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
-import { toViewEdges, toViewNodes, type ViewEdge, type ViewNode } from "./view.js";
+import {
+  containerOfFrameId,
+  toViewEdges,
+  toViewNodes,
+  type ViewEdge,
+  type ViewNode,
+} from "./view.js";
 
 const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
-const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge };
+const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge, connection: ConnectionEdge };
 
 const containerOfFrame = (node: ViewNode): string | undefined => {
   switch (node.type) {
@@ -361,6 +368,12 @@ function Board({
   };
 
   const onConnect = ({ source, sourceHandle, target, targetHandle }: Connection) => {
+    const from = containerOfFrameId(source);
+    const to = containerOfFrameId(target);
+    if (from !== undefined && to !== undefined) {
+      store.getState().connectSessions(from, to);
+      return;
+    }
     if (sourceHandle === null || targetHandle === null) return;
     store
       .getState()

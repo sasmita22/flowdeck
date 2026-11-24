@@ -123,6 +123,23 @@ describe("claudeCommand", () => {
     expect(command).toMatch(/ --plugin-dir '\/b' --mcp-config '\/m\.json' --strict-mcp-config$/);
   });
 
+  it("names the session right after its id", () => {
+    expect(claudeCommand({ sessionId, model: "haiku", name: "fd-run-1a2b3c4d" })).toContain(
+      ` claude --session-id ${sessionId} --name fd-run-1a2b3c4d --model 'haiku'`,
+    );
+  });
+
+  it("names a resumed session right after its id", () => {
+    expect(
+      claudeCommand({ sessionId, model: "haiku", resume: true, name: "fd-run-1a2b3c4d" }),
+    ).toContain(` claude --resume ${sessionId} --name fd-run-1a2b3c4d --model 'haiku'`);
+  });
+
+  it("names no session without a name", () => {
+    expect(claudeCommand({ sessionId, model: "haiku", resume: true })).not.toContain("--name");
+    expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain("--name");
+  });
+
   it("adds no settings without a settings path", () => {
     expect(claudeCommand({ sessionId, model: "haiku" })).not.toContain("--settings");
   });

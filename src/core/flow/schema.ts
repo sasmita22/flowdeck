@@ -104,12 +104,18 @@ export const CanvasNote = z.object({
   size: z.object({ width: z.number().positive(), height: z.number().positive() }),
 });
 
+export const Connection = z.object({
+  id: z.string(),
+  between: z.tuple([z.string(), z.string()]),
+});
+
 export const Flow = z.object({
   nodes: z.array(Node),
   wires: z.array(Wire),
   containers: z.array(FlowContainer),
   settings: FlowSettings,
   notes: z.array(CanvasNote).optional(),
+  connections: z.array(Connection).optional(),
 });
 
 export type NodeType = z.infer<typeof NodeType>;
@@ -124,6 +130,7 @@ export type FlowContainer = z.infer<typeof FlowContainer>;
 export type FlowSettings = z.infer<typeof FlowSettings>;
 export type Node = z.infer<typeof Node>;
 export type CanvasNote = z.infer<typeof CanvasNote>;
+export type Connection = z.infer<typeof Connection>;
 export type Flow = z.infer<typeof Flow>;
 
 export class FlowParseError extends Error {

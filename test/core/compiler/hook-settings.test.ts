@@ -14,6 +14,7 @@ import {
   permissionHookTimeoutSeconds,
   sessionEnvNames,
   shellQuote,
+  workspaceTmuxVariable,
 } from "../../../src/core/compiler/hook-settings.js";
 import type { ManifestContainer } from "../../../src/core/compiler/lower.js";
 import { standardRules } from "../../../src/core/compiler/standard-rules.js";
@@ -272,13 +273,34 @@ describe("containerStartCommand", () => {
     branch: "flowdeck/fix-login",
     worktree,
   };
-  const command = () =>
+  const command = (peers?: readonly string[]) =>
     containerStartCommand({
       container: android,
       buildDir,
       workspaceDir,
       env: { tmux: "FD_SESSION_ANDROID_TMUX", id: "FD_SESSION_ANDROID_ID" },
+      ...(peers === undefined ? {} : { peers }),
     });
+
+  it("names the workspace session's tmux variable", () => {
+    expect(workspaceTmuxVariable).toBe("FD_WORKSPACE_TMUX");
+  });
+
+  it("names the session by the container's tmux variable", () => {
+    expect(command()).toContain(
+      ' --session-id "$FD_SESSION_ANDROID_ID" --name "$FD_SESSION_ANDROID_TMUX" ',
+    );
+  });
+
+  it("forwards each connected peer's tmux variable, sorted by name", () => {
+    expect(command(["FD_SESSION_WEB_TMUX", "FD_SESSION_IOS_TMUX"])).toContain(
+      ' -e FD_SESSION_IOS_TMUX="$FD_SESSION_IOS_TMUX" -e FD_SESSION_WEB_TMUX="$FD_SESSION_WEB_TMUX" ',
+    );
+  });
+
+  it.each([undefined, []])("forwards no session variable without peers (%s)", (peers) => {
+    expect(command(peers)).not.toMatch(/-e FD_SESSION_/);
+  });
 
   it("starts a tmux server and session named by the container's tmux variable, in its worktree", () => {
     expect(
@@ -292,6 +314,7 @@ describe("containerStartCommand", () => {
     '-e FLOWDECK_SOCK="$FLOWDECK_SOCK"',
     '-e FLOWDECK_HOOK_NODE="$FLOWDECK_HOOK_NODE"',
     '-e FLOWDECK_HOOK_SCRIPT="$FLOWDECK_HOOK_SCRIPT"',
+    '-e FD_WORKSPACE_TMUX="$FD_WORKSPACE_TMUX"',
     "-e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
   ])("forwards %s to the session", (flag) => {
     expect(command()).toContain(` ${flag} `);
@@ -303,7 +326,7 @@ describe("containerStartCommand", () => {
     expect(PARENT_SESSION_VARS).toContain("CLAUDECODE");
     expect(
       command().endsWith(
-        ` env ${unset} claude --session-id "$FD_SESSION_ANDROID_ID" --model ${shellQuote("sonnet")} --settings ${shellQuote(settingsPath)} --plugin-dir ${shellQuote(pluginPath)} --add-dir ${shellQuote(workspaceDir)} ${shellQuote("/fix-login-android:run")}`,
+        ` env ${unset} claude --session-id "$FD_SESSION_ANDROID_ID" --name "$FD_SESSION_ANDROID_TMUX" --model ${shellQuote("sonnet")} --settings ${shellQuote(settingsPath)} --plugin-dir ${shellQuote(pluginPath)} --add-dir ${shellQuote(workspaceDir)} ${shellQuote("/fix-login-android:run")}`,
       ),
     ).toBe(true);
   });
@@ -388,6 +411,7 @@ describe("containerStartCommand", () => {
         FLOWDECK_SOCK: "/fd home/sockets/fd-run-9f8e7d6c.sock",
         FLOWDECK_HOOK_NODE: "/my node/bin/node",
         FLOWDECK_HOOK_SCRIPT: "/flow deck/bin/flowdeck-hook.cjs",
+        FD_WORKSPACE_TMUX: "fd-run-9f8e7d6c",
         CLAUDE_CONFIG_DIR: "/fd home/claude config",
       };
 
@@ -411,6 +435,8 @@ describe("containerStartCommand", () => {
         "claude",
         "--session-id",
         env.FD_SESSION_ANDROID_ID,
+        "--name",
+        env.FD_SESSION_ANDROID_TMUX,
         "--model",
         "sonnet",
         "--settings",
@@ -425,6 +451,7 @@ describe("containerStartCommand", () => {
         `FLOWDECK_SOCK=${env.FLOWDECK_SOCK}`,
         `FLOWDECK_HOOK_NODE=${env.FLOWDECK_HOOK_NODE}`,
         `FLOWDECK_HOOK_SCRIPT=${env.FLOWDECK_HOOK_SCRIPT}`,
+        `FD_WORKSPACE_TMUX=${env.FD_WORKSPACE_TMUX}`,
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
       ];
       const middle = argv.slice(head.length, argv.length - tail.length);

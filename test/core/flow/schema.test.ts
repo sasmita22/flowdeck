@@ -304,3 +304,26 @@ describe("notes", () => {
     expect(parseError(flowWith({ notes: [bad] })).issues[0]?.path).toEqual(path);
   });
 });
+
+describe("connections", () => {
+  const connection = { id: "c1", between: ["s-android", "s-ios"] };
+
+  it("keeps a flow's connections exactly", () => {
+    const flow = flowWith({ connections: [connection] });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("adds no connections key to a flow without connections", () => {
+    expect(parseFlow(flowWith({}))).not.toHaveProperty("connections");
+  });
+
+  it.each([
+    ["no id", { between: connection.between }, ["connections", 0, "id"]],
+    ["one end", { id: "c1", between: ["s-android"] }, ["connections", 0, "between"]],
+    ["three ends", { id: "c1", between: ["a", "b", "c"] }, ["connections", 0, "between"]],
+    ["a number end", { id: "c1", between: ["s-android", 2] }, ["connections", 0, "between", 1]],
+  ])("rejects a connection with %s at its path", (_name, bad, path) => {
+    expect(parseError(flowWith({ connections: [bad] })).issues[0]?.path).toEqual(path);
+  });
+});

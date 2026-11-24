@@ -2104,3 +2104,113 @@ describe("updateFlowContainer", () => {
     expect(containerIn(store.getState().flow, "workspace-1")).toMatchObject({ model: "haiku" });
   });
 });
+
+describe("connecting session containers", () => {
+  const sessionsOnCanvas = (): Flow =>
+    flow(
+      [
+        placedAt(trigger("w-start"), 0, 0),
+        placedAt(output("w-stop"), 600, 0),
+        placedAt(trigger("a1"), 0, 400),
+        placedAt(output("a2"), 600, 400),
+        placedAt(trigger("i1"), 0, 800),
+        placedAt(output("i2"), 600, 800),
+      ],
+      [thenWire("w-start", "w-stop"), thenWire("a1", "a2"), thenWire("i1", "i2")],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["a1", "a2"], { id: "android", name: "android" }),
+          sessionContainer(["i1", "i2"], { id: "ios", name: "ios" }),
+        ],
+      },
+    );
+
+  const connected = () => {
+    const store = loadedCanvas(sessionsOnCanvas());
+    store.getState().connectSessions("android", "ios");
+    return store;
+  };
+
+  it("connects two sessions as one undoable step, and redo brings it back", () => {
+    const store = loadedCanvas(sessionsOnCanvas());
+    const before = store.getState().flow;
+
+    const accepted = store.getState().connectSessions("android", "ios");
+
+    const added = store.getState().flow.connections;
+    expect(accepted).toBe(true);
+    expect(added).toEqual([{ id: expect.any(String), between: ["android", "ios"] }]);
+    expect(store.getState().undoStack).toHaveLength(1);
+    expect(store.getState().message).toBeNull();
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+
+    store.getState().redo();
+    expect(store.getState().flow.connections).toEqual(added);
+  });
+
+  it.each([
+    ["the same pair again", "android", "ios"],
+    ["the reversed pair", "ios", "android"],
+  ])("refuses %s with a toast and leaves the flow alone", (_name, a, b) => {
+    const store = connected();
+    const before = store.getState();
+
+    const accepted = store.getState().connectSessions(a, b);
+
+    expect(accepted).toBe(false);
+    expect(store.getState().message).toBe("android and ios are already connected.");
+    expect(store.getState().flow).toEqual(before.flow);
+    expect(store.getState().undoStack).toEqual(before.undoStack);
+  });
+
+  it("refuses a session connecting to itself", () => {
+    const store = loadedCanvas(sessionsOnCanvas());
+    const before = store.getState().flow;
+
+    const accepted = store.getState().connectSessions("android", "android");
+
+    expect(accepted).toBe(false);
+    expect(store.getState().message).toBe("A session cannot connect to itself.");
+    expect(store.getState().flow).toEqual(before);
+  });
+
+  it.each([
+    ["the workspace", "workspace-1", "android"],
+    ["the workspace as the second end", "android", "workspace-1"],
+    ["a node", "android", "a1"],
+  ])("refuses a connection to %s with the rule's message", (_name, a, b) => {
+    const store = loadedCanvas(sessionsOnCanvas());
+    const before = store.getState().flow;
+    const [problem] = flowProblems({
+      ...before,
+      connections: [{ id: "c1", between: [a, b] }],
+    }).filter(({ rule }) => rule === "session-connections");
+
+    const accepted = store.getState().connectSessions(a, b);
+
+    expect(problem).toBeDefined();
+    expect(accepted).toBe(false);
+    expect(store.getState().message).toBe(problem?.message);
+    expect(store.getState().flow).toEqual(before);
+    expect(store.getState().undoStack).toEqual([]);
+  });
+
+  it("deletes a selected connection edge, and undo restores it", () => {
+    const store = connected();
+    const before = store.getState().flow;
+    const [connection] = before.connections ?? [];
+    store.getState().selectWires([`connection-${connection?.id}`]);
+
+    store.getState().deleteSelection();
+
+    expect(store.getState().flow).not.toHaveProperty("connections");
+    expect(store.getState().undoStack).toHaveLength(2);
+
+    store.getState().undo();
+    expect(store.getState().flow).toEqual(before);
+  });
+});

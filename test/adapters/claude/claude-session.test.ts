@@ -109,6 +109,7 @@ describe("openClaudeSession", () => {
     expect(sessions.get("fd-run")?.command).toContain("--plugin-dir '/fd/builds/abc'");
     expect(sessions.get("fd-run")?.env).toEqual({
       FLOWDECK_SOCK: "/fd/sockets/fd-run.sock",
+      FD_WORKSPACE_TMUX: "fd-run",
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
       FLOWDECK_HOOK_NODE: "/opt/my node/bin/node",
       FLOWDECK_HOOK_SCRIPT: "/fd/hooks/flowdeck-hook.cjs",
@@ -171,12 +172,33 @@ describe("openClaudeSession", () => {
     await opened.session.ensureStarted();
 
     const command = sessions.get("fd-run")?.command ?? "";
-    expect(command).toContain(" claude --resume s1 --model 'haiku'");
+    expect(command).toContain(" claude --resume s1 --name fd-run --model 'haiku'");
     expect(command).toContain(" --settings '/fd/builds/abc/settings.json'");
     expect(command).toMatch(/ --plugin-dir '\/fd\/builds\/abc'$/);
     expect(sessions.get("fd-run")?.env?.["FLOWDECK_SOCK"]).toBe("/fd/sockets/fd-run.sock");
     await opened.stop();
   });
+
+  it.each([false, true])(
+    "names the session by its tmux name and publishes that name as FD_WORKSPACE_TMUX (resume: %s)",
+    async (resume) => {
+      const sessions = new SlowStartHost();
+      const claude = new ClaudeCli({ sessions, pollIntervalMs: 2, readyTimeoutMs: 100 });
+      const opened = await openClaudeSession(
+        { ...options, sessionName: "fd-run-1a2b3c4d", resume },
+        { sessions, claude, sessionId: "s1" },
+      );
+      sessions.finishStart();
+
+      await opened.session.ensureStarted();
+
+      const started = sessions.get("fd-run-1a2b3c4d");
+      const flag = resume ? "--resume" : "--session-id";
+      expect(started?.command).toContain(` claude ${flag} s1 --name fd-run-1a2b3c4d `);
+      expect(started?.env?.["FD_WORKSPACE_TMUX"]).toBe("fd-run-1a2b3c4d");
+      await opened.stop();
+    },
+  );
 
   describe("for a workspace build", () => {
     const openWorkspace = (overrides: { resume?: boolean } = {}) => {
@@ -245,7 +267,7 @@ describe("openClaudeSession", () => {
       await session.session.ensureStarted();
 
       const command = sessions.get("fd-run")?.command ?? "";
-      expect(command).toContain(" claude --resume s1 --model 'haiku'");
+      expect(command).toContain(" claude --resume s1 --name fd-run --model 'haiku'");
       expect(command).toContain(" --add-dir '..'");
       expect(command).toContain(" --plugin-dir '../plugin'");
       await session.stop();

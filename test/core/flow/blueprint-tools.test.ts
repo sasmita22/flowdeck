@@ -164,6 +164,35 @@ describe("blueprintToolDefinitions", () => {
     expect(description).not.toMatch(/\bsession\b(?! containers?)/i);
   });
 
+  it("says read_blueprint reads the blueprint's connections", () => {
+    expect(definition("read_blueprint").description).toMatch(/\bconnections\b/);
+  });
+
+  it("keeps the wire tool to then and event wires between node ports", () => {
+    const { description, inputSchema } = definition("wire");
+
+    expect(description).toBe("Connect an output port of one node to an input port of another.");
+    expect(inputSchema).toEqual({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["then", "event"] },
+        from: {
+          type: "object",
+          properties: { node: { type: "string" }, port: { type: "string" } },
+          required: ["node", "port"],
+        },
+        to: {
+          type: "object",
+          properties: { node: { type: "string" }, port: { type: "string" } },
+          required: ["node", "port"],
+        },
+      },
+      required: ["kind", "from", "to"],
+      additionalProperties: false,
+    });
+  });
+
   it("lets read_blueprint name a blueprint, optionally", () => {
     const [branch] = inputBranches("read_blueprint");
     expect(branch?.properties?.blueprint?.type).toBe("string");

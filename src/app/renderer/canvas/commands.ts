@@ -1,5 +1,6 @@
 import type {
   CanvasNote,
+  Connection,
   Flow,
   FlowContainer,
   FlowSettings,
@@ -41,6 +42,18 @@ const withNotes = (flow: Flow, notes: readonly CanvasNote[]): Flow => {
 
 const notesOf = (flow: Flow): readonly CanvasNote[] => flow.notes ?? [];
 
+const withConnections = (flow: Flow, connections: readonly Connection[]): Flow => {
+  if (connections.length > 0) return { ...flow, connections: [...connections] };
+  const rest = { ...flow };
+  delete rest.connections;
+  return rest;
+};
+
+const connectionsOf = (flow: Flow): readonly Connection[] => flow.connections ?? [];
+
+const touching = (flow: Flow, removed: ReadonlySet<string>): Indexed<Connection>[] =>
+  indexed(connectionsOf(flow), ({ between }) => between.some((end) => removed.has(end)));
+
 const withMember = (flow: Flow, containerId: string | undefined, id: string, join: boolean) =>
   containerId === undefined
     ? flow.containers
@@ -72,6 +85,20 @@ export const addWire = (wire: Wire): Command => ({
   do: (flow) => ({ ...flow, wires: [...flow.wires, wire] }),
   undo: (flow) => ({ ...flow, wires: flow.wires.slice(0, -1) }),
 });
+
+export const addConnection = (connection: Connection): Command => ({
+  do: (flow) => withConnections(flow, [...connectionsOf(flow), connection]),
+  undo: (flow) => withConnections(flow, connectionsOf(flow).slice(0, -1)),
+});
+
+export const deleteConnections = (flow: Flow, ids: readonly string[]): Command => {
+  const doomed = new Set(ids);
+  const connections = indexed(connectionsOf(flow), ({ id }) => doomed.has(id));
+  return {
+    do: (current) => withConnections(current, without(connectionsOf(current), connections)),
+    undo: (current) => withConnections(current, reinsert(connectionsOf(current), connections)),
+  };
+};
 
 export const addNote = (note: CanvasNote): Command => ({
   do: (flow) => withNotes(flow, [...notesOf(flow), note]),
@@ -147,26 +174,33 @@ const deleting = (flow: Flow, ids: readonly string[], dropped?: ReadonlySet<stri
     (wire) => doomed.has(wire.from.node) || doomed.has(wire.to.node),
   );
   const containers = containerRemoval(flow.containers, doomed, dropped);
+  const connections = touching(flow, new Set(containers.containers.map(({ item }) => item.id)));
   return {
     do: (current) =>
-      withNotes(
-        {
-          ...current,
-          nodes: without(current.nodes, nodes),
-          wires: without(current.wires, wires),
-          containers: removeContainers(current.containers, containers),
-        },
-        without(notesOf(current), notes),
+      withConnections(
+        withNotes(
+          {
+            ...current,
+            nodes: without(current.nodes, nodes),
+            wires: without(current.wires, wires),
+            containers: removeContainers(current.containers, containers),
+          },
+          without(notesOf(current), notes),
+        ),
+        without(connectionsOf(current), connections),
       ),
     undo: (current) =>
-      withNotes(
-        {
-          ...current,
-          nodes: reinsert(current.nodes, nodes),
-          wires: reinsert(current.wires, wires),
-          containers: restoreContainers(current.containers, containers),
-        },
-        reinsert(notesOf(current), notes),
+      withConnections(
+        withNotes(
+          {
+            ...current,
+            nodes: reinsert(current.nodes, nodes),
+            wires: reinsert(current.wires, wires),
+            containers: restoreContainers(current.containers, containers),
+          },
+          reinsert(notesOf(current), notes),
+        ),
+        reinsert(connectionsOf(current), connections),
       ),
   };
 };
@@ -287,15 +321,26 @@ const rehome = (containers: readonly FlowContainer[], moves: readonly Move[]): F
 
 export const moveNodes = (moves: readonly Move[]): Command => {
   let previous: readonly FlowContainer[] | undefined;
+  let dropped: Indexed<Connection>[] = [];
   return {
     do: (flow) => {
       previous = flow.containers;
-      return { ...placeAt(moves, "to")(flow), containers: rehome(flow.containers, moves) };
+      const containers = rehome(flow.containers, moves);
+      const kept = new Set(containers.map(({ id }) => id));
+      dropped = touching(
+        flow,
+        new Set(flow.containers.map(({ id }) => id).filter((id) => !kept.has(id))),
+      );
+      return withConnections(
+        { ...placeAt(moves, "to")(flow), containers },
+        without(connectionsOf(flow), dropped),
+      );
     },
-    undo: (flow) => ({
-      ...placeAt(moves, "from")(flow),
-      containers: [...(previous ?? flow.containers)],
-    }),
+    undo: (flow) =>
+      withConnections(
+        { ...placeAt(moves, "from")(flow), containers: [...(previous ?? flow.containers)] },
+        reinsert(connectionsOf(flow), dropped),
+      ),
   };
 };
 

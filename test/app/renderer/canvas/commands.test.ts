@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  addConnection,
   addNode,
   addWire,
+  deleteConnections,
   deleteFlowContainer,
   deleteNodes,
   moveNodes,
@@ -12,7 +14,7 @@ import {
   type Command,
 } from "../../../../src/app/renderer/canvas/commands.js";
 import { flowsEqual } from "../../../../src/core/flow/equal.js";
-import type { Flow, Node, Wire } from "../../../../src/core/flow/schema.js";
+import type { Connection, Flow, Node, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
@@ -556,5 +558,139 @@ describe("moveNodes across container frames", () => {
     const after = moveNodes([{ id: "v", from: at, to: { x: 5, y: 5 } }]).do(before);
 
     expect(after.containers).toEqual(before.containers);
+  });
+});
+
+describe("connections", () => {
+  const at = { x: 0, y: 0 };
+  const androidIos: Connection = { id: "c1", between: ["android", "ios"] };
+  const androidWeb: Connection = { id: "c2", between: ["web", "android"] };
+  const iosWeb: Connection = { id: "c3", between: ["ios", "web"] };
+
+  const threeSessions = (connections?: Connection[]): Flow => {
+    const base = flow(
+      [
+        trigger("w-start"),
+        output("w-stop"),
+        trigger("a1"),
+        output("a2"),
+        trigger("i1"),
+        output("i2"),
+        trigger("b1"),
+        output("b2"),
+      ],
+      [
+        thenWire("w-start", "w-stop"),
+        thenWire("a1", "a2"),
+        thenWire("i1", "i2"),
+        thenWire("b1", "b2"),
+      ],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["a1", "a2"], { id: "android", name: "android" }),
+          sessionContainer(["i1", "i2"], { id: "ios", name: "ios" }),
+          sessionContainer(["b1", "b2"], { id: "web", name: "web" }),
+        ],
+      },
+    );
+    return connections === undefined ? base : { ...base, connections };
+  };
+
+  const connectionIds = (source: Flow) => source.connections?.map(({ id }) => id);
+
+  it("addConnection adds the connection, and undo leaves no connections key", () => {
+    const before = threeSessions();
+
+    const { after, restored } = roundTrip(addConnection(androidIos), before);
+
+    expect(after.connections).toEqual([androidIos]);
+    expect(restored).toEqual(before);
+    expect(restored).not.toHaveProperty("connections");
+  });
+
+  it("addConnection appends after the existing ones, and undo takes only it away", () => {
+    const before = threeSessions([androidWeb]);
+
+    const { after, restored } = roundTrip(addConnection(androidIos), before);
+
+    expect(connectionIds(after)).toEqual(["c2", "c1"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("deleteConnections removes the given ids, and undo puts them back in place", () => {
+    const before = threeSessions([androidIos, androidWeb, iosWeb]);
+
+    const { after, restored } = roundTrip(deleteConnections(before, ["c1", "c3"]), before);
+
+    expect(connectionIds(after)).toEqual(["c2"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("deleteConnections of the last one leaves no connections key", () => {
+    const before = threeSessions([androidIos]);
+
+    const after = deleteConnections(before, ["c1"]).do(before);
+
+    expect(after).not.toHaveProperty("connections");
+  });
+
+  it("deleteFlowContainer removes the container's connections, and one undo restores both", () => {
+    const before = threeSessions([androidIos, androidWeb]);
+
+    const { after, restored } = roundTrip(deleteFlowContainer(before, "ios"), before);
+
+    expect(after.containers.map(({ id }) => id)).not.toContain("ios");
+    expect(connectionIds(after)).toEqual(["c2"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("deleting every node of a container removes its connections, and one undo restores them", () => {
+    const before = threeSessions([androidWeb, androidIos, iosWeb]);
+
+    const { after, restored } = roundTrip(deleteNodes(before, ["i1", "i2"]), before);
+
+    expect(after.containers.map(({ id }) => id)).not.toContain("ios");
+    expect(connectionIds(after)).toEqual(["c2"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("deleting a container's only connection leaves no connections key", () => {
+    const before = threeSessions([androidIos]);
+
+    const after = deleteFlowContainer(before, "ios").do(before);
+
+    expect(after).not.toHaveProperty("connections");
+  });
+
+  it("moving every node out of a container removes its connections, and undo restores them", () => {
+    const before = threeSessions([androidIos, androidWeb]);
+    const command = moveNodes(
+      ["i1", "i2"].map((id) => ({
+        id,
+        from: at,
+        to: { x: 2000, y: 0 },
+        container: { from: "ios", to: "web" },
+      })),
+    );
+
+    const { after, restored } = roundTrip(command, before);
+
+    expect(after.containers.map(({ id }) => id)).not.toContain("ios");
+    expect(connectionIds(after)).toEqual(["c2"]);
+    expect(restored).toEqual(before);
+  });
+
+  it("keeps the connections of a container that is not removed", () => {
+    const before = threeSessions([androidIos, androidWeb]);
+
+    const deleted = deleteNodes(before, ["i1"]).do(before);
+    const moved = moveNodes([
+      { id: "i1", from: at, to: at, container: { from: "ios", to: "web" } },
+    ]).do(before);
+
+    expect(deleted.connections).toEqual(before.connections);
+    expect(moved.connections).toEqual(before.connections);
   });
 });

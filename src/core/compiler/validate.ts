@@ -16,6 +16,7 @@ import { rule as parallelSection } from "./rules/parallel-section.js";
 import { rule as ports } from "./rules/ports.js";
 import { rule as references } from "./rules/references.js";
 import { rule as requiredSettings } from "./rules/required-settings.js";
+import { rule as sessionConnections } from "./rules/session-connections.js";
 import { rule as sessionNames } from "./rules/session-names.js";
 import { rule as sessionSettings } from "./rules/session-settings.js";
 import { rule as stopRequired } from "./rules/stop-required.js";
@@ -58,6 +59,7 @@ export const rules = [
   workspaceCount,
   sessionSettings,
   sessionNames,
+  sessionConnections,
   outsideContainer,
   oneStart,
   stopRequired,

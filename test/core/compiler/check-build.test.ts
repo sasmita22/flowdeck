@@ -795,6 +795,88 @@ describe("checkBuild per container", () => {
     });
   });
 
+  describe("connected sessions", () => {
+    const connected = async (): Promise<BuildCheckInputs> => {
+      const source: Flow = {
+        ...twoSessionWorkflow(),
+        connections: [{ id: "c1", between: ["session-1", "session-2"] }],
+      };
+      const laidDown = await laid(source);
+      return {
+        laidDown,
+        readBack: laidDown.map(fillContainerFile),
+        manifest: manifestOf(laidDown),
+        flow: source,
+        shared: [],
+      };
+    };
+    const block = /\n## Connected sessions\n\n(- .*\n)+/;
+    const androidPath = "sessions/android/CLAUDE.md";
+    const workspacePath = "workspace/CLAUDE.md";
+    const rulesOf = (failures: readonly BuildCheckFailure[]) =>
+      failures.map((failure) => [failure.file, failure.rule, failure.container]);
+
+    it("passes peer sections and the pair list as emitted, with notes added below", async () => {
+      const inputs = await connected();
+      for (const path of [androidPath, "sessions/ios/CLAUDE.md", workspacePath]) {
+        const text = inputs.laidDown.find((file) => file.path === path)?.content;
+        expect(text, path).toMatch(block);
+      }
+
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+
+    it("finds no peer or pair failure in a read-back identical to the laid-down files", async () => {
+      const inputs = await connected();
+
+      const rules = checkBuild({ ...inputs, readBack: inputs.laidDown }).map(
+        (failure) => failure.rule,
+      );
+
+      expect(rules).not.toEqual([]);
+      expect(rules).not.toContain("session-peers");
+      expect(rules).not.toContain("connected-pairs");
+    });
+
+    it.each([
+      ["removes", (content: string) => content.replace(block, "\n")],
+      [
+        "alters",
+        (content: string) =>
+          content.replace("- ios (ios): FD_SESSION_IOS_TMUX", "- ios (ios): FD_SESSION_IOS_ID"),
+      ],
+    ])(
+      "fails a build agent that %s android's peer section, naming android only",
+      async (_label, change) => {
+        const inputs = edited(await connected(), androidPath, change);
+
+        expect(rulesOf(checkBuild(inputs))).toEqual([[androidPath, "session-peers", "android"]]);
+      },
+    );
+
+    it.each([
+      ["removes", (content: string) => content.replace(block, "\n")],
+      [
+        "alters",
+        (content: string) =>
+          content.replace("- android (android) and ios (ios)", "- android and ios"),
+      ],
+    ])("fails a build agent that %s the workspace pair list", async (_label, change) => {
+      const inputs = edited(await connected(), workspacePath, change);
+
+      expect(rulesOf(checkBuild(inputs))).toEqual([
+        [workspacePath, "connected-pairs", "workspace"],
+      ]);
+    });
+
+    it("checks a build without connections as before", async () => {
+      const inputs = await twoSessions();
+      for (const file of inputs.laidDown) expect(file.content).not.toMatch(block);
+
+      expect(checkBuild(inputs)).toEqual([]);
+    });
+  });
+
   it("names a file added to a container's plugin as extra", async () => {
     const path = "sessions/android/plugin/agents/stray.md";
     const inputs = await twoSessions();

@@ -27,7 +27,9 @@ Nodes sit in containers, drawn as frames on the canvas:
 
 Each container holds exactly one Start and one Stop, and its Start reaches its Stop. A blueprint with a workspace is a workflow: every node in it sits in the workspace or a session. A blueprint with no workspace is a library, and a library cannot be built. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
 
-The tools cannot add, delete or change a container. For a container's settings, the build model or the permission mode, tell the user to set them on the canvas: a container's settings by selecting its frame, the blueprint settings from the gear. Connectors are not set in the blueprint: each session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
+A connection joins two session containers so their sessions may message each other directly. `read_blueprint` answers the `connections`, each with the two container ids it is `between`.
+
+The tools cannot add, delete or change a container or a connection; the user draws a connection on the canvas between two session frames. For a container's settings, the build model or the permission mode, tell the user to set them on the canvas: a container's settings by selecting its frame, the blueprint settings from the gear. Connectors are not set in the blueprint: each session uses the connectors set up for the user's Claude Code, which the Doctor page lists. To add one, the user runs `claude mcp add --scope user <name>`.
 
 ## Nodes
 
@@ -112,18 +114,19 @@ A `wire` edit that breaks `ports` or `references` is refused, and so is a `chang
 - `one-stop`: each container has at most one Stop.
 - `session-settings`: each session has a `repo`, a `branch` and a `model`, and the workspace a `model`.
 - `session-names`: each session has a name no other session uses.
+- `session-connections`: a connection joins two different sessions, at most once per pair.
 - `outside-container`: in a workflow, every node sits in the workspace or a session.
 
 ## Tools
 
 Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved blueprint; leave it out for the open one. Reading a deleted blueprint answers that it was deleted. Edits apply only to the blueprint you were opened on, and only while it is open in the editor; an edit at any other time is refused. When asked to change another blueprint, reply that you can edit only the open one, and that the user can open that blueprint's own Agent pane.
 
-| Tool                | Does                                                                                          | Input                                 |
-| ------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                         | none                                  |
-| `search_blueprints` | Finds blueprints whose name or any node label contains the query                              | `query`                               |
-| `read_blueprint`    | Reads nodes, wires, containers, whether there are unsaved changes, and current problems       | `blueprint`                           |
-| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId` | `type`, `label`, `parent`, `settings` |
+| Tool                | Does                                                                                                 | Input                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `list_blueprints`   | Lists every saved blueprint that has not been deleted                                                | none                                  |
+| `search_blueprints` | Finds blueprints whose name or any node label contains the query                                     | `query`                               |
+| `read_blueprint`    | Reads nodes, wires, containers, connections, whether there are unsaved changes, and current problems | `blueprint`                           |
+| `add_node`          | Adds a node; the settings given are merged over the type's defaults; answers the new `nodeId`        | `type`, `label`, `parent`, `settings` |
 
 `add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`.
 | `change_node` | Changes a node's label or some of its settings; settings given are merged over the current ones | `nodeId`, `label`, `settings` |

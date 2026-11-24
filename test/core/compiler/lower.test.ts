@@ -437,4 +437,47 @@ describe("lower", () => {
       ]);
     });
   });
+
+  describe("connections", () => {
+    const android = "session-1";
+    const ios = "session-2";
+    const web = "session-3";
+
+    const threeSessions = (androidName = "android"): Flow =>
+      sessionsWorkflow([
+        { name: androidName, repo: "/repos/android", branch: "main" },
+        { name: "ios", repo: "/repos/ios", branch: "main" },
+        { name: "web", repo: "/repos/web", branch: "main" },
+      ]);
+
+    const connectionsOf = (input: Flow, ...pairs: [string, string][]) =>
+      lower(
+        { ...input, connections: pairs.map((between, index) => ({ id: `c${index}`, between })) },
+        workspace,
+      ).manifest;
+
+    it("carries each connection as a pair of session slugs", () => {
+      expect(connectionsOf(threeSessions(), [android, ios]).connections).toEqual([
+        ["android", "ios"],
+      ]);
+    });
+
+    it("names a renamed session by its new slug", () => {
+      expect(connectionsOf(threeSessions("Droid App"), [android, ios]).connections).toEqual([
+        ["droid-app", "ios"],
+      ]);
+    });
+
+    it("sorts each pair and the list", () => {
+      expect(connectionsOf(threeSessions(), [web, ios], [ios, android]).connections).toEqual([
+        ["android", "ios"],
+        ["ios", "web"],
+      ]);
+    });
+
+    it("leaves the connections key out when there are none", () => {
+      expect(connectionsOf(threeSessions())).not.toHaveProperty("connections");
+      expect(lower(threeSessions(), workspace).manifest).not.toHaveProperty("connections");
+    });
+  });
 });

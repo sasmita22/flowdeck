@@ -13,6 +13,9 @@ const buildConfigOf = (flow: Flow): BuildConfig | null => sessionBuildConfig(flo
 
 const copy = <T>(value: T): T => structuredClone(value);
 
+const asSaved = ({ connections, ...flow }: Flow): Flow =>
+  copy(connections === undefined || connections.length === 0 ? flow : { ...flow, connections });
+
 const cleanName = (name: string): string => {
   if (name.trim() === "") throw new Error("A blueprint needs a name");
   return name.trim();
@@ -83,7 +86,7 @@ export class FakeFlowStore implements FlowStore {
       flowId: blueprint.flowId,
       name: blueprint.name,
       version,
-      flow: copy(flow),
+      flow: asSaved(flow),
     });
     blueprint.touched = ++this.clock;
     return { flowId: blueprint.flowId, version };

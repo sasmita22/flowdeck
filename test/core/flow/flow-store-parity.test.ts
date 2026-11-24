@@ -5,7 +5,7 @@ import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
-import { roundTripFlow } from "../../fixtures/round-trip-flow.js";
+import { roundTripFlow, unconnectedRoundTripFlow } from "../../fixtures/round-trip-flow.js";
 
 const kinds = [
   ["SqliteFlowStore", "sqlite"],
@@ -116,5 +116,27 @@ describe.each(kinds)("%s delete", (_name, kind) => {
     expect(store.isDeleted("flow-a")).toBe(true);
     expect(store.isDeleted("flow-b")).toBe(false);
     expect(store.isDeleted("unknown")).toBe(false);
+  });
+});
+
+describe.each(kinds)("%s connections", (_name, kind) => {
+  const open = withStores(kind);
+
+  it("reopens a flow with connections equal to the one saved", () => {
+    const store = open();
+    store.save(roundTripFlow());
+
+    expect(store.loadLatest()?.flow).toEqual(roundTripFlow());
+  });
+
+  it.each([
+    ["without connections", unconnectedRoundTripFlow()],
+    ["with an empty connections list", { ...unconnectedRoundTripFlow(), connections: [] }],
+  ])("reopens a flow saved %s with no connections key", (_label, saved) => {
+    const store = open();
+    store.save(saved);
+
+    expect(store.loadLatest()?.flow).toEqual(unconnectedRoundTripFlow());
+    expect(store.loadLatest()?.flow).not.toHaveProperty("connections");
   });
 });

@@ -33,6 +33,7 @@ const storedManifestSchema = z.looseObject({
   version: z.literal(1),
   hash: z.string(),
   containers: z.array(storedContainerSchema),
+  connections: z.array(z.tuple([z.string(), z.string()])).optional(),
 });
 
 export function parseManifest(

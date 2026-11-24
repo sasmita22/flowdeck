@@ -1,6 +1,6 @@
 import { MarkerType } from "@xyflow/react";
 import { mainFlow } from "../../../core/flow/main-flow.js";
-import type { CanvasNote, Flow, Node, Wire } from "../../../core/flow/schema.js";
+import type { CanvasNote, Flow, FlowContainer, Node, Wire } from "../../../core/flow/schema.js";
 import { nodeLook } from "../nodes/look.js";
 import {
   bodyFrameBounds,
@@ -37,6 +37,7 @@ export interface ViewNode {
     loopId?: string;
     forEachId?: string;
     containerId?: string;
+    session?: boolean;
     text?: string;
     ignored?: boolean;
   };
@@ -49,12 +50,16 @@ export interface ViewEdge {
   target: string;
   targetHandle: string;
   markerEnd: { type: MarkerType };
+  markerStart?: { type: MarkerType };
+  style?: { strokeDasharray: string };
   selected?: boolean;
-  type?: "aligned" | "branch";
+  type?: "aligned" | "branch" | "connection";
   data?: { align: Align } | { label: string };
 }
 
 export type Align = "source" | "target";
+
+export const connectionPorts = { source: "session-out", target: "session-in" } as const;
 
 type EdgeEnds = { sourceX: number; sourceY: number; targetX: number; targetY: number };
 
@@ -144,22 +149,30 @@ const toForEachFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =
 
 const behindSelectedNodes = -1000;
 
+const framePrefix = "container-frame-";
+
+const containerFrameId = (id: string) => `${framePrefix}${id}`;
+
+export const containerOfFrameId = (nodeId: string): string | undefined =>
+  nodeId.startsWith(framePrefix) ? nodeId.slice(framePrefix.length) : undefined;
+
+const hasFrame = (container: FlowContainer) => container.nodes.length > 0;
+
 const toFlowContainerFrameViewNodes = (flow: Flow, selection: readonly string[]): ViewNode[] =>
-  flow.containers
-    .filter((container) => container.nodes.length > 0)
-    .map((container) => ({
-      ...frameView(
-        `container-frame-${container.id}`,
-        "container-frame",
-        flowContainerBounds(flow, container.id),
-        {
-          containerId: container.id,
-          label: container.kind === "workspace" ? "Workspace" : container.name,
-        },
-      ),
-      selected: selection.includes(container.id),
-      zIndex: behindSelectedNodes,
-    }));
+  flow.containers.filter(hasFrame).map((container) => ({
+    ...frameView(
+      containerFrameId(container.id),
+      "container-frame",
+      flowContainerBounds(flow, container.id),
+      {
+        containerId: container.id,
+        label: container.kind === "workspace" ? "Workspace" : container.name,
+        ...(container.kind === "session" && { session: true }),
+      },
+    ),
+    selected: selection.includes(container.id),
+    zIndex: behindSelectedNodes,
+  }));
 
 const placed = (flow: Flow, node: Node, position: Position) => {
   if (!isBar(node)) return { position };
@@ -231,7 +244,39 @@ const alignOf = (types: ReadonlyMap<string, Node["type"]>, wire: Wire): Align | 
   return null;
 };
 
-export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewEdge[] => {
+const connectionPrefix = "connection-";
+
+export const connectionEdgeId = (id: string) => `${connectionPrefix}${id}`;
+
+export const connectionOfEdge = (edgeId: string) => edgeId.slice(connectionPrefix.length);
+
+const toConnectionEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
+  const framed = new Set(flow.containers.filter(hasFrame).map(({ id }) => id));
+  return (flow.connections ?? [])
+    .filter(({ between }) => between.every((end) => framed.has(end)))
+    .map(({ id, between: [from, to] }) => {
+      const edge = connectionEdgeId(id);
+      const isSelected = selected.includes(edge);
+      const marker = {
+        type: MarkerType.ArrowClosed,
+        ...(isSelected && { color: "var(--select)" }),
+      };
+      return {
+        id: edge,
+        type: "connection" as const,
+        source: containerFrameId(from),
+        sourceHandle: connectionPorts.source,
+        target: containerFrameId(to),
+        targetHandle: connectionPorts.target,
+        markerStart: marker,
+        markerEnd: marker,
+        style: { strokeDasharray: "6 4" },
+        ...(isSelected && { selected: true }),
+      };
+    });
+};
+
+const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
   const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
   return flow.wires.map((wire) => {
     const align = alignOf(types, wire);
@@ -254,3 +299,8 @@ export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewE
     };
   });
 };
+
+export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewEdge[] => [
+  ...toWireEdges(flow, selected),
+  ...toConnectionEdges(flow, selected),
+];

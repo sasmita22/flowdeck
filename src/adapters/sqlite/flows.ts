@@ -25,6 +25,7 @@ type CurrentRow = {
   containers: string;
   settings: string;
   notes: string;
+  connections: string;
 };
 
 type SummaryRow = {
@@ -189,8 +190,9 @@ export class SqliteFlowStore implements FlowStore {
 
       this.db
         .prepare(
-          `INSERT INTO flow_versions (flow_id, version, session, containers, settings, notes, saved_at)
-           VALUES (?, ?, '{}', ?, ?, ?, ?)`,
+          `INSERT INTO flow_versions
+             (flow_id, version, session, containers, settings, notes, connections, saved_at)
+           VALUES (?, ?, '{}', ?, ?, ?, ?, ?)`,
         )
         .run(
           flowId,
@@ -198,6 +200,7 @@ export class SqliteFlowStore implements FlowStore {
           JSON.stringify(flow.containers),
           JSON.stringify(flow.settings),
           JSON.stringify(flow.notes ?? []),
+          JSON.stringify(flow.connections ?? []),
           time,
         );
 
@@ -221,7 +224,7 @@ export class SqliteFlowStore implements FlowStore {
     const current = this.db
       .prepare(
         `SELECT flow_versions.flow_id, flows.name, flow_versions.version, flow_versions.containers,
-                flow_versions.settings, flow_versions.notes
+                flow_versions.settings, flow_versions.notes, flow_versions.connections
            FROM flow_versions JOIN flows ON flows.id = flow_versions.flow_id
           WHERE flow_versions.flow_id = ? AND flow_versions.version = ?`,
       )
@@ -259,6 +262,7 @@ export class SqliteFlowStore implements FlowStore {
     }));
 
     const notes = JSON.parse(current.notes) as unknown[];
+    const connections = JSON.parse(current.connections) as unknown[];
 
     return {
       flowId,
@@ -270,6 +274,7 @@ export class SqliteFlowStore implements FlowStore {
         containers: JSON.parse(current.containers) as unknown,
         settings: JSON.parse(current.settings) as unknown,
         ...(notes.length === 0 ? {} : { notes }),
+        ...(connections.length === 0 ? {} : { connections }),
       }),
     };
   }

@@ -139,8 +139,8 @@ const sessionEntry = (slug: string, repo: string, base: string) => ({
 const android = sessionEntry("android", "/repos/android", "main");
 const ios = sessionEntry("ios", "/repos/ios", "develop");
 
-const manifestWith = (containers: Record<string, unknown>[]) =>
-  canonicalJson({ version: 1, hash, files: {}, containers });
+const manifestWith = (containers: Record<string, unknown>[], extra: Record<string, unknown> = {}) =>
+  canonicalJson({ version: 1, hash, files: {}, containers, ...extra });
 
 describe("parseManifest with containers", () => {
   it("keeps every container of a two-session build that has no top-level session", () => {
@@ -198,6 +198,31 @@ describe("parseManifest with containers", () => {
         model: "sonnet",
       },
     ]);
+  });
+});
+
+describe("parseManifest with connections", () => {
+  const containers = () => [workspaceEntry(), android, ios];
+
+  it("keeps the connected slug pairs", () => {
+    const manifest = parseManifest(
+      manifestWith(containers(), { connections: [["android", "ios"]] }),
+      named,
+    );
+
+    expect(manifest.connections).toEqual([["android", "ios"]]);
+  });
+
+  it("reads a manifest without connections as before, with no connections key", () => {
+    expect(parseManifest(manifestWith(containers()), named)).not.toHaveProperty("connections");
+  });
+
+  it.each([
+    ["a pair with one slug", [["android"]]],
+    ["a pair with a number", [["android", 2]]],
+    ["a list that is not pairs", ["android"]],
+  ])("refuses connections with %s", (_label, connections) => {
+    expect(() => parseManifest(manifestWith(containers(), { connections }), named)).toThrow();
   });
 });
 

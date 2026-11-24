@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { flowProblems } from "../../../src/core/compiler/flow-problems.js";
+import type { Flow } from "../../../src/core/flow/schema.js";
 import {
   agent,
   flow,
   flowSettings,
   output,
   sessionContainer,
+  sessionsWorkflow,
   thenWire,
   trigger,
   wire,
@@ -122,5 +124,45 @@ describe("flowProblems", () => {
     expect(flowProblems(looseWireFirst)).toEqual([
       expect.objectContaining({ rule: "ports", node: "stop", wire: 2 }),
     ]);
+  });
+});
+
+describe("flowProblems on connections", () => {
+  const connected = (...pairs: [string, string][]): Flow => ({
+    ...sessionsWorkflow([
+      { name: "android", repo: "/repos/android", branch: "main" },
+      { name: "ios", repo: "/repos/ios", branch: "main" },
+    ]),
+    connections: pairs.map((between, index) => ({ id: `c${index + 1}`, between })),
+  });
+  const connectionProblems = (flow: Flow) =>
+    flowProblems(flow).filter(({ rule }) => rule === "session-connections");
+
+  it("raises nothing for two sessions connected once", () => {
+    expect(flowProblems(connected(["session-1", "session-2"]))).toEqual([]);
+  });
+
+  it.each<[string, [string, string][]]>([
+    ["a session to the workspace", [["session-1", "workspace-1"]]],
+    ["the workspace to a session", [["workspace-1", "session-1"]]],
+    ["a session to a node", [["session-1", "session-2-start"]]],
+    ["a session to an unknown id", [["session-1", "missing"]]],
+    ["a session to itself", [["session-1", "session-1"]]],
+    [
+      "a second connection between the same pair",
+      [
+        ["session-1", "session-2"],
+        ["session-1", "session-2"],
+      ],
+    ],
+    [
+      "the reversed connection after the first",
+      [
+        ["session-1", "session-2"],
+        ["session-2", "session-1"],
+      ],
+    ],
+  ])("raises session-connections for %s", (_label, pairs) => {
+    expect(connectionProblems(connected(...pairs))).toHaveLength(1);
   });
 });
