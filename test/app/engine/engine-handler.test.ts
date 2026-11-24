@@ -502,6 +502,35 @@ describe("createEngineHandler", async () => {
         });
       });
 
+      it("answers a stored library loop with the path, naming the host's library", async () => {
+        const flows = new FakeFlowStore({ newId: ids("loop-a", "loop-b") });
+        const usingLibrary = (usedId: string): Flow =>
+          parseFlow({
+            nodes: [
+              trigger("canvas-start"),
+              {
+                ...libraryUse(usedId),
+                settings: { libraryId: usedId, label: "Uses", overrides: {} },
+              },
+              output("canvas-stop"),
+            ],
+            wires: [thenWire("canvas-start", "use"), thenWire("use", "canvas-stop")],
+            containers: [],
+            settings: savedFlow().settings,
+          });
+        flows.save(nodeLibrary("Planner"), { name: "LoopA" });
+        flows.save(usingLibrary("loop-a"), { name: "LoopB" });
+        flows.save(usingLibrary("loop-b"), "loop-a");
+        const handler = createEngineHandler(options({ openStores: () => stores(flows) }));
+
+        expect(
+          await expand(handler, onWorkspaceMainFlow([libraryUse("loop-a")], [])),
+        ).toMatchObject({
+          ok: true,
+          value: { problem: "LoopA makes a loop: LoopA → LoopB → LoopA" },
+        });
+      });
+
       it("shows a library's later save the next time its user is opened, keeping only the library node in the blueprint", async () => {
         const flows = new FakeFlowStore({ newId: ids("flow-lib", "flow-host") });
         flows.save(nodeLibrary("Planner"), { name: "Android" });

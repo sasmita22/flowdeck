@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { rules, validate } from "../../../src/core/compiler/validate.js";
-import type { LibraryLookup } from "../../../src/core/flow/libraries.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 import {
   agent,
@@ -13,15 +12,13 @@ import {
   trigger,
   wire,
 } from "../../fixtures/flow-builders.js";
+import { knownLibrary } from "../../fixtures/known-library.js";
 
 const brokenDir = new URL("../../fixtures/broken/", import.meta.url);
 const examplesDir = new URL("../../../examples/", import.meta.url);
 
 const readJson = (dir: URL, name: string): unknown =>
   JSON.parse(readFileSync(new URL(name, dir), "utf8"));
-
-const knownLibrary: LibraryLookup = (flowId) =>
-  flowId === "known-library" ? { name: "Known", kind: "node-library", sessions: [] } : undefined;
 
 const brokenFixtures = readdirSync(brokenDir).filter((name) => name.endsWith(".json"));
 
@@ -50,6 +47,7 @@ describe("validate", () => {
         "container-wires",
         "library-use",
         "library-labels",
+        "library-loops",
       ]),
     );
     expect(ids).not.toContain("repo-required");
@@ -78,6 +76,7 @@ describe("validate", () => {
     "container-wires",
     "library-use",
     "library-labels",
+    "library-loops",
   ])("reports exactly %s for its broken fixture", (ruleId) => {
     const errors = validate(parseFlow(readJson(brokenDir, `${ruleId}.json`)), knownLibrary);
 

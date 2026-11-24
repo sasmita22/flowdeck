@@ -7,6 +7,7 @@ import { rule as containerWires } from "./rules/container-wires.js";
 import { rule as handoffs } from "./rules/handoffs.js";
 import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
 import { rule as libraryLabels } from "./rules/library-labels.js";
+import { rule as libraryLoops } from "./rules/library-loops.js";
 import { rule as libraryUse } from "./rules/library-use.js";
 import { rule as loopBody } from "./rules/loop-body.js";
 import { rule as loopCap } from "./rules/loop-cap.js";
@@ -72,6 +73,7 @@ export const rules = [
   containerWires,
   libraryUse,
   libraryLabels,
+  libraryLoops,
   oneStart,
   stopRequired,
   oneStop,

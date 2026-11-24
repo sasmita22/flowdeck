@@ -2390,6 +2390,7 @@ describe("libraries", () => {
     name: string,
     kind: FlowSummary["kind"],
     sessions: FlowSummary["sessions"] = [],
+    uses: string[] = [],
   ): FlowSummary => ({
     flowId,
     name,
@@ -2401,6 +2402,7 @@ describe("libraries", () => {
     pinned: false,
     kind,
     sessions,
+    uses,
   });
 
   const androidSession = {
@@ -2436,6 +2438,7 @@ describe("libraries", () => {
       name: "Android",
       kind: "session-library",
       sessions: [androidSession],
+      uses: [],
     });
     expect(store.getState().libraries("f-gone")).toBeUndefined();
     expect(store.getState().librarySummaries).toEqual(summaries);
@@ -2524,6 +2527,100 @@ describe("libraries", () => {
 
     expect(libraryNodes(store.getState().flow)).toHaveLength(1);
     expect(flowContainerOf(store.getState().flow, "library-1")?.id).toBe("session-1");
+  });
+
+  describe("refusing a loop", () => {
+    const stale = [summary("f-a", "A", "node-library"), summary("f-b", "B", "node-library")];
+    const fresh = [
+      summary("f-a", "A", "node-library", [], ["f-b"]),
+      summary("f-b", "B", "node-library"),
+    ];
+
+    const openOn = (openFlowId: string) => {
+      const store = loadedCanvas(twoSessionsOnCanvas());
+      store.getState().setLibraries(stale, openFlowId);
+      return store;
+    };
+
+    const expectUnchanged = (store: Store, before: Flow, message: string | RegExp) => {
+      expect(store.getState().message).toMatch(message);
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toHaveLength(0);
+    };
+
+    it("refuses adding a library that uses the open blueprint, read from the live summaries rather than the stale list", () => {
+      const store = openOn("f-b");
+      store.getState().setLibraries(fresh, "f-b");
+      const before = store.getState().flow;
+
+      store.getState().addLibrary("f-a");
+
+      expect(store.getState().message).toBe("Can't drop A: makes a loop: B → A → B");
+      expect(libraryNodes(store.getState().flow)).toEqual([]);
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toHaveLength(0);
+    });
+
+    it("refuses dropping it into a session container the same way", () => {
+      const store = openOn("f-b");
+      store.getState().setLibraries(fresh, "f-b");
+      const before = store.getState().flow;
+
+      store.getState().dropLibrary("f-a", inSession);
+
+      expectUnchanged(store, before, /^Can't drop A into .+: makes a loop: B → A → B$/);
+    });
+
+    it("refuses pasting a library node that uses the open blueprint, and pastes nothing", () => {
+      const store = openOn("f-b");
+      store.getState().dropLibrary("f-a", inSession);
+      store.getState().copy();
+      store.getState().setLibraries(fresh, "f-b");
+      const before = store.getState().flow;
+      const steps = store.getState().undoStack.length;
+
+      store.getState().paste();
+
+      expect(store.getState().message).toBe("Can't paste A: makes a loop: B → A → B");
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toHaveLength(steps);
+    });
+
+    it("refuses pasting a library node of the open blueprint itself", () => {
+      const store = openOn("f-other");
+      store.getState().dropLibrary("f-a", inSession);
+      store.getState().copy();
+      store.getState().setLibraries(stale, "f-a");
+      const before = store.getState().flow;
+      const steps = store.getState().undoStack.length;
+
+      store.getState().paste();
+
+      expect(store.getState().message).toBe("Can't paste A: makes a loop: A → A");
+      expect(store.getState().flow).toBe(before);
+      expect(store.getState().undoStack).toHaveLength(steps);
+    });
+
+    it("adds a library that another library also uses", () => {
+      const store = loadedCanvas(twoSessionsOnCanvas());
+      store
+        .getState()
+        .setLibraries(
+          [
+            summary("f-a", "A", "node-library", [], ["f-c"]),
+            summary("f-b", "B", "node-library"),
+            summary("f-c", "C", "node-library"),
+          ],
+          "f-b",
+        );
+
+      store.getState().dropLibrary("f-c", inSession);
+
+      expect(store.getState().message).toBeNull();
+      expect(libraryNodes(store.getState().flow).map((node) => node.settings.libraryId)).toEqual([
+        "f-c",
+      ]);
+    });
   });
 
   it("reports a known library's node without a missing-library problem, given the lookup", () => {

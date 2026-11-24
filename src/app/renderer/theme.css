@@ -1081,8 +1081,13 @@ body,
   cursor: grab;
 }
 
-.fd-palette-item:hover {
+.fd-palette-item:hover:not([aria-disabled="true"]) {
   background: color-mix(in srgb, var(--line) 45%, transparent);
+}
+
+.fd-palette-item[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .fd-palette-item:focus-visible {

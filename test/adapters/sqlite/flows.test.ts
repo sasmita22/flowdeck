@@ -512,6 +512,7 @@ describe("SqliteFlowStore", () => {
           buildConfig: null,
           variables: [],
           sessions: [],
+          uses: [],
           pinned: false,
         },
         {
@@ -524,6 +525,7 @@ describe("SqliteFlowStore", () => {
           buildConfig: null,
           variables: [],
           sessions: [],
+          uses: [],
           pinned: false,
         },
       ]);
@@ -595,6 +597,7 @@ describe("SqliteFlowStore", () => {
             { name: "ticket", kind: "text", nodeIds: ["say"] },
           ],
           sessions: [],
+          uses: [],
           pinned: false,
         },
         {
@@ -607,6 +610,7 @@ describe("SqliteFlowStore", () => {
           buildConfig: null,
           variables: [],
           sessions: [],
+          uses: [],
           pinned: false,
         },
       ]);

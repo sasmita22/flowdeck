@@ -4,8 +4,8 @@ import { unknownLibraries, type LibraryLookup } from "../../../../src/core/flow/
 
 const lookup: LibraryLookup = (flowId) =>
   ({
-    "f-review": { name: "Review", kind: "node-library" as const, sessions: [] },
-    "f-android": { name: "Android", kind: "session-library" as const, sessions: [] },
+    "f-review": { name: "Review", kind: "node-library" as const, sessions: [], uses: [] },
+    "f-android": { name: "Android", kind: "session-library" as const, sessions: [], uses: [] },
   })[flowId];
 
 describe("libraryCaption", () => {

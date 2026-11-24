@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { order } from "../../../src/core/flow/order.js";
 import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import { validate } from "../../../src/core/compiler/validate.js";
-import type { LibraryLookup } from "../../../src/core/flow/libraries.js";
+import { knownLibrary } from "../../fixtures/known-library.js";
 
 const readExample = (name: string): unknown =>
   JSON.parse(readFileSync(new URL(`../../../examples/${name}`, import.meta.url), "utf8"));
@@ -105,9 +105,6 @@ const storedFlows = flowFolders.flatMap((folder) => {
 const brokenFolder = "test/fixtures/broken/";
 const workingFlows = storedFlows.filter(({ file }) => !file.startsWith(brokenFolder));
 const brokenFlows = storedFlows.filter(({ file }) => file.startsWith(brokenFolder));
-
-const knownLibrary: LibraryLookup = (flowId) =>
-  flowId === "known-library" ? { name: "Known", kind: "node-library", sessions: [] } : undefined;
 
 describe("stored flows", () => {
   it("finds the example, fixture and e2e flows", () => {

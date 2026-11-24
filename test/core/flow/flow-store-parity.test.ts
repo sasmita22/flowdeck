@@ -259,6 +259,22 @@ describe.each(kinds)("%s summary", (_name, kind) => {
     ]);
   });
 
+  it("lists the libraries a blueprint uses, on its path and off it", () => {
+    const store = open();
+    store.save(throughCanvas([agent("plan")]), { name: "On path" });
+    store.save(throughCanvas([agent("check")]), { name: "Off path" });
+    const host = throughCanvas([libraryNode("use", "flow-a", "On path")]);
+    store.save(
+      parseFlow({ ...host, nodes: [...host.nodes, libraryNode("stray", "flow-b", "Off")] }),
+      {
+        name: "Host",
+      },
+    );
+
+    expect(summaryOf(store, "flow-c")?.uses).toEqual(["flow-a", "flow-b"]);
+    expect(summaryOf(store, "flow-a")?.uses).toEqual([]);
+  });
+
   it("still lists a host whose library is gone, with its own variables only", () => {
     const store = open();
     store.save(throughCanvas([branch("scan", "isFullScan")]), { name: "E2E" });
