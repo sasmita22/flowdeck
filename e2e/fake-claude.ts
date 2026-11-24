@@ -103,7 +103,7 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
-const directivePattern = /fake: (start|wait|fail|hang|pause)(?: ([A-Za-z0-9_-]+))?/g;
+const directivePattern = /fake: (start|wait|fail|hang|pause|hardstop)(?: ([A-Za-z0-9_-]+))?/g;
 const directivesIn = (text) => [...text.matchAll(directivePattern)].map(([, verb, slug]) => ({ verb, slug }));
 const pluginDirs = () => argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "")] : []));
 const pieceOfType = (agentType) => agentType.slice(agentType.indexOf(":") + 1);
@@ -414,7 +414,9 @@ const sessionTurn = async () => {
   const skill = resolve(pluginDirs()[0] ?? "", "skills", "run", "SKILL.md");
   const steps = existsSync(skill) ? readFileSync(skill, "utf8") : "";
   const dispatchLine = /^\\d+\\. NODE (\\S+) .*?: dispatch \\x60([^\\x60]+)\\x60/gm;
-  const nodes = [...steps.matchAll(dispatchLine)].map(([, nodeId, agentType]) => ({ nodeId, agentType }));
+  const nodes = [...steps.matchAll(dispatchLine)].map((match) => ({ nodeId: match[1], agentType: match[2], at: match.index }));
+  const hardStopLine = /^\\d+\\. NODE \\S+ .*?: hard rule: .*\\x60(STOPPED NODE \\S+)\\x60/gm;
+  const hardStops = [...steps.matchAll(hardStopLine)].map((match) => ({ marker: match[1], at: match.index }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
   say("────────");
@@ -422,7 +424,7 @@ const sessionTurn = async () => {
   say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
-  for (const { nodeId, agentType } of nodes) {
+  for (const { nodeId, agentType, at } of nodes) {
     const verbs = directivesIn(agentFileText(agentType)).map(({ verb }) => verb);
     const call = {
       tool_name: "Agent",
@@ -449,6 +451,13 @@ const sessionTurn = async () => {
       await pause(50);
       await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
       return say("Stop");
+    }
+    if (verbs.includes("hardstop")) {
+      const marker = hardStops.find((hardStop) => hardStop.at > at)?.marker;
+      await pause(50);
+      await post({ hook_event_name: "Stop", last_assistant_message: marker === undefined ? "ok" : "Hard stop.\\n" + marker });
+      say(marker ?? "Stop");
+      return ended();
     }
   }
   await pause(50);

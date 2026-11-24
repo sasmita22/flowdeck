@@ -20,6 +20,7 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 - Keep every step line starting `<n>. NODE <nodeId> `, in the same order, one per node of the container. Never add, remove, merge or move a step.
 - Never change a branch target, a loop cap, a gate's question, or a dispatch prompt.
+- Keep every `STOPPED NODE <nodeId>` line a Hard stop or Loop step tells the session to end its reply with, exactly as written.
 - Keep the frontmatter and the scope line. Never touch `plugin/hooks/`.
 - Never name a node or piece of another container.
 - A rule the blueprint's nodes do not state is never added and never a question.
