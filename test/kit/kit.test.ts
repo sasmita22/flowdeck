@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildReportSchema } from "../../src/core/compiler/build-report.js";
+import { namedSendLine, replyFallbackLine } from "../../src/core/compiler/emit.js";
 import { scopeLine } from "../../src/core/compiler/scope-line.js";
 import { SHARED_PIECE_TOOL } from "../../src/core/compiler/shared.js";
 import { frontmatterOf } from "../fixtures/kit-frontmatter.js";
@@ -70,6 +71,13 @@ const entryKeys = (field: string): string[] => {
 };
 
 describe("the build kit", () => {
+  it.each([
+    ["the reply line", replyFallbackLine],
+    ["the send rule", namedSendLine],
+  ])("write-workspace-rules quotes %s exactly as code writes it", (_name, line) => {
+    expect(skill("write-workspace-rules")).toContain(`\`${line}\``);
+  });
+
   it("is the flowdeck-build plugin", () => {
     const manifest = readKit(".claude-plugin/plugin.json");
 
