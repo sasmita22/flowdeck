@@ -413,8 +413,16 @@ const say = (line) => process.stdout.write(line + "\\r\\n");
 const sessionTurn = async () => {
   const skill = resolve(pluginDirs()[0] ?? "", "skills", "run", "SKILL.md");
   const steps = existsSync(skill) ? readFileSync(skill, "utf8") : "";
-  const dispatchLine = /^\\d+\\. NODE (\\S+) .*?: dispatch \\x60([^\\x60]+)\\x60/gm;
-  const nodes = [...steps.matchAll(dispatchLine)].map(([, nodeId, agentType]) => ({ nodeId, agentType }));
+  const stepLine = /^\\d+\\. NODE \\S+ .*$/gm;
+  const dispatchLine = /^\\d+\\. NODE (\\S+) .*?: dispatch \\x60([^\\x60]+)\\x60/;
+  const forkLine = /: dispatch every branch in one message, in parallel: /;
+  const branchCall = /\\x60([^\\x60]+)\\x60 with the prompt "NODE ([^\\\\"]+)/g;
+  const batchOf = (line) => {
+    if (forkLine.test(line)) return [...line.matchAll(branchCall)].map(([, agentType, nodeId]) => ({ nodeId, agentType }));
+    const match = dispatchLine.exec(line);
+    return match === null ? [] : [{ nodeId: match[1], agentType: match[2] }];
+  };
+  const batches = [...steps.matchAll(stepLine)].map(([line]) => batchOf(line)).filter((batch) => batch.length > 0);
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
   say("────────");
@@ -422,30 +430,38 @@ const sessionTurn = async () => {
   say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
-  for (const { nodeId, agentType } of nodes) {
-    const verbs = directivesIn(agentFileText(agentType)).map(({ verb }) => verb);
-    const call = {
-      tool_name: "Agent",
-      tool_use_id: "fake-" + nodeId + "-" + Date.now(),
-      tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
-    };
-    await pause(50);
-    await post({ hook_event_name: "PreToolUse", ...call });
-    say("NODE " + nodeId + " running");
-    if (verbs.includes("hang")) return say("NODE " + nodeId + " hangs");
-    await pause(50);
-    if (verbs.includes("fail")) {
-      await post({ hook_event_name: "StopFailure", error: "Fake failure in " + nodeId + "." });
-      say("NODE " + nodeId + " failed");
-      return ended();
+  for (const batch of batches) {
+    const calls = batch.map(({ nodeId, agentType }) => ({
+      nodeId,
+      agentType,
+      verbs: directivesIn(agentFileText(agentType)).map(({ verb }) => verb),
+      call: {
+        tool_name: "Agent",
+        tool_use_id: "fake-" + nodeId + "-" + Date.now(),
+        tool_input: { subagent_type: agentType, prompt: "NODE " + nodeId + "\\nGo" },
+      },
+    }));
+    for (const { nodeId, call } of calls) {
+      await pause(50);
+      await post({ hook_event_name: "PreToolUse", ...call });
+      say("NODE " + nodeId + " running");
     }
-    await post({
-      hook_event_name: "PostToolUse",
-      ...call,
-      tool_response: { agentType, status: "completed", content: [{ type: "text", text: "Fake report from " + nodeId + "." }] },
-    });
-    say("NODE " + nodeId + " done");
-    if (verbs.includes("pause")) {
+    for (const { nodeId, agentType, verbs, call } of calls) {
+      if (verbs.includes("hang")) return say("NODE " + nodeId + " hangs");
+      await pause(50);
+      if (verbs.includes("fail")) {
+        await post({ hook_event_name: "StopFailure", error: "Fake failure in " + nodeId + "." });
+        say("NODE " + nodeId + " failed");
+        return ended();
+      }
+      await post({
+        hook_event_name: "PostToolUse",
+        ...call,
+        tool_response: { agentType, status: "completed", content: [{ type: "text", text: "Fake report from " + nodeId + "." }] },
+      });
+      say("NODE " + nodeId + " done");
+    }
+    if (calls.some(({ verbs }) => verbs.includes("pause"))) {
       await pause(50);
       await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
       return say("Stop");
