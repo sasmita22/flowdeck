@@ -3,6 +3,7 @@ import type { Wire } from "../flow/schema.js";
 import { agentPrompt, agentTurnNode, agentType } from "../nodes/agent/execute.js";
 import { producersOf } from "../nodes/branch/execute.js";
 import { decidedByValue } from "../nodes/branch/settings.js";
+import { stopMarker } from "../run/stop-marker.js";
 import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, type ScopeParts } from "./scope-line.js";
@@ -23,6 +24,9 @@ const text = (value: unknown) => (typeof value === "string" ? value : "");
 const nodeList = (ids: readonly string[]) => ids.map((id) => `NODE ${id}`).join(", ");
 
 const quoted = (value: string) => JSON.stringify(value);
+
+const stopInstruction = (nodeId: string) =>
+  `end your reply with the line \`${stopMarker(nodeId)}\` and end your turn`;
 
 export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopeParts): BuildFile {
   const { prefix, nodes, wires, orchestrator } = manifest;
@@ -63,7 +67,9 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       }
       case "loop": {
         const atCap =
-          settings.onCap === "ask" ? "ask in the chat what to do" : "stop the run as failed";
+          settings.onCap === "ask"
+            ? "ask in the chat what to do"
+            : `stop the run as failed: ${stopInstruction(node.id)}`;
         return `repeat the steps inside it (${nodeList(inside(node.id))}) until ${text(settings.condition)}, at most ${String(settings.cap)} rounds; at the cap, ${atCap}.`;
       }
       case "foreach":
@@ -83,7 +89,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
           ? `continue with the first branch result that returns (${nodeList(into(node.id))}); the others are ignored.`
           : `continue once every branch has returned (${nodeList(into(node.id))}).`;
       case "hardstop":
-        return `hard rule: if ${text(settings.condition)}, stop the run at once and show ${text(settings.shown)}.`;
+        return `hard rule: if ${text(settings.condition)}, stop the run at once: show ${text(settings.shown)}, ${stopInstruction(node.id)}.`;
       case "library":
         throw new Error("library nodes are expanded before the build");
       case "output":
