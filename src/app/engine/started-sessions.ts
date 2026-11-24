@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import type { ManifestContainer } from "../../core/compiler/lower.js";
 import type { LoadedBuild, StartedSessionsView } from "../../core/run/execute.js";
 import {
@@ -8,6 +9,7 @@ import {
 } from "../../core/run/permission.js";
 import {
   SessionWatch,
+  type AskingNode,
   type SessionFailure,
   type SessionHookEvent,
 } from "../../core/run/session-watch.js";
@@ -16,6 +18,7 @@ import { sessionState } from "../../core/run/session-state.js";
 import type { EventEntry, RunSession, StoredEvent } from "../../core/run/store.js";
 import type { TurnEvents } from "../../core/run/turns.js";
 import type { HookEventKind } from "../../ports/event-source.js";
+import type { FileSystem } from "../../ports/file-system.js";
 import type { PermissionSource } from "../../ports/permission-source.js";
 import type { Store } from "../../ports/store.js";
 import type { Waiter } from "../../ports/waiter.js";
@@ -35,6 +38,7 @@ export type StartedSessionsOptions = {
   runId: string;
   events: TurnEvents;
   permissions?: PermissionSource;
+  fs?: Pick<FileSystem, "readFile">;
   store: Pick<Store, "appendAll">;
   waiter: Waiter;
   sessionAlive: (tmuxName: string) => Promise<boolean>;
@@ -54,6 +58,7 @@ type Watched = {
   dialogsAnswered: boolean;
   gone: boolean;
   openAsks: Map<string, number>;
+  subagents: Map<string, string>;
   events: EventEntry[];
 };
 
@@ -99,6 +104,7 @@ export class StartedSessions implements StartedSessionsView {
           dialogsAnswered: false,
           gone: false,
           openAsks: new Map(),
+          subagents: new Map(),
           events,
         },
       ];
@@ -168,8 +174,14 @@ export class StartedSessions implements StartedSessionsView {
     payload: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<PermissionDecision> {
-    const { container, watch, openAsks } = watched;
-    const open = watch.openNode;
+    const { container, openAsks, watch } = watched;
+    const resolved = await this.askingNode(watched, payload);
+    const asking: AskingNode =
+      "node" in resolved && watch.isOpen(resolved.node) && !signal.aborted
+        ? resolved
+        : { candidates: signal.aborted ? [] : watch.openCalls.map(({ nodeId }) => nodeId) };
+    const candidates = "candidates" in asking ? asking.candidates : [];
+    const open = "node" in asking ? asking.node : candidates[0];
     const nodeId =
       open ?? container.nodes.find((node) => node.type === "trigger")?.id ?? container.slug;
     if (open !== undefined) {
@@ -185,12 +197,51 @@ export class StartedSessions implements StartedSessionsView {
     }
     try {
       return permissionDecision(
-        await this.options.waiter.wait(permissionRequest(nodeId, payload), signal),
+        await this.options.waiter.wait(permissionRequest(nodeId, payload, candidates), signal),
       );
     } catch (error) {
       return denied(messageOf(error));
     } finally {
       if (open !== undefined) this.answered(watched, open);
+    }
+  }
+
+  private async askingNode(
+    watched: Watched,
+    payload: Record<string, unknown>,
+  ): Promise<AskingNode> {
+    const { watch, subagents } = watched;
+    const asking = watch.askingNode(payload);
+    const agentId = payload["agent_id"];
+    if ("node" in asking || typeof agentId !== "string") return asking;
+    const known = subagents.get(agentId);
+    if (known !== undefined && watch.isOpen(known)) return { node: known };
+    const toolUseId = await this.parentCallOf(watched, payload, agentId);
+    const node = watch.openCalls.find((call) => call.toolUseId === toolUseId)?.nodeId;
+    if (toolUseId === undefined || node === undefined) return asking;
+    subagents.set(agentId, node);
+    return { node };
+  }
+
+  private async parentCallOf(
+    watched: Watched,
+    payload: Record<string, unknown>,
+    agentId: string,
+  ): Promise<string | undefined> {
+    const transcript = payload["transcript_path"];
+    const { fs } = this.options;
+    if (fs === undefined || typeof transcript !== "string") return undefined;
+    const sessionId = watched.session.claudeSessionId;
+    const metaPath = `${dirname(transcript)}/${sessionId}/subagents/agent-${agentId}.meta.json`;
+    try {
+      const meta: unknown = JSON.parse(await fs.readFile(metaPath));
+      const toolUseId =
+        typeof meta === "object" && meta !== null
+          ? (meta as Record<string, unknown>)["toolUseId"]
+          : undefined;
+      return typeof toolUseId === "string" ? toolUseId : undefined;
+    } catch {
+      return undefined;
     }
   }
 

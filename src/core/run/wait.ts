@@ -19,6 +19,7 @@ export const waitRequestSchema = z.discriminatedUnion("kind", [
     kind: z.literal("permission"),
     tool: z.string(),
     input: z.string(),
+    candidates: z.array(z.string()).optional(),
   }),
 ]);
 
