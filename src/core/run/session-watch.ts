@@ -18,11 +18,16 @@ export type SessionHookEvent = AgentCallEvent & { sessionId: string };
 
 export type SessionFailure = { container: string; node: string };
 
+export type OpenCall = { nodeId: string; toolUseId?: string; agentType?: string };
+
+export type AskingNode = { node: string } | { candidates: string[] };
+
 export class SessionWatch {
   started = false;
   private stopped = false;
   private readonly open = new Set<string>();
   private readonly finished = new Set<string>();
+  private readonly calls = new Map<string, Omit<OpenCall, "nodeId">>();
 
   constructor(private readonly deps: SessionWatchDeps) {}
 
@@ -54,8 +59,23 @@ export class SessionWatch {
     }
   }
 
-  get openNode(): string | undefined {
-    return this.open.values().next().value;
+  get openCalls(): OpenCall[] {
+    return [...this.open].map((nodeId) => ({ nodeId, ...this.calls.get(nodeId) }));
+  }
+
+  askingNode(payload: Record<string, unknown>): AskingNode {
+    const open = [...this.open];
+    const [first] = open;
+    if (first !== undefined && (open.length === 1 || payload["agent_id"] === undefined)) {
+      return { node: first };
+    }
+    const agentType = payload["agent_type"];
+    const ofType =
+      typeof agentType === "string"
+        ? this.openCalls.filter((call) => call.agentType === agentType)
+        : [];
+    const [only] = ofType;
+    return only !== undefined && ofType.length === 1 ? { node: only.nodeId } : { candidates: open };
   }
 
   isOpen(nodeId: string): boolean {
@@ -81,18 +101,31 @@ export class SessionWatch {
     return start === undefined ? [] : this.finish(start.id);
   }
 
-  private ownNode(event: SessionHookEvent): string | undefined {
+  private ownCall(event: SessionHookEvent): OpenCall | undefined {
     const kind = event.kind === "PreToolUse" ? "PreToolUse" : "PostToolUse";
-    const nodeId = agentCallOf({ kind, payload: event.payload })?.nodeId;
-    return nodeId !== undefined && this.deps.container.nodes.some((node) => node.id === nodeId)
-      ? nodeId
-      : undefined;
+    const call = agentCallOf({ kind, payload: event.payload });
+    const nodeId = call?.nodeId;
+    if (nodeId === undefined || !this.deps.container.nodes.some((node) => node.id === nodeId)) {
+      return undefined;
+    }
+    return {
+      nodeId,
+      ...(call?.toolUseId === undefined ? {} : { toolUseId: call.toolUseId }),
+      ...(call?.agentType === undefined ? {} : { agentType: call.agentType }),
+    };
+  }
+
+  private ownNode(event: SessionHookEvent): string | undefined {
+    return this.ownCall(event)?.nodeId;
   }
 
   private onCall(event: SessionHookEvent): EventEntry[] {
-    const nodeId = this.ownNode(event);
-    if (nodeId === undefined || this.finished.has(nodeId) || this.open.has(nodeId)) return [];
+    const call = this.ownCall(event);
+    if (call === undefined) return [];
+    const { nodeId, ...details } = call;
+    if (this.finished.has(nodeId) || this.open.has(nodeId)) return [];
     this.open.add(nodeId);
+    this.calls.set(nodeId, details);
     return [{ nodeId, event: { kind: "running" } }];
   }
 

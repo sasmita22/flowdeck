@@ -379,6 +379,73 @@ describe("SessionWatch", () => {
 
       expect(watch.accept(agentDone(a1, 2000))).toEqual([{ nodeId: a1, event: { kind: "done" } }]);
     });
+
+    describe("the node a permission ask comes from", () => {
+      const shared = `${prefix}:shared`;
+      const sharedCall = (nodeId: string, at: number) =>
+        hookEvent("PreToolUse", at, {
+          tool_name: "Agent",
+          tool_input: { ...agentInput(nodeId), subagent_type: shared },
+          tool_use_id: `toolu-${nodeId}`,
+        });
+      const ask = (fields: Record<string, unknown> = {}) => ({
+        tool_name: "Bash",
+        tool_input: { command: "git push" },
+        ...fields,
+      });
+
+      it("reports each open node's Agent call", () => {
+        accept(agentCall(a1, 1100), agentCall(a2, 1110));
+
+        expect(watch.openCalls).toEqual([
+          { nodeId: a1, toolUseId: `toolu-${a1}`, agentType: `${prefix}:${a1}` },
+          { nodeId: a2, toolUseId: `toolu-${a2}`, agentType: `${prefix}:${a2}` },
+        ]);
+      });
+
+      it("picks the first open node for an ask from the main thread", () => {
+        accept(agentCall(a1, 1100), agentCall(a2, 1110));
+
+        expect(watch.askingNode(ask())).toEqual({ node: a1 });
+      });
+
+      it("picks the open node whose Agent type matches the asking subagent's", () => {
+        accept(agentCall(a1, 1100), agentCall(a2, 1110));
+
+        expect(
+          watch.askingNode(ask({ agent_id: "a2acfd3c49ca63d33", agent_type: `${prefix}:${a2}` })),
+        ).toEqual({ node: a2 });
+      });
+
+      it("names every open node when the asking subagent's type matches more than one", () => {
+        accept(sharedCall(a1, 1100), sharedCall(a2, 1110));
+
+        expect(
+          watch.askingNode(ask({ agent_id: "a2acfd3c49ca63d33", agent_type: shared })),
+        ).toEqual({ candidates: [a1, a2] });
+      });
+
+      it("names every open node when the asking subagent has no type and a resumed node has no call", () => {
+        watch.seed([
+          { nodeId: start, seq: 1, time: "t1", kind: "running" },
+          { nodeId: start, seq: 2, time: "t2", kind: "done" },
+          { nodeId: a1, seq: 3, time: "t3", kind: "running" },
+        ]);
+        accept(agentCall(a2, 2000));
+
+        expect(watch.askingNode(ask({ agent_id: "a2acfd3c49ca63d33" }))).toEqual({
+          candidates: [a1, a2],
+        });
+      });
+
+      it("picks the only open node whatever the asking subagent's type", () => {
+        accept(agentCall(a1, 1100));
+
+        expect(
+          watch.askingNode(ask({ agent_id: "a2acfd3c49ca63d33", agent_type: "general-purpose" })),
+        ).toEqual({ node: a1 });
+      });
+    });
   });
 
   describe("events that are not its session's", () => {

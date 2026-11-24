@@ -1166,6 +1166,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             runId,
             events: started.events,
             ...(started.permissions === undefined ? {} : { permissions: started.permissions }),
+            fs: options.fs,
             store,
             waiter: waiterFor(runId),
             sessionAlive,
