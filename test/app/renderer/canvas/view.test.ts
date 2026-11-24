@@ -5,6 +5,7 @@ import {
   connectionPorts,
   edgeId,
   FRAME_PADDING,
+  frameOwnerId,
   routeConnection,
   toViewEdges,
   toViewNodes,
@@ -1099,5 +1100,49 @@ describe("routeConnection", () => {
   it("routes nothing when a handle is missing", () => {
     expect(routeConnection(drag("a", null, "b", "in"))).toBeNull();
     expect(routeConnection(drag("a", "out", "b", null))).toBeNull();
+  });
+});
+
+describe("frameOwnerId", () => {
+  it.each([
+    ["container-frame-session-1", "session-1"],
+    ["container-frame-workspace-1", "workspace-1"],
+    ["loop-frame-L", "L"],
+    ["foreach-frame-F", "F"],
+  ])("maps %s to %s", (viewId, owner) => {
+    expect(frameOwnerId(viewId)).toBe(owner);
+  });
+
+  it.each(["P", "loop-1", "foreach-1", "agent-1"])("gives nothing for the plain id %s", (id) => {
+    expect(frameOwnerId(id)).toBeUndefined();
+  });
+
+  it("names the same owner as every frame's data", () => {
+    const base = containersOnCanvas();
+    const source = parseFlow({
+      ...base,
+      nodes: [
+        ...base.nodes,
+        placedAt(loop("L"), 1000, 0),
+        placedAt(agent("P", { parent: "L" }), 1000, 80),
+        placedAt(forEach("F"), 1400, 0),
+        placedAt(agent("Q", { parent: "F" }), 1400, 80),
+      ],
+    });
+    const ownerKey = {
+      "container-frame": "containerId",
+      "loop-frame": "loopId",
+      "foreach-frame": "forEachId",
+    } as const;
+    const checked = new Set<string>();
+
+    for (const node of toViewNodes(source, [], {}, null)) {
+      const key: string | undefined = ownerKey[node.type as keyof typeof ownerKey];
+      if (key === undefined) continue;
+      expect(frameOwnerId(node.id)).toBe((node.data as Record<string, unknown>)[key]);
+      checked.add(key);
+    }
+
+    expect([...checked].sort()).toEqual(["containerId", "forEachId", "loopId"]);
   });
 });

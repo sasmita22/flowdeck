@@ -67,7 +67,7 @@ import {
   type Move,
 } from "./commands.js";
 import { tidyMoves } from "./layout.js";
-import { connectionEdgeId, edgeId } from "./view.js";
+import { connectionEdgeId, edgeId, frameOwnerId } from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
 
@@ -1097,7 +1097,8 @@ export function createCanvasStore(
         });
       },
 
-      openNodeMenu: (nodeId, { x, y }) => set({ menu: { nodeId, x, y } }),
+      openNodeMenu: (nodeId, { x, y }) =>
+        set({ menu: { nodeId: frameOwnerId(nodeId) ?? nodeId, x, y } }),
 
       closeNodeMenu: () => set({ menu: null }),
 

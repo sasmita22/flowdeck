@@ -133,7 +133,7 @@ const toLoopFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
   flow.nodes
     .filter((node) => node.type === "loop")
     .map((loop) =>
-      frameView(`loop-frame-${loop.id}`, "loop-frame", bodyFrameBounds(flow, loop), {
+      frameView(`${loopFramePrefix}${loop.id}`, "loop-frame", bodyFrameBounds(flow, loop), {
         loopId: loop.id,
         ignored: isIgnored(loop.id),
       }),
@@ -143,7 +143,7 @@ const toForEachFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =
   flow.nodes
     .filter((node) => node.type === "foreach")
     .map((each) =>
-      frameView(`foreach-frame-${each.id}`, "foreach-frame", bodyFrameBounds(flow, each), {
+      frameView(`${forEachFramePrefix}${each.id}`, "foreach-frame", bodyFrameBounds(flow, each), {
         forEachId: each.id,
         ignored: isIgnored(each.id),
       }),
@@ -153,10 +153,21 @@ const behindSelectedNodes = -1000;
 
 const framePrefix = "container-frame-";
 
+const loopFramePrefix = "loop-frame-";
+
+const forEachFramePrefix = "foreach-frame-";
+
 const containerFrameId = (id: string) => `${framePrefix}${id}`;
 
 export const containerOfFrameId = (nodeId: string): string | undefined =>
   nodeId.startsWith(framePrefix) ? nodeId.slice(framePrefix.length) : undefined;
+
+export const frameOwnerId = (viewId: string): string | undefined => {
+  const prefix = [framePrefix, loopFramePrefix, forEachFramePrefix].find((each) =>
+    viewId.startsWith(each),
+  );
+  return prefix === undefined ? undefined : viewId.slice(prefix.length);
+};
 
 const hasFrame = (container: FlowContainer) => container.nodes.length > 0;
 
