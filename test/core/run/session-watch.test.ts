@@ -14,6 +14,12 @@ const a2 = "android-a2";
 const stopNode = "android-stop";
 const iosAgent = "ios-a1";
 
+const then = (from: string, to: string, port = "out") => ({
+  kind: "then" as const,
+  from: { node: from, port },
+  to: { node: to, port: "in" },
+});
+
 const container = {
   prefix,
   nodes: [
@@ -22,6 +28,7 @@ const container = {
     { id: a2, type: "agent" as const, label: "Build" },
     { id: stopNode, type: "output" as const, label: "Stop" },
   ],
+  wires: [then(start, a1), then(a1, a2), then(a2, stopNode)],
 };
 
 const hookEvent = (
@@ -147,6 +154,92 @@ describe("SessionWatch", () => {
     expect(statuses()).toEqual({ [start]: "done", [a1]: "done", [a2]: "done", [stopNode]: "done" });
   });
 
+  describe("a session that ends its turn with work left", () => {
+    it("records nothing for a Stop between two nodes and keeps listening", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+
+      expect(watch.accept(stop(1300))).toEqual([]);
+      expect(statusOf(stopNode)).toBe("waiting");
+      expect(watch.accept(agentCall(a2, 1400))).toEqual([
+        { nodeId: a2, event: { kind: "running" } },
+      ]);
+    });
+
+    it("finishes once the remaining node is done and the next turn ends", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200), stop(1300));
+
+      accept(agentCall(a2, 1400), agentDone(a2, 1500));
+      const before = emitted.length;
+      accept(stop(1600));
+
+      expect(emitted.slice(before)).toEqual([
+        { nodeId: stopNode, event: { kind: "running" } },
+        { nodeId: stopNode, event: { kind: "done" } },
+      ]);
+      expect(statuses()).toEqual({
+        [start]: "done",
+        [a1]: "done",
+        [a2]: "done",
+        [stopNode]: "done",
+      });
+    });
+
+    it("finishes a branch session whose untaken side never ran", () => {
+      const ask = "android-branch";
+      const branched = {
+        prefix,
+        nodes: [
+          { id: start, type: "trigger" as const, label: "Start" },
+          { id: ask, type: "branch" as const, label: "Ready?" },
+          { id: a1, type: "agent" as const, label: "Plan" },
+          { id: a2, type: "agent" as const, label: "Build" },
+          { id: stopNode, type: "output" as const, label: "Stop" },
+        ],
+        wires: [
+          then(start, ask),
+          then(ask, a1, "yes"),
+          then(ask, a2, "no"),
+          then(a1, stopNode),
+          then(a2, stopNode),
+        ],
+      };
+      watch = new SessionWatch({ container: branched, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200), stop(1300));
+
+      expect(statusOf(stopNode)).toBe("done");
+      expect(statusOf(a2)).toBe("waiting");
+    });
+
+    it("follows the same rule for a session resumed from its history", () => {
+      const history = [
+        { nodeId: start, seq: 1, time: "t1", kind: "running" as const },
+        { nodeId: start, seq: 2, time: "t2", kind: "done" as const },
+        { nodeId: a1, seq: 3, time: "t3", kind: "running" as const },
+        { nodeId: a1, seq: 4, time: "t4", kind: "done" as const },
+      ];
+      watch.seed(history);
+
+      accept(stop(2000));
+      expect(emitted).toEqual([]);
+
+      accept(agentCall(a2, 2100), agentDone(a2, 2200), stop(2300));
+      expect(statusOf(stopNode)).toBe("done");
+    });
+
+    it("fails the Stop as ended before it when its tmux session is gone after a mid-flow Stop", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200), stop(1300));
+
+      died();
+
+      expect(statusOf(stopNode)).toBe("failed");
+      expect(emitted.at(-1)).toEqual({
+        nodeId: stopNode,
+        event: { kind: "failed", payload: { message: `session ${ours} ended before its Stop` } },
+      });
+    });
+  });
+
   describe("a session that fails", () => {
     it("fails the node whose marker is open on a StopFailure", () => {
       accept(agentCall(a1, 1100), agentDone(a1, 1200), agentCall(a2, 1300), stopFailure(1400));
@@ -197,7 +290,8 @@ describe("SessionWatch", () => {
     });
 
     it("fails nothing when its tmux session is gone after Stop", () => {
-      accept(agentCall(a1, 1100), agentDone(a1, 1200), stop(1300));
+      accept(agentCall(a1, 1100), agentDone(a1, 1200), agentCall(a2, 1250), agentDone(a2, 1280));
+      accept(stop(1300));
       const before = emitted.length;
 
       died();

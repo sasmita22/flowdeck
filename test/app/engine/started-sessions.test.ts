@@ -22,25 +22,35 @@ const longEnough = 60_000;
 const node = (id: string, type: ManifestNode["type"], label: string): ManifestNode =>
   ({ id, type, label, settings: {} }) as ManifestNode;
 
+const thenWire = (from: string, to: string) => ({
+  kind: "then" as const,
+  from: { node: from, port: "out" },
+  to: { node: to, port: "in" },
+});
+
 const container = (
   kind: ManifestContainer["kind"],
   slug: string,
   worktree?: string,
-): ManifestContainer => ({
-  kind,
-  name: slug,
-  slug,
-  prefix: `fix-login-${slug}`,
-  ...(worktree === undefined ? {} : { worktree }),
-  model: "haiku",
-  nodes: [
-    node(`${slug}-start`, "trigger", "Start"),
-    node(`${slug}-a1`, "agent", "Plan"),
-    node(`${slug}-stop`, "output", "Stop"),
-  ],
-  wires: [],
-  orchestrator: `${slug}/orchestrator.md`,
-});
+  agents: string[] = ["a1"],
+): ManifestContainer => {
+  const ids = [`${slug}-start`, ...agents.map((agent) => `${slug}-${agent}`), `${slug}-stop`];
+  return {
+    kind,
+    name: slug,
+    slug,
+    prefix: `fix-login-${slug}`,
+    ...(worktree === undefined ? {} : { worktree }),
+    model: "haiku",
+    nodes: [
+      node(`${slug}-start`, "trigger", "Start"),
+      ...agents.map((agent) => node(`${slug}-${agent}`, "agent", agent)),
+      node(`${slug}-stop`, "output", "Stop"),
+    ],
+    wires: ids.slice(1).map((id, index) => thenWire(ids[index] as string, id)),
+    orchestrator: `${slug}/orchestrator.md`,
+  };
+};
 
 const manifest = {
   version: 1,
@@ -50,7 +60,7 @@ const manifest = {
   containers: [
     container("workspace", "workspace"),
     container("session", "android", "/b/sessions/android/app"),
-    container("session", "ios", "/b/sessions/ios/app"),
+    container("session", "ios", "/b/sessions/ios/app", ["a1", "a2"]),
   ],
   files: {},
 } as unknown as LoadedBuild;
@@ -70,21 +80,29 @@ const hookEvent = (
   payload: { hook_event_name: kind, session_id: sessionId, flowdeck_hook_at: 1000, ...payload },
 });
 
-const agentInput = (slug: string) => ({
-  subagent_type: `fix-login-${slug}:${slug}-a1`,
+const agentInput = (slug: string, agent: string) => ({
+  subagent_type: `fix-login-${slug}:${slug}-${agent}`,
   description: "Run",
-  prompt: `NODE ${slug}-a1\nGo`,
+  prompt: `NODE ${slug}-${agent}\nGo`,
 });
 
 const bash = (sessionId: string) =>
   hookEvent("PreToolUse", sessionId, { tool_name: "Bash", tool_input: { command: "ls" } });
 
-const agentCall = (slug: string, sessionId: string) =>
-  hookEvent("PreToolUse", sessionId, {
+const agentCall = (
+  slug: string,
+  sessionId: string,
+  agent = "a1",
+  kind: HookEventKind = "PreToolUse",
+) =>
+  hookEvent(kind, sessionId, {
     tool_name: "Agent",
-    tool_input: agentInput(slug),
-    tool_use_id: `toolu-${slug}`,
+    tool_input: agentInput(slug, agent),
+    tool_use_id: `toolu-${slug}-${agent}`,
   });
+
+const agentDone = (slug: string, sessionId: string, agent = "a1") =>
+  agentCall(slug, sessionId, agent, "PostToolUse");
 
 const stop = (sessionId: string) =>
   hookEvent("Stop", sessionId, { last_assistant_message: "all done" });
@@ -289,6 +307,7 @@ describe("StartedSessions", () => {
 
       events.publish(bash(androidId));
       events.publish(agentCall("ios", iosId));
+      events.publish(agentDone("android", androidId));
       events.publish(stop(androidId));
 
       expect(statusOf("android-stop")).toBe("done");
@@ -520,9 +539,28 @@ describe("StartedSessions", () => {
       supervisor();
 
       events.publish(bash(androidId));
+      events.publish(agentDone("android", androidId));
       events.publish(stop(androidId));
 
       expect(writes.at(-1)).toBe(states("done", "not-started"));
+    });
+
+    it("writes a session running when it ends its turn with an agent left, then done after it", () => {
+      supervisor();
+
+      events.publish(agentCall("ios", iosId, "a1"));
+      events.publish(agentDone("ios", iosId, "a1"));
+      events.publish(stop(iosId));
+
+      expect(writes.at(-1)).toBe(states("not-started", "running"));
+      expect(statusOf("ios-stop")).toBe("waiting");
+
+      events.publish(agentCall("ios", iosId, "a2"));
+      events.publish(agentDone("ios", iosId, "a2"));
+      events.publish(stop(iosId));
+
+      expect(writes.at(-1)).toBe(states("not-started", "done"));
+      expect(statusOf("ios-a2")).toBe("done");
     });
 
     it("writes a session failed on a StopFailure", () => {

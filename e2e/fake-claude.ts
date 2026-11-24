@@ -103,7 +103,7 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
-const directivePattern = /fake: (start|wait|fail|hang)(?: ([A-Za-z0-9_-]+))?/g;
+const directivePattern = /fake: (start|wait|fail|hang|pause)(?: ([A-Za-z0-9_-]+))?/g;
 const directivesIn = (text) => [...text.matchAll(directivePattern)].map(([, verb, slug]) => ({ verb, slug }));
 const pluginDirs = () => argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "")] : []));
 const pieceOfType = (agentType) => agentType.slice(agentType.indexOf(":") + 1);
@@ -442,6 +442,11 @@ const sessionTurn = async () => {
       tool_response: { agentType, status: "completed", content: [{ type: "text", text: "Fake report from " + nodeId + "." }] },
     });
     say("NODE " + nodeId + " done");
+    if (verbs.includes("pause")) {
+      await pause(50);
+      await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
+      return say("Stop");
+    }
   }
   await pause(50);
   await post({ hook_event_name: "Stop", last_assistant_message: "ok" });

@@ -1,4 +1,6 @@
+import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import { agentCallOf, type AgentCallEvent } from "./agent-calls.js";
+import { hasFinishedPath } from "./finished-path.js";
 import type { PipelineItem, PipelineStage } from "./pipeline.js";
 import { nodeStatus, type RunEvent } from "./run-events.js";
 import type { EventEntry, StoredEvent } from "./store.js";
@@ -6,7 +8,8 @@ import { turnFailure } from "./turns.js";
 
 export type WatchedContainer = {
   prefix: string;
-  nodes: readonly { id: string; type: string; label: string }[];
+  nodes: readonly Pick<ManifestNode, "id" | "type" | "label" | "parent">[];
+  wires: ManifestContainer["wires"];
 };
 
 export type SessionWatchDeps = { container: WatchedContainer; sessionId: string };
@@ -102,6 +105,7 @@ export class SessionWatch {
   private onStop(): EventEntry[] {
     const stop = this.stopNode;
     if (stop === undefined || this.open !== undefined) return [];
+    if (!hasFinishedPath(this.deps.container, this.finished)) return [];
     this.stopped = true;
     return this.finish(stop.id);
   }

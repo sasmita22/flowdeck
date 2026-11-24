@@ -5384,6 +5384,8 @@ describe("createEngineHandler", async () => {
             );
             expect(workspace.sessionStatesPath).toBe(statesPath(runId));
 
+            hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+            hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan"));
             hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
 
             await vi.waitFor(async () =>
