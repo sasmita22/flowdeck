@@ -323,6 +323,14 @@ describe("the blueprint kit", () => {
     expect(tidy).toBeLessThan(content.indexOf("`read_blueprint`"));
   });
 
+  it("check-blueprint changes a node's library only to one the ask names", () => {
+    const content = readKit("skills/check-blueprint/SKILL.md");
+    const sentence = content.split(/(?<=\.) /).find((line) => line.includes("`libraryId`")) ?? "";
+
+    expect(sentence).toContain("the ask names");
+    expect(content).not.toContain("to a library that fits");
+  });
+
   it("names the two wire kinds", () => {
     const content = skill();
 
@@ -348,12 +356,68 @@ describe("the blueprint kit", () => {
     expect(content).toMatch(/Start[^.\n]*workspace[^.\n]*Stop/);
   });
 
-  it("says the tools cannot add a library node", () => {
-    const sentence = skill()
-      .split(/(?<=\.)\s+/)
-      .find((text) => text.includes("`library`") && /`add_node`/.test(text));
+  it("says add_node adds a library node from its libraryId and derives its label", () => {
+    const sentences = skill().split(/(?<=\.)\s+/);
+    const libraries = sectionOf(skill(), "## Libraries").split(/(?<=\.)\s+/);
+    const addRow = tableRows(sectionOf(skill(), "## Tools")).find(
+      ([name]) => name === "`add_node`",
+    );
 
-    expect(sentence).toMatch(/cannot|can't|never/i);
+    expect(
+      sentences.filter(
+        (text) =>
+          /`?library`? node/.test(text) &&
+          /`add_node`|\badd\b/.test(text) &&
+          /cannot|can't|never/i.test(text),
+      ),
+    ).toEqual([]);
+    expect(
+      libraries.some(
+        (text) =>
+          text.includes("`add_node`") &&
+          text.includes("`libraryId`") &&
+          /`settings`/.test(text) &&
+          /derive/i.test(text),
+      ),
+    ).toBe(true);
+    expect(addRow?.[1]).toMatch(/`libraryId`[^|]*derive/);
+  });
+
+  it("says change_node can change a library node's libraryId, re-deriving its label", () => {
+    const libraries = sectionOf(skill(), "## Libraries").split(/(?<=\.)\s+/);
+    const changeRow = tableRows(sectionOf(skill(), "## Tools")).find(
+      ([name]) => name === "`change_node`",
+    );
+
+    expect(
+      libraries.some(
+        (text) =>
+          text.includes("`change_node`") &&
+          text.includes("`libraryId`") &&
+          /re-?derive/i.test(text) &&
+          text.includes("`overrides`") &&
+          !/refuse/i.test(text),
+      ),
+    ).toBe(true);
+    expect(changeRow?.[1]).toMatch(/`libraryId`[^|]*re-?derive/);
+  });
+
+  it("states library refusals in a sentence of their own, apart from the wire sentence", () => {
+    const sentences = sectionOf(skill(), "## Validator rules").split(/(?<=\.)\s+/);
+    const libraryRefusal = sentences.find(
+      (text) => /refused/.test(text) && text.includes("`library-use`"),
+    );
+    const wireRefusal = sentences.find((text) => text.includes("`wire` edit"));
+
+    expect(libraryRefusal).toBeDefined();
+    expect(libraryRefusal).not.toContain("`wire` edit");
+    for (const part of ["`add_node`", "`change_node`", "`library-loops`", "open blueprint"]) {
+      expect(libraryRefusal).toContain(part);
+    }
+    for (const reason of [/missing|no longer exists/i, /workflow/i, /incomplete/i]) {
+      expect(libraryRefusal).toMatch(reason);
+    }
+    expect(wireRefusal).not.toContain("`libraryId`");
   });
 
   it("says a blueprint with a workspace is a workflow and one without is a library", () => {

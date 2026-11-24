@@ -108,13 +108,29 @@ describe("blueprintToolDefinitions", () => {
     expect(toolInputs.add_node.safeParse({ type, label: "Old" }).success).toBe(false);
   });
 
-  it("leaves the library node out of the types add_node takes", () => {
+  it("lets add_node take a library node with its libraryId in settings", () => {
     const [branch] = inputBranches("add_node");
     const types = (branch?.properties?.type as { enum?: string[] } | undefined)?.enum ?? [];
+    const input = { type: "library", label: "Lib", settings: { libraryId: "flow-lib" } };
 
-    expect(types).toContain("agent");
-    expect(types).not.toContain("library");
-    expect(toolInputs.add_node.safeParse({ type: "library", label: "Lib" }).success).toBe(false);
+    expect(types).toContain("library");
+    expect(toolInputs.add_node.safeParse(input)).toEqual({ success: true, data: input });
+  });
+
+  it("says add_node takes a library's libraryId in settings and derives its label", () => {
+    const { description } = definition("add_node");
+
+    expect(description).toMatch(/libraryId.*settings/i);
+    expect(description).toMatch(/label.*ignored|ignores.*label/i);
+    expect(description).toMatch(/canvas/i);
+  });
+
+  it("says a new libraryId in change_node re-derives the label and clears the old library's overrides", () => {
+    const { description } = definition("change_node");
+
+    expect(description).toMatch(/libraryId/);
+    expect(description).toMatch(/label/i);
+    expect(description).toMatch(/overrides/i);
   });
 
   it("offers Agent among the node types add_node takes, and no Prompt or Script", () => {

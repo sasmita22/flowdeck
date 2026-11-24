@@ -1,13 +1,12 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
 import { flowProblems } from "../../../core/compiler/flow-problems.js";
-import { validate, type ValidationError } from "../../../core/compiler/validate.js";
+import type { ValidationError } from "../../../core/compiler/validate.js";
 import { newProblems } from "../../../core/flow/blueprint-edits.js";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
+import { labelIn, libraryRefusal, loopRefusal } from "../../../core/flow/library-checks.js";
 import {
-  labelPrefix,
-  libraryLoop,
-  loopReason,
+  libraryLabelFor,
   unknownLibraries,
   type LibraryLookup,
 } from "../../../core/flow/libraries.js";
@@ -414,19 +413,6 @@ type LibraryNode = Extract<Node, { type: "library" }>;
 
 const isLibraryNode = (node: Node): node is LibraryNode => node.type === "library";
 
-const freeLabel = (base: string, taken: ReadonlySet<string>): string => {
-  if (!taken.has(base)) return base;
-  let count = 2;
-  while (taken.has(`${base}-${count}`)) count += 1;
-  return `${base}-${count}`;
-};
-
-const libraryLabelFor = (flow: Flow, name: string): string =>
-  freeLabel(
-    labelPrefix(name),
-    new Set(flow.nodes.filter(isLibraryNode).map((node) => labelPrefix(node.settings.label))),
-  );
-
 const byLibrariesAndFlow = <T>(compute: (flow: Flow, libraries: LibraryLookup) => T) => {
   const caches = new WeakMap<LibraryLookup, WeakMap<Flow, T>>();
   return (flow: Flow, libraries: LibraryLookup): T => {
@@ -444,12 +430,7 @@ const byLibrariesAndFlow = <T>(compute: (flow: Flow, libraries: LibraryLookup) =
 };
 
 const reasonOf = (flow: Flow, error: ValidationError) =>
-  reasonNaming(error.node, error.message, labelOf(flow, error.node ?? ""));
-
-const labelOf = (flow: Flow, id: string) => {
-  const container = flow.containers.find((candidate) => candidate.id === id);
-  return container === undefined ? nodeLabel(flow.nodes, id) : flowContainerName(container);
-};
+  reasonNaming(error.node, error.message, labelIn(flow, error.node ?? ""));
 
 export const nodeLabel = (nodes: readonly Node[], nodeId?: string): string => {
   if (nodeId === undefined) return labelFor(undefined);
@@ -517,7 +498,7 @@ const sameEnd = (a: WireEnd, b: WireEnd) => a.node === b.node && a.port === b.po
 const sameWire = (a: Wire, b: Wire) => sameEnd(a.from, b.from) && sameEnd(a.to, b.to);
 
 const cannotConnect = (flow: Flow, from: WireEnd, to: WireEnd, reason: string) =>
-  `Can't connect ${labelOf(flow, from.node)} to ${labelOf(flow, to.node)}: ${reason}`;
+  `Can't connect ${labelIn(flow, from.node)} to ${labelIn(flow, to.node)}: ${reason}`;
 
 const wrongWay =
   "Can't connect those ports: drag from a node's output on its right to another node's input on its left.";
@@ -805,16 +786,10 @@ export function createCanvasStore(
       return { nodes, wires, notes, members };
     };
 
-    const loopOf = (flowId: string): string | undefined => {
-      const { libraries, openFlowId } = get();
-      const path = libraryLoop((id) => libraries(id)?.uses, openFlowId ?? undefined, flowId);
-      return path && loopReason(path, (id) => libraries(id)?.name);
-    };
-
     const pasteItems = (items: Items, offset: Position): boolean => {
-      const { flow, libraries } = get();
+      const { flow, libraries, openFlowId } = get();
       const [loop] = items.nodes.filter(isLibraryNode).flatMap(({ settings: { libraryId } }) => {
-        const reason = loopOf(libraryId);
+        const reason = loopRefusal(libraries, openFlowId, libraryId);
         return reason === undefined
           ? []
           : [`${libraries(libraryId)?.name ?? "library"}: ${reason}`];
@@ -834,11 +809,11 @@ export function createCanvasStore(
       );
       if (misplaced !== undefined) {
         const into =
-          target !== null && isContainer(target) ? ` into ${labelOf(after, target.id)}` : "";
+          target !== null && isContainer(target) ? ` into ${labelIn(after, target.id)}` : "";
         const reason = reasonNaming(
           misplaced.node,
           `${misplaced.message}.`,
-          labelOf(after, misplaced.node),
+          labelIn(after, misplaced.node),
         );
         set({ message: `Can't paste${into}: ${reason}` });
         return false;
@@ -856,7 +831,7 @@ export function createCanvasStore(
       const inside = flowContainerAt(flow, position) ?? containerAt(flow, position);
       if (inside !== undefined) {
         const host = flow.containers.find((container) => container.id === inside);
-        const where = host === undefined ? labelOf(flow, inside) : flowContainerName(host);
+        const where = host === undefined ? labelIn(flow, inside) : flowContainerName(host);
         set({
           message: `Can't drop ${label} into ${where}: a ${label} sits on the canvas, never inside another container.`,
         });
@@ -875,7 +850,7 @@ export function createCanvasStore(
     };
 
     const dropLibrary = (flowId: string, position: Position) => {
-      const { flow, libraries } = get();
+      const { flow, libraries, openFlowId } = get();
       const name = libraries(flowId)?.name ?? "library";
       const label = libraryLabelFor(flow, name);
       const id = nextId("library", flow);
@@ -891,22 +866,18 @@ export function createCanvasStore(
         settings: { libraryId: flowId, label, overrides: {} },
       };
       const host = member ?? parent;
-      const into = host === undefined ? "" : ` into ${labelOf(flow, host)}`;
-      const loop = loopOf(flowId);
-      if (loop !== undefined) {
-        set({ message: `Can't drop ${name}${into}: ${loop}` });
-        return;
-      }
+      const into = host === undefined ? "" : ` into ${labelIn(flow, host)}`;
       const command = addNode(node, member);
-      const after = command.do(flow);
-      const [refused] = [
-        ...newProblems(flow, after, libraries).filter(({ rule }) => rule === "body-nodes"),
-        ...validate(after, libraries).filter(
-          (error) => error.rule === "library-use" && error.node === id,
-        ),
-      ];
+      const refused = libraryRefusal({
+        before: flow,
+        after: command.do(flow),
+        nodeId: id,
+        libraryId: flowId,
+        libraries,
+        openFlowId,
+      });
       if (refused !== undefined) {
-        set({ message: `Can't drop ${name}${into}: ${reasonOf(after, refused)}` });
+        set({ message: `Can't drop ${name}${into}: ${refused}` });
         return;
       }
       run(command, [id]);
@@ -960,7 +931,7 @@ export function createCanvasStore(
         );
         if (misplaced !== undefined) {
           set({
-            message: `Can't drop ${nodeDefaults[type].label} into ${labelOf(flow, parent ?? "")}: ${reasonOf(command.do(flow), misplaced)}`,
+            message: `Can't drop ${nodeDefaults[type].label} into ${labelIn(flow, parent ?? "")}: ${reasonOf(command.do(flow), misplaced)}`,
           });
           return;
         }
@@ -1167,7 +1138,7 @@ export function createCanvasStore(
             const { from, to } = nested.parent;
             const where = to === undefined ? `out of ${from ?? ""}` : `into ${to}`;
             set({
-              message: `Can't move ${labelOf(flow, nested.id)} ${where}: ${reasonOf(command.do(flow), error)}`,
+              message: `Can't move ${labelIn(flow, nested.id)} ${where}: ${reasonOf(command.do(flow), error)}`,
             });
             return;
           }
