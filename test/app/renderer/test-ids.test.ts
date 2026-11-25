@@ -384,6 +384,20 @@ describe("test ids", () => {
     expect(new Set(ids).size).toBe(4);
   });
 
+  it("names each grip of a frame by the container and the side, apart from its handles", () => {
+    const grips = (["top", "left", "right", "bottom"] as const).map((side) =>
+      containerTestIds.frameGrip("session-2", side),
+    );
+
+    expect(grips).toEqual([
+      "container-frame-session-2-grip-top",
+      "container-frame-session-2-grip-left",
+      "container-frame-session-2-grip-right",
+      "container-frame-session-2-grip-bottom",
+    ]);
+    expect(containerTestIds.frameGrip("workspace-1", "top")).not.toBe(grips[0]);
+  });
+
   it("names a container's frame by the container", () => {
     expect(containerTestIds.frame("session-2")).toBe("container-frame-session-2");
     expect(containerTestIds.frame("workspace-1")).toBe("container-frame-workspace-1");

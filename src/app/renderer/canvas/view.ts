@@ -7,6 +7,7 @@ import {
   boundsOf,
   containerMoves,
   flowContainerBounds,
+  flowContainerMoves,
   followed,
   nodeSub,
   withPositions,
@@ -169,6 +170,18 @@ export const frameOwnerId = (viewId: string): string | undefined => {
   return prefix === undefined ? undefined : viewId.slice(prefix.length);
 };
 
+export const frameDragMoves = (
+  flow: Flow,
+  dragPositions: Readonly<Record<string, Position>>,
+): Record<string, Position> =>
+  Object.assign(
+    {},
+    ...Object.entries(dragPositions).map(([id, to]) => {
+      const container = containerOfFrameId(id);
+      return container === undefined ? {} : flowContainerMoves(flow, container, to);
+    }),
+  ) as Record<string, Position>;
+
 const hasFrame = (container: FlowContainer) => container.nodes.length > 0;
 
 type End = { node: string; port: string };
@@ -260,8 +273,10 @@ export const toViewNodes = (
   highlighted: string | null,
   noteBoxes: Readonly<Record<string, Box>> = {},
 ): ViewNode[] => {
-  const live = withPositions(flow, followed(flow, dragPositions));
-  const framing = withPositions(flow, containerMoves(flow, dragPositions));
+  const carried = frameDragMoves(flow, dragPositions);
+  const positions = { ...carried, ...dragPositions };
+  const live = withPositions(flow, followed(flow, positions));
+  const framing = withPositions(flow, { ...carried, ...containerMoves(flow, positions) });
   const ignoring = ignoredIn(flow);
   const isIgnored = ignoring.node;
   return [
