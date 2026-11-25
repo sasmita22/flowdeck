@@ -11,9 +11,12 @@ import { LAYER_GAP, tidyMoves } from "../../../../src/app/renderer/canvas/layout
 import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Node } from "../../../../src/core/flow/schema.js";
 import { flowContainerOf } from "../../../../src/core/flow/structure.js";
+import { featureLibrary } from "../../../fixtures/feature-library.js";
 import {
   agent,
+  bareFlow,
   flow,
+  flowSettings,
   forEach,
   fork,
   inOneSession,
@@ -21,21 +24,79 @@ import {
   loop,
   onMainFlow,
   output,
+  sessionContainer,
+  sessionLibrary,
   thenWire,
   trigger,
+  wire,
+  workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
 
 const canvas = { width: 1600, height: 1000 };
+
+const canvasWidths = [860, 1000, 1200, 1400, 1600];
 
 const tidied = async (source: Flow, size = canvas): Promise<Flow> =>
   moveNodes(await tidyMoves(source, size)).do(source);
 
 const steps = (count: number) => Array.from({ length: count }, (_, index) => `s${index + 1}`);
 
+const thenChain = (ids: readonly string[]) =>
+  ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id));
+
 const chain = (ids: readonly string[]): Flow =>
   inOneSession(
     ids.map((id) => agent(id)),
-    ids.slice(1).map((id, index) => thenWire(ids[index] ?? "", id)),
+    thenChain(ids),
+  );
+
+const chainedSessions = (sizes: readonly number[]): Flow => {
+  const sessions = sizes.map((size, index) => {
+    const id = `session-${index + 1}`;
+    return { id, agents: steps(size).map((step) => `${id}-${step}`) };
+  });
+  const last = sessions.at(-1)?.id ?? "";
+  return flow(
+    [
+      ...sessions.flatMap(({ agents }) => agents.map((id) => agent(id))),
+      trigger("canvas-start"),
+      output("canvas-stop"),
+    ],
+    [
+      ...sessions.flatMap(({ agents }) => thenChain(agents)),
+      ...sessions
+        .slice(1)
+        .map(({ id }, index) => wire(sessions[index]?.id ?? "", "flow-out", id, "flow-in")),
+      wire("canvas-start", "out", "session-1", "flow-in"),
+      wire(last, "flow-out", "canvas-stop", "in"),
+    ],
+    flowSettings,
+    { containers: sessions.map(({ id, agents }) => sessionContainer(agents, { id })) },
+  );
+};
+
+const library = (id: string) => ({
+  id,
+  label: id,
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId: "shared", label: "Shared", overrides: {} },
+});
+
+const frameThenLibraries = (
+  container: { id: string; nodes: string[] },
+  libraries: readonly string[],
+  tail: readonly ReturnType<typeof output>[],
+): Flow =>
+  flow(
+    [...container.nodes.map((id) => agent(id)), ...libraries.map(library), ...tail],
+    [
+      ...thenChain(container.nodes),
+      wire(container.id, "flow-out", libraries[0] ?? "", "in"),
+      ...thenChain([...libraries, ...tail.map(({ id }) => id)]),
+    ],
+    flowSettings,
+    { containers: [container] },
   );
 
 const drawnBoxes = (current: Flow): Map<string, Bounds> => {
@@ -96,6 +157,118 @@ const span = (current: Flow): number => {
 
 const rowsOf = (current: Flow, ids: readonly string[]): number =>
   new Set(ids.map((id) => Math.round(positionOf(current, id).y))).size;
+
+const startGap = (current: Flow, frameId: string): number => {
+  const start = nodeOf(current, "canvas-start");
+  return (
+    flowContainerBounds(current, frameId).left -
+    (boundsOf(start).right + sideLabelSpan(start.label))
+  );
+};
+
+const topOf = (current: Flow, id: string): string => {
+  const parent = nodeOf(current, id).parent;
+  return parent === undefined ? id : topOf(current, parent);
+};
+
+const union = (a: Bounds, b: Bounds): Bounds => ({
+  left: Math.min(a.left, b.left),
+  top: Math.min(a.top, b.top),
+  right: Math.max(a.right, b.right),
+  bottom: Math.max(a.bottom, b.bottom),
+});
+
+const membersOf = (current: Flow, containerId: string): string[] =>
+  current.containers.find(({ id }) => id === containerId)?.nodes ?? [];
+
+const packedRows = (current: Flow, containerId: string) => {
+  const boxes = drawnBoxes(current);
+  const items = membersOf(current, containerId)
+    .map((id) => {
+      const node = nodeOf(current, id);
+      const drawn = box(boxes, id);
+      const isFrame = node.type === "loop" || node.type === "foreach";
+      return { id, bounds: isFrame ? union(drawn, bodyFrameBounds(current, node)) : drawn };
+    })
+    .sort((a, b) => a.bounds.top - b.bounds.top);
+  const rows: { bottom: number; items: typeof items }[] = [];
+  for (const item of items) {
+    const last = rows.at(-1);
+    if (last !== undefined && item.bounds.top - last.bottom < LAYER_GAP) {
+      last.items.push(item);
+      last.bottom = Math.max(last.bottom, item.bounds.bottom);
+    } else rows.push({ bottom: item.bounds.bottom, items: [item] });
+  }
+  const rowOf = new Map(rows.flatMap((row, index) => row.items.map(({ id }) => [id, index])));
+  const firstOf = rows.map((row) => {
+    const leftmost = row.items.reduce((a, b) => (b.bounds.left < a.bounds.left ? b : a));
+    return new Set(
+      row.items.filter(({ bounds }) => bounds.left < leftmost.bounds.right).map(({ id }) => id),
+    );
+  });
+  return { rows, rowOf, firstOf };
+};
+
+const unlevelledBlocks = (current: Flow, containerId: string): string[] => {
+  const boxes = drawnBoxes(current);
+  const middle = (id: string) => (box(boxes, id).top + box(boxes, id).bottom) / 2;
+  const { rows, rowOf } = packedRows(current, containerId);
+  const blockOf = new Map<string, string>();
+  for (const row of rows) {
+    let right = -Infinity;
+    let block = "";
+    for (const { id, bounds } of [...row.items].sort((a, b) => a.bounds.left - b.bounds.left)) {
+      if (bounds.left >= right) block = id;
+      blockOf.set(id, block);
+      right = Math.max(right, bounds.right);
+    }
+  }
+  const isPlainNode = (id: string) =>
+    current.nodes.some((node) => node.id === id && node.type !== "fork" && node.type !== "join");
+  const receivers = new Map<string, { from: string; to: string }[]>();
+  for (const { from, to, kind } of current.wires) {
+    if (kind !== "then" || !isPlainNode(from.node) || !isPlainNode(to.node)) continue;
+    const [source, target] = [topOf(current, from.node), topOf(current, to.node)];
+    const [sourceBlock, targetBlock] = [blockOf.get(source), blockOf.get(target)];
+    if (sourceBlock === undefined || targetBlock === undefined || sourceBlock === targetBlock)
+      continue;
+    if (rowOf.get(source) !== rowOf.get(target)) continue;
+    if (box(boxes, to.node).left <= box(boxes, from.node).left) continue;
+    receivers.set(targetBlock, [
+      ...(receivers.get(targetBlock) ?? []),
+      { from: from.node, to: to.node },
+    ]);
+  }
+  return [...receivers]
+    .filter(([, wires]) => !wires.some(({ from, to }) => Math.abs(middle(from) - middle(to)) < 1))
+    .map(
+      ([block, wires]) => `${block}: ${wires.map(({ from, to }) => `${from} -> ${to}`).join(", ")}`,
+    );
+};
+
+const backwardOrStrayWires = (current: Flow, containerId: string): string[] => {
+  const members = new Set(membersOf(current, containerId));
+  const { rowOf, firstOf } = packedRows(current, containerId);
+  const boxes = drawnBoxes(current);
+  const isNode = (id: string) => current.nodes.some((node) => node.id === id);
+  const thenWires = current.wires.filter(({ kind }) => kind === "then");
+  const incoming = (id: string) => thenWires.filter(({ to }) => to.node === id).length;
+  return thenWires
+    .filter(({ from, to }) => isNode(from.node) && isNode(to.node))
+    .filter(
+      ({ from, to }) =>
+        members.has(topOf(current, from.node)) && members.has(topOf(current, to.node)),
+    )
+    .filter(({ from, to }) => {
+      const source = rowOf.get(topOf(current, from.node)) ?? -1;
+      const target = rowOf.get(topOf(current, to.node)) ?? -1;
+      if (target < source) return true;
+      if (target === source) return box(boxes, to.node).left <= box(boxes, from.node).left;
+      if (nodeOf(current, from.node).type === "branch" || incoming(to.node) >= 2) return false;
+      return target !== source + 1 || !firstOf[target]?.has(topOf(current, to.node));
+    })
+    .map(({ from, to }) => `${from.node} -> ${to.node}`);
+};
 
 const nodeOf = (current: Flow, id: string): Node => {
   const found = current.nodes.find((node) => node.id === id);
@@ -442,6 +615,140 @@ describe("tidyMoves", () => {
     expect(boundsOf(start).right + sideLabelSpan(start.label)).toBeLessThan(frame.left);
     expect(positionOf(after, "canvas-stop").x).toBeGreaterThan(frame.right);
   });
+
+  it("puts the canvas Start, side label included, left of a session library's wrapped frame", async () => {
+    expect(startGap(await tidied(featureLibrary), "session-1")).toBeGreaterThan(0);
+  });
+
+  it("puts the canvas Stop right of a session library's wrapped frame", async () => {
+    const after = await tidied(featureLibrary);
+
+    expect(positionOf(after, "canvas-stop").x).toBeGreaterThan(
+      flowContainerBounds(after, "session-1").right,
+    );
+  });
+
+  it.each([4, 5])(
+    "keeps the canvas Start left and the canvas Stop right of a %i-agent session library that fits the canvas",
+    async (count) => {
+      const ids = steps(count);
+
+      const after = await tidied(
+        sessionLibrary(
+          ids.map((id) => agent(id)),
+          thenChain(ids),
+        ),
+      );
+
+      expect(startGap(after, "session-1")).toBeGreaterThan(0);
+      expect(positionOf(after, "canvas-stop").x).toBeGreaterThan(
+        flowContainerBounds(after, "session-1").right,
+      );
+    },
+  );
+
+  it.each([1400, 1600])(
+    "fits a wrapped session library's frame within a %i px canvas",
+    async (width) => {
+      const frame = flowContainerBounds(
+        await tidied(featureLibrary, { ...canvas, width }),
+        "session-1",
+      );
+
+      expect(frame.right - frame.left).toBeLessThanOrEqual(width);
+    },
+  );
+
+  it.each(canvasWidths)(
+    "lays a wrapped frame's rows out so every then-wire reads forward in a %i px canvas",
+    async (width) => {
+      const after = await tidied(featureLibrary, { ...canvas, width });
+
+      expect(backwardOrStrayWires(after, "session-1")).toEqual([]);
+    },
+  );
+
+  it.each(canvasWidths)(
+    "keeps the inner Stop level with the Branch that sends to it in a %i px canvas",
+    async (width) => {
+      const boxes = drawnBoxes(await tidied(featureLibrary, { ...canvas, width }));
+      const middle = (id: string) => (box(boxes, id).top + box(boxes, id).bottom) / 2;
+
+      expect(middle("stop")).toBe(middle("b2"));
+    },
+  );
+
+  it.each(canvasWidths)(
+    "lines each block in a packed row up with the node that sends to it in a %i px canvas",
+    async (width) => {
+      expect(
+        unlevelledBlocks(await tidied(featureLibrary, { ...canvas, width }), "session-1"),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(canvasWidths)(
+    "lets no two node boxes overlap in a wrapped session library in a %i px canvas",
+    async (width) => {
+      const after = await tidied(featureLibrary, { ...canvas, width });
+
+      expect(overlappingPairs(after)).toEqual([]);
+      expect(frameIntruders(after)).toEqual([]);
+    },
+  );
+
+  it("returns no moves when a wrapped session library is already tidy", async () => {
+    expect(await tidyMoves(await tidied(featureLibrary), canvas)).toEqual([]);
+  });
+
+  it("still wraps a frameless chain wider than the canvas into rows that fit it", async () => {
+    const ids = steps(30);
+
+    const after = await tidied(
+      bareFlow(
+        ids.map((id) => agent(id)),
+        thenChain(ids),
+      ),
+    );
+
+    expect(span(after)).toBeLessThanOrEqual(canvas.width);
+    expect(rowsOf(after, ids)).toBeGreaterThan(1);
+  });
+
+  it("wraps six chained session frames that each fit the canvas onto more than one row", async () => {
+    const firstAgents = steps(6).map((_, index) => `session-${index + 1}-s1`);
+
+    const after = await tidied(chainedSessions([4, 4, 4, 4, 4, 4]));
+
+    expect(rowsOf(after, firstAgents)).toBeGreaterThan(1);
+  });
+
+  it("wraps chained session frames onto more than one row when one of them is packed", async () => {
+    const sizes = [15, 4, 4, 4, 4];
+    const firstAgentsOfEqualFrames = sizes.slice(1).map((_, index) => `session-${index + 2}-s1`);
+
+    const after = await tidied(chainedSessions(sizes));
+
+    expect(rowsOf(after, firstAgentsOfEqualFrames)).toBeGreaterThan(1);
+  });
+
+  it.each([
+    {
+      frame: "a 3-agent workspace",
+      container: workspaceContainer(steps(3)),
+      tail: [output("canvas-stop")],
+    },
+    { frame: "a 15-agent session", container: sessionContainer(steps(15)), tail: [] },
+  ])(
+    "wraps root items after a one-frame canvas onto more than one row: $frame",
+    async ({ container, tail }) => {
+      const libraries = steps(8).map((id) => `lib-${id}`);
+
+      const after = await tidied(frameThenLibraries(container, libraries, tail));
+
+      expect(rowsOf(after, libraries)).toBeGreaterThan(1);
+    },
+  );
 
   it("keeps a session that fits the canvas on one row when the canvas path is wider than the canvas", async () => {
     const source = flow(

@@ -1,5 +1,7 @@
 import type { ELK, ElkExtendedEdge, ElkNode, LayoutOptions } from "elkjs/lib/elk-api.js";
+import { canvasStart } from "../../../core/flow/main-flow.js";
 import type { Flow, Node } from "../../../core/flow/schema.js";
+import { flowContainerOf } from "../../../core/flow/structure.js";
 import { parallelSections } from "../../../core/nodes/fork/execute.js";
 import { nodeLook } from "../nodes/look.js";
 import type { Move } from "./commands.js";
@@ -9,9 +11,11 @@ type Position = { x: number; y: number };
 
 type Size = { width: number; height: number };
 
-type Laid = { width: number; boxes: Map<string, Position & Size>; wide: Set<string> };
+type Box = Position & Size;
 
-type Wraps = (elkId: string) => boolean;
+type Laid = { width: number; boxes: Map<string, Box>; wide: Set<string>; elk: ElkNode };
+
+type Packed = Size & { boxes: Map<string, Box> };
 
 type ElkClass = new () => ELK;
 
@@ -107,7 +111,7 @@ const graphOf = (
   flow: Flow,
   elkIds: Map<string, string>,
   options: LayoutOptions,
-  wraps: Wraps,
+  packed: ReadonlyMap<string, Packed>,
 ): ElkNode => {
   const childrenOf = new Map<string | undefined, Node[]>();
   for (const node of flow.nodes) {
@@ -134,7 +138,7 @@ const graphOf = (
   }
   const frames: ElkNode[] = flow.containers.map((_, index) => ({
     id: `c${index}`,
-    layoutOptions: { ...containerOptions, ...(wraps(`c${index}`) ? options : {}) },
+    layoutOptions: containerOptions,
     children: [],
   }));
   const frameOf = new Map(
@@ -175,21 +179,30 @@ const graphOf = (
       return frame !== undefined && drawn.includes(frame) ? [[id, frame.id] as const] : [];
     }),
   );
-  const elkIdOf = (id: string) => elkIds.get(id) ?? frameIds.get(id);
+  const packedFrameOf = (id: string): string | undefined => {
+    const frame = frameOf.get(topOf(id));
+    return frame !== undefined && packed.has(frame.id) ? frame.id : undefined;
+  };
+  const elkIdOf = (id: string) => packedFrameOf(id) ?? elkIds.get(id) ?? frameIds.get(id);
   const edges: ElkExtendedEdge[] = flow.wires.flatMap(({ kind, from, to }, index) => {
     const source = elkIdOf(from.node);
     const target = elkIdOf(to.node);
-    if (kind !== "then" || source === undefined || target === undefined) return [];
+    if (kind !== "then" || source === undefined || target === undefined || source === target)
+      return [];
     return [{ id: `e${index}`, sources: [source], targets: [target] }];
   });
-  const children = connectedGroups([...drawn, ...root], edges);
+  const placed = drawn.map((frame): ElkNode => {
+    const size = packed.get(frame.id);
+    return size === undefined ? frame : { id: frame.id, width: size.width, height: size.height };
+  });
+  const children = connectedGroups([...placed, ...root], edges);
   return { id: "root", layoutOptions: { ...rootOptions, ...options }, children, edges };
 };
 
 const absoluteBoxes = (
   nodes: readonly ElkNode[],
   origin: Position,
-  boxes: Map<string, Position & Size>,
+  boxes: Map<string, Box>,
 ): void => {
   for (const node of nodes) {
     const x = origin.x + (node.x ?? 0);
@@ -199,17 +212,31 @@ const absoluteBoxes = (
   }
 };
 
+const elkIdsOf = (flow: Flow): Map<string, string> =>
+  new Map(flow.nodes.map((node, index) => [node.id, `n${index}`]));
+
 const layOut = async (
   flow: Flow,
   canvas: Size,
   options: LayoutOptions = {},
-  wraps: Wraps = () => true,
+  packed: ReadonlyMap<string, Packed> = new Map(),
+  packsRoot = false,
 ): Promise<Laid> => {
-  const elkIds = new Map(flow.nodes.map((node, index) => [node.id, `n${index}`]));
-  const laid = await (await loadEngine()).layout(graphOf(flow, elkIds, options, wraps));
-  const elkBoxes = new Map<string, Position & Size>();
-  absoluteBoxes(laid.children ?? [], { x: 0, y: 0 }, elkBoxes);
-  const boxes = new Map<string, Position & Size>();
+  const elkIds = elkIdsOf(flow);
+  const laid = await (await loadEngine()).layout(graphOf(flow, elkIds, options, packed));
+  const rootPack =
+    packsRoot && (laid.width ?? 0) > canvas.width
+      ? pack(laid, canvas.width, linksOf(laid), 0)
+      : undefined;
+  const elkBoxes = rootPack?.boxes ?? new Map<string, Box>();
+  if (rootPack === undefined) absoluteBoxes(laid.children ?? [], { x: 0, y: 0 }, elkBoxes);
+  for (const [frameId, { boxes: inner }] of packed) {
+    const origin = elkBoxes.get(frameId);
+    if (origin === undefined) continue;
+    for (const [id, found] of inner)
+      elkBoxes.set(id, { ...found, x: origin.x + found.x, y: origin.y + found.y });
+  }
+  const boxes = new Map<string, Box>();
   for (const [id, elkId] of elkIds) {
     const found = elkBoxes.get(elkId);
     if (found !== undefined) boxes.set(id, found);
@@ -217,7 +244,7 @@ const layOut = async (
   const wide = new Set(
     [...elkBoxes].flatMap(([id, { width }]) => (width > canvas.width ? [id] : [])),
   );
-  return { width: laid.width ?? 0, boxes, wide };
+  return { width: rootPack?.width ?? laid.width ?? 0, boxes, wide, elk: laid };
 };
 
 const ELK_DEFAULT_LAYER_GAP = 20;
@@ -232,16 +259,167 @@ const wrapRatio = (flow: Flow, canvas: Size): number => {
   return ((canvas.width / canvas.height) * (width + ELK_DEFAULT_LAYER_GAP)) / (width + LAYER_GAP);
 };
 
-const wrapped = (flow: Flow, canvas: Size, wide: ReadonlySet<string>): Promise<Laid> =>
-  layOut(
-    flow,
-    canvas,
-    {
-      "elk.layered.wrapping.strategy": "MULTI_EDGE",
-      "elk.aspectRatio": String(wrapRatio(flow, canvas)),
-    },
-    (id) => wide.has(id),
+type Span = { left: number; right: number; top: number; bottom: number };
+
+type Item = Span & { boxes: Map<string, Box> };
+
+type Row = { left: number; right: number; blocks: Item[][] };
+
+const spanOf = (items: readonly Item[]): Span => ({
+  left: Math.min(...items.map(({ left }) => left)),
+  right: Math.max(...items.map(({ right }) => right)),
+  top: Math.min(...items.map(({ top }) => top)),
+  bottom: Math.max(...items.map(({ bottom }) => bottom)),
+});
+
+const itemOf = (child: ElkNode): Item => {
+  const boxes = new Map<string, Box>();
+  absoluteBoxes([child], { x: 0, y: 0 }, boxes);
+  const { x, y, width, height } = boxes.get(child.id) ?? { x: 0, y: 0, width: 0, height: 0 };
+  return { left: x, right: x + width, top: y, bottom: y + height, boxes };
+};
+
+const blocksOf = (items: readonly Item[]): Item[][] => {
+  const blocks: Item[][] = [];
+  let right = -Infinity;
+  for (const item of items) {
+    const last = blocks.at(-1);
+    if (last !== undefined && item.left < right) last.push(item);
+    else blocks.push([item]);
+    right = Math.max(right, item.right);
+  }
+  return blocks;
+};
+
+const rowsOf = (blocks: readonly Item[][], rowWidth: number): Row[] => {
+  const rows: Row[] = [];
+  for (const block of blocks) {
+    const last = rows.at(-1);
+    const { left, right } = spanOf(block);
+    if (last !== undefined && right - last.left <= rowWidth) {
+      last.blocks.push(block);
+      last.right = Math.max(last.right, right);
+    } else rows.push({ left, right, blocks: [block] });
+  }
+  return rows;
+};
+
+type Link = { from: string; to: string };
+
+type Placed = { box: Box; block: number };
+
+const linksOf = (graph: ElkNode): Link[] =>
+  (graph.edges ?? []).flatMap(({ sources, targets }) => {
+    const [from] = sources;
+    const [to] = targets;
+    return from === undefined || to === undefined ? [] : [{ from, to }];
+  });
+
+const middleOf = ({ y, height }: Box): number => y + height / 2;
+
+const shiftOf = (
+  block: readonly Item[],
+  placed: ReadonlyMap<string, Placed>,
+  links: readonly Link[],
+): number => {
+  const own = new Map(block.flatMap((item) => [...item.boxes]));
+  const [chosen] = links
+    .flatMap(({ from, to }) => {
+      const sender = placed.get(from);
+      const receiver = own.get(to);
+      return sender === undefined || receiver === undefined ? [] : [{ sender, receiver }];
+    })
+    .sort(
+      (a, b) =>
+        b.sender.block - a.sender.block ||
+        a.sender.box.y - b.sender.box.y ||
+        a.receiver.y - b.receiver.y,
+    );
+  return chosen === undefined
+    ? -spanOf(block).top
+    : middleOf(chosen.sender.box) - middleOf(chosen.receiver);
+};
+
+const pack = (
+  frame: ElkNode,
+  rowWidth: number,
+  links: readonly Link[],
+  margin = FRAME_PADDING,
+): Packed => {
+  const items = (frame.children ?? []).map(itemOf).sort((a, b) => a.left - b.left);
+  const boxes = new Map<string, Box>();
+  let top = margin;
+  let width = 0;
+  for (const row of rowsOf(blocksOf(items), rowWidth)) {
+    const dx = margin - row.left;
+    const placed = new Map<string, Placed>();
+    for (const [index, block] of row.blocks.entries()) {
+      const dy = shiftOf(block, placed, links);
+      for (const item of block)
+        for (const [id, found] of item.boxes)
+          placed.set(id, { box: { ...found, x: found.x + dx, y: found.y + dy }, block: index });
+    }
+    const all = [...placed.values()].map(({ box }) => box);
+    const highest = Math.min(...all.map(({ y }) => y));
+    const lowest = Math.max(...all.map(({ y, height }) => y + height));
+    for (const [id, { box }] of placed) boxes.set(id, { ...box, y: box.y - highest + top });
+    top += lowest - highest + LAYER_GAP;
+    width = Math.max(width, row.right - row.left);
+  }
+  return {
+    width: width + 2 * margin,
+    height: top - LAYER_GAP + margin,
+    boxes,
+  };
+};
+
+const framesOf = (nodes: readonly ElkNode[]): ElkNode[] =>
+  nodes.flatMap((node) => (node.id.startsWith("c") ? [node] : framesOf(node.children ?? [])));
+
+const rootLeavesOf = (nodes: readonly ElkNode[]): string[] =>
+  nodes.flatMap((node) => {
+    if (node.id.startsWith("c")) return [];
+    if (node.id.startsWith("n")) return [node.id];
+    return rootLeavesOf(node.children ?? []);
+  });
+
+const canvasEnds = (flow: Flow): Set<string> => {
+  const start = canvasStart(flow);
+  const elkIds = elkIdsOf(flow);
+  return new Set(
+    flow.nodes
+      .filter(
+        (node) =>
+          node.parent === undefined &&
+          flowContainerOf(flow, node.id) === undefined &&
+          (node.id === start || node.type === "output"),
+      )
+      .flatMap((node) => elkIds.get(node.id) ?? []),
   );
+};
+
+const holdsOnlyCanvasEnds = (flow: Flow, root: readonly ElkNode[]): boolean => {
+  const ends = canvasEnds(flow);
+  return rootLeavesOf(root).every((id) => ends.has(id));
+};
+
+const wrapped = (flow: Flow, canvas: Size, unwrapped: Laid): Promise<Laid> => {
+  const rowWidth = canvas.width - 2 * FRAME_PADDING;
+  const links = linksOf(unwrapped.elk);
+  const root = unwrapped.elk.children ?? [];
+  const drawn = framesOf(root);
+  const packed = new Map(
+    drawn
+      .filter(({ id }) => unwrapped.wide.has(id))
+      .map((frame) => [frame.id, pack(frame, rowWidth, links)] as const),
+  );
+  if (drawn.length > 0)
+    return layOut(flow, canvas, {}, packed, drawn.length > 1 || !holdsOnlyCanvasEnds(flow, root));
+  return layOut(flow, canvas, {
+    "elk.layered.wrapping.strategy": "MULTI_EDGE",
+    "elk.aspectRatio": String(wrapRatio(flow, canvas)),
+  });
+};
 
 const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";
 
@@ -273,9 +451,7 @@ export async function tidyMoves(flow: Flow, canvasSize: Size): Promise<Move[]> {
   if (flow.nodes.length === 0) return [];
   const unwrapped = await layOut(flow, canvasSize);
   const laid =
-    unwrapped.width <= canvasSize.width
-      ? unwrapped
-      : await wrapped(flow, canvasSize, unwrapped.wide);
+    unwrapped.width <= canvasSize.width ? unwrapped : await wrapped(flow, canvasSize, unwrapped);
   return flow.nodes.flatMap((node) => {
     const to = placeOf(flow, node, laid);
     if (to === undefined || (to.x === node.position.x && to.y === node.position.y)) return [];

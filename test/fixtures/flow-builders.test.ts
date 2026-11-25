@@ -11,6 +11,7 @@ import {
   onWorkspaceMainFlow,
   output,
   sessionContainer,
+  sessionLibrary,
   sessionsWorkflow,
   thenWire,
   trigger,
@@ -171,6 +172,25 @@ describe("flow", () => {
     expect(result.containers).toEqual(containers);
     expect(result.nodes.map((node) => node.id)).toEqual(["a", "b"]);
     expect(result.wires).toEqual([]);
+  });
+});
+
+describe("sessionLibrary", () => {
+  it("puts the nodes in session-1 and wires canvas Start into its flow-in and its flow-out into canvas Stop", () => {
+    const result = sessionLibrary([agent("a"), agent("b")], [thenWire("a", "b")]);
+
+    expect(result.containers).toEqual([sessionContainer(["a", "b"])]);
+    expect(result.nodes.map(({ id, type, parent }) => ({ id, type, parent }))).toEqual([
+      { id: "a", type: "agent", parent: undefined },
+      { id: "b", type: "agent", parent: undefined },
+      { id: "canvas-start", type: "trigger", parent: undefined },
+      { id: "canvas-stop", type: "output", parent: undefined },
+    ]);
+    expect(result.wires).toEqual([
+      thenWire("a", "b"),
+      wire("canvas-start", "out", "session-1", "flow-in"),
+      wire("session-1", "flow-out", "canvas-stop", "in"),
+    ]);
   });
 });
 
