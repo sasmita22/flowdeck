@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const releaseVersion = "1.1.0";
+const releaseVersion = "1.2.0";
 
 const manifest = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(repoRoot, name), "utf8")) as Record<string, unknown>;
