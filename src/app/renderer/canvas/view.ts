@@ -17,7 +17,17 @@ import {
   withPositions,
   type Bounds,
 } from "./frames.js";
-import { bezierCrosses, branchStub, routeWire, type ExitSide, type Point } from "./wire-route.js";
+import {
+  bezierCrosses,
+  branchStub,
+  clearOfEnds,
+  goesBack,
+  leavesRow,
+  routeWire,
+  wireEnds,
+  type Point,
+} from "../../../core/flow/wire-router.js";
+import { textSpan } from "./wire-route.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 
 export { FRAME_PADDING } from "./frames.js";
@@ -349,27 +359,8 @@ const toConnectionEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] 
     });
 };
 
-const handleTop = 24;
-
 const drawnBounds = (flow: Flow, node: Node): Bounds =>
   (isBar(node) ? barBounds(flow, node) : null) ?? labelledBounds(node);
-
-const overlapping = (a: Bounds, b: Bounds) =>
-  a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-
-const leavesRow = (from: Bounds, to: Bounds) =>
-  !(from.top < to.bottom && to.top < from.bottom) || to.left < from.right;
-
-type WireEnds = { source: Point; side: ExitSide; target: Point };
-
-const wireEnds = (sender: Node, port: string, from: Bounds, to: Bounds): WireEnds => {
-  const target = { x: to.left, y: to.top + handleTop };
-  if (sender.type === "branch" && port === "no")
-    return { source: { x: (from.left + from.right) / 2, y: from.bottom }, side: "bottom", target };
-  if (sender.type === "branch")
-    return { source: { x: from.right, y: (from.top + from.bottom) / 2 }, side: "right", target };
-  return { source: { x: from.right, y: from.top + handleTop }, side: "right", target };
-};
 
 const wireRouter = (flow: Flow) => {
   const nodes = new Map(flow.nodes.map((node) => [node.id, node]));
@@ -399,20 +390,22 @@ const wireRouter = (flow: Flow) => {
     if (container === undefined || container.id !== flowContainerOf(flow, wire.to.node)?.id)
       return null;
     if (!leavesRow(from, to)) return null;
-    const clearOfEnds = (bounds: Bounds) => !overlapping(bounds, from) && !overlapping(bounds, to);
     const obstacles = [...boxes]
       .filter(([id]) => id !== wire.from.node && id !== wire.to.node)
       .map(([, bounds]) => bounds)
-      .filter(clearOfEnds);
+      .filter(clearOfEnds(from, to));
     const ends = wireEnds(sender, wire.from.port, from, to);
-    const goesBack = to.left < from.right && !overlapping(from, to);
-    if (!goesBack && !bezierCrosses(ends.source, ends.side, ends.target, obstacles)) return null;
+    if (!goesBack(from, to) && !bezierCrosses(ends.source, ends.side, ends.target, obstacles))
+      return null;
     const foreignBodies = bodies
       .filter(({ id }) => !within(wire.from.node, id) && !within(wire.to.node, id))
       .map(({ bounds }) => bounds)
-      .filter(clearOfEnds);
+      .filter(clearOfEnds(from, to));
     return routeWire(
-      { ...ends, ...(sender.type === "branch" && { stub: branchStub(wire.from.port, ends.side) }) },
+      {
+        ...ends,
+        ...(sender.type === "branch" && { stub: branchStub(wire.from.port, ends.side, textSpan) }),
+      },
       [...obstacles, ...foreignBodies, from, to],
       frameOf(container.id),
     );

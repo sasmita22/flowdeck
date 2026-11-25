@@ -1,6 +1,7 @@
 import { BaseEdge, type Edge, type EdgeProps } from "@xyflow/react";
 import { BranchLabel } from "./branch-edge.js";
-import { labelPoint, routePath, snapRoute, type Point } from "./wire-route.js";
+import { routePath, type Point } from "../../../core/flow/wire-router.js";
+import { labelPoint, snapRoute } from "./wire-route.js";
 
 export function RoutedEdge({
   source,

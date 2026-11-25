@@ -18,11 +18,8 @@ import {
   sideLabelSpan,
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
-import {
-  bezierCrosses,
-  labelPoint,
-  type ExitSide,
-} from "../../../../src/app/renderer/canvas/wire-route.js";
+import { labelPoint } from "../../../../src/app/renderer/canvas/wire-route.js";
+import { bezierCrosses, type ExitSide } from "../../../../src/core/flow/wire-router.js";
 import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import {
   parseFlow,

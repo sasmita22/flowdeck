@@ -1,7 +1,11 @@
 import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "vitest";
-import { flowSvg } from "../../../src/core/flow/flow-svg.js";
+import { edgeId, toViewEdges } from "../../../src/app/renderer/canvas/view.js";
+import { flowSvg, pictureLayout } from "../../../src/core/flow/flow-svg.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
+import type { Point } from "../../../src/core/flow/wire-router.js";
+import { canvas, pathCrossings, tidied } from "../../app/renderer/canvas/canvas-geometry.js";
+import { featureLibrary } from "../../fixtures/feature-library.js";
 import {
   agent,
   flow,
@@ -375,5 +379,126 @@ describe("flowSvg", () => {
           `label of ${id} over ${other.getAttribute("data-id")}`,
         ).toBe(false);
     });
+  });
+
+  describe("wires on a tidied long flow", () => {
+    const widths = [1600, 1400, 960, 860];
+
+    const tidiedLibraries = new Map<number, Promise<Flow>>();
+    const tidiedAt = (width: number): Promise<Flow> => {
+      const known = tidiedLibraries.get(width);
+      if (known !== undefined) return known;
+      const made = tidied(featureLibrary, { ...canvas, width });
+      tidiedLibraries.set(width, made);
+      return made;
+    };
+
+    const wirePaths = (svg: string): string[] =>
+      drawn(svg, "wire").map((element) => element.getAttribute("d") ?? "");
+
+    const pointsOf = (d: string): Point[] =>
+      Array.from(d.matchAll(/([MLHV])\s*(-?\d+(?:\.\d+)?)(?:[ ,](-?\d+(?:\.\d+)?))?/g)).reduce<
+        Point[]
+      >((points, [, command, first, second]) => {
+        const last = points.at(-1) ?? { x: 0, y: 0 };
+        if (command === "H") return [...points, { x: Number(first), y: last.y }];
+        if (command === "V") return [...points, { x: last.x, y: Number(first) }];
+        return [...points, { x: Number(first), y: Number(second) }];
+      }, []);
+
+    const within = (current: Flow, id: string, scope: string): boolean => {
+      const parent = current.nodes.find((node) => node.id === id)?.parent;
+      return id === scope || (parent !== undefined && within(current, parent, scope));
+    };
+
+    it.each(widths)(
+      "draws no wire over a node or body it does not connect, only in straight segments, at %i px",
+      async (width) => {
+        const current = await tidiedAt(width);
+        const svg = flowSvg(current);
+        const { boxes, bodies, wires } = pictureLayout(current);
+        const paths = wirePaths(svg);
+
+        expect(paths).toHaveLength(wires.length);
+        const crossing = wires.flatMap(({ from, to }, index) => {
+          const others = [...boxes].filter(([id]) => id !== from && id !== to);
+          const foreign = [...bodies].filter(
+            ([scope]) => !within(current, from, scope) && !within(current, to, scope),
+          );
+          const crossed = pathCrossings(
+            pointsOf(paths[index] ?? ""),
+            [...others, ...foreign].map(([, bounds]) => bounds),
+          );
+          return crossed.length === 0 ? [] : [`${from}->${to}`];
+        });
+        expect(crossing).toEqual([]);
+      },
+    );
+
+    it.each(widths)(
+      "draws every wire the canvas routes on the canvas's route, rounded, at %i px",
+      async (width) => {
+        const current = await tidiedAt(width);
+        const paths = wirePaths(flowSvg(current));
+        expect(paths).toHaveLength(current.wires.length);
+        const canvasRoutes = toViewEdges(current).flatMap((edge) =>
+          edge.type === "routed" && edge.data !== undefined && "points" in edge.data
+            ? [[edge.id, edge.data.points] as const]
+            : [],
+        );
+        const pictureRoute = (id: string): Point[] =>
+          pointsOf(paths[current.wires.findIndex((wire) => edgeId(wire) === id)] ?? "");
+
+        expect(canvasRoutes.length).toBeGreaterThan(0);
+        expect(Object.fromEntries(canvasRoutes.map(([id]) => [id, pictureRoute(id)]))).toEqual(
+          Object.fromEntries(
+            canvasRoutes.map(([id, points]) => [
+              id,
+              points.map(({ x, y }) => ({ x: Math.round(x), y: Math.round(y) })),
+            ]),
+          ),
+        );
+      },
+    );
+
+    it("draws a forward wire on the same row as today's path", () => {
+      const current = flow([at(agent("a"), 0, 0), at(agent("b"), 300, 0)], [thenWire("a", "b")]);
+      const paths = wirePaths(flowSvg(current));
+      const index = pictureLayout(current).wires.findIndex(
+        ({ from, to }) => from === "a" && to === "b",
+      );
+
+      expect(paths[index]).toBe("M170,24 H235 V24 H300");
+    });
+
+    it.each([
+      [
+        1600,
+        [
+          ["canvas-start", "session-1", "M48,1442 H169 V1442 H290"],
+          ["session-1", "canvas-stop", "M1841,1442 H1916 V1442 H1991"],
+        ],
+      ],
+      [
+        960,
+        [
+          ["canvas-start", "session-1", "M48,2103 H169 V2104 H290"],
+          ["session-1", "canvas-stop", "M1516,2104 H1591 V2103 H1666"],
+        ],
+      ],
+    ])(
+      "draws the wires to and from a session frame as today's paths at %i px",
+      async (width, expected) => {
+        const current = await tidiedAt(width);
+        const frames = new Set(current.containers.map(({ id }) => id));
+        const paths = wirePaths(flowSvg(current));
+
+        expect(
+          pictureLayout(current)
+            .wires.map(({ from, to }, index) => [from, to, paths[index]])
+            .filter(([from, to]) => frames.has(from ?? "") || frames.has(to ?? "")),
+        ).toEqual(expected);
+      },
+    );
   });
 });
