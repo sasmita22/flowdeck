@@ -9,8 +9,20 @@ import {
   routeConnection,
   toViewEdges,
   toViewNodes,
+  type ViewEdge,
 } from "../../../../src/app/renderer/canvas/view.js";
-import { containerText, sideLabelSpan } from "../../../../src/app/renderer/canvas/frames.js";
+import {
+  bodyFrameBounds,
+  containerText,
+  flowContainerBounds,
+  sideLabelSpan,
+  type Bounds,
+} from "../../../../src/app/renderer/canvas/frames.js";
+import {
+  bezierCrosses,
+  labelPoint,
+  type ExitSide,
+} from "../../../../src/app/renderer/canvas/wire-route.js";
 import { BAR_MIN_HEIGHT, nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import {
   parseFlow,
@@ -19,7 +31,8 @@ import {
   type Wire,
 } from "../../../../src/core/flow/schema.js";
 import type { LibraryLookup } from "../../../../src/core/flow/libraries.js";
-import { flowIn, flowOut } from "../../../../src/core/flow/structure.js";
+import { flowContainerOf, flowIn, flowOut } from "../../../../src/core/flow/structure.js";
+import { featureLibrary } from "../../../fixtures/feature-library.js";
 import {
   agent,
   ask,
@@ -41,6 +54,18 @@ import {
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
 import { libraryOf } from "../../../fixtures/known-library.js";
+import {
+  box,
+  canvas,
+  drawnBoxes,
+  obstaclesFor,
+  overlaps,
+  pathCrossings,
+  routeShapeProblems,
+  rowsSpanned,
+  tidied,
+  type Point,
+} from "./canvas-geometry.js";
 
 const nodeViews = (...args: Parameters<typeof toViewNodes>) =>
   toViewNodes(...args).filter((node) => node.type !== "container-frame");
@@ -1181,5 +1206,445 @@ describe("frameOwnerId", () => {
     }
 
     expect([...checked].sort()).toEqual(["containerId", "forEachId", "loopId"]);
+  });
+});
+
+describe("toViewEdges routes wires that leave their row", () => {
+  const widths = [1600, 1400, 860];
+
+  const tidiedAt = (width: number) => tidied(featureLibrary, { ...canvas, width });
+
+  const labelledBoxes = (current: Flow): Map<string, Bounds> => {
+    const boxes = drawnBoxes(current);
+    for (const node of current.nodes) {
+      const drawn = boxes.get(node.id);
+      if (drawn !== undefined && (node.type === "trigger" || node.type === "output"))
+        boxes.set(node.id, { ...drawn, right: drawn.right + sideLabelSpan(node.label) });
+    }
+    return boxes;
+  };
+
+  const typeOf = (current: Flow, id: string) => current.nodes.find((node) => node.id === id)?.type;
+
+  const handles = (current: Flow, boxes: Map<string, Bounds>, wire: Wire) => {
+    const from = box(boxes, wire.from.node);
+    const to = box(boxes, wire.to.node);
+    const target = { x: to.left, y: to.top + 24 };
+    if (typeOf(current, wire.from.node) === "branch" && wire.from.port === "no")
+      return {
+        source: { x: (from.left + from.right) / 2, y: from.bottom },
+        side: "bottom" as ExitSide,
+        target,
+      };
+    if (typeOf(current, wire.from.node) === "branch")
+      return {
+        source: { x: from.right, y: (from.top + from.bottom) / 2 },
+        side: "right" as ExitSide,
+        target,
+      };
+    return { source: { x: from.right, y: from.top + 24 }, side: "right" as ExitSide, target };
+  };
+
+  const crossesToday = (current: Flow, boxes: Map<string, Bounds>, wire: Wire) => {
+    const { source, side, target } = handles(current, boxes, wire);
+    return bezierCrosses(source, side, target, obstaclesFor(boxes, wire.from.node, wire.to.node));
+  };
+
+  const inFrame = (current: Flow, wire: Wire) => {
+    const ids = new Set(current.nodes.map(({ id }) => id));
+    const from = flowContainerOf(current, wire.from.node);
+    return (
+      wire.kind === "then" &&
+      ids.has(wire.from.node) &&
+      ids.has(wire.to.node) &&
+      from !== undefined &&
+      from.id === flowContainerOf(current, wire.to.node)?.id
+    );
+  };
+
+  const leavesRow = (from: Bounds, to: Bounds) =>
+    !(from.top < to.bottom && to.top < from.bottom) || to.left < from.right;
+
+  const pointsOf = (edge: ViewEdge | undefined): Point[] | undefined =>
+    edge?.data !== undefined && "points" in edge.data ? edge.data.points : undefined;
+
+  const routedFrom = (edges: readonly ViewEdge[], source: string, target: string) =>
+    edges.find((edge) => edge.source === source && edge.target === target);
+
+  const within = (current: Flow, id: string, scope: string): boolean => {
+    const parent = current.nodes.find((node) => node.id === id)?.parent;
+    return id === scope || (parent !== undefined && within(current, parent, scope));
+  };
+
+  const foreignBodies = (current: Flow, source: string, target: string): Bounds[] =>
+    current.nodes
+      .filter((node) => node.type === "loop" || node.type === "foreach")
+      .filter((scope) => !within(current, source, scope.id) && !within(current, target, scope.id))
+      .map((scope) => bodyFrameBounds(current, scope));
+
+  const frameOf = (current: Flow, id: string): Bounds => {
+    const container = flowContainerOf(current, id);
+    if (container === undefined) throw new Error(`${id} is in no frame`);
+    return flowContainerBounds(current, container.id);
+  };
+
+  const labelGap = 4;
+
+  const wireLabelBox = (label: string, at: Point): Bounds => {
+    const width = label.length * 0.6 * 9.5 + 2 * (5 + 1);
+    const height = 13 + 2;
+    return {
+      left: at.x - width / 2,
+      top: at.y - height / 2,
+      right: at.x + width / 2,
+      bottom: at.y + height / 2,
+    };
+  };
+
+  const portLabelBox = (from: Bounds, port: string): Bounds => {
+    const width = port.length * 0.6 * 9.5;
+    if (port === "no") {
+      const x = (from.left + from.right) / 2 - 3 + 8;
+      return { left: x, top: from.bottom + 3, right: x + width, bottom: from.bottom + 3 + 13 };
+    }
+    const y = (from.top + from.bottom) / 2;
+    return { left: from.right + 3, top: y - 17, right: from.right + 3 + width, bottom: y - 4 };
+  };
+
+  const gapBetween = (a: Bounds, b: Bounds) =>
+    Math.hypot(
+      Math.max(0, a.left - b.right, b.left - a.right),
+      Math.max(0, a.top - b.bottom, b.top - a.bottom),
+    );
+
+  const labelProblems = (boxes: Map<string, Bounds>, edge: ViewEdge): string[] => {
+    const label = edge.sourceHandle ?? "";
+    const from = box(boxes, edge.source);
+    const at = labelPoint(pointsOf(edge) ?? []);
+    const drawn = wireLabelBox(label, at);
+    const width = drawn.right - drawn.left;
+    const fromNode = gapBetween({ left: at.x, top: at.y, right: at.x, bottom: at.y }, from);
+    return [
+      ...(fromNode >= width / 2 + labelGap
+        ? []
+        : [
+            `${edge.id}: label point is ${fromNode} px from its node, needs ${width / 2 + labelGap}`,
+          ]),
+      ...(gapBetween(drawn, portLabelBox(from, label)) >= labelGap
+        ? []
+        : [`${edge.id}: label overlaps the port label`]),
+    ];
+  };
+
+  it.each(widths)(
+    "routes every in-frame wire that goes back or leaves its row over a node, around the nodes, at %i px",
+    async (width) => {
+      const current = await tidiedAt(width);
+      const boxes = labelledBoxes(current);
+      const edges = toViewEdges(current);
+      const routed = edges.filter((edge) => edge.type === "routed");
+
+      expect(routedFrom(routed, "n2", "stop")).toBeDefined();
+      expect(
+        routed.some(({ source, target }) => {
+          const from = box(boxes, source);
+          const to = box(boxes, target);
+          return to.top >= from.bottom && to.left < from.left;
+        }),
+      ).toBe(true);
+      const problems = routed.flatMap((edge) => {
+        const wire = current.wires.find((candidate) => edgeId(candidate) === edge.id);
+        if (wire === undefined) return [`${edge.id}: no wire with this id`];
+        const points = pointsOf(edge) ?? [];
+        const side = edge.sourceHandle === "no" ? "bottom" : "right";
+        return [
+          ...routeShapeProblems(points, side),
+          ...pathCrossings(points, obstaclesFor(boxes, edge.source, edge.target)).map(
+            (crossed) => `crosses ${JSON.stringify(crossed)}`,
+          ),
+          ...rowsSpanned(
+            points,
+            obstaclesFor(boxes, edge.source, edge.target).filter((row) =>
+              overlaps(row, frameOf(current, edge.source)),
+            ),
+            frameOf(current, edge.source),
+          ),
+          ...pathCrossings(points, foreignBodies(current, edge.source, edge.target)).map(
+            (entered) => `enters the body frame ${JSON.stringify(entered)}`,
+          ),
+        ].map((problem) => `${edge.id}: ${problem}`);
+      });
+      expect(problems).toEqual([]);
+      const byId = new Map(edges.map((edge) => [edge.id, edge]));
+      const missed = current.wires
+        .filter((wire) => inFrame(current, wire))
+        .filter((wire) => leavesRow(box(boxes, wire.from.node), box(boxes, wire.to.node)))
+        .filter((wire) => crossesToday(current, boxes, wire))
+        .map(edgeId)
+        .filter((id) => byId.get(id)?.type !== "routed");
+      expect(missed).toEqual([]);
+      const backward = current.wires
+        .filter((wire) => inFrame(current, wire))
+        .filter((wire) => box(boxes, wire.to.node).left < box(boxes, wire.from.node).right)
+        .map(edgeId);
+      expect(backward.length).toBeGreaterThan(0);
+      expect(backward.filter((id) => byId.get(id)?.type !== "routed")).toEqual([]);
+    },
+  );
+
+  it("keeps the port label on every routed Branch wire, clear of its node and port label", async () => {
+    const current = await tidiedAt(1600);
+    const boxes = labelledBoxes(current);
+    const routedBranches = toViewEdges(current).filter(
+      (edge) => edge.type === "routed" && typeOf(current, edge.source) === "branch",
+    );
+
+    expect(routedBranches.length).toBeGreaterThan(0);
+    for (const edge of routedBranches)
+      expect(edge.data).toMatchObject({ label: edge.sourceHandle });
+    expect(routedBranches.flatMap((edge) => labelProblems(boxes, edge))).toEqual([]);
+  });
+
+  it("routes a Branch no wire to a node a row above it downwards first, keeping its label", () => {
+    const current = inOneSession(
+      [
+        { ...branch("B", "flag"), position: { x: 300, y: 300 } },
+        { ...agent("M"), position: { x: 440, y: 230 } },
+        { ...agent("X"), position: { x: 600, y: 150 } },
+        { ...agent("Z"), position: { x: 300, y: 520 } },
+      ],
+      [wire("B", "no", "X", "in")],
+    );
+    const noWire = current.wires[0];
+    if (noWire === undefined) throw new Error("no wire");
+    const boxes = labelledBoxes(current);
+    expect(crossesToday(current, boxes, noWire)).toBe(true);
+
+    const [edge] = toViewEdges(current);
+
+    expect(edge?.type).toBe("routed");
+    expect(edge?.data).toMatchObject({ label: "no" });
+    expect(routeShapeProblems(pointsOf(edge) ?? [], "bottom")).toEqual([]);
+    expect(edge === undefined ? ["no edge"] : labelProblems(boxes, edge)).toEqual([]);
+  });
+
+  it("keeps today's Branch wire when its label stub has no room inside the frame", () => {
+    const current = inOneSession(
+      [
+        { ...branch("B", "flag"), position: { x: 300, y: 300 } },
+        { ...agent("M"), position: { x: 440, y: 230 } },
+        { ...agent("X"), position: { x: 600, y: 150 } },
+      ],
+      [wire("B", "no", "X", "in")],
+    );
+    const noWire = current.wires[0];
+    if (noWire === undefined) throw new Error("no wire");
+    expect(crossesToday(current, labelledBoxes(current), noWire)).toBe(true);
+
+    expect(toViewEdges(current).map(({ type, data }) => ({ type, data }))).toEqual([
+      { type: "branch", data: { label: "no" } },
+    ]);
+  });
+
+  it.each(widths)(
+    "keeps today's edge for every wire to a node further along its row at %i px",
+    async (width) => {
+      const current = await tidiedAt(width);
+      const boxes = labelledBoxes(current);
+      const byId = new Map(toViewEdges(current).map((edge) => [edge.id, edge]));
+      const forward = current.wires.filter((wire) => {
+        if (!inFrame(current, wire)) return false;
+        const from = box(boxes, wire.from.node);
+        const to = box(boxes, wire.to.node);
+        return from.top < to.bottom && to.top < from.bottom && to.left >= from.right;
+      });
+
+      expect(forward.length).toBeGreaterThan(0);
+      for (const wire of forward) {
+        const edge = byId.get(edgeId(wire));
+        expect([undefined, "aligned", "branch"]).toContain(edge?.type);
+        expect(pointsOf(edge)).toBeUndefined();
+      }
+    },
+  );
+
+  it("keeps today's edge for a wire that skips a node on its own row", () => {
+    const current = inOneSession(
+      [
+        { ...agent("A"), position: { x: 0, y: 0 } },
+        { ...agent("B"), position: { x: 250, y: 0 } },
+        { ...agent("C"), position: { x: 500, y: 0 } },
+      ],
+      [thenWire("A", "C")],
+    );
+    const skip = current.wires[0];
+    if (skip === undefined) throw new Error("no wire");
+    expect(crossesToday(current, labelledBoxes(current), skip)).toBe(true);
+
+    expect(toViewEdges(current)).toEqual([
+      {
+        id: "A:out->C:in",
+        source: "A",
+        sourceHandle: "out",
+        target: "C",
+        targetHandle: "in",
+        markerEnd: { type: MarkerType.ArrowClosed },
+      },
+    ]);
+  });
+
+  it.each([
+    { x: 100, y: 40 },
+    { x: -60, y: 20 },
+  ])("keeps today's edge for a node dragged partly onto its sender at $x,$y", (position) => {
+    const current = inOneSession(
+      [
+        { ...agent("A"), position: { x: 0, y: 0 } },
+        { ...agent("B"), position },
+      ],
+      [thenWire("A", "B")],
+    );
+
+    expect(toViewEdges(current)).toEqual([
+      {
+        id: "A:out->B:in",
+        source: "A",
+        sourceHandle: "out",
+        target: "B",
+        targetHandle: "in",
+        markerEnd: { type: MarkerType.ArrowClosed },
+      },
+    ]);
+  });
+
+  it("routes past a node that overlaps an end box", () => {
+    const current = inOneSession(
+      [
+        { ...agent("A"), position: { x: 300, y: 100 } },
+        { ...agent("B"), position: { x: 280, y: 200 } },
+        { ...agent("C"), position: { x: 360, y: 80 } },
+      ],
+      [thenWire("A", "B")],
+    );
+
+    expect(toViewEdges(current)).toMatchObject([{ id: "A:out->B:in", type: "routed" }]);
+  });
+
+  it("routes past a Loop body that overlaps an end box", () => {
+    const current = inOneSession(
+      [
+        { ...agent("a"), position: { x: 120, y: 270 } },
+        { ...agent("b"), position: { x: 150, y: 210 } },
+        { ...loop("L"), position: { x: 190, y: 260 } },
+        { ...agent("in", { parent: "L" }), position: { x: 190, y: 350 } },
+      ],
+      [thenWire("a", "b")],
+    );
+
+    expect(toViewEdges(current)).toMatchObject([{ id: "a:out->b:in", type: "routed" }]);
+  });
+
+  it.each(widths)("keeps wires with a container end plain at %i px", async (width) => {
+    const ends = toViewEdges(await tidiedAt(width)).filter(({ id }) => id.includes("session-1:"));
+
+    expect(ends.map(({ id }) => id)).toEqual([
+      `canvas-start:out->session-1:${flowIn}`,
+      `session-1:${flowOut}->canvas-stop:in`,
+    ]);
+    for (const edge of ends) {
+      expect(edge.type).toBeUndefined();
+      expect(edge.data).toBeUndefined();
+    }
+  });
+
+  it("keeps today's edge for a canvas-level wire outside any frame", () => {
+    const current = flow(
+      [
+        { ...agent("A"), position: { x: 0, y: 0 } },
+        { ...agent("B"), position: { x: 300, y: 100 } },
+        { ...agent("C"), position: { x: 600, y: 200 } },
+      ],
+      [thenWire("A", "C")],
+      flowSettings,
+      { containers: [] },
+    );
+    const across = current.wires[0];
+    if (across === undefined) throw new Error("no wire");
+    expect(crossesToday(current, labelledBoxes(current), across)).toBe(true);
+
+    const [edge] = toViewEdges(current);
+
+    expect(edge?.type).toBeUndefined();
+    expect(edge?.data).toBeUndefined();
+  });
+
+  it("keeps a hand-placed Branch fan-out with nothing between as plain Branch wires", () => {
+    const current = inOneSession(
+      [
+        { ...branch("B", "flag"), position: { x: 0, y: 0 } },
+        { ...agent("Y"), position: { x: 300, y: -100 } },
+        { ...agent("N"), position: { x: 300, y: 150 } },
+      ],
+      [wire("B", "yes", "Y", "in"), wire("B", "no", "N", "in")],
+    );
+
+    expect(toViewEdges(current).map(({ id, type, data }) => ({ id, type, data }))).toEqual([
+      { id: "B:yes->Y:in", type: "branch", data: { label: "yes" } },
+      { id: "B:no->N:in", type: "branch", data: { label: "no" } },
+    ]);
+  });
+
+  it("moves a routed wire's end with its target while the target is dragged", async () => {
+    const current = await tidiedAt(860);
+    const stop = current.nodes.find((node) => node.id === "stop");
+    if (stop === undefined) throw new Error("no stop");
+    const dragged = { stop: { x: stop.position.x + 8, y: stop.position.y + 6 } };
+
+    const still = routedFrom(toViewEdges(current), "n2", "stop");
+    const moving = routedFrom(toViewEdges(current, [], dragged), "n2", "stop");
+
+    expect(moving?.type).toBe("routed");
+    const before = pointsOf(still)?.at(-1);
+    const after = pointsOf(moving)?.at(-1);
+    expect(before).toBeDefined();
+    expect(after).toEqual({ x: (before?.x ?? 0) + 8, y: (before?.y ?? 0) + 6 });
+  });
+
+  it("routes a hand-placed 100-node flow during a drag well within a frame budget", () => {
+    const count = 100;
+    const columns = 10;
+    const order = Array.from({ length: count }, (_, index) => (index * 37) % count);
+    const current = inOneSession(
+      order.map((_, index) => ({
+        ...agent(`h${index}`),
+        position: {
+          x: (index % columns) * 260 + ((index * 13) % 40),
+          y: Math.floor(index / columns) * 140 + ((index * 7) % 30),
+        },
+      })),
+      order.slice(1).map((to, index) => thenWire(`h${order[index] ?? 0}`, `h${to}`)),
+    );
+    const dragged = { h5: { x: 30, y: 40 } };
+    expect(
+      toViewEdges(current, [], dragged).filter((edge) => edge.type === "routed").length,
+    ).toBeGreaterThan(count / 2);
+
+    const batch = () => {
+      const started = performance.now();
+      for (let run = 0; run < 20; run += 1) toViewEdges(current, [], dragged);
+      return (performance.now() - started) / 20;
+    };
+
+    expect(Math.min(...Array.from({ length: 5 }, batch))).toBeLessThan(8);
+  });
+
+  it("routes the tidied feature library well within a frame budget", async () => {
+    const current = await tidiedAt(860);
+    toViewEdges(current);
+
+    const started = performance.now();
+    for (let run = 0; run < 20; run += 1) toViewEdges(current);
+
+    expect((performance.now() - started) / 20).toBeLessThan(8);
   });
 });
