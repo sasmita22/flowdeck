@@ -121,6 +121,19 @@ export const inOneSession = (nodes: unknown[], wires: unknown[]): Flow =>
     containers: [sessionContainer(topLevelIds(nodes))],
   });
 
+export const sessionLibrary = (nodes: unknown[], wires: unknown[]): Flow => {
+  const library = inOneSession(nodes, wires);
+  return parseFlow({
+    ...library,
+    nodes: [...library.nodes, trigger("canvas-start"), output("canvas-stop")],
+    wires: [
+      ...library.wires,
+      wire("canvas-start", "out", "session-1", "flow-in"),
+      wire("session-1", "flow-out", "canvas-stop", "in"),
+    ],
+  });
+};
+
 export const flow = (
   nodes: unknown[],
   wires: unknown[],
