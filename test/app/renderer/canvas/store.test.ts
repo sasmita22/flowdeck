@@ -23,7 +23,7 @@ import {
   nodeWidth,
   sideLabelSpan,
 } from "../../../../src/app/renderer/canvas/frames.js";
-import { canvasStart } from "../../../../src/core/flow/main-flow.js";
+import { canvasStart, mainFlow } from "../../../../src/core/flow/main-flow.js";
 import { flowContainerOf, flowIn, flowOut } from "../../../../src/core/flow/structure.js";
 import { nodeLook } from "../../../../src/app/renderer/nodes/look.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
@@ -2584,6 +2584,62 @@ describe("libraries", () => {
     expect(libraryNodes(store.getState().flow).map((node) => node.settings.label)).toEqual([
       "android",
     ]);
+  });
+
+  it.each([
+    [
+      "an Agent",
+      "agent",
+      (store: ReturnType<typeof withLibraries>) => store.getState().drop("agent", loose),
+    ],
+    [
+      "a node library",
+      "library",
+      (store: ReturnType<typeof withLibraries>) => store.getState().dropLibrary("f-review", loose),
+    ],
+  ])("drops %s loose on a workflow canvas", (_, type, dropLoose) => {
+    const store = withLibraries();
+    const before = store.getState().flow.nodes;
+
+    dropLoose(store);
+
+    const after = store.getState().flow;
+    const added = after.nodes.filter((node) => !before.includes(node));
+    expect(store.getState().message).toBeNull();
+    expect(added.map((node) => node.type)).toEqual([type]);
+    expect(added.map((node) => flowContainerOf(after, node.id))).toEqual([undefined]);
+  });
+
+  type Edit = (store: ReturnType<typeof withLibraries>) => void;
+  const nothing: Edit = () => undefined;
+  const dropAgent: Edit = (store) => store.getState().drop("agent", loose);
+  const dropReview: Edit = (store) => store.getState().dropLibrary("f-review", loose);
+  const paste: Edit = (store) => store.getState().paste();
+  const copiedAfter =
+    (dropped: Edit): Edit =>
+    (store) => {
+      dropped(store);
+      store.getState().copy();
+    };
+
+  it.each([
+    ["drops", "an Agent", nothing, dropAgent],
+    ["drops", "a node library", nothing, dropReview],
+    ["pastes", "an Agent", copiedAfter(dropAgent), paste],
+    ["pastes", "a node library", copiedAfter(dropReview), paste],
+  ])("%s %s loose on a workflow canvas off the main flow", (_, __, ready, place) => {
+    const store = withLibraries();
+    ready(store);
+    const before = store.getState().flow.nodes;
+
+    place(store);
+
+    const { flow: after, libraries } = store.getState();
+    const added = after.nodes.filter((node) => !before.includes(node)).map(({ id }) => id);
+    const reached = mainFlow(after, libraries)?.reached ?? new Set<string>();
+    expect(store.getState().message).toBeNull();
+    expect(added).toHaveLength(1);
+    expect(added.filter((id) => reached.has(id))).toEqual([]);
   });
 
   it.each([

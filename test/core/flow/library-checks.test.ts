@@ -169,7 +169,6 @@ describe("libraryRefusal", () => {
   it.each([
     ["a session library inside a session", inSession, "sessions"],
     ["a session library inside the workspace", inWorkspace, "sessions"],
-    ["a node library loose in a workflow", looseInWorkflow, "nodes"],
     ["an incomplete blueprint", loose, "draft"],
     ["a workflow", loose, "flow"],
     ["a blueprint that does not exist", loose, "gone"],
@@ -189,6 +188,7 @@ describe("libraryRefusal", () => {
     ["a node library inside the workspace", inWorkspace, "nodes"],
     ["a node library loose in a blueprint with no workspace", loose, "nodes"],
     ["a node library inside a session", inSession, "nodes"],
+    ["a node library loose in a workflow", looseInWorkflow, "nodes"],
     ["a session library loose in a workflow", looseInWorkflow, "sessions"],
     ["a session library loose in a blueprint with no workspace", loose, "sessions"],
   ])("allows %s", (_, place, libraryId) => {

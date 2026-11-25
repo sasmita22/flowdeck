@@ -1,3 +1,4 @@
+import type { LibraryLookup } from "./libraries.js";
 import type { Flow, FlowContainer, Node } from "./schema.js";
 import {
   flowContainerMembers,
@@ -71,7 +72,7 @@ export function canvasReach(flow: Flow): CanvasReach | undefined {
 
 export const reachFrom = (flow: Flow, id: string): CanvasReach => walk(flow, [id]);
 
-export function mainFlow(flow: Flow): MainFlow | undefined {
+export function mainFlow(flow: Flow, libraries?: LibraryLookup): MainFlow | undefined {
   const start = canvasStart(flow);
   const containerSeeds = isWorkflow(flow)
     ? flow.containers
@@ -84,7 +85,8 @@ export function mainFlow(flow: Flow): MainFlow | undefined {
           (node) =>
             node.type === "library" &&
             node.parent === undefined &&
-            flowContainerOf(flow, node.id) === undefined,
+            flowContainerOf(flow, node.id) === undefined &&
+            libraries?.(node.settings.libraryId)?.kind === "session-library",
         )
         .map((node) => node.id)
     : [];
@@ -95,8 +97,8 @@ export function mainFlow(flow: Flow): MainFlow | undefined {
   return { reached, containers, ignored: flow.nodes.filter((node) => !reached.has(node.id)) };
 }
 
-export function mainFlowOnly(flow: Flow): Flow {
-  const found = mainFlow(flow);
+export function mainFlowOnly(flow: Flow, libraries?: LibraryLookup): Flow {
+  const found = mainFlow(flow, libraries);
   if (found === undefined) return flow;
   const kept = new Set([
     ...found.reached,

@@ -323,9 +323,9 @@ const libraryRules = new Set([libraryUse.id, libraryLabels.id, libraryLoops.id])
 type Expansion = { ok: false; errors: ValidationError[] } | { ok: true; flow: Flow };
 
 const expandedHost = (saved: Flow, deps: BuildFlowDeps): Expansion => {
-  const host = mainFlowOnly(saved);
   const resolve = latestLibraries(deps.flows);
   const lookup = libraryLookup(resolve);
+  const host = mainFlowOnly(saved, lookup);
   const errors = [
     ...validate(saved, lookup).filter((error) => error.rule === libraryLoops.id),
     ...validate(host, lookup).filter(

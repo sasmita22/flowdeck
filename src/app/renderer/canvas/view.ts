@@ -1,4 +1,5 @@
 import { MarkerType } from "@xyflow/react";
+import type { LibraryLookup } from "../../../core/flow/libraries.js";
 import { mainFlow } from "../../../core/flow/main-flow.js";
 import type { CanvasNote, Flow, FlowContainer, Node, Wire } from "../../../core/flow/schema.js";
 import { nodeLook } from "../nodes/look.js";
@@ -124,8 +125,8 @@ type IsIgnored = (id: string) => boolean;
 
 type Ignoring = { node: IsIgnored; container: IsIgnored };
 
-const ignoredIn = (flow: Flow): Ignoring => {
-  const found = mainFlow(flow);
+const ignoredIn = (flow: Flow, libraries?: LibraryLookup): Ignoring => {
+  const found = mainFlow(flow, libraries);
   if (found === undefined) return { node: () => false, container: () => false };
   return { node: (id) => !found.reached.has(id), container: (id) => !found.containers.has(id) };
 };
@@ -272,12 +273,13 @@ export const toViewNodes = (
   dragPositions: Readonly<Record<string, Position>>,
   highlighted: string | null,
   noteBoxes: Readonly<Record<string, Box>> = {},
+  libraries?: LibraryLookup,
 ): ViewNode[] => {
   const carried = frameDragMoves(flow, dragPositions);
   const positions = { ...carried, ...dragPositions };
   const live = withPositions(flow, followed(flow, positions));
   const framing = withPositions(flow, { ...carried, ...containerMoves(flow, positions) });
-  const ignoring = ignoredIn(flow);
+  const ignoring = ignoredIn(flow, libraries);
   const isIgnored = ignoring.node;
   return [
     ...toFlowContainerFrameViewNodes(framing, selection, ignoring.container),

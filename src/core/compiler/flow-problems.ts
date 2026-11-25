@@ -4,7 +4,7 @@ import { mainFlowOnly } from "../flow/main-flow.js";
 import { validate, type ValidationError } from "./validate.js";
 
 export function flowProblems(flow: Flow, libraries?: LibraryLookup): ValidationError[] {
-  const checked = mainFlowOnly(flow);
+  const checked = mainFlowOnly(flow, libraries);
   return validate(checked, libraries).map((problem) => {
     const checkedWire = problem.wire === undefined ? undefined : checked.wires[problem.wire];
     return checkedWire === undefined

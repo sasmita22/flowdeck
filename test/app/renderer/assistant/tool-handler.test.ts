@@ -1194,6 +1194,7 @@ describe("tool handler adds and changes library nodes", () => {
 
   it.each([
     ["a node library inside the workspace", "f-review", "workspace-1"],
+    ["a node library loose in a workflow", "f-review", undefined],
     ["a session library loose in a workflow", "f-sessions", undefined],
     ["a library other libraries also use", "f-review", "session-1"],
     ["a library that uses another library", "f-shared", "session-1"],
@@ -1209,6 +1210,30 @@ describe("tool handler adds and changes library nodes", () => {
 
     expect(result).toMatchObject({ ok: true, nodeId: "library-1" });
     expect(nodeIn(canvas.getState().flow, "library-1")).toMatchObject({ settings: { libraryId } });
+  });
+
+  it.each([
+    ["an Agent", { type: "agent", label: "Given", settings: { instructions: "Review it." } }],
+    ["a node library", { type: "library", label: "Given", settings: { libraryId: "f-review" } }],
+  ])("answers %s added loose in a workflow with the loose-node problem", async (_, input) => {
+    const { call, canvas } = await ready();
+    const before = canvas.getState().flow;
+
+    const result = await call("add_node", input);
+
+    const added = canvas.getState().flow.nodes.find((node) => !before.nodes.includes(node));
+    if (added === undefined) return expect.fail("nothing added");
+    expect(result).toEqual({
+      ok: true,
+      nodeId: added.id,
+      problems: [
+        {
+          rule: "outside-container",
+          node: added.id,
+          message: `${added.label} is outside every workspace and session; move it into one.`,
+        },
+      ],
+    });
   });
 
   it("adds a node library loose in a blueprint with no workspace", async () => {

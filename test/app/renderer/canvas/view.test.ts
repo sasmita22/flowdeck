@@ -18,6 +18,7 @@ import {
   type NodeType,
   type Wire,
 } from "../../../../src/core/flow/schema.js";
+import type { LibraryLookup } from "../../../../src/core/flow/libraries.js";
 import { flowIn, flowOut } from "../../../../src/core/flow/structure.js";
 import {
   agent,
@@ -39,6 +40,7 @@ import {
   wire,
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
+import { libraryOf } from "../../../fixtures/known-library.js";
 
 const nodeViews = (...args: Parameters<typeof toViewNodes>) =>
   toViewNodes(...args).filter((node) => node.type !== "container-frame");
@@ -122,8 +124,8 @@ describe("toViewNodes", () => {
   });
 });
 
-const ignoredOf = (source: Flow) =>
-  nodeViews(source, [], {}, null).map((node) => [node.id, node.data.ignored]);
+const ignoredOf = (source: Flow, libraries?: LibraryLookup) =>
+  nodeViews(source, [], {}, null, {}, libraries).map((node) => [node.id, node.data.ignored]);
 
 const throughSession = (source: Flow, session = "session-1"): Flow =>
   parseFlow({
@@ -971,6 +973,41 @@ describe("toViewNodes and container frames on the canvas path", () => {
     toViewNodes(source, [], {}, null)
       .filter((node) => node.type === "container-frame")
       .map((node) => [node.data.containerId, node.data.ignored]);
+
+  const libraryNode = (id: string, libraryId: string) => ({
+    id,
+    type: "library",
+    label: id,
+    position: { x: 0, y: 1200 },
+    settings: { libraryId, label: id, overrides: {} },
+  });
+
+  const libraries = libraryOf({ nodes: "node-library", sessions: "session-library" });
+
+  const workflowWithLoose = (): Flow =>
+    flow(
+      [
+        trigger("w-start"),
+        output("w-stop"),
+        agent("loose-agent"),
+        libraryNode("nodes-use", "nodes"),
+        libraryNode("sessions-use", "sessions"),
+      ],
+      [thenWire("w-start", "w-stop")],
+      flowSettings,
+      { containers: [workspaceContainer(["w-start", "w-stop"])] },
+    );
+
+  it.each([
+    ["a loose Agent", "loose-agent", true],
+    ["a loose node library", "nodes-use", true],
+    ["a loose session library", "sessions-use", false],
+  ])("greys %s in a workflow by its library kind", (_, id, ignored) => {
+    expect(ignoredOf(workflowWithLoose(), libraries).find(([nodeId]) => nodeId === id)).toEqual([
+      id,
+      ignored,
+    ]);
+  });
 
   it("greys the frame of a session the canvas path does not reach, and only that one", () => {
     expect(frameIgnored(twoSessions())).toEqual([
