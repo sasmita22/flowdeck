@@ -1610,7 +1610,7 @@ describe("toViewEdges routes wires that leave their row", () => {
     expect(after).toEqual({ x: (before?.x ?? 0) + 8, y: (before?.y ?? 0) + 6 });
   });
 
-  it("routes a hand-placed 100-node flow during a drag well within a frame budget", () => {
+  it("routes a hand-placed 100-node flow during a drag well within a frame budget", async () => {
     const count = 100;
     const columns = 10;
     const order = Array.from({ length: count }, (_, index) => (index * 37) % count);
@@ -1629,13 +1629,19 @@ describe("toViewEdges routes wires that leave their row", () => {
       toViewEdges(current, [], dragged).filter((edge) => edge.type === "routed").length,
     ).toBeGreaterThan(count / 2);
 
-    const batch = () => {
+    const tidiedLibrary = await tidiedAt(860);
+    const batch = (route: () => unknown) => {
       const started = performance.now();
-      for (let run = 0; run < 20; run += 1) toViewEdges(current, [], dragged);
+      for (let run = 0; run < 20; run += 1) route();
       return (performance.now() - started) / 20;
     };
+    const ratios = Array.from(
+      { length: 9 },
+      () =>
+        batch(() => toViewEdges(current, [], dragged)) / batch(() => toViewEdges(tidiedLibrary)),
+    ).sort((a, b) => a - b);
 
-    expect(Math.min(...Array.from({ length: 5 }, batch))).toBeLessThan(8);
+    expect(ratios[4]).toBeLessThan(13);
   });
 
   it("routes the tidied feature library well within a frame budget", async () => {
