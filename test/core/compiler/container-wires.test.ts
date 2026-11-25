@@ -11,6 +11,8 @@ import {
   wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
+import { libraryOf } from "../../fixtures/known-library.js";
+import type { LibraryLookup } from "../../../src/core/flow/libraries.js";
 import { parseFlow } from "../../../src/core/flow/schema.js";
 
 const library = (id: string) => ({
@@ -49,8 +51,8 @@ const workflow = (
     ],
   });
 
-const errorsOf = (ruleId: string, flow: ReturnType<typeof workflow>) =>
-  validate(flow).filter((error) => error.rule === ruleId);
+const errorsOf = (ruleId: string, flow: ReturnType<typeof workflow>, libraries?: LibraryLookup) =>
+  validate(flow, libraries).filter((error) => error.rule === ruleId);
 
 describe("container wire ends", () => {
   it("validates a workflow wired canvas Start → workspace → canvas Stop", () => {
@@ -96,10 +98,11 @@ describe("container wire ends", () => {
   });
 
   describe("outside-container", () => {
-    it("leaves the canvas Start, the canvas Stop and library nodes alone", () => {
+    it("leaves the canvas Start, the canvas Stop and session library nodes alone", () => {
       const flow = workflow({ nodes: [library("android-app")] });
+      const sessionLibrary = libraryOf({ "known-library": "session-library" });
 
-      expect(errorsOf("outside-container", flow)).toEqual([]);
+      expect(errorsOf("outside-container", flow, sessionLibrary)).toEqual([]);
     });
 
     it("still flags any other canvas-level node", () => {

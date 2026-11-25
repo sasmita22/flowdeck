@@ -2,9 +2,15 @@ import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Problem } from "../../core/compiler/problems.js";
 import { openedFlowSchema } from "../../core/flow/flow-store.js";
+import { labelPrefix, type LibraryLookup } from "../../core/flow/libraries.js";
 import { mainFlow } from "../../core/flow/main-flow.js";
 import { Flow, type BuildConfig } from "../../core/flow/schema.js";
-import { foundVariables, groupVariables, type FoundVariable } from "../../core/flow/variables.js";
+import {
+  foundVariables,
+  groupVariables,
+  type FoundVariable,
+  type LibraryUse,
+} from "../../core/flow/variables.js";
 import {
   isValidBranchName,
   recommendedBranch,
@@ -152,6 +158,20 @@ const expandAnswerSchema = z.union([
 ]);
 
 const unexpandable = "The libraries could not be expanded";
+
+const usedLibraries = (flow: Flow, uses: readonly LibraryUse[]): LibraryLookup => {
+  const byId = new Map(
+    flow.nodes.flatMap((node) => {
+      if (node.type !== "library") return [];
+      const use = uses.find(({ path }) => path === labelPrefix(node.settings.label));
+      return use === undefined ? [] : [[node.settings.libraryId, use] as const];
+    }),
+  );
+  return (libraryId) => {
+    const use = byId.get(libraryId);
+    return use && { name: use.name, kind: use.kind, sessions: [], uses: [] };
+  };
+};
 
 export type BuildCardRun = {
   old: boolean;
@@ -535,9 +555,11 @@ export const createRunStore = ({
         ? dialog
         : { ...dialog, branchName: recommendedBranch(dialog.name, dialog.branches) };
 
-    const expandedOrSaved = async (flow: Flow): Promise<Flow> => {
+    const expandedOrSaved = async (
+      flow: Flow,
+    ): Promise<{ flow: Flow; uses: readonly LibraryUse[] }> => {
       const answer = expandAnswerSchema.safeParse(await bridge.expandFlow({ flow }));
-      return answer.success && "flow" in answer.data ? answer.data.flow : flow;
+      return answer.success && "flow" in answer.data ? answer.data : { flow, uses: [] };
     };
 
     const openedVersion = async (
@@ -549,13 +571,14 @@ export const createRunStore = ({
       buildConfig: BuildConfig | null;
     }> => {
       const flow = openedFlowSchema.nullable().parse(await bridge.openFlow({ flowId }))?.flow;
-      const main = flow ? mainFlow(flow) : undefined;
       const expanded = flow ? await expandedOrSaved(flow) : undefined;
+      const main =
+        flow && expanded ? mainFlow(flow, usedLibraries(flow, expanded.uses)) : undefined;
       return {
         ignored: (main?.ignored ?? []).map((node) => ({ id: node.id, label: labelFor(node) })),
         buildModel: flow?.settings.buildModel ?? "",
-        target: expanded ? buildTarget(expanded) : oneSessionTarget,
-        buildConfig: expanded ? sessionFolder(expanded) : null,
+        target: expanded ? buildTarget(expanded.flow) : oneSessionTarget,
+        buildConfig: expanded ? sessionFolder(expanded.flow) : null,
       };
     };
 

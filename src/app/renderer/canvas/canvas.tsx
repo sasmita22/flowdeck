@@ -311,9 +311,10 @@ function Board({
   const dragPositions = useStore(store, (state) => state.dragPositions);
   const highlighted = useStore(store, (state) => state.highlighted);
   const noteBoxes = useStore(store, (state) => state.noteBoxes);
+  const libraries = useStore(store, (state) => state.libraries);
   const nodes = useMemo(
-    () => toViewNodes(flow, selection, dragPositions, highlighted, noteBoxes),
-    [flow, selection, dragPositions, highlighted, noteBoxes],
+    () => toViewNodes(flow, selection, dragPositions, highlighted, noteBoxes, libraries),
+    [flow, selection, dragPositions, highlighted, noteBoxes, libraries],
   );
   const edges = useMemo(() => toViewEdges(flow, selectedWires), [flow, selectedWires]);
   const { screenToFlowPosition } = useReactFlow();

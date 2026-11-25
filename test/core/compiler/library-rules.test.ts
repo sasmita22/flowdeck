@@ -138,10 +138,8 @@ describe("library-use", () => {
     expect(ruleProblems(flow, "library-use")).toEqual([]);
   });
 
-  it("refuses a node library loose in a workflow", () => {
-    expect(ruleProblems(workflow(libraryNode("use", "nodes"), "loose"), "library-use")).toEqual([
-      { node: "use", field: undefined },
-    ]);
+  it("allows a node library loose in a workflow", () => {
+    expect(ruleProblems(workflow(libraryNode("use", "nodes"), "loose"), "library-use")).toEqual([]);
   });
 
   it("treats every library as unknown without a lookup", () => {

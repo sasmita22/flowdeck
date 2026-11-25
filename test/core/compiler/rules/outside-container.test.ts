@@ -11,6 +11,7 @@ import {
   trigger,
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
+import { libraryOf } from "../../../fixtures/known-library.js";
 
 const workspaceNodes = [trigger("workspace-start"), output("workspace-stop")];
 const workspaceWire = thenWire("workspace-start", "workspace-stop");
@@ -51,5 +52,34 @@ describe("outside-container", () => {
     });
 
     expect(rule.check(library)).toEqual([]);
+  });
+
+  const libraries = libraryOf({ nodes: "node-library", sessions: "session-library" });
+
+  const libraryNode = (id: string, libraryId: string) => ({
+    id,
+    type: "library",
+    label: `Use ${libraryId}`,
+    position: { x: 0, y: 0 },
+    settings: { libraryId, label: libraryId, overrides: {} },
+  });
+
+  it.each([
+    ["an Agent", agent("x"), ["x is outside every workspace and session; move it into one."]],
+    [
+      "a node library",
+      libraryNode("x", "nodes"),
+      ["Use nodes is outside every workspace and session; move it into one."],
+    ],
+    ["a session library", libraryNode("x", "sessions"), []],
+  ])("answers %s loose in a workflow", (_, loose, messages) => {
+    const withLoose = flow(
+      [...workspaceNodes, ...sessionNodes, loose],
+      [workspaceWire, ...sessionWires],
+      flowSettings,
+      { containers: [workspace, session] },
+    );
+
+    expect(rule.check(withLoose, { libraries }).map(({ message }) => message)).toEqual(messages);
   });
 });

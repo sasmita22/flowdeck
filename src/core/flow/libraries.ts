@@ -342,7 +342,7 @@ function expandOne(
 }
 
 function expandWithin(flow: Flow, resolve: LibraryResolver, chain: readonly string[]): Expanded {
-  const reached = mainFlow(flow)?.reached ?? new Set<string>();
+  const reached = mainFlow(flow, libraryLookup(resolve))?.reached ?? new Set<string>();
   return flow.nodes
     .filter((node): node is LibraryNode => node.type === "library" && reached.has(node.id))
     .reduce<Expanded>(

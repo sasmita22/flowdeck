@@ -29,7 +29,7 @@ Each container holds exactly one Start and one Stop of its own, and its Start re
 
 The canvas path joins the frames. The canvas has a canvas-level Start and Stop, outside every frame, and each frame has a `flow-in` port on its left and a `flow-out` port on its right. `then` wires run from the canvas Start into a frame's `flow-in`, out of its `flow-out` to the next frame or canvas-level node, and on to the canvas Stop.
 
-A blueprint with a workspace is a workflow: its canvas path runs from the canvas Start through the workspace to the canvas Stop, and every other node sits in the workspace or a session. A blueprint with no workspace is a library, and a library cannot be built. A library's kind comes from its canvas path: a session library when the path passes a session container or a session library, a node library when it does not, and incomplete when there is no single canvas Start or its path never reaches a canvas Stop. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
+A blueprint with a workspace is a workflow: its canvas path runs from the canvas Start through the workspace to the canvas Stop, and every other node sits in the workspace or a session, except session library nodes, which sit outside every frame. A blueprint with no workspace is a library, and a library cannot be built. A library's kind comes from its canvas path: a session library when the path passes a session container or a session library, a node library when it does not, and incomplete when there is no single canvas Start or its path never reaches a canvas Stop. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
 
 A connection joins two session containers so their sessions may message each other directly. `read_blueprint` answers the `connections`, each with the two container ids it is `between`.
 
@@ -60,11 +60,11 @@ Start and Stop are drawn as circles, Stop with a heavy ring. Each container has 
 
 ## Main flow
 
-The main flow is every node reached along `then` wires from the canvas Start, and in a workflow also from each container's own Start. A wire into a frame's `flow-in` reaches that container and its Start; the frame's `flow-out` wires lead on. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
+The main flow is every node reached along `then` wires from the canvas Start, and in a workflow also from each container's own Start and each session library node outside every frame. A wire into a frame's `flow-in` reaches that container and its Start; the frame's `flow-out` wires lead on. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
 
 ## Libraries
 
-A `library` node uses a node or session library, named by its flow id in `libraryId`. When the blueprint is opened or built, the node stands for the library's latest saved nodes; a build keeps the copy it was made from, so later edits to the library never reach it. A node library's node sits in the workspace or a session; a session library's node sits on the canvas path, outside every frame. Its `label` setting names the use: the library's variables are asked for as `<label>.<name>`, with the label in lower case and spaces as dashes, so `Android app` asks for `android-app.ticket`. `overrides` sets a session library's sessions' `repo`, `branch` or `model`, keyed by session id. `add_node` adds one with `type` `library` and the library's flow id as `libraryId` in `settings`; it ignores the `label` given and derives the label from the library's name as the canvas does, adding `-2`, `-3` and on when another library node already has that label. `change_node` with a new `libraryId` swaps the library, re-derives the label and clears the `overrides` carried over from the old library.
+A `library` node uses a node or session library, named by its flow id in `libraryId`. When the blueprint is opened or built, the node stands for the library's latest saved nodes; a build keeps the copy it was made from, so later edits to the library never reach it. A node library's node sits wherever any other node can; a session library's node sits on the canvas path, outside every frame. Its `label` setting names the use: the library's variables are asked for as `<label>.<name>`, with the label in lower case and spaces as dashes, so `Android app` asks for `android-app.ticket`. `overrides` sets a session library's sessions' `repo`, `branch` or `model`, keyed by session id. `add_node` adds one with `type` `library` and the library's flow id as `libraryId` in `settings`; it ignores the `label` given and derives the label from the library's name as the canvas does, adding `-2`, `-3` and on when another library node already has that label. `change_node` with a new `libraryId` swaps the library, re-derives the label and clears the `overrides` carried over from the old library.
 
 ## Wires
 
@@ -124,7 +124,7 @@ A `wire` edit that breaks `ports`, `references` or `container-wires` is refused,
 - `session-settings`: each session has a `repo`, a `branch` and a `model`, and the workspace a `model`.
 - `session-names`: each session has a name no other session uses.
 - `session-connections`: a connection joins two different sessions, at most once per pair.
-- `outside-container`: in a workflow, every node except the canvas Start, the canvas Stop and library nodes sits in the workspace or a session.
+- `outside-container`: in a workflow, every node except the canvas Start, the canvas Stop and session library nodes sits in the workspace or a session.
 - `workflow-path`: a workflow runs from its canvas Start through the workspace to a canvas Stop.
 - `container-wires`: a wire stays inside its workspace or session, or at canvas level; it enters a container only at its `flow-in` and leaves only from its `flow-out`.
 - `library-use`: a library node names a node or session library that exists, and sits where that kind fits.
@@ -148,7 +148,7 @@ Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved bluepri
 | `list_builds`       | Lists the builds made from blueprints                                                                                                                                                        | none                                            |
 | `read_build`        | Reads one build                                                                                                                                                                              | `id`                                            |
 
-`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`; only the canvas Start and Stop go without one.
+`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`; only the canvas Start and Stop and session library nodes go without one.
 
 The build tools only read. There is no tool to build, run or delete; tell the user where to do that in the app.
 

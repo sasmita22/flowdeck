@@ -1,6 +1,6 @@
 import { unknownLibraries } from "../../flow/libraries.js";
 import type { Flow, Node } from "../../flow/schema.js";
-import { flowContainerOf, isWorkflow } from "../../flow/structure.js";
+import { flowContainerOf } from "../../flow/structure.js";
 import type { Rule, ValidationError } from "../validate.js";
 
 const id = "library-use";
@@ -11,9 +11,6 @@ function placementProblem(flow: Flow, use: LibraryNode, sessionLibrary: boolean)
   const container = flowContainerOf(flow, use.id);
   if (sessionLibrary && container !== undefined) {
     return "is a session library, so it cannot sit inside the workspace or a session";
-  }
-  if (!sessionLibrary && container === undefined && isWorkflow(flow)) {
-    return "is a node library, so in a workflow it sits inside the workspace or a session";
   }
   return undefined;
 }

@@ -13,6 +13,7 @@ import {
   wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
+import { libraryOf } from "../../fixtures/known-library.js";
 
 const eventWire = (from: string, to: string) => ({
   kind: "event",
@@ -34,6 +35,26 @@ const throughSession = [
 
 const workspaceNodes = [trigger("ws-start"), output("ws-stop")];
 const workspaceWire = thenWire("ws-start", "ws-stop");
+
+const looseLibrary = (id: string, libraryId: string) => ({
+  id,
+  type: "library",
+  label: "Library",
+  position: { x: 0, y: 0 },
+  settings: { libraryId, label: libraryId, overrides: {} },
+});
+
+const workflowWithLoose = (...loose: ReturnType<typeof looseLibrary>[]) =>
+  flow(
+    [canvasStart, ...workspaceNodes, ...loose, canvasStop],
+    [
+      intoContainer("canvas-start", "workspace-1"),
+      outOfContainer("workspace-1", "canvas-stop"),
+      workspaceWire,
+    ],
+    flowSettings,
+    { containers: [workspaceContainer(["ws-start", "ws-stop"])] },
+  );
 
 const twoContainers = (sessionNodes: { id: string }[], sessionWires: unknown[]) =>
   flow([...workspaceNodes, ...sessionNodes], [workspaceWire, ...sessionWires], flowSettings, {
@@ -270,30 +291,31 @@ describe("mainFlow from the canvas Start", () => {
     expect(containerIds(found)).toEqual(["session-1", "workspace-1"]);
   });
 
-  it("reaches a workflow's canvas-level library node unwired, like a session container", () => {
-    const loose = {
-      id: "use",
-      type: "library",
-      label: "Library",
-      position: { x: 0, y: 0 },
-      settings: { libraryId: "sessions", label: "sessions", overrides: {} },
-    };
+  it("reaches a workflow's canvas-level session library node unwired, like a session container", () => {
     const found = mainFlow(
-      flow(
-        [canvasStart, ...workspaceNodes, loose, canvasStop],
-        [
-          intoContainer("canvas-start", "workspace-1"),
-          outOfContainer("workspace-1", "canvas-stop"),
-          workspaceWire,
-        ],
-        flowSettings,
-        { containers: [workspaceContainer(["ws-start", "ws-stop"])] },
-      ),
+      workflowWithLoose(looseLibrary("use", "sessions")),
+      libraryOf({ sessions: "session-library" }),
     );
 
     expect(found?.reached.has("use")).toBe(true);
     expect(found?.ignored).toEqual([]);
   });
+
+  it.each([
+    ["a node library", libraryOf({ sessions: "node-library" })],
+    ["an incomplete blueprint", libraryOf({ sessions: "incomplete" })],
+    ["a workflow", libraryOf({ sessions: "workflow" })],
+    ["a blueprint the lookup does not know", libraryOf({})],
+    ["any library with no lookup", undefined],
+  ])(
+    "leaves a workflow's unwired canvas-level library node off the main flow when it is %s",
+    (_, lookup) => {
+      const found = mainFlow(workflowWithLoose(looseLibrary("use", "sessions")), lookup);
+
+      expect(found?.reached.has("use")).toBe(false);
+      expect(found?.ignored.map((node) => node.id)).toEqual(["use"]);
+    },
+  );
 });
 
 describe("mainFlow per container", () => {
@@ -443,6 +465,22 @@ describe("mainFlowOnly", () => {
       expect(only.containers).toEqual(input.containers);
     },
   );
+
+  it("keeps a loose session library and drops a loose node library in a workflow", () => {
+    const input = workflowWithLoose(
+      looseLibrary("sessions-use", "sessions"),
+      looseLibrary("nodes-use", "nodes"),
+    );
+
+    const only = mainFlowOnly(
+      input,
+      libraryOf({ sessions: "session-library", nodes: "node-library" }),
+    );
+
+    expect(only.nodes.filter((node) => node.type === "library").map((node) => node.id)).toEqual([
+      "sessions-use",
+    ]);
+  });
 
   it("returns the flow unchanged when no container has exactly one Start", () => {
     const input = flow(

@@ -2365,6 +2365,45 @@ describe("the Build dialog for a host that uses libraries", () => {
       return ready;
     };
 
+    const nodeLibrary = library("lib-2", "review");
+    const withLooseNodes = (): Flow =>
+      flow(
+        [
+          trigger("w-start"),
+          output("w-stop"),
+          library("lib-1", "android-app"),
+          { ...nodeLibrary, settings: { ...nodeLibrary.settings, libraryId: "f-nodes" } },
+          agent("loose"),
+        ],
+        [thenWire("w-start", "w-stop")],
+        flowSettings,
+        { containers: [workspaceContainer(["w-start", "w-stop"])] },
+      );
+
+    it.each([
+      ["a loose Agent", "loose", true],
+      ["a loose node library", "lib-2", true],
+      ["a loose session library", "lib-1", false],
+    ])("lists %s as ignored by its library kind", async (_, id, listed) => {
+      const { run } = await setup({
+        built: withLooseNodes(),
+        expanded: () => ({
+          flow: expandedHost(),
+          uses: [
+            { path: "android-app", name: "Android", kind: "session-library" },
+            { path: "review", name: "Review", kind: "node-library" },
+          ],
+        }),
+      });
+
+      await run
+        .getState()
+        .openBuild({ flowId: "flow-b", version: 4, buildConfig: {}, variables: [] });
+
+      const ignored = run.getState().buildDialog?.ignored.map((node) => node.id) ?? [];
+      expect(ignored.includes(id)).toBe(listed);
+    });
+
     it("prefills the library session's repo and its override branch as the base", async () => {
       const { bridge, run } = await opened();
 

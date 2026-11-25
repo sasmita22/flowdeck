@@ -21,6 +21,7 @@ import {
   type BuildRequest,
   type StartedBuild,
 } from "../../../src/core/compiler/build-version.js";
+import { manifestNodes } from "../../../src/core/compiler/build-turns.js";
 import { sha256Hex } from "../../../src/core/compiler/hash.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
 import { mainFlowOnly } from "../../../src/core/flow/main-flow.js";
@@ -261,6 +262,24 @@ describe("buildVersion", () => {
   };
 
   const v1 = { flowId: "flow-1", version: 1 };
+
+  const libraryId = "flow-2";
+
+  const libraryNode = (label: string) => ({
+    id: "use",
+    label: "Library",
+    position: { x: 0, y: 0 },
+    type: "library",
+    settings: { libraryId, label, overrides: {} },
+  });
+
+  const nodeLibrary = (label: string): Flow =>
+    parseFlow({
+      nodes: [trigger("canvas-start"), { ...agent("plan"), label }, output("canvas-stop")],
+      wires: [thenWire("canvas-start", "plan"), thenWire("plan", "canvas-stop")],
+      containers: [],
+      settings: { ...flowSettings, buildModel: "opus" },
+    });
 
   const expectNothingDone = (store: FakeStore, fs: FakeFileSystem, worktree: FakeWorktree) => {
     expect(store.builds()).toEqual([]);
@@ -2703,24 +2722,6 @@ describe("buildVersion", () => {
 
   describe("a host that uses a library", () => {
     const request = { name: "fix-login", repo, base: "main", values: {} };
-    const libraryId = "flow-2";
-
-    const libraryNode = (label: string) => ({
-      id: "use",
-      label: "Library",
-      position: { x: 0, y: 0 },
-      type: "library",
-      settings: { libraryId, label, overrides: {} },
-    });
-
-    const nodeLibrary = (label: string): Flow =>
-      parseFlow({
-        nodes: [trigger("canvas-start"), { ...agent("plan"), label }, output("canvas-stop")],
-        wires: [thenWire("canvas-start", "plan"), thenWire("plan", "canvas-stop")],
-        containers: [],
-        settings: { ...flowSettings, buildModel: "opus" },
-      });
-
     const host = (label = "Android App") =>
       withConfig(onMainFlow([libraryNode(label)], []), ticketConfig);
 
@@ -2732,6 +2733,31 @@ describe("buildVersion", () => {
 
     const nodeIn = (flow: Flow | undefined, id: string) =>
       flow?.nodes.find((node) => node.id === id);
+
+    const android = "/repos/android";
+    const sessionLibrary = parseFlow({
+      nodes: [
+        trigger("canvas-start"),
+        trigger("s-start"),
+        agent("plan"),
+        output("s-stop"),
+        output("canvas-stop"),
+      ],
+      wires: [
+        wire("canvas-start", "out", "session-1", "flow-in"),
+        thenWire("s-start", "plan"),
+        thenWire("plan", "s-stop"),
+        wire("session-1", "flow-out", "canvas-stop", "in"),
+      ],
+      containers: [
+        sessionContainer(["s-start", "plan", "s-stop"], {
+          name: "android",
+          repo: android,
+          branch: "main",
+        }),
+      ],
+      settings: flowSettings,
+    });
 
     it("builds the expanded flow, with the host's settings, not the library's", async () => {
       const t = withLibrary(nodeLibrary("Planner"));
@@ -2779,30 +2805,6 @@ describe("buildVersion", () => {
 
     it("gives the dialog's repo to no session once a session library adds a second", async () => {
       const web = "/repos/web";
-      const android = "/repos/android";
-      const sessionLibrary = parseFlow({
-        nodes: [
-          trigger("canvas-start"),
-          trigger("s-start"),
-          agent("plan"),
-          output("s-stop"),
-          output("canvas-stop"),
-        ],
-        wires: [
-          wire("canvas-start", "out", "session-1", "flow-in"),
-          thenWire("s-start", "plan"),
-          thenWire("plan", "s-stop"),
-          wire("session-1", "flow-out", "canvas-stop", "in"),
-        ],
-        containers: [
-          sessionContainer(["s-start", "plan", "s-stop"], {
-            name: "android",
-            repo: android,
-            branch: "main",
-          }),
-        ],
-        settings: flowSettings,
-      });
       const own = withConfig(onMainFlow([agent("p1")], []), { repo: web, base: "main" });
       const atCanvasLevel = parseFlow({
         ...own,
@@ -2829,6 +2831,22 @@ describe("buildVersion", () => {
 
       if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
       expect(t.worktree.calls.map((call) => call.repo).sort()).toEqual([android, web]);
+    });
+
+    it("builds a session library left unwired beside the workspace", async () => {
+      const own = withConfig(onMainFlow([agent("p1")], []), ticketConfig);
+      const loose = parseFlow({ ...own, nodes: [...own.nodes, libraryNode("Android App")] });
+      const t = withLibrary(sessionLibrary, loose);
+      const gitState = new FakeGitState(
+        { [repo]: { kind: "branch", name: "main" }, [android]: { kind: "branch", name: "main" } },
+        { branches: { [repo]: ["main"], [android]: ["main"] } },
+      );
+
+      const result = await buildVersion(v1, request, { ...t.deps, gitState });
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      const frozen = t.store.buildSnapshot({ buildId: result.record.id })?.flow;
+      expect(frozen?.nodes.map((node) => node.id)).toContain("android-app-plan");
     });
 
     it("still refuses a blueprint without a workspace", async () => {
@@ -2986,6 +3004,30 @@ describe("buildVersion", () => {
         ok: false,
         errors: [expect.objectContaining({ rule: "required-settings", node: "b" })],
       });
+    });
+
+    it("leaves a loose node library out of the build, like a loose Agent", async () => {
+      const base = ticketFlow();
+      const withLooseNodes = parseFlow({
+        ...base,
+        nodes: [...base.nodes, agent("loose"), libraryNode("Android App")],
+      });
+      const t = setup({ flows: [withLooseNodes], flowIds: ids("flow-1", libraryId) });
+      t.flows.save(nodeLibrary("Planner"), { name: "Android" });
+      const leftOut = (id: string) =>
+        id === "loose" || id === "use" || id.startsWith("android-app");
+
+      const result = await buildVersion(v1, request, t.deps);
+
+      if (!result.ok) throw new Error(`build failed: ${errorMessages(result).join("; ")}`);
+      const frozen = t.store.buildSnapshot({ buildId: result.record.id })?.flow;
+      const manifest = JSON.parse(await t.fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
+      expect(frozen?.nodes.map((node) => node.id).filter(leftOut)).toEqual([]);
+      expect(
+        [...(manifest.nodes ?? []), ...manifestNodes(manifest)]
+          .map((node) => node.id)
+          .filter(leftOut),
+      ).toEqual([]);
     });
 
     it.each([
