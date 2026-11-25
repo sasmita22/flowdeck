@@ -1,7 +1,16 @@
-import type { CanvasNote, Flow, FlowContainer, Node, NodeType } from "./schema.js";
-import { flowContainerMembers } from "./structure.js";
-
-type Bounds = { left: number; top: number; right: number; bottom: number };
+import type { CanvasNote, Flow, FlowContainer, Node, NodeType, Wire } from "./schema.js";
+import { flowContainerMembers, flowContainerOf } from "./structure.js";
+import {
+  branchStub,
+  clearOfEnds,
+  goesBack,
+  isClear,
+  routePath,
+  routeWire,
+  wireEnds,
+  type Bounds,
+  type Point,
+} from "./wire-router.js";
 
 const FRAME_PADDING = 24;
 const MARGIN = 32;
@@ -121,7 +130,15 @@ const nodeTexts = (node: Node, box: Bounds): string[] => {
   return [textAt(box.left + 10, (box.top + box.bottom) / 2 + 4, palette.text, title)];
 };
 
-export function flowSvg(flow: Flow): string {
+export type PictureWire = { from: string; to: string; points: Point[]; routed: boolean };
+
+export type PictureLayout = {
+  boxes: Map<string, Bounds>;
+  bodies: Map<string, Bounds>;
+  wires: PictureWire[];
+};
+
+const layoutOf = (flow: Flow) => {
   const notes = flow.notes ?? [];
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
 
@@ -144,6 +161,99 @@ export function flowSvg(flow: Flow): string {
     ];
     return boxes.length === 0 ? [] : [{ container, box: padded(boxes) }];
   });
+
+  const frameById = new Map(containerFrames.map(({ container, box }) => [container.id, box]));
+  const endOf = (id: string): Bounds | undefined => {
+    const node = byId.get(id);
+    return node === undefined ? frameById.get(id) : boundsOf(node);
+  };
+
+  const boxes = new Map(flow.nodes.map((node) => [node.id, boundsOf(node)]));
+  const within = (id: string, scope: string): boolean => {
+    const parent = byId.get(id)?.parent;
+    return id === scope || (parent !== undefined && within(parent, scope));
+  };
+
+  const routed = (wire: Wire, elbow: readonly Point[]): Point[] | null => {
+    const sender = byId.get(wire.from.node);
+    const from = boxes.get(wire.from.node);
+    const to = boxes.get(wire.to.node);
+    if (sender === undefined || from === undefined || to === undefined) return null;
+    const obstacles = [...boxes]
+      .filter(([id]) => id !== wire.from.node && id !== wire.to.node)
+      .map(([, bounds]) => bounds);
+    const foreignBodies = frames
+      .filter(({ container }) => !within(wire.from.node, container.id))
+      .filter(({ container }) => !within(wire.to.node, container.id))
+      .map(({ box }) => box);
+    if (!goesBack(from, to) && isClear(elbow, [...obstacles, ...foreignBodies])) return null;
+    const container = flowContainerOf(flow, wire.from.node);
+    if (container === undefined || container.id !== flowContainerOf(flow, wire.to.node)?.id)
+      return null;
+    const frame = frameById.get(container.id);
+    if (frame === undefined) return null;
+    const ends = wireEnds(sender, wire.from.port, from, to);
+    const points = routeWire(
+      {
+        ...ends,
+        ...(sender.type === "branch" && { stub: branchStub(wire.from.port, ends.side) }),
+      },
+      [
+        ...obstacles.filter(clearOfEnds(from, to)),
+        ...foreignBodies.filter(clearOfEnds(from, to)),
+        from,
+        to,
+      ],
+      frame,
+    );
+    return points?.map(({ x, y }) => ({ x: round(x), y: round(y) })) ?? null;
+  };
+
+  const wires = flow.wires.flatMap((wire): PictureWire[] => {
+    const start = endOf(wire.from.node);
+    const end = endOf(wire.to.node);
+    if (start === undefined || end === undefined) return [];
+    const x1 = round(start.right);
+    const y1 = round((start.top + start.bottom) / 2);
+    const x2 = round(end.left);
+    const y2 = round((end.top + end.bottom) / 2);
+    const mid = round((x1 + x2) / 2);
+    const elbow = [
+      { x: x1, y: y1 },
+      { x: mid, y: y1 },
+      { x: mid, y: y2 },
+      { x: x2, y: y2 },
+    ];
+    const route = routed(wire, elbow);
+    return [
+      {
+        from: wire.from.node,
+        to: wire.to.node,
+        points: route ?? elbow,
+        routed: route !== null,
+      },
+    ];
+  });
+
+  return { notes, boxes, frames, containerFrames, wires };
+};
+
+export const pictureLayout = (flow: Flow): PictureLayout => {
+  const { boxes, frames, wires } = layoutOf(flow);
+  return {
+    boxes,
+    bodies: new Map(frames.map(({ container, box }) => [container.id, box])),
+    wires,
+  };
+};
+
+const elbowPath = (points: readonly Point[]): string => {
+  const [start, bend, , end] = points as [Point, Point, Point, Point];
+  return `M${start.x},${start.y} H${bend.x} V${end.y} H${end.x}`;
+};
+
+export function flowSvg(flow: Flow): string {
+  const { notes, frames, containerFrames, wires } = layoutOf(flow);
 
   const everything = [
     ...flow.nodes.map(boundsOf),
@@ -177,25 +287,10 @@ export function flowSvg(flow: Flow): string {
       ),
     );
 
-  const frameById = new Map(containerFrames.map(({ container, box }) => [container.id, box]));
-  const endOf = (id: string): Bounds | undefined => {
-    const node = byId.get(id);
-    return node === undefined ? frameById.get(id) : boundsOf(node);
-  };
-
-  for (const wire of flow.wires) {
-    const start = endOf(wire.from.node);
-    const end = endOf(wire.to.node);
-    if (start === undefined || end === undefined) continue;
-    const x1 = round(start.right);
-    const y1 = round((start.top + start.bottom) / 2);
-    const x2 = round(end.left);
-    const y2 = round((end.top + end.bottom) / 2);
-    const mid = round((x1 + x2) / 2);
+  for (const { points, routed } of wires)
     parts.push(
-      `<path data-kind="wire" d="M${x1},${y1} H${mid} V${y2} H${x2}" fill="none" stroke="${palette.wire}" stroke-width="1.5"/>`,
+      `<path data-kind="wire" d="${routed ? routePath(points) : elbowPath(points)}" fill="none" stroke="${palette.wire}" stroke-width="1.5"/>`,
     );
-  }
 
   for (const node of flow.nodes) {
     const box = boundsOf(node);
