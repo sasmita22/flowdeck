@@ -66,7 +66,13 @@ import {
   type Move,
 } from "./commands.js";
 import { tidyMoves } from "./layout.js";
-import { connectionEdgeId, edgeId, frameOwnerId } from "./view.js";
+import {
+  connectionEdgeId,
+  containerOfFrameId,
+  edgeId,
+  frameDragMoves,
+  frameOwnerId,
+} from "./view.js";
 
 export const isNodeType = (value: string): value is NodeType => NodeType.safeParse(value).success;
 
@@ -1083,14 +1089,18 @@ export function createCanvasStore(
       endDrag: (ids) => {
         if (!ready()) return;
         const { flow, dragPositions } = get();
-        const dragged = Object.fromEntries(
-          ids.flatMap((id) => {
-            const position = dragPositions[id];
-            return position === undefined ? [] : [[id, position] as const];
-          }),
-        );
-        const targets = followed(flow, dragged);
-        const framing = withPositions(flow, containerMoves(flow, dragged));
+        const draggedOf = (frames: boolean) =>
+          Object.fromEntries(
+            ids.flatMap((id) => {
+              const position = dragPositions[id];
+              const isFrame = containerOfFrameId(id) !== undefined;
+              return position === undefined || isFrame !== frames ? [] : [[id, position] as const];
+            }),
+          );
+        const dragged = draggedOf(false);
+        const carried = frameDragMoves(flow, draggedOf(true));
+        const targets = { ...carried, ...followed(flow, dragged) };
+        const framing = withPositions(flow, { ...carried, ...containerMoves(flow, dragged) });
         const moved = withPositions(flow, targets);
         const parentOf = (node: Node): Move["parent"] => {
           if (isContainer(node) || !(node.id in dragged)) return undefined;

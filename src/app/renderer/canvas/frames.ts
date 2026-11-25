@@ -172,6 +172,39 @@ export const containerMoves = (
   return positions;
 };
 
+const descendantsOf = (flow: Flow, ids: ReadonlySet<string>): Node[] => {
+  const carried = new Set(ids);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const node of flow.nodes) {
+      if (node.parent !== undefined && carried.has(node.parent) && !carried.has(node.id)) {
+        carried.add(node.id);
+        grew = true;
+      }
+    }
+  }
+  return flow.nodes.filter((node) => carried.has(node.id));
+};
+
+export const flowContainerMoves = (
+  flow: Flow,
+  containerId: string,
+  to: Position,
+): Record<string, Position> => {
+  const container = flow.containers.find((candidate) => candidate.id === containerId);
+  if (container === undefined || container.nodes.length === 0) return {};
+  const { left, top } = flowContainerBounds(flow, containerId);
+  const dx = to.x - left;
+  const dy = to.y - top;
+  return Object.fromEntries(
+    descendantsOf(flow, new Set(container.nodes)).map((node) => [
+      node.id,
+      { x: node.position.x + dx, y: node.position.y + dy },
+    ]),
+  );
+};
+
 export const followed = (
   flow: Flow,
   dragPositions: Readonly<Record<string, Position>>,

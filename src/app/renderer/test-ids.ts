@@ -39,8 +39,11 @@ export const controlTestIds = {
 
 export type ContainerField = "name" | "model" | "repo" | "branch";
 
+export type FrameGripSide = "top" | "left" | "right" | "bottom";
+
 export const containerTestIds = {
   frame: (id: string) => `container-frame-${id}`,
+  frameGrip: (id: string, side: FrameGripSide) => `container-frame-${id}-grip-${side}`,
   field: (id: string, field: ContainerField) => `container-${id}-${field}`,
   frameSource: (id: string) => `container-frame-${id}-source`,
   frameTarget: (id: string) => `container-frame-${id}-target`,
