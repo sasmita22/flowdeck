@@ -30,6 +30,7 @@ import { openingViewport, startViewport } from "./fit.js";
 import { NodeMenu } from "./node-menu.js";
 import { libraryMimeType, nodeMimeType, Palette } from "./palette.js";
 import { RenameField } from "./rename-field.js";
+import { RoutedEdge } from "./routed-edge.js";
 import { claimsShortcut, shortcutFor } from "./shortcuts.js";
 import { CanvasEditingContext, CanvasStoreContext } from "./status.js";
 import { isCanvasItemType, selectCanDelete, selectCanvasEmpty, type CanvasState } from "./store.js";
@@ -44,7 +45,12 @@ import {
 
 const deleteKeys = ["Delete", "Backspace"];
 const proOptions = { hideAttribution: true };
-const edgeTypes = { aligned: AlignedEdge, branch: BranchEdge, connection: ConnectionEdge };
+const edgeTypes = {
+  aligned: AlignedEdge,
+  branch: BranchEdge,
+  connection: ConnectionEdge,
+  routed: RoutedEdge,
+};
 
 const viewing = {
   deleteKeyCode: null,
@@ -316,7 +322,10 @@ function Board({
     () => toViewNodes(flow, selection, dragPositions, highlighted, noteBoxes, libraries),
     [flow, selection, dragPositions, highlighted, noteBoxes, libraries],
   );
-  const edges = useMemo(() => toViewEdges(flow, selectedWires), [flow, selectedWires]);
+  const edges = useMemo(
+    () => toViewEdges(flow, selectedWires, dragPositions),
+    [flow, selectedWires, dragPositions],
+  );
   const { screenToFlowPosition } = useReactFlow();
   const board = useRef<HTMLDivElement>(null);
 

@@ -124,7 +124,7 @@ export const containerAt = (flow: Flow, point: Position): string | undefined =>
 export const hasSideLabel = (node: Node): boolean =>
   node.type === "trigger" || node.type === "output";
 
-const labelledBounds = (node: Node): Bounds => {
+export const labelledBounds = (node: Node): Bounds => {
   const bounds = boundsOf(node);
   return hasSideLabel(node)
     ? { ...bounds, right: bounds.right + sideLabelSpan(node.label) }

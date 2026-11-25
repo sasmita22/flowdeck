@@ -2,6 +2,7 @@ import { MarkerType } from "@xyflow/react";
 import type { LibraryLookup } from "../../../core/flow/libraries.js";
 import { mainFlow } from "../../../core/flow/main-flow.js";
 import type { CanvasNote, Flow, FlowContainer, Node, Wire } from "../../../core/flow/schema.js";
+import { flowContainerOf } from "../../../core/flow/structure.js";
 import { nodeLook } from "../nodes/look.js";
 import {
   bodyFrameBounds,
@@ -10,10 +11,13 @@ import {
   flowContainerBounds,
   flowContainerMoves,
   followed,
+  isContainer,
+  labelledBounds,
   nodeSub,
   withPositions,
   type Bounds,
 } from "./frames.js";
+import { bezierCrosses, branchStub, routeWire, type ExitSide, type Point } from "./wire-route.js";
 import { labelFor } from "../../../core/nodes/defaults.js";
 
 export { FRAME_PADDING } from "./frames.js";
@@ -55,8 +59,8 @@ export interface ViewEdge {
   markerStart?: { type: MarkerType };
   style?: { strokeDasharray: string };
   selected?: boolean;
-  type?: "aligned" | "branch" | "connection";
-  data?: { align: Align } | { label: string };
+  type?: "aligned" | "branch" | "connection" | "routed";
+  data?: { align: Align } | { label: string } | { points: Point[]; label?: string };
 }
 
 export type Align = "source" | "target";
@@ -345,16 +349,87 @@ const toConnectionEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] 
     });
 };
 
+const handleTop = 24;
+
+const drawnBounds = (flow: Flow, node: Node): Bounds =>
+  (isBar(node) ? barBounds(flow, node) : null) ?? labelledBounds(node);
+
+const overlapping = (a: Bounds, b: Bounds) =>
+  a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+const leavesRow = (from: Bounds, to: Bounds) =>
+  !(from.top < to.bottom && to.top < from.bottom) || to.left < from.right;
+
+type WireEnds = { source: Point; side: ExitSide; target: Point };
+
+const wireEnds = (sender: Node, port: string, from: Bounds, to: Bounds): WireEnds => {
+  const target = { x: to.left, y: to.top + handleTop };
+  if (sender.type === "branch" && port === "no")
+    return { source: { x: (from.left + from.right) / 2, y: from.bottom }, side: "bottom", target };
+  if (sender.type === "branch")
+    return { source: { x: from.right, y: (from.top + from.bottom) / 2 }, side: "right", target };
+  return { source: { x: from.right, y: from.top + handleTop }, side: "right", target };
+};
+
+const wireRouter = (flow: Flow) => {
+  const nodes = new Map(flow.nodes.map((node) => [node.id, node]));
+  const boxes = new Map(flow.nodes.map((node) => [node.id, drawnBounds(flow, node)]));
+  const bodies = flow.nodes
+    .filter(isContainer)
+    .map((scope) => ({ id: scope.id, bounds: bodyFrameBounds(flow, scope) }));
+  const within = (id: string, scope: string): boolean => {
+    const parent = nodes.get(id)?.parent;
+    return id === scope || (parent !== undefined && within(parent, scope));
+  };
+  const frames = new Map<string, Bounds>();
+  const frameOf = (containerId: string): Bounds => {
+    const known = frames.get(containerId);
+    if (known !== undefined) return known;
+    const bounds = flowContainerBounds(flow, containerId);
+    frames.set(containerId, bounds);
+    return bounds;
+  };
+  return (wire: Wire): Point[] | null => {
+    const sender = nodes.get(wire.from.node);
+    const from = boxes.get(wire.from.node);
+    const to = boxes.get(wire.to.node);
+    if (wire.kind !== "then" || sender === undefined || from === undefined || to === undefined)
+      return null;
+    const container = flowContainerOf(flow, wire.from.node);
+    if (container === undefined || container.id !== flowContainerOf(flow, wire.to.node)?.id)
+      return null;
+    if (!leavesRow(from, to)) return null;
+    const clearOfEnds = (bounds: Bounds) => !overlapping(bounds, from) && !overlapping(bounds, to);
+    const obstacles = [...boxes]
+      .filter(([id]) => id !== wire.from.node && id !== wire.to.node)
+      .map(([, bounds]) => bounds)
+      .filter(clearOfEnds);
+    const ends = wireEnds(sender, wire.from.port, from, to);
+    const goesBack = to.left < from.right && !overlapping(from, to);
+    if (!goesBack && !bezierCrosses(ends.source, ends.side, ends.target, obstacles)) return null;
+    const foreignBodies = bodies
+      .filter(({ id }) => !within(wire.from.node, id) && !within(wire.to.node, id))
+      .map(({ bounds }) => bounds)
+      .filter(clearOfEnds);
+    return routeWire(
+      { ...ends, ...(sender.type === "branch" && { stub: branchStub(wire.from.port, ends.side) }) },
+      [...obstacles, ...foreignBodies, from, to],
+      frameOf(container.id),
+    );
+  };
+};
+
 const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
   const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
   const containerIds = new Set(flow.containers.map(({ id }) => id));
   const viewId = (id: string) => (containerIds.has(id) ? containerFrameId(id) : id);
-  return flow.wires.map((wire) => {
+  const route = wireRouter(flow);
+  return flow.wires.map((wire): ViewEdge => {
     const align = alignOf(types, wire);
     const id = edgeId(wire);
     const fromBranch = types.get(wire.from.node) === "branch";
     const isSelected = selected.includes(id);
-    return {
+    const today: ViewEdge = {
       id,
       source: viewId(wire.from.node),
       sourceHandle: wire.from.port,
@@ -368,10 +443,22 @@ const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
       ...(fromBranch && { type: "branch" as const, data: { label: wire.from.port } }),
       ...(isSelected && { selected: true }),
     };
+    const points = route(wire);
+    if (points === null) return today;
+    return {
+      ...today,
+      type: "routed",
+      data: { points, ...(fromBranch && { label: wire.from.port }) },
+    };
   });
 };
 
-export const toViewEdges = (flow: Flow, selected: readonly string[] = []): ViewEdge[] => [
-  ...toWireEdges(flow, selected),
-  ...toConnectionEdges(flow, selected),
-];
+export const toViewEdges = (
+  flow: Flow,
+  selected: readonly string[] = [],
+  dragPositions: Readonly<Record<string, Position>> = {},
+): ViewEdge[] => {
+  const positions = { ...frameDragMoves(flow, dragPositions), ...dragPositions };
+  const live = withPositions(flow, followed(flow, positions));
+  return [...toWireEdges(live, selected), ...toConnectionEdges(live, selected)];
+};

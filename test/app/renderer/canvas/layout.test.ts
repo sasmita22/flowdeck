@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { moveNodes, type Move } from "../../../../src/app/renderer/canvas/commands.js";
+import type { Move } from "../../../../src/app/renderer/canvas/commands.js";
 import {
   bodyFrameBounds,
   boundsOf,
@@ -8,7 +8,6 @@ import {
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
 import { LAYER_GAP, tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
-import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Node } from "../../../../src/core/flow/schema.js";
 import { flowContainerOf } from "../../../../src/core/flow/structure.js";
 import { featureLibrary } from "../../../fixtures/feature-library.js";
@@ -31,13 +30,9 @@ import {
   wire,
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
-
-const canvas = { width: 1600, height: 1000 };
+import { box, canvas, drawnBoxes, overlaps, tidied } from "./canvas-geometry.js";
 
 const canvasWidths = [860, 1000, 1200, 1400, 1600];
-
-const tidied = async (source: Flow, size = canvas): Promise<Flow> =>
-  moveNodes(await tidyMoves(source, size)).do(source);
 
 const steps = (count: number) => Array.from({ length: count }, (_, index) => `s${index + 1}`);
 
@@ -98,29 +93,6 @@ const frameThenLibraries = (
     flowSettings,
     { containers: [container] },
   );
-
-const drawnBoxes = (current: Flow): Map<string, Bounds> => {
-  const view = new Map(toViewNodes(current, [], {}, null).map((node) => [node.id, node]));
-  return new Map(
-    current.nodes.map((node) => {
-      const drawn = view.get(node.id);
-      const isBar = node.type === "fork" || node.type === "join";
-      if (!isBar || drawn?.width === undefined || drawn.height === undefined)
-        return [node.id, boundsOf(node)];
-      const { x, y } = drawn.position;
-      return [node.id, { left: x, top: y, right: x + drawn.width, bottom: y + drawn.height }];
-    }),
-  );
-};
-
-const overlaps = (a: Bounds, b: Bounds) =>
-  a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-
-const box = (boxes: Map<string, Bounds>, id: string): Bounds => {
-  const found = boxes.get(id);
-  if (found === undefined) throw new Error(`no box for ${id}`);
-  return found;
-};
 
 const overlappingPairs = (current: Flow): string[] => {
   const boxes = [...drawnBoxes(current)];
