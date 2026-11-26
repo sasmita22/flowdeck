@@ -70,13 +70,13 @@ export type BuildRecord = {
 
 export type RunBuildCopy = {
   buildName: string | null;
-  buildHash: string | null;
+  buildHash: string;
   blueprintName: string | null;
   source?: BuildSource;
   repo: string | null;
   branch: string | null;
   buildValues: VariableValues | null;
-  manifestJson: string | null;
+  manifestJson: string;
 };
 
 export type RunRecord = Omit<NewRun, "buildId" | "sessions"> &

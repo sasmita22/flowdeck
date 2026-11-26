@@ -1842,15 +1842,6 @@ describe("the run pipeline", () => {
     });
   });
 
-  it("keeps a run whose stages were not recorded as no pipeline", async () => {
-    const { bridge, run } = await setup();
-    bridge.runPipeline.mockResolvedValueOnce(null);
-
-    await run.getState().loadPipeline("run-7");
-
-    expect(run.getState().pipelines).toHaveProperty("run-7", null);
-  });
-
   it("replaces a run's pipeline with the newer answer", async () => {
     const { bridge, run } = await setup();
     bridge.runPipeline.mockResolvedValueOnce(inWorkspace(stage("a1")));

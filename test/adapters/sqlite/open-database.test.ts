@@ -1062,6 +1062,25 @@ describe("openDatabase", () => {
     });
   });
 
+  describe("migrating a database made by 001 to 014 to the head", () => {
+    it("leaves no run without a stored manifest", async () => {
+      const before = openDatabase({ path, migrationsDir: await stage("before-015", "015") });
+      before.exec(`
+        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at)
+          VALUES ('b1', 'h1', 'old', '/repo', 'main', '{}', '/fd/builds/h1', 1);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
+          VALUES ('r1', '/fd/builds/h1', '{}', 'done', 't', 'b1');
+      `);
+      before.close();
+
+      const db = open();
+
+      expect(
+        db.prepare("SELECT count(*) FROM runs WHERE manifest_json IS NULL").pluck().get(),
+      ).toBe(0);
+    });
+  });
+
   it("reports every migration applied on a database that did not exist before", () => {
     const { reports } = openReporting();
 

@@ -79,7 +79,9 @@ import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
   ask,
+  canvasPath,
   fork,
+  workspaceContainer,
   workspaceFlow,
   gate,
   join as joinNode,
@@ -963,35 +965,97 @@ describe("createEngineHandler", async () => {
       });
     });
 
-    const withoutManifest = (runs: FakeStore) => {
-      runs.recordBuildWithoutManifest({
-        id: "b2",
-        hash: "h2",
-        name: "before-manifests",
-        repo: "/repo",
-        base: "main",
-        branch: "flowdeck/before-manifests",
-        branchCreated: true,
-        values: {},
-        dir: "/fd-home/workspaces/b2",
-        source: { flowId: "flow-a", version: 1 },
-        files: [],
-        nodes: [],
+    describe("a run of a workspace-only blueprint", () => {
+      const workspaceOnly = () =>
+        canvasPath(
+          workspaceFlow(
+            [trigger("start"), agent("w1"), output("stop")],
+            [thenWire("start", "w1"), thenWire("w1", "stop")],
+            undefined,
+            { containers: [workspaceContainer(["start", "w1", "stop"])] },
+          ),
+        );
+
+      const seededWorkspaceRun = () => {
+        const runs = new FakeStore();
+        runs.recordBuild({
+          id: "b9",
+          hash: "h9",
+          name: "workspace-only",
+          repo: "/repo",
+          base: "main",
+          branch: "flowdeck/workspace-only",
+          branchCreated: true,
+          values: {},
+          dir: "/fd-home/workspaces/b9",
+          files: [],
+          nodes: [],
+          manifest: manifestText(workspaceOnly(), "h9"),
+        });
+        const { id: runId } = runs.createRun({
+          buildDir: "/fd-home/workspaces/b9",
+          inputs: {},
+          nodeIds: ["w1"],
+          session: {
+            tmuxName: "left-b9",
+            cwd: "/fd-home/workspaces/b9/repo",
+            claudeSessionId: "c9",
+          },
+          buildId: "b9",
+        });
+        runs.append(runId, "w1", { kind: "sent" });
+        runs.append(runId, "w1", { kind: "done" });
+        return { runs, runId };
+      };
+
+      const finished = () => {
+        const seeded = seededWorkspaceRun();
+        seeded.runs.finishRun(seeded.runId, "done");
+        return seeded;
+      };
+
+      it("lists a workspace-only run without reading its events", async () => {
+        const { runs, runId } = finished();
+        const events = vi.spyOn(runs, "events");
+        runs.listRuns();
+        const readsByListRuns = events.mock.calls.length;
+        events.mockClear();
+        const handler = createEngineHandler(
+          options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
+        );
+
+        expect(await handler.handle({ id: 1, type: "list-runs" })).toEqual({
+          id: 1,
+          ok: true,
+          value: [expect.objectContaining({ id: runId, doneCount: 1 })],
+        });
+        expect(events).toHaveBeenCalledTimes(readsByListRuns);
       });
-      const { id: runId } = runs.createRun({
-        buildDir: "/fd-home/workspaces/b2",
-        inputs: {},
-        nodeIds: ["s1", "s2"],
-        session: {
-          tmuxName: "fd-run-z",
-          cwd: "/fd-home/workspaces/b2/repo",
-          claudeSessionId: "c3",
-        },
-        buildId: "b2",
+
+      it("reads the run's after-state from its session's folder", async () => {
+        const { runs, runId } = seededWorkspaceRun();
+        const gitState = new FakeGitState();
+        const after: RepoState = {
+          kind: "read",
+          branch: "flowdeck/workspace-only",
+          head: "fee1234",
+          upstream: null,
+          staged: 0,
+          unstaged: 0,
+          untracked: 0,
+        };
+        gitState.repoStates.set("/fd-home/workspaces/b9/repo", after);
+        const handler = createEngineHandler(
+          options({ openStores: () => ({ runs, flows: unreadableFlows() }), gitState }),
+        );
+
+        expect(await handler.handle({ id: 1, type: "stop-run", payload: { runId } })).toMatchObject(
+          { ok: true, value: { stopped: true } },
+        );
+
+        expect(runs.repoStates(runId).after).toEqual(after);
       });
-      runs.finishRun(runId, "failed");
-      return runId;
-    };
+    });
 
     it("loads one run with its build's name, its stages from the stored manifest and each node's status, reading no blueprint", async () => {
       const { runs, runId } = seededRun();
@@ -1070,47 +1134,6 @@ describe("createEngineHandler", async () => {
       expect(digest).toContain("Repo: /repo\nBranch: flowdeck/report\n");
       expect(digest).toContain("Instructions: Draft the release notes from merged PRs.");
       expect(digest).toContain("Instructions: Post the notes to the release channel.");
-    });
-
-    it("loads a run of a build with no stored manifest with the build's name and no stages, reading no blueprint", async () => {
-      const { runs } = seededRun();
-      const runId = withoutManifest(runs);
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
-
-      expect(loaded).toEqual({
-        id: 1,
-        ok: true,
-        value: expect.objectContaining({ name: "before-manifests", stages: null }),
-      });
-      expect((loaded as { value: object }).value).not.toHaveProperty("flow");
-    });
-
-    it("gives a run of a build with no stored manifest a story digest with no session line", async () => {
-      const { runs } = seededRun();
-      const runId = withoutManifest(runs);
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      const loaded = await handler.handle({ id: 1, type: "load-run", payload: { runId } });
-
-      expect(loaded).toMatchObject({
-        ok: true,
-        value: {
-          story: {
-            header: { name: "before-manifests" },
-            digest: expect.stringContaining("Build: before-manifests"),
-            written: null,
-          },
-        },
-      });
-      const { digest } = (loaded as { value: { story: { digest: string } } }).value.story;
-      expect(digest).toContain("Run status: failed");
-      expect(digest).not.toContain("Session:");
     });
 
     it("answers a run's pipeline in run order from the stored manifest and its events, reading no blueprint", async () => {
@@ -1201,18 +1224,6 @@ describe("createEngineHandler", async () => {
       expect(digest).toContain("Read step of body → ok");
     });
 
-    it("answers no pipeline for a run of a build with no stored manifest", async () => {
-      const { runs } = seededRun();
-      const runId = withoutManifest(runs);
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      expect(
-        await handler.handle({ id: 1, type: "run-pipeline" as never, payload: { runId } }),
-      ).toEqual({ id: 1, ok: true, value: null });
-    });
-
     it("refuses the pipeline of an unknown run", async () => {
       const { runs } = seededRun();
       const handler = createEngineHandler(
@@ -1222,33 +1233,6 @@ describe("createEngineHandler", async () => {
       expect(
         await handler.handle({ id: 1, type: "run-pipeline" as never, payload: { runId: "nope" } }),
       ).toEqual({ id: 1, ok: false, error: "No run nope" });
-    });
-
-    it("answers the cost of a deleted build's run that has no stored manifest", async () => {
-      const { runs } = seededRun();
-      const runId = withoutManifest(runs);
-      runs.append(runId, "s1", {
-        kind: "usage",
-        payload: { messages: [] },
-        tokens: 40,
-        cost: 0.12,
-      });
-      runs.deleteBuild("b2");
-      const handler = createEngineHandler(
-        options({ openStores: () => ({ runs, flows: unreadableFlows() }) }),
-      );
-
-      expect(await handler.handle({ id: 1, type: "run-cost", payload: { runId } })).toEqual({
-        id: 1,
-        ok: true,
-        value: expect.objectContaining({
-          nodes: [
-            expect.objectContaining({ nodeId: "s1", tokens: 40, cost: 0.12 }),
-            expect.objectContaining({ nodeId: "s2", tokens: 0, cost: 0 }),
-          ],
-          total: expect.objectContaining({ tokens: 40, cost: 0.12 }),
-        }),
-      });
     });
 
     describe("a run outlives its build", () => {
@@ -2597,6 +2581,20 @@ describe("createEngineHandler", async () => {
 
     it("lists the active run as running and first, and an older run left running as interrupted", async () => {
       const seed = (buildId: string, status?: "done") => {
+        runs.recordBuild({
+          id: buildId,
+          hash: buildId,
+          name: buildId,
+          repo: repo.path,
+          base: "main",
+          branch: null,
+          branchCreated: null,
+          values: {},
+          dir: "/nowhere",
+          files: [],
+          nodes: [],
+          manifest: manifestText(sleeper(), buildId),
+        });
         const { id } = runs.createRun({
           buildDir: "/nowhere",
           inputs: {},
@@ -6940,25 +6938,6 @@ describe("createEngineHandler", async () => {
         await vi.waitFor(() => expect(appended()).toHaveLength(1));
         expect(appended()[0]).toMatchObject({ runId, runStatus: "stopped", text: narration.text });
         expect(pushes).toContainEqual({ push: "story", runId });
-      });
-
-      it("tells no story of a run whose build is not stored, logs why, and its page has no story", async () => {
-        handler = storyHandler();
-        const runId = runs.createRun({
-          buildDir: "/fd-home/workspaces/gone",
-          inputs: {},
-          nodeIds: ["start"],
-          session: { tmuxName: "left-gone", cwd: repo.path, claudeSessionId: "c-gone" },
-          buildId: "gone",
-        }).id;
-
-        expect(await stopRunRequest(runId)).toMatchObject({ ok: true, value: { stopped: true } });
-
-        await vi.waitFor(() => expect(storyNotWritten(runId)).toHaveLength(1));
-        expect(storyNotWritten(runId)[0]).toMatch(/build is not stored/);
-        expect(narrator.calls).toEqual([]);
-        expect(appended()).toEqual([]);
-        expect(await loadedStory(runId)).toBeUndefined();
       });
 
       it("writes no story when the narrator fails, logs why, and the run still ends and its page has the header and digest", async () => {

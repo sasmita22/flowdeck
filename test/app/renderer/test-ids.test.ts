@@ -273,10 +273,6 @@ describe("test ids", () => {
     expect(pageTestIds).not.toHaveProperty("runBlueprintDeleted");
   });
 
-  it("names the stages a run did not record", () => {
-    expect(pageTestIds.runStagesNotRecorded).toEqual(expect.any(String));
-  });
-
   it("gives each run stage's dot, status, detail, reason, Retry and reply its own id per run, node and round", () => {
     const stageIds = [
       pageTestIds.runStage,
@@ -296,7 +292,6 @@ describe("test ids", () => {
 
     expect(ids.every((id) => typeof id === "string" && id !== "")).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).not.toContain(pageTestIds.runStagesNotRecorded);
   });
 
   it("gives each round header's cost its own id per run, container and round, apart from the round's stages", () => {

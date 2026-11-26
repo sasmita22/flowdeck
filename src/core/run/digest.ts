@@ -31,7 +31,7 @@ export type DigestStageGroup = Omit<StageGroup, "nodes"> & { nodes: DigestStageN
 
 export type DigestInput = {
   build: RunHeader & Pick<BuildRecord, "hash">;
-  stages: DigestStageGroup[] | null;
+  stages: DigestStageGroup[];
   events: readonly StoredEvent[];
   activity: readonly ActivityEntry[];
   cost: CostReport;
@@ -92,11 +92,6 @@ const tightest = attempts.at(-1) ?? untouched;
 
 const shortened = (text: string, limit: number) =>
   text.length <= limit ? text : `${text.slice(0, limit).trimEnd()}…`;
-
-const nodesFromEvents = (events: readonly StoredEvent[]): DigestStageNode[] =>
-  [...new Set([...events].sort((a, b) => a.seq - b.seq).map((event) => event.nodeId))].map(
-    (id) => ({ id, type: "agent", label: id }),
-  );
 
 export const variablesText = (values: VariableValues | null): string =>
   Object.entries(values ?? {})
@@ -255,9 +250,8 @@ export function runDigest(
     values: build.values,
     ...(otherRepos.length === 0 ? {} : { otherRepos }),
   };
-  const groups = input.stages ?? [{ name: "", nodes: nodesFromEvents(input.events), wires: [] }];
   const pipeline = pipelineOf(
-    groups,
+    input.stages,
     input.events,
     input.activity,
     input.cost,
@@ -272,7 +266,7 @@ export function runDigest(
       build.blueprintVersion === null ? "" : `, version ${build.blueprintVersion}`
     }`,
     `Build: ${build.name ?? build.hash}`,
-    ...(input.stages === null ? [] : [`Session: ${input.stages[0]?.name ?? ""}`]),
+    `Session: ${input.stages[0]?.name ?? ""}`,
     `Repo: ${build.repo ?? "none"}`,
     `Branch: ${build.branch ?? "none"}`,
     `Before: ${repoStateText(input.repoStates?.before ?? null)}`,
@@ -289,7 +283,7 @@ export function runDigest(
     questions: input.questions,
     status: input.status,
     instructions: new Map(
-      groups
+      input.stages
         .flatMap((group) => group.nodes)
         .flatMap((node) =>
           node.instructions === undefined ? [] : [[node.id, node.instructions] as const],

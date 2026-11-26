@@ -51,8 +51,8 @@ const stagesIn = (items: readonly PipelineItem[]): PipelineStage[] =>
   );
 
 const labelsOf = (
-  stages: LoadedRun["stages"],
-  groups: readonly PipelineGroup[] | null | undefined,
+  stages: LoadedRun["stages"] | null,
+  groups: readonly PipelineGroup[] | undefined,
 ): RunLabels => {
   const nodes = new Map((stages?.nodes ?? []).map((node) => [node.id, labelFor(node)]));
   for (const stage of stagesIn((groups ?? []).flatMap((group) => group.items))) {
@@ -390,7 +390,6 @@ export function RunPage({
           {loaded !== null && (
             <RunPipeline
               runId={runId}
-              recorded={stages !== null}
               run={run}
               view={view}
               inspector={inspector}

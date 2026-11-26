@@ -238,7 +238,7 @@ export type RunState = {
   dialog: RunDialog | null;
   kept: KeptBuild[] | null;
   cost: { runId: string; report: CostReport } | null;
-  pipelines: Record<string, PipelineGroup[] | null>;
+  pipelines: Record<string, PipelineGroup[]>;
   startedSessions: Record<string, StartedSession[]>;
   selectedStage: Record<string, StageSelection>;
   menuOpen: string | null;
@@ -836,9 +836,7 @@ export const createRunStore = ({
 
       loadPipeline: async (runId) => {
         try {
-          const pipeline = pipelineGroupsSchema
-            .nullable()
-            .parse(await bridge.runPipeline({ runId }));
+          const pipeline = pipelineGroupsSchema.parse(await bridge.runPipeline({ runId }));
           set({ pipelines: { ...get().pipelines, [runId]: pipeline } });
         } catch (thrown) {
           set({ error: messageOf(thrown) });

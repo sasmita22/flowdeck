@@ -866,10 +866,6 @@ body,
   padding: 0 var(--space-4) var(--space-4);
 }
 
-.fd-run-stages > .fd-page-note {
-  margin-top: var(--space-4);
-}
-
 .fd-run-story {
   margin: var(--space-4) 0;
 }

@@ -357,7 +357,6 @@ function ContainerGroups({
 
 export function RunPipeline({
   runId,
-  recorded,
   run,
   view,
   inspector,
@@ -367,7 +366,6 @@ export function RunPipeline({
   fullText,
 }: {
   runId: string;
-  recorded: boolean;
   run: StoreApi<RunState>;
   view: StoreApi<RunView>;
   inspector: StoreApi<InspectorState>;
@@ -384,21 +382,14 @@ export function RunPipeline({
   const runStatus = useStore(view, (state) => state.snapshot?.status ?? "running");
 
   useEffect(() => {
-    if (recorded) void run.getState().loadPipeline(runId);
-  }, [run, runId, recorded, changed]);
+    void run.getState().loadPipeline(runId);
+  }, [run, runId, changed]);
 
   useEffect(
-    () => (recorded && runStatus === "running" ? run.getState().watchCost(runId) : undefined),
-    [run, runId, recorded, runStatus],
+    () => (runStatus === "running" ? run.getState().watchCost(runId) : undefined),
+    [run, runId, runStatus],
   );
 
-  if (!recorded || pipeline === null) {
-    return (
-      <p className="fd-page-note" data-testid={pageTestIds.runStagesNotRecorded}>
-        This run's stages were not recorded.
-      </p>
-    );
-  }
   if (pipeline === undefined) return <p className="fd-muted">Reading the stages…</p>;
   const chosen = chosenStage(
     pipeline.flatMap((group) => group.items),

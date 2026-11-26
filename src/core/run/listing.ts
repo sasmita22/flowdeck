@@ -52,7 +52,7 @@ const runStorySchema = z.object({
 export const loadedRunSchema = z.object({
   run: runSummarySchema,
   name: z.string().nullable(),
-  stages: stageSourcesSchema.nullable(),
+  stages: stageSourcesSchema,
   snapshot: runSnapshotSchema,
   activity: z.array(activityEntrySchema),
   note: z.string().optional(),
