@@ -230,6 +230,7 @@ type ActiveRun = {
   detached?: boolean;
   untold?: boolean;
   stopEvents?: () => Promise<void>;
+  eventsStarted?: Promise<unknown>;
   claudeCalls: Set<Promise<unknown>>;
 };
 
@@ -625,6 +626,20 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const startsSettled = () => Promise.allSettled(starting.values());
+
+  const statesWrites = new Map<string, Promise<void>>();
+
+  const writesSettled = async (): Promise<void> => {
+    while (statesWrites.size > 0) await Promise.allSettled(statesWrites.values());
+  };
+
+  const runWritesSettled = async (runId: string): Promise<void> => {
+    let seen: Promise<void> | undefined;
+    while (seen !== statesWrites.get(runId)) {
+      seen = statesWrites.get(runId);
+      await seen;
+    }
+  };
 
   const activeRun = (runId: string) => [...active.values()].find((run) => run.runId === runId);
 
@@ -1075,13 +1090,16 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const statesWriter = (runId: string) => {
     const path = sessionStatesPath(options.home, runId);
-    let written = Promise.resolve();
     return (text: string) => {
-      written = written
+      const tail = (statesWrites.get(runId) ?? Promise.resolve())
         .then(() => options.fs.writeFile(path, text))
         .catch((error: unknown) => {
           console.log(`engine: run ${runId} session states not written: ${messageOf(error)}`);
         });
+      statesWrites.set(runId, tail);
+      void tail.then(() => {
+        if (statesWrites.get(runId) === tail) statesWrites.delete(runId);
+      });
     };
   };
 
@@ -1162,49 +1180,50 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       sessionGroups: sessionGroupsOf(manifest),
       publish: options.publish,
     });
+    const startEvents = async (path: string) => {
+      const started = await options.run.startEvents(path).catch((error: unknown) => {
+        eventsFailed = true;
+        throw error;
+      });
+      const sessionIds = [claudeSessionId, ...sessionRows.map((row) => row.claudeSessionId)];
+      const repoGate = repoGateOf(runs, runId, manifest);
+      const ungates = sessionIds.map((id) => started.toolStarts?.onToolStart(id, repoGate.check));
+      supervisor = new StartedSessions({
+        runId,
+        events: started.events,
+        ...(started.permissions === undefined ? {} : { permissions: started.permissions }),
+        fs: options.fs,
+        store,
+        waiter: waiterFor(runId),
+        sessionAlive,
+        endSession: options.endSession ?? (async () => undefined),
+        ...(options.answerDialogs === undefined ? {} : { answerDialogs: options.answerDialogs }),
+        writeStates: sessionRows.length === 0 ? () => undefined : statesWriter(runId),
+        manifest,
+        sessions: sessionRows,
+        history: runs.events(runId),
+        onStart: pushSessions,
+      });
+      const unwatches = sessionIds.map((id) => tracker.watch(started.events, id));
+      const stopEvents = async () => {
+        for (const unwatch of unwatches) unwatch();
+        repoGate.close();
+        for (const ungate of ungates) ungate?.();
+        supervisor?.halt();
+        await started.stop();
+      };
+      run.stopEvents = stopEvents;
+      return { ...started, stop: stopEvents };
+    };
     run.done = execute(
       {
         ...options.run,
         waiter: waiterFor(runId),
         store,
-        startEvents: async (path) => {
-          const started = await options.run.startEvents(path).catch((error: unknown) => {
-            eventsFailed = true;
-            throw error;
-          });
-          const sessionIds = [claudeSessionId, ...sessionRows.map((row) => row.claudeSessionId)];
-          const repoGate = repoGateOf(runs, runId, manifest);
-          const ungates = sessionIds.map((id) =>
-            started.toolStarts?.onToolStart(id, repoGate.check),
-          );
-          supervisor = new StartedSessions({
-            runId,
-            events: started.events,
-            ...(started.permissions === undefined ? {} : { permissions: started.permissions }),
-            fs: options.fs,
-            store,
-            waiter: waiterFor(runId),
-            sessionAlive,
-            endSession: options.endSession ?? (async () => undefined),
-            ...(options.answerDialogs === undefined
-              ? {}
-              : { answerDialogs: options.answerDialogs }),
-            writeStates: sessionRows.length === 0 ? () => undefined : statesWriter(runId),
-            manifest,
-            sessions: sessionRows,
-            history: runs.events(runId),
-            onStart: pushSessions,
-          });
-          const unwatches = sessionIds.map((id) => tracker.watch(started.events, id));
-          const stopEvents = async () => {
-            for (const unwatch of unwatches) unwatch();
-            repoGate.close();
-            for (const ungate of ungates) ungate?.();
-            supervisor?.halt();
-            await started.stop();
-          };
-          run.stopEvents = stopEvents;
-          return { ...started, stop: stopEvents };
+        startEvents: (path) => {
+          const eventsStarting = startEvents(path);
+          run.eventsStarted = eventsStarting.catch(() => undefined);
+          return eventsStarting;
         },
         onChange: (line) => console.log(`engine: ${line}`),
         onInterrupt: (handler) => {
@@ -1764,9 +1783,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       [...active.values()].map(async (run) => {
         run.detached = true;
         await claudeCallsSettled(run);
+        await run.eventsStarted;
         await run.stopEvents?.();
       }),
     );
+    await writesSettled();
   };
 
   const readRepoState = (folder: string): Promise<RepoState> =>
@@ -1941,6 +1962,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const removeRun = async (runId: string): Promise<void> => {
     await stopForDelete(runId);
+    await runWritesSettled(runId);
     storesOrThrow().runs.deleteRun(runId);
     await options.fs.removeTree(runFolder(options.home, runId));
   };
@@ -2598,6 +2620,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       closeNarrations();
       await startsSettled();
       await Promise.all([...active.values()].map(stopActive));
+      await writesSettled();
     },
     async handle(request) {
       switch (request.type) {
