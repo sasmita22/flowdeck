@@ -250,14 +250,6 @@ export const buildDialogTestIds = {
   ignoredCancel: "build-dialog-ignored-cancel",
 } as const;
 
-export const buildConfigTestIds = {
-  repo: "session-build-config-repo",
-  base: "session-build-config-base",
-  repoBrowse: "session-build-config-repo-browse",
-  baseInfo: "session-build-config-base-info",
-  branchesError: "session-branches-error",
-} as const;
-
 export const branchVariableTestId = "node-setting-variable";
 
 export const branchDecidedByTestId = "node-setting-decided-by";
