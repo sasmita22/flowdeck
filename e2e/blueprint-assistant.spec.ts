@@ -581,19 +581,11 @@ test("an edit aimed at another blueprint is refused", async () => {
   expect(await tmuxAlive(bpName(a))).toBe(true);
 });
 
-test("the agent lists live and old builds, leaves a deleted one out, and reads one", async () => {
+test("the agent lists builds, leaves a deleted one out, and reads one", async () => {
   test.setTimeout(120_000);
   repo = await createTmpRepo({ commit: true });
   const repoName = repo.path.split("/").at(-1) ?? "";
   const { flowId } = seedBlueprint(home, "a", runnable([agent("p1")], []), repo.path);
-  const seed = new Database(join(home, "flowdeck.db"));
-  try {
-    seed
-      .prepare("INSERT INTO builds (id, hash, dir, created_at) VALUES (?, ?, ?, ?)")
-      .run("oldhash1", "oldhash1", join(home, "builds", "oldhash1"), 1);
-  } finally {
-    seed.close();
-  }
   const window = await launch();
   await openOn(window, flowId);
   const keepId = await buildOnCanvas(window, home, "keep");
@@ -626,19 +618,14 @@ test("the agent lists live and old builds, leaves a deleted one out, and reads o
   expect(first.map(({ name }) => name)).toEqual(["list_builds", "read_build"]);
   const listed = first[0]?.result as { ok: boolean; builds: unknown[] };
   expect(listed).toMatchObject({ ok: true });
-  expect(listed.builds).toHaveLength(2);
-  expect(listed.builds).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        id: keepId,
-        name: "keep",
-        blueprint: flowId,
-        version: expect.any(Number),
-        state: "live",
-      }),
-      expect.objectContaining({ id: "oldhash1", name: null, state: "old" }),
-    ]),
-  );
+  expect(listed.builds).toEqual([
+    {
+      id: keepId,
+      name: "keep",
+      blueprint: flowId,
+      version: expect.any(Number),
+    },
+  ]);
   const read = first[1]?.result as { ok: boolean; workspace: { tree: string[] } };
   expect(read).toMatchObject({
     ok: true,

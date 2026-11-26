@@ -76,9 +76,6 @@ import { cutOffMessage, decideResume, type TranscriptTurn } from "../../core/run
 import { carryOnNode, sessionContinuePrompt } from "../../core/run/session-continue.js";
 import { turnFailure } from "../../core/run/turns.js";
 import { retryEntries } from "../../core/run/retry.js";
-import { sha256Hex } from "../../core/compiler/hash.js";
-import { backfillManifests } from "../../core/run/backfill-manifests.js";
-import { backfillSnapshots } from "../../core/run/backfill-snapshots.js";
 import {
   parseManifest,
   sessionContainersOf,
@@ -143,7 +140,6 @@ import { createActivityTracker, createBuildActivity } from "./activity-tracker.j
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult, PreparedHooks } from "./hooks.js";
 import type {
-  AssistantBuildState,
   AssistantListedBuild,
   AssistantReadBuild,
   BlueprintSessionStarted,
@@ -333,18 +329,12 @@ function detachable(store: Store, detached: () => boolean): Store {
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
     buildSnapshot: (key) => store.buildSnapshot(key),
-    listSnapshotGaps: () => store.listSnapshotGaps(),
-    addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
     buildManifest: (buildId) => store.buildManifest(buildId),
-    listManifestGaps: () => store.listManifestGaps(),
     recordBuild: (build) => store.recordBuild(build),
     addBuildWorktree: (buildId, worktree) => store.addBuildWorktree(buildId, worktree),
     deleteBuild: (id) => store.deleteBuild(id),
     deleteRun: (runId) => store.deleteRun(runId),
     deletePendingBuild: (id) => store.deletePendingBuild(id),
-    storeManifest(manifest) {
-      if (!detached()) store.storeManifest(manifest);
-    },
     append(id, nodeId, event) {
       if (!detached()) store.append(id, nodeId, event);
     },
@@ -389,8 +379,6 @@ type Continuation = { kind: "retry"; nodeId: string } | { kind: "resume" };
 export type BuiltVersion = BuildVersionStarted | Extract<BuildVersionResult, { kind: "error" }>;
 
 type BuildProgressEntry = Omit<Extract<EnginePush, { push: "build-progress" }>, "push">;
-
-export type ListedBuild = BuildRecord & { old: boolean };
 
 export type { BuildFileContent };
 
@@ -440,8 +428,6 @@ const progressEntry = (
     ...(buildId === undefined ? {} : { buildId }),
   };
 };
-
-const isOld = (build: BuildRecord) => build.name === null;
 
 type ProjectBuild = BuildRecord & { name: string; repo: string; base: string };
 
@@ -511,15 +497,11 @@ const flatStages = (groups: readonly StageGroup[]) => ({
 const hasProject = (build: BuildRecord): build is ProjectBuild =>
   build.name !== null && build.repo !== null && build.base !== null;
 
-const assistantBuildState = (build: BuildRecord): AssistantBuildState =>
-  isOld(build) ? "old" : "live";
-
 const assistantListedBuild = (build: BuildRecord): AssistantListedBuild => ({
   id: build.id,
   name: build.name,
   blueprint: build.source?.flowId ?? null,
   version: build.source?.version ?? null,
-  state: assistantBuildState(build),
 });
 
 const isRepo = (state: { kind: string }) => state.kind === "branch" || state.kind === "detached";
@@ -564,20 +546,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       opened = { kind: "ready", stores: options.openStores() };
     } catch (error) {
       opened = { kind: "error", message: messageOf(error) };
-      return opened;
-    }
-    try {
-      const { failures } = backfillSnapshots({
-        store: opened.stores.runs,
-        flows: opened.stores.flows,
-      });
-      for (const { gap, error } of failures) {
-        const which =
-          gap.buildId === null ? `pending build ${gap.pendingId}` : `build ${gap.buildId}`;
-        console.log(`engine: snapshot backfill skipped ${which} error ${messageOf(error)}`);
-      }
-    } catch (error) {
-      console.log(`engine: snapshot backfill error ${messageOf(error)}`);
     }
     return opened;
   };
@@ -1311,9 +1279,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     model = workspaceOf(manifest).model,
   ) => ({
     ...session,
-    buildDir,
     workspaceFolder: workspaceFolder(buildDir),
-    layout: manifest.layout,
     model,
     hooks: { nodePath: hooks.nodePath, hookScriptPath: hooks.hookScriptPath },
   });
@@ -1331,11 +1297,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const { runs } = stores;
     const built = runs.findBuild(buildId);
     if (built === undefined) return failure(`No build ${buildId}`);
-    if (isOld(built)) {
-      return failure(
-        "This build was made before builds had names and a workspace. Make a new build from this blueprint to run it.",
-      );
-    }
     if (runs.listRuns().some((run) => run.buildId === buildId && run.status === "running")) {
       return failure("This build has a run left going. Stop or resume it first.");
     }
@@ -1366,7 +1327,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const nodeIds = [workspace, ...sessionContainersOf(manifest)].flatMap((container) =>
       container.nodes.map((node) => node.id),
     );
-    const stored = storedOptions({ inputs: {}, flags: {}, auto: choices.auto ?? false });
+    const stored = storedOptions({ auto: choices.auto ?? false });
     const { id: runId } = runs.createRun({
       buildDir: built.dir,
       inputs: stored,
@@ -1688,25 +1649,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     }
   };
 
-  const backfillStoredManifests = async (): Promise<void> => {
-    const result = openStoresOnce();
-    if (result.kind === "error") return;
-    const { runs } = result.stores;
-    const failures = await backfillManifests({
-      store: runs,
-      readManifest: async (buildId) => {
-        const build = runs.findBuild(buildId);
-        return build === undefined ? undefined : options.fs.readFile(`${build.dir}/manifest.json`);
-      },
-      sha256: sha256Hex,
-    });
-    for (const { gap, error } of failures) {
-      console.log(
-        `engine: manifest backfill skipped build ${gap.buildId} error ${messageOf(error)}`,
-      );
-    }
-  };
-
   const reattach = async (): Promise<void> => {
     if (!(await holdsHome())) {
       console.log(`engine: another Flowdeck holds ${options.home}; not reattaching`);
@@ -1976,7 +1918,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const manifestOf = (run: RunRecord): ParsedManifest | undefined =>
     run.manifestJson === null || run.buildHash === null
       ? undefined
-      : parseManifest(run.manifestJson, { hash: run.buildHash, name: run.buildName });
+      : parseManifest(run.manifestJson);
 
   type StoredNode = ManifestContainer["nodes"][number];
 
@@ -2222,9 +2164,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const isActive = (runId: string) => activeRun(runId) !== undefined;
-
-  const listBuilds = (runs: Store): ListedBuild[] =>
-    runs.listBuilds().map((build) => ({ ...build, old: isOld(build) }));
 
   const readWorktree = async (
     runs: Store,
@@ -2601,9 +2540,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     await sweepAfterCleanStart(sessionsAtStart).catch((error: unknown) => {
       console.log(`engine: clean start sweep error ${messageOf(error)}`);
     });
-    await backfillStoredManifests().catch((error: unknown) => {
-      console.log(`engine: manifest backfill error ${messageOf(error)}`);
-    });
     await reattach();
   };
 
@@ -2701,7 +2637,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "build-progress-list":
           return answer(request.id, () => buildProgressList(storesOrThrow().runs));
         case "list-builds":
-          return answer(request.id, () => listBuilds(storesOrThrow().runs));
+          return answer(request.id, () => storesOrThrow().runs.listBuilds());
         case "assistant-list-builds":
           return answer(request.id, () =>
             storesOrThrow().runs.listBuilds().map(assistantListedBuild),

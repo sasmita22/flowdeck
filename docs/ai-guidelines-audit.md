@@ -126,8 +126,6 @@ Files the detection rule matches that hold no text a model reads.
 | `src/core/nodes/join/execute.ts`                | Its not-started question goes to the person at the app, not a model                                                                                                                                                                                                                                           |
 | `src/core/run/activity.ts`                      | Activity log entries for the app                                                                                                                                                                                                                                                                              |
 | `src/core/run/attribution.ts`                   | Usage attribution only                                                                                                                                                                                                                                                                                        |
-| `src/core/run/backfill-manifests.ts`            | Copies build manifests into the database; no text a model reads                                                                                                                                                                                                                                               |
-| `src/core/run/backfill-snapshots.ts`            | Copies saved blueprint versions into build snapshots; no text a model reads                                                                                                                                                                                                                                   |
 | `src/core/run/branch-name.ts`                   | Recommends a build's branch name and checks it is a valid git branch name; its results go to the app's Build dialog, no text                                                                                                                                                                                  |
 | `src/core/run/budget.ts`                        | Usage prices and totals only                                                                                                                                                                                                                                                                                  |
 | `src/core/run/build-pipeline.ts`                | Build pipeline projection for the app                                                                                                                                                                                                                                                                         |
@@ -496,6 +494,12 @@ The connection-tools pass judged the texts it changed: the `add_connection` and 
 | 23   | `src/core/flow/blueprint-edits.ts` `connectionRefusal`, `checkEdit` | n/a (message text). The canvas's connection refusals moved here unchanged and are now the one copy the canvas and `add_connection` share. `No connection "<id>" in the blueprint.` has the shape of `No node "<id>" in the blueprint.`. Rule 5: the skill's "A refused edit changed nothing: fix the input from its `reason`" covers both |
 | 24aa | `src/core/compiler/rules/session-connections.ts` `rule`             | n/a (message text). Unchanged; its "can only join two session containers" message now also reaches the pane as an `add_connection` refusal                                                                                                                                                                                                |
 
+The legacy-build-removal pass (builds with no name and the old layout are gone) judged the one model-facing text it changed. No skill, agent or prompt changed.
+
+| Row | File                                                      | Result                                                                                                                                                                                                                                                    |
+| --- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 23  | `src/app/engine/engine-handler.ts` `assistantListedBuild` | n/a (tool result). Each `list_builds` entry is `id`, `name`, `blueprint` and `version`; the `state` field is gone, since with no unnamed build left it was always `live`. The `list_builds` description and the blueprint skill's row never named `state` |
+
 ## Stale claims
 
 Each claim was read against the code on this branch. T = a `test/kit/` check compares the text with the code (written failing first), then the text; R = reword.
@@ -594,6 +598,8 @@ The digest-sessions pass read each claim of the narrator's prompt and the digest
 
 The connection-tools pass read each claim of the texts it changed against the code (`blueprint-tools.ts` `toolInputs`, `blueprint-edits.ts` `checkEdit` and `connectionRefusal`, `tool-handler.ts` `commandFor`, `commands.ts` `addConnection` and `deleteConnections`, `session-connections.ts`) and found S40, fixed. Superseded in this report: row 1's containers-pass result (after G14) says the skill tells the pane the tools cannot draw a connection; the skill now says `add_connection` and `delete_connection` do, and the tools still cannot add, delete or change a container or wire a frame's `flow-in` or `flow-out`.
 
+The legacy-build-removal pass read each claim about `list_builds` against the code (`protocol.ts` `AssistantListedBuild`, `engine-handler.ts` `assistantListedBuild`, `blueprint-tools.ts` `descriptions`, `kit-blueprint/skills/blueprint/SKILL.md` tools table) and found no stale claim in model-facing text. Superseded in this report, not rewritten: the build-delete pass's row 23 says `list_builds` and `read_build` give a build `state` of `live` or `old`, its staleness note says `AssistantBuildState` is `"live" | "old"`, and its changes row says the states are `live` or `old`; `AssistantBuildState` is gone and `list_builds` entries carry no `state`.
+
 ## Gaps
 
 What a model needs to do its job and no text gave it.
@@ -666,6 +672,8 @@ The loose-node-library pass found no new gap: the pane is told where each kind o
 The digest-sessions pass closed G13, which the workspace-starts-sessions pass had raised as open. It needed a change to the digest's format, not rewording: the engine now passes the stored manifest's containers to the digest one by one instead of merged, the digest heads each group, and the narrator's prompt names the headings. It found no new gap.
 
 The connection-tools pass found no new gap: the pane is told how to join two sessions and remove a connection, which ids each takes, and why one is refused.
+
+The legacy-build-removal pass found no new gap: the pane reads a build's name, blueprint and version from `list_builds` and the rest from `read_build`.
 
 ## Skills added or changed and why
 
@@ -1054,6 +1062,14 @@ Row 9 gained `src/core/run/stop-marker.ts`.
 | `.claude/rules/manual-test.md` | Changed          | App screens row: lists every drive step kind, including the new `click-at` and `select`, instead of four of thirteen |
 
 The file is read by the agents that work on this repo, not by a Flowdeck session, and sits outside the detection rule's folders, so the inventory needs no row. Standard, judged on the file as a whole: rule 1 pass (manual testing only); rule 2 n/a (a rules file, no frontmatter); rule 3 pass (43 lines); rule 4 pass (rule 9 still pins the result row; the step kinds are named exactly as `steps.json` spells them); rule 5 pass (unchanged: rule 2 makes a check pass only on read-back evidence); rule 6 n/a (no blueprint); rule 7 pass (each kind written as its `type` literal in `scripts/drive.ts`). Staleness: the row named click, type, wait-for-text and screenshot only, while `scripts/drive.ts` `stepSchemas` already had nine more; the row now lists all thirteen keys of `stepSchemas`, `canvas` is the canvas's `data-testid` in `src/app/renderer/canvas/canvas.tsx`, and "finding elements by `data-testid`" no longer implies that `wait-for-text`, `press` or the window steps take one. No product model-facing text changed: `scripts/drive.ts` is a dev script outside the detection rule's folders.
+
+### Legacy build removal
+
+| Skill or file                                                              | Added or changed | Why                                                                                           |
+| -------------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
+| `src/app/engine/engine-handler.ts`                                         | Changed          | Row 23: `list_builds` entries no longer carry `state`; `assistantBuildState` removed          |
+| `src/app/engine/protocol.ts`                                               | Changed          | Not model-facing: `AssistantBuildState` and `AssistantListedBuild.state` removed              |
+| `src/core/run/backfill-manifests.ts`, `src/core/run/backfill-snapshots.ts` | Removed          | Not model-facing: deleted with the start-up backfills; their rows leave `## Not model-facing` |
 
 ### Raised, not changed here
 

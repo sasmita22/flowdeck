@@ -4,11 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../../src/adapters/sqlite/sqlite-store.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
-import { backfillSnapshots } from "../../../src/core/run/backfill-snapshots.js";
 import type { NewBuild } from "../../../src/ports/store.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { agent, flow } from "../../fixtures/flow-builders.js";
@@ -315,43 +313,6 @@ describe("build snapshots", () => {
     expect(
       db.prepare("SELECT pending_id, build_id FROM build_snapshots WHERE build_id = 'b1'").all(),
     ).toEqual([]);
-  });
-
-  it("lets a second Flowdeck's backfill leave a just-recorded build to its own pending snapshot", () => {
-    const first = stores();
-    const { flowId, version } = new SqliteFlowStore({ db: first.db }).save(savedFlow, {
-      name: "Report",
-    });
-    const pendingSnapshot = { blueprintName: "Report", version, svg: flowSvg(savedFlow) };
-    const start = first.runs.startPendingBuild({
-      flowId,
-      version,
-      name: "fix-login",
-      origin: { source: { flowId, version }, blueprint: { name: "Report", version } },
-      startedAt: 1_000,
-      snapshot: pendingSnapshot,
-    });
-    if (start.kind !== "started") throw new Error(`expected a start, got ${start.reason}`);
-    first.runs.recordBuild({ ...newBuild, source: { flowId, version } });
-    const second = stores();
-
-    const backfilled = backfillSnapshots({
-      store: second.runs,
-      flows: new SqliteFlowStore({ db: second.db }),
-    });
-    first.runs.endPendingBuild(start.pendingId, {
-      outcome: "built",
-      endedAt: 2_000,
-      buildId: "b1",
-    });
-
-    expect(first.runs.pendingBuild(start.pendingId)?.endedAt).toBe(2_000);
-    expect(backfilled).toEqual({ added: 0, failures: [] });
-    expect(second.runs.buildSnapshot({ buildId: "b1" })).toEqual({
-      ...pendingSnapshot,
-      pendingId: start.pendingId,
-      buildId: "b1",
-    });
   });
 
   it("records a build naming a flow version that was never saved", () => {

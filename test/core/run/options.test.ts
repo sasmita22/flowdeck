@@ -28,8 +28,8 @@ describe("runChoices", () => {
 
 describe("stored run options", () => {
   it("keeps automatic mode in the stored record", () => {
-    expect(storedOptions({ inputs: {}, flags: {}, auto: true })).toEqual({ auto: true });
-    expect(storedOptions({ inputs: {}, flags: {}, auto: false })).toEqual({});
+    expect(storedOptions({ auto: true })).toEqual({ auto: true });
+    expect(storedOptions({ auto: false })).toEqual({});
   });
 
   it("reads back automatic mode for a resume", () => {

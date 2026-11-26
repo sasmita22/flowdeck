@@ -170,19 +170,19 @@ const call = async (handler: EngineHandler, type: string, payload?: unknown) => 
 
 describe("engine build tools", () => {
   describe("assistant-list-builds", () => {
-    it("lists live and old builds, each with its state, and leaves a deleted build out", async () => {
+    it("lists named and unnamed builds, and leaves a deleted build out", async () => {
       const listed = (await call(setup(), "assistant-list-builds")) as unknown[];
 
       expect(listed).toHaveLength(2);
       expect(listed).toEqual(
         expect.arrayContaining([
-          { id: live.id, name: "keep", blueprint: "flow-1", version: 2, state: "live" },
-          { id: oldBuild.id, name: null, blueprint: null, version: null, state: "old" },
+          { id: live.id, name: "keep", blueprint: "flow-1", version: 2 },
+          { id: oldBuild.id, name: null, blueprint: null, version: null },
         ]),
       );
     });
 
-    it("never lists a build as deleted, even one whose record carries a delete time", async () => {
+    it("never leaves out a build whose record carries a delete time", async () => {
       const handler = setup({
         prepare: (runs) => {
           const records = runs.listBuilds();
@@ -194,17 +194,16 @@ describe("engine build tools", () => {
         },
       });
 
-      const listed = (await call(handler, "assistant-list-builds")) as { state: string }[];
+      const listed = (await call(handler, "assistant-list-builds")) as { id: string }[];
 
-      expect(listed.map(({ state }) => state).sort()).toEqual(["live", "old"]);
+      expect(listed.map(({ id }) => id).sort()).toEqual([live.id, oldBuild.id].sort());
     });
 
     it("leaves the list-builds answer without deleted builds, in its own shape", async () => {
-      const listed = (await call(setup(), "list-builds")) as { id: string; old: boolean }[];
+      const listed = (await call(setup(), "list-builds")) as { id: string }[];
 
       expect(listed.map(({ id }) => id).sort()).toEqual([live.id, oldBuild.id].sort());
-      expect(listed.find(({ id }) => id === live.id)).toMatchObject({ name: "keep", old: false });
-      expect(listed.find(({ id }) => id === oldBuild.id)).toMatchObject({ old: true });
+      expect(listed.find(({ id }) => id === live.id)).toMatchObject({ name: "keep" });
     });
   });
 

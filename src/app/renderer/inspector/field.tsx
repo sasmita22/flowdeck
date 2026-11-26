@@ -1,12 +1,9 @@
 import { useState, type CSSProperties, type KeyboardEvent } from "react";
-import { addFlag, removeFlag, renameFlag, setFlag } from "./node-form.js";
 import type { FieldDescription, FieldValue } from "./schema-form.js";
 
 type Path = readonly string[];
 
 export type Commit = (path: Path, value: FieldValue) => string | null;
-
-type Flags = Readonly<Record<string, string | number | boolean>>;
 
 const labelStyle: CSSProperties = {
   display: "flex",
@@ -48,69 +45,6 @@ function Issue({ testId, text }: { testId: string; text: string | undefined }) {
     <span data-testid={`${testId}-issue`} role="status" style={issueStyle}>
       {text}
     </span>
-  );
-}
-
-function FlagsField({
-  field,
-  flags,
-  commit,
-}: {
-  field: FieldDescription;
-  flags: Flags;
-  commit: Commit;
-}) {
-  const set = (next: Flags) => commit(field.path, next);
-  return (
-    <fieldset
-      data-testid={field.testId}
-      style={{ ...labelStyle, gap: 4, margin: 0, padding: 0, border: "none", minWidth: 0 }}
-    >
-      <legend style={{ padding: 0, marginBottom: 2 }}>{field.label}</legend>
-      {Object.entries(flags).map(([name, value], index) => (
-        <div key={`${index}-${name}`} style={rowStyle}>
-          {typeof value === "boolean" ? (
-            <input
-              type="checkbox"
-              data-testid={`${field.testId}-on-${index}`}
-              aria-label={`${name} on by default`}
-              checked={value}
-              onChange={(event) => set(setFlag(flags, name, event.target.checked))}
-            />
-          ) : (
-            <span title="Not a switch">{String(value)}</span>
-          )}
-          <input
-            type="text"
-            data-testid={`${field.testId}-name-${index}`}
-            aria-label="Flag name"
-            defaultValue={name}
-            style={{ flex: 1, minWidth: 0 }}
-            onBlur={(event) => {
-              const next = renameFlag(flags, name, event.target.value);
-              if (next === flags) event.target.value = name;
-              else set(next);
-            }}
-            onKeyDown={blurOnEnter}
-          />
-          <button
-            className="fd-btn"
-            data-testid={`${field.testId}-remove-${index}`}
-            onClick={() => set(removeFlag(flags, name))}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
-      <button
-        className="fd-btn"
-        data-testid={`${field.testId}-add`}
-        style={{ alignSelf: "flex-start" }}
-        onClick={() => set(addFlag(flags))}
-      >
-        Add flag
-      </button>
-    </fieldset>
   );
 }
 
@@ -186,14 +120,6 @@ export function Field({
           />
           {field.label}
         </label>
-        <Issue testId={field.testId} text={issue} />
-      </>
-    );
-  }
-  if (field.control === "flags") {
-    return (
-      <>
-        <FlagsField field={field} flags={(raw ?? {}) as Flags} commit={commit} />
         <Issue testId={field.testId} text={issue} />
       </>
     );

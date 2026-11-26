@@ -24,9 +24,7 @@ import type {
   BuildSnapshot,
   BuildWorktree,
   EventEntry,
-  ManifestGap,
   NewBuild,
-  NewBuildSnapshot,
   NewPendingBuild,
   NewRun,
   PendingBuildEnd,
@@ -36,7 +34,6 @@ import type {
   RunStatus,
   RunStory,
   RunSummary,
-  SnapshotGap,
   SnapshotKey,
   Store,
   StoredEvent,
@@ -45,19 +42,6 @@ import type {
 type RecordedBuild = Omit<NewBuild, "manifest"> & { manifest?: string };
 
 const copy = <T>(value: T): T => structuredClone(value);
-
-const blueprintNameIn = (origin: unknown): string | null => {
-  const blueprint: unknown =
-    typeof origin === "object" && origin !== null && "blueprint" in origin
-      ? origin.blueprint
-      : undefined;
-  return typeof blueprint === "object" &&
-    blueprint !== null &&
-    "name" in blueprint &&
-    typeof blueprint.name === "string"
-    ? blueprint.name
-    : null;
-};
 
 const stateMoving = new Set(stateMovingKinds);
 
@@ -459,61 +443,8 @@ export class FakeStore implements Store {
     return known === undefined ? null : copy(known);
   }
 
-  listSnapshotGaps(): SnapshotGap[] {
-    const pending = this.pendingBuilds
-      .filter((known) => !this.snapshots.some((snapshot) => snapshot.pendingId === known.id))
-      .map((known): SnapshotGap => ({
-        pendingId: known.id,
-        buildId: known.buildId ?? null,
-        flowId: known.flowId,
-        version: known.version,
-        blueprintName: blueprintNameIn(known.origin),
-      }));
-    const building = new Set(this.openPendingBuilds().map((known) => known.name));
-    const built = this.buildRecords
-      .filter((known) => this.snapshotOf(known.id) === undefined && !building.has(known.name))
-      .map((known): SnapshotGap => ({
-        pendingId: null,
-        buildId: known.id,
-        flowId: known.source?.flowId ?? null,
-        version: known.source?.version ?? null,
-        blueprintName: null,
-      }));
-    return [...pending, ...built];
-  }
-
-  addSnapshotIfMissing(
-    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
-    snapshot: NewBuildSnapshot,
-  ): boolean {
-    if (gap.pendingId === null && gap.buildId === null) {
-      throw new Error("FakeStore: a snapshot names a pending build or a build");
-    }
-    const taken = this.snapshots.some(
-      (known) =>
-        (gap.pendingId !== null && known.pendingId === gap.pendingId) ||
-        (gap.buildId !== null && known.buildId === gap.buildId),
-    );
-    if (taken) return false;
-    this.snapshots.push({ ...copy(snapshot), pendingId: gap.pendingId, buildId: gap.buildId });
-    return true;
-  }
-
-  storeManifest({ buildId, manifest }: { buildId: string; manifest: string }): void {
-    if (!this.manifests.has(buildId)) this.manifests.set(buildId, manifest);
-  }
-
   buildManifest(buildId: string): string | undefined {
     return this.manifests.get(buildId);
-  }
-
-  listManifestGaps(): ManifestGap[] {
-    return this.buildRecords.flatMap((build): ManifestGap[] => {
-      const file = build.files.find((known) => known.path === "manifest.json");
-      return file === undefined || this.manifests.has(build.id)
-        ? []
-        : [{ buildId: build.id, manifestSha256: file.sha256 }];
-    });
   }
 
   buildFiles(id: string): BuildFileRecord[] {

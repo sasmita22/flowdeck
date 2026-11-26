@@ -448,7 +448,8 @@ describe("FakeStore", () => {
 
     it("refuses to lock a pending build onto a build id that already has a snapshot, leaving the build open", () => {
       const store = new FakeStore();
-      store.addSnapshotIfMissing({ pendingId: null, buildId: "b1" }, snapshot("First"));
+      const first = startedId(store, { ...pending(), snapshot: snapshot("First") });
+      store.endPendingBuild(first, { outcome: "built", endedAt: 1_000, buildId: "b1" });
       const id = startedId(store, { ...pending(), snapshot: snapshot("Second") });
 
       expect(() =>
@@ -456,21 +457,10 @@ describe("FakeStore", () => {
       ).toThrow();
       expect(store.buildSnapshot({ buildId: "b1" })).toMatchObject({
         blueprintName: "First",
-        pendingId: null,
+        pendingId: first,
       });
       expect(store.buildSnapshot({ pendingId: id })).toMatchObject({ buildId: null });
       expect(store.pendingBuild(id)?.endedAt).toBeUndefined();
-    });
-
-    it("sets a snapshot's build id once, keeping the first", () => {
-      const store = new FakeStore();
-      const id = startedId(store, pending());
-      store.addSnapshotIfMissing({ pendingId: id, buildId: "b1" }, snapshot("First"));
-
-      store.endPendingBuild(id, { outcome: "built", endedAt: 2_000, buildId: "b2" });
-
-      expect(store.buildSnapshot({ pendingId: id })).toMatchObject({ buildId: "b1" });
-      expect(store.buildSnapshot({ buildId: "b2" })).toBeNull();
     });
   });
 
@@ -549,14 +539,6 @@ describe("FakeStore", () => {
   });
 
   describe("build manifests", () => {
-    const beforeManifests = (id: string, files = lockedBeforeManifests(id).files) => ({
-      ...lockedBeforeManifests(id),
-      files,
-    });
-
-    const gaps = (store: FakeStore) =>
-      store.listManifestGaps().sort((a, b) => a.buildId.localeCompare(b.buildId));
-
     it("keeps the manifest text a build is recorded with, unchanged, and none for an unknown build", () => {
       const store = new FakeStore();
 
@@ -573,49 +555,6 @@ describe("FakeStore", () => {
       store.deleteBuild("b1");
 
       expect(store.buildManifest("b1")).toBeUndefined();
-    });
-
-    it("stores the manifest of a build that has none", () => {
-      const store = new FakeStore();
-      store.recordBuildWithoutManifest(beforeManifests("old1"));
-
-      store.storeManifest({ buildId: "old1", manifest: lockedManifest });
-
-      expect(store.buildManifest("old1")).toBe(lockedManifest);
-    });
-
-    it("leaves a stored manifest as it is, without an error", () => {
-      const store = new FakeStore();
-      store.recordBuild(build("b1"));
-
-      store.storeManifest({ buildId: "b1", manifest: '{"version":1,"hash":"other"}' });
-
-      expect(store.buildManifest("b1")).toBe(lockedManifest);
-    });
-
-    it("lists builds with no stored manifest and a manifest file, with that file's sha256, leaving out a deleted one", () => {
-      const store = new FakeStore();
-      store.recordBuild(build("b1"));
-      store.recordBuildWithoutManifest(beforeManifests("old1"));
-      store.recordBuildWithoutManifest({
-        ...beforeManifests("gone1"),
-        files: [{ path: "manifest.json", sha256: "m2" }],
-      });
-      store.deleteBuild("gone1");
-
-      expect(gaps(store)).toEqual([{ buildId: "old1", manifestSha256: "m" }]);
-    });
-
-    it("leaves out a build once its manifest is stored, and one with no manifest file", () => {
-      const store = new FakeStore();
-      store.recordBuildWithoutManifest(beforeManifests("old1"));
-      store.recordBuildWithoutManifest(
-        beforeManifests("bare1", [{ path: "commands/p1.md", sha256: "c" }]),
-      );
-
-      store.storeManifest({ buildId: "old1", manifest: lockedManifest });
-
-      expect(gaps(store)).toEqual([]);
     });
   });
 

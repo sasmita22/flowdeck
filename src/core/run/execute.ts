@@ -1,6 +1,6 @@
 import type { HookPaths } from "../compiler/hook-settings.js";
 import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
-import { verify, type VerifyFileSystem, type VerifyLayout } from "../compiler/verify.js";
+import { verify, type VerifyFileSystem } from "../compiler/verify.js";
 import { workspaceFolder } from "./workspace.js";
 import { costOf, type UsageReader } from "./budget.js";
 import type { CompactionReader } from "./context.js";
@@ -21,7 +21,6 @@ import type { HumanWaiter } from "./wait.js";
 
 export type OpenSessionOptions = {
   sessionName: string;
-  buildDir: string;
   model: string;
   socketPath: string;
   cwd: string;
@@ -31,7 +30,8 @@ export type OpenSessionOptions = {
   resume?: boolean;
   env?: Record<string, string>;
   sessionStatesPath?: string;
-} & ({ layout: "legacy" } | { layout: "workspace"; workspaceFolder: string });
+  workspaceFolder: string;
+};
 
 export type OpenedSession = {
   sessionId: string;
@@ -113,15 +113,14 @@ export async function loadBuild(
 ): Promise<LoadBuildResult> {
   const row = deps.store.findBuild(buildId);
   if (row === undefined) return { kind: "error", message: `No build ${buildId}` };
-  const layout: VerifyLayout = row.name === null ? "legacy" : "workspace";
-  const verified = await verify(row.dir, row.hash, layout, { fs: deps.fs });
+  const verified = await verify(row.dir, row.hash, { fs: deps.fs });
   if (!verified.ok) {
     return {
       kind: "error",
       message: verified.problems.map(({ path, problem }) => `${path}: ${problem}`).join("\n"),
     };
   }
-  const manifest = parseManifest(await deps.fs.readFile(`${row.dir}/manifest.json`), row);
+  const manifest = parseManifest(await deps.fs.readFile(`${row.dir}/manifest.json`));
   const { nodes, wires } = workspaceOf(manifest);
   const problems = structureProblems(nodes, wires);
   if (problems.length > 0) return { kind: "error", message: new StructureError(problems).message };
@@ -280,13 +279,7 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
     appendBuildActivity: (pendingId, entry) => store.appendBuildActivity(pendingId, entry),
     buildActivity: (pendingId) => store.buildActivity(pendingId),
     buildSnapshot: (key) => store.buildSnapshot(key),
-    listSnapshotGaps: () => store.listSnapshotGaps(),
-    addSnapshotIfMissing: (gap, snapshot) => store.addSnapshotIfMissing(gap, snapshot),
     buildManifest: (buildId) => store.buildManifest(buildId),
-    listManifestGaps: () => store.listManifestGaps(),
-    storeManifest(manifest) {
-      if (!stopped()) store.storeManifest(manifest);
-    },
     append(id, nodeId, event) {
       if (!stopped()) store.append(id, nodeId, event);
     },
@@ -368,7 +361,6 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
         {
           ...workspace,
           hash: manifest.hash,
-          layout: manifest.layout,
           ...(manifest.values === undefined ? {} : { values: manifest.values }),
         },
         { actions },

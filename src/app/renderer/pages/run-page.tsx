@@ -241,7 +241,7 @@ export function RunPage({
   }, [view, snapshot]);
   const status = snapshot?.status ?? "running";
   const blocked = useStore(run, (state) =>
-    selectRunDisabled(state, card ?? { old: false, run: { id: runId, status } }),
+    selectRunDisabled(state, card ?? { run: { id: runId, status } }),
   );
   const badge = (live === null ? null : selectLiveBadge(live)) ?? status;
   const waiting = useStore(wait, (state) => state.pending !== null);

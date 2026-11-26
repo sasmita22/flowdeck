@@ -34,7 +34,6 @@ const builds = [
   {
     id: "b-fix",
     name: "fix-login",
-    old: false,
     dir: "/fd/workspaces/b-fix",
     createdAt: 7,
     source: { flowId: "flow-a", version: 2 },
@@ -44,7 +43,6 @@ const builds = [
   {
     id: "b-idle",
     name: null,
-    old: false,
     dir: "/fd/workspaces/b-idle",
     createdAt: 6,
     source: { flowId: "flow-a", version: 2 },
@@ -54,7 +52,6 @@ const builds = [
   {
     id: "b-gap",
     name: null,
-    old: false,
     dir: "/fd/workspaces/b-gap",
     createdAt: 5,
     source: { flowId: "flow-a", version: 1 },
@@ -64,7 +61,6 @@ const builds = [
   {
     id: "0123456789",
     name: null,
-    old: true,
     dir: "/fd/builds/0123456789",
     createdAt: 4,
     blueprintName: null,
@@ -216,6 +212,17 @@ describe("createLibraryStore", () => {
     await library.getState().refresh();
 
     expect(library.getState()).toMatchObject({ flows, builds, runs, loaded: true, error: null });
+  });
+
+  it("drops an old mark a build payload still carries", async () => {
+    const bridge = fakeBridge();
+    bridge.listBuilds.mockResolvedValueOnce(builds.map((build) => ({ ...build, old: true })));
+    const library = createLibraryStore({ bridge });
+
+    await library.getState().refresh();
+
+    expect(library.getState().builds).toHaveLength(builds.length);
+    for (const build of library.getState().builds) expect(build).not.toHaveProperty("old");
   });
 
   it("holds the error and keeps what it had when a list cannot be read", async () => {
@@ -388,7 +395,6 @@ describe("cards", () => {
       version: 2,
       createdAt: 7,
       flowId: "flow-a",
-      old: false,
       run: { id: "run-2", status: "interrupted" },
     },
     {
@@ -398,7 +404,6 @@ describe("cards", () => {
       version: 2,
       createdAt: 6,
       flowId: "flow-a",
-      old: false,
       run: { id: "run-idle", status: "done" },
     },
     {
@@ -408,7 +413,6 @@ describe("cards", () => {
       version: null,
       createdAt: 5,
       flowId: "flow-a",
-      old: false,
       run: null,
     },
     {
@@ -418,7 +422,6 @@ describe("cards", () => {
       version: null,
       createdAt: 4,
       flowId: null,
-      old: true,
       run: { id: "run-old", status: "done" },
     },
   ];

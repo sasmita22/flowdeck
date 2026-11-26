@@ -77,14 +77,11 @@ export type EnginePush =
 
 export type EngineMessage = EngineResponse | EnginePush;
 
-export type AssistantBuildState = "live" | "old";
-
 export type AssistantListedBuild = {
   id: string;
   name: string | null;
   blueprint: string | null;
   version: number | null;
-  state: AssistantBuildState;
 };
 
 export type AssistantReadBuild = {

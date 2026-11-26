@@ -39,7 +39,6 @@ import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { workspaceDir } from "../../../src/core/compiler/build.js";
 import { emit } from "../../../src/core/compiler/emit.js";
-import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
 import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { flowSvg } from "../../../src/core/flow/flow-svg.js";
@@ -892,10 +891,19 @@ describe("createEngineHandler", async () => {
         nodes: [],
         manifest: manifestText(built, "h1"),
       });
-      runs.addSnapshotIfMissing(
-        { pendingId: null, buildId: "b1" },
-        { blueprintName: "Report", version, svg: flowSvg(built) },
-      );
+      const pending = runs.startPendingBuild({
+        flowId: "flow-a",
+        version,
+        name: "report",
+        origin: {
+          source: { flowId: "flow-a", version },
+          blueprint: { name: "Report", version },
+        },
+        startedAt: 0,
+        snapshot: { blueprintName: "Report", version, svg: flowSvg(built) },
+      });
+      if (pending.kind !== "started") throw new Error("the pending build did not start");
+      runs.endPendingBuild(pending.pendingId, { outcome: "built", endedAt: 1, buildId: "b1" });
       const { id } = runs.createRun({
         buildDir: "/fd-home/workspaces/b1",
         inputs: {},
@@ -1601,10 +1609,19 @@ describe("createEngineHandler", async () => {
         nodes: [],
         manifest: "{}",
       });
-      runs.addSnapshotIfMissing(
-        { pendingId: null, buildId: "b1" },
-        { blueprintName: "Report", version: 1, svg: flowSvg(pictured()) },
-      );
+      const pictured1 = runs.startPendingBuild({
+        flowId: "flow-a",
+        version: 1,
+        name: "pictured",
+        origin: {
+          source: { flowId: "flow-a", version: 1 },
+          blueprint: { name: "Report", version: 1 },
+        },
+        startedAt: 0,
+        snapshot: { blueprintName: "Report", version: 1, svg: flowSvg(pictured()) },
+      });
+      if (pictured1.kind !== "started") throw new Error("the pending build did not start");
+      runs.endPendingBuild(pictured1.pendingId, { outcome: "built", endedAt: 1, buildId: "b1" });
       runs.recordBuild({
         id: "b2",
         hash: "h2",
@@ -1683,132 +1700,6 @@ describe("createEngineHandler", async () => {
         ok: true,
         value: { svg: null },
       });
-    });
-  });
-
-  describe("snapshots of builds made before them", () => {
-    let dir: string;
-    let db: ReturnType<typeof openDatabase>;
-    let store: SqliteStore;
-    let flows: SqliteFlowStore;
-    const saved = () => onWorkspaceMainFlow([agent("old")], []);
-
-    beforeEach(async () => {
-      dir = await mkdtemp(join(tmpdir(), "fd-backfill-"));
-      db = openDatabase({ path: join(dir, "flowdeck.db") });
-      store = new SqliteStore({ db });
-      flows = new SqliteFlowStore({ db, newId: () => "flow-old" });
-      flows.create("Old report");
-      const { version } = flows.save(saved(), "flow-old");
-      store.recordBuild({
-        id: "b-old",
-        hash: "h-old",
-        name: "old-build",
-        repo: "/repo",
-        base: "main",
-        branch: "flowdeck/old-build",
-        branchCreated: true,
-        values: {},
-        dir: join(dir, "workspaces", "b-old"),
-        source: { flowId: "flow-old", version },
-        files: [],
-        nodes: [],
-        manifest: "{}",
-      });
-    });
-
-    afterEach(async () => {
-      db.close();
-      await rm(dir, { recursive: true, force: true });
-    });
-
-    it("gives an old build its snapshot before the first request is answered", async () => {
-      const handler = createEngineHandler(options({ openStores: () => ({ runs: store, flows }) }));
-
-      expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
-        id: 1,
-        ok: true,
-        value: [
-          expect.objectContaining({
-            id: "b-old",
-            blueprintName: "Old report",
-            blueprintVersion: 1,
-          }),
-        ],
-      });
-      expect(store.buildSnapshot({ buildId: "b-old" })).toEqual({
-        pendingId: null,
-        buildId: "b-old",
-        blueprintName: "Old report",
-        version: 1,
-        svg: flowSvg(saved()),
-      });
-    });
-
-    it("logs a blueprint that cannot be read while filling snapshots, and still answers", async () => {
-      vi.spyOn(flows, "load").mockImplementation(() => {
-        throw new Error("flow_versions is locked");
-      });
-      const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      onTestFinished(() => {
-        vi.restoreAllMocks();
-      });
-      const handler = createEngineHandler(options({ openStores: () => ({ runs: store, flows }) }));
-
-      expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
-        id: 1,
-        ok: true,
-        value: [expect.objectContaining({ id: "b-old", blueprintName: null })],
-      });
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining("flow_versions is locked"));
-      expect(store.buildSnapshot({ buildId: "b-old" })).toBeNull();
-    });
-  });
-
-  describe("manifests of builds locked before they were kept", () => {
-    let home: string;
-
-    const lockedEarlier = async (runs: FakeStore, id: string, onDisk: string, locked: string) => {
-      const dir = join(home, "workspaces", id);
-      await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, "manifest.json"), onDisk);
-      runs.recordBuildWithoutManifest({
-        id,
-        hash: `h-${id}`,
-        name: id,
-        repo: "/repo",
-        base: "main",
-        branch: `flowdeck/${id}`,
-        branchCreated: true,
-        values: {},
-        dir,
-        files: [{ path: "manifest.json", sha256: sha256Hex(locked) }],
-        nodes: [],
-      });
-    };
-
-    beforeEach(async () => {
-      home = await mkdtemp(join(tmpdir(), "fd-manifests-"));
-    });
-
-    afterEach(async () => {
-      await rm(home, { recursive: true, force: true });
-    });
-
-    it("copies the manifest.json of a build whose folder still holds it as locked at engine start, and leaves one that changed", async () => {
-      const runs = new FakeStore();
-      const kept = manifestText(onWorkspaceMainFlow([agent("old")], []), "h-kept");
-      const edited = manifestText(onWorkspaceMainFlow([agent("old")], []), "h-edited");
-      await lockedEarlier(runs, "kept", kept, kept);
-      await lockedEarlier(runs, "edited", `${edited}\n`, edited);
-      const handler = createEngineHandler(
-        options({ home, openStores: () => ({ runs, flows: new FakeFlowStore() }) }),
-      );
-
-      await handler.startUp();
-
-      expect(runs.buildManifest("kept")).toBe(kept);
-      expect(runs.buildManifest("edited")).toBeUndefined();
     });
   });
 
@@ -3218,20 +3109,21 @@ describe("createEngineHandler", async () => {
           },
         ]);
 
-        expect(await handler.handle({ id: 2, type: "list-builds" })).toEqual({
+        const listedBuilds = await handler.handle({ id: 2, type: "list-builds" });
+        expect(listedBuilds).toEqual({
           id: 2,
           ok: true,
           value: [
             expect.objectContaining({
               id,
               name: "fix-login",
-              old: false,
               dir,
               createdAt: expect.any(Number),
               source: { flowId: "flow-1", version: 1 },
             }),
           ],
         });
+        expect((listedBuilds as { value: object[] }).value[0]).not.toHaveProperty("old");
 
         const files = await handler.handle({
           id: 3,
@@ -5657,7 +5549,6 @@ describe("createEngineHandler", async () => {
           expect(claude.opened[0]).toMatchObject({
             cwd: workspaceFolder(buildDirOf(buildId)),
             model: "opus",
-            layout: "workspace",
             workspaceFolder: workspaceFolder(buildDirOf(buildId)),
           });
           expect(runs.findRun(runId)?.session.cwd).toBe(workspaceFolder(buildDirOf(buildId)));
@@ -6840,47 +6731,19 @@ describe("createEngineHandler", async () => {
       });
     });
 
-    describe("an old hash-named build", () => {
-      const legacyManifest = {
-        version: 1,
-        session: {
-          name: "main",
-          workingFolder: { kind: "worktree", branch: "main" },
-          model: "sonnet",
-          allowedTools: [],
-          permissionMode: "default",
-          connectors: [],
-        },
-        nodes: [
-          { id: "s1", type: "gate", label: "s1", settings: { shown: "Check", skippable: false } },
-        ],
-        wires: [],
-        files: {},
-      };
-
+    describe("a deleted build", () => {
       let db: ReturnType<typeof openDatabase>;
       let store: SqliteStore;
-      let hash: string;
+      let blueprints: SqliteFlowStore;
       let waiter: FakeWaiter;
 
-      beforeEach(async () => {
+      beforeEach(() => {
         db = openDatabase({ path: join(home, "flowdeck.db") });
         store = new SqliteStore({ db });
-        hash = hashBuild([{ path: "manifest.json", content: canonicalJson(legacyManifest) }]);
-        const dir = join(home, "builds", hash);
-        await new NodeFileSystem().writeFile(
-          join(dir, "manifest.json"),
-          canonicalJson({ ...legacyManifest, hash }),
-        );
-        db.prepare("INSERT INTO builds (id, hash, dir, created_at) VALUES (?, ?, ?, ?)").run(
-          hash,
-          hash,
-          dir,
-          1,
-        );
+        blueprints = new SqliteFlowStore({ db });
         waiter = new FakeWaiter([{ decision: "approve" }]);
         handler = handlerWith({
-          openStores: () => ({ runs: store, flows: new SqliteFlowStore({ db }) }),
+          openStores: () => ({ runs: store, flows: blueprints }),
           run: { ...runEnvironment(new NodeFileSystem()), waiter },
         });
       });
@@ -6890,38 +6753,26 @@ describe("createEngineHandler", async () => {
         db.close();
       });
 
-      it("is listed and marked old", async () => {
-        expect(await handler.handle({ id: 1, type: "list-builds" })).toEqual({
-          id: 1,
-          ok: true,
-          value: [expect.objectContaining({ id: hash, name: null, old: true })],
-        });
-      });
-
-      it("refuses a new run, pointing to a new build, and starts nothing", async () => {
-        expect(await runBuild(hash)).toEqual({
-          kind: "error",
-          message: expect.stringContaining("Make a new build from this blueprint"),
-        });
-        expect(store.listRuns()).toEqual([]);
-      });
-
       it("refuses to resume a stopped run of it once deleted, naming the build by its id", async () => {
+        blueprints.save(sleeper());
+        const buildId = await builtId();
+        const build = store.findBuild(buildId);
+        if (build === undefined) throw new Error(`no build ${buildId}`);
         const { id: runId } = store.createRun({
-          buildDir: join(home, "builds", hash),
+          buildDir: build.dir,
           inputs: {},
-          nodeIds: ["s1"],
+          nodeIds: ["nap"],
           session: { tmuxName: "fd-run-old", cwd: repo.path, claudeSessionId: "c-old" },
-          buildId: hash,
+          buildId,
         });
         store.finishRun(runId, "stopped");
-        store.deleteBuild(hash);
+        store.deleteBuild(buildId);
 
         expect(
           await handler.handle({ id: 1, type: "resume-run", payload: { runId } }),
         ).toMatchObject({
           ok: true,
-          value: { kind: "error", message: `No build ${hash}` },
+          value: { kind: "error", message: `No build ${buildId}` },
         });
         expect(store.findRun(runId)?.status).toBe("stopped");
         expect(waiter.calls).toEqual([]);
@@ -7979,9 +7830,9 @@ describe("createEngineHandler", async () => {
       await startedOn(buildId);
       await vi.waitFor(() => expect(openings).toHaveLength(2));
 
-      expect(openings.map((opening) => opening.buildDir)).toEqual([
-        runs.findBuild(buildId)?.dir,
-        runs.findBuild(buildId)?.dir,
+      expect(openings.map((opening) => opening.workspaceFolder)).toEqual([
+        workspaceFolder(buildDirOf(buildId)),
+        workspaceFolder(buildDirOf(buildId)),
       ]);
       expect(openings.map((opening) => opening.hooks.nodePath)).toEqual([
         "/usr/local/bin/node",

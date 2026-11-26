@@ -32,7 +32,6 @@ import type {
   BuildSnapshot,
   BuildWorktree,
   EventEntry,
-  ManifestGap,
   NewBuild,
   NewBuildSnapshot,
   NewPendingBuild,
@@ -44,7 +43,6 @@ import type {
   RunStatus,
   RunStory,
   RunSummary,
-  SnapshotGap,
   SnapshotKey,
   Store,
   StoredEvent,
@@ -324,14 +322,6 @@ const toSnapshot = (row: SnapshotRow): BuildSnapshot => ({
   pendingId: row.pending_id,
   buildId: row.build_id,
 });
-
-type SnapshotGapRow = {
-  pending_id: string | null;
-  build_id: string | null;
-  flow_id: string | null;
-  version: number | null;
-  blueprint_name: string | null;
-};
 
 const buildRunningMessage = "build is running";
 
@@ -975,66 +965,11 @@ export class SqliteStore implements Store {
     return row === undefined ? null : toSnapshot(row);
   }
 
-  listSnapshotGaps(): SnapshotGap[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id AS pending_id, build_id, flow_id, version,
-                json_extract(origin_json, '$.blueprint.name') AS blueprint_name,
-                0 AS part, rowid AS ordinal
-           FROM pending_builds
-          WHERE NOT EXISTS (SELECT 1 FROM build_snapshots WHERE pending_id = pending_builds.id)
-         UNION ALL
-         SELECT NULL, id, flow_id, version, NULL, 1, rowid
-           FROM builds
-          WHERE NOT EXISTS (SELECT 1 FROM build_snapshots WHERE build_id = builds.id)
-            AND NOT EXISTS (
-              SELECT 1 FROM pending_builds WHERE name = builds.name AND ended_at IS NULL)
-         ORDER BY part, ordinal`,
-      )
-      .all() as SnapshotGapRow[];
-    return rows.map((row) => ({
-      pendingId: row.pending_id,
-      buildId: row.build_id,
-      flowId: row.flow_id,
-      version: row.version,
-      blueprintName: row.blueprint_name,
-    }));
-  }
-
-  addSnapshotIfMissing(
-    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
-    snapshot: NewBuildSnapshot,
-  ): boolean {
-    return this.insertSnapshot(gap, snapshot, this.now().getTime());
-  }
-
-  storeManifest({ buildId, manifest }: { buildId: string; manifest: string }): void {
-    this.db
-      .prepare(
-        `INSERT INTO build_manifests (build_id, manifest_json)
-         SELECT @buildId, @manifest
-          WHERE NOT EXISTS (SELECT 1 FROM build_manifests WHERE build_id = @buildId)`,
-      )
-      .run({ buildId, manifest });
-  }
-
   buildManifest(buildId: string): string | undefined {
     const row = this.db
       .prepare("SELECT manifest_json FROM build_manifests WHERE build_id = ?")
       .get(buildId) as { manifest_json: string } | undefined;
     return row?.manifest_json;
-  }
-
-  listManifestGaps(): ManifestGap[] {
-    return this.db
-      .prepare(
-        `SELECT builds.id AS buildId, build_files.sha256 AS manifestSha256
-           FROM builds
-           JOIN build_files ON build_files.build_id = builds.id AND build_files.path = 'manifest.json'
-          WHERE NOT EXISTS (SELECT 1 FROM build_manifests WHERE build_id = builds.id)
-          ORDER BY builds.rowid`,
-      )
-      .all() as ManifestGap[];
   }
 
   buildFiles(id: string): BuildFileRecord[] {
@@ -1056,7 +991,7 @@ export class SqliteStore implements Store {
   }
 
   private insertSnapshot(
-    keys: Pick<SnapshotGap, "pendingId" | "buildId">,
+    keys: Pick<BuildSnapshot, "pendingId" | "buildId">,
     snapshot: NewBuildSnapshot,
     createdAt: number,
   ): boolean {

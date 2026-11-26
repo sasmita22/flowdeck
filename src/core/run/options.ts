@@ -10,8 +10,6 @@ export const runChoicesSchema: z.ZodType<RunChoices> = z.discriminatedUnion("kin
 ]);
 
 export type RunOptions = {
-  inputs: Record<string, string>;
-  flags: Record<string, boolean>;
   auto: boolean;
 };
 
@@ -25,9 +23,7 @@ export const runChoices = (manifest: ManifestPart): RunChoices => ({
   automatic: manifest.nodes.some(skippable),
 });
 
-export const storedOptions = ({ inputs, flags, auto }: RunOptions): Record<string, unknown> => ({
-  ...inputs,
-  ...flags,
+export const storedOptions = ({ auto }: RunOptions): Record<string, unknown> => ({
   ...(auto ? { auto: true } : {}),
 });
 

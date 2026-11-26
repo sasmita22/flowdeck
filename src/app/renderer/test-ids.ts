@@ -112,7 +112,6 @@ export const pageTestIds = {
   buildingDelete: (pendingId: string) => `building-delete-${pendingId}`,
   runMenu: (runId: string) => `run-menu-${runId}`,
   runDelete: (runId: string) => `run-delete-${runId}`,
-  buildOld: (buildId: string) => `build-old-${buildId}`,
   buildKept: (buildId: string) => `build-kept-${buildId}`,
   buildPictureToggle: (id: string) => `build-picture-toggle-${id}`,
   buildPictureImage: (id: string) => `build-picture-image-${id}`,

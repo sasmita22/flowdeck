@@ -3244,7 +3244,6 @@ describe("Runner branch on a yes/no variable", () => {
     return {
       hash,
       prefix: lowered.prefix,
-      layout: lowered.layout,
       values: lowered.values,
       nodes: lowered.nodes,
       wires: lowered.wires,

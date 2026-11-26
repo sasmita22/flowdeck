@@ -16,7 +16,7 @@ import {
   type LibraryState,
 } from "../library-store.js";
 import { arrange, type NavState } from "../nav-store.js";
-import { selectKeptNotes, selectRunDisabled, selectRunHint, type RunState } from "../run-store.js";
+import { selectKeptNotes, selectRunDisabled, type RunState } from "../run-store.js";
 import { pageTestIds } from "../test-ids.js";
 import { BlueprintPicture } from "./blueprint-picture.js";
 import { BuildTree } from "./build-tree.js";
@@ -26,7 +26,7 @@ import { RunRow } from "./runs-page.js";
 const versionText = (card: Pick<BuildCard, "version">) =>
   card.version === null ? "" : `v${card.version}`;
 
-const neverRun = { old: false, run: null };
+const neverRun = { run: null };
 
 function useRunDisabled(run: StoreApi<RunState>, card: BuildCard | undefined) {
   return useStore(run, (state) => selectRunDisabled(state, card ?? neverRun));
@@ -226,7 +226,6 @@ function BuildFiles({
             className="fd-btn fd-btn-primary"
             data-testid={pageTestIds.buildDetailRun}
             disabled={blocked}
-            title={card === undefined ? undefined : (selectRunHint(card) ?? undefined)}
             onClick={() => void actions.runBuild(buildId)}
           >
             Run
@@ -343,7 +342,6 @@ function BuildCardView({
   actions: Actions;
 }) {
   const blocked = useRunDisabled(run, card);
-  const hint = selectRunHint(card);
   const interrupted = card.run?.status === "interrupted" ? card.run : null;
   const runGoing = card.run?.status === "running" || interrupted !== null;
   const resume = async (runId: string) => {
@@ -366,15 +364,6 @@ function BuildCardView({
             {versionText(card)}
           </span>
         </button>
-        {card.old && (
-          <span
-            className="fd-badge fd-badge-quiet"
-            data-testid={pageTestIds.buildOld(card.id)}
-            title={hint ?? undefined}
-          >
-            old
-          </span>
-        )}
         <ItemMenu
           run={run}
           menuKey={`build:${card.id}`}
@@ -392,14 +381,12 @@ function BuildCardView({
       </div>
       <div className="fd-card-meta">
         <span>Built {formatWhen(card.createdAt)}</span>
-        {hint !== null && <span>{hint}</span>}
       </div>
       <div className="fd-card-actions">
         <button
           className="fd-btn"
           data-testid={pageTestIds.buildRun(card.id)}
           disabled={blocked}
-          title={hint ?? undefined}
           onClick={() => void actions.runBuild(card.id)}
         >
           Run

@@ -1045,6 +1045,23 @@ describe("openDatabase", () => {
     });
   });
 
+  describe("migrating a database made by 001 to 023 to 024", () => {
+    it("leaves no build without a name", async () => {
+      const before = openDatabase({ path, migrationsDir: await stage("before-024", "024") });
+      before.exec(`
+        INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at)
+          VALUES ('b1', 'h1', NULL, '/repo', 'main', '{}', '/fd/builds/h1', 1);
+        INSERT INTO runs (id, build_dir, inputs, status, created_at, build_id)
+          VALUES ('r1', '/fd/builds/h1', '{}', 'done', 't', 'b1');
+      `);
+      before.close();
+
+      const db = open();
+
+      expect(db.prepare("SELECT count(*) FROM builds WHERE name IS NULL").pluck().get()).toBe(0);
+    });
+  });
+
   it("reports every migration applied on a database that did not exist before", () => {
     const { reports } = openReporting();
 

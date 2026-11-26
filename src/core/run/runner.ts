@@ -1,5 +1,5 @@
 import type { Manifest, ManifestNode } from "../compiler/lower.js";
-import type { VerifyFileSystem, VerifyLayout } from "../compiler/verify.js";
+import type { VerifyFileSystem } from "../compiler/verify.js";
 import { pieceOf } from "../compiler/pieces.js";
 import { hasTemplate, templatePath } from "../compiler/handoff-templates.js";
 import { handoffPairs } from "../flow/handoff.js";
@@ -75,7 +75,6 @@ export type RunnableManifest = Required<Pick<Manifest, "nodes">> &
   Partial<Pick<Manifest, "wires" | "values">> & {
     hash: string;
     prefix: string;
-    layout?: VerifyLayout;
   };
 
 export type RunnerDeps = {

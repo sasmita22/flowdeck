@@ -26,7 +26,7 @@ const manifestText = (flow: Flow): string => {
   return canonicalJson({ ...(JSON.parse(manifest.content) as object), hash });
 };
 
-const legacyText = (flow: Flow): string => {
+const textWithoutLayout = (flow: Flow): string => {
   const manifest: Partial<Manifest> = JSON.parse(manifestText(flow)) as Manifest;
   delete manifest.layout;
   return canonicalJson(manifest);
@@ -34,29 +34,25 @@ const legacyText = (flow: Flow): string => {
 
 const gates = () => onMainFlow([gate("write"), gate("check")], [thenWire("write", "check")]);
 
-const named = { hash, name: "fix-login" };
-const legacy = { hash, name: null };
-
 describe("parseManifest", () => {
-  it("reads a named build's manifest with its session's prefix and the workspace layout", () => {
-    const manifest = parseManifest(manifestText(gates()), named);
+  it("reads a build's manifest with its session's prefix", () => {
+    const manifest = parseManifest(manifestText(gates()));
     const [session] = sessionContainersOf(manifest);
 
     expect(session?.nodes.map((node) => node.id)).toEqual(["start", "write", "check", "stop"]);
     expect(session?.prefix).toBe("fix-login-main");
-    expect(manifest.layout).toBe("workspace");
   });
 
-  it("reads an old build in the legacy layout", () => {
-    expect(parseManifest(legacyText(gates()), legacy).layout).toBe("legacy");
+  it("adds no layout the manifest does not hold", () => {
+    expect(parseManifest(textWithoutLayout(gates()))).not.toHaveProperty("layout");
   });
 
   it("refuses text that is not JSON", () => {
-    expect(() => parseManifest("{not json", named)).toThrow();
+    expect(() => parseManifest("{not json")).toThrow();
   });
 
   it("refuses JSON that is not a manifest", () => {
-    expect(() => parseManifest(JSON.stringify({ version: 1, hash }), named)).toThrow();
+    expect(() => parseManifest(JSON.stringify({ version: 1, hash }))).toThrow();
   });
 });
 
@@ -66,7 +62,7 @@ describe("stageSourcesOf", () => {
       [agent("plan"), loop("review"), agent("fix", { parent: "review" }), forEach("each")],
       [thenWire("plan", "review"), thenWire("review", "each")],
     );
-    const manifest = parseManifest(manifestText(flow), named);
+    const manifest = parseManifest(manifestText(flow));
 
     const [workspace, main, ...rest] = stageSourcesOf(manifest);
 
@@ -144,7 +140,7 @@ const manifestWith = (containers: Record<string, unknown>[], extra: Record<strin
 
 describe("parseManifest with containers", () => {
   it("keeps every container of a two-session build that has no top-level session", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]), named);
+    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]));
 
     expect(manifest.containers?.map((container) => container.slug)).toEqual([
       "workspace",
@@ -155,13 +151,13 @@ describe("parseManifest with containers", () => {
   });
 
   it("reads a build with no session container", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry()]), named);
+    const manifest = parseManifest(manifestWith([workspaceEntry()]));
 
     expect(manifest.containers?.map((container) => container.kind)).toEqual(["workspace"]);
   });
 
   it("keeps each session container's repo, base, branch, worktree and model", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]), named);
+    const manifest = parseManifest(manifestWith([workspaceEntry(), android, ios]));
 
     expect(
       manifest.containers?.map(({ slug, repo, base, branch, worktree, model }) => ({
@@ -207,14 +203,13 @@ describe("parseManifest with connections", () => {
   it("keeps the connected slug pairs", () => {
     const manifest = parseManifest(
       manifestWith(containers(), { connections: [["android", "ios"]] }),
-      named,
     );
 
     expect(manifest.connections).toEqual([["android", "ios"]]);
   });
 
   it("reads a manifest without connections as before, with no connections key", () => {
-    expect(parseManifest(manifestWith(containers()), named)).not.toHaveProperty("connections");
+    expect(parseManifest(manifestWith(containers()))).not.toHaveProperty("connections");
   });
 
   it.each([
@@ -222,14 +217,14 @@ describe("parseManifest with connections", () => {
     ["a pair with a number", [["android", 2]]],
     ["a list that is not pairs", ["android"]],
   ])("refuses connections with %s", (_label, connections) => {
-    expect(() => parseManifest(manifestWith(containers(), { connections }), named)).toThrow();
+    expect(() => parseManifest(manifestWith(containers(), { connections }))).toThrow();
   });
 });
 
 describe("stageSourcesOf with containers", () => {
   it("gives one group per container, workspace first, each with its name, its own nodes and Then wires", () => {
     const workspace = workspaceEntry([{ id: "workspace-plan", type: "agent", label: "Plan" }]);
-    const manifest = parseManifest(manifestWith([workspace, android, ios]), named);
+    const manifest = parseManifest(manifestWith([workspace, android, ios]));
 
     const groups = stageSourcesOf(manifest);
 
@@ -268,7 +263,7 @@ describe("stageSourcesOf with containers", () => {
   });
 
   it("puts the workspace group first even when the workspace is not listed first", () => {
-    const manifest = parseManifest(manifestWith([android, workspaceEntry(), ios]), named);
+    const manifest = parseManifest(manifestWith([android, workspaceEntry(), ios]));
 
     expect(stageSourcesOf(manifest).map((group) => group.name)).toEqual([
       "workspace",
@@ -284,7 +279,7 @@ describe("workspaceOf", () => {
       ...workspaceEntry([{ id: "workspace-plan", type: "agent", label: "Plan" }]),
       model: "opus",
     };
-    const manifest = parseManifest(manifestWith([android, workspace, ios]), named);
+    const manifest = parseManifest(manifestWith([android, workspace, ios]));
 
     const view = workspaceOf(manifest);
 
@@ -301,7 +296,7 @@ describe("workspaceOf", () => {
 
 describe("sessionContainersOf", () => {
   it("gives the session containers in the manifest's order, without the workspace", () => {
-    const manifest = parseManifest(manifestWith([workspaceEntry(), ios, android]), named);
+    const manifest = parseManifest(manifestWith([workspaceEntry(), ios, android]));
 
     expect(sessionContainersOf(manifest).map((container) => container.slug)).toEqual([
       "ios",
@@ -310,6 +305,6 @@ describe("sessionContainersOf", () => {
   });
 
   it("gives none for a build with only the workspace", () => {
-    expect(sessionContainersOf(parseManifest(manifestWith([workspaceEntry()]), named))).toEqual([]);
+    expect(sessionContainersOf(parseManifest(manifestWith([workspaceEntry()])))).toEqual([]);
   });
 });

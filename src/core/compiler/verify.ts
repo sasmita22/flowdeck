@@ -41,8 +41,6 @@ const manifestProblem = (problem: VerifyProblem["problem"]): VerifyResult => ({
 const byPath = (a: VerifyProblem, b: VerifyProblem) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
-export type VerifyLayout = "workspace" | "legacy";
-
 const pluginFolder = "plugin";
 export const workspaceRootFiles = [manifestPath];
 const containerRootFiles = ["CLAUDE.md", "settings.json"];
@@ -65,11 +63,6 @@ async function readOrMissing(fs: VerifyFileSystem, path: string): Promise<string
     if (hasCode(error, "ENOENT")) return undefined;
     throw error;
   }
-}
-
-async function legacyListing(dir: string, fs: VerifyFileSystem): Promise<Listing | undefined> {
-  const paths = await listOrMissing(fs, dir);
-  return paths === undefined ? undefined : { paths, read: (path) => fs.readFile(`${dir}/${path}`) };
 }
 
 const containerRoots = async (fs: VerifyFileSystem, dir: string): Promise<string[]> => [
@@ -108,13 +101,9 @@ export async function workspaceListing(
 export async function verify(
   buildDir: string,
   expectedHash: string,
-  layout: VerifyLayout,
   deps: { fs: VerifyFileSystem },
 ): Promise<VerifyResult> {
-  const listing =
-    layout === "workspace"
-      ? await workspaceListing(deps.fs, buildDir, workspaceRootFiles)
-      : await legacyListing(buildDir, deps.fs);
+  const listing = await workspaceListing(deps.fs, buildDir, workspaceRootFiles);
   if (listing === undefined) return manifestProblem("missing");
   const listed = listing.paths;
   if (!listed.includes(manifestPath)) return manifestProblem("missing");

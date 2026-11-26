@@ -133,20 +133,10 @@ export type BuildSnapshot = NewBuildSnapshot & { pendingId: string | null; build
 
 export type SnapshotKey = { pendingId: string } | { buildId: string };
 
-export type SnapshotGap = {
-  pendingId: string | null;
-  buildId: string | null;
-  flowId: string | null;
-  version: number | null;
-  blueprintName: string | null;
-};
-
 export type NewPendingBuild = Pick<
   PendingBuild,
   "flowId" | "version" | "name" | "origin" | "startedAt"
 > & { snapshot?: NewBuildSnapshot };
-
-export type ManifestGap = { buildId: string; manifestSha256: string };
 
 export type PendingBuildStart =
   { kind: "started"; pendingId: string } | { kind: "busy"; reason: "name" };
@@ -217,12 +207,5 @@ export interface Store {
   appendBuildActivity(pendingId: string, entry: ActivityEntry): void;
   buildActivity(pendingId: string): ActivityEntry[];
   buildSnapshot(key: SnapshotKey): BuildSnapshot | null;
-  listSnapshotGaps(): SnapshotGap[];
-  addSnapshotIfMissing(
-    gap: Pick<SnapshotGap, "pendingId" | "buildId">,
-    snapshot: NewBuildSnapshot,
-  ): boolean;
-  storeManifest(manifest: { buildId: string; manifest: string }): void;
   buildManifest(buildId: string): string | undefined;
-  listManifestGaps(): ManifestGap[];
 }
