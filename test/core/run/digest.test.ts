@@ -195,7 +195,7 @@ const digestInput = (
     groups,
   }: {
     activity?: ActivityEntry[];
-    sources?: StageSources | null;
+    sources?: StageSources;
     status?: RunStatus;
     endedAt?: string | null;
     questions?: Record<string, string>;
@@ -205,11 +205,7 @@ const digestInput = (
 ): DigestInput => ({
   ...(repoStates === undefined ? {} : { repoStates }),
   build,
-  stages:
-    groups ??
-    (sources === null
-      ? null
-      : [{ name: sources.session.name, nodes: sources.nodes, wires: sources.wires }]),
+  stages: groups ?? [{ name: sources.session.name, nodes: sources.nodes, wires: sources.wires }],
   events,
   activity,
   cost: costReport({
@@ -479,22 +475,6 @@ describe("runDigest", () => {
     );
   });
 
-  it("takes the stages from the events' node ids, in order, when there is no stored manifest", () => {
-    const events = stored([
-      ["node-alpha-17", 1, { kind: "sent" }],
-      ["node-alpha-17", 5, { kind: "done" }],
-      ["node-beta-42", 6, { kind: "sent" }],
-      ["node-beta-42", 9, { kind: "failed", payload: { message: "node-beta-42 failed: no disk" } }],
-    ]);
-
-    const { text } = runDigest(digestInput(events, { sources: null, activity: [] }));
-
-    expect(text).toContain("node-alpha-17");
-    expect(text).toContain("node-beta-42");
-    expect(text.indexOf("node-alpha-17")).toBeLessThan(text.indexOf("node-beta-42"));
-    expect(text).toContain(plainReason("node-beta-42", "node-beta-42 failed: no disk"));
-  });
-
   it("gives a run stopped before any stage started a short digest with its facts, status and time", () => {
     const result = runDigest(digestInput([], { status: "stopped", activity: [], endedAt: iso(3) }));
 
@@ -610,7 +590,7 @@ describe("runDigest", () => {
     };
 
     const { header, text } = runDigest({
-      ...digestInput([], { sources: null, activity: [], status: "stopped", endedAt: null }),
+      ...digestInput([], { activity: [], status: "stopped", endedAt: null }),
       build: bare,
     });
 
@@ -628,7 +608,6 @@ describe("runDigest", () => {
     expect(text).toContain("Branch: none\n");
     expect(text).toContain("Variables: none\n");
     expect(text).toContain("Ended: not recorded\n");
-    expect(text).not.toContain("Session:");
   });
 
   it("names each kind of gate decision, with the reason a rejection gave", () => {

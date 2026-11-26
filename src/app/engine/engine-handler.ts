@@ -1767,7 +1767,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const manifest = manifestOf(record);
     const own = [
       record.session.cwd,
-      ...(manifest === undefined ? [] : ownFolders(manifest)),
+      ...ownFolders(manifest),
       ...(record.repo === null ? [] : [record.repo]),
     ];
     const skipped = new Set(own);
@@ -1804,7 +1804,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       const record = runs.findRun(runId);
       if (record === undefined) return;
       const manifest = manifestOf(record);
-      const folder = (manifest === undefined ? [] : ownFolders(manifest))[0] ?? record.session.cwd;
+      const folder = ownFolders(manifest)[0] ?? record.session.cwd;
       const state = await readRepoState(folder);
       const otherRepos = await otherReposOf(runs, record).catch((error: unknown) => {
         console.log(`engine: run ${runId} other repos not read (${messageOf(error)})`);
@@ -1915,10 +1915,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return runChoices(workspaceOf(loaded.build));
   };
 
-  const manifestOf = (run: RunRecord): ParsedManifest | undefined =>
-    run.manifestJson === null || run.buildHash === null
-      ? undefined
-      : parseManifest(run.manifestJson);
+  const manifestOf = (run: RunRecord): ParsedManifest => parseManifest(run.manifestJson);
 
   type StoredNode = ManifestContainer["nodes"][number];
 
@@ -1957,11 +1954,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       }),
     );
 
-  const digestOf = (runs: Store, runId: string): RunDigest | undefined => {
+  const digestOf = (runs: Store, runId: string): RunDigest => {
     const record = runs.findRun(runId);
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
-    if (record.buildHash === null) return undefined;
     const manifest = manifestOf(record);
     const events = runs.events(runId);
     const last = events.at(-1);
@@ -1977,17 +1973,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           branch: record.branch,
           values: record.buildValues,
         },
-        stages: manifest === undefined ? null : digestStagesOf(manifest),
+        stages: digestStagesOf(manifest),
         events,
         activity: runs.activity(runId),
         cost: costReport({ nodeIds: record.nodeIds, events, pending: [], now }),
         createdAt: summary.createdAt,
         endedAt: summary.endedAt,
         status: record.status,
-        questions: manifest === undefined ? {} : questionsOf(manifest),
+        questions: questionsOf(manifest),
         repoStates: runs.repoStates(runId),
       },
-      manifest === undefined ? undefined : sessionOverlayOf(sessionGroupsOf(manifest), events),
+      sessionOverlayOf(sessionGroupsOf(manifest), events),
     );
   };
 
@@ -2012,7 +2008,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     narrating.set(runId, (narrating.get(runId) ?? 0) + 1);
     try {
       const digest = digestOf(runs, runId);
-      if (digest === undefined) throw new Error("its build is not stored");
       const seen = runs.events(runId).length;
       const told = await narrator.narrate(digest.text, controller.signal);
       if (runs.findRun(runId)?.status !== runStatus || runs.events(runId).length !== seen) {
@@ -2070,7 +2065,6 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     usage: UsageReader,
   ) => {
     const manifest = manifestOf(run);
-    if (manifest === undefined) throw new Error("manifest.json: missing");
     const sessions = runs.runSessions(run.id).filter((row) => row.parent !== null);
     const charged = [
       { container: workspaceOf(manifest), session: run.session },
@@ -2103,18 +2097,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return costReport({ nodeIds: record.nodeIds, events, pending, now });
   };
 
-  const runPipeline = async (
-    stores: EngineStores,
-    runId: string,
-  ): Promise<PipelineGroup[] | null> => {
+  const runPipeline = async (stores: EngineStores, runId: string): Promise<PipelineGroup[]> => {
     const { runs } = stores;
     const record = runs.findRun(runId);
     const summary = runs.findRunSummary(runId);
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
-    const manifest = manifestOf(record);
-    if (manifest === undefined) return null;
     return pipelineOf(
-      stageSourcesOf(manifest),
+      stageSourcesOf(manifestOf(record)),
       runs.events(runId),
       [],
       await runCost(stores, runId),
@@ -2351,10 +2340,9 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const known = runShapes.get(runId);
     if (known !== undefined) return known;
     const record = runs.findRun(runId);
-    const manifest = record === undefined ? undefined : manifestOf(record);
     const shape = {
       nodeIds: record?.nodeIds ?? [],
-      groups: manifest === undefined ? [] : sessionGroupsOf(manifest),
+      groups: record === undefined ? [] : sessionGroupsOf(manifestOf(record)),
     };
     runShapes.set(runId, shape);
     return shape;
@@ -2392,7 +2380,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (record === undefined || summary === undefined) throw new Error(`No run ${runId}`);
     const listedRun = listed(summary);
     const manifest = manifestOf(record);
-    const groups = manifest === undefined ? [] : sessionGroupsOf(manifest);
+    const groups = sessionGroupsOf(manifest);
     const snapshot = runSnapshot(
       {
         runId,
@@ -2402,31 +2390,27 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       },
       groups,
     );
-    const run = groups.length === 0 ? listedRun : { ...listedRun, doneCount: doneIn(snapshot) };
+    const run = { ...listedRun, doneCount: doneIn(snapshot) };
     const digest = digestOf(runs, runId);
     const written = runs.latestRunStory(runId);
     return {
       ...(run.status === "interrupted" ? { note: notes.get(runId) ?? closedNote } : {}),
-      ...(digest === undefined
-        ? {}
-        : {
-            story: {
-              header: digest.header,
-              digest: digest.text,
-              written:
-                written === undefined
-                  ? null
-                  : {
-                      text: written.text,
-                      at: written.at,
-                      runStatus: written.runStatus,
-                      cost: written.cost,
-                    },
-            },
-          }),
+      story: {
+        header: digest.header,
+        digest: digest.text,
+        written:
+          written === undefined
+            ? null
+            : {
+                text: written.text,
+                at: written.at,
+                runStatus: written.runStatus,
+                cost: written.cost,
+              },
+      },
       run,
       name: run.buildName,
-      stages: manifest === undefined ? null : flatStages(stageSourcesOf(manifest).slice(0, 1)),
+      stages: flatStages(stageSourcesOf(manifest).slice(0, 1)),
       snapshot,
       activity: runs.activity(runId),
     };

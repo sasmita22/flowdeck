@@ -65,14 +65,14 @@ type RunRow = {
   claude_session_id: string;
   build_id: string | null;
   build_name: string | null;
-  build_hash: string | null;
+  build_hash: string;
   blueprint_name: string | null;
   flow_id: string | null;
   flow_version: number | null;
   repo: string | null;
   branch: string | null;
   build_values: string | null;
-  manifest_json: string | null;
+  manifest_json: string;
 };
 
 type RunSummaryRow = {

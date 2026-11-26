@@ -20,7 +20,7 @@ const summary = {
 const loaded = {
   run: summary,
   name: "fix-login",
-  stages: null,
+  stages: { session: { name: "" }, nodes: [], wires: [] },
   snapshot: { runId: "run-1", status: "failed", nodes: { s1: "done", s2: "failed" } },
   activity: [],
 };

@@ -164,7 +164,6 @@ export const pageTestIds = {
     `run-stage-reply-${stageKey(runId, nodeId, round)}`,
   runRoundCost: (runId: string, containerId: string, round: number) =>
     `run-round-cost-${runId}-${containerId}-${round}`,
-  runStagesNotRecorded: "run-stages-not-recorded",
   runStory: "run-story",
   runPageMenu: "run-page-menu",
   runPageDelete: "run-page-delete",

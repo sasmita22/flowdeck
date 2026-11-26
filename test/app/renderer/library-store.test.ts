@@ -364,7 +364,7 @@ describe("an interrupted run", () => {
     bridge.loadRun.mockResolvedValueOnce({
       run: { ...runs[1], status: "interrupted", endedAt: null },
       name: "Report",
-      stages: null,
+      stages: { session: { name: "" }, nodes: [], wires: [] },
       snapshot: { runId: "run-1", status: "interrupted", nodes: {} },
       activity: [],
       note,
@@ -374,7 +374,6 @@ describe("an interrupted run", () => {
     await library.getState().openRun("run-1");
 
     expect(library.getState().viewedRun?.note).toBe(note);
-    expect(library.getState().viewedRun).toHaveProperty("stages", null);
   });
 });
 

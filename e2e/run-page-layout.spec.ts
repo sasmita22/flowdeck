@@ -11,6 +11,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { endSessionsOfHome } from "./own-sessions.js";
+import { manifestOf } from "./stale-manifest.js";
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -37,14 +38,28 @@ test.afterEach(async () => {
   }
 });
 
-const seedInterruptedRunWithoutStages = (): string => {
-  seedBlueprint(home, "Alpha", flow([agent("p1")], []), repo.path);
+const seedInterruptedRun = (): string => {
+  const blueprint = flow([agent("p1")], []);
+  const source = seedBlueprint(home, "Alpha", blueprint, repo.path);
   const db = openDatabase({ path: join(home, "flowdeck.db") });
   try {
-    db.prepare(
-      "INSERT INTO builds (id, hash, name, repo, dir, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run("stale-build", "stalehash", "stale", repo.path, "/nowhere", 1);
-    return new SqliteStore({ db }).createRun({
+    const runs = new SqliteStore({ db });
+    runs.recordBuild({
+      id: "stale-build",
+      hash: "stalehash",
+      name: "stale",
+      repo: repo.path,
+      base: "main",
+      branch: "flowdeck/stale",
+      branchCreated: true,
+      values: {},
+      dir: "/nowhere",
+      source,
+      files: [],
+      nodes: [],
+      manifest: manifestOf(blueprint, "stalehash"),
+    });
+    return runs.createRun({
       buildDir: "/nowhere",
       inputs: {},
       nodeIds: ["p1"],
@@ -66,8 +81,8 @@ const boxOf = async (name: string, locator: Locator): Promise<[string, Box]> => 
 const overlaps = (a: Box, b: Box) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-test("An interrupted run with no recorded stages shows its note clear of the Story panel, the not-recorded line and the picture button", async () => {
-  const runId = seedInterruptedRunWithoutStages();
+test("An interrupted run shows its note clear of the Story panel, its first stage and the picture button", async () => {
+  const runId = seedInterruptedRun();
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
   await expect(window.getByTestId(controlTestIds.build)).toBeVisible();
@@ -80,7 +95,7 @@ test("An interrupted run with no recorded stages shows its note clear of the Sto
   const [, note] = await boxOf("interrupted note", window.getByTestId(pageTestIds.runPageNote));
   const others = [
     await boxOf("Story panel", window.getByTestId(pageTestIds.runStory)),
-    await boxOf("not-recorded line", window.getByTestId(pageTestIds.runStagesNotRecorded)),
+    await boxOf("first stage", window.getByTestId(pageTestIds.runStage(runId, "p1"))),
     await boxOf(
       "picture button",
       window.getByTestId(pageTestIds.buildPictureToggle("stale-build")),

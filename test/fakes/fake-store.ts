@@ -39,8 +39,6 @@ import type {
   StoredEvent,
 } from "../../src/ports/store.js";
 
-type RecordedBuild = Omit<NewBuild, "manifest"> & { manifest?: string };
-
 const copy = <T>(value: T): T => structuredClone(value);
 
 const stateMoving = new Set(stateMovingKinds);
@@ -64,7 +62,7 @@ export class FakeStore implements Store {
   private readonly nodeSessionsByRun = new Map<string, Record<string, string>>();
   private readonly nodeEntries: { runId: string; nodeId: string }[] = [];
   private readonly stored: { runId: string; event: StoredEvent }[] = [];
-  private readonly buildRecords: RecordedBuild[] = [];
+  private readonly buildRecords: NewBuild[] = [];
   private readonly manifests = new Map<string, string>();
   private readonly worktrees = new Map<string, BuildWorktree[]>();
   private readonly buildCreatedAt = new Map<string, number>();
@@ -194,13 +192,13 @@ export class FakeStore implements Store {
     const built = this.buildRecords.find((known) => known.id === buildId);
     return {
       buildName: built?.name ?? null,
-      buildHash: built?.hash ?? null,
+      buildHash: built?.hash ?? "",
       blueprintName: this.snapshotOf(buildId)?.blueprintName ?? null,
       ...(built?.source === undefined ? {} : { source: copy(built.source) }),
       repo: built?.repo ?? null,
       branch: built?.branch ?? null,
       buildValues: built === undefined ? null : copy(built.values),
-      manifestJson: this.manifests.get(buildId) ?? null,
+      manifestJson: this.manifests.get(buildId) ?? "",
     };
   }
 
@@ -261,16 +259,11 @@ export class FakeStore implements Store {
     return this.stored.filter((entry) => entry.runId === runId).map(({ event }) => copy(event));
   }
 
-  builds(): RecordedBuild[] {
+  builds(): NewBuild[] {
     return copy(this.buildRecords);
   }
 
   recordBuild(build: NewBuild): void {
-    this.recordBuildWithoutManifest(build);
-    this.manifests.set(build.id, build.manifest);
-  }
-
-  recordBuildWithoutManifest(build: RecordedBuild): void {
     if (this.buildRecords.some((known) => known.id === build.id)) {
       throw new Error(`FakeStore: builds are locked (${build.id} is recorded)`);
     }
@@ -279,6 +272,7 @@ export class FakeStore implements Store {
     }
     this.buildRecords.push(copy(build));
     this.buildCreatedAt.set(build.id, this.buildCreatedAt.size + 1);
+    this.manifests.set(build.id, build.manifest);
   }
 
   findBuild(id: string): BuildRecord | undefined {

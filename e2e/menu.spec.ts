@@ -24,12 +24,10 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, buildIdNamed, runIdOf, waitForBuilt } from "./build-run.js";
+import { manifestOf } from "./stale-manifest.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
-import { emit } from "../src/core/compiler/emit.js";
-import { lower } from "../src/core/compiler/lower.js";
-import type { Flow } from "../src/core/flow/schema.js";
 
 const secret = "xoxb-fd59-never-shown";
 
@@ -111,19 +109,6 @@ const saveNow = async (window: Page) => {
 };
 
 const readout = (window: Page) => window.getByTestId(readoutTestIds.flow);
-
-const manifestOf = (input: Flow, hash: string): string => {
-  const files = emit(lower(input, { name: "stale", values: {} }), {
-    repo: "/nowhere",
-    base: "main",
-    branch: "flowdeck/stale",
-    branchCreated: true,
-    workspace: "/nowhere",
-  });
-  const manifest = files.find((file) => file.path === "manifest.json");
-  if (manifest === undefined) throw new Error("emit wrote no manifest.json");
-  return JSON.stringify({ ...(JSON.parse(manifest.content) as object), hash });
-};
 
 const byPrefix = (window: Page, prefix: string, text?: string): Locator => {
   const all = window.locator(`[data-testid^="${prefix}"]`);
