@@ -17,6 +17,27 @@ import { testDisplayFlags, withWindowMode } from "./window-mode.js";
 
 const stepSchemas = {
   click: z.object({ type: z.literal("click"), testid: z.string().min(1) }),
+  "click-at": z.strictObject({
+    type: z.literal("click-at"),
+    testid: z.string().min(1),
+    position: z.strictObject({ x: z.number().min(0), y: z.number().min(0) }),
+  }),
+  select: z
+    .strictObject({
+      type: z.literal("select"),
+      testid: z.string().min(1),
+      value: z.string().optional(),
+      label: z.string().optional(),
+    })
+    .refine((step) => (step.value === undefined) !== (step.label === undefined), {
+      error: "give exactly one of value or label",
+    })
+    .pipe(
+      z.union([
+        z.strictObject({ type: z.literal("select"), testid: z.string().min(1), value: z.string() }),
+        z.strictObject({ type: z.literal("select"), testid: z.string().min(1), label: z.string() }),
+      ]),
+    ),
   "right-click": z.object({ type: z.literal("right-click"), testid: z.string().min(1) }),
   type: z.object({ type: z.literal("type"), testid: z.string().min(1), text: z.string() }),
   "wait-for-text": z.object({
@@ -49,6 +70,8 @@ export type Step = z.infer<(typeof stepSchemas)[keyof typeof stepSchemas]>;
 export interface DrivePage {
   click(testid: string): Promise<void>;
   rightClick(testid: string): Promise<void>;
+  clickAt(testid: string, position: Point): Promise<void>;
+  select(testid: string, option: SelectOption): Promise<void>;
   waitFor(testid: string, timeoutMs: number): Promise<void>;
   type(testid: string, text: string): Promise<void>;
   waitForText(text: string, timeoutMs: number): Promise<void>;
@@ -101,6 +124,13 @@ async function runPageStep(step: PageStep, index: number, page: DrivePage, outDi
       return page.click(step.testid);
     case "right-click":
       return page.rightClick(step.testid);
+    case "click-at":
+      return page.clickAt(step.testid, step.position);
+    case "select":
+      return page.select(
+        step.testid,
+        "value" in step ? { value: step.value } : { label: step.label },
+      );
     case "type":
       return page.type(step.testid, step.text);
     case "wait-for-text":
@@ -158,10 +188,52 @@ async function boxOf(page: Page, testid: string) {
   return box;
 }
 
-export function playwrightPage(page: Page): DrivePage {
+type SelectOption = { value: string } | { label: string };
+
+const defaultOptionWaitMs = 3_000;
+
+function readOptions(select: ReturnType<Page["getByTestId"]>) {
+  return select.locator("option").evaluateAll((elements) =>
+    elements.map((element) => {
+      const { value, label } = element as unknown as { value: string; label: string };
+      return { value, label };
+    }),
+  );
+}
+
+async function selectOption(
+  page: Page,
+  testid: string,
+  option: SelectOption,
+  optionWaitMs: number,
+) {
+  const select = page.getByTestId(testid);
+  await select.waitFor();
+  const [field, wanted] =
+    "value" in option ? (["value", option.value] as const) : (["label", option.label] as const);
+  const deadline = Date.now() + optionWaitMs;
+  let options = await readOptions(select);
+  while (!options.some((candidate) => candidate[field] === wanted) && Date.now() < deadline) {
+    await sleep(pollMs);
+    options = await readOptions(select);
+  }
+  if (options.length === 0) throw new Error(`${testid} has no options; is it a <select>?`);
+  if (!options.some((candidate) => candidate[field] === wanted)) {
+    const listed = options.map(({ value, label }) => `${value} "${label}"`).join(", ");
+    throw new Error(`${testid} has no option with ${field} "${wanted}" (options: ${listed})`);
+  }
+  await select.selectOption(option);
+}
+
+export function playwrightPage(
+  page: Page,
+  { optionWaitMs = defaultOptionWaitMs }: { optionWaitMs?: number } = {},
+): DrivePage {
   return {
     click: (testid) => page.getByTestId(testid).click(),
     rightClick: (testid) => page.getByTestId(testid).click({ button: "right" }),
+    clickAt: (testid, position) => page.getByTestId(testid).click({ position }),
+    select: (testid, option) => selectOption(page, testid, option, optionWaitMs),
     waitFor: (testid, timeoutMs) => page.getByTestId(testid).waitFor({ timeout: timeoutMs }),
     type: (testid, text) => page.getByTestId(testid).fill(text),
     waitForText: (text, timeoutMs) => page.getByText(text).first().waitFor({ timeout: timeoutMs }),
