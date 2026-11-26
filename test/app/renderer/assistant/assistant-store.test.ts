@@ -25,9 +25,18 @@ const setup = async (options: { saved?: boolean; saveReply?: SaveReply } = {}) =
     setDirty: vi.fn<(dirty: boolean) => void>(),
     onCloseRequest: vi.fn(() => () => {}),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
+    onRunQuitRequest: vi.fn(() => () => {}),
+    answerRunQuit: vi.fn<(answer: "keep" | "stop" | "cancel") => void>(),
   } satisfies Pick<
     FlowdeckBridge,
-    "saveFlow" | "openFlow" | "renameFlow" | "setDirty" | "onCloseRequest" | "answerClose"
+    | "saveFlow"
+    | "openFlow"
+    | "renameFlow"
+    | "setDirty"
+    | "onCloseRequest"
+    | "answerClose"
+    | "onRunQuitRequest"
+    | "answerRunQuit"
   >;
   const bridge = {
     startBlueprintSession: vi.fn<(payload: { flowId: string }) => Promise<unknown>>(

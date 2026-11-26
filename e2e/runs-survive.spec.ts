@@ -15,6 +15,7 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
+import { clickToQuit } from "./quit.js";
 import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
 import { killRunSessions } from "./run-sessions.js";
 
@@ -51,19 +52,11 @@ const launch = async (env: Record<string, string> = {}) => {
   return launched.window;
 };
 
-const exited = (app: LaunchedApp) =>
-  new Promise<void>((resolve) => {
-    const proc = app.app.process();
-    if (proc.exitCode !== null || proc.signalCode !== null) resolve();
-    else proc.once("exit", () => resolve());
-  });
-
 const quit = async () => {
   const current = launched;
   if (current === undefined) return;
-  const gone = exited(current);
   await current.app.evaluate(({ app }) => app.quit());
-  await gone;
+  await clickToQuit(current, pageTestIds.runQuitKeep);
   launched = undefined;
   await current.close();
 };

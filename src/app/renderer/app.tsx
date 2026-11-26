@@ -26,6 +26,7 @@ import { EditorPage } from "./pages/editor-page.js";
 import { RunPage } from "./pages/run-page.js";
 import { RunsPage } from "./pages/runs-page.js";
 import { RunDialog } from "./run-dialog.js";
+import { RunQuitPrompt } from "./run-quit-prompt.js";
 import { selectLatestSnapshot, selectRunSummary, type RunState } from "./run-store.js";
 import { SavePrompt } from "./save-prompt.js";
 import type { SaveState } from "./save-store.js";
@@ -342,6 +343,7 @@ export function App(stores: AppStores) {
         actions={stores.actions}
       />
       <ClosePrompt store={stores.save} />
+      <RunQuitPrompt store={stores.save} />
       <LeavePrompt store={stores.save} />
       <SavePrompt store={stores.save} />
     </main>

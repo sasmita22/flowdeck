@@ -13,6 +13,7 @@ import {
   bridgeChannels,
   engineCalls,
   type CloseAnswer,
+  type RunQuitAnswer,
   type StoreStatus,
 } from "../preload/bridge.js";
 import { createActivityRelay } from "./activity.js";
@@ -23,6 +24,7 @@ import { folderPickerHandler } from "./folder-picker.js";
 import { resolveFlowdeckHome } from "./flowdeck-home.js";
 import { loginPath } from "./login-path.js";
 import { createTerminal } from "./pty.js";
+import { createRunQuitGuard } from "./run-quit-guard.js";
 import { createRunRelay, stopEngine } from "./run.js";
 import { createToolRelay } from "./tool-relay.js";
 import { answerWait, createWaitRelay } from "./wait.js";
@@ -230,7 +232,10 @@ async function wireToolRelay(
   return relay;
 }
 
-function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
+const isRunQuitAnswer = (answer: unknown): answer is RunQuitAnswer =>
+  answer === "keep" || answer === "stop" || answer === "cancel";
+
+function guardClose(window: BrowserWindow, windowGuard: WindowGuard, client: EngineClient) {
   const guard = createCloseGuard({
     requestClose: () => window.webContents.send(bridgeChannels.closeRequest),
     closeWindow: () => window.close(),
@@ -243,9 +248,25 @@ function guardClose(window: BrowserWindow, windowGuard: WindowGuard) {
     bridgeChannels.closeAnswer,
     windowGuard.listen((answer: CloseAnswer) => guard.answer(answer)),
   );
+  const runQuit = createRunQuitGuard({
+    goingRuns: async () => ((await client.request("going-runs")) as { runIds: string[] }).runIds,
+    stopGoingRuns: () => client.request("stop-going-runs", undefined, { timeoutMs: 60_000 }),
+    requestDialog: () => window.webContents.send(bridgeChannels.runQuitRequest),
+    closeWindow: () => window.close(),
+    cancelled: () => guard.clearConfirmed(),
+  });
+  ipcMain.on(
+    bridgeChannels.runQuitAnswer,
+    windowGuard.listen((answer: unknown) => {
+      if (isRunQuitAnswer(answer)) runQuit.answer(answer);
+    }),
+  );
   window.on("close", (event) => guard.onClose(event));
+  window.on("close", (event) => runQuit.onClose(event));
   window.webContents.on("did-navigate", () => guard.reset());
   window.webContents.on("render-process-gone", () => guard.reset());
+  window.webContents.on("did-navigate", () => runQuit.reset());
+  window.webContents.on("render-process-gone", () => runQuit.reset());
 }
 
 void app.whenReady().then(async () => {
@@ -364,7 +385,7 @@ void app.whenReady().then(async () => {
         app.exit(0);
       });
   });
-  guardClose(window, windowGuard);
+  guardClose(window, windowGuard, client);
 });
 
 app.on("window-all-closed", () => app.quit());

@@ -1786,6 +1786,27 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const stopRun = (runId: string) => halt(runId, { tell: true });
 
+  let startingUp: Promise<void> = Promise.resolve();
+
+  const goingRuns = async (): Promise<string[]> => {
+    const driven = [...active.values()].map((run) => run.runId);
+    const { runs } = storesOrThrow();
+    const left = runs.listRuns().filter((run) => run.status === "running" && !isActive(run.id));
+    const leftAlive: string[] = [];
+    for (const { id } of left) {
+      const record = runs.findRun(id);
+      if (record !== undefined && (await sessionAlive(record.session.tmuxName))) leftAlive.push(id);
+    }
+    return [...driven, ...leftAlive];
+  };
+
+  const stopGoingRuns = async (): Promise<{ runIds: string[] }> => {
+    await startingUp.catch(() => undefined);
+    const runIds = await goingRuns();
+    await Promise.allSettled(runIds.map((runId) => halt(runId, { tell: false })));
+    return { runIds };
+  };
+
   const stopForDelete = async (runId: string): Promise<void> => {
     await halt(runId, { tell: false });
   };
@@ -2423,22 +2444,27 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     await sweepBlueprintSessions();
   };
 
+  const startUp = async (): Promise<void> => {
+    await sweepBlueprintSessions().catch((error: unknown) => {
+      console.log(`engine: blueprint sweep error ${messageOf(error)}`);
+    });
+    await sweepAfterCleanStart().catch((error: unknown) => {
+      console.log(`engine: clean start sweep error ${messageOf(error)}`);
+    });
+    await backfillStoredManifests().catch((error: unknown) => {
+      console.log(`engine: manifest backfill error ${messageOf(error)}`);
+    });
+    await reattach();
+  };
+
   return {
     detach,
     reattach,
     sweepBlueprintSessions,
     shutDown,
-    async startUp() {
-      await sweepBlueprintSessions().catch((error: unknown) => {
-        console.log(`engine: blueprint sweep error ${messageOf(error)}`);
-      });
-      await sweepAfterCleanStart().catch((error: unknown) => {
-        console.log(`engine: clean start sweep error ${messageOf(error)}`);
-      });
-      await backfillStoredManifests().catch((error: unknown) => {
-        console.log(`engine: manifest backfill error ${messageOf(error)}`);
-      });
-      await reattach();
+    startUp() {
+      startingUp = startUp();
+      return startingUp;
     },
     async stop() {
       closeNarrations();
@@ -2634,6 +2660,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
           );
         case "blueprint-session-stop-all":
           return answer(request.id, () => stopAllBlueprintSessions(blueprintOrThrow().sessions));
+        case "going-runs":
+          return answer(request.id, async () => ({ runIds: await goingRuns() }));
+        case "stop-going-runs":
+          return answer(request.id, stopGoingRuns);
         case "answer-wait": {
           const parsed = waitAnswerSchema.safeParse(request.payload);
           if (!parsed.success) return { id: request.id, ok: false, error: parsed.error.message };

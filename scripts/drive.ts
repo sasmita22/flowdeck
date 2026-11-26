@@ -392,6 +392,25 @@ export async function launchOnCanvas(options: LaunchOptions): Promise<LaunchedAp
   return launched;
 }
 
+async function windowClosed(
+  window: Page,
+  requestClose: () => Promise<unknown>,
+  timeoutMs = defaultWaitMs,
+): Promise<boolean> {
+  if (window.isClosed()) return true;
+  const closed = window.waitForEvent("close", { timeout: timeoutMs }).then(() => true);
+  const prompted = window
+    .getByTestId("close-save")
+    .or(window.getByTestId(pageTestIds.runQuitDialog))
+    .waitFor({ state: "visible", timeout: timeoutMs })
+    .then(() => false);
+  const settled = Promise.any([closed, prompted]).catch(() => {
+    throw new Error(`the window neither closed nor showed a close prompt within ${timeoutMs} ms`);
+  });
+  const [, isClosed] = await Promise.all([requestClose(), settled]);
+  return isClosed;
+}
+
 export async function resolveHome(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<{ home: string; keep: boolean }> {
@@ -436,19 +455,12 @@ export async function drive(
   const session: DriveSession = {
     closeWindow: async () => {
       closeRequested = true;
-      return (
-        (await launched?.app.evaluate(
-          ({ BrowserWindow }) =>
-            new Promise<boolean>((resolve) => {
-              const window = BrowserWindow.getAllWindows()[0];
-              if (window === undefined || window.isDestroyed()) {
-                resolve(true);
-                return;
-              }
-              window.once("close", (event) => resolve(!event.defaultPrevented));
-              window.close();
-            }),
-        )) ?? true
+      if (launched === undefined) return true;
+      const { app } = launched;
+      return windowClosed(launched.window, () =>
+        app.evaluate(({ BrowserWindow }) => {
+          BrowserWindow.getAllWindows()[0]?.close();
+        }),
       );
     },
     relaunch: async () => {

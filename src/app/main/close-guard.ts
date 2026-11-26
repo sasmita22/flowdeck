@@ -5,6 +5,7 @@ export type CloseGuard = {
   onClose(event: { preventDefault(): void }): void;
   answer(answer: "close" | "cancel"): void;
   reset(): void;
+  clearConfirmed(): void;
 };
 
 export function createCloseGuard(options: CloseGuardOptions): CloseGuard {
@@ -32,6 +33,9 @@ export function createCloseGuard(options: CloseGuardOptions): CloseGuard {
     reset() {
       dirty = false;
       pending = false;
+    },
+    clearConfirmed() {
+      confirmed = false;
     },
   };
 }

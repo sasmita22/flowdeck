@@ -477,3 +477,30 @@ describe("preload blueprint tool wiring", () => {
     );
   });
 });
+
+describe("preload run quit wiring", () => {
+  let bridge: FlowdeckBridge;
+
+  beforeAll(async () => {
+    await import("../../../src/app/preload/preload.js");
+    bridge = electron.exposed["flowdeck"] as FlowdeckBridge;
+  });
+
+  it("calls the listener on each flowdeck:run-quit-request, and stops once unsubscribed", () => {
+    const listener = vi.fn();
+
+    const unsubscribe = bridge.onRunQuitRequest(listener);
+    electron.emit("flowdeck:run-quit-request");
+    unsubscribe();
+    electron.emit("flowdeck:run-quit-request");
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(electron.listeners.get("flowdeck:run-quit-request")).toEqual([]);
+  });
+
+  it("sends the answer on flowdeck:run-quit-answer for answerRunQuit", () => {
+    bridge.answerRunQuit("stop");
+
+    expect(electron.ipcRenderer.send).toHaveBeenLastCalledWith("flowdeck:run-quit-answer", "stop");
+  });
+});

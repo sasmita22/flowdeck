@@ -76,9 +76,30 @@ class FakeDrivePage implements DrivePage {
   }
 }
 
-const windowThatNeverShowsText = {
-  getByText: () => ({ first: () => ({ waitFor: () => Promise.reject(new Error("never shown")) }) }),
-} as unknown as Page;
+function windowOf(app: FakeApp): Page {
+  const closed = () => once(app.proc, "exit");
+  const prompt = {
+    or: () => prompt,
+    waitFor: () =>
+      app.closePrompts
+        ? Promise.resolve()
+        : closed().then(() => Promise.reject(new Error("target closed"))),
+  };
+  return {
+    getByText: () => ({
+      first: () => ({ waitFor: () => Promise.reject(new Error("never shown")) }),
+    }),
+    getByTestId: (testid: string) => ({
+      ...prompt,
+      click: () => {
+        app.clicks.push(testid);
+        return Promise.resolve();
+      },
+    }),
+    isClosed: () => app.proc.exitCode !== null,
+    waitForEvent: () => closed(),
+  } as unknown as Page;
+}
 
 class FakeProcess extends EventEmitter {
   readonly pid = 4242;
@@ -103,6 +124,8 @@ class FakeApp implements DriveApp {
   windowError: Error | undefined;
   closeError: Error | undefined;
   evaluateError: Error | undefined;
+  closePrompts = false;
+  clicks: string[] = [];
 
   process() {
     return this.proc;
@@ -121,7 +144,7 @@ class FakeApp implements DriveApp {
 
   firstWindow(): Promise<Page> {
     if (this.windowError) return Promise.reject(this.windowError);
-    return Promise.resolve(windowThatNeverShowsText);
+    return Promise.resolve(windowOf(this));
   }
 
   close(): Promise<void> {
@@ -1006,8 +1029,39 @@ describe("drive cleanup", () => {
       expect(second.evaluateCalls).toBe(2);
     });
 
+    it("fails a page step after a close that ends the app, even though the first close event was held", async () => {
+      const closing = new ClosingApp(100);
+
+      await expect(
+        drive([{ type: "close-window" }, { type: "click", testid: "x" }], {
+          outDir,
+          home,
+          launch: () => Promise.resolve(closing),
+          exitGraceMs: 2000,
+        }),
+      ).rejects.toThrow(
+        "step 2 (click): the window was closed; add a relaunch step before this one",
+      );
+      expect(closing.clicks).toEqual([]);
+    });
+
+    it("keeps driving the same window when the close shows a prompt", async () => {
+      const held = new ClosingApp(undefined);
+      held.closePrompts = true;
+
+      await drive([{ type: "close-window" }, { type: "click", testid: "close-cancel" }], {
+        outDir,
+        home,
+        launch: () => Promise.resolve(held),
+        exitGraceMs: 50,
+      });
+
+      expect(held.clicks).toEqual(["close-cancel"]);
+    });
+
     it("force-exits an app that is still alive once the grace period ends", async () => {
       const held = new ClosingApp(undefined);
+      held.closePrompts = true;
       const started = Date.now();
 
       await drive([{ type: "close-window" }], {

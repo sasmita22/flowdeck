@@ -55,6 +55,8 @@ export type EngineRequest = {
     | "blueprint-session-start"
     | "blueprint-session-stop"
     | "blueprint-session-stop-all"
+    | "going-runs"
+    | "stop-going-runs"
     | "assistant-list-builds"
     | "assistant-read-build";
   payload?: unknown;

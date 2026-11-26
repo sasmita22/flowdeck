@@ -10,6 +10,7 @@ import {
   type LaunchedApp,
 } from "../scripts/drive.js";
 import { controlTestIds, pageTestIds, paletteTestId } from "../src/app/renderer/test-ids.js";
+import { clickToQuit, exited } from "./quit.js";
 
 let home: string;
 let opened: LaunchedApp[];
@@ -25,27 +26,6 @@ const readout = async (window: Page) =>
   JSON.parse((await window.getByTestId("canvas-flow").textContent()) ?? "") as {
     nodes: { type: string }[];
   };
-
-const exited = (launched: LaunchedApp) =>
-  new Promise<void>((resolve) => {
-    const proc = launched.app.process();
-    if (proc.exitCode !== null || proc.signalCode !== null) resolve();
-    else proc.once("exit", () => resolve());
-  });
-
-const targetClosed = (error: unknown) =>
-  error instanceof Error &&
-  error.message.includes("Target page, context or browser has been closed");
-
-const clickToQuit = async (launched: LaunchedApp, testid: string) => {
-  const exit = exited(launched);
-  try {
-    await launched.window.getByTestId(testid).click();
-  } catch (error) {
-    if (!targetClosed(error)) throw error;
-  }
-  await exit;
-};
 
 const closeWindow = (launched: LaunchedApp) =>
   launched.app.evaluate(({ BrowserWindow }) => {
