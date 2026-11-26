@@ -657,7 +657,7 @@ describe("an app restart", () => {
       release(true);
       await startingUp;
 
-      expect(await stopping).toEqual({ runIds: [runId] });
+      expect(await stopping).toEqual({ runIds: [runId], pendingIds: [] });
       expect(order).toEqual(["started up", "stopped"]);
       expect(opened.at(-1)).toMatchObject({ attach: true, sessionName: sessionName(runId) });
       expect(runs.findRun(runId)?.status).toBe("stopped");
@@ -838,6 +838,67 @@ describe("an app restart", () => {
       ).toHaveLength(1);
       expect(endPush(pendingId)?.progress).toMatchObject({ outcomeLabel: "Built · v1" });
       expect(worktree.calls).toEqual([]);
+    });
+
+    it("stops a build left going at quit only once start-up has picked it up again", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      let release: (held: boolean) => void = () => undefined;
+      const order: string[] = [];
+      const second = newHandler({
+        buildAgents: after,
+        homeLock: { acquire: () => new Promise<boolean>((resolve) => (release = resolve)) },
+      });
+
+      const startingUp = second.startUp().then(() => order.push("started up"));
+      const stopping = call(second, "stop-going-runs").then((value) => {
+        order.push("stopped");
+        return value;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      release(true);
+      await startingUp;
+
+      expect(await stopping).toEqual({ runIds: [], pendingIds: [pendingId] });
+      expect(order).toEqual(["started up", "stopped"]);
+      expect(after.closed).toContain(spec.sessionName);
+      expect(runs.pendingBuild(pendingId)?.outcome).toBe("stopped");
+    });
+
+    it("stops a build left going that start-up did not pick up, ending it stopped", async () => {
+      const { pendingId, spec } = await leftMidTurn();
+      const after = new FakeBuildAgents({
+        fs: new NodeFileSystem(),
+        script: { aliveAfterRestart: true },
+      });
+      const second = newHandler({
+        buildAgents: after,
+        homeLock: { acquire: async () => false },
+      });
+      await second.startUp();
+
+      expect(await call(second, "going-runs")).toEqual({ runIds: [], pendingIds: [pendingId] });
+      expect(await call(second, "stop-going-runs")).toEqual({
+        runIds: [],
+        pendingIds: [pendingId],
+      });
+      expect(after.closed).toEqual([spec.sessionName]);
+      expect(await new NodeFileSystem().exists(spec.workspaceDir)).toBe(false);
+      expect(runs.pendingBuild(pendingId)?.outcome).toBe("stopped");
+    });
+
+    it("does not count a build left going whose session has ended", async () => {
+      await leftMidTurn();
+      const second = newHandler({
+        buildAgents: new FakeBuildAgents({ fs: new NodeFileSystem() }),
+        homeLock: { acquire: async () => false },
+      });
+      await second.startUp();
+
+      expect(await call(second, "going-runs")).toEqual({ runIds: [], pendingIds: [] });
     });
 
     it("resumes a build mid step 3 from the blueprint version it started from, under its snapshot's name", async () => {

@@ -563,7 +563,7 @@ describe("run controls", () => {
       holding();
       const runId = await going();
 
-      expect(await call("stop-going-runs")).toEqual({ runIds: [runId] });
+      expect(await call("stop-going-runs")).toEqual({ runIds: [runId], pendingIds: [] });
 
       expect(runs.findRun(runId)?.status).toBe("stopped");
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -583,7 +583,7 @@ describe("run controls", () => {
       alive.add("fd-run-left");
       alive.add("fd-run-child");
 
-      expect(await call("stop-going-runs")).toEqual({ runIds: [runId] });
+      expect(await call("stop-going-runs")).toEqual({ runIds: [runId], pendingIds: [] });
 
       expect(runs.findRun(runId)?.status).toBe("stopped");
       expect(ended).toEqual(["fd-run-left", "fd-run-child"]);
