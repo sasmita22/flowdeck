@@ -21,6 +21,7 @@ const digestLines = [
   "Files written",
   "Final reply",
   "Run status",
+  "Workspace",
 ];
 
 describe("the narrator prompt", () => {

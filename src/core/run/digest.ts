@@ -4,8 +4,13 @@ import type { ActivityEntry } from "./activity.js";
 import { usd } from "./budget.js";
 import type { CostReport } from "./cost.js";
 import { displayStatus } from "./display.js";
-import type { StageNode, StageSources } from "./manifest.js";
-import { pipelineOf, type PipelineItem, type PipelineStage } from "./pipeline.js";
+import type { StageGroup, StageNode } from "./manifest.js";
+import {
+  pipelineOf,
+  type PipelineGroup,
+  type PipelineItem,
+  type PipelineStage,
+} from "./pipeline.js";
 import type { NodeState } from "./state.js";
 import { otherReposText, repoStateText, type OtherRepo, type RunRepoStates } from "./repo-state.js";
 import type { BuildRecord, RunStatus, StoredEvent } from "./store.js";
@@ -22,11 +27,11 @@ export type RunDigest = { header: RunHeader; text: string };
 
 type DigestStageNode = StageNode & { instructions?: string };
 
-type DigestStages = Omit<StageSources, "nodes"> & { nodes: DigestStageNode[] };
+export type DigestStageGroup = Omit<StageGroup, "nodes"> & { nodes: DigestStageNode[] };
 
 export type DigestInput = {
   build: RunHeader & Pick<BuildRecord, "hash">;
-  stages: DigestStages | null;
+  stages: DigestStageGroup[] | null;
   events: readonly StoredEvent[];
   activity: readonly ActivityEntry[];
   cost: CostReport;
@@ -224,6 +229,17 @@ function itemLines(
   });
 }
 
+const headingOf = (group: PipelineGroup, index: number) =>
+  index === 0 ? "Workspace:" : `Session ${group.name}:`;
+
+const stageBlock = (pipeline: readonly PipelineGroup[], limits: Limits, run: StageRun) =>
+  pipeline.length === 1
+    ? itemLines(pipeline[0]?.items ?? [], "", limits, run)
+    : pipeline.flatMap((group, index) => [
+        headingOf(group, index),
+        ...itemLines(group.items, "", limits, run),
+      ]);
+
 export function runDigest(
   input: DigestInput,
   sessionStates?: Readonly<Record<string, NodeState>>,
@@ -239,15 +255,15 @@ export function runDigest(
     values: build.values,
     ...(otherRepos.length === 0 ? {} : { otherRepos }),
   };
-  const nodes = input.stages?.nodes ?? nodesFromEvents(input.events);
-  const items = pipelineOf(
-    [{ name: input.stages?.session.name ?? "", nodes, wires: input.stages?.wires ?? [] }],
+  const groups = input.stages ?? [{ name: "", nodes: nodesFromEvents(input.events), wires: [] }];
+  const pipeline = pipelineOf(
+    groups,
     input.events,
     input.activity,
     input.cost,
     input.status,
     sessionStates,
-  ).flatMap((group) => group.items);
+  );
   const pullRequests = [
     ...new Set(input.activity.flatMap((entry) => (entry.kind === "pr" ? [entry.url] : []))),
   ];
@@ -256,7 +272,7 @@ export function runDigest(
       build.blueprintVersion === null ? "" : `, version ${build.blueprintVersion}`
     }`,
     `Build: ${build.name ?? build.hash}`,
-    ...(input.stages === null ? [] : [`Session: ${input.stages.session.name}`]),
+    ...(input.stages === null ? [] : [`Session: ${input.stages[0]?.name ?? ""}`]),
     `Repo: ${build.repo ?? "none"}`,
     `Branch: ${build.branch ?? "none"}`,
     `Before: ${repoStateText(input.repoStates?.before ?? null)}`,
@@ -273,13 +289,15 @@ export function runDigest(
     questions: input.questions,
     status: input.status,
     instructions: new Map(
-      nodes.flatMap((node) =>
-        node.instructions === undefined ? [] : [[node.id, node.instructions] as const],
-      ),
+      groups
+        .flatMap((group) => group.nodes)
+        .flatMap((node) =>
+          node.instructions === undefined ? [] : [[node.id, node.instructions] as const],
+        ),
     ),
   };
   const textWith = (limits: Limits) =>
-    [...facts, "Stages, in order:", ...itemLines(items, "", limits, run)].join("\n");
+    [...facts, "Stages, in order:", ...stageBlock(pipeline, limits, run)].join("\n");
 
   for (const limits of attempts) {
     const text = textWith(limits);

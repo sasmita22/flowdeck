@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import { usd } from "../../../src/core/run/budget.js";
 import { costReport } from "../../../src/core/run/cost.js";
-import { digestCap, runDigest, variablesText } from "../../../src/core/run/digest.js";
+import {
+  digestCap,
+  runDigest,
+  variablesText,
+  type DigestStageGroup,
+} from "../../../src/core/run/digest.js";
 import { plainReason } from "../../../src/core/run/failure.js";
 import type { StageSources } from "../../../src/core/run/manifest.js";
 import {
@@ -187,6 +192,7 @@ const digestInput = (
     endedAt = iso(125),
     questions = {},
     repoStates,
+    groups,
   }: {
     activity?: ActivityEntry[];
     sources?: StageSources | null;
@@ -194,11 +200,16 @@ const digestInput = (
     endedAt?: string | null;
     questions?: Record<string, string>;
     repoStates?: RunRepoStates;
+    groups?: DigestStageGroup[];
   } = {},
 ): DigestInput => ({
   ...(repoStates === undefined ? {} : { repoStates }),
   build,
-  stages: sources,
+  stages:
+    groups ??
+    (sources === null
+      ? null
+      : [{ name: sources.session.name, nodes: sources.nodes, wires: sources.wires }]),
   events,
   activity,
   cost: costReport({
@@ -214,6 +225,42 @@ const digestInput = (
 });
 
 describe("runDigest", () => {
+  it("writes a one-session run's digest without session headings", () => {
+    expect(runDigest(digestInput(eventsOf())).text).toBe(
+      [
+        "Blueprint: Fix and verify, version 3",
+        "Build: nightly-login-fix",
+        "Session: login-session",
+        "Repo: /work/shop-repo",
+        "Branch: flowdeck/nightly-login-fix",
+        "Before: not recorded",
+        "After: not recorded",
+        "Variables: target = login page; strict = true",
+        "Run status: failed",
+        "Started: 2026-11-15T10:00:00.000Z",
+        "Ended: 2026-11-15T10:02:05.000Z",
+        "Total cost: $1.25",
+        "Pull requests: https://github.com/acme/shop/pull/42",
+        "Stages, in order:",
+        "1. Start (trigger): done, took 0s",
+        "2. Fix the login bug (agent): done, 1 retry, took 19s",
+        "   Instructions: not recorded",
+        "   Files written: src/login.ts",
+        "   Steps:",
+        "     - Write write src/login.ts → not recorded",
+        "   Report: not recorded",
+        "   Final reply: Patched the cookie check.",
+        "3. Pick the approach (ask): done",
+        "   Decision: answered: Take the smaller fix and keep the old session cookie for one more release",
+        "4. Run the test suite (agent): failed, took 94s",
+        "   Instructions: not recorded",
+        "   Reason: Tests did not pass in CI",
+        "   Report: not recorded",
+        "5. Finish (output): waiting",
+      ].join("\n"),
+    );
+  });
+
   describe("facts", () => {
     const { text } = runDigest(digestInput(eventsOf()));
 
@@ -928,5 +975,131 @@ describe("runDigest with session states", () => {
 
     expect(headingOf(text, "Split")).not.toMatch(/: done$/);
     expect(headingOf(text, "Merge")).not.toMatch(/: done$/);
+  });
+});
+
+describe("runDigest with sessions", () => {
+  const workspace: DigestStageGroup = {
+    name: "workspace",
+    nodes: [
+      { id: "w-start", type: "trigger", label: "Start" },
+      { id: "coordinate", type: "agent", label: "Coordinate" },
+      { id: "w-stop", type: "output", label: "Finish" },
+    ],
+    wires: [then("w-start", "coordinate"), then("coordinate", "w-stop")],
+  };
+
+  const android: DigestStageGroup = {
+    name: "android",
+    nodes: [
+      { id: "a-start", type: "trigger", label: "Start" },
+      { id: "a-split", type: "fork", label: "Split" },
+      { id: "a-left", type: "agent", label: "Build the list screen" },
+      { id: "a-right", type: "agent", label: "Build the detail screen" },
+      { id: "a-meet", type: "join", label: "Meet" },
+      { id: "a-stop", type: "output", label: "Finish" },
+    ],
+    wires: [
+      then("a-start", "a-split"),
+      then("a-split", "a-left"),
+      then("a-split", "a-right"),
+      then("a-left", "a-meet"),
+      then("a-right", "a-meet"),
+      then("a-meet", "a-stop"),
+    ],
+  };
+
+  const ios: DigestStageGroup = {
+    name: "ios",
+    nodes: [
+      { id: "i-start", type: "trigger", label: "Start" },
+      { id: "i-each", type: "foreach", label: "Each screen" },
+      { id: "i-work", type: "agent", label: "Port the screen", parent: "i-each" },
+      { id: "i-stop", type: "output", label: "Finish" },
+    ],
+    wires: [then("i-start", "i-each"), then("i-each", "i-stop")],
+  };
+
+  const finished = (id: string, seconds: number): [string, number, RunEvent][] => [
+    [id, seconds, { kind: "running" }],
+    [id, seconds, { kind: "done" }],
+  ];
+
+  const events = stored([
+    ...finished("w-start", 0),
+    ...finished("coordinate", 1),
+    ...finished("a-start", 2),
+    ...finished("a-left", 3),
+    ...finished("a-right", 4),
+    ...finished("i-start", 5),
+    ["i-each", 6, { kind: "round", payload: { round: 1, items: ["login", "cart"] } }],
+    ...finished("i-work", 7),
+    ["i-each", 8, { kind: "round", payload: { round: 2 } }],
+    ["i-work", 8, { kind: "reset" }],
+    ...finished("i-work", 9),
+  ]);
+
+  const digestOf = (groups: DigestStageGroup[]) =>
+    runDigest(digestInput(events, { groups, activity: [], status: "done" })).text;
+
+  const lines = (text: string) => text.split("\n");
+
+  it("heads the workspace's stages with Workspace: and each session's with its name", () => {
+    const text = digestOf([workspace, android, ios]);
+    const workspaceAt = text.indexOf("Stages, in order:\nWorkspace:\n1. ");
+    const androidAt = text.indexOf("\nSession android:\n1. ");
+    const iosAt = text.indexOf("\nSession ios:\n1. ");
+    const androidStageAt = text.indexOf("Build the list screen");
+
+    expect(workspaceAt).toBeGreaterThan(-1);
+    expect(androidAt).toBeGreaterThan(workspaceAt);
+    expect(iosAt).toBeGreaterThan(androidAt);
+    expect(androidStageAt).toBeGreaterThan(androidAt);
+    expect(androidStageAt).toBeLessThan(iosAt);
+  });
+
+  it("restarts the numbering in each group", () => {
+    const all = lines(digestOf([workspace, android, ios]));
+    const after = (heading: string) => all[all.indexOf(heading) + 1];
+
+    expect(after("Workspace:")).toMatch(/^1\. Start \(trigger\)/);
+    expect(after("Session android:")).toMatch(/^1\. Start \(trigger\)/);
+    expect(after("Session ios:")).toMatch(/^1\. Start \(trigger\)/);
+    expect(all.slice(all.indexOf("Workspace:") + 1, all.indexOf("Session android:"))).toEqual([
+      "1. Start (trigger): done, took 0s",
+      "2. Coordinate (agent): done, took 0s",
+      "   Instructions: not recorded",
+      "   Report: not recorded",
+      "3. Finish (output): waiting",
+    ]);
+  });
+
+  it("nests a session's fork lanes and for-each rounds under that session", () => {
+    const text = digestOf([workspace, android, ios]);
+    const androidBlock = text.slice(
+      text.indexOf("\nSession android:\n"),
+      text.indexOf("\nSession ios:\n"),
+    );
+    const iosBlock = text.slice(text.indexOf("\nSession ios:\n"));
+
+    expect(androidBlock).toContain("3. In parallel:\n3.1.1. Build the list screen (agent)");
+    expect(androidBlock).toContain("3.2.1. Build the detail screen (agent)");
+    expect(iosBlock).toContain("2. Round 1 (login):\n2.1.1. Port the screen (agent)");
+    expect(iosBlock).toContain("2. Round 2 (cart):\n2.2.1. Port the screen (agent)");
+  });
+
+  it("keeps the Session: fact on the first group", () => {
+    const text = digestOf([workspace, android, ios]);
+
+    expect(text.split("Session: workspace\n")).toHaveLength(2);
+    expect(text).not.toContain("Session: android");
+  });
+
+  it("prints no heading for a workspace-only run", () => {
+    const text = digestOf([workspace]);
+
+    expect(text).not.toContain("Workspace:");
+    expect(text).not.toContain("\nSession ");
+    expect(text).toContain("Stages, in order:\n1. ");
   });
 });

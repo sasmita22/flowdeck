@@ -5898,6 +5898,27 @@ describe("createEngineHandler", async () => {
             ).toMatch(/: done$/);
           });
 
+          it("gives the narrator the session's stages under Session android:", async () => {
+            const narrator = new FakeRunNarrator({ text: "Told.", cost: 0.25 });
+            runHandler({ narrator });
+            const { runId, android } = await startGated();
+            await finishPlanAndBuild(android.claudeSessionId, runId);
+            hook(android.claudeSessionId, "Stop", { last_assistant_message: "DONE" });
+            await vi.waitFor(() => expect(statusOf(runId, "session-1-stop")).toBe("done"));
+            release();
+            expect(await endOf(runId)).toBe("done");
+            await vi.waitFor(() => expect(narrator.calls).toHaveLength(1));
+
+            const digest = narrator.calls[0] ?? "";
+            const lines = digest.split("\n");
+
+            expect(digest).toContain("\nWorkspace:\n1. ");
+            expect(digest).toContain("\nSession android:\n1. ");
+            expect(lines.findIndex((line) => line.includes("Check (gate)"))).toBeGreaterThan(
+              lines.indexOf("Session android:"),
+            );
+          });
+
           it("shows the Gate done in the snapshot it pushes when the run is resumed", async () => {
             const { runId, android } = await startGated();
             alive.add(android.tmuxName);

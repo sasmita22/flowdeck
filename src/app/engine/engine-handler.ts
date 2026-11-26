@@ -1899,20 +1899,19 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
       : undefined;
 
   const digestStagesOf = (manifest: ParsedManifest) => {
-    const stages = flatStages(stageSourcesOf(manifest));
     const instructions = new Map(
       allNodes(manifest).flatMap((node) => {
         const text = instructionsOf(node);
         return text === undefined ? [] : [[node.id, text] as const];
       }),
     );
-    return {
-      ...stages,
-      nodes: stages.nodes.map((stage) => {
+    return stageSourcesOf(manifest).map((group) => ({
+      ...group,
+      nodes: group.nodes.map((stage) => {
         const text = instructions.get(stage.id);
         return text === undefined ? stage : { ...stage, instructions: text };
       }),
-    };
+    }));
   };
 
   const questionsOf = (manifest: ParsedManifest): Record<string, string> =>
