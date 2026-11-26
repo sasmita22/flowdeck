@@ -2,6 +2,8 @@ export type StoreStatus = { kind: "ready" } | { kind: "error"; message: string }
 
 export type CloseAnswer = "close" | "cancel";
 
+export type RunQuitAnswer = "keep" | "stop" | "cancel";
+
 export type BuildAnswerPayload = {
   nodeId: string;
   text: string;
@@ -130,6 +132,8 @@ export type FlowdeckBridge = EngineCalls & {
   setDirty(dirty: boolean): void;
   onCloseRequest(listener: () => void): () => void;
   answerClose(answer: CloseAnswer): void;
+  onRunQuitRequest(listener: () => void): () => void;
+  answerRunQuit(answer: RunQuitAnswer): void;
   getRunState(runId: string): Promise<unknown>;
   onRunState(listener: (snapshot: unknown) => void): () => void;
   onRunSessions(listener: (sessions: unknown) => void): () => void;
@@ -167,6 +171,8 @@ export const bridgeChannels = {
   setDirty: "flowdeck:set-dirty",
   closeRequest: "flowdeck:close-request",
   closeAnswer: "flowdeck:close-answer",
+  runQuitRequest: "flowdeck:run-quit-request",
+  runQuitAnswer: "flowdeck:run-quit-answer",
   getRunState: "flowdeck:get-run-state",
   runState: "flowdeck:run-state",
   runSessions: "flowdeck:run-sessions",

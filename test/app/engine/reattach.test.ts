@@ -631,6 +631,39 @@ describe("an app restart", () => {
       expect(opened.at(-1)).toMatchObject({ attach: true, sessionName: sessionName(runId) });
     });
 
+    it("stops the going runs at quit only once start-up has picked them up again", async () => {
+      const first = newHandler();
+      const runId = await start(first, askedAtGate());
+      await vi.waitFor(() => expect(statusOf(runId, "g1")).toBe("needs-you"));
+      await first.detach();
+      alive.add(sessionName(runId));
+      const ended: string[] = [];
+      let release: (held: boolean) => void = () => undefined;
+      const order: string[] = [];
+      const second = newHandler({
+        homeLock: { acquire: () => new Promise<boolean>((resolve) => (release = resolve)) },
+        endSession: async (name) => {
+          ended.push(name);
+          alive.delete(name);
+        },
+      });
+
+      const startingUp = second.startUp().then(() => order.push("started up"));
+      const stopping = call(second, "stop-going-runs").then((value) => {
+        order.push("stopped");
+        return value;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      release(true);
+      await startingUp;
+
+      expect(await stopping).toEqual({ runIds: [runId] });
+      expect(order).toEqual(["started up", "stopped"]);
+      expect(opened.at(-1)).toMatchObject({ attach: true, sessionName: sessionName(runId) });
+      expect(runs.findRun(runId)?.status).toBe("stopped");
+      expect([...stops, ...ended]).toContain(sessionName(runId));
+    });
+
     it("does not mark a run failed when its event socket cannot be opened", async () => {
       const first = newHandler();
       const runId = await start(first, askedAtGate());

@@ -279,6 +279,8 @@ describe("opening a blueprint through the editor's save store", () => {
       setDirty: vi.fn(),
       onCloseRequest: vi.fn(() => () => {}),
       answerClose: vi.fn(),
+      onRunQuitRequest: vi.fn(() => () => {}),
+      answerRunQuit: vi.fn(),
     };
     const save = createSaveStore({ bridge, canvas: createCanvasStore({ ready: false }) });
     const run = createStore(() => ({

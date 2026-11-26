@@ -1,17 +1,26 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { openedFlowSchema, saveFlowResultSchema } from "../../core/flow/flow-store.js";
 import { usedBy } from "../../core/flow/libraries.js";
-import type { FlowdeckBridge } from "../preload/bridge.js";
+import type { FlowdeckBridge, RunQuitAnswer } from "../preload/bridge.js";
 import { newCanvasFlow, selectDirty, type CanvasState } from "./canvas/store.js";
 
 export type SaveBridge = Pick<
   FlowdeckBridge,
-  "saveFlow" | "openFlow" | "renameFlow" | "setDirty" | "onCloseRequest" | "answerClose"
+  | "saveFlow"
+  | "openFlow"
+  | "renameFlow"
+  | "setDirty"
+  | "onCloseRequest"
+  | "answerClose"
+  | "onRunQuitRequest"
+  | "answerRunQuit"
 >;
 
 export type CloseChoice = "save" | "discard" | "cancel";
 
 export type SaveWarningChoice = "save" | "cancel";
+
+export type RunQuitPrompt = "closed" | "asking" | "stopping";
 
 export const untitled = "Untitled";
 
@@ -19,6 +28,7 @@ export type SaveState = {
   saving: boolean;
   error: string | null;
   closePrompt: boolean;
+  runQuitPrompt: RunQuitPrompt;
   leavePrompt: boolean;
   saveWarning: { count: number } | null;
   saveCancelled: boolean;
@@ -34,6 +44,7 @@ export type SaveState = {
   answerLeave(answer: CloseChoice): Promise<void>;
   answerClose(answer: CloseChoice): Promise<void>;
   answerSaveWarning(answer: SaveWarningChoice): void;
+  answerRunQuit(answer: RunQuitAnswer): void;
 };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -99,6 +110,7 @@ export const createSaveStore = ({
       saving: false,
       error: null,
       closePrompt: false,
+      runQuitPrompt: "closed",
       leavePrompt: false,
       saveWarning: null,
       saveCancelled: false,
@@ -188,6 +200,12 @@ export const createSaveStore = ({
         set({ closePrompt: false });
         bridge.answerClose(saved ? "close" : "cancel");
       },
+
+      answerRunQuit: (answer) => {
+        if (get().runQuitPrompt !== "asking") return;
+        set({ runQuitPrompt: answer === "stop" ? "stopping" : "closed" });
+        bridge.answerRunQuit(answer);
+      },
     };
   });
 
@@ -201,6 +219,7 @@ export const createSaveStore = ({
   });
 
   bridge.onCloseRequest(() => store.setState({ closePrompt: true }));
+  bridge.onRunQuitRequest(() => store.setState({ runQuitPrompt: "asking" }));
 
   return store;
 };

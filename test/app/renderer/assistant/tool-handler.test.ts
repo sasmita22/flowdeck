@@ -52,6 +52,8 @@ type HandlerBridge = Pick<
   | "setDirty"
   | "onCloseRequest"
   | "answerClose"
+  | "onRunQuitRequest"
+  | "answerRunQuit"
   | "onToolCall"
   | "onToolTurnEnd"
   | "answerToolCall"
@@ -110,6 +112,8 @@ const fakeBridge = (blueprints: readonly Saved[]) => {
     setDirty: vi.fn<(dirty: boolean) => void>(),
     onCloseRequest: vi.fn(() => () => {}),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
+    onRunQuitRequest: vi.fn(() => () => {}),
+    answerRunQuit: vi.fn<(answer: "keep" | "stop" | "cancel") => void>(),
     onToolCall: vi.fn((listener: (call: unknown) => void) => {
       callListeners.push(listener);
       return () => {};

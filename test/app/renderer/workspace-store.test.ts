@@ -55,6 +55,8 @@ const setup = (options: { latest?: Flow; saveFails?: boolean } = {}) => {
     setDirty: vi.fn<(dirty: boolean) => void>(),
     onCloseRequest: vi.fn(() => () => {}),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
+    onRunQuitRequest: vi.fn(() => () => {}),
+    answerRunQuit: vi.fn<(answer: "keep" | "stop" | "cancel") => void>(),
   } satisfies SaveBridge;
   const bridge = {
     workspaceInfo: vi.fn<(buildConfig: unknown) => Promise<unknown>>(async (folder) =>

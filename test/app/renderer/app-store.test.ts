@@ -55,6 +55,8 @@ const bridge = (
   setDirty: vi.fn(),
   onCloseRequest: vi.fn(() => () => {}),
   answerClose: vi.fn(),
+  onRunQuitRequest: vi.fn(() => () => {}),
+  answerRunQuit: vi.fn(),
   getRunState: vi.fn(),
   onRunState: vi.fn(() => () => {}),
   onRunSessions: vi.fn(() => () => {}),

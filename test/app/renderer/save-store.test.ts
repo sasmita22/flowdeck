@@ -12,7 +12,14 @@ import { flowSummary as summary } from "../../fixtures/flow-summary.js";
 
 type SaveBridge = Pick<
   FlowdeckBridge,
-  "saveFlow" | "openFlow" | "renameFlow" | "setDirty" | "onCloseRequest" | "answerClose"
+  | "saveFlow"
+  | "openFlow"
+  | "renameFlow"
+  | "setDirty"
+  | "onCloseRequest"
+  | "answerClose"
+  | "onRunQuitRequest"
+  | "answerRunQuit"
 >;
 
 const deferred = <T>() => {
@@ -25,6 +32,7 @@ const deferred = <T>() => {
 
 const fakeBridge = (options: { latest?: () => Promise<unknown> } = {}) => {
   const closeListeners: (() => void)[] = [];
+  const runQuitListeners: (() => void)[] = [];
   const bridge = {
     saveFlow: vi.fn<(flow: unknown) => Promise<unknown>>(() =>
       Promise.resolve({ kind: "saved", flowId: "flow-1", version: 1 }),
@@ -44,21 +52,29 @@ const fakeBridge = (options: { latest?: () => Promise<unknown> } = {}) => {
       return () => {};
     }),
     answerClose: vi.fn<(answer: "close" | "cancel") => void>(),
+    onRunQuitRequest: vi.fn((listener: () => void) => {
+      runQuitListeners.push(listener);
+      return () => {};
+    }),
+    answerRunQuit: vi.fn<(answer: "keep" | "stop" | "cancel") => void>(),
   } satisfies SaveBridge;
   const requestClose = () => {
     for (const listener of closeListeners) listener();
   };
-  return { bridge, requestClose };
+  const requestRunQuit = () => {
+    for (const listener of runQuitListeners) listener();
+  };
+  return { bridge, requestClose, requestRunQuit };
 };
 
 const savedFlow = () => flow([agent("agent-1")], []);
 
 const setup = async (options: { latest?: () => Promise<unknown> } = {}) => {
-  const { bridge, requestClose } = fakeBridge(options);
+  const { bridge, requestClose, requestRunQuit } = fakeBridge(options);
   const canvas = createCanvasStore({ ready: false });
   const store = createSaveStore({ bridge, canvas });
   await store.getState().open();
-  return { bridge, requestClose, canvas, store };
+  return { bridge, requestClose, requestRunQuit, canvas, store };
 };
 
 const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
@@ -344,6 +360,49 @@ describe("close request", () => {
     requestClose();
 
     expect(store.getState().closePrompt).toBe(true);
+  });
+});
+
+describe("answerRunQuit", () => {
+  const asked = async () => {
+    const ctx = await setup();
+    ctx.requestRunQuit();
+    return ctx;
+  };
+
+  it("shows the run quit dialog when main asks", async () => {
+    const { store } = await asked();
+
+    expect(store.getState().runQuitPrompt).toBe("asking");
+  });
+
+  it("keep answers keep and closes the dialog", async () => {
+    const { bridge, store } = await asked();
+
+    store.getState().answerRunQuit("keep");
+
+    expect(bridge.answerRunQuit.mock.calls).toEqual([["keep"]]);
+    expect(store.getState().runQuitPrompt).toBe("closed");
+  });
+
+  it("cancel answers cancel and closes the dialog", async () => {
+    const { bridge, store } = await asked();
+
+    store.getState().answerRunQuit("cancel");
+
+    expect(bridge.answerRunQuit.mock.calls).toEqual([["cancel"]]);
+    expect(store.getState().runQuitPrompt).toBe("closed");
+  });
+
+  it("stop answers stop once and keeps the dialog showing while the runs stop", async () => {
+    const { bridge, store } = await asked();
+
+    store.getState().answerRunQuit("stop");
+    store.getState().answerRunQuit("cancel");
+    store.getState().answerRunQuit("stop");
+
+    expect(bridge.answerRunQuit.mock.calls).toEqual([["stop"]]);
+    expect(store.getState().runQuitPrompt).toBe("stopping");
   });
 });
 

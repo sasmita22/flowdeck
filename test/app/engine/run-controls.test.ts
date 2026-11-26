@@ -21,6 +21,7 @@ import { FakeEventSource } from "../../fakes/fake-event-source.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
 import { FakePullRequests } from "../../fakes/fake-pull-requests.js";
+import { FakeRunNarrator } from "../../fakes/fake-run-narrator.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
@@ -455,6 +456,156 @@ describe("run controls", () => {
         expect(runs.findRun(runId)?.status).toBe("stopped");
         expect(ended).toEqual([]);
       });
+    });
+  });
+
+  describe("going runs at quit", () => {
+    let narrator: FakeRunNarrator;
+    let stoppedSessions: string[];
+
+    const twoAgents = () => onWorkspaceMainFlow([agent("s1"), agent("s2")], [thenWire("s1", "s2")]);
+
+    const holding = () => {
+      const claude = fakeClaudeSession((nodeId) => (nodeId === "s1" ? "hold" : "done"));
+      handler = handlerWith({
+        narrator,
+        run: runEnvironment({
+          startEvents: claude.startEvents,
+          openSession: async (opening) => {
+            const session = await claude.openSession(opening);
+            return {
+              ...session,
+              stop: async () => {
+                stoppedSessions.push(opening.sessionName);
+              },
+            };
+          },
+        }),
+      });
+    };
+
+    const going = async () => {
+      const runId = await start(twoAgents());
+      await vi.waitFor(() => expect(statusOf(runId, "s1")).toBe("sent"));
+      return runId;
+    };
+
+    const leftOver = async (tmuxName: string, children: string[] = []) => {
+      const buildId = await builtId(onWorkspaceMainFlow([agent("s1")], []));
+      const { id } = runs.createRun({
+        buildDir: buildDirOf(buildId),
+        inputs: {},
+        nodeIds: ["s1"],
+        session: { tmuxName, cwd: repo.path, claudeSessionId: `c-${tmuxName}` },
+        sessions: children.map((child) => ({
+          tmuxName: child,
+          cwd: "/b/sessions/web/app",
+          claudeSessionId: `c-${child}`,
+        })),
+        buildId,
+      });
+      return id;
+    };
+
+    const goingIds = async () => ((await call("going-runs")) as { runIds: string[] }).runIds;
+
+    beforeEach(() => {
+      narrator = new FakeRunNarrator({ text: "Told.", cost: 0.25 });
+      stoppedSessions = [];
+    });
+
+    it("lists a run it is driving", async () => {
+      holding();
+      const runId = await going();
+
+      expect(await goingIds()).toEqual([runId]);
+    });
+
+    it("lists a run left running whose session is still alive", async () => {
+      const runId = await leftOver("fd-run-left");
+      alive.add("fd-run-left");
+
+      expect(await goingIds()).toEqual([runId]);
+    });
+
+    it("leaves out a run left running whose session has ended, and runs that have stopped or finished, and lists a driven run once", async () => {
+      holding();
+      const drivenId = await going();
+      const driven = runs.findRun(drivenId);
+      if (driven !== undefined) alive.add(driven.session.tmuxName);
+      await leftOver("fd-run-gone");
+      const stoppedId = await leftOver("fd-run-stopped");
+      alive.add("fd-run-stopped");
+      runs.stopRun(stoppedId);
+      const doneId = await startOn(await builtId(onWorkspaceMainFlow([agent("s9")], [])));
+      expect(await finished(doneId)).toBe("done");
+
+      expect(await goingIds()).toEqual([drivenId]);
+    });
+
+    it("records nothing and ends no session when asked which runs are going", async () => {
+      holding();
+      const drivenId = await going();
+      const leftId = await leftOver("fd-run-left");
+      alive.add("fd-run-left");
+      const before = [...runs.events(drivenId), ...runs.events(leftId)];
+
+      await goingIds();
+
+      expect([...runs.events(drivenId), ...runs.events(leftId)]).toEqual(before);
+      expect(ended).toEqual([]);
+      expect(stoppedSessions).toEqual([]);
+      expect(runs.findRun(drivenId)?.status).toBe("running");
+      expect(runs.findRun(leftId)?.status).toBe("running");
+    });
+
+    it("stops a driven run the way Stop does, ending its sessions, without writing its story", async () => {
+      holding();
+      const runId = await going();
+
+      expect(await call("stop-going-runs")).toEqual({ runIds: [runId] });
+
+      expect(runs.findRun(runId)?.status).toBe("stopped");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(runs.events(runId).map(({ nodeId, kind }) => `${nodeId} ${kind}`)).toEqual([
+        "start running",
+        "start done",
+        "s1 sent",
+      ]);
+      expect(stoppedSessions.every((name) => name.startsWith("fd-"))).toBe(true);
+      expect(stoppedSessions).not.toEqual([]);
+      expect(narrator.calls).toEqual([]);
+      expect(pushes).not.toContainEqual({ push: "story", runId });
+    });
+
+    it("stops a run left running with a live session, ending each of its live sessions", async () => {
+      const runId = await leftOver("fd-run-left", ["fd-run-child"]);
+      alive.add("fd-run-left");
+      alive.add("fd-run-child");
+
+      expect(await call("stop-going-runs")).toEqual({ runIds: [runId] });
+
+      expect(runs.findRun(runId)?.status).toBe("stopped");
+      expect(ended).toEqual(["fd-run-left", "fd-run-child"]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(narrator.calls).toEqual([]);
+    });
+
+    it("answers once every going run is stopped, naming them all, and leaves a run that is not going alone", async () => {
+      holding();
+      const first = await going();
+      const second = await going();
+      const left = await leftOver("fd-run-left");
+      alive.add("fd-run-left");
+      const gone = await leftOver("fd-run-gone");
+
+      const { runIds } = (await call("stop-going-runs")) as { runIds: string[] };
+
+      expect([...runIds].sort()).toEqual([first, second, left].sort());
+      expect(runs.findRun(first)?.status).toBe("stopped");
+      expect(runs.findRun(second)?.status).toBe("stopped");
+      expect(runs.findRun(left)?.status).toBe("stopped");
+      expect(runs.findRun(gone)?.status).toBe("running");
     });
   });
 

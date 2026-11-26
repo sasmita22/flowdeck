@@ -95,6 +95,29 @@ describe("createCloseGuard", () => {
     expect(requestClose).toHaveBeenCalledTimes(2);
   });
 
+  it("asks again on the next close of a still-dirty window once a close answer is cleared", () => {
+    guard.setDirty(true);
+    guard.onClose(closeEvent());
+    guard.answer("close");
+
+    guard.clearConfirmed();
+    const next = closeEvent();
+    guard.onClose(next);
+
+    expect(next.preventDefault).toHaveBeenCalledTimes(1);
+    expect(requestClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a clean window close without asking after a close answer is cleared", () => {
+    guard.clearConfirmed();
+    const event = closeEvent();
+
+    guard.onClose(event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(requestClose).not.toHaveBeenCalled();
+  });
+
   it("lets the window close once the renderer reports clean again", () => {
     guard.setDirty(true);
     guard.setDirty(false);

@@ -63,6 +63,7 @@ const quit = async () => {
   if (current === undefined) return;
   const gone = exited(current);
   await current.app.evaluate(({ app }) => app.quit());
+  await current.window.getByTestId(pageTestIds.runQuitKeep).click();
   await gone;
   launched = undefined;
   await current.close();

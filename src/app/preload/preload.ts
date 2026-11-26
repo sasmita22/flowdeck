@@ -28,6 +28,14 @@ const bridge: FlowdeckBridge = {
     };
   },
   answerClose: (answer) => ipcRenderer.send(bridgeChannels.closeAnswer, answer),
+  onRunQuitRequest: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(bridgeChannels.runQuitRequest, handler);
+    return () => {
+      ipcRenderer.removeListener(bridgeChannels.runQuitRequest, handler);
+    };
+  },
+  answerRunQuit: (answer) => ipcRenderer.send(bridgeChannels.runQuitAnswer, answer),
   getRunState: (runId) => ipcRenderer.invoke(bridgeChannels.getRunState, runId),
   onRunState: (listener) => {
     const handler = (_event: unknown, snapshot: unknown) => listener(snapshot);
