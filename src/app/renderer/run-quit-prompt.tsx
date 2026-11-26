@@ -36,10 +36,10 @@ export function RunQuitPrompt({ store }: { store: StoreApi<SaveState> }) {
         data-testid={pageTestIds.runQuitDialog}
       >
         <h2 id="run-quit-title" style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
-          Runs are still going
+          Runs or builds are still going
         </h2>
         <p id="run-quit-text">
-          Keep them running in the background after Flowdeck quits, or stop them now?
+          Keep them going in the background after Flowdeck quits, or stop them now?
         </p>
         <div className="fd-dialog-actions">
           <button
@@ -56,7 +56,7 @@ export function RunQuitPrompt({ store }: { store: StoreApi<SaveState> }) {
             disabled={!asking}
             onClick={() => answerRunQuit("stop")}
           >
-            {asking ? "Stop and quit" : "Stopping runs…"}
+            {asking ? "Stop and quit" : "Stopping…"}
           </button>
           <button
             className="fd-btn"

@@ -3278,6 +3278,51 @@ describe("createEngineHandler", async () => {
         expect(runs.listBuilds()).toEqual([]);
       });
 
+      describe("going builds at quit", () => {
+        const quitAnswer = async (type: "going-runs" | "stop-going-runs") => {
+          const answered = await handler.handle({ id: nextId++, type });
+          expect(answered).toMatchObject({ ok: true });
+          return (answered as { value: unknown }).value;
+        };
+
+        const heldBuild = async () => {
+          agents.holdTurns();
+          const pendingId = await startedPendingId();
+          await vi.waitFor(() => {
+            expect(agents.turnsStarted).toBe(1);
+          });
+          const [opened] = agents.fake.opened;
+          if (opened === undefined) throw new Error("the build session never opened");
+          return { pendingId, sessionName: opened.sessionName };
+        };
+
+        it("lists a build it is driving and leaves it going", async () => {
+          const { pendingId } = await heldBuild();
+
+          expect(await quitAnswer("going-runs")).toEqual({ runIds: [], pendingIds: [pendingId] });
+          expect(agents.fake.closed).toEqual([]);
+          expect(runs.pendingBuild(pendingId)?.endedAt).toBeUndefined();
+
+          await handler.handle({ id: nextId++, type: "build-stop", payload: { pendingId } });
+        });
+
+        it("stops a build it is driving the way Stop does before it answers", async () => {
+          const { pendingId, sessionName } = await heldBuild();
+
+          expect(await quitAnswer("stop-going-runs")).toEqual({
+            runIds: [],
+            pendingIds: [pendingId],
+          });
+          expect(agents.fake.closed).toEqual([sessionName]);
+          expect(runs.pendingBuild(pendingId)?.outcome).toBe("stopped");
+          expect((await endPush(pendingId)).progress).toMatchObject({ outcomeLabel: "Stopped" });
+        });
+
+        it("lists nothing when nothing is going", async () => {
+          expect(await quitAnswer("going-runs")).toEqual({ runIds: [], pendingIds: [] });
+        });
+      });
+
       it("stops a build before its session opens: leaves neither its settings folder nor its workspace", async () => {
         let release: () => void = () => undefined;
         const gate = new Promise<void>((resolve) => {

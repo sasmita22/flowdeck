@@ -249,7 +249,13 @@ function guardClose(window: BrowserWindow, windowGuard: WindowGuard, client: Eng
     windowGuard.listen((answer: CloseAnswer) => guard.answer(answer)),
   );
   const runQuit = createRunQuitGuard({
-    goingRuns: async () => ((await client.request("going-runs")) as { runIds: string[] }).runIds,
+    goingRuns: async () => {
+      const { runIds, pendingIds } = (await client.request("going-runs")) as {
+        runIds: string[];
+        pendingIds: string[];
+      };
+      return [...runIds, ...pendingIds];
+    },
     stopGoingRuns: () => client.request("stop-going-runs", undefined, { timeoutMs: 60_000 }),
     requestDialog: () => window.webContents.send(bridgeChannels.runQuitRequest),
     closeWindow: () => window.close(),

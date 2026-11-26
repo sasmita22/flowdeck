@@ -963,8 +963,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return { dir: workspaceDir(options.home, session.buildId), worktrees };
   };
 
-  const failLeftBuild = async (runs: Store, pending: PendingBuild, why: string) => {
-    console.log(`engine: build ${pending.id} not reattached (${why})`);
+  const endLeftBuild = async (
+    runs: Store,
+    pending: PendingBuild,
+    outcome: "failed" | "stopped",
+  ): Promise<void> => {
     const session = lastSession(runs, pending.id);
     if (session !== undefined) {
       if (await options.buildAgents.alive(session.name))
@@ -975,8 +978,13 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         await sessionWorkspace(runs, session),
       );
     }
-    runs.endPendingBuild(pending.id, { outcome: "failed", endedAt: options.run.now() });
-    finishBuild(runs, pending, "failed");
+    runs.endPendingBuild(pending.id, { outcome, endedAt: options.run.now() });
+    finishBuild(runs, pending, outcome);
+  };
+
+  const failLeftBuild = async (runs: Store, pending: PendingBuild, why: string) => {
+    console.log(`engine: build ${pending.id} not reattached (${why})`);
+    await endLeftBuild(runs, pending, "failed");
   };
 
   const reattachBuild = async (stores: EngineStores, pending: PendingBuild): Promise<void> => {
@@ -1800,11 +1808,35 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     return [...driven, ...leftAlive];
   };
 
-  const stopGoingRuns = async (): Promise<{ runIds: string[] }> => {
+  const goingBuilds = async (): Promise<string[]> => {
+    const { runs } = storesOrThrow();
+    const leftAlive: string[] = [];
+    for (const pending of runs.listPendingBuilds()) {
+      if (buildStops.has(pending.id)) continue;
+      const session = lastSession(runs, pending.id);
+      if (session !== undefined && (await options.buildAgents.alive(session.name)))
+        leftAlive.push(pending.id);
+    }
+    return [...buildStops.keys(), ...leftAlive];
+  };
+
+  const going = async () => ({ runIds: await goingRuns(), pendingIds: await goingBuilds() });
+
+  const stopGoingBuild = async (pendingId: string): Promise<void> => {
+    if (buildStops.has(pendingId)) return stopBuild(pendingId);
+    const { runs } = storesOrThrow();
+    const pending = runs.pendingBuild(pendingId);
+    if (pending !== null) await endLeftBuild(runs, pending, "stopped");
+  };
+
+  const stopGoingRuns = async (): Promise<{ runIds: string[]; pendingIds: string[] }> => {
     await startingUp.catch(() => undefined);
-    const runIds = await goingRuns();
-    await Promise.allSettled(runIds.map((runId) => halt(runId, { tell: false })));
-    return { runIds };
+    const { runIds, pendingIds } = await going();
+    await Promise.allSettled([
+      ...runIds.map((runId) => halt(runId, { tell: false })),
+      ...pendingIds.map(stopGoingBuild),
+    ]);
+    return { runIds, pendingIds };
   };
 
   const stopForDelete = async (runId: string): Promise<void> => {
@@ -2661,7 +2693,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         case "blueprint-session-stop-all":
           return answer(request.id, () => stopAllBlueprintSessions(blueprintOrThrow().sessions));
         case "going-runs":
-          return answer(request.id, async () => ({ runIds: await goingRuns() }));
+          return answer(request.id, going);
         case "stop-going-runs":
           return answer(request.id, stopGoingRuns);
         case "answer-wait": {
