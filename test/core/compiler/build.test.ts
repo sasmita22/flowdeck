@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import {
-  build,
   type BuildDeps,
   type BuildFileSystem,
   type BuildResult,
@@ -11,6 +10,7 @@ import {
 import { hashBuild } from "../../../src/core/compiler/hash.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
+import { build } from "../../fixtures/build.js";
 import {
   agent,
   onMainFlow,

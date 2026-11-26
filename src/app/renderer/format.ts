@@ -1,8 +1,6 @@
 import type { BuildConfig } from "../../core/flow/schema.js";
 import { usd } from "../../core/run/budget.js";
 
-export const shortHash = (hash: string): string => hash.slice(0, 7);
-
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");

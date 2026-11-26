@@ -37,9 +37,6 @@ export type TerminalState = {
   onData(listener: (data: string) => void): () => void;
 };
 
-export const selectOpenDisabled = (terminal: Pick<TerminalState, "available">): boolean =>
-  !terminal.available;
-
 export const selectAttachTarget = (
   terminal: Pick<TerminalState, "sessions" | "chosen">,
 ): string | null => {

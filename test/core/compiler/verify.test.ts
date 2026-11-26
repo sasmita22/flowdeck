@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { build, type BuildDeps, type BuildResult } from "../../../src/core/compiler/build.js";
+import type { BuildDeps, BuildResult } from "../../../src/core/compiler/build.js";
 import {
   verify,
   workspaceListing,
@@ -11,6 +11,7 @@ import {
   type VerifyFileSystem,
 } from "../../../src/core/compiler/verify.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
+import { build } from "../../fixtures/build.js";
 import { agent, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const home = "/fd-home";

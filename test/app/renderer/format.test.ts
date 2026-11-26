@@ -6,14 +6,9 @@ import {
   formatTokens,
   formatWhen,
   folderText,
-  shortHash,
 } from "../../../src/app/renderer/format.js";
 
 describe("format", () => {
-  it("shortens a build hash to its first seven characters", () => {
-    expect(shortHash("abcdef1234567")).toBe("abcdef1");
-  });
-
   it("writes a time as month, day and 24-hour clock in the local zone", () => {
     const at = new Date(2026, 10, 2, 9, 5);
     expect(formatWhen(at.toISOString())).toBe("Nov 2, 09:05");

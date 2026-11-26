@@ -23,10 +23,6 @@ export function nodeMarker(nodeId: string): string {
   return `${nodeLead}${nodeId}`;
 }
 
-export function pieceMarker(path: string): string {
-  return `${pieceLead}${path}`;
-}
-
 export function markerOf(prompt: string): Marker {
   const [first = ""] = prompt.split("\n", 1);
   const line = first.trim();

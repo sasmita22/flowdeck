@@ -48,8 +48,6 @@ export const activityFeedSchema = z.object({
 
 export type ActivityFeed = { nextId: number; entries: ActivityEntry[] };
 
-export const emptyFeed: ActivityFeed = { nextId: 1, entries: [] };
-
 export type ActivityHookEvent = {
   kind: "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "SubagentStop";
   payload: Record<string, unknown>;

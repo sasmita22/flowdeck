@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { ActivityEntry } from "../../../src/core/run/activity.js";
 import { costReport, type CostReport } from "../../../src/core/run/cost.js";
 import { plainReason } from "../../../src/core/run/failure.js";
 import {
+  pipelineItemSchema,
   pipelineOf,
-  pipelineSchema,
   stageActivityOf,
   type PipelineItem,
 } from "../../../src/core/run/pipeline.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import type { StoredEvent } from "../../../src/core/run/store.js";
+
+const pipelineSchema = z.array(pipelineItemSchema);
 
 type Source = { id: string; type: string; label: string; parent?: string };
 type Link = {

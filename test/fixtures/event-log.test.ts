@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EventLog } from "../../../src/adapters/jsonl/event-log.js";
-import type { HookEvent, HookEventKind } from "../../../src/ports/event-source.js";
-import { FakeEventSource } from "../../fakes/fake-event-source.js";
+import { EventLog } from "./event-log.js";
+import type { HookEvent, HookEventKind } from "../../src/ports/event-source.js";
+import { FakeEventSource } from "../fakes/fake-event-source.js";
 
 const time = new Date("2026-10-27T12:00:00.000Z");
 const now = () => time;

@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { EventSource, HookEvent, HookEventKind } from "../../ports/event-source.js";
+import type { EventSource, HookEvent, HookEventKind } from "../../src/ports/event-source.js";
 
 export type EventLogOptions = {
   events: EventSource;

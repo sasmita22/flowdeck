@@ -12,7 +12,7 @@ import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
 import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
-import { buildVersion } from "../src/core/compiler/build-version.js";
+import { buildVersion } from "../test/fixtures/build-version.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
 import {
