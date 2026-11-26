@@ -1384,3 +1384,101 @@ describe("tool handler adds and changes library nodes", () => {
     });
   });
 });
+
+describe("tool handler and connections between sessions", () => {
+  const twoSessions = (): Flow =>
+    flow(
+      [
+        trigger("w-start"),
+        output("w-stop"),
+        trigger("a1"),
+        output("a2"),
+        trigger("i1"),
+        output("i2"),
+      ],
+      [thenWire("w-start", "w-stop"), thenWire("a1", "a2"), thenWire("i1", "i2")],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["a1", "a2"], { id: "android", name: "android" }),
+          sessionContainer(["i1", "i2"], { id: "ios", name: "ios" }),
+        ],
+      },
+    );
+
+  const onTwoSessions = async () => {
+    const handler = await setup();
+    handler.canvas.getState().load(twoSessions());
+    return handler;
+  };
+
+  const canvasToast = (current: Flow, a: string, b: string) => {
+    const store = createCanvasStore();
+    store.getState().load(current);
+    store.getState().connectSessions(a, b);
+    return store.getState().message;
+  };
+
+  it("add_connection connects two sessions in the ask's one undo step", async () => {
+    const { call, canvas } = await onTwoSessions();
+    const before = canvas.getState().flow;
+
+    const result = await call("add_connection", { between: ["android", "ios"] });
+
+    expect(result).toEqual({ ok: true, connectionId: "c1", problems: [] });
+    expect(canvas.getState().flow.connections).toEqual([{ id: "c1", between: ["android", "ios"] }]);
+    expect(canvas.getState().undoStack).toHaveLength(1);
+
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+    expect(canvas.getState().flow.connections ?? []).toEqual([]);
+  });
+
+  it.each([
+    ["the same session on both ends", ["android", "android"]],
+    ["the connected pair again", ["android", "ios"]],
+    ["the connected pair reversed", ["ios", "android"]],
+    ["a node", ["android", "a1"]],
+    ["the workspace", ["workspace-1", "ios"]],
+  ] as [string, [string, string]][])(
+    "add_connection refuses %s with the canvas's own reason and leaves the flow alone",
+    async (_name, between) => {
+      const { call, canvas } = await onTwoSessions();
+      await call("add_connection", { between: ["android", "ios"] });
+      const before = canvas.getState().flow;
+      const toast = canvasToast(before, ...between);
+
+      const result = await call("add_connection", { between });
+
+      expect(toast).toEqual(expect.stringMatching(/\S/));
+      expect(result).toEqual({ ok: false, reason: toast });
+      expect(canvas.getState().flow).toBe(before);
+    },
+  );
+
+  it("delete_connection removes a connection, and undo brings it back", async () => {
+    const { call, canvas, endTurn } = await onTwoSessions();
+    await call("add_connection", { between: ["android", "ios"] });
+    endTurn();
+    const before = canvas.getState().flow;
+
+    const result = await call("delete_connection", { connectionId: "c1" });
+
+    expect(result).toEqual({ ok: true, problems: [] });
+    expect(canvas.getState().flow.connections ?? []).toEqual([]);
+
+    canvas.getState().undo();
+    expect(canvas.getState().flow).toEqual(before);
+  });
+
+  it("delete_connection refuses a connection not in the blueprint", async () => {
+    const { call, canvas } = await onTwoSessions();
+    const before = canvas.getState().flow;
+
+    const result = await call("delete_connection", { connectionId: "c7" });
+
+    expect(result).toEqual({ ok: false, reason: 'No connection "c7" in the blueprint.' });
+    expect(canvas.getState().flow).toBe(before);
+  });
+});

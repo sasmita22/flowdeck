@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { checkEdit, editProblems, newProblems } from "../../../src/core/flow/blueprint-edits.js";
+import {
+  checkEdit,
+  connectionRefusal,
+  editProblems,
+  newProblems,
+  nextConnectionId,
+} from "../../../src/core/flow/blueprint-edits.js";
 import { libraryLabelFor, type LibraryLookup } from "../../../src/core/flow/libraries.js";
 import { WireKind, type Flow } from "../../../src/core/flow/schema.js";
 import { defaultSettings as agentDefaults } from "../../../src/core/nodes/agent/defaults.js";
@@ -563,4 +569,99 @@ describe("editProblems", () => {
 
     expect(editProblems(withStray, relabelled, ["stray"])).toEqual([]);
   });
+});
+
+describe("connections between sessions", () => {
+  const sessions = (connections: { id: string; between: [string, string] }[] = []): Flow => ({
+    ...flow(
+      [trigger("w-start"), output("w-stop"), trigger("a1"), output("a2"), trigger("i1")],
+      [thenWire("w-start", "w-stop"), thenWire("a1", "a2")],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["w-start", "w-stop"]),
+          sessionContainer(["a1", "a2"], { id: "android", name: "Android app" }),
+          sessionContainer(["i1"], { id: "ios", name: "iOS app" }),
+        ],
+      },
+    ),
+    ...(connections.length === 0 ? {} : { connections }),
+  });
+  const joined = () => sessions([{ id: "c1", between: ["android", "ios"] }]);
+  const notTwoSessions = "A connection can only join two session containers.";
+
+  const refusals: [string, Flow, [string, string], string][] = [
+    [
+      "the same session on both ends",
+      sessions(),
+      ["android", "android"],
+      "A session cannot connect to itself.",
+    ],
+    [
+      "a connected pair",
+      joined(),
+      ["android", "ios"],
+      "Android app and iOS app are already connected.",
+    ],
+    [
+      "a connected pair reversed",
+      joined(),
+      ["ios", "android"],
+      "Android app and iOS app are already connected.",
+    ],
+    ["the workspace", sessions(), ["workspace-1", "android"], notTwoSessions],
+    ["the workspace as the second end", sessions(), ["android", "workspace-1"], notTwoSessions],
+    ["a node", sessions(), ["android", "a1"], notTwoSessions],
+    ["an unknown id", sessions(), ["android", "nowhere"], notTwoSessions],
+  ];
+
+  it.each(refusals)(
+    "connectionRefusal refuses %s with the canvas's reason",
+    (_name, before, between, reason) => {
+      expect(connectionRefusal(before, between)).toBe(reason);
+    },
+  );
+
+  it("connectionRefusal lets two unconnected sessions connect", () => {
+    expect(connectionRefusal(sessions(), ["android", "ios"])).toBeUndefined();
+  });
+
+  it.each(refusals)("checkEdit refuses add_connection for %s", (_name, before, between, reason) => {
+    const untouched = structuredClone(before);
+
+    expect(checkEdit(before, "add_connection", { between })).toEqual({ ok: false, reason });
+    expect(before).toEqual(untouched);
+  });
+
+  it("checkEdit accepts add_connection for two unconnected sessions", () => {
+    expect(checkEdit(sessions(), "add_connection", { between: ["android", "ios"] })).toEqual({
+      ok: true,
+      edit: { tool: "add_connection", between: ["android", "ios"] },
+    });
+  });
+
+  it("checkEdit refuses delete_connection for a connection not in the blueprint", () => {
+    expect(checkEdit(joined(), "delete_connection", { connectionId: "c9" })).toEqual({
+      ok: false,
+      reason: 'No connection "c9" in the blueprint.',
+    });
+  });
+
+  it("checkEdit accepts delete_connection for a connection in the blueprint", () => {
+    expect(checkEdit(joined(), "delete_connection", { connectionId: "c1" })).toEqual({
+      ok: true,
+      edit: { tool: "delete_connection", connectionId: "c1" },
+    });
+  });
+
+  it.each([
+    ["no connections", [], "c1"],
+    ["c1 taken", [{ id: "c1", between: ["android", "ios"] }], "c2"],
+    ["a gap at c1", [{ id: "c2", between: ["android", "ios"] }], "c1"],
+  ] as [string, { id: string; between: [string, string] }[], string][])(
+    "nextConnectionId with %s",
+    (_name, connections, id) => {
+      expect(nextConnectionId(sessions(connections))).toBe(id);
+    },
+  );
 });

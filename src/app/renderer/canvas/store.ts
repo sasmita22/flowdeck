@@ -2,7 +2,11 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { plainReason, reasonNaming } from "../../../core/compiler/problems.js";
 import { flowProblems } from "../../../core/compiler/flow-problems.js";
 import type { ValidationError } from "../../../core/compiler/validate.js";
-import { newProblems } from "../../../core/flow/blueprint-edits.js";
+import {
+  connectionRefusal,
+  newProblems,
+  nextConnectionId,
+} from "../../../core/flow/blueprint-edits.js";
 import type { FlowSummary } from "../../../core/flow/flow-store.js";
 import { labelIn, libraryRefusal, loopRefusal } from "../../../core/flow/library-checks.js";
 import {
@@ -511,42 +515,6 @@ const wrongWay =
 
 const alreadyJoined = "they are already joined.";
 
-const sessionLabel = (flow: Flow, id: string) => {
-  const container = flow.containers.find((candidate) => candidate.id === id);
-  return container?.kind === "session" ? container.name : id;
-};
-
-const alreadyConnected = (flow: Flow, [a, b]: readonly [string, string]) =>
-  `${sessionLabel(flow, a)} and ${sessionLabel(flow, b)} are already connected.`;
-
-const selfConnection = "A session cannot connect to itself.";
-
-const connectionJoining = (flow: Flow, a: string, b: string) =>
-  flow.connections?.find(({ between }) => between.includes(a) && between.includes(b));
-
-const connectionRefusal = (
-  flow: Flow,
-  a: string,
-  b: string,
-  command: Command,
-  libraries: LibraryLookup,
-): string | undefined => {
-  if (a === b) return selfConnection;
-  const existing = connectionJoining(flow, a, b);
-  if (existing !== undefined) return alreadyConnected(flow, existing.between);
-  const [problem] = newProblems(flow, command.do(flow), libraries).filter(
-    ({ rule }) => rule === "session-connections",
-  );
-  return problem?.message;
-};
-
-const nextConnectionId = (flow: Flow): string => {
-  const used = new Set((flow.connections ?? []).map(({ id }) => id));
-  let n = 1;
-  while (used.has(`c${n}`)) n += 1;
-  return `c${n}`;
-};
-
 const kept = (selection: readonly string[], flow: Flow) => {
   const ids = new Set(
     [...flow.nodes, ...(flow.notes ?? []), ...flow.containers].map(({ id }) => id),
@@ -992,13 +960,12 @@ export function createCanvasStore(
       connectSessions: (a, b) => {
         if (!ready()) return false;
         const { flow } = get();
-        const command = addConnection({ id: nextConnectionId(flow), between: [a, b] });
-        const refused = connectionRefusal(flow, a, b, command, get().libraries);
+        const refused = connectionRefusal(flow, [a, b], get().libraries);
         if (refused !== undefined) {
           set({ message: refused });
           return false;
         }
-        run(command);
+        run(addConnection({ id: nextConnectionId(flow), between: [a, b] }));
         return true;
       },
 

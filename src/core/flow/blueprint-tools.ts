@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { LoadedFlow } from "./flow-store.js";
-import { NodeType, Wire, WireKind } from "./schema.js";
+import { Connection, NodeType, Wire, WireKind } from "./schema.js";
 
 const partialSettings = z.record(z.string(), z.unknown());
 
@@ -36,6 +36,8 @@ export const toolInputs = {
   list_builds: z.object({}),
   read_build: z.object({ id: z.string() }),
   tidy_layout: z.strictObject({}),
+  add_connection: z.strictObject({ between: Connection.shape.between }),
+  delete_connection: z.strictObject({ connectionId: z.string() }),
 };
 
 export type ToolName = keyof typeof toolInputs;
@@ -56,6 +58,10 @@ const descriptions: Record<ToolName, string> = {
   read_build: "Read one build.",
   tidy_layout:
     "Lay out the open blueprint. It moves nodes only and is part of the ask's one undo step. Call it as the last edit of every ask that added nodes or wires, then check the blueprint.",
+  add_connection:
+    "Connect two session containers so their sessions may message each other directly. `between` is the two session container ids. Answers the new `connectionId`.",
+  delete_connection:
+    "Delete one connection by its id, as `read_blueprint` lists it. The sessions stay.",
 };
 
 export const toolNames = Object.keys(toolInputs) as ToolName[];

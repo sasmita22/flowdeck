@@ -302,12 +302,12 @@ describe("the blueprint kit", () => {
     expect(fields.get("description") ?? "").not.toBe("");
   });
 
-  it("names all ten tools, each with a row in its tools table, and no set_variable", () => {
+  it("names all twelve tools, each with a row in its tools table, and no set_variable", () => {
     const content = skill();
 
-    expect(toolNames).toHaveLength(10);
+    expect(toolNames).toHaveLength(12);
     expect(toolsIn(content)).toEqual(expect.arrayContaining([...toolNames]));
-    expect(frontmatterOf(content).get("description")).toContain("ten tools");
+    expect(frontmatterOf(content).get("description")).toContain("twelve tools");
     expect(content).not.toContain("set_variable");
   });
 
