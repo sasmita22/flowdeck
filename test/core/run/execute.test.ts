@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WaitReply } from "../../../src/ports/waiter.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
-import { build, layDown, lockBuild } from "../../../src/core/compiler/build.js";
+import { layDown, lockBuild } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit, reportPath } from "../../../src/core/compiler/emit.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
@@ -34,6 +34,7 @@ import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
 import { FakeWaiter } from "../../fakes/fake-waiter.js";
+import { build } from "../../fixtures/build.js";
 import { permission as permissionWait } from "../../fixtures/waits.js";
 import {
   agent,

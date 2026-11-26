@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTerminalStore,
   selectAttachTarget,
-  selectOpenDisabled,
   type TerminalBridge,
 } from "../../../../src/app/renderer/terminal/store.js";
 
@@ -65,12 +64,11 @@ const viewing = async (runId = "run-1") => {
 };
 
 describe("initial state", () => {
-  it("starts on no run, unavailable, detached and hidden, with Open disabled", () => {
+  it("starts on no run, unavailable, detached and hidden", () => {
     const { terminal, state } = setup();
 
     expect(terminal.getState().runId).toBeNull();
     expect(state()).toEqual({ available: false, attached: false, visible: false });
-    expect(selectOpenDisabled(terminal.getState())).toBe(true);
   });
 });
 
@@ -86,10 +84,9 @@ describe("view", () => {
   });
 
   it("applies the viewed run's status", async () => {
-    const { terminal, state } = await viewing();
+    const { state } = await viewing();
 
     expect(state()).toEqual({ available: true, attached: false, visible: false });
-    expect(selectOpenDisabled(terminal.getState())).toBe(false);
   });
 
   it("keeps a push for the viewed run that arrived before its status answered", async () => {

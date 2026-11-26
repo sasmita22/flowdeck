@@ -11,7 +11,6 @@ import {
 import {
   buildInputsSchema,
   buildResumeOf,
-  buildVersion,
   resumeRequest,
   runBuild,
   startBuild,
@@ -38,6 +37,7 @@ import type { BuildAgents } from "../../../src/ports/build-agents.js";
 import type { FolderState } from "../../../src/ports/git-state.js";
 import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
+import { buildVersion } from "../../fixtures/build-version.js";
 import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import { FakeGitState } from "../../fakes/fake-git-state.js";
@@ -2520,22 +2520,6 @@ describe("buildVersion", () => {
       const message = errorMessages(result).join("\n");
       expect(message).toContain("ticket");
       expect(message).toContain("reviewer");
-      expectNothingDone(store, fs, worktree);
-    });
-
-    it("a version that was never saved", async () => {
-      const { store, fs, worktree, deps } = setup();
-
-      const result = await buildVersion(
-        { flowId: "flow-1", version: 9 },
-        { name: "fix-login", repo, values: { ticket: "FD-1" } },
-        deps,
-      );
-
-      expect(result).toEqual({
-        ok: false,
-        errors: [{ rule: "version", message: "flow-1 has no saved version 9" }],
-      });
       expectNothingDone(store, fs, worktree);
     });
 

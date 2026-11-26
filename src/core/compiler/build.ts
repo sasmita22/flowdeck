@@ -5,7 +5,6 @@ import { canonicalJson } from "./canonical-json.js";
 import { emit, reportPath, type EmitTarget } from "./emit.js";
 import { hashBuild } from "./hash.js";
 import { lower, type BuildFile, type Manifest } from "./lower.js";
-import { buildRecord } from "./record.js";
 import { validate, type ValidationError } from "./validate.js";
 import type { VerifyFileSystem } from "./verify.js";
 
@@ -77,12 +76,4 @@ export async function lockBuild(
   }
   const manifest = files.find((file) => file.path === manifestPath)?.content ?? "";
   return { hash, manifest };
-}
-
-export async function build(flow: Flow, deps: BuildDeps): Promise<BuildResult> {
-  const laidDown = await layDown(flow, deps);
-  if (!laidDown.ok) return laidDown;
-  const dir = workspaceDir(deps.home, deps.workspace.id);
-  const { hash, manifest } = await lockBuild(deps.fs, dir, laidDown.files);
-  return { ok: true, hash, dir, record: buildRecord(dir, manifest, deps.workspace) };
 }

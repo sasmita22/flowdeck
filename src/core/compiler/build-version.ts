@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { latestLibraries, type FlowStore, type SavedFlowRef } from "../flow/flow-store.js";
+import { latestLibraries, type FlowStore } from "../flow/flow-store.js";
 import { flowSvg } from "../flow/flow-svg.js";
 import { expandLibraries, LibraryError, libraryLookup } from "../flow/libraries.js";
 import { mainFlowOnly } from "../flow/main-flow.js";
@@ -118,14 +118,7 @@ export type BuildFlowDeps = Omit<BuildDeps, "source" | "workspace"> & {
   flows: Pick<FlowStore, "loadLatest">;
 };
 
-export type BuildVersionDeps = BuildFlowDeps & { flows: Pick<FlowStore, "load" | "loadLatest"> };
-
 const kebabCase = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
-const refused = (rule: string, message: string): BuildResult => ({
-  ok: false,
-  errors: [{ rule, message }],
-});
 
 const withDefaults = (flow: Flow, values: VariableValues): VariableValues => ({
   ...Object.fromEntries(
@@ -912,30 +905,4 @@ export async function runBuild(
     if (stopped()) return stoppedResult;
     throw error;
   }
-}
-
-export async function buildFlow(
-  saved: Flow,
-  request: BuildRequest,
-  deps: BuildFlowDeps,
-  origin?: BuildOrigin,
-): Promise<BuildResult> {
-  const started = await startBuild(saved, request, deps, origin);
-  if ("errors" in started) return started;
-  return runBuild(started, started.flow, request, deps, origin);
-}
-
-export async function buildVersion(
-  ref: SavedFlowRef,
-  request: BuildRequest,
-  deps: BuildVersionDeps,
-): Promise<BuildResult> {
-  const saved = deps.flows.load(ref);
-  if (saved === null) {
-    return refused("version", `${ref.flowId} has no saved version ${ref.version}`);
-  }
-  return buildFlow(saved.flow, request, deps, {
-    source: { flowId: ref.flowId, version: ref.version },
-    blueprint: { name: saved.name, version: saved.version },
-  });
 }

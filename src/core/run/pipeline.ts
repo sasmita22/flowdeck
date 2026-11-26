@@ -138,8 +138,6 @@ export const pipelineItemSchema: z.ZodType<PipelineItem> = z.lazy(() =>
   z.union([stageSchema, parallelGroupSchema]),
 );
 
-export const pipelineSchema = z.array(pipelineItemSchema);
-
 type Window = {
   fromSeq: number;
   toSeq: number;

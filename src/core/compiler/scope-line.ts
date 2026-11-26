@@ -9,10 +9,6 @@ export function scopeLine({ build, repo, workspace }: ScopeParts): string {
   return `Part of build ${build} (repo ${repo}, build folder ${workspace}). For work in this build, use this, not a similarly named skill from elsewhere.`;
 }
 
-export function startsWithScopeLine(description: string, parts: ScopeParts): boolean {
-  return description.startsWith(scopeLine(parts));
-}
-
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const scopeParts = new RegExp(

@@ -4,7 +4,7 @@ import { layDown, type LayDownDeps } from "../../src/core/compiler/build.js";
 import { parseBuildReport } from "../../src/core/compiler/build-report.js";
 import { checkBuild } from "../../src/core/compiler/check-build.js";
 import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
-import { pieceMarker, type AgentCall } from "../../src/core/run/agent-calls.js";
+import type { AgentCall } from "../../src/core/run/agent-calls.js";
 import type { Flow } from "../../src/core/flow/schema.js";
 import type { BuildStepEvent } from "../../src/ports/build-agents.js";
 import { agent, onMainFlow, thenWire } from "../fixtures/flow-builders.js";
@@ -85,7 +85,7 @@ const pieceFiles = (manifest: Manifest): string[] => [
 const agentFile = (manifest: Manifest): string =>
   oneSession(manifest).nodes.find((node) => node.id === "a")?.file ?? "";
 
-const turnText = (paths: readonly string[]) => paths.map(pieceMarker).join("\n\n");
+const turnText = (paths: readonly string[]) => paths.map((path) => `PIECE ${path}`).join("\n\n");
 
 const readBack = async ({ fs, laidDown }: Laid): Promise<BuildFile[]> =>
   Promise.all(

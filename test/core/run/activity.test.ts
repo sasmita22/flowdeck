@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   activityFeedSchema,
   activityUpdateSchema,
-  emptyFeed,
   feedOf,
   foldHookEvent,
   foldNodeEvent,
@@ -15,6 +14,8 @@ import {
 } from "../../../src/core/run/activity.js";
 import { trackWindow, type NodeWindow } from "../../../src/core/run/attribution.js";
 import { subagent as storedSubagent, tool as storedTool } from "../../fixtures/activity-entries.js";
+
+const emptyFeed: ActivityFeed = { nextId: 1, entries: [] };
 
 type HookInput = ActivityHookEvent;
 

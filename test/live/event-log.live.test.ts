@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { ClaudeCli } from "../../src/adapters/claude/claude-cli.js";
 import { writeHookSettings } from "../../src/adapters/claude/write-hook-settings.js";
 import { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
-import { EventLog } from "../../src/adapters/jsonl/event-log.js";
+import { EventLog } from "../fixtures/event-log.js";
 import { TmuxSessionHost } from "../../src/adapters/tmux/tmux-session-host.js";
 import { hookCommand, hookSettings } from "../../src/core/compiler/hook-settings.js";
 import { waitForTurnEnd } from "../../src/core/run/turns.js";

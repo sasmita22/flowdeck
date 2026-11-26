@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HookSocketServer } from "../../src/adapters/hook-socket/hook-socket-server.js";
-import { EventLog } from "../../src/adapters/jsonl/event-log.js";
+import { EventLog } from "../fixtures/event-log.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import { asWorkspaceWorkflow } from "../fixtures/flow-builders.js";
 import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
