@@ -3024,7 +3024,7 @@ describe("buildVersion", () => {
       const manifest = JSON.parse(await t.fs.readFile(`${result.dir}/manifest.json`)) as Manifest;
       expect(frozen?.nodes.map((node) => node.id).filter(leftOut)).toEqual([]);
       expect(
-        [...(manifest.nodes ?? []), ...manifestNodes(manifest)]
+        manifestNodes(manifest)
           .map((node) => node.id)
           .filter(leftOut),
       ).toEqual([]);

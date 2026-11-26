@@ -1,6 +1,6 @@
-import type { Manifest } from "../../src/core/compiler/lower.js";
+import type { Manifest, ManifestContainer } from "../../src/core/compiler/lower.js";
 
-type OneSession<M> = M & Required<Pick<Manifest, "nodes" | "wires" | "prefix">>;
+type OneSession<M> = M & Pick<ManifestContainer, "nodes" | "wires" | "prefix">;
 
 export function oneSession<M extends Pick<Manifest, "containers">>(manifest: M): OneSession<M> {
   const sessions = manifest.containers.filter((container) => container.kind === "session");

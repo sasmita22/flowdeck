@@ -148,7 +148,6 @@ describe("applyShared", () => {
         expect(manifest.files[path], path).toBe(sha256Hex(contentOf(files, path) ?? ""));
       }
       expect(JSON.parse(contentOf(files, "manifest.json") ?? "{}")).toEqual(manifest);
-      expect(manifest.nodes).toEqual(before.manifest.nodes);
     });
 
     it("leaves the files and manifest as they were when nothing is shared", async () => {

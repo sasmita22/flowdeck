@@ -211,7 +211,9 @@ const manifestOf = (built: EndedBuild): Manifest =>
   JSON.parse(contentOf(built, "manifest.json")) as Manifest;
 
 const nodeOf = (manifest: Manifest, id: string): ManifestNode => {
-  const node = (manifest.nodes ?? []).find((candidate) => candidate.id === id);
+  const node = manifest.containers
+    .flatMap((container) => container.nodes)
+    .find((candidate) => candidate.id === id);
   if (node === undefined) throw new Error(`no manifest node ${id}`);
   return node;
 };

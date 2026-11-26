@@ -48,12 +48,6 @@ export const BuildConfig = z.object({
   base: z.string().optional(),
 });
 
-export const Session = z.object({
-  name: z.string(),
-  buildConfig: BuildConfig,
-  model: z.string(),
-});
-
 export const WorkspaceContainer = z.object({
   id: z.string().min(1),
   kind: z.literal("workspace"),
@@ -126,7 +120,6 @@ export type WireKind = z.infer<typeof WireKind>;
 export type Port = z.infer<typeof Port>;
 export type Wire = z.infer<typeof Wire>;
 export type BuildConfig = z.infer<typeof BuildConfig>;
-export type Session = z.infer<typeof Session>;
 export type WorkspaceContainer = z.infer<typeof WorkspaceContainer>;
 export type SessionContainer = z.infer<typeof SessionContainer>;
 export type FlowContainer = z.infer<typeof FlowContainer>;

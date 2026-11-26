@@ -123,7 +123,6 @@ export const applyMerges = (
     .map((file) => orchestrators.get(file.path) ?? file);
   const result: Manifest = {
     ...manifest,
-    ...(manifest.nodes === undefined ? {} : { nodes: manifest.nodes.map(withShared) }),
     containers: merged,
     files: Object.fromEntries(
       kept

@@ -8,7 +8,7 @@ import { build, layDown, lockBuild } from "../../../src/core/compiler/build.js";
 import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
 import { emit, reportPath } from "../../../src/core/compiler/emit.js";
 import { hashBuild } from "../../../src/core/compiler/hash.js";
-import { lower, type Manifest } from "../../../src/core/compiler/lower.js";
+import { lower, type Manifest, type ManifestContainer } from "../../../src/core/compiler/lower.js";
 import { pieceOf } from "../../../src/core/compiler/pieces.js";
 import { buildRecord } from "../../../src/core/compiler/record.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
@@ -92,7 +92,7 @@ const approve: WaitReply = { decision: "approve" };
 const manifestWith = (types: string[]) =>
   ({
     nodes: types.map((type, index) => ({ id: `n${index}`, type })),
-  }) as unknown as Required<Pick<Manifest, "nodes">>;
+  }) as unknown as Pick<ManifestContainer, "nodes">;
 
 const buildId = "b1111111-0000-4000-8000-000000000001";
 
@@ -645,7 +645,7 @@ describe("the core run path", () => {
       const withCondition = (condition: string) =>
         ({
           nodes: [{ id: "h", type: "hardstop", settings: { condition } }],
-        }) as unknown as Required<Pick<Manifest, "nodes">>;
+        }) as unknown as Pick<ManifestContainer, "nodes">;
 
       expect(needsClaude(withCondition("tests fail"))).toBe(true);
       expect(needsClaude(withCondition(" "))).toBe(false);

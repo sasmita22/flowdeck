@@ -54,7 +54,7 @@ const failureLine = (failure: BuildCheckFailure) =>
 
 const sharedLines = (manifest: Manifest, path: string, shared: BuildReport["shared"]): string[] => {
   const nodeIds = nodeIdsOf(manifest, path);
-  const prefix = containerOf(manifest, path)?.prefix ?? manifest.prefix ?? "";
+  const prefix = containerOf(manifest, path)?.prefix ?? "";
   return shared.flatMap(({ name, usedBy }) =>
     usedBy.some((id) => nodeIds.includes(id)) ? [`SHARED ${prefix}:${name}`] : [],
   );
@@ -117,7 +117,7 @@ const containerParagraphs = (containers: readonly ManifestContainer[]): string[]
 
 export const auditTurn = (manifest: Manifest, answers: readonly BuildAnswer[] = []): string =>
   [
-    `Dispatch ${kit("handoff-auditor")} once${manifest.prefix === undefined ? "" : ` for the build ${manifest.prefix}`}, with this prompt:`,
+    `Dispatch ${kit("handoff-auditor")} once, with this prompt:`,
     "",
     `PIECE ${auditPiece}`,
     ...answers.flatMap(answerLines),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Manifest, ManifestNode } from "../compiler/lower.js";
+import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
 
 export type RunChoices =
   { kind: "choices"; automatic: boolean } | { kind: "error"; message: string };
@@ -13,7 +13,7 @@ export type RunOptions = {
   auto: boolean;
 };
 
-type ManifestPart = Required<Pick<Manifest, "nodes">>;
+type ManifestPart = Pick<ManifestContainer, "nodes">;
 
 const skippable = (node: ManifestNode) =>
   node.type === "gate" && (node.settings as { skippable?: unknown }).skippable === true;

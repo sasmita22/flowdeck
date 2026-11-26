@@ -1,4 +1,4 @@
-import type { Manifest, ManifestNode } from "../compiler/lower.js";
+import type { Manifest, ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import type { VerifyFileSystem } from "../compiler/verify.js";
 import { pieceOf } from "../compiler/pieces.js";
 import { hasTemplate, templatePath } from "../compiler/handoff-templates.js";
@@ -71,11 +71,9 @@ import { stampedBefore, waitForTurnEnd, type TurnEndEvent, type TurnEvents } fro
 import { parseProducedValue, parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
-export type RunnableManifest = Required<Pick<Manifest, "nodes">> &
-  Partial<Pick<Manifest, "wires" | "values">> & {
-    hash: string;
-    prefix: string;
-  };
+export type RunnableManifest = Pick<ManifestContainer, "prefix" | "nodes"> &
+  Partial<Pick<ManifestContainer, "wires">> &
+  Pick<Manifest, "values"> & { hash: string };
 
 export type RunnerDeps = {
   prompts: { sendPrompt(text: string): Promise<void>; interrupt(): Promise<void> };
@@ -145,7 +143,7 @@ const runnable = new Set<ManifestNode["type"]>([
 
 export function structureProblems(
   nodes: readonly ManifestNode[],
-  wires: Manifest["wires"] = [],
+  wires: ManifestContainer["wires"] = [],
 ): string[] {
   const sectionProblems = parallelSections(nodes, wires).problems.map(
     ({ node, message }) => `${node} ${message}`,
