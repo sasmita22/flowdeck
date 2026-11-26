@@ -3,6 +3,7 @@ import type { WorktreeRemoval } from "../../src/core/run/workspace.js";
 import type {
   Worktree,
   WorktreeAddOptions,
+  WorktreeCheckout,
   WorktreeRemoveOptions,
 } from "../../src/ports/worktree.js";
 
@@ -67,5 +68,10 @@ export class FakeWorktree implements Worktree {
   async deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]> {
     this.deletedRemoteBranches.push({ repo, branch, tip });
     return [];
+  }
+
+  async checkoutAt(path: string): Promise<WorktreeCheckout | undefined> {
+    const held = this.worktrees.get(path);
+    return held === undefined ? undefined : { path, repo: held.repo, branch: held.branch };
   }
 }

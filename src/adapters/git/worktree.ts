@@ -1,8 +1,14 @@
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { WorktreeRemoval } from "../../core/run/workspace.js";
-import type { Worktree, WorktreeAddOptions, WorktreeRemoveOptions } from "../../ports/worktree.js";
+import type {
+  Worktree,
+  WorktreeAddOptions,
+  WorktreeCheckout,
+  WorktreeRemoveOptions,
+} from "../../ports/worktree.js";
 
 const run = promisify(execFile);
 
@@ -139,5 +145,28 @@ export class GitWorktree implements Worktree {
       }
     }
     return moved;
+  }
+
+  async checkoutAt(path: string): Promise<WorktreeCheckout | undefined> {
+    try {
+      if (!(await stat(join(path, ".git"))).isFile()) return undefined;
+      const { stdout } = await run("git", [
+        "-C",
+        path,
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+      ]);
+      const [top, repo] = stdout.trim().split("\n");
+      if (top === undefined || repo === undefined) return undefined;
+      if (top !== (await realpath(path))) return undefined;
+      const branch = await run("git", ["-C", path, "symbolic-ref", "-q", "--short", "HEAD"])
+        .then(({ stdout: name }) => name.trim())
+        .catch(() => "");
+      return branch === "" ? { path: top, repo } : { path: top, repo, branch };
+    } catch {
+      return undefined;
+    }
   }
 }

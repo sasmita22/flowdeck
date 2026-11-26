@@ -232,4 +232,30 @@ describe("FakeWorktree", () => {
     expect(await worktree.hasUnpushed("/r", "flowdeck/a", "main")).toBe(true);
     expect(await worktree.hasUnpushed("/r", "flowdeck/b", "main")).toBe(false);
   });
+
+  it("reads the repo and branch of a worktree it added until it is removed", async () => {
+    const worktree = new FakeWorktree();
+    const options = {
+      repo: "/r",
+      base: "main",
+      branch: "flowdeck/a",
+      path: join(root, "a"),
+      create: true,
+    };
+    await worktree.add(options);
+
+    expect(await worktree.checkoutAt(options.path)).toEqual({
+      path: options.path,
+      repo: "/r",
+      branch: "flowdeck/a",
+    });
+
+    await worktree.remove(options);
+
+    expect(await worktree.checkoutAt(options.path)).toBeUndefined();
+  });
+
+  it("reads nothing at a folder it holds no worktree for", async () => {
+    expect(await new FakeWorktree().checkoutAt(join(root, "unknown"))).toBeUndefined();
+  });
 });
