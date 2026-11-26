@@ -197,6 +197,48 @@ const runEnvironment = (
   };
 };
 
+const heldStatesWrites = () => {
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  const writes: Promise<void>[] = [];
+  let pending = 0;
+  let holding = true;
+  let started = 0;
+  const fs = new (class extends NodeFileSystem {
+    override writeFile(path: string, content: string): Promise<void> {
+      if (!path.endsWith("session-states")) return super.writeFile(path, content);
+      started++;
+      if (!holding) return super.writeFile(path, content);
+      pending++;
+      const landed = gate
+        .then(() => super.writeFile(path, content))
+        .finally(() => {
+          pending--;
+        });
+      writes.push(landed);
+      return landed;
+    }
+  })();
+  return {
+    fs,
+    release: () => open(),
+    holdNoMore: () => {
+      holding = false;
+    },
+    pendingStatesWrites: () => pending,
+    statesWritesStarted: () => started,
+    statesWritesLanded: async () => {
+      let seen = -1;
+      while (seen !== writes.length) {
+        seen = writes.length;
+        await Promise.allSettled(writes);
+      }
+    },
+  };
+};
+
+const macrotask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 const options = (overrides: Partial<EngineHandlerOptions> = {}): EngineHandlerOptions => {
   const fs = new NodeFileSystem();
   return {
@@ -2690,6 +2732,61 @@ describe("createEngineHandler", async () => {
       expect(loaded).toMatchObject({
         value: { run: { status: "running" }, snapshot: { status: "running" } },
       });
+    });
+
+    it.each([
+      ["stop", () => handler.stop()],
+      ["detach", () => handler.detach()],
+    ] as const)(
+      "%s resolves only after the run's pending session-states write has landed",
+      async (_, end) => {
+        const held = heldStatesWrites();
+        handler = handlerWith({ fs: held.fs, run: runEnvironment(held.fs) });
+        flows.save(sessionsWorkflow([{ name: "android", repo: repo.path, branch: "main" }]));
+        try {
+          await startedOn(await builtId());
+          await vi.waitFor(() => expect(held.pendingStatesWrites()).toBeGreaterThan(0));
+          let ended = false;
+          const ending = end().then(() => {
+            ended = true;
+          });
+
+          await macrotask();
+          expect(ended).toBe(false);
+          held.release();
+          await ending;
+
+          expect(held.pendingStatesWrites()).toBe(0);
+        } finally {
+          held.release();
+        }
+      },
+    );
+
+    it("writes no session states after a detach issued while the run's events are still starting", async () => {
+      const held = heldStatesWrites();
+      held.release();
+      let eventsReady: () => void = () => undefined;
+      const eventsGate = new Promise<void>((resolve) => (eventsReady = resolve));
+      const environment = runEnvironment(held.fs);
+      handler = handlerWith({
+        fs: held.fs,
+        run: {
+          ...environment,
+          startEvents: () => eventsGate.then(() => environment.startEvents()),
+        },
+      });
+      flows.save(sessionsWorkflow([{ name: "android", repo: repo.path, branch: "main" }]));
+      await startedOn(await builtId());
+
+      const detaching = handler.detach();
+      await macrotask();
+      eventsReady();
+      await detaching;
+      const writtenByDetach = held.statesWritesStarted();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(held.statesWritesStarted()).toBe(writtenByDetach);
     });
 
     describe("one run at a time per build", () => {
@@ -6671,6 +6768,60 @@ describe("createEngineHandler", async () => {
         await deleteRun(runId);
 
         await expect(stat(folder)).rejects.toThrow(/ENOENT/);
+      });
+
+      it("keeps a deleted run's folder gone when its last session-states write lands after the delete", async () => {
+        const held = heldStatesWrites();
+        handler = handlerWith({
+          openStores: () => ({ runs: store, flows: blueprints }),
+          fs: held.fs,
+          run: runEnvironment(held.fs),
+        });
+        blueprints.save(sessionsWorkflow([{ name: "android", repo: repo.path, branch: "main" }]));
+        try {
+          const runId = await startedOn(await builtId());
+          await untilFinished(runId);
+          expect(held.pendingStatesWrites()).toBeGreaterThan(0);
+
+          const deleting = deleteRun(runId);
+          await macrotask();
+          held.release();
+          await deleting;
+          await held.statesWritesLanded();
+
+          await expect(stat(join(home, "runs", runId))).rejects.toThrow(/ENOENT/);
+        } finally {
+          held.release();
+        }
+      });
+
+      it("deletes a run while another run's session-states write is still held", async () => {
+        const held = heldStatesWrites();
+        handler = handlerWith({
+          openStores: () => ({ runs: store, flows: blueprints }),
+          fs: held.fs,
+          run: runEnvironment(held.fs),
+        });
+        blueprints.save(sessionsWorkflow([{ name: "android", repo: repo.path, branch: "main" }]));
+        try {
+          const kept = await startedOn(await builtId());
+          await untilFinished(kept);
+          expect(held.pendingStatesWrites()).toBeGreaterThan(0);
+          held.holdNoMore();
+          const deleted = await startedOn(await builtId());
+          await untilFinished(deleted);
+
+          let removed = false;
+          const removing = deleteRun(deleted).then(() => {
+            removed = true;
+          });
+
+          await vi.waitFor(() => expect(removed).toBe(true));
+          expect(held.pendingStatesWrites()).toBeGreaterThan(0);
+          await removing;
+        } finally {
+          held.release();
+        }
       });
 
       it("does not pick a deleted run up again when the engine reattaches", async () => {
