@@ -30,7 +30,7 @@ import { createTmpRepo } from "../test/fixtures/tmp-repo.js";
 import { hideWindow, testDisplayFlags } from "../scripts/window-mode.js";
 import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
 import { fakeClaudeRan, launchWithFakeClaude } from "./fake-claude.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const defaultAppPath = join(repoRoot, "out", "Flowdeck-darwin-arm64", "Flowdeck.app");
@@ -95,9 +95,18 @@ const quit = async ({ child, browser }: Launch) => {
 test.afterAll(async () => {
   for (const launch of launches) await quit(launch);
   launches = [];
-  for (const dir of tempDirs) await killRunSessions(dir);
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
+  const failures: unknown[] = [];
+  for (const dir of tempDirs) {
+    try {
+      await endSessionsOfHome(dir);
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   tempDirs = [];
+  if (failures.length > 0)
+    throw new AggregateError(failures, "Some test homes still have tmux sessions");
 });
 
 const toolDir = (tool: string): string => {

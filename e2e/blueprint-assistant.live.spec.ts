@@ -12,7 +12,6 @@ import {
   bpName,
   capture,
   keepEvidence,
-  killTmux,
   modelsAndUsage,
   paneId,
   readBlueprintOverSocket,
@@ -21,6 +20,7 @@ import {
   removeTranscripts,
   toggleId,
 } from "./blueprint-pane.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const ask = "add an Agent node that runs npm test after the planner";
 const agentDeadlineMs = 240_000;
@@ -62,9 +62,10 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    if (flowId !== undefined) {
-      await killTmux(bpName(flowId));
-      await removeTranscripts(home, flowId);
+    try {
+      await endSessionsOfHome(home);
+    } finally {
+      if (flowId !== undefined) await removeTranscripts(home, flowId);
     }
     await rm(home, { recursive: true, force: true });
   }

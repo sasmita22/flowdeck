@@ -10,7 +10,7 @@ import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -28,9 +28,12 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 

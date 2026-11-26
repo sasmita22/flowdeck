@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchApp, type LaunchedApp } from "../scripts/drive.js";
 import { hideWindow } from "../scripts/window-mode.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const packageVersion = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -29,8 +30,12 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  await launched?.close();
-  await rm(home, { recursive: true, force: true });
+  try {
+    await launched?.close();
+  } finally {
+    await endSessionsOfHome(home);
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("opens a window titled Flowdeck", async () => {

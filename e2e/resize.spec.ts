@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { CANVAS_MIN, panelWidthLimits } from "../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../src/app/renderer/test-ids.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -78,6 +79,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });

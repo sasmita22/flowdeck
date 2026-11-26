@@ -21,6 +21,7 @@ import {
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type ColorScheme, type LaunchedApp } from "../scripts/drive.js";
 import { nodeTitle } from "../src/app/renderer/canvas/palette-items.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -124,6 +125,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });

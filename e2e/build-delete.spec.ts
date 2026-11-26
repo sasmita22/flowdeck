@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
@@ -13,7 +13,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 import { sessionWorktree } from "../src/core/run/workspace.js";
 
 const run = promisify(execFile);
@@ -100,17 +100,6 @@ const buildSessions = (pendingId?: string): BuildSession[] =>
     .map((row) => JSON.parse(row.body_json) as { type: string } & BuildSession)
     .filter((event) => event.type === "session");
 
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const killBuildSessions = async () => {
-  if (!existsSync(join(home, "flowdeck.db"))) return;
-  for (const { name } of buildSessions()) {
-    if (!/^fd-build-/.test(name)) continue;
-    await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-    await rm(join(tmuxSockets, name), { force: true });
-  }
-};
-
 const deletedAt = (buildId: string) =>
   rows<{ deleted_at: number | null }>("SELECT deleted_at FROM builds WHERE id = ?", buildId)[0]
     ?.deleted_at;
@@ -155,10 +144,12 @@ test.afterEach(async () => {
   try {
     await closeApp();
   } finally {
-    await killRunSessions(home);
-    await killBuildSessions();
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 

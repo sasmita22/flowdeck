@@ -1,9 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -23,7 +22,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import { buildOnCanvas, buildWorktreePaths, runFromDetail, runIdOf } from "./build-run.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -31,28 +30,6 @@ let repo: TmpRepo | undefined;
 let otherRepo: TmpRepo | undefined;
 
 const git = promisify(execFile);
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const buildSessionNames = (): string[] => {
-  if (!existsSync(join(home, "flowdeck.db"))) return [];
-  const db = new Database(join(home, "flowdeck.db"), { readonly: true });
-  try {
-    return (db.prepare("SELECT body_json FROM build_events").all() as { body_json: string }[])
-      .map((row) => JSON.parse(row.body_json) as { type: string; name?: string })
-      .flatMap((event) =>
-        event.type === "session" && /^fd-build-/.test(event.name ?? "") ? [event.name ?? ""] : [],
-      );
-  } finally {
-    db.close();
-  }
-};
-
-const killBuildSessions = async () => {
-  for (const name of buildSessionNames()) {
-    await git("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-    await rm(join(tmuxSockets, name), { force: true });
-  }
-};
 
 test.beforeEach(async () => {
   launched = undefined;
@@ -65,11 +42,13 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
-    await killBuildSessions();
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    await repo?.cleanup();
-    await otherRepo?.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo?.cleanup();
+      await otherRepo?.cleanup();
+    }
   }
 });
 

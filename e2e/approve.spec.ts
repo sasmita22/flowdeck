@@ -9,7 +9,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun } from "./build-run.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -36,9 +36,12 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 

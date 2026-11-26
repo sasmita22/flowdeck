@@ -11,6 +11,7 @@ import {
 } from "../scripts/drive.js";
 import { controlTestIds, pageTestIds, paletteTestId } from "../src/app/renderer/test-ids.js";
 import { clickToQuit, exited } from "./quit.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let opened: LaunchedApp[];
@@ -63,6 +64,7 @@ test.afterEach(async () => {
     );
     if (failed) throw failed.reason;
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });

@@ -17,7 +17,6 @@ import {
   capture,
   assistantMessages,
   keepEvidence,
-  killTmux,
   lastText,
   modelsAndUsage,
   paneId,
@@ -29,6 +28,7 @@ import {
   toolCalls,
   turnEnded,
 } from "./blueprint-pane.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const fixture = (name: string) =>
   fileURLToPath(new URL(`./fixtures/copy-flow/${name}`, import.meta.url));
@@ -188,9 +188,10 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    for (const id of flowIds) {
-      await killTmux(bpName(id));
-      await removeTranscripts(home, id);
+    try {
+      await endSessionsOfHome(home);
+    } finally {
+      for (const id of flowIds) await removeTranscripts(home, id);
     }
     await rm(home, { recursive: true, force: true });
   }

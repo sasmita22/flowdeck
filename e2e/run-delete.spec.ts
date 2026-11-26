@@ -12,7 +12,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun, runFromDetail, runIdOf } from "./build-run.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const run = promisify(execFile);
 const watchMs = 20_000;
@@ -81,9 +81,12 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 
