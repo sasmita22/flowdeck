@@ -30,7 +30,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
 import { buildAndRun, runIdOf } from "./build-run.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const git = (repo: string, ...args: string[]) => promisify(execFile)("git", ["-C", repo, ...args]);
 
@@ -161,9 +161,12 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 
@@ -563,6 +566,7 @@ test("Review shots", async () => {
   await reviewShot(target.window, testInfo, "small-flow");
   await target.close();
 
+  await endSessionsOfHome(home);
   await rm(home, { recursive: true, force: true });
   home = await mkdtemp(join(tmpdir(), "fd-shell-"));
   target = await launch();
@@ -580,6 +584,7 @@ test("Review shots", async () => {
   await window.keyboard.press("Escape");
   await target.close();
 
+  await endSessionsOfHome(home);
   await rm(home, { recursive: true, force: true });
   home = await mkdtemp(join(tmpdir(), "fd-shell-"));
   seedFlow(home, twoAgents(), repo.path);

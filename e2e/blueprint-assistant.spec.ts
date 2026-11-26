@@ -21,8 +21,7 @@ import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { latestFlowId, type LaunchedApp } from "../scripts/drive.js";
 import { buildAndRun, buildOnCanvas } from "./build-run.js";
-import { killTmux } from "./blueprint-pane.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 import {
   blueprintResults,
   fakeClaudeRan,
@@ -81,13 +80,6 @@ const tmuxAlive = async (name: string) => {
 
 const capture = async (name: string) =>
   (await run("tmux", ["-L", name, "capture-pane", "-p", "-t", `=${name}:`])).stdout;
-
-const killOwnTmux = async () => {
-  if (!existsSync(join(home, "flowdeck.db"))) return;
-  const flowIds = rows<{ id: string }>("SELECT id FROM flows").map(({ id }) => id);
-  for (const flowId of flowIds) await killTmux(bpName(flowId));
-  await killRunSessions(home);
-};
 
 const launches = async () =>
   (await readFile(fakeClaudeRan(home), "utf8").catch(() => ""))
@@ -170,9 +162,12 @@ test.afterEach(async () => {
     launched = undefined;
     await current?.close();
   } finally {
-    await killOwnTmux();
-    await rm(home, { recursive: true, force: true });
-    await repo?.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo?.cleanup();
+    }
   }
 });
 

@@ -23,6 +23,7 @@ import {
 import { CANVAS_MIN } from "../src/app/renderer/shell-store.js";
 import { controlTestIds } from "../src/app/renderer/test-ids.js";
 import type { FlowContainer } from "../src/core/flow/schema.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -149,6 +150,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });

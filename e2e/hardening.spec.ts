@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchOnCanvas, playwrightPage, type LaunchedApp } from "../scripts/drive.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 const remoteUrl = "https://example.com/";
 const settleMs = 2000;
@@ -79,6 +80,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });

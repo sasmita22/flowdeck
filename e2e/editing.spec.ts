@@ -36,7 +36,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { buildAndRun, runIdOf } from "./build-run.js";
-import { killRunSessions } from "./run-sessions.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 import { sessionWorktree, workspaceFolder } from "../src/core/run/workspace.js";
 
 const git = async (repo: string, ...args: string[]) =>
@@ -55,9 +55,12 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
-    await killRunSessions(home);
-    await rm(home, { recursive: true, force: true });
-    for (const cleanup of cleanups.splice(0)) await cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      for (const cleanup of cleanups.splice(0)) await cleanup();
+    }
   }
 });
 

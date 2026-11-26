@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { buildDialogTestIds, controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
@@ -12,6 +12,7 @@ import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let repo: TmpRepo;
@@ -62,17 +63,6 @@ const buildBranches = async (): Promise<string[]> =>
     .split("\n")
     .filter((line) => line !== "");
 
-const tmuxSockets = join(process.env["TMUX_TMPDIR"] ?? "/tmp", `tmux-${userInfo().uid}`);
-
-const killBuildSessions = async () => {
-  if (!existsSync(join(home, "flowdeck.db"))) return;
-  for (const { name } of buildSessions()) {
-    if (!/^fd-build-/.test(name)) continue;
-    await run("tmux", ["-L", name, "kill-server"]).catch(() => undefined);
-    await rm(join(tmuxSockets, name), { force: true });
-  }
-};
-
 const startBuild = async (window: Page, name: string): Promise<string> => {
   await window.getByTestId(controlTestIds.build).click();
   await window.getByTestId(buildDialogTestIds.name).fill(name);
@@ -116,10 +106,13 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   try {
     await launched?.close();
-    await killBuildSessions();
   } finally {
-    await rm(home, { recursive: true, force: true });
-    await repo.cleanup();
+    try {
+      await endSessionsOfHome(home);
+      await rm(home, { recursive: true, force: true });
+    } finally {
+      await repo.cleanup();
+    }
   }
 });
 

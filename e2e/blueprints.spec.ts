@@ -7,6 +7,7 @@ import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { agent, flow } from "../test/fixtures/flow-builders.js";
 import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { launchApp, launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
+import { endSessionsOfHome } from "./own-sessions.js";
 
 let home: string;
 let launched: LaunchedApp | undefined;
@@ -20,6 +21,7 @@ test.afterEach(async () => {
   try {
     await launched?.close();
   } finally {
+    await endSessionsOfHome(home);
     await rm(home, { recursive: true, force: true });
   }
 });
