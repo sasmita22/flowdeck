@@ -16,7 +16,7 @@ import { makeTempClaudeConfig } from "./claude-config.js";
 import { testDisplayFlags, withWindowMode } from "./window-mode.js";
 
 const stepSchemas = {
-  click: z.object({ type: z.literal("click"), testid: z.string().min(1) }),
+  click: z.strictObject({ type: z.literal("click"), testid: z.string().min(1) }),
   "click-at": z.strictObject({
     type: z.literal("click-at"),
     testid: z.string().min(1),
@@ -33,26 +33,26 @@ const stepSchemas = {
       error: "give exactly one of value or label",
     })
     .pipe(
-      z.union([
+      z.xor([
         z.strictObject({ type: z.literal("select"), testid: z.string().min(1), value: z.string() }),
         z.strictObject({ type: z.literal("select"), testid: z.string().min(1), label: z.string() }),
       ]),
     ),
-  "right-click": z.object({ type: z.literal("right-click"), testid: z.string().min(1) }),
-  type: z.object({ type: z.literal("type"), testid: z.string().min(1), text: z.string() }),
-  "wait-for-text": z.object({
+  "right-click": z.strictObject({ type: z.literal("right-click"), testid: z.string().min(1) }),
+  type: z.strictObject({ type: z.literal("type"), testid: z.string().min(1), text: z.string() }),
+  "wait-for-text": z.strictObject({
     type: z.literal("wait-for-text"),
     text: z.string().min(1),
     timeoutMs: z.number().int().positive().optional(),
   }),
-  screenshot: z.object({ type: z.literal("screenshot") }),
-  drag: z.object({
+  screenshot: z.strictObject({ type: z.literal("screenshot") }),
+  drag: z.strictObject({
     type: z.literal("drag"),
     from: z.string().min(1),
     to: z.string().min(1),
-    toPosition: z.object({ x: z.number(), y: z.number() }).optional(),
+    toPosition: z.strictObject({ x: z.number(), y: z.number() }).optional(),
   }),
-  press: z.object({ type: z.literal("press"), key: z.string().min(1) }),
+  press: z.strictObject({ type: z.literal("press"), key: z.string().min(1) }),
   "close-window": z.strictObject({ type: z.literal("close-window") }),
   relaunch: z.strictObject({ type: z.literal("relaunch") }),
   "resize-window": z.strictObject({

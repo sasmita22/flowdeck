@@ -339,6 +339,52 @@ describe("parseSteps", () => {
     expect(parse).toThrow(field);
     expect(parse).not.toThrow("give exactly one");
   });
+
+  it("rejects a click step with a position key, naming the key", () => {
+    const parse = () =>
+      parseSteps(
+        JSON.stringify([
+          { type: "screenshot" },
+          { type: "click", testid: "canvas", position: { x: 6, y: 6 } },
+        ]),
+      );
+
+    expect(parse).toThrow("step 2 (click)");
+    expect(parse).toThrow('Unrecognized key: "position"');
+    expect(parse).not.toThrow("unknown step type");
+  });
+
+  it.each([
+    ["right-click", { testid: "a" }],
+    ["type", { testid: "a", text: "hi" }],
+    ["wait-for-text", { text: "ready" }],
+    ["screenshot", {}],
+    ["drag", { from: "palette-agent", to: "canvas" }],
+    ["press", { key: "Meta+z" }],
+    ["click-at", { testid: "canvas", position: { x: 6, y: 6 } }],
+    ["select", { testid: "m", value: "haiku" }],
+  ])("rejects an extra key on a %s step, naming the step and the key", (type, fields) => {
+    const parse = () =>
+      parseSteps(JSON.stringify([{ type: "screenshot" }, { type, ...fields, bogus: 1 }]));
+
+    expect(parse).toThrow(`step 2 (${type})`);
+    expect(parse).toThrow('Unrecognized key: "bogus"');
+    expect(parse).not.toThrow("unknown step type");
+  });
+
+  it("rejects an extra key inside a drag toPosition, naming the key", () => {
+    const parse = () =>
+      parseSteps(
+        JSON.stringify([
+          { type: "screenshot" },
+          { type: "drag", from: "palette-agent", to: "canvas", toPosition: { x: 1, y: 1, z: 1 } },
+        ]),
+      );
+
+    expect(parse).toThrow("step 2 (drag)");
+    expect(parse).toThrow('Unrecognized key: "z"');
+    expect(parse).not.toThrow("unknown step type");
+  });
 });
 
 describe("runSteps", () => {
