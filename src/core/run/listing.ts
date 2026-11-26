@@ -112,7 +112,7 @@ export const buildProjectSchema = z.object({
 
 export type BuildProject = z.infer<typeof buildProjectSchema>;
 
-export const buildEntrySchema = z.object({
+const buildEntrySchema = z.object({
   name: z.string(),
   kind: z.enum(["folder", "file"]),
 });

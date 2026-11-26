@@ -92,17 +92,17 @@ export const isCanvasItemType = (value: string): value is CanvasItemType =>
 
 export { nodeDefaults };
 
-export type WireEnd = { node: string; port: string };
+type WireEnd = { node: string; port: string };
 
 type Position = { x: number; y: number };
 
-export type NoteBox = { x: number; y: number; width: number; height: number };
+type NoteBox = { x: number; y: number; width: number; height: number };
 
-export type NodeMenu = { nodeId: string; x: number; y: number };
+type NodeMenu = { nodeId: string; x: number; y: number };
 
-export type Focus = { node: string; seq: number };
+type Focus = { node: string; seq: number };
 
-export type CanvasSize = { width: number; height: number };
+type CanvasSize = { width: number; height: number };
 
 export const defaultCanvasSize: CanvasSize = { width: 1600, height: 1000 };
 
@@ -405,7 +405,7 @@ const nextTo = (flow: Flow, selection: readonly string[]): Position => {
     : { x: rightEdge(anchor) + gap, y: anchor.position.y };
 };
 
-export const summaryLookup =
+const summaryLookup =
   (summaries: readonly FlowSummary[]): LibraryLookup =>
   (flowId) => {
     const summary = summaries.find((candidate) => candidate.flowId === flowId);

@@ -308,8 +308,7 @@ const withRequestTarget = (flow: Flow, request: BuildRequest): Flow => {
 
 export type StartedBuild = { kind: "started"; pendingId: string };
 
-export type StartBuildResult =
-  { ok: false; errors: ValidationError[] } | (StartedBuild & { flow: Flow });
+type StartBuildResult = { ok: false; errors: ValidationError[] } | (StartedBuild & { flow: Flow });
 
 const libraryRules = new Set([libraryUse.id, libraryLabels.id, libraryLoops.id]);
 

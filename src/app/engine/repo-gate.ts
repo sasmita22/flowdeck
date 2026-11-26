@@ -6,7 +6,7 @@ import type { GitState } from "../../ports/git-state.js";
 
 export const repoGateDeadlineMs = 3000;
 
-export type RepoGateOptions = {
+type RepoGateOptions = {
   own: readonly string[];
   sessions?: readonly RunSessionRecord[];
   seen: readonly string[];
@@ -18,7 +18,7 @@ export type RepoGateOptions = {
   deadlineMs?: number;
 };
 
-export type RepoGate = {
+type RepoGate = {
   check: (payload: Record<string, unknown>) => Promise<void>;
   close: () => void;
 };

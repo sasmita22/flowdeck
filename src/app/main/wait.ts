@@ -2,9 +2,9 @@ import { pendingWaitSchema, waitAnswerSchema, type PendingWait } from "../../cor
 import type { EnginePush } from "../engine/protocol.js";
 import type { EngineClient } from "./engine-client.js";
 
-export type RunWait = { runId: string; value: PendingWait | null };
+type RunWait = { runId: string; value: PendingWait | null };
 
-export type WaitRelay = {
+type WaitRelay = {
   onPush(push: EnginePush): void;
   latest(runId: string): PendingWait | null;
 };

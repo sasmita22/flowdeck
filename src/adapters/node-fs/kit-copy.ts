@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rename, stat, writeFile } from "node
 import { dirname, join, relative } from "node:path";
 import { kitVersion } from "../../core/compiler/kit-version.js";
 
-export type PreparedKit = { dir: string; version: string };
+type PreparedKit = { dir: string; version: string };
 
 const manifestPath = join(".claude-plugin", "plugin.json");
 

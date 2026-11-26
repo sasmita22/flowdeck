@@ -13,7 +13,7 @@ import type {
   SavedFlowRef,
 } from "../../ports/flow-store.js";
 
-export type SqliteFlowStoreOptions = {
+type SqliteFlowStoreOptions = {
   db: Database.Database;
   now?: () => Date;
   newId?: () => string;

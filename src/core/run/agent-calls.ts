@@ -14,7 +14,7 @@ export type AgentCallEvent = {
   payload: Record<string, unknown>;
 };
 
-export type Marker = { nodeId: string } | { piece: string } | Record<string, never>;
+type Marker = { nodeId: string } | { piece: string } | Record<string, never>;
 
 const nodeLead = "NODE ";
 const pieceLead = "PIECE ";

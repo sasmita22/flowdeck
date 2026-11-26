@@ -5,9 +5,9 @@ import { costOf, type UsageEntry } from "./budget.js";
 import { donePayload, nodeStatus, type RunEvent } from "./run-events.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 
-export type RoundLine = { round: number; tokens: number; cost: number };
+type RoundLine = { round: number; tokens: number; cost: number };
 
-export type CostLine = {
+type CostLine = {
   nodeId: string;
   tokens: number;
   cost: number;
@@ -97,7 +97,7 @@ function roundAt(marks: readonly RoundMark[], when: Mark | number | undefined): 
   return marks.findLast((mark) => byMark(mark, when) < 0)?.round;
 }
 
-export type UsageOwners = {
+type UsageOwners = {
   calls: ReadonlyMap<string, string>;
   types: ReadonlyMap<string, string>;
 };

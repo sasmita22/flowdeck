@@ -1,7 +1,7 @@
 import type { NodeType, Port } from "../../../core/flow/schema.js";
 import { registry } from "../../../core/nodes/registry.js";
 
-export interface NodeLook {
+interface NodeLook {
   tag: string;
   group: string;
   outline: string;

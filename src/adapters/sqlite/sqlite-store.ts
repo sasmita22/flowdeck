@@ -49,7 +49,7 @@ import type {
 } from "../../ports/store.js";
 import { openDatabase } from "./open-database.js";
 
-export type SqliteStoreOptions =
+type SqliteStoreOptions =
   | { db: Database.Database; now?: () => Date }
   | { path: string; now?: () => Date; migrationsDir?: string };
 

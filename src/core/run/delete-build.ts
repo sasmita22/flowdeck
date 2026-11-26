@@ -3,7 +3,7 @@ import { legacyBranchName } from "./branch-name.js";
 import type { RunWorktree, WorktreeRemoval } from "./workspace.js";
 import type { BuildRecord, BuildWorktree, Store } from "./store.js";
 
-export type DeleteBuildDeps = {
+type DeleteBuildDeps = {
   store: Pick<Store, "findBuild" | "listRuns" | "deleteBuild" | "buildWorktrees">;
   worktree: {
     remove(options: RunWorktree & { force?: boolean }): Promise<WorktreeRemoval>;

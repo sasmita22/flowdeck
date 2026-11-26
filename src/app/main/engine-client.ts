@@ -13,7 +13,7 @@ export type EnginePort = {
 
 export type EngineRequestOptions = { timeoutMs?: number };
 
-export type EngineClientOptions = { port: EnginePort; timeoutMs: number };
+type EngineClientOptions = { port: EnginePort; timeoutMs: number };
 
 type Pending = {
   resolve(value: unknown): void;

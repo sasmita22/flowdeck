@@ -1,7 +1,7 @@
 import { agentCallOf } from "./agent-calls.js";
 import { stampedBefore, turnFailure, type TurnEndEvent, type TurnEvents } from "./turns.js";
 
-export type SectionWatchDeps = {
+type SectionWatchDeps = {
   events: TurnEvents;
   sessionId: string;
   armedAt: number;

@@ -18,7 +18,7 @@ import type { HumanDecision } from "./wait.js";
 
 export const digestCap = 12_000;
 
-export type RunHeader = Pick<
+type RunHeader = Pick<
   BuildRecord,
   "name" | "blueprintName" | "blueprintVersion" | "repo" | "branch" | "values"
 > & { otherRepos?: OtherRepo[] };
@@ -29,7 +29,7 @@ type DigestStageNode = StageNode & { instructions?: string };
 
 export type DigestStageGroup = Omit<StageGroup, "nodes"> & { nodes: DigestStageNode[] };
 
-export type DigestInput = {
+type DigestInput = {
   build: RunHeader & Pick<BuildRecord, "hash">;
   stages: DigestStageGroup[];
   events: readonly StoredEvent[];

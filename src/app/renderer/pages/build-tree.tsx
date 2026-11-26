@@ -3,7 +3,7 @@ import { fileTree, type FileTreeNode } from "../../../core/run/file-tree.js";
 import { Icon } from "../icons.js";
 import { pageTestIds } from "../test-ids.js";
 
-export type FileSelection = { selected: string | null; onSelect: (path: string) => void };
+type FileSelection = { selected: string | null; onSelect: (path: string) => void };
 
 function FileRow({
   node,

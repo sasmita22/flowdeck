@@ -3,7 +3,7 @@ import { usedBy } from "../../core/flow/libraries.js";
 import type { Actions } from "./actions.js";
 import type { LibraryState } from "./library-store.js";
 
-export const isLibrary = (kind: FlowSummary["kind"]) =>
+const isLibrary = (kind: FlowSummary["kind"]) =>
   kind === "node-library" || kind === "session-library";
 
 export function libraryUsers(

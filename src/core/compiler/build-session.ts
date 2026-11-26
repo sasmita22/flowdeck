@@ -3,7 +3,7 @@ type HookEntry = {
   hooks: { type: "command"; command: string; timeout?: number }[];
 }[];
 
-export type BuildSessionSettings = {
+type BuildSessionSettings = {
   permissions: { allow: string[]; deny: string[]; defaultMode: string };
   hooks: {
     PreToolUse: HookEntry;

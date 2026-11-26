@@ -16,7 +16,7 @@ import type { BuildStepEvent } from "../../ports/build-agents.js";
 import type { EventEntry, Store } from "../../ports/store.js";
 import type { EnginePush } from "./protocol.js";
 
-export type ActivityTrackerOptions = {
+type ActivityTrackerOptions = {
   runId: string;
   now: () => number;
   publish: (push: EnginePush) => void;
@@ -27,7 +27,7 @@ export type ActivityTrackerOptions = {
   sessionNodes?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
-export type ActivityTracker = {
+type ActivityTracker = {
   store(inner: Store): Store;
   watch(events: TurnEvents, sessionId: string): () => void;
 };
@@ -148,14 +148,14 @@ export function createActivityTracker(options: ActivityTrackerOptions): Activity
   };
 }
 
-export type BuildActivityOptions = {
+type BuildActivityOptions = {
   pendingId: string;
   now: () => number;
   activity: Pick<Store, "appendBuildActivity" | "buildActivity" | "appendBuildStepText">;
   publish: (push: EnginePush) => void;
 };
 
-export type BuildActivity = {
+type BuildActivity = {
   (call: AgentCall, report?: string): void;
   step(event: BuildStepEvent): void;
 };

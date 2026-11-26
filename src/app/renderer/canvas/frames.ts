@@ -21,14 +21,14 @@ const containerTitleFont = "600 11px var(--f-mono)";
 
 const containerTitleTracking = 0.04 * 11;
 
-export type LabelFont = keyof typeof labelFonts;
+type LabelFont = keyof typeof labelFonts;
 
 const charWidths: Record<LabelFont, number> = { body: 7 };
 
 export const isContainer = (node: Pick<Node, "type">): boolean =>
   node.type === "loop" || node.type === "foreach";
 
-export const containerSub = (node: Node): string | undefined => {
+const containerSub = (node: Node): string | undefined => {
   if (node.type === "loop") return `max ${node.settings.cap}`;
   if (node.type === "foreach") return node.settings.file;
   return undefined;

@@ -3,7 +3,7 @@ import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { RunState } from "./run-store.js";
 
-export type ItemMenuEntry = {
+type ItemMenuEntry = {
   testId: string;
   label: string;
   onSelect(): void;

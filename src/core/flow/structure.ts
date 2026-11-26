@@ -3,7 +3,7 @@ import type { BuildConfig, Flow, FlowContainer, Node } from "./schema.js";
 
 type StructureNode = Pick<Node, "id" | "type" | "parent">;
 
-export type BodyProblem = {
+type BodyProblem = {
   node: string;
   message: string;
   parentMissing?: true;

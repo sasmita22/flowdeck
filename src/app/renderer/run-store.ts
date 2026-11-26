@@ -45,7 +45,7 @@ import { labelFor } from "../../core/nodes/defaults.js";
 import type { SaveState } from "./save-store.js";
 import { buildTarget, sessionFolder, type BuildTarget } from "./workspace-store.js";
 
-export type RunBridge = Pick<
+type RunBridge = Pick<
   FlowdeckBridge,
   | "buildVersion"
   | "runBuild"
@@ -73,13 +73,13 @@ export type RunBridge = Pick<
 
 export type RunChoice = { auto: boolean };
 
-export type RunDialog = { buildId: string };
+type RunDialog = { buildId: string };
 
-export type IgnoredNode = { id: string; label: string };
+type IgnoredNode = { id: string; label: string };
 
 export type BranchMode = "new" | "existing";
 
-export type ExistingBranch = { name: string; reason: string | null };
+type ExistingBranch = { name: string; reason: string | null };
 
 export type BuildDialog = {
   flowId: string;
@@ -110,7 +110,7 @@ type BuildDialogEdit = Partial<
   >
 >;
 
-export type BuildSource = {
+type BuildSource = {
   flowId: string;
   version: number;
   buildConfig: BuildConfig;
@@ -118,7 +118,7 @@ export type BuildSource = {
   problem?: string;
 };
 
-export type VariableGroup = {
+type VariableGroup = {
   path: string | null;
   heading: string | null;
   variables: FoundVariable[];
@@ -173,15 +173,15 @@ const usedLibraries = (flow: Flow, uses: readonly LibraryUse[]): LibraryLookup =
   };
 };
 
-export type BuildCardRun = {
+type BuildCardRun = {
   run: { id: string; status: SnapshotStatus } | null;
 };
 
-export type KeptBuild = { buildId: string } & KeptAfterDelete;
+type KeptBuild = { buildId: string } & KeptAfterDelete;
 
 export type StageSelection = { nodeId: string; round?: number };
 
-export type DeleteQuestion =
+type DeleteQuestion =
   | { kind: "build"; id: string }
   | { kind: "pending"; id: string }
   | { kind: "run"; id: string; from: "runs" | "run-page" };
@@ -193,7 +193,7 @@ export type ConfirmingDelete =
 export const losesWork = (question: ConfirmingDelete): boolean =>
   question.kind !== "run" && (question.preview.dirtyWorktree || question.preview.unpushedBranch);
 
-export type DeleteWorktree = { path: string; branch: string; losesWork: boolean };
+type DeleteWorktree = { path: string; branch: string; losesWork: boolean };
 
 export const selectDeleteWorktrees = (question: ConfirmingDelete): DeleteWorktree[] =>
   question.kind === "run"

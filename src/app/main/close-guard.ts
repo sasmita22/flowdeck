@@ -1,6 +1,6 @@
-export type CloseGuardOptions = { requestClose: () => void; closeWindow: () => void };
+type CloseGuardOptions = { requestClose: () => void; closeWindow: () => void };
 
-export type CloseGuard = {
+type CloseGuard = {
   setDirty(dirty: boolean): void;
   onClose(event: { preventDefault(): void }): void;
   answer(answer: "close" | "cancel"): void;

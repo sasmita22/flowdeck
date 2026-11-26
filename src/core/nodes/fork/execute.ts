@@ -3,9 +3,9 @@ import { agentPrompt, agentType, type AgentTurnNode } from "../agent/execute.js"
 
 export type ParallelSection = { fork: string; join: string; branches: string[] };
 
-export type SectionProblem = { node: string; message: string };
+type SectionProblem = { node: string; message: string };
 
-export type ParallelSections = { sections: ParallelSection[]; problems: SectionProblem[] };
+type ParallelSections = { sections: ParallelSection[]; problems: SectionProblem[] };
 
 export type SectionNode = Pick<Node, "id" | "type" | "parent">;
 

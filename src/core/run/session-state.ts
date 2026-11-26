@@ -2,9 +2,9 @@ import { nodeStatus } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import type { EventEntry } from "./store.js";
 
-export type SessionState = "not-started" | "running" | "waiting" | "done" | "failed";
+type SessionState = "not-started" | "running" | "waiting" | "done" | "failed";
 
-export type SessionNodes = { nodeIds: readonly string[]; stopNode: string | undefined };
+type SessionNodes = { nodeIds: readonly string[]; stopNode: string | undefined };
 
 export function sessionState(session: SessionNodes, events: readonly EventEntry[]): SessionState {
   const statusOf = (nodeId: string): NodeState =>

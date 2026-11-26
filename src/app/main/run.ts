@@ -1,7 +1,7 @@
 import type { RunSnapshot } from "../../core/run/snapshot.js";
 import type { EnginePush } from "../engine/protocol.js";
 
-export type RunRelay = {
+type RunRelay = {
   onPush(push: EnginePush): void;
   latest(runId: string): RunSnapshot | null;
 };

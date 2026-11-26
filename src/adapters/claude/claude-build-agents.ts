@@ -13,9 +13,9 @@ import type { EventSource } from "../../ports/event-source.js";
 import type { SessionHost } from "../../ports/session-host.js";
 import type { ClaudeCli } from "./claude-cli.js";
 
-export type BuildSessionEvents = { events: EventSource; stop: () => Promise<void> };
+type BuildSessionEvents = { events: EventSource; stop: () => Promise<void> };
 
-export type ClaudeBuildAgentsDeps = {
+type ClaudeBuildAgentsDeps = {
   home: string;
   sessions: (socketName: string) => SessionHost;
   cli: (sessions: SessionHost) => ClaudeCli;

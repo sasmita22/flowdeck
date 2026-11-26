@@ -20,7 +20,7 @@ const fable: Rates = { input: 10, output: 50, cacheRead: 0.25 };
 const opus: Rates = { input: 5, output: 25, cacheRead: 0.5 };
 const sonnet: Rates = { input: 2, output: 10, cacheRead: 0.2 };
 
-export const prices: Record<string, Rates> = {
+const prices: Record<string, Rates> = {
   "claude-fable-5-1": fable,
   "claude-mythos-5-1": fable,
   "claude-fable-5": { input: 10, output: 50, cacheRead: 1 },

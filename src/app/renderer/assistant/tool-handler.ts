@@ -41,7 +41,7 @@ import {
 import type { NavState } from "../nav-store.js";
 import type { SaveState } from "../save-store.js";
 
-export type ToolHandlerBridge = Pick<
+type ToolHandlerBridge = Pick<
   FlowdeckBridge,
   "openFlow" | "listFlows" | "onToolCall" | "onToolTurnEnd" | "answerToolCall"
 >;

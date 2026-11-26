@@ -1,6 +1,6 @@
 import type { Flow } from "../../../core/flow/schema.js";
 
-export type Shortcut =
+type Shortcut =
   | "undo"
   | "redo"
   | "save"

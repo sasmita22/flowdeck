@@ -40,7 +40,7 @@ export type OpenedSession = {
   stop(): Promise<void>;
 };
 
-export type ExecuteDeps = {
+type ExecuteDeps = {
   fs: VerifyFileSystem & Pick<RunnerDeps["files"], "writeFile">;
   waiter: HumanWaiter;
   startEvents(socketPath: string): Promise<{
@@ -68,10 +68,9 @@ export interface StartedSessionsView {
   failure(): { container: string; node: string } | undefined;
 }
 
-export type LoadBuildResult =
-  { kind: "loaded"; build: LoadedBuild } | { kind: "error"; message: string };
+type LoadBuildResult = { kind: "loaded"; build: LoadedBuild } | { kind: "error"; message: string };
 
-export type Execution = {
+type Execution = {
   store: Store;
   runId: string;
   manifest: LoadedBuild;

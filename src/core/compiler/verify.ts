@@ -7,9 +7,9 @@ export type VerifyFileSystem = {
   readFile(path: string): Promise<string>;
 };
 
-export type VerifyProblem = { path: string; problem: "changed" | "missing" | "extra" };
+type VerifyProblem = { path: string; problem: "changed" | "missing" | "extra" };
 
-export type VerifyResult = { ok: true } | { ok: false; problems: VerifyProblem[] };
+type VerifyResult = { ok: true } | { ok: false; problems: VerifyProblem[] };
 
 const manifestPath = "manifest.json";
 

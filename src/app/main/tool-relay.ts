@@ -15,7 +15,7 @@ export type ToolRelayRequestEngine = (
   options: EngineRequestOptions,
 ) => Promise<unknown>;
 
-export type ToolRelayOptions = {
+type ToolRelayOptions = {
   socket: ToolSocket;
   send: ToolRelaySend;
   requestEngine?: ToolRelayRequestEngine;
@@ -25,7 +25,7 @@ const buildToolTimeoutMs = 30_000;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export type ToolRelay = {
+type ToolRelay = {
   start(path: string): Promise<void>;
   answer(requestId: string, result: unknown): void;
   failAll(reason: string): void;

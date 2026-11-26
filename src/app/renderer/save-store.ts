@@ -16,13 +16,13 @@ export type SaveBridge = Pick<
   | "answerRunQuit"
 >;
 
-export type CloseChoice = "save" | "discard" | "cancel";
+type CloseChoice = "save" | "discard" | "cancel";
 
-export type SaveWarningChoice = "save" | "cancel";
+type SaveWarningChoice = "save" | "cancel";
 
-export type RunQuitPrompt = "closed" | "asking" | "stopping";
+type RunQuitPrompt = "closed" | "asking" | "stopping";
 
-export const untitled = "Untitled";
+const untitled = "Untitled";
 
 export type SaveState = {
   saving: boolean;

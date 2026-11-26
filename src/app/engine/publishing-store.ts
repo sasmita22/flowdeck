@@ -3,7 +3,7 @@ import { runSnapshot } from "../../core/run/snapshot.js";
 import type { RunStatus, Store } from "../../ports/store.js";
 import type { EnginePush } from "./protocol.js";
 
-export type PublishingStoreOptions = {
+type PublishingStoreOptions = {
   store: Store;
   runId: string;
   nodeIds: readonly string[];

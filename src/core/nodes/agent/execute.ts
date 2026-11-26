@@ -5,7 +5,7 @@ import { answerContext } from "../ask/execute.js";
 import { withItem } from "../foreach/execute.js";
 import { producedName } from "./settings.js";
 
-export type AgentOutcome = "done" | "failed";
+type AgentOutcome = "done" | "failed";
 
 export type AgentTurnNode = { id: string; produces?: string } & Handoff;
 

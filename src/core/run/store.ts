@@ -24,7 +24,7 @@ export type BuildSource = { flowId: string; version: number };
 
 export type BuildFileRecord = { path: string; sha256: string };
 
-export type BuildNodeRecord = { nodeId: string; type: string; config: unknown; file?: string };
+type BuildNodeRecord = { nodeId: string; type: string; config: unknown; file?: string };
 
 export type NewBuild = {
   id: string;

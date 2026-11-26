@@ -1,11 +1,11 @@
 type HookEntry = { matcher?: string; hooks: { type: "command"; command: string }[] }[];
 
-export type BlueprintSessionSettings = {
+type BlueprintSessionSettings = {
   permissions: { allow: string[]; deny: string[]; defaultMode: "dontAsk" };
   hooks: { Stop: HookEntry; PreToolUse: HookEntry };
 };
 
-export type GithubMcpServer = {
+type GithubMcpServer = {
   type: "http";
   url: string;
   headers: { Authorization: string };

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const waitRequestSchema = z.discriminatedUnion("kind", [
+const waitRequestSchema = z.discriminatedUnion("kind", [
   z.object({ nodeId: z.string(), kind: z.literal("gate"), shown: z.string() }),
   z.object({
     nodeId: z.string(),

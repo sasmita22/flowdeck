@@ -228,7 +228,7 @@ export const producedChoices = (nodes: readonly Pick<Node, "settings">[]): Choic
 export const containerFields = (container: FlowContainer): FieldDescription[] =>
   describeFields(containerSettings[container.kind], containerForm(container));
 
-export type SharedField = "model" | "repo" | "branch";
+type SharedField = "model" | "repo" | "branch";
 
 const sharedFields: Readonly<Record<string, SharedField>> = {
   model: "model",

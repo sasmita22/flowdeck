@@ -1,4 +1,4 @@
-export const EMPTY_ENV_CARRIER = "FLOWDECK_EMPTY_ENV";
+const EMPTY_ENV_CARRIER = "FLOWDECK_EMPTY_ENV";
 
 type Env = Record<string, string | undefined>;
 

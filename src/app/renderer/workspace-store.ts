@@ -12,9 +12,9 @@ import type { FlowdeckBridge } from "../preload/bridge.js";
 import type { CanvasState } from "./canvas/store.js";
 import type { SaveState } from "./save-store.js";
 
-export type WorkspaceBridge = Pick<FlowdeckBridge, "workspaceInfo">;
+type WorkspaceBridge = Pick<FlowdeckBridge, "workspaceInfo">;
 
-export type WorkspaceInfo = { state: FolderState; base: string | null } | null;
+type WorkspaceInfo = { state: FolderState; base: string | null } | null;
 
 export type WorkspaceState = {
   folder: BuildConfig | null;

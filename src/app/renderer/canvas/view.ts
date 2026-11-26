@@ -203,7 +203,7 @@ const hasFrame = (container: FlowContainer) => container.nodes.length > 0;
 
 type End = { node: string; port: string };
 
-export type ConnectionRoute =
+type ConnectionRoute =
   { kind: "sessions"; from: string; to: string } | { kind: "wire"; from: End; to: End };
 
 type Drag = {

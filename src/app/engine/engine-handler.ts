@@ -376,7 +376,7 @@ function detachable(store: Store, detached: () => boolean): Store {
 
 type Continuation = { kind: "retry"; nodeId: string } | { kind: "resume" };
 
-export type BuiltVersion = BuildVersionStarted | Extract<BuildVersionResult, { kind: "error" }>;
+type BuiltVersion = BuildVersionStarted | Extract<BuildVersionResult, { kind: "error" }>;
 
 type BuildProgressEntry = Omit<Extract<EnginePush, { push: "build-progress" }>, "push">;
 

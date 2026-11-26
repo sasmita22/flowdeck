@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { StoreApi } from "zustand/vanilla";
 import type { ShellState } from "./shell-store.js";
 
-export type PanelSide = "left" | "right";
+type PanelSide = "left" | "right";
 
 function PanelIcon({ side }: { side: PanelSide }) {
   const edge = side === "left" ? 6 : 10;

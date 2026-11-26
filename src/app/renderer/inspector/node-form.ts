@@ -133,7 +133,7 @@ export const describeNodeFields = (
   return type === "branch" ? branchFields(fields, flow, settings) : fields;
 };
 
-export type SettingResult = { node: Node } | { error: string };
+type SettingResult = { node: Node } | { error: string };
 
 export const applyNodeSetting = (node: Node, path: Path, value: FieldValue): SettingResult => {
   if (forms[node.type].hidden?.has(path.join("."))) return { error: lockedMessage };
