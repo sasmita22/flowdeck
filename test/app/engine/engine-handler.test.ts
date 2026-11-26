@@ -1,8 +1,18 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import {
   afterEach,
@@ -14,6 +24,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { GitFolderState } from "../../../src/adapters/git/git-state.js";
 import { GitWorktree } from "../../../src/adapters/git/worktree.js";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
@@ -51,7 +62,7 @@ import type {
 import type { HookEventKind } from "../../../src/ports/event-source.js";
 import type { FileSystem } from "../../../src/ports/file-system.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
-import type { WorktreeAddOptions } from "../../../src/ports/worktree.js";
+import type { WorktreeAddOptions, WorktreeRemoveOptions } from "../../../src/ports/worktree.js";
 import { FakeBuildAgents, type FakeBuildScript } from "../../fakes/fake-build-agents.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -1977,6 +1988,267 @@ describe("createEngineHandler", async () => {
 
       expect(tmux.ended).toEqual([]);
     });
+
+    describe("on real git", () => {
+      const committer = [
+        "-c",
+        "user.name=Flowdeck Test",
+        "-c",
+        "user.email=test@flowdeck.invalid",
+        "-c",
+        "commit.gpgsign=false",
+      ];
+      const gitIn = async (folder: string, ...args: string[]) =>
+        (await promisify(execFile)("git", ["-C", folder, ...args])).stdout;
+      const registered = async (repo: string) =>
+        (await gitIn(repo, "worktree", "list", "--porcelain"))
+          .split("\n")
+          .filter((line) => line.startsWith("worktree "))
+          .map((line) => line.slice("worktree ".length));
+      const branchesOf = (repo: string) =>
+        gitIn(repo, "branch", "--list", "--format=%(refname:short)");
+
+      let realHome: string;
+      let outside: string;
+      let repo: string;
+      const git = new GitWorktree();
+
+      beforeEach(async () => {
+        realHome = await realpath(await mkdtemp(join(tmpdir(), "fd-clean-home-")));
+        outside = await realpath(await mkdtemp(join(tmpdir(), "fd-clean-outside-")));
+        const made = await createTmpRepo({ commit: true });
+        repo = made.path;
+      });
+
+      afterEach(async () => {
+        await rm(realHome, { recursive: true, force: true });
+        await rm(outside, { recursive: true, force: true });
+        await rm(repo, { recursive: true, force: true });
+      });
+
+      const addOn = (branch: string, path: string, create = true) =>
+        git.add({ repo, base: "main", branch, path, create });
+
+      const startedAtRealHome = async (home = realHome) => {
+        const handler = createEngineHandler(
+          options({
+            home,
+            fs: new NodeFileSystem(),
+            openStores: () => ({ ...stores(), migrations: wiped }),
+            worktree: git,
+            gitState: new GitFolderState(),
+          }),
+        );
+        await handler.startUp();
+      };
+
+      it("unregisters the Flowdeck worktrees it deletes and their flowdeck branches, leaving the user's worktree and branch alone", async () => {
+        await addOn("flowdeck/b1", sessionWorktree(workspaceDir(realHome, "b1"), "s", repo));
+        await addOn("flowdeck/b2", join(realHome, "workspaces", "b2", basename(repo)));
+        await addOn("flowdeck/abcd1234", join(realHome, "worktrees", "abcd1234"));
+        await addOn("user/wt", join(outside, "wt"));
+        await gitIn(repo, "branch", "user/keep");
+        await gitIn(repo, "worktree", "add", "--detach", join(outside, "gone"));
+        await rm(join(outside, "gone"), { recursive: true, force: true });
+
+        await startedAtRealHome();
+
+        expect((await registered(repo)).sort()).toEqual(
+          [repo, join(outside, "gone"), join(outside, "wt")].sort(),
+        );
+        expect(await branchesOf(repo)).toBe("main\nuser/keep\nuser/wt\n");
+      });
+
+      it("keeps a flowdeck branch that holds commits found nowhere else", async () => {
+        const path = sessionWorktree(workspaceDir(realHome, "b1"), "s", repo);
+        await addOn("flowdeck/b1", path);
+        await writeFile(join(path, "made.txt"), "made\n");
+        await gitIn(path, "add", "made.txt");
+        await gitIn(path, ...committer, "commit", "--quiet", "-m", "made");
+
+        await startedAtRealHome();
+
+        expect(await registered(repo)).toEqual([repo]);
+        expect(await branchesOf(repo)).toBe("flowdeck/b1\nmain\n");
+      });
+
+      it("keeps a branch not named flowdeck/ that a Flowdeck worktree held", async () => {
+        await gitIn(repo, "branch", "test/syncer-build");
+        await addOn(
+          "test/syncer-build",
+          sessionWorktree(workspaceDir(realHome, "b1"), "s", repo),
+          false,
+        );
+
+        await startedAtRealHome();
+
+        expect(await registered(repo)).toEqual([repo]);
+        expect(await branchesOf(repo)).toBe("main\ntest/syncer-build\n");
+      });
+
+      it("unregisters the Flowdeck worktrees when the home is reached through a symlink", async () => {
+        const linkedHome = join(outside, "home");
+        await symlink(realHome, linkedHome);
+        await addOn("flowdeck/b1", sessionWorktree(workspaceDir(realHome, "b1"), "s", repo));
+        await addOn("flowdeck/abcd1234", join(realHome, "worktrees", "abcd1234"));
+
+        await startedAtRealHome(linkedHome);
+
+        expect(await registered(repo)).toEqual([repo]);
+        expect(await branchesOf(repo)).toBe("main\n");
+      });
+
+      it("leaves alone a user's worktree that a symlink under the home leads to", async () => {
+        const users = join(outside, "wt");
+        await addOn("user/wt", users);
+        await writeFile(join(users, "mine.txt"), "mine\n");
+        await symlink(outside, join(realHome, "worktrees"));
+
+        await startedAtRealHome();
+
+        expect((await registered(repo)).sort()).toEqual([repo, users].sort());
+        expect(await readFile(join(users, "mine.txt"), "utf8")).toBe("mine\n");
+        expect(await branchesOf(repo)).toBe("main\nuser/wt\n");
+      });
+
+      it("leaves alone a user's worktree inside the home that a symlink under the home leads to", async () => {
+        const users = join(realHome, "mine", "wt");
+        await addOn("user/wt", users);
+        await writeFile(join(users, "mine.txt"), "mine\n");
+        await symlink(join(realHome, "mine"), join(realHome, "worktrees"));
+
+        await startedAtRealHome();
+
+        expect((await registered(repo)).sort()).toEqual([repo, users].sort());
+        expect(await readFile(join(users, "mine.txt"), "utf8")).toBe("mine\n");
+        expect(await branchesOf(repo)).toBe("main\nuser/wt\n");
+      });
+
+      it("unregisters a Flowdeck worktree of a bare repo", async () => {
+        const bare = join(outside, "bare.git");
+        await promisify(execFile)("git", ["clone", "--quiet", "--bare", repo, bare]);
+        await gitIn(
+          bare,
+          "worktree",
+          "add",
+          "-b",
+          "flowdeck/b1",
+          join(realHome, "workspaces", "b1", "bare"),
+          "main",
+        );
+
+        await startedAtRealHome();
+
+        expect(await registered(bare)).toEqual([bare]);
+        expect(await branchesOf(bare)).toBe("main\n");
+      });
+    });
+
+    const seeded = (worktree: FakeWorktree, held: Record<string, [string, string]>) => {
+      for (const [path, [repo, branch]] of Object.entries(held)) {
+        worktree.worktrees.set(path, { repo, base: "main", branch });
+      }
+      return homeWith(...Object.keys(held).map((path) => `${path}/README.md`));
+    };
+
+    it("reads each worktree's checkout before the folders are removed", async () => {
+      const read: [string, boolean][] = [];
+      let fs = new FakeFileSystem();
+      const worktree = new (class extends FakeWorktree {
+        override async checkoutAt(path: string) {
+          read.push([path, await fs.exists(path)]);
+          return super.checkoutAt(path);
+        }
+      })();
+      const v12 = `${home}/workspaces/b1/sessions/s/repo`;
+      const v11 = `${home}/workspaces/b2/repo`;
+      const old = `${home}/worktrees/abcd1234`;
+      fs = seeded(worktree, {
+        [v12]: ["/repo", "flowdeck/b1"],
+        [v11]: ["/repo", "flowdeck/b2"],
+        [old]: ["/repo", "flowdeck/abcd1234"],
+      });
+
+      await startedWith(fs, wiped, { worktree });
+
+      expect(read).toEqual(
+        expect.arrayContaining([
+          [v12, true],
+          [v11, true],
+          [old, true],
+        ]),
+      );
+    });
+
+    it("clears the other repos and still removes the folders when one repo fails", async () => {
+      const worktree = new (class extends FakeWorktree {
+        override async remove(options: WorktreeRemoveOptions) {
+          if (options.repo === "/repo-a") throw new Error("index.lock exists");
+          return super.remove(options);
+        }
+      })();
+      const pathA = `${home}/workspaces/a/repo-a`;
+      const pathB = `${home}/workspaces/b/repo-b`;
+      const fs = seeded(worktree, {
+        [pathA]: ["/repo-a", "flowdeck/a"],
+        [pathB]: ["/repo-b", "flowdeck/b"],
+      });
+
+      await startedWith(fs, wiped, { worktree });
+
+      expect(worktree.removed.map(({ path }) => path)).toEqual([pathB]);
+      expect(worktree.deletedBranches).toEqual([{ repo: "/repo-b", branch: "flowdeck/b" }]);
+      expect(await present(fs, [`${pathA}/README.md`, `${pathB}/README.md`])).toEqual([]);
+    });
+
+    it("keeps a flowdeck branch another worktree still has checked out", async () => {
+      const worktree = new FakeWorktree();
+      const path = `${home}/workspaces/b2/repo`;
+      const fs = seeded(worktree, { [path]: ["/repo", "flowdeck/b2"] });
+
+      await startedWith(fs, wiped, {
+        worktree,
+        gitState: new FakeGitState(
+          {},
+          { checkedOut: { "/repo": { "flowdeck/b2": "/elsewhere" } } },
+        ),
+      });
+
+      expect(worktree.removed.map(({ path: removed }) => removed)).toEqual([path]);
+      expect(worktree.deletedBranches).toEqual([]);
+    });
+
+    it("touches no worktree when another process holds the home", async () => {
+      const read: string[] = [];
+      const worktree = new (class extends FakeWorktree {
+        override async checkoutAt(path: string) {
+          read.push(path);
+          return super.checkoutAt(path);
+        }
+      })();
+      const fs = seeded(worktree, { [`${home}/workspaces/b2/repo`]: ["/repo", "flowdeck/b2"] });
+
+      await startedWith(fs, wiped, { worktree, homeLock: { acquire: async () => false } });
+
+      expect(read).toEqual([]);
+      expect(worktree.removed).toEqual([]);
+    });
+
+    it("still removes the folders and ends the sessions when a folder of the home cannot be read", async () => {
+      const fs = new (class extends FakeFileSystem {
+        override async folders(dir: string) {
+          if (dir === `${home}/workspaces/b1/sessions`)
+            throw new Error("EACCES: permission denied");
+          return super.folders(dir);
+        }
+      })(Object.fromEntries(leftBehind.map((path) => [path, "x"])));
+      const tmux = tmuxWith({ "fd-run-own": `${home}/sockets/fd-run-own.sock` });
+
+      await startedWith(fs, wiped, tmux.overrides);
+
+      expect(await present(fs, leftBehind)).toEqual([]);
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
   });
 
   describe("doctor", () => {
@@ -3661,6 +3933,7 @@ describe("createEngineHandler", async () => {
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
             branchTip: (repo, branch) => git.branchTip(repo, branch),
             deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
+            checkoutAt: (path) => git.checkoutAt(path),
           },
         });
         const saved = flows.save(
@@ -3723,6 +3996,7 @@ describe("createEngineHandler", async () => {
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
             branchTip: (repo, branch) => git.branchTip(repo, branch),
             deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
+            checkoutAt: (path) => git.checkoutAt(path),
           },
         });
         const saved = flows.save(
@@ -3792,6 +4066,7 @@ describe("createEngineHandler", async () => {
             deleteBranch: (repo, branch) => git.deleteBranch(repo, branch),
             branchTip: (repo, branch) => git.branchTip(repo, branch),
             deleteRemoteBranch: (repo, branch, tip) => git.deleteRemoteBranch(repo, branch, tip),
+            checkoutAt: (path) => git.checkoutAt(path),
           },
         });
         const saved = flows.save(

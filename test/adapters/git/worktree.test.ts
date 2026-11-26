@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -489,5 +489,67 @@ describe("GitWorktree", () => {
     await worktree.deleteBranch(repo.path, branch);
 
     expect(await branches(repo.path)).toBe("main\ntheirs\n");
+  });
+
+  describe("reading the checkout of a folder", () => {
+    it("reads the repo and branch of a worktree folder", async () => {
+      const path = join(target, "x");
+      await worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch: "flowdeck/x",
+        path,
+        create: true,
+      });
+
+      expect(await worktree.checkoutAt(path)).toEqual({
+        path,
+        repo: join(repo.path, ".git"),
+        branch: "flowdeck/x",
+      });
+    });
+
+    it("reads the repo and no branch of a detached worktree folder", async () => {
+      const path = join(target, "detached");
+      await git(repo.path, "worktree", "add", "--detach", path);
+
+      expect(await worktree.checkoutAt(path)).toStrictEqual({
+        path,
+        repo: join(repo.path, ".git"),
+      });
+    });
+
+    it("reads nothing at the repo's main checkout", async () => {
+      expect(await worktree.checkoutAt(repo.path)).toBeUndefined();
+    });
+
+    it("reads nothing in a folder inside a worktree", async () => {
+      const path = join(target, "x");
+      await worktree.add({
+        repo: repo.path,
+        base: "main",
+        branch: "flowdeck/x",
+        path,
+        create: true,
+      });
+      await mkdir(join(path, "sub"));
+
+      expect(await worktree.checkoutAt(join(path, "sub"))).toBeUndefined();
+    });
+
+    it("reads nothing at a worktree folder whose git work tree is elsewhere", async () => {
+      const path = join(target, "x");
+      const elsewhere = join(target, "elsewhere");
+      await mkdir(elsewhere);
+      await git(repo.path, "worktree", "add", "--detach", path);
+      await git(repo.path, "config", "extensions.worktreeConfig", "true");
+      await git(path, "config", "--worktree", "core.worktree", elsewhere);
+
+      expect(await worktree.checkoutAt(path)).toBeUndefined();
+    });
+
+    it("reads nothing in a folder outside any repo", async () => {
+      expect(await worktree.checkoutAt(target)).toBeUndefined();
+    });
   });
 });

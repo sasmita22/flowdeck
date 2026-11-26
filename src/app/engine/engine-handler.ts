@@ -138,7 +138,7 @@ import type { GitState } from "../../ports/git-state.js";
 import type { PullRequests } from "../../ports/pull-requests.js";
 import type { RunNarrator } from "../../ports/run-narrator.js";
 import type { RunSummary, Store } from "../../ports/store.js";
-import type { Worktree } from "../../ports/worktree.js";
+import type { Worktree, WorktreeCheckout } from "../../ports/worktree.js";
 import { createActivityTracker, createBuildActivity } from "./activity-tracker.js";
 import type { AppWaiter } from "./app-waiter.js";
 import type { HooksResult, PreparedHooks } from "./hooks.js";
@@ -1570,10 +1570,81 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     if (migrations?.existedBefore !== true) return;
     if (!migrations.applied.some(isCleanStart)) return;
     if (!(await holdsHome())) return;
+    const found = await worktreesOfHome().catch((error: unknown) => {
+      console.log(`engine: clean start worktrees not read (${messageOf(error)})`);
+      return [];
+    });
     await Promise.all(
       cleanStartFolders.map((folder) => options.fs.removeTree(join(options.home, folder))),
     );
+    await clearWorktreesOfHome(found);
     await endSessionsOfHome(await sessionsAtStart);
+  };
+
+  const worktreesOfHome = async (): Promise<WorktreeCheckout[]> => {
+    const under = async (dir: string) =>
+      (await options.fs.folders(dir)).map((name) => join(dir, name));
+    const workspaces = await under(join(options.home, "workspaces"));
+    const inWorkspaces = (await Promise.all(workspaces.map(under))).flat();
+    const sessions = (
+      await Promise.all(workspaces.map((workspace) => under(join(workspace, "sessions"))))
+    ).flat();
+    const inSessions = (await Promise.all(sessions.map(under))).flat();
+    const candidates = [
+      ...(await under(join(options.home, "worktrees"))),
+      ...inWorkspaces,
+      ...inSessions,
+    ];
+    const realHome = `${await options.fs.realPath(options.home)}/`;
+    const read = await Promise.all(
+      candidates.map(async (path) => {
+        const checkout = await options.worktree.checkoutAt(path).catch(() => undefined);
+        return checkout?.path.startsWith(realHome) === true ? [checkout] : [];
+      }),
+    );
+    return read.flat();
+  };
+
+  const clearWorktreesOfHome = async (found: WorktreeCheckout[]): Promise<void> => {
+    const byRepo = new Map<string, WorktreeCheckout[]>();
+    for (const worktree of found) {
+      byRepo.set(worktree.repo, [...(byRepo.get(worktree.repo) ?? []), worktree]);
+    }
+    for (const [repo, worktrees] of byRepo) {
+      try {
+        const removed: WorktreeCheckout[] = [];
+        for (const checkout of worktrees) {
+          const { path, branch } = checkout;
+          if (await options.fs.exists(path)) {
+            console.log(`engine: clean start kept worktree ${path} of ${repo}`);
+            continue;
+          }
+          await options.worktree.remove({
+            repo,
+            path,
+            branch: branch ?? "",
+            base: "",
+            create: false,
+            force: true,
+          });
+          removed.push(checkout);
+        }
+        const held = new Set(removed.flatMap(({ branch }) => branch ?? []));
+        const ours = [...held].filter((branch) => branch.startsWith("flowdeck/"));
+        if (ours.length === 0) continue;
+        const checkedOut = await options.gitState.checkedOutBranches(repo);
+        const base = await options.gitState.defaultBranch(repo);
+        for (const branch of ours) {
+          if (branch in checkedOut || (await options.worktree.hasUnpushed(repo, branch, base))) {
+            console.log(`engine: clean start kept branch ${branch} in ${repo}`);
+            continue;
+          }
+          await options.worktree.deleteBranch(repo, branch);
+        }
+      } catch (error) {
+        console.log(`engine: clean start worktrees of ${repo} not cleared (${messageOf(error)})`);
+      }
+    }
   };
 
   const listSessionsAtStart = async (): Promise<string[]> =>

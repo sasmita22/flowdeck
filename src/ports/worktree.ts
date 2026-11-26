@@ -10,6 +10,8 @@ export type WorktreeAddOptions = {
 
 export type WorktreeRemoveOptions = WorktreeAddOptions & { force?: boolean };
 
+export type WorktreeCheckout = { path: string; repo: string; branch?: string };
+
 export interface Worktree {
   add(options: WorktreeAddOptions): Promise<void>;
   remove(options: WorktreeRemoveOptions): Promise<WorktreeRemoval>;
@@ -18,4 +20,5 @@ export interface Worktree {
   deleteBranch(repo: string, branch: string): Promise<void>;
   branchTip(repo: string, branch: string): Promise<string | undefined>;
   deleteRemoteBranch(repo: string, branch: string, tip: string): Promise<string[]>;
+  checkoutAt(path: string): Promise<WorktreeCheckout | undefined>;
 }
