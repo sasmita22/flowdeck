@@ -31,13 +31,9 @@ const fieldsImportedFromSharedModule = (file: string) =>
     .flatMap(({ names }) => names.split(",").map((name) => name.trim()));
 
 const ownedControlIds = [
-  "buildConfigTestIds.repo",
-  "buildConfigTestIds.base",
   "buildDialogTestIds.repo",
   "buildDialogTestIds.base",
   "controlTestIds.buildModel",
-  "session-build-config-repo",
-  "session-build-config-base",
   "build-dialog-repo",
   "build-dialog-base",
   "build-model",

@@ -4,7 +4,6 @@ import {
   branchDecidedByTestId,
   branchValueTestId,
   branchVariableTestId,
-  buildConfigTestIds,
   buildDialogTestIds,
   containerTestIds,
   controlTestIds,
@@ -237,20 +236,6 @@ describe("test ids", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("names the Build configuration fields as the session form draws them", () => {
-    expect(buildConfigTestIds).toMatchObject({
-      repo: "session-build-config-repo",
-      base: "session-build-config-base",
-      repoBrowse: "session-build-config-repo-browse",
-      baseInfo: "session-build-config-base-info",
-      branchesError: "session-branches-error",
-    });
-  });
-
-  it("names no variable controls in the session form, since variables are found, not declared", () => {
-    expect(Object.keys(buildConfigTestIds).filter((key) => /variable/i.test(key))).toEqual([]);
-  });
-
   it("names the stop-agent confirm and its two answers", () => {
     expect(pageTestIds).toMatchObject({
       stopAgentDialog: "stop-agent-dialog",
@@ -336,7 +321,6 @@ describe("test ids", () => {
       pageTestIds,
       dialogTestIds,
       buildDialogTestIds,
-      buildConfigTestIds,
       { branchVariableTestId, branchDecidedByTestId, branchValueTestId, agentProducesTestId },
       {
         containerFrame: containerTestIds.frame,
