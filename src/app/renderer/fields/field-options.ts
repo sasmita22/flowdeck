@@ -1,7 +1,7 @@
 import type { Choice } from "../../../core/flow/choices.js";
 import type { RepoBranches } from "../branch-store.js";
 
-export type BranchSelect = {
+type BranchSelect = {
   disabled: boolean;
   options: Choice[];
   error: string | null;

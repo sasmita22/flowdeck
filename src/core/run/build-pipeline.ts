@@ -13,7 +13,7 @@ import type {
 
 type Stored<T extends BuildEvent["type"]> = StoredBuildEvent & { type: T };
 
-export type PipelineWorktree = Omit<Extract<BuildEvent, { type: "worktree" }>, "type">;
+type PipelineWorktree = Omit<Extract<BuildEvent, { type: "worktree" }>, "type">;
 
 export type PipelineRow = {
   path: string;

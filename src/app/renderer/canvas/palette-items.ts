@@ -19,7 +19,7 @@ export const paletteGroups = [
   "Canvas",
 ] as const;
 
-export type PaletteGroup = (typeof paletteGroups)[number];
+type PaletteGroup = (typeof paletteGroups)[number];
 
 export interface PaletteItem {
   type: CanvasItemType;
@@ -104,7 +104,7 @@ export const paletteItems: readonly PaletteItem[] = [
   noteItem,
 ];
 
-export type LibraryKind = "node-library" | "session-library";
+type LibraryKind = "node-library" | "session-library";
 
 export interface LibraryItem {
   flowId: string;

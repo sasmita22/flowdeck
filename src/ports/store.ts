@@ -1,6 +1,5 @@
 export type {
   BuildFileRecord,
-  BuildNodeRecord,
   BuildRecord,
   BuildSnapshot,
   BuildSource,

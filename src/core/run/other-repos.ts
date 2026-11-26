@@ -1,6 +1,6 @@
 import type { ActivityEntry } from "./activity.js";
 
-export type CandidateOptions = { home?: string };
+type CandidateOptions = { home?: string };
 
 const candidateCap = 200;
 const pathFields = ["file_path", "path", "notebook_path"] as const;

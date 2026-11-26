@@ -1,6 +1,6 @@
 import { verdictKey } from "../nodes/agent/settings.js";
 
-export type Verdict = { kind: "verdict"; done: boolean } | { kind: "malformed"; reason: string };
+type Verdict = { kind: "verdict"; done: boolean } | { kind: "malformed"; reason: string };
 
 export type ProducedValue =
   { kind: "value"; answer: boolean } | { kind: "malformed"; reason: string };

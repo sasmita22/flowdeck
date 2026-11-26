@@ -29,7 +29,7 @@ export function contextWindowOf(model: string): number {
   return prefix === undefined ? smallestWindow : (contextWindows[prefix] ?? smallestWindow);
 }
 
-export type ContextUse = { messageId: string; tokens: number; window: number };
+type ContextUse = { messageId: string; tokens: number; window: number };
 
 export function contextUse(entries: readonly UsageEntry[]): ContextUse | undefined {
   const last = entries.findLast((entry) => entry.agentType === undefined);

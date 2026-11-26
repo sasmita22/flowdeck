@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../preload/bridge.js";
 
-export type BranchBridge = Pick<FlowdeckBridge, "listBranches" | "pickFolder">;
+type BranchBridge = Pick<FlowdeckBridge, "listBranches" | "pickFolder">;
 
 export type RepoBranches = { branches: string[] | null; error: string | null };
 

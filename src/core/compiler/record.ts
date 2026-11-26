@@ -7,7 +7,7 @@ const manifestPath = "manifest.json";
 const byPath = (a: { path: string }, b: { path: string }) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
-export type BuildIdentity = Pick<
+type BuildIdentity = Pick<
   NewBuild,
   "id" | "name" | "repo" | "base" | "branch" | "branchCreated" | "values"
 >;

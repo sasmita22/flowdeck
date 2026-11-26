@@ -38,7 +38,7 @@ import { selectWorkspaceLabel, type WorkspaceState } from "./workspace-store.js"
 const statusText = (status: AppState["status"]) =>
   status.kind === "error" ? status.message : status.kind;
 
-export type AppStores = {
+type AppStores = {
   store: StoreApi<AppState>;
   canvas: StoreApi<CanvasState>;
   save: StoreApi<SaveState>;

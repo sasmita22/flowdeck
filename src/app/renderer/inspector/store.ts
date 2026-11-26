@@ -9,7 +9,7 @@ import type { DisplayStatus } from "../../../core/run/display.js";
 import type { SnapshotStatus } from "../../../core/run/snapshot.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 
-export type InspectorBridge = Pick<FlowdeckBridge, "getActivity" | "onActivity">;
+type InspectorBridge = Pick<FlowdeckBridge, "getActivity" | "onActivity">;
 
 type Feed = { runId: string; entries: ActivityEntry[] };
 
@@ -119,7 +119,7 @@ export function entryText(
   }
 }
 
-export type WrittenFiles = {
+type WrittenFiles = {
   nodes: { nodeId: string; paths: string[] }[];
   pullRequests: { nodeId: string; url: string }[];
 };

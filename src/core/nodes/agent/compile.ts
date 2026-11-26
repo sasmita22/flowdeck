@@ -3,7 +3,7 @@ import { declaredHandoff, handoffFolderLine, handoffText } from "../../flow/hand
 import type { Node } from "../../flow/schema.js";
 import { fillVariables, type VariableValues } from "../../flow/variables.js";
 
-export type AgentCompileInputs = {
+type AgentCompileInputs = {
   piece: string;
   scope: ScopeParts;
   values?: VariableValues;

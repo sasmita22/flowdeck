@@ -7,9 +7,9 @@ import {
   isWorkflow,
 } from "./structure.js";
 
-export type CanvasReach = { reached: ReadonlySet<string>; containers: ReadonlySet<string> };
+type CanvasReach = { reached: ReadonlySet<string>; containers: ReadonlySet<string> };
 
-export type MainFlow = CanvasReach & { ignored: readonly Node[] };
+type MainFlow = CanvasReach & { ignored: readonly Node[] };
 
 const frameTypes = new Set(["loop", "foreach"]);
 

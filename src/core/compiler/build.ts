@@ -19,7 +19,7 @@ export type BuildResult =
   | { ok: true; hash: string; dir: string; record: NewBuild }
   | { ok: false; errors: ValidationError[] };
 
-export type BuildWorkspace = EmitTarget & {
+type BuildWorkspace = EmitTarget & {
   id: string;
   name: string;
   values: VariableValues;
@@ -34,8 +34,7 @@ export type BuildDeps = {
 
 export type LayDownDeps = Omit<BuildDeps, "fs"> & { kitVersion?: string };
 
-export type LayDownResult =
-  { ok: true; files: BuildFile[] } | { ok: false; errors: ValidationError[] };
+type LayDownResult = { ok: true; files: BuildFile[] } | { ok: false; errors: ValidationError[] };
 
 export const workspaceDir = (home: string, id: string) => `${home}/workspaces/${id}`;
 

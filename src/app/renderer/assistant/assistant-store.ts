@@ -3,10 +3,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 import type { SaveState } from "../save-store.js";
 
-export type AssistantBridge = Pick<
-  FlowdeckBridge,
-  "startBlueprintSession" | "stopBlueprintSession"
->;
+type AssistantBridge = Pick<FlowdeckBridge, "startBlueprintSession" | "stopBlueprintSession">;
 
 export type AssistantState = {
   visible: boolean;

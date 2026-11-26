@@ -4,7 +4,7 @@ export type CloseAnswer = "close" | "cancel";
 
 export type RunQuitAnswer = "keep" | "stop" | "cancel";
 
-export type BuildAnswerPayload = {
+type BuildAnswerPayload = {
   nodeId: string;
   text: string;
   otherNodeId?: string | undefined;

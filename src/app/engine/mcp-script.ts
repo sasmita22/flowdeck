@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findNode } from "./hooks.js";
 
-export type McpScript = { nodePath: string; scriptPath: string };
+type McpScript = { nodePath: string; scriptPath: string };
 
 const scriptName = "flowdeck-mcp.cjs";
 

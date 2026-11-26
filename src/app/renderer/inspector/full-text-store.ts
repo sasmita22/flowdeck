@@ -22,7 +22,7 @@ export type FullText =
   | { kind: "not-kept" }
   | { kind: "failed"; error: string };
 
-export type FullTextState = {
+type FullTextState = {
   texts: Record<string, FullText>;
   request(ownerId: string, entryId: number): Promise<void>;
 };

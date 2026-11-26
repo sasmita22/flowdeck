@@ -20,7 +20,7 @@ export type BlueprintEdit =
   | { tool: "add_connection"; between: [string, string] }
   | { tool: "delete_connection"; connectionId: string };
 
-export type EditCheck = { ok: true; edit: BlueprintEdit } | { ok: false; reason: string };
+type EditCheck = { ok: true; edit: BlueprintEdit } | { ok: false; reason: string };
 
 const refuse = (reason: string): EditCheck => ({ ok: false, reason });
 

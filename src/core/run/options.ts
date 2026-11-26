@@ -9,7 +9,7 @@ export const runChoicesSchema: z.ZodType<RunChoices> = z.discriminatedUnion("kin
   z.object({ kind: z.literal("error"), message: z.string() }),
 ]);
 
-export type RunOptions = {
+type RunOptions = {
   auto: boolean;
 };
 

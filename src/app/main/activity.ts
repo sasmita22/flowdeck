@@ -4,7 +4,7 @@ import type { EnginePush } from "../engine/protocol.js";
 type ActivityUpdate = { runId: string; entry: ActivityEntry };
 type ActivityFeedSnapshot = { runId: string; entries: ActivityEntry[] };
 
-export type ActivityRelay = {
+type ActivityRelay = {
   onPush(push: EnginePush): void;
   onRunState(push: EnginePush): void;
   feed(runId: string): ActivityFeedSnapshot | null;

@@ -99,7 +99,7 @@ export type RunnerDeps = {
 
 export type RunOptions = { actions?: ResumeActions };
 
-export type RunResult = {
+type RunResult = {
   outcome: "done" | "failed";
   failedNode?: string;
   states: Record<string, NodeState>;

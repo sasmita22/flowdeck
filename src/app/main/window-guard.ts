@@ -1,8 +1,8 @@
-export type WindowGuardOptions = { appUrl: string };
+type WindowGuardOptions = { appUrl: string };
 
 export type SenderFrame = { url: string; parent: unknown } | null;
 
-export type IpcEvent = { senderFrame: SenderFrame };
+type IpcEvent = { senderFrame: SenderFrame };
 
 export type WindowGuard = {
   isAppFrame(frame: SenderFrame): boolean;

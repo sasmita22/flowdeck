@@ -66,13 +66,13 @@ const descriptions: Record<ToolName, string> = {
 
 export const toolNames = Object.keys(toolInputs) as ToolName[];
 
-export const buildToolNames: ReadonlySet<string> = new Set<ToolName>(["list_builds", "read_build"]);
+const buildToolNames: ReadonlySet<string> = new Set<ToolName>(["list_builds", "read_build"]);
 
 export const canvasToolNames: ReadonlySet<string> = new Set(
   toolNames.filter((name) => !buildToolNames.has(name)),
 );
 
-export type ToolDefinition = { name: ToolName; description: string; inputSchema: unknown };
+type ToolDefinition = { name: ToolName; description: string; inputSchema: unknown };
 
 export function blueprintToolDefinitions(): ToolDefinition[] {
   return toolNames.map((name) => ({
@@ -96,9 +96,7 @@ export const toolCallSchema = z.object({
 
 export const toolAnswerSchema = z.object({ requestId: z.string(), result: z.unknown() });
 
-export type SocketLine = z.infer<typeof socketLineSchema>;
 export type ToolCall = z.infer<typeof toolCallSchema>;
-export type ToolAnswer = z.infer<typeof toolAnswerSchema>;
 
 export function searchBlueprints<T extends Pick<LoadedFlow, "name" | "flow">>(
   entries: readonly T[],

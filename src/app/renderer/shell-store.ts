@@ -7,7 +7,7 @@ type SelectionView = Pick<CanvasState, "selection" | "select">;
 
 export type Panel = "sidebar" | "inspector";
 
-export type PanelWidths = Record<Panel, number>;
+type PanelWidths = Record<Panel, number>;
 
 export type WidthStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -184,7 +184,7 @@ export const emptyCanvasHint = (empty: boolean, sidebarOpen: boolean): string | 
 
 export type MenuAction = "terminal-open" | "terminal-close";
 
-export type MenuItem = { action: MenuAction; testId: string; label: string; disabled: boolean };
+type MenuItem = { action: MenuAction; testId: string; label: string; disabled: boolean };
 
 export const menuItems = (state: {
   terminalOpen: boolean;

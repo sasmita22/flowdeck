@@ -8,7 +8,7 @@ import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
 import { scopeLine, type ScopeParts } from "./scope-line.js";
 
-export type OrchestratorManifest = {
+type OrchestratorManifest = {
   prefix: string;
   nodes: ManifestNode[];
   wires: Wire[];

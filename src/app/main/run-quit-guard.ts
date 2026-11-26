@@ -1,4 +1,4 @@
-export type RunQuitGuardOptions = {
+type RunQuitGuardOptions = {
   goingRuns: () => Promise<string[]>;
   stopGoingRuns: () => Promise<unknown>;
   requestDialog: () => void;
@@ -6,7 +6,7 @@ export type RunQuitGuardOptions = {
   cancelled: () => void;
 };
 
-export type RunQuitGuard = {
+type RunQuitGuard = {
   onClose(event: { preventDefault(): void; defaultPrevented: boolean }): void;
   answer(answer: "keep" | "stop" | "cancel"): void;
   reset(): void;

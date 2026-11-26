@@ -131,9 +131,9 @@ const nodeTexts = (node: Node, box: Bounds): string[] => {
   return [textAt(box.left + 10, (box.top + box.bottom) / 2 + 4, palette.text, title)];
 };
 
-export type PictureWire = { from: string; to: string; points: Point[]; routed: boolean };
+type PictureWire = { from: string; to: string; points: Point[]; routed: boolean };
 
-export type PictureLayout = {
+type PictureLayout = {
   boxes: Map<string, Bounds>;
   bodies: Map<string, Bounds>;
   wires: PictureWire[];

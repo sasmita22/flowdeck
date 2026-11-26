@@ -25,7 +25,7 @@ import { settings as outputSettings } from "./output/settings.js";
 import { ports as triggerPorts } from "./trigger/ports.js";
 import { settings as triggerSettings } from "./trigger/settings.js";
 
-export type NodeDefinition = { settings: z.ZodType; ports: readonly Port[] };
+type NodeDefinition = { settings: z.ZodType; ports: readonly Port[] };
 
 export const registry = {
   agent: { settings: agentSettings, ports: agentPorts },

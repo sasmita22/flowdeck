@@ -69,7 +69,7 @@ export const firstAtOrAfter = (entries: readonly ActivityEntry[], id: number): n
   return low;
 };
 
-export type CutText = { entryId: number; field: StepTextField; text: string };
+type CutText = { entryId: number; field: StepTextField; text: string };
 
 export type FoldResult = {
   feed: ActivityFeed;
@@ -123,7 +123,7 @@ export type WorkingPlace = { cwd: string; home?: string };
 const within = (path: string, folder: string) =>
   path.startsWith(folder.endsWith("/") ? folder : `${folder}/`);
 
-export function shownPath(path: string, { cwd, home }: WorkingPlace): string {
+function shownPath(path: string, { cwd, home }: WorkingPlace): string {
   if (!path.startsWith("/")) return path;
   if (within(path, cwd)) return path.slice(cwd.replace(/\/$/, "").length + 1);
   const outside =

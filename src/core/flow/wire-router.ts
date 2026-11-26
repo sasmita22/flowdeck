@@ -6,7 +6,7 @@ export type ExitSide = "right" | "bottom";
 
 export type Bounds = { left: number; top: number; right: number; bottom: number };
 
-export const EXIT_STUB = 12;
+const EXIT_STUB = 12;
 
 const HANDLE_TOP = 24;
 
@@ -306,7 +306,7 @@ export const routeWire = (
 export const routePath = (points: readonly Point[]): string =>
   points.map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`).join(" ");
 
-export type WireEnd = { bounds: Bounds; frame: boolean };
+type WireEnd = { bounds: Bounds; frame: boolean };
 
 const middleOf = ({ top, bottom }: Bounds) => (top + bottom) / 2;
 

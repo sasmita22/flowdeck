@@ -20,7 +20,7 @@ export const ignoredMarks = (ignored: boolean | undefined) =>
     ? { className: "fd-node fd-node-ignored", "data-ignored": "true" }
     : { className: "fd-node" };
 
-export const BODY_HEIGHT = 48;
+const BODY_HEIGHT = 48;
 
 export const ports = (id: string, type: NodeType, sourceLeft?: number) => {
   return nodeLook(type).ports.map(({ name, direction }) => (

@@ -1,6 +1,6 @@
 import { getViewportForBounds, type Rect } from "@xyflow/react";
 
-export type Viewport = { x: number; y: number; zoom: number };
+type Viewport = { x: number; y: number; zoom: number };
 
 export const startViewport: Viewport = { x: 24, y: 56, zoom: 1 };
 

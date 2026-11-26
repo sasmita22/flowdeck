@@ -3,7 +3,7 @@ import { pendingWaitSchema, type PendingWait, type WaitAnswer } from "../../../c
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 import { pushFor } from "../run-push.js";
 
-export type WaitBridge = Pick<FlowdeckBridge, "getWait" | "onWait" | "answerWait">;
+type WaitBridge = Pick<FlowdeckBridge, "getWait" | "onWait" | "answerWait">;
 
 export type WaitState = {
   runId: string | null;

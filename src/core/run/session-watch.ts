@@ -7,20 +7,20 @@ import { stoppedNodeOf, stopsTheRun } from "./stop-marker.js";
 import type { EventEntry, StoredEvent } from "./store.js";
 import { turnFailure } from "./turns.js";
 
-export type WatchedContainer = {
+type WatchedContainer = {
   prefix: string;
   nodes: readonly (Pick<ManifestNode, "id" | "type" | "label" | "parent"> &
     Partial<Pick<ManifestNode, "settings">>)[];
   wires: ManifestContainer["wires"];
 };
 
-export type SessionWatchDeps = { container: WatchedContainer; sessionId: string };
+type SessionWatchDeps = { container: WatchedContainer; sessionId: string };
 
 export type SessionHookEvent = AgentCallEvent & { sessionId: string };
 
 export type SessionFailure = { container: string; node: string };
 
-export type OpenCall = { nodeId: string; toolUseId?: string; agentType?: string };
+type OpenCall = { nodeId: string; toolUseId?: string; agentType?: string };
 
 export type AskingNode = { node: string } | { candidates: string[] };
 

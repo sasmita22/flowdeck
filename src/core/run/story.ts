@@ -1,4 +1,4 @@
-export type StoryParts = { context: string; goal: string; result: string };
+type StoryParts = { context: string; goal: string; result: string };
 
 const threeParts = /^\s*Context:([\s\S]*?)\nGoal:([\s\S]*?)\nResult:([\s\S]*)$/;
 

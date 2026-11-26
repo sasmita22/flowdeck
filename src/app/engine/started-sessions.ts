@@ -23,7 +23,7 @@ import type { PermissionSource } from "../../ports/permission-source.js";
 import type { Store } from "../../ports/store.js";
 import type { Waiter } from "../../ports/waiter.js";
 
-export const sessionPollMs = 2000;
+const sessionPollMs = 2000;
 
 const hookKinds: Record<HookEventKind, true> = {
   Stop: true,
@@ -34,7 +34,7 @@ const hookKinds: Record<HookEventKind, true> = {
   StopFailure: true,
 };
 
-export type StartedSessionsOptions = {
+type StartedSessionsOptions = {
   runId: string;
   events: TurnEvents;
   permissions?: PermissionSource;

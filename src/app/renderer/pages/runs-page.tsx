@@ -23,7 +23,7 @@ const tone: Record<RunCard["status"], string> = {
   interrupted: "quiet",
 };
 
-export const durationOf = (run: Pick<RunCard, "createdAt" | "endedAt" | "status">, now: number) => {
+const durationOf = (run: Pick<RunCard, "createdAt" | "endedAt" | "status">, now: number) => {
   if (run.status !== "running" && run.endedAt === null) return "—";
   const end = run.endedAt === null ? now : Date.parse(run.endedAt);
   return formatDuration(Math.max(0, end - Date.parse(run.createdAt)));

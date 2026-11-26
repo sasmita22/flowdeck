@@ -12,7 +12,7 @@ const stepNumberSchema = z.union([
 const componentKindSchema = z.enum(["agent", "template", "workspace", "shared"]);
 const componentStatusSchema = z.enum(["waiting", "running", "done", "failed"]);
 const stepStatusSchema = z.enum(["running", "done", "failed", "skipped"]);
-export const buildOutcomeSchema = z.enum(["built", "needs-you", "failed", "stopped"]);
+const buildOutcomeSchema = z.enum(["built", "needs-you", "failed", "stopped"]);
 
 export type BuildStepNumber = z.infer<typeof stepNumberSchema>;
 export type ComponentKind = z.infer<typeof componentKindSchema>;
@@ -102,7 +102,7 @@ export type PendingBuild = {
   report?: unknown;
 };
 
-export const buildProgressSchema = z.object({
+const buildProgressSchema = z.object({
   steps: z.array(
     z.object({
       step: stepNumberSchema,
@@ -146,7 +146,7 @@ export const buildProgressEntrySchema = z.object({
 export type BuildProgress = z.infer<typeof buildProgressSchema>;
 export type BuildProgressEntry = z.infer<typeof buildProgressEntrySchema>;
 export type StepProgress = BuildProgress["steps"][number];
-export type ComponentProgress = BuildProgress["components"][number];
+type ComponentProgress = BuildProgress["components"][number];
 export type BuildCost = z.infer<typeof buildCostSchema>;
 export type BuildQuestion = BuildReport["questions"][number];
 

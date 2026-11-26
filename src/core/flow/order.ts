@@ -13,7 +13,7 @@ export class FlowCycleError extends Error {
 type Scope = string | undefined;
 type Edge = { from: string; to: string };
 
-export type OrderSources = {
+type OrderSources = {
   nodes: readonly { id: string; parent?: string | undefined }[];
   wires: readonly Wire[];
 };

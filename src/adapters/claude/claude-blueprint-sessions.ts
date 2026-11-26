@@ -3,7 +3,7 @@ import type { BlueprintSessionSpec, BlueprintSessions } from "../../ports/bluepr
 import type { SessionHost } from "../../ports/session-host.js";
 import type { ClaudeCli } from "./claude-cli.js";
 
-export type ClaudeBlueprintSessionsDeps = {
+type ClaudeBlueprintSessionsDeps = {
   sessions: (socketName: string) => SessionHost;
   cli: (sessions: SessionHost) => ClaudeCli;
 };

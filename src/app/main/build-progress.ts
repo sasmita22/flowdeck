@@ -4,7 +4,7 @@ import {
 } from "../../core/run/build-progress.js";
 import type { EnginePush } from "../engine/protocol.js";
 
-export type BuildProgressRelay = {
+type BuildProgressRelay = {
   onPush(push: EnginePush): void;
   latest(pendingId: string): BuildProgressEntry | null;
 };

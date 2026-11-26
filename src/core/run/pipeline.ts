@@ -44,7 +44,7 @@ export type PipelineStage = {
   rounds?: PipelineRound[] | undefined;
 };
 
-export type PipelineRound = {
+type PipelineRound = {
   round: number;
   item?: string | undefined;
   tokens?: number | undefined;
@@ -52,7 +52,7 @@ export type PipelineRound = {
   items: PipelineItem[];
 };
 
-export type ParallelGroup = { lanes: PipelineItem[][] };
+type ParallelGroup = { lanes: PipelineItem[][] };
 
 export type PipelineItem = PipelineStage | ParallelGroup;
 

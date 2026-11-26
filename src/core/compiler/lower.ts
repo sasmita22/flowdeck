@@ -20,7 +20,7 @@ export type ManifestNode = {
   piece?: string;
 };
 
-export type ManifestOutput = { node: string; name: string; type: string };
+type ManifestOutput = { node: string; name: string; type: string };
 
 export type ManifestContainer = {
   kind: "workspace" | "session";
@@ -50,14 +50,14 @@ export type Manifest = {
   files: Record<string, string>;
 };
 
-export type LowerInputs = {
+type LowerInputs = {
   name: string;
   values: VariableValues;
   workspace?: string;
   kitVersion?: string;
 };
 
-export type LoweredManifest = Omit<Manifest, "files"> &
+type LoweredManifest = Omit<Manifest, "files"> &
   Required<Pick<Manifest, "layout" | "values" | "settings">>;
 
 const compile = (

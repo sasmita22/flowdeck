@@ -2,12 +2,12 @@ import type { NodeType } from "../../../core/flow/schema.js";
 import { nodeLook } from "./look.js";
 import { noteLook } from "./note-look.js";
 
-export const roundedRect = (width: number, height: number, r: number, inset = 0): string => {
+const roundedRect = (width: number, height: number, r: number, inset = 0): string => {
   const [x, y, w, h] = [inset, inset, width - 2 * inset, height - 2 * inset];
   return `M${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x + r} Q${x},${y + h} ${x},${y + h - r} V${y + r} Q${x},${y} ${x + r},${y} Z`;
 };
 
-export const octagon = (w: number, h: number, c: number): string =>
+const octagon = (w: number, h: number, c: number): string =>
   `M${c},0 H${w - c} L${w},${c} V${h - c} L${w - c},${h} H${c} L0,${h - c} V${c} Z`;
 
 export interface ShapeExtra {
@@ -15,7 +15,7 @@ export interface ShapeExtra {
   attributes: Readonly<Record<string, string | number>>;
 }
 
-export interface NodeOutline {
+interface NodeOutline {
   path: string;
   padL: number;
   fill: string;

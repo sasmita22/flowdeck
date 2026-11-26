@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type OpenDatabaseOptions = {
+type OpenDatabaseOptions = {
   path: string;
   migrationsDir?: string;
   now?: () => Date;

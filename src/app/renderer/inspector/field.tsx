@@ -25,7 +25,7 @@ const issueStyle: CSSProperties = {
   lineHeight: 1.35,
 };
 
-export const valueAt = (root: unknown, path: Path): unknown =>
+const valueAt = (root: unknown, path: Path): unknown =>
   path.reduce<unknown>((value, key) => (value as Record<string, unknown> | undefined)?.[key], root);
 
 const textOf = (value: unknown) =>

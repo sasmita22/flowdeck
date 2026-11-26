@@ -43,7 +43,7 @@ export type LibraryBridge = Pick<
 type BuildRecord = z.infer<typeof buildRecordSchema>;
 type RunSummary = z.infer<typeof runSummarySchema>;
 
-export type DeleteQuestion = Pick<FlowSummary, "flowId" | "name">;
+type DeleteQuestion = Pick<FlowSummary, "flowId" | "name">;
 
 export const blueprintKindLabel: Record<FlowSummary["kind"], string> = {
   workflow: "Workflow",
@@ -52,11 +52,11 @@ export const blueprintKindLabel: Record<FlowSummary["kind"], string> = {
   incomplete: "Incomplete",
 };
 
-export type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
+type BuildFiles = { buildId: string; list: BuildFileContent[]; selected: string | null };
 
-export type OpenTree = BuildTree & { buildId: string };
+type OpenTree = BuildTree & { buildId: string };
 
-export type OpenProject = BuildProject & { buildId: string };
+type OpenProject = BuildProject & { buildId: string };
 
 export type LibraryState = {
   flows: FlowSummary[];
@@ -133,7 +133,7 @@ export const selectRunCards = (state: Pick<LibraryState, "runs">): RunCard[] =>
     version: run.blueprintVersion,
   }));
 
-export type RunBuildOption = { buildId: string; label: string };
+type RunBuildOption = { buildId: string; label: string };
 
 export const selectRunBuildOptions = (runs: readonly RunSummary[]): RunBuildOption[] => {
   const options = new Map<string, RunBuildOption>();
