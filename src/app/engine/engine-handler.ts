@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { join, normalize, relative, sep } from "node:path";
+import { dirname, join, normalize, relative, sep } from "node:path";
 import { z } from "zod";
 import { writeSessionMcpConfig } from "../../adapters/claude/claude-connectors.js";
 import { workspaceDir, type BuildResult } from "../../core/compiler/build.js";
@@ -196,6 +196,8 @@ export type EngineHandlerOptions = {
   sessionAlive?: (sessionName: string) => Promise<boolean>;
   buildSessionPollMs?: number;
   endSession?: (sessionName: string) => Promise<void>;
+  flowdeckSessions?: () => Promise<string[]>;
+  sessionSocketPath?: (sessionName: string) => Promise<string | undefined>;
   answerDialogs?: (tmuxName: string) => Promise<void>;
   homeLock?: { acquire(): Promise<boolean> };
   narrator?: RunNarrator;
@@ -1561,7 +1563,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const holdsHome = async () => options.homeLock === undefined || options.homeLock.acquire();
 
-  const sweepAfterCleanStart = async (): Promise<void> => {
+  const sweepAfterCleanStart = async (sessionsAtStart: Promise<string[]>): Promise<void> => {
     const result = openStoresOnce();
     if (result.kind === "error") return;
     const { migrations } = result.stores;
@@ -1571,6 +1573,29 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     await Promise.all(
       cleanStartFolders.map((folder) => options.fs.removeTree(join(options.home, folder))),
     );
+    await endSessionsOfHome(await sessionsAtStart);
+  };
+
+  const listSessionsAtStart = async (): Promise<string[]> =>
+    (await options.flowdeckSessions?.().catch((error: unknown) => {
+      console.log(`engine: session list error ${messageOf(error)}`);
+      return [];
+    })) ?? [];
+
+  const endSessionsOfHome = async (names: string[]): Promise<void> => {
+    const { sessionSocketPath } = options;
+    if (sessionSocketPath === undefined) return;
+    const homeSockets = `${await options.fs.realPath(join(options.home, "sockets"))}/`;
+    for (const name of names) {
+      try {
+        const socket = await sessionSocketPath(name);
+        if (socket === undefined) continue;
+        if (!`${await options.fs.realPath(dirname(socket))}/`.startsWith(homeSockets)) continue;
+        await options.endSession?.(name);
+      } catch (error) {
+        console.log(`engine: clean start session ${name} not ended (${messageOf(error)})`);
+      }
+    }
   };
 
   const backfillStoredManifests = async (): Promise<void> => {
@@ -2477,10 +2502,11 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   };
 
   const startUp = async (): Promise<void> => {
+    const sessionsAtStart = listSessionsAtStart();
     await sweepBlueprintSessions().catch((error: unknown) => {
       console.log(`engine: blueprint sweep error ${messageOf(error)}`);
     });
-    await sweepAfterCleanStart().catch((error: unknown) => {
+    await sweepAfterCleanStart(sessionsAtStart).catch((error: unknown) => {
       console.log(`engine: clean start sweep error ${messageOf(error)}`);
     });
     await backfillStoredManifests().catch((error: unknown) => {

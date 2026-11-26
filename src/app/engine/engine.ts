@@ -22,6 +22,7 @@ import { HomeLock } from "../../adapters/process/home-lock.js";
 import { SqliteFlowStore } from "../../adapters/sqlite/flows.js";
 import { openDatabase, type MigrationReport } from "../../adapters/sqlite/open-database.js";
 import { SqliteStore } from "../../adapters/sqlite/sqlite-store.js";
+import { flowdeckSessionNames, sessionSocketPath } from "../../adapters/tmux/flowdeck-sessions.js";
 import { TmuxSessionHost } from "../../adapters/tmux/tmux-session-host.js";
 import { emptyEnvOf } from "../../core/env/empty-env.js";
 import { createAppWaiter } from "./app-waiter.js";
@@ -190,6 +191,8 @@ const createHandler = async () =>
     claudeConfig: runClaudeConfig,
     sessionAlive: (name) => new TmuxSessionHost({ socketName: name }).has(name),
     endSession: (name) => new TmuxSessionHost({ socketName: name }).stop(name),
+    flowdeckSessions: flowdeckSessionNames,
+    sessionSocketPath,
     answerDialogs: (name) =>
       new ClaudeCli({ sessions: new TmuxSessionHost({ socketName: name }) }).waitUntilReady(name),
     homeLock: { acquire: lockHome },
