@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   blueprintToolDefinitions,
+  canvasToolNames,
   searchBlueprints,
   socketLineSchema,
   toolAnswerSchema,
@@ -29,9 +30,19 @@ const toolNames = [
   "list_builds",
   "read_build",
   "tidy_layout",
+  "add_connection",
+  "delete_connection",
 ];
 
-const editToolNames = ["add_node", "change_node", "wire", "delete_node", "tidy_layout"];
+const editToolNames = [
+  "add_node",
+  "change_node",
+  "wire",
+  "delete_node",
+  "tidy_layout",
+  "add_connection",
+  "delete_connection",
+];
 
 const definition = (name: string) => {
   const found = blueprintToolDefinitions().find((tool) => tool.name === name);
@@ -57,11 +68,11 @@ describe("blueprintToolDefinitions", () => {
     expect(parent?.description).toMatch(/loop/i);
   });
 
-  it("offers exactly the ten blueprint tools and nothing that builds, runs or deletes a build", () => {
+  it("offers exactly the twelve blueprint tools and nothing that builds, runs or deletes a build", () => {
     const names = blueprintToolDefinitions().map((tool) => tool.name);
 
     expect([...names].sort()).toEqual([...toolNames].sort());
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(12);
     expect(names).not.toContain("set_variable");
   });
 
@@ -95,6 +106,25 @@ describe("blueprintToolDefinitions", () => {
     expect(inputBranches("read_build")[0]?.required).toContain("id");
     expect(inputBranches("delete_node")[0]?.required).toContain("nodeId");
     expect(inputBranches("change_node")[0]?.required).toContain("nodeId");
+  });
+
+  it("requires two session ids to add a connection and a connection id to delete one", () => {
+    const [add] = inputBranches("add_connection");
+    const between = add?.properties?.["between"] as
+      | { type?: string; minItems?: number; maxItems?: number; prefixItems?: JsonSchema[] }
+      | undefined;
+
+    expect(add?.required).toEqual(["between"]);
+    expect(between?.type).toBe("array");
+    expect(between?.prefixItems?.map(({ type }) => type)).toEqual(["string", "string"]);
+    expect(inputBranches("delete_connection")[0]?.required).toEqual(["connectionId"]);
+    expect(inputBranches("delete_connection")[0]?.properties?.["connectionId"]?.type).toBe(
+      "string",
+    );
+  });
+
+  it.each(["add_connection", "delete_connection"])("lets the canvas take %s", (name) => {
+    expect(canvasToolNames.has(name)).toBe(true);
   });
 
   it.each(editToolNames)("gives %s no blueprint argument and refuses extra keys", (name) => {

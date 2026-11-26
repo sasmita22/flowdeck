@@ -6,6 +6,7 @@ import {
   checkEdit,
   editProblems,
   newProblems,
+  nextConnectionId,
   type BlueprintEdit,
 } from "../../../core/flow/blueprint-edits.js";
 import {
@@ -19,8 +20,10 @@ import { labelIn, libraryRefusal } from "../../../core/flow/library-checks.js";
 import type { Flow, Node } from "../../../core/flow/schema.js";
 import type { FlowdeckBridge } from "../../preload/bridge.js";
 import {
+  addConnection,
   addNode,
   addWire,
+  deleteConnections,
   deleteNodes,
   moveNodes,
   updateNode,
@@ -106,7 +109,7 @@ export function createToolHandler({
   const commandFor = (
     flow: Flow,
     edit: Exclude<BlueprintEdit, { tool: "tidy_layout" }>,
-  ): { command: Command; nodeId?: string } => {
+  ): { command: Command; nodeId?: string; connectionId?: string } => {
     switch (edit.tool) {
       case "add_node": {
         const nodeId = nextNodeId(edit.type, flow);
@@ -135,6 +138,15 @@ export function createToolHandler({
       }
       case "delete_node":
         return { command: deleteNodes(flow, [edit.nodeId]) };
+      case "add_connection": {
+        const connectionId = nextConnectionId(flow);
+        return {
+          command: addConnection({ id: connectionId, between: edit.between }),
+          connectionId,
+        };
+      }
+      case "delete_connection":
+        return { command: deleteConnections(flow, [edit.connectionId]) };
     }
   };
 
@@ -200,7 +212,7 @@ export function createToolHandler({
     const check = checkEdit(before, name, input, libraries);
     if (!check.ok) return check;
     if (check.edit.tool === "tidy_layout") return tidyLayout(session, before);
-    const { command, nodeId } = commandFor(before, check.edit);
+    const { command, nodeId, connectionId } = commandFor(before, check.edit);
     const use = libraryUse(before, check.edit);
     const reason =
       use &&
@@ -226,6 +238,7 @@ export function createToolHandler({
       touched === undefined ? [] : [touched],
       libraries,
     );
+    if (connectionId !== undefined) return { ok: true, connectionId, problems };
     return nodeId === undefined ? { ok: true, problems } : { ok: true, nodeId, problems };
   };
 

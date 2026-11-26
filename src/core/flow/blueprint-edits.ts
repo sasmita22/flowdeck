@@ -16,7 +16,9 @@ export type BlueprintEdit =
   | { tool: "change_node"; nodeId: string; label?: string; settings?: Settings }
   | { tool: "wire"; wire: Wire }
   | { tool: "delete_node"; nodeId: string }
-  | { tool: "tidy_layout" };
+  | { tool: "tidy_layout" }
+  | { tool: "add_connection"; between: [string, string] }
+  | { tool: "delete_connection"; connectionId: string };
 
 export type EditCheck = { ok: true; edit: BlueprintEdit } | { ok: false; reason: string };
 
@@ -31,7 +33,54 @@ const settingsFor = (type: NodeType, settings: Settings): Settings | string =>
   parsed(registry[type].settings as z.ZodType<Settings>, settings);
 
 const isEditTool = (name: string): name is ToolName & BlueprintEdit["tool"] =>
-  ["add_node", "change_node", "wire", "delete_node", "tidy_layout"].includes(name);
+  [
+    "add_node",
+    "change_node",
+    "wire",
+    "delete_node",
+    "tidy_layout",
+    "add_connection",
+    "delete_connection",
+  ].includes(name);
+
+const sessionLabel = (flow: Flow, id: string) => {
+  const container = flow.containers.find((candidate) => candidate.id === id);
+  return container?.kind === "session" ? container.name : id;
+};
+
+const alreadyConnected = (flow: Flow, [a, b]: readonly [string, string]) =>
+  `${sessionLabel(flow, a)} and ${sessionLabel(flow, b)} are already connected.`;
+
+const selfConnection = "A session cannot connect to itself.";
+
+const connectionJoining = (flow: Flow, a: string, b: string) =>
+  flow.connections?.find(({ between }) => between.includes(a) && between.includes(b));
+
+export const nextConnectionId = (flow: Flow): string => {
+  const used = new Set((flow.connections ?? []).map(({ id }) => id));
+  let n = 1;
+  while (used.has(`c${n}`)) n += 1;
+  return `c${n}`;
+};
+
+export function connectionRefusal(
+  flow: Flow,
+  between: [string, string],
+  libraries?: LibraryLookup,
+): string | undefined {
+  const [a, b] = between;
+  if (a === b) return selfConnection;
+  const existing = connectionJoining(flow, a, b);
+  if (existing !== undefined) return alreadyConnected(flow, existing.between);
+  const after: Flow = {
+    ...flow,
+    connections: [...(flow.connections ?? []), { id: nextConnectionId(flow), between }],
+  };
+  const [problem] = newProblems(flow, after, libraries).filter(
+    ({ rule }) => rule === "session-connections",
+  );
+  return problem?.message;
+}
 
 export function checkEdit(
   flow: Flow,
@@ -126,6 +175,21 @@ export function checkEdit(
       const data = parsed(toolInputs.tidy_layout, input);
       if (typeof data === "string") return refuse(data);
       return { ok: true, edit: { tool: name } };
+    }
+    case "add_connection": {
+      const data = parsed(toolInputs.add_connection, input);
+      if (typeof data === "string") return refuse(data);
+      const refusal = connectionRefusal(flow, data.between, libraries);
+      if (refusal !== undefined) return refuse(refusal);
+      return { ok: true, edit: { tool: name, between: data.between } };
+    }
+    case "delete_connection": {
+      const data = parsed(toolInputs.delete_connection, input);
+      if (typeof data === "string") return refuse(data);
+      if (!(flow.connections ?? []).some(({ id }) => id === data.connectionId)) {
+        return refuse(`No connection "${data.connectionId}" in the blueprint.`);
+      }
+      return { ok: true, edit: { tool: name, connectionId: data.connectionId } };
     }
   }
 }
