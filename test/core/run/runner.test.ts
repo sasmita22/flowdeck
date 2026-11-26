@@ -17,7 +17,7 @@ import {
   type RunnableManifest,
   type RunOptions,
 } from "../../../src/core/run/runner.js";
-import type { ResumeActions } from "../../../src/core/run/resume.js";
+import { cutOffMessage, type ResumeActions } from "../../../src/core/run/resume.js";
 import { retryEntries } from "../../../src/core/run/retry.js";
 import { decisionsOf, nodeStatus, type RunEvent } from "../../../src/core/run/run-events.js";
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
@@ -1736,6 +1736,37 @@ describe("Runner run state", () => {
       expect(sends(calls)).toEqual([turnOf("p2"), turnOf("p3")]);
       expect(kindsOf(deps.store, "p2")).toEqual(["sent", "done"]);
     });
+
+    it.each([
+      ["sent", [["p1", { kind: "sent" }]]],
+      [
+        "running after a permission ask was answered",
+        [
+          ["p1", { kind: "sent" }],
+          ["p1", { kind: "needs-you" }],
+          ["p1", { kind: "running" }],
+        ],
+      ],
+    ] as [string, [string, RunEvent][]][])(
+      "fails a workspace Agent cut off mid-turn while %s, so Retry can send it again",
+      async (_, entries) => {
+        const { deps, calls } = harness();
+        const m = manifest(agent("p1"));
+        const runId = seeded(deps, m, entries);
+
+        const result = await resume(deps, m, runId, {
+          p1: { kind: "fail", message: cutOffMessage("p1") },
+        });
+
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "p1" });
+        expect(eventsOf(deps.store, "p1").at(-1)).toMatchObject({
+          kind: "failed",
+          payload: { message: cutOffMessage("p1") },
+        });
+        expect(kindsOf(deps.store, "p1").filter((kind) => kind === "sent")).toHaveLength(1);
+        expect(sends(calls)).toEqual([]);
+      },
+    );
 
     it("resends node 2 with the answer it was sent with", async () => {
       const { deps, calls } = harness();

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionGoneError } from "../../../src/adapters/claude/claude-session.js";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { createAppWaiter } from "../../../src/app/engine/app-waiter.js";
@@ -14,6 +14,7 @@ import type { EnginePush } from "../../../src/app/engine/protocol.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import type { OpenSessionOptions, OpenedSession } from "../../../src/core/run/execute.js";
 import type { PipelineGroup } from "../../../src/core/run/pipeline.js";
+import { cutOffMessage } from "../../../src/core/run/resume.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import { FakeConnectorSource } from "../../fakes/fake-connector-source.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
@@ -662,6 +663,49 @@ describe("run controls", () => {
       expect(opened.at(-1)).toMatchObject({ resume: true });
       expect(opened.at(-1)?.attach).toBeUndefined();
       await call("stop-run", { runId });
+    });
+
+    it("ends the run failed with the cut-off message when the step's turn never ended in the gone session", async () => {
+      const prompts: string[] = [];
+      const logged = vi.spyOn(console, "log");
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      handler = handlerWith({
+        run: runEnvironment({
+          openSession: async (options) => {
+            if (options.attach === true) throw new SessionGoneError(options.sessionName);
+            return {
+              sessionId: options.claudeSessionId,
+              session: { ensureStarted: async () => undefined },
+              prompts: {
+                sendPrompt: async (text) => {
+                  prompts.push(text);
+                },
+                interrupt: async () => undefined,
+              },
+              stop: async () => undefined,
+            };
+          },
+        }),
+        sessionAlive: async () => false,
+        transcriptTurns: async () => prompts.map((userText) => ({ userText, ended: false })),
+      });
+      const runId = await start(onWorkspaceMainFlow([agent("p1")], []));
+      await vi.waitFor(() => expect(statusOf(runId, "p1")).toBe("sent"));
+      await call("stop-run", { runId });
+
+      expect(started(await call("resume-run", { runId }))).toBe(runId);
+
+      expect(await finished(runId)).toBe("failed");
+      const p1 = runs.events(runId).filter((event) => event.nodeId === "p1");
+      expect(p1.at(-1)).toMatchObject({
+        kind: "failed",
+        payload: { message: cutOffMessage("p1") },
+      });
+      expect(p1.filter((event) => event.kind === "sent")).toHaveLength(1);
+      expect(prompts).toHaveLength(1);
+      expect(logged).not.toHaveBeenCalledWith(expect.stringContaining("Illegal node state move"));
     });
 
     it("refuses, changing nothing, when the session ends between the check and the attach", async () => {
