@@ -62,6 +62,15 @@ class FakeDrivePage implements DrivePage {
     return this.act(`right-click ${testid}`);
   }
 
+  clickAt(testid: string, position: { x: number; y: number }): Promise<void> {
+    return this.act(`click-at ${testid} ${position.x},${position.y}`);
+  }
+
+  select(testid: string, option: { value: string } | { label: string }): Promise<void> {
+    const chosen = "value" in option ? `value=${option.value}` : `label=${option.label}`;
+    return this.act(`select ${testid} ${chosen}`);
+  }
+
   waitFor(testid: string, timeoutMs: number): Promise<void> {
     return this.act(`wait-for ${testid} ${timeoutMs}`);
   }
@@ -278,6 +287,58 @@ describe("parseSteps", () => {
     expect(parse).toThrow(field);
     expect(parse).not.toThrow("unknown step type");
   });
+
+  it("accepts click-at steps and select steps by value, by label and by an empty value", () => {
+    const steps = [
+      { type: "click-at", testid: "container-frame-session-1", position: { x: 6, y: 6 } },
+      { type: "select", testid: "container-session-1-model", value: "haiku" },
+      { type: "select", testid: "container-session-1-model", label: "Haiku (latest)" },
+      { type: "select", testid: "runs-build-filter", value: "" },
+    ];
+
+    expect(parseSteps(JSON.stringify(steps))).toEqual(steps);
+  });
+
+  it.each([
+    [
+      "a negative coordinate",
+      { type: "click-at", testid: "canvas", position: { x: -1, y: 6 } },
+      "position.x",
+    ],
+    ["a missing position", { type: "click-at", testid: "canvas" }, "position"],
+    [
+      "an extra key inside position",
+      { type: "click-at", testid: "canvas", position: { x: 6, y: 6, z: 1 } },
+      'Unrecognized key: "z"',
+    ],
+  ])("rejects a click-at step with %s, naming the step", (_, step, field) => {
+    const parse = () => parseSteps(JSON.stringify([{ type: "screenshot" }, step]));
+
+    expect(parse).toThrow("(click-at):");
+    expect(parse).toThrow(field);
+    expect(parse).not.toThrow("unknown step type");
+  });
+
+  it.each([
+    ["both value and label", { type: "select", testid: "m", value: "haiku", label: "Haiku" }],
+    ["neither value nor label", { type: "select", testid: "m" }],
+  ])("rejects a select step with %s", (_, step) => {
+    const parse = () => parseSteps(JSON.stringify([step]));
+
+    expect(parse).toThrow("step 1 (select):");
+    expect(parse).toThrow("give exactly one of value or label");
+  });
+
+  it.each([
+    ["no testid", { type: "select", value: "haiku" }, "testid"],
+    ["a non-string value", { type: "select", testid: "m", value: 5 }, "value"],
+  ])("rejects a select step with %s, naming the field", (_, step, field) => {
+    const parse = () => parseSteps(JSON.stringify([step]));
+
+    expect(parse).toThrow("step 1 (select):");
+    expect(parse).toThrow(field);
+    expect(parse).not.toThrow("give exactly one");
+  });
 });
 
 describe("runSteps", () => {
@@ -348,6 +409,35 @@ describe("runSteps", () => {
       "press Meta+z",
       "press Shift+Meta+z",
     ]);
+  });
+
+  it("dispatches a click-at step to the page with its testid and position", async () => {
+    await runSteps(
+      parseSteps(
+        JSON.stringify([
+          { type: "click-at", testid: "container-frame-session-1", position: { x: 6, y: 6 } },
+        ]),
+      ),
+      page,
+      { outDir },
+    );
+
+    expect(page.calls).toEqual(["click-at container-frame-session-1 6,6"]);
+  });
+
+  it.each([
+    [{ value: "haiku" }, "select container-session-1-model value=haiku"],
+    [{ label: "Haiku (latest)" }, "select container-session-1-model label=Haiku (latest)"],
+  ])("dispatches a select step by %o to the page", async (option, call) => {
+    await runSteps(
+      parseSteps(
+        JSON.stringify([{ type: "select", testid: "container-session-1-model", ...option }]),
+      ),
+      page,
+      { outDir },
+    );
+
+    expect(page.calls).toEqual([call]);
   });
 
   it("saves evidence only for screenshot steps when drag and press steps run", async () => {
@@ -569,6 +659,7 @@ class FakePlaywrightPage {
   constructor(
     private readonly boxes: Record<string, Box | null>,
     private readonly viewportHeight: number,
+    private readonly optionReads: Record<string, { value: string; label: string }[][]> = {},
   ) {}
 
   readonly mouse = {
@@ -605,6 +696,25 @@ class FakePlaywrightPage {
         return Promise.resolve();
       },
       boundingBox: () => Promise.resolve(box === null ? null : { ...box, y: box.y - this.scrollY }),
+      click: (options?: unknown) => {
+        this.calls.push(`click ${testid} ${JSON.stringify(options)}`);
+        return Promise.resolve();
+      },
+      waitFor: () => {
+        this.calls.push(`wait-for ${testid}`);
+        return Promise.resolve();
+      },
+      locator: (selector: string) => ({
+        evaluateAll: <R>(read: (elements: { value: string; label: string }[]) => R) => {
+          this.calls.push(`read ${testid} ${selector}`);
+          const reads = this.optionReads[testid] ?? [[]];
+          return Promise.resolve(read((reads.length > 1 ? reads.shift() : reads[0]) ?? []));
+        },
+      }),
+      selectOption: (option: unknown) => {
+        this.calls.push(`select ${testid} ${JSON.stringify(option)}`);
+        return Promise.resolve([]);
+      },
     };
   }
 
@@ -665,6 +775,80 @@ describe("playwrightPage", () => {
       "canvas is not visible",
     );
     expect(page.calls).toEqual([]);
+  });
+
+  it("clicks the given point of the element, in px from its top-left", async () => {
+    const page = new FakePlaywrightPage(layout(), 2000);
+
+    await playwrightPage(page.asPage()).clickAt("container-frame-session-1", { x: 6, y: 6 });
+
+    expect(page.calls).toEqual(['click container-frame-session-1 {"position":{"x":6,"y":6}}']);
+  });
+
+  describe("select", () => {
+    const testid = "container-session-1-model";
+    const models = () =>
+      new FakePlaywrightPage(layout(), 2000, {
+        [testid]: [
+          [
+            { value: "opus", label: "Opus (latest)" },
+            { value: "haiku", label: "Haiku (latest)" },
+          ],
+        ],
+      });
+    const selections = (page: FakePlaywrightPage) =>
+      page.calls.filter((call) => call.startsWith("select "));
+
+    it.each([
+      [{ value: "haiku" }, `select ${testid} {"value":"haiku"}`],
+      [{ label: "Haiku (latest)" }, `select ${testid} {"label":"Haiku (latest)"}`],
+    ])("picks the option by %o", async (option, call) => {
+      const page = models();
+
+      await playwrightPage(page.asPage()).select(testid, option);
+
+      expect(selections(page)).toEqual([call]);
+    });
+
+    it.each([
+      [{ value: "nope" }, 'value "nope"'],
+      [{ label: "Nope" }, 'label "Nope"'],
+    ])(
+      "fails on a missing option by %o, listing the options and selecting nothing",
+      async (option, wanted) => {
+        const page = models();
+
+        await expect(
+          playwrightPage(page.asPage(), { optionWaitMs: 50 }).select(testid, option),
+        ).rejects.toThrow(
+          `${testid} has no option with ${wanted} (options: opus "Opus (latest)", haiku "Haiku (latest)")`,
+        );
+        expect(selections(page)).toEqual([]);
+      },
+    );
+
+    it("waits for an option that the dropdown fills in later", async () => {
+      const page = new FakePlaywrightPage(layout(), 2000, {
+        "branch-field": [
+          [],
+          [{ value: "main", label: "main" }],
+          [{ value: "main", label: "main" }],
+        ],
+      });
+
+      await playwrightPage(page.asPage()).select("branch-field", { value: "main" });
+
+      expect(selections(page)).toEqual(['select branch-field {"value":"main"}']);
+    });
+
+    it("fails on an element with no options, asking whether it is a <select>", async () => {
+      const page = new FakePlaywrightPage(layout(), 2000);
+
+      await expect(
+        playwrightPage(page.asPage(), { optionWaitMs: 50 }).select("canvas", { value: "main" }),
+      ).rejects.toThrow("canvas has no options; is it a <select>?");
+      expect(selections(page)).toEqual([]);
+    });
   });
 
   it("sends a press step to the keyboard unchanged", async () => {

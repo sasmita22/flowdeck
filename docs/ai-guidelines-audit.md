@@ -1047,6 +1047,14 @@ Row 9 gained `src/core/run/stop-marker.ts`.
 | `src/app/renderer/assistant/tool-handler.ts` | Changed          | Row 23: the two edits become the canvas's `addConnection` and `deleteConnections` commands; `add_connection` answers `connectionId`              |
 | `src/app/renderer/canvas/store.ts`           | Changed          | Not model-facing: `connectSessions` uses the shared `connectionRefusal`                                                                          |
 
+### Drive click point and select
+
+| Skill or file                  | Added or changed | Why                                                                                                                  |
+| ------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `.claude/rules/manual-test.md` | Changed          | App screens row: lists every drive step kind, including the new `click-at` and `select`, instead of four of thirteen |
+
+The file is read by the agents that work on this repo, not by a Flowdeck session, and sits outside the detection rule's folders, so the inventory needs no row. Standard, judged on the file as a whole: rule 1 pass (manual testing only); rule 2 n/a (a rules file, no frontmatter); rule 3 pass (43 lines); rule 4 pass (rule 9 still pins the result row; the step kinds are named exactly as `steps.json` spells them); rule 5 pass (unchanged: rule 2 makes a check pass only on read-back evidence); rule 6 n/a (no blueprint); rule 7 pass (each kind written as its `type` literal in `scripts/drive.ts`). Staleness: the row named click, type, wait-for-text and screenshot only, while `scripts/drive.ts` `stepSchemas` already had nine more; the row now lists all thirteen keys of `stepSchemas`, `canvas` is the canvas's `data-testid` in `src/app/renderer/canvas/canvas.tsx`, and "finding elements by `data-testid`" no longer implies that `wait-for-text`, `press` or the window steps take one. No product model-facing text changed: `scripts/drive.ts` is a dev script outside the detection rule's folders.
+
 ### Raised, not changed here
 
 - Resolved by the GitHub-links pass: the blueprint session fetches github.com and raw.githubusercontent.com only, and `copy-flow` reads GitHub links. Still open: a fetch hands the session a summary of the page, not the file, so `copy-flow` prefers the GitHub tools and raw files; and a repo's text can carry instructions that add steps, which the user sees on the canvas before anything runs.
