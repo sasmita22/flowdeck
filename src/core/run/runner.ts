@@ -1059,6 +1059,7 @@ export class Runner {
         return { failure: messageOf(error) };
       }
     }
+    if (action?.kind === "fail") return { failure: reasonIn(node.id, action.message) };
     const answers = this.answersFor(node.id, action);
     this.emit(`${node.id} started`);
     let recorded: AgentCalls | undefined;
