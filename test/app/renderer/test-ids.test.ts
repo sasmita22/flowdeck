@@ -110,7 +110,6 @@ describe("test ids", () => {
       pageTestIds.buildResume(id),
       pageTestIds.buildStop(id),
       pageTestIds.buildDelete(id),
-      pageTestIds.buildOld(id),
       pageTestIds.buildKept(id),
     ]).toEqual([
       `build-card-${id}`,
@@ -119,9 +118,9 @@ describe("test ids", () => {
       `build-resume-${id}`,
       `build-stop-${id}`,
       `build-delete-${id}`,
-      `build-old-${id}`,
       `build-kept-${id}`,
     ]);
+    expect(pageTestIds).not.toHaveProperty("buildOld");
   });
 
   it("names the blueprint picture's controls by the build or pending build it shows", () => {

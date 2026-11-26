@@ -4,7 +4,6 @@ import { NodeType, Wire } from "../flow/schema.js";
 
 export type ParsedManifest = Omit<Manifest, "prefix" | "layout" | "nodes" | "wires" | "session"> & {
   hash: string;
-  layout: "workspace" | "legacy";
 };
 
 const storedNodeSchema = z.looseObject({
@@ -36,14 +35,10 @@ const storedManifestSchema = z.looseObject({
   connections: z.array(z.tuple([z.string(), z.string()])).optional(),
 });
 
-export function parseManifest(
-  text: string,
-  build: { hash: string; name: string | null },
-): ParsedManifest {
+export function parseManifest(text: string): ParsedManifest {
   const parsed: unknown = JSON.parse(text);
   storedManifestSchema.parse(parsed);
-  const manifest = parsed as Omit<ParsedManifest, "layout">;
-  return { ...manifest, layout: build.name === null ? "legacy" : "workspace" };
+  return parsed as ParsedManifest;
 }
 
 const stageNodeSchema = z.object({

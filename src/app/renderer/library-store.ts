@@ -97,7 +97,6 @@ export type BuildCard = {
   version: number | null;
   createdAt: number;
   flowId: string | null;
-  old: boolean;
   run: Pick<RunSummary, "id" | "status"> | null;
 };
 
@@ -124,7 +123,6 @@ export const selectBuildCards = (state: Pick<LibraryState, "builds" | "runs">): 
     version: build.blueprintVersion,
     createdAt: build.createdAt,
     flowId: build.source?.flowId ?? null,
-    old: build.old,
     run: latestRun(state.runs, build.id),
   }));
 

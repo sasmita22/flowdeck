@@ -99,7 +99,7 @@ const buildId = "b1111111-0000-4000-8000-000000000001";
 const oldRow = (hash: string, dir: string): BuildRecord => ({
   id: hash,
   hash,
-  name: null,
+  name: "build",
   repo: null,
   base: null,
   branch: null,
@@ -168,30 +168,6 @@ describe("the core run path", () => {
     };
   };
 
-  const legacyBuild = async (
-    nodes: unknown[] = [
-      { id: "s", type: "gate", label: "s", settings: { shown: "Check", skippable: false } },
-    ],
-    wires: unknown[] = [],
-  ) => {
-    const manifestWithoutHash = {
-      version: 1,
-      session: { name: "main", workingFolder: { kind: "worktree", branch: "main" } },
-      nodes,
-      wires,
-      files: {},
-    };
-    const hash = hashBuild([
-      { path: "manifest.json", content: canonicalJson(manifestWithoutHash) },
-    ]);
-    const legacyDir = join(home, "builds", hash);
-    await fs.writeFile(
-      join(legacyDir, "manifest.json"),
-      canonicalJson({ ...manifestWithoutHash, hash }),
-    );
-    return { hash, legacyDir };
-  };
-
   describe("loadBuild", () => {
     it("finds a build by its id and loads its verified manifest", async () => {
       const result = await loadBuild(buildId, { fs, store });
@@ -207,11 +183,10 @@ describe("the core run path", () => {
       expect(result.build.hash).toBe(store.findBuild(buildId)?.hash);
     });
 
-    it("takes the prefix and layout from the manifest", async () => {
+    it("takes the prefix from the manifest", async () => {
       const build = await loaded();
 
       expect(workspaceOf(build).prefix).toBe("fix-login-workspace");
-      expect(build.layout).toBe("workspace");
     });
 
     it("gives a one-session build the worktree in its session's folder", async () => {
@@ -298,16 +273,6 @@ describe("the core run path", () => {
       expect(await loadBuild(buildId, { fs, store: rows({ ...row, hash: otherHash }) })).toEqual({
         kind: "error",
         message: "manifest.json: changed",
-      });
-    });
-
-    it("still names any file an old build did not write, anywhere in its folder", async () => {
-      const { hash, legacyDir } = await legacyBuild();
-      await fs.writeFile(join(legacyDir, "notes", ".DS_Store"), "");
-
-      expect(await loadBuild(hash, { fs, store: rows(oldRow(hash, legacyDir)) })).toEqual({
-        kind: "error",
-        message: "notes/.DS_Store: extra",
       });
     });
 

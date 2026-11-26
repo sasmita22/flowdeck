@@ -14,7 +14,6 @@ import {
   selectLiveBadge,
   selectNodeDisplay,
   selectRunDisabled,
-  selectRunHint,
   selectRunningCount,
   selectRunSnapshot,
   selectRunSummary,
@@ -265,8 +264,7 @@ const makeDirty = (canvas: ReturnType<typeof createCanvasStore>) =>
 
 const card = (
   run: { id: string; status: Status } | null = null,
-  old = false,
-): { old: boolean; run: { id: string; status: Status } | null } => ({ old, run });
+): { run: { id: string; status: Status } | null } => ({ run });
 
 describe("connect", () => {
   it("keeps each pushed snapshot under its own run", async () => {
@@ -1330,23 +1328,6 @@ describe("selectRunDisabled", () => {
 
     push(snapshot("done", {}, "run-1"));
     expect(selectRunDisabled(run.getState(), card({ id: "run-1", status: "running" }))).toBe(false);
-  });
-
-  it("is true for an old build, which says to make a new build", async () => {
-    const { run } = await setup();
-
-    expect(selectRunDisabled(run.getState(), card(null, true))).toBe(true);
-    expect(selectRunHint({ old: true, blueprint: "review" })).toBe(
-      "Make a new build from this blueprint",
-    );
-    expect(selectRunHint({ old: false, blueprint: "review" })).toBeNull();
-  });
-
-  it("does not point an old build with no blueprint at one", () => {
-    expect(selectRunHint({ old: true, blueprint: "" })).toBe(
-      "Builds from before named builds can't run again.",
-    );
-    expect(selectRunHint({ old: false, blueprint: "" })).toBeNull();
   });
 
   it("is true for every build while a run is starting", async () => {

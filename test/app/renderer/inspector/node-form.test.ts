@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import { nodeDefaults } from "../../../../src/app/renderer/canvas/store.js";
 import * as nodeForm from "../../../../src/app/renderer/inspector/node-form.js";
 import {
-  addFlag,
   applyNodeSetting,
   describeNodeFields,
-  removeFlag,
-  renameFlag,
-  setFlag,
 } from "../../../../src/app/renderer/inspector/node-form.js";
 import {
   describeFields,
@@ -306,45 +302,6 @@ describe("applyNodeSetting", () => {
     const result = applyNodeSetting(nodeOf("hardstop"), [key], false);
 
     expect(result).toEqual({ error: "Hard stop is locked" });
-  });
-});
-
-describe("trigger flags", () => {
-  it("adds a flag, off, with a name not yet taken", () => {
-    expect(addFlag({})).toEqual({ flag: false });
-    expect(addFlag({ flag: true })).toEqual({ flag: true, "flag-2": false });
-  });
-
-  it("switches a flag on and off", () => {
-    expect(setFlag({ deep: false, quick: true }, "deep", true)).toEqual({
-      deep: true,
-      quick: true,
-    });
-  });
-
-  it("renames a flag in place, keeping its value and order", () => {
-    const renamed = renameFlag({ a: true, deep: false, z: true }, "deep", "thorough");
-
-    expect(Object.entries(renamed)).toEqual([
-      ["a", true],
-      ["thorough", false],
-      ["z", true],
-    ]);
-  });
-
-  it("refuses a blank name or one already taken", () => {
-    const flags = { a: true, b: false };
-
-    expect(renameFlag(flags, "a", " ")).toBe(flags);
-    expect(renameFlag(flags, "a", "b")).toBe(flags);
-  });
-
-  it("trims a new name", () => {
-    expect(renameFlag({ a: true }, "a", " deep ")).toEqual({ deep: true });
-  });
-
-  it("removes a flag", () => {
-    expect(removeFlag({ a: true, b: false }, "a")).toEqual({ b: false });
   });
 });
 

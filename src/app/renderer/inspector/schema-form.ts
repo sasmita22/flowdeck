@@ -11,11 +11,11 @@ import { producedName } from "../../../core/nodes/agent/settings.js";
 
 type Path = readonly string[];
 
-export type FieldValue = string | boolean | Readonly<Record<string, string | number | boolean>>;
+export type FieldValue = string | boolean;
 
 export type FieldDescription =
   | {
-      control: "text" | "multiline" | "list" | "number" | "toggle" | "flags";
+      control: "text" | "multiline" | "list" | "number" | "toggle";
       path: Path;
       testId: string;
       label: string;
@@ -183,7 +183,6 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   }
   if (inner instanceof z.ZodNumber) return [{ control: "number", path, testId, label: label() }];
   if (inner instanceof z.ZodBoolean) return [{ control: "toggle", path, testId, label: label() }];
-  if (inner instanceof z.ZodRecord) return [{ control: "flags", path, testId, label: label() }];
   if (inner instanceof z.ZodObject) return objectFields(form, path, inner as AnyObject);
   return [];
 };

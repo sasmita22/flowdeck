@@ -1296,7 +1296,7 @@ describe("buildVersion", () => {
         expect(await t.fs.readFile(path)).toBe(content);
       }
       expect(seededWrites()).toHaveLength(Object.keys(seeded).length);
-      expect(await verify(result.dir, result.hash, "workspace", { fs: t.fs })).toEqual({
+      expect(await verify(result.dir, result.hash, { fs: t.fs })).toEqual({
         ok: true,
       });
     });

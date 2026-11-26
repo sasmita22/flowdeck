@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node-fs/node-file-system.js";
 import { build, type BuildDeps, type BuildResult } from "../../../src/core/compiler/build.js";
-import { canonicalJson } from "../../../src/core/compiler/canonical-json.js";
-import { hashBuild, sha256Hex } from "../../../src/core/compiler/hash.js";
 import {
   verify,
   workspaceListing,
@@ -46,39 +44,6 @@ const copyWithout = async (fs: FakeFileSystem, dir: string, omitted: string) => 
       await copy.writeFile(`${dir}/${path}`, await fs.readFile(`${dir}/${path}`));
   }
   return copy;
-};
-
-const legacyFiles = {
-  "commands/p.md": '---\ndescription: "p"\n---\nDo the work.\n',
-  "agents/a.md": '---\nname: "a"\n---\nImplement the plan.\n',
-  "hooks/hooks.json": canonicalJson({ hooks: {} }),
-  "settings.json": canonicalJson({ permissions: { allow: [], defaultMode: "default" } }),
-};
-
-const legacyBuild = async () => {
-  const manifestWithoutHash = {
-    version: 1,
-    session: { name: "main", workingFolder: { kind: "worktree", branch: "main" } },
-    nodes: [
-      { id: "p", type: "prompt", label: "p", settings: {}, file: "commands/p.md" },
-      { id: "a", type: "agent", label: "a", settings: {}, file: "agents/a.md" },
-    ],
-    wires: [],
-    files: Object.fromEntries(
-      Object.entries(legacyFiles).map(([path, content]) => [path, sha256Hex(content)]),
-    ),
-  };
-  const files = Object.entries(legacyFiles).map(([path, content]) => ({ path, content }));
-  const hash = hashBuild([
-    ...files,
-    { path: "manifest.json", content: canonicalJson(manifestWithoutHash) },
-  ]);
-  const dir = `${home}/builds/${hash}`;
-  const fs = new FakeFileSystem({
-    ...Object.fromEntries(files.map(({ path, content }) => [`${dir}/${path}`, content])),
-    [`${dir}/manifest.json`]: canonicalJson({ ...manifestWithoutHash, hash }),
-  });
-  return { fs, dir, hash };
 };
 
 const enoent = () =>
@@ -177,14 +142,14 @@ describe("verify", () => {
       await mkdir(join(dir, "sessions", "main", "repo", "src"), { recursive: true });
       await writeFile(join(dir, "sessions", "main", "repo", "src", "login.ts"), "export {};\n");
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+      expect(await verify(dir, hash, { fs })).toStrictEqual({ ok: true });
     });
 
     it("accepts a fresh build, checked against the hash it is given, not its folder name", async () => {
       const { fs, dir, hash } = await built();
 
       expect(dir.endsWith(hash)).toBe(false);
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+      expect(await verify(dir, hash, { fs })).toStrictEqual({ ok: true });
     });
 
     it("accepts new files inside the worktree folder", async () => {
@@ -199,7 +164,7 @@ describe("verify", () => {
         "a repo file named like ours",
       );
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+      expect(await verify(dir, hash, { fs })).toStrictEqual({ ok: true });
     });
 
     describe("with build-report.json at its root", () => {
@@ -207,14 +172,14 @@ describe("verify", () => {
         const { fs, dir, hash } = await built();
 
         expect(await fs.readFile(`${dir}/build-report.json`)).not.toBe("");
-        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+        expect(await verify(dir, hash, { fs })).toStrictEqual({ ok: true });
       });
 
       it("accepts the report after the agents rewrote it", async () => {
         const { fs, dir, hash } = await built();
         await fs.writeFile(`${dir}/build-report.json`, '{"questions":["written after the lock"]}');
 
-        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({ ok: true });
+        expect(await verify(dir, hash, { fs })).toStrictEqual({ ok: true });
       });
 
       it("still names CLAUDE.md when it was edited after the lock", async () => {
@@ -222,7 +187,7 @@ describe("verify", () => {
         await fs.writeFile(`${dir}/build-report.json`, '{"questions":["written after the lock"]}');
         await fs.writeFile(`${dir}/sessions/main/CLAUDE.md`, "tampered");
 
-        expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+        expect(await verify(dir, hash, { fs })).toStrictEqual({
           ok: false,
           problems: [{ path: "sessions/main/CLAUDE.md", problem: "changed" }],
         });
@@ -240,7 +205,7 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       await fs.writeFile(`${dir}/${path}`, "tampered");
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+      expect(await verify(dir, hash, { fs })).toStrictEqual({
         ok: false,
         problems: [{ path, problem: "changed" }],
       });
@@ -254,7 +219,7 @@ describe("verify", () => {
         JSON.stringify({ ...manifest, values: { ticket: "FD-1" } }),
       );
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+      expect(await verify(dir, hash, { fs })).toStrictEqual({
         ok: false,
         problems: [{ path: "manifest.json", problem: "changed" }],
       });
@@ -264,7 +229,7 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       const copy = await copyWithout(fs, dir, "sessions/main/plugin/agents/a.md");
 
-      expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
+      expect(await verify(dir, hash, { fs: copy })).toStrictEqual({
         ok: false,
         problems: [{ path: "sessions/main/plugin/agents/a.md", problem: "missing" }],
       });
@@ -274,7 +239,7 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       await fs.writeFile(`${dir}/sessions/main/plugin/agents/stray.md`, "---\nname: stray\n---\n");
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+      expect(await verify(dir, hash, { fs })).toStrictEqual({
         ok: false,
         problems: [{ path: "sessions/main/plugin/agents/stray.md", problem: "extra" }],
       });
@@ -286,7 +251,7 @@ describe("verify", () => {
       await copy.writeFile(`${dir}/sessions/main/settings.json`, "tampered");
       await copy.writeFile(`${dir}/sessions/main/plugin/skills/extra/SKILL.md`, "stray");
 
-      expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
+      expect(await verify(dir, hash, { fs: copy })).toStrictEqual({
         ok: false,
         problems: [
           { path: "sessions/main/plugin/agents/a.md", problem: "missing" },
@@ -299,7 +264,7 @@ describe("verify", () => {
     it("names the manifest when the build's row records another hash", async () => {
       const { fs, dir } = await built();
 
-      expect(await verify(dir, otherHash, "workspace", { fs })).toStrictEqual({
+      expect(await verify(dir, otherHash, { fs })).toStrictEqual({
         ok: false,
         problems: [{ path: "manifest.json", problem: "changed" }],
       });
@@ -309,7 +274,7 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       await fs.writeFile(`${dir}/manifest.json`, "{ not json");
 
-      expect(await verify(dir, hash, "workspace", { fs })).toStrictEqual({
+      expect(await verify(dir, hash, { fs })).toStrictEqual({
         ok: false,
         problems: [{ path: "manifest.json", problem: "changed" }],
       });
@@ -319,7 +284,7 @@ describe("verify", () => {
       const { fs, dir, hash } = await built();
       const copy = await copyWithout(fs, dir, "manifest.json");
 
-      expect(await verify(dir, hash, "workspace", { fs: copy })).toStrictEqual({
+      expect(await verify(dir, hash, { fs: copy })).toStrictEqual({
         ok: false,
         problems: [{ path: "manifest.json", problem: "missing" }],
       });
@@ -327,7 +292,7 @@ describe("verify", () => {
 
     it("names the manifest as missing when the workspace does not exist", async () => {
       expect(
-        await verify(`${home}/workspaces/gone`, otherHash, "workspace", {
+        await verify(`${home}/workspaces/gone`, otherHash, {
           fs: failingList(enoent()),
         }),
       ).toStrictEqual({ ok: false, problems: [{ path: "manifest.json", problem: "missing" }] });
@@ -337,45 +302,8 @@ describe("verify", () => {
       const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
 
       await expect(
-        verify(`${home}/workspaces/x`, otherHash, "workspace", { fs: failingList(error) }),
+        verify(`${home}/workspaces/x`, otherHash, { fs: failingList(error) }),
       ).rejects.toBe(error);
-    });
-  });
-
-  describe("an old flat build in builds/<hash>", () => {
-    it("verifies by the old rule", async () => {
-      const { fs, dir, hash } = await legacyBuild();
-
-      expect(await verify(dir, hash, "legacy", { fs })).toStrictEqual({ ok: true });
-    });
-
-    it("still names any file the build did not write", async () => {
-      const { fs, dir, hash } = await legacyBuild();
-      await fs.writeFile(`${dir}/notes/.DS_Store`, "");
-
-      expect(await verify(dir, hash, "legacy", { fs })).toStrictEqual({
-        ok: false,
-        problems: [{ path: "notes/.DS_Store", problem: "extra" }],
-      });
-    });
-
-    it("names a generated file that was edited", async () => {
-      const { fs, dir, hash } = await legacyBuild();
-      await fs.writeFile(`${dir}/commands/p.md`, "tampered");
-
-      expect(await verify(dir, hash, "legacy", { fs })).toStrictEqual({
-        ok: false,
-        problems: [{ path: "commands/p.md", problem: "changed" }],
-      });
-    });
-
-    it("names the manifest when the row records another hash", async () => {
-      const { fs, dir } = await legacyBuild();
-
-      expect(await verify(dir, otherHash, "legacy", { fs })).toStrictEqual({
-        ok: false,
-        problems: [{ path: "manifest.json", problem: "changed" }],
-      });
     });
   });
 });

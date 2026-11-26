@@ -45,30 +45,6 @@ describe("build manifests", () => {
     return { db, runs: new SqliteStore({ db, now: () => new Date("2026-03-01T00:00:00Z") }) };
   };
 
-  const lockedBeforeManifests = (
-    db: Database.Database,
-    id: string,
-    options: { manifestSha256?: string; deletedAt?: number } = {},
-  ) => {
-    db.transaction(() => {
-      db.prepare(
-        "INSERT INTO build_files (build_id, path, sha256) VALUES (?, 'commands/p1.md', 'c')",
-      ).run(id);
-      if (options.manifestSha256 !== undefined) {
-        db.prepare(
-          "INSERT INTO build_files (build_id, path, sha256) VALUES (?, 'manifest.json', ?)",
-        ).run(id, options.manifestSha256);
-      }
-      db.prepare(
-        `INSERT INTO builds (id, hash, name, repo, base, "values", dir, created_at, deleted_at)
-         VALUES (?, ?, ?, '/repo', 'main', '{}', ?, 1, ?)`,
-      ).run(id, `hash-${id}`, `build-${id}`, `/fd/workspaces/${id}`, options.deletedAt ?? null);
-    })();
-  };
-
-  const gaps = (runs: SqliteStore) =>
-    runs.listManifestGaps().sort((a, b) => a.buildId.localeCompare(b.buildId));
-
   beforeEach(async () => {
     folder = await mkdtemp(join(tmpdir(), "fd-manifests-"));
   });
@@ -101,26 +77,6 @@ describe("build manifests", () => {
     expect(runs.buildManifest("b1")).toBeUndefined();
   });
 
-  describe("storeManifest", () => {
-    it("stores the manifest of a build that has none", () => {
-      const { db, runs } = stores();
-      lockedBeforeManifests(db, "old1", { manifestSha256: "m1" });
-
-      runs.storeManifest({ buildId: "old1", manifest: lockedManifest });
-
-      expect(runs.buildManifest("old1")).toBe(lockedManifest);
-    });
-
-    it("leaves a stored manifest as it is, without an error", () => {
-      const { runs } = stores();
-      runs.recordBuild(newBuild("b1"));
-
-      runs.storeManifest({ buildId: "b1", manifest: '{"version":1,"hash":"other"}' });
-
-      expect(runs.buildManifest("b1")).toBe(lockedManifest);
-    });
-  });
-
   describe("a stored manifest is locked, except for being deleted", () => {
     const manifestRows = (db: Database.Database) =>
       db.prepare("SELECT build_id, manifest_json FROM build_manifests ORDER BY build_id").all();
@@ -147,37 +103,6 @@ describe("build manifests", () => {
       db.exec("DELETE FROM build_manifests");
 
       expect(manifestRows(db)).toEqual([]);
-    });
-  });
-
-  describe("listManifestGaps", () => {
-    it("lists builds with no stored manifest and a manifest file, deleted ones too, with that file's sha256", () => {
-      const { db, runs } = stores();
-      lockedBeforeManifests(db, "old1", { manifestSha256: "m1" });
-      lockedBeforeManifests(db, "gone1", { manifestSha256: "m2", deletedAt: 5 });
-
-      expect(gaps(runs)).toEqual([
-        { buildId: "gone1", manifestSha256: "m2" },
-        { buildId: "old1", manifestSha256: "m1" },
-      ]);
-    });
-
-    it("leaves out a build with a stored manifest", () => {
-      const { db, runs } = stores();
-      runs.recordBuild(newBuild("b1"));
-      lockedBeforeManifests(db, "old1", { manifestSha256: "m1" });
-      lockedBeforeManifests(db, "old2", { manifestSha256: "m2" });
-
-      runs.storeManifest({ buildId: "old2", manifest: lockedManifest });
-
-      expect(gaps(runs)).toEqual([{ buildId: "old1", manifestSha256: "m1" }]);
-    });
-
-    it("leaves out a build with no manifest file", () => {
-      const { db, runs } = stores();
-      lockedBeforeManifests(db, "bare1");
-
-      expect(gaps(runs)).toEqual([]);
     });
   });
 });

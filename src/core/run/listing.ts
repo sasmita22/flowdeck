@@ -73,7 +73,6 @@ export const buildRecordSchema = z.object({
   name: z.string().nullable(),
   branch: z.string().nullable().optional(),
   branchCreated: z.boolean().nullable().optional(),
-  old: z.boolean(),
   dir: z.string(),
   createdAt: z.number(),
   source: sourceSchema.optional(),

@@ -174,7 +174,6 @@ const usedLibraries = (flow: Flow, uses: readonly LibraryUse[]): LibraryLookup =
 };
 
 export type BuildCardRun = {
-  old: boolean;
   run: { id: string; status: SnapshotStatus } | null;
 };
 
@@ -300,17 +299,10 @@ export const selectRunDisabled = (
   run: Pick<RunState, "starting" | "snapshots">,
   card: BuildCardRun,
 ): boolean => {
-  if (run.starting || card.old) return true;
+  if (run.starting) return true;
   if (card.run === null) return false;
   const status = run.snapshots[card.run.id]?.status ?? card.run.status;
   return blockingStatuses.includes(status);
-};
-
-export const selectRunHint = (card: { old: boolean; blueprint: string }): string | null => {
-  if (!card.old) return null;
-  return card.blueprint === ""
-    ? "Builds from before named builds can't run again."
-    : "Make a new build from this blueprint";
 };
 
 export const selectExistingBranches = (run: Pick<RunState, "buildDialog">): ExistingBranch[] => {

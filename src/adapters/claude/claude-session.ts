@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import {
   hookEnvironment,
   sessionStatesVariable,
@@ -20,7 +19,6 @@ export class SessionGoneError extends Error {
 export async function openClaudeSession(
   {
     sessionName,
-    buildDir,
     model,
     socketPath,
     cwd,
@@ -29,7 +27,7 @@ export async function openClaudeSession(
     resume,
     env,
     sessionStatesPath,
-    ...layout
+    workspaceFolder,
   }: OpenSessionOptions & { env?: Record<string, string> },
   { sessions, claude, sessionId }: { sessions: SessionHost; claude: ClaudeCli; sessionId: string },
 ): Promise<OpenedSession> {
@@ -37,15 +35,13 @@ export async function openClaudeSession(
     throw new SessionGoneError(sessionName);
   }
   const buildFiles =
-    layout.layout === "legacy"
-      ? { settingsPath: join(buildDir, "settings.json"), pluginDirs: [buildDir] }
-      : layout.workspaceFolder === cwd
-        ? { settingsPath: "settings.json", pluginDirs: ["plugin"] }
-        : {
-            settingsPath: "../settings.json",
-            pluginDirs: ["../plugin"],
-            addDir: ["..", layout.workspaceFolder],
-          };
+    workspaceFolder === cwd
+      ? { settingsPath: "settings.json", pluginDirs: ["plugin"] }
+      : {
+          settingsPath: "../settings.json",
+          pluginDirs: ["../plugin"],
+          addDir: ["..", workspaceFolder],
+        };
   let closed = false;
   let started = attach === true;
   let starting: Promise<void> | undefined;
