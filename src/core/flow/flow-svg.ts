@@ -5,6 +5,8 @@ import {
   clearOfEnds,
   goesBack,
   isClear,
+  ROUTE_MARGIN,
+  routeAroundRows,
   routePath,
   routeWire,
   wireEnds,
@@ -13,7 +15,6 @@ import {
 } from "./wire-router.js";
 
 const FRAME_PADDING = 24;
-const MARGIN = 32;
 const CHAR_WIDTH = 7;
 const TEXT_PADDING = 26;
 
@@ -209,6 +210,30 @@ const layoutOf = (flow: Flow) => {
     return points?.map(({ x, y }) => ({ x: round(x), y: round(y) })) ?? null;
   };
 
+  const everything = [
+    ...flow.nodes.map(boundsOf),
+    ...notes.map(noteBounds),
+    ...frames.map(({ box }) => box),
+    ...containerFrames.map(({ box }) => box),
+  ];
+  const view =
+    everything.length === 0
+      ? { left: 0, top: 0, right: 0, bottom: 0 }
+      : grown(everything, ROUTE_MARGIN);
+
+  const aroundRows = (wire: Wire, elbow: readonly Point[]): Point[] | null => {
+    const points = routeAroundRows({
+      from: wire.from.node,
+      to: wire.to.node,
+      boxes,
+      bodies: frames.map(({ box }) => box),
+      frames: frameById,
+      bounds: view,
+      crossesToday: (_source, _target, gate) => !isClear(elbow, gate),
+    });
+    return points?.map(({ x, y }) => ({ x: round(x), y: round(y) })) ?? null;
+  };
+
   const wires = flow.wires.flatMap((wire): PictureWire[] => {
     const start = endOf(wire.from.node);
     const end = endOf(wire.to.node);
@@ -224,7 +249,7 @@ const layoutOf = (flow: Flow) => {
       { x: mid, y: y2 },
       { x: x2, y: y2 },
     ];
-    const route = routed(wire, elbow);
+    const route = routed(wire, elbow) ?? aroundRows(wire, elbow);
     return [
       {
         from: wire.from.node,
@@ -235,7 +260,7 @@ const layoutOf = (flow: Flow) => {
     ];
   });
 
-  return { notes, boxes, frames, containerFrames, wires };
+  return { notes, boxes, frames, containerFrames, wires, view };
 };
 
 export const pictureLayout = (flow: Flow): PictureLayout => {
@@ -253,16 +278,7 @@ const elbowPath = (points: readonly Point[]): string => {
 };
 
 export function flowSvg(flow: Flow): string {
-  const { notes, frames, containerFrames, wires } = layoutOf(flow);
-
-  const everything = [
-    ...flow.nodes.map(boundsOf),
-    ...notes.map(noteBounds),
-    ...frames.map(({ box }) => box),
-    ...containerFrames.map(({ box }) => box),
-  ];
-  const view =
-    everything.length === 0 ? { left: 0, top: 0, right: 0, bottom: 0 } : grown(everything, MARGIN);
+  const { notes, frames, containerFrames, wires, view } = layoutOf(flow);
   const width = round(view.right - view.left);
   const height = round(view.bottom - view.top);
 

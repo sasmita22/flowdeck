@@ -1,4 +1,4 @@
-import type { Flow } from "../../src/core/flow/schema.js";
+import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import {
   agent,
   ask,
@@ -14,6 +14,7 @@ import {
   thenWire,
   trigger,
   wire,
+  workspaceContainer,
 } from "./flow-builders.js";
 
 const ids = (prefix: string, count: number) =>
@@ -83,3 +84,20 @@ const wires = [
 ];
 
 export const featureLibrary: Flow = sessionLibrary(nodes, wires);
+
+const workspaceStart = "workspace-1-start";
+const workspaceStop = "workspace-1-stop";
+
+export const wrappedFeatureLibrary: Flow = parseFlow({
+  ...featureLibrary,
+  nodes: [...featureLibrary.nodes, trigger(workspaceStart), output(workspaceStop)],
+  wires: [
+    ...featureLibrary.wires.filter(
+      ({ from, to }) => !(from.node === "canvas-start" && to.node === "session-1"),
+    ),
+    thenWire(workspaceStart, workspaceStop),
+    wire("canvas-start", "out", "workspace-1", "flow-in"),
+    wire("workspace-1", "flow-out", "session-1", "flow-in"),
+  ],
+  containers: [workspaceContainer([workspaceStart, workspaceStop]), ...featureLibrary.containers],
+});

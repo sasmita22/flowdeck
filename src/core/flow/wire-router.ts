@@ -305,3 +305,80 @@ export const routeWire = (
 
 export const routePath = (points: readonly Point[]): string =>
   points.map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`).join(" ");
+
+export type WireEnd = { bounds: Bounds; frame: boolean };
+
+const middleOf = ({ top, bottom }: Bounds) => (top + bottom) / 2;
+
+export const containerWireEnds = (
+  from: WireEnd,
+  to: WireEnd,
+): { source: Point; side: ExitSide; target: Point } => ({
+  source: {
+    x: from.bounds.right,
+    y: from.frame ? middleOf(from.bounds) : from.bounds.top + HANDLE_TOP,
+  },
+  side: "right",
+  target: { x: to.bounds.left, y: to.frame ? middleOf(to.bounds) : to.bounds.top + HANDLE_TOP },
+});
+
+export const routeContainerWire = ({
+  source,
+  target,
+  sourceFrame,
+  targetFrame,
+  boxes,
+  bounds,
+}: {
+  source: Point;
+  target: Point;
+  sourceFrame?: Bounds;
+  targetFrame?: Bounds;
+  boxes: readonly Bounds[];
+  bounds: Bounds;
+}): Point[] | null => {
+  const frames = [sourceFrame, targetFrame].filter((frame) => frame !== undefined);
+  return routeWire({ source, side: "right", target }, [...boxes, ...frames], bounds);
+};
+
+export const ROUTE_MARGIN = 32;
+
+export const routeAroundRows = ({
+  from,
+  to,
+  boxes,
+  bodies,
+  frames,
+  bounds,
+  crossesToday,
+}: {
+  from: string;
+  to: string;
+  boxes: ReadonlyMap<string, Bounds>;
+  bodies: readonly Bounds[];
+  frames: ReadonlyMap<string, Bounds>;
+  bounds: Bounds;
+  crossesToday: (source: Point, target: Point, gate: readonly Bounds[]) => boolean;
+}): Point[] | null => {
+  const sourceFrame = frames.get(from);
+  const targetFrame = frames.get(to);
+  if (sourceFrame === undefined && targetFrame === undefined) return null;
+  const fromBounds = sourceFrame ?? boxes.get(from);
+  const toBounds = targetFrame ?? boxes.get(to);
+  if (fromBounds === undefined || toBounds === undefined) return null;
+  const { source, target } = containerWireEnds(
+    { bounds: fromBounds, frame: sourceFrame !== undefined },
+    { bounds: toBounds, frame: targetFrame !== undefined },
+  );
+  const others = <T>(entries: Iterable<[string, T]>) =>
+    [...entries].filter(([id]) => id !== from && id !== to).map(([, value]) => value);
+  if (!crossesToday(source, target, [...others(boxes), ...bodies])) return null;
+  return routeContainerWire({
+    source,
+    target,
+    ...(sourceFrame !== undefined && { sourceFrame }),
+    ...(targetFrame !== undefined && { targetFrame }),
+    boxes: [...boxes.values(), ...bodies, ...others(frames)],
+    bounds,
+  });
+};

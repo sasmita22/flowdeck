@@ -29,7 +29,7 @@ import {
 } from "../../../../src/core/flow/schema.js";
 import type { LibraryLookup } from "../../../../src/core/flow/libraries.js";
 import { flowContainerOf, flowIn, flowOut } from "../../../../src/core/flow/structure.js";
-import { featureLibrary } from "../../../fixtures/feature-library.js";
+import { featureLibrary, wrappedFeatureLibrary } from "../../../fixtures/feature-library.js";
 import {
   agent,
   ask,
@@ -1541,6 +1541,80 @@ describe("toViewEdges routes wires that leave their row", () => {
     expect(toViewEdges(current)).toMatchObject([{ id: "a:out->b:in", type: "routed" }]);
   });
 
+  describe("with a wrapped flow", () => {
+    const wrappedWidths = [1600, 1400, 960, 860];
+
+    const wrappedAt = (width: number) => tidied(wrappedFeatureLibrary, { ...canvas, width });
+
+    const containerEnds = (current: Flow, boxes: Map<string, Bounds>, wire: Wire) => {
+      const frames = new Set(current.containers.map(({ id }) => id));
+      const middle = ({ top, bottom }: Bounds) => (top + bottom) / 2;
+      const from = frames.has(wire.from.node)
+        ? flowContainerBounds(current, wire.from.node)
+        : box(boxes, wire.from.node);
+      const to = frames.has(wire.to.node)
+        ? flowContainerBounds(current, wire.to.node)
+        : box(boxes, wire.to.node);
+      return {
+        source: { x: from.right, y: frames.has(wire.from.node) ? middle(from) : from.top + 24 },
+        target: { x: to.left, y: frames.has(wire.to.node) ? middle(to) : to.top + 24 },
+      };
+    };
+
+    const gateBoxes = (current: Flow, boxes: Map<string, Bounds>, wire: Wire): Bounds[] => [
+      ...[...boxes]
+        .filter(([id]) => id !== wire.from.node && id !== wire.to.node)
+        .map(([, bounds]) => bounds),
+      ...current.nodes
+        .filter((node) => node.type === "loop" || node.type === "foreach")
+        .map((scope) => bodyFrameBounds(current, scope)),
+    ];
+
+    const containerWires = (current: Flow) => {
+      const frames = new Set(current.containers.map(({ id }) => id));
+      return current.wires.filter(({ from, to }) => frames.has(from.node) || frames.has(to.node));
+    };
+
+    it.each(wrappedWidths)(
+      "routes every container wire that crosses a node or body around them at %i px",
+      async (width) => {
+        const current = await wrappedAt(width);
+        const boxes = labelledBoxes(current);
+        const edges = new Map(toViewEdges(current).map((edge) => [edge.id, edge]));
+        const crossingToday = containerWires(current).filter((wire) => {
+          const { source, target } = containerEnds(current, boxes, wire);
+          return bezierCrosses(source, "right", target, gateBoxes(current, boxes, wire));
+        });
+
+        expect(crossingToday.map(edgeId)).toEqual([
+          `session-1:${flowOut}->canvas-stop:in`,
+          `workspace-1:${flowOut}->session-1:${flowIn}`,
+        ]);
+        const problems = crossingToday.flatMap((wire) => {
+          const edge = edges.get(edgeId(wire));
+          if (edge?.type !== "routed") return [`${edgeId(wire)}: not routed`];
+          return pathCrossings(pointsOf(edge) ?? [], gateBoxes(current, boxes, wire)).map(
+            (crossed) => `${edgeId(wire)}: crosses ${JSON.stringify(crossed)}`,
+          );
+        });
+        expect(problems).toEqual([]);
+      },
+    );
+
+    it.each(wrappedWidths)(
+      "keeps the canvas Start wire to the workspace plain at %i px",
+      async (width) => {
+        const edge = toViewEdges(await wrappedAt(width)).find(
+          ({ id }) => id === `canvas-start:out->workspace-1:${flowIn}`,
+        );
+
+        expect(edge).toBeDefined();
+        expect(edge?.type).toBeUndefined();
+        expect(edge?.data).toBeUndefined();
+      },
+    );
+  });
+
   it.each(widths)("keeps wires with a container end plain at %i px", async (width) => {
     const ends = toViewEdges(await tidiedAt(width)).filter(({ id }) => id.includes("session-1:"));
 
@@ -1641,8 +1715,11 @@ describe("toViewEdges routes wires that leave their row", () => {
     expect(ratios[4]).toBeLessThan(13);
   });
 
-  it("routes the tidied feature library well within a frame budget", async () => {
-    const current = await tidiedAt(860);
+  it.each([
+    ["feature library", featureLibrary],
+    ["wrapped feature library", wrappedFeatureLibrary],
+  ])("routes the tidied %s well within a frame budget", async (_name, library) => {
+    const current = await tidied(library, { ...canvas, width: 860 });
     toViewEdges(current);
 
     const started = performance.now();

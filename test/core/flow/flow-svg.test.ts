@@ -5,7 +5,7 @@ import { flowSvg, pictureLayout } from "../../../src/core/flow/flow-svg.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import type { Point } from "../../../src/core/flow/wire-router.js";
 import { canvas, pathCrossings, tidied } from "../../app/renderer/canvas/canvas-geometry.js";
-import { featureLibrary } from "../../fixtures/feature-library.js";
+import { featureLibrary, wrappedFeatureLibrary } from "../../fixtures/feature-library.js";
 import {
   agent,
   flow,
@@ -379,6 +379,70 @@ describe("flowSvg", () => {
           `label of ${id} over ${other.getAttribute("data-id")}`,
         ).toBe(false);
     });
+  });
+
+  describe("container wires on a tidied wrapped long flow", () => {
+    const widths = [1600, 1400, 960, 860];
+
+    const tidiedWrapped = new Map<number, Promise<Flow>>();
+    const wrappedAt = (width: number): Promise<Flow> => {
+      const known = tidiedWrapped.get(width);
+      if (known !== undefined) return known;
+      const made = tidied(wrappedFeatureLibrary, { ...canvas, width });
+      tidiedWrapped.set(width, made);
+      return made;
+    };
+
+    const pointsOf = (d: string): Point[] =>
+      Array.from(d.matchAll(/([MLHV])\s*(-?\d+(?:\.\d+)?)(?:[ ,](-?\d+(?:\.\d+)?))?/g)).reduce<
+        Point[]
+      >((points, [, command, first, second]) => {
+        const last = points.at(-1) ?? { x: 0, y: 0 };
+        if (command === "H") return [...points, { x: Number(first), y: last.y }];
+        if (command === "V") return [...points, { x: last.x, y: Number(first) }];
+        return [...points, { x: Number(first), y: Number(second) }];
+      }, []);
+
+    const containerWires = (current: Flow) => {
+      const frames = new Set(current.containers.map(({ id }) => id));
+      const paths = drawn(flowSvg(current), "wire").map(
+        (element) => element.getAttribute("d") ?? "",
+      );
+      return pictureLayout(current)
+        .wires.map(({ from, to }, index) => ({ from, to, d: paths[index] ?? "" }))
+        .filter(({ from, to }) => frames.has(from) || frames.has(to));
+    };
+
+    it.each(widths)(
+      "draws no container wire over a node or body, only in straight segments, at %i px",
+      async (width) => {
+        const current = await wrappedAt(width);
+        const { boxes, bodies } = pictureLayout(current);
+        const wires = containerWires(current);
+
+        expect(wires).toHaveLength(3);
+        const crossing = wires.flatMap(({ from, to, d }) => {
+          const gate = [
+            ...[...boxes].filter(([id]) => id !== from && id !== to).map(([, bounds]) => bounds),
+            ...bodies.values(),
+          ];
+          return pathCrossings(pointsOf(d), gate).length === 0 ? [] : [`${from}->${to}`];
+        });
+        expect(crossing).toEqual([]);
+      },
+    );
+
+    it.each([
+      [1600, "M48,48 H169 V48 H290"],
+      [960, "M48,48 H169 V48 H290"],
+    ])(
+      "draws the canvas Start wire to the workspace as today's path at %i px",
+      async (width, d) => {
+        const wires = containerWires(await wrappedAt(width));
+
+        expect(wires.find(({ from }) => from === "canvas-start")?.d).toBe(d);
+      },
+    );
   });
 
   describe("wires on a tidied long flow", () => {
