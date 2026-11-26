@@ -1,5 +1,5 @@
 import { order } from "../flow/order.js";
-import type { Flow, FlowContainer, FlowSettings, Node, Session, Wire } from "../flow/schema.js";
+import type { Flow, FlowContainer, FlowSettings, Node, Wire } from "../flow/schema.js";
 import { flowContainerMembers } from "../flow/structure.js";
 import type { VariableValues } from "../flow/variables.js";
 import type { BuildSource } from "../run/store.js";
@@ -39,16 +39,12 @@ export type ManifestContainer = {
 
 export type Manifest = {
   version: 1;
-  prefix?: string;
   kitVersion?: string;
   layout?: "workspace";
   values?: VariableValues;
   source?: BuildSource;
   outputs?: ManifestOutput[];
-  session?: Session;
   settings?: FlowSettings;
-  nodes?: ManifestNode[];
-  wires?: Wire[];
   containers: ManifestContainer[];
   connections?: [string, string][];
   files: Record<string, string>;

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Manifest, ManifestContainer } from "../compiler/lower.js";
 import { NodeType, Wire } from "../flow/schema.js";
 
-export type ParsedManifest = Omit<Manifest, "prefix" | "layout" | "nodes" | "wires" | "session"> & {
+export type ParsedManifest = Omit<Manifest, "layout"> & {
   hash: string;
 };
 

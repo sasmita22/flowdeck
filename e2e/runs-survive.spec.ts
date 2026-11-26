@@ -122,7 +122,7 @@ const seedStaleConnectors = async (buildId: string) => {
     };
     const path = join(dir, "manifest.json");
     const built = JSON.parse(await readFile(path, "utf8")) as Manifest;
-    const stale = { ...built, session: { ...built.session, connectors: ["jira"] } };
+    const stale = { ...built, session: { connectors: ["jira"] } };
     const files = await Promise.all(
       Object.keys(stale.files).map(async (file) => ({
         path: file,

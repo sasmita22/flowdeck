@@ -34,12 +34,8 @@ const manifest = (): Manifest => {
   ];
   return {
     version: 1,
-    prefix: "ship-it",
     kitVersion: "1",
     layout: "workspace",
-    session: { name: "main", buildConfig: { repo: targetRepo, base: "main" }, model: "sonnet" },
-    nodes,
-    wires: [],
     containers: [
       {
         kind: "session",
