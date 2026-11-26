@@ -1850,6 +1850,133 @@ describe("createEngineHandler", async () => {
 
       expect(await present(fs, leftBehind)).toEqual(leftBehind);
     });
+
+    const tmuxWith = (sockets: Record<string, string | Error>) => {
+      const ended: string[] = [];
+      const overrides: Partial<EngineHandlerOptions> = {
+        flowdeckSessions: async () => Object.keys(sockets),
+        sessionSocketPath: async (name) => {
+          const socket = sockets[name];
+          if (socket instanceof Error) throw socket;
+          return socket;
+        },
+        endSession: async (name) => {
+          ended.push(name);
+        },
+      };
+      return { ended, overrides };
+    };
+
+    it("ends a tmux session of this home that the wiped runs left behind", async () => {
+      const tmux = tmuxWith({ "fd-run-own": `${home}/sockets/fd-run-own.sock` });
+
+      await startedWith(homeWith(...leftBehind), wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
+
+    it("leaves a session of another home alone", async () => {
+      const tmux = tmuxWith({
+        "fd-run-own": `${home}/sockets/fd-run-own.sock`,
+        "fd-run-other": "/fd-home2/sockets/fd-run-other.sock",
+      });
+
+      await startedWith(homeWith(...leftBehind), wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
+
+    it("leaves a session alone whose socket folder only begins with this home's sockets folder name", async () => {
+      const tmux = tmuxWith({
+        "fd-run-own": `${home}/sockets/fd-run-own.sock`,
+        "fd-run-sibling": `${home}/sockets2/x.sock`,
+      });
+
+      await startedWith(homeWith(...leftBehind), wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
+
+    it("leaves alone a session of this home that starts after the start-up began", async () => {
+      const tmux = tmuxWith({
+        "fd-run-own": `${home}/sockets/fd-run-own.sock`,
+        "fd-bp-late": `${home}/sockets/bp.sock`,
+      });
+      const running = ["fd-run-own"];
+      const handler = createEngineHandler(
+        options({
+          home,
+          fs: homeWith(...leftBehind),
+          openStores: () => ({ ...stores(), migrations: wiped }),
+          ...tmux.overrides,
+          flowdeckSessions: async () => [...running],
+        }),
+      );
+
+      const startingUp = handler.startUp();
+      running.push("fd-bp-late");
+      await startingUp;
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
+
+    it("ends a session whose socket path reaches this home through a link", async () => {
+      const fs = homeWith(...leftBehind);
+      fs.link("/linked-home", home);
+      const tmux = tmuxWith({ "fd-run-own": "/linked-home/sockets/fd-run-own.sock" });
+
+      await startedWith(fs, wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+    });
+
+    it("ends nothing and removes the folders as before when no session is left", async () => {
+      const fs = homeWith(...leftBehind, ...kept);
+      const tmux = tmuxWith({});
+
+      await startedWith(fs, wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual([]);
+      expect(await present(fs, leftBehind)).toEqual([]);
+      expect(await present(fs, kept)).toEqual(kept);
+    });
+
+    it("still ends the other sessions and removes the folders when one session cannot be read", async () => {
+      const fs = homeWith(...leftBehind);
+      const tmux = tmuxWith({
+        "fd-run-stale": new Error("no server running on /tmp/tmux-502/fd-run-stale"),
+        "fd-run-own": `${home}/sockets/fd-run-own.sock`,
+      });
+
+      await startedWith(fs, wiped, tmux.overrides);
+
+      expect(tmux.ended).toEqual(["fd-run-own"]);
+      expect(await present(fs, leftBehind)).toEqual([]);
+    });
+
+    it("still removes the folders when the sessions cannot be listed", async () => {
+      const fs = homeWith(...leftBehind);
+      const tmux = tmuxWith({ "fd-run-own": `${home}/sockets/fd-run-own.sock` });
+
+      await startedWith(fs, wiped, {
+        ...tmux.overrides,
+        flowdeckSessions: () => Promise.reject(new Error("permission denied")),
+      });
+
+      expect(tmux.ended).toEqual([]);
+      expect(await present(fs, leftBehind)).toEqual([]);
+    });
+
+    it("ends no session while another Flowdeck holds the home", async () => {
+      const tmux = tmuxWith({ "fd-run-own": `${home}/sockets/fd-run-own.sock` });
+
+      await startedWith(homeWith(...leftBehind), wiped, {
+        ...tmux.overrides,
+        homeLock: { acquire: async () => false },
+      });
+
+      expect(tmux.ended).toEqual([]);
+    });
   });
 
   describe("doctor", () => {
