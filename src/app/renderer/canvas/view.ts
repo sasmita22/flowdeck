@@ -23,6 +23,8 @@ import {
   clearOfEnds,
   goesBack,
   leavesRow,
+  ROUTE_MARGIN,
+  routeAroundRows,
   routeWire,
   wireEnds,
   type Point,
@@ -362,23 +364,34 @@ const toConnectionEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] 
 const drawnBounds = (flow: Flow, node: Node): Bounds =>
   (isBar(node) ? barBounds(flow, node) : null) ?? labelledBounds(node);
 
-const wireRouter = (flow: Flow) => {
+type WireGeometry = {
+  boxes: ReadonlyMap<string, Bounds>;
+  bodies: readonly { id: string; bounds: Bounds }[];
+  frameOf: (containerId: string) => Bounds;
+};
+
+const wireGeometry = (flow: Flow): WireGeometry => {
+  const frames = new Map<string, Bounds>();
+  return {
+    boxes: new Map(flow.nodes.map((node) => [node.id, drawnBounds(flow, node)])),
+    bodies: flow.nodes
+      .filter(isContainer)
+      .map((scope) => ({ id: scope.id, bounds: bodyFrameBounds(flow, scope) })),
+    frameOf: (containerId) => {
+      const known = frames.get(containerId);
+      if (known !== undefined) return known;
+      const bounds = flowContainerBounds(flow, containerId);
+      frames.set(containerId, bounds);
+      return bounds;
+    },
+  };
+};
+
+const wireRouter = (flow: Flow, { boxes, bodies, frameOf }: WireGeometry) => {
   const nodes = new Map(flow.nodes.map((node) => [node.id, node]));
-  const boxes = new Map(flow.nodes.map((node) => [node.id, drawnBounds(flow, node)]));
-  const bodies = flow.nodes
-    .filter(isContainer)
-    .map((scope) => ({ id: scope.id, bounds: bodyFrameBounds(flow, scope) }));
   const within = (id: string, scope: string): boolean => {
     const parent = nodes.get(id)?.parent;
     return id === scope || (parent !== undefined && within(parent, scope));
-  };
-  const frames = new Map<string, Bounds>();
-  const frameOf = (containerId: string): Bounds => {
-    const known = frames.get(containerId);
-    if (known !== undefined) return known;
-    const bounds = flowContainerBounds(flow, containerId);
-    frames.set(containerId, bounds);
-    return bounds;
   };
   return (wire: Wire): Point[] | null => {
     const sender = nodes.get(wire.from.node);
@@ -412,11 +425,49 @@ const wireRouter = (flow: Flow) => {
   };
 };
 
+const containerRouter = (flow: Flow, { boxes, bodies, frameOf }: WireGeometry) => {
+  const framed = flow.containers.filter(hasFrame).map(({ id }) => id);
+  const framedIds = new Set(framed);
+  const bodyBounds = bodies.map(({ bounds }) => bounds);
+  let drawing: { frames: Map<string, Bounds>; bounds: Bounds } | undefined;
+  const drawn = () => {
+    if (drawing !== undefined) return drawing;
+    const frames = new Map(framed.map((id) => [id, frameOf(id)]));
+    const all = [...boxes.values(), ...frames.values()];
+    drawing = {
+      frames,
+      bounds: {
+        left: Math.min(...all.map(({ left }) => left)) - ROUTE_MARGIN,
+        top: Math.min(...all.map(({ top }) => top)) - ROUTE_MARGIN,
+        right: Math.max(...all.map(({ right }) => right)) + ROUTE_MARGIN,
+        bottom: Math.max(...all.map(({ bottom }) => bottom)) + ROUTE_MARGIN,
+      },
+    };
+    return drawing;
+  };
+  return (wire: Wire): Point[] | null => {
+    if (wire.kind !== "then") return null;
+    if (!framedIds.has(wire.from.node) && !framedIds.has(wire.to.node)) return null;
+    const { frames, bounds } = drawn();
+    return routeAroundRows({
+      from: wire.from.node,
+      to: wire.to.node,
+      boxes,
+      bodies: bodyBounds,
+      frames,
+      bounds,
+      crossesToday: (source, target, gate) => bezierCrosses(source, "right", target, gate),
+    });
+  };
+};
+
 const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
   const types = new Map(flow.nodes.map((node) => [node.id, node.type]));
   const containerIds = new Set(flow.containers.map(({ id }) => id));
   const viewId = (id: string) => (containerIds.has(id) ? containerFrameId(id) : id);
-  const route = wireRouter(flow);
+  const geometry = wireGeometry(flow);
+  const route = wireRouter(flow, geometry);
+  const routeAround = containerRouter(flow, geometry);
   return flow.wires.map((wire): ViewEdge => {
     const align = alignOf(types, wire);
     const id = edgeId(wire);
@@ -436,7 +487,7 @@ const toWireEdges = (flow: Flow, selected: readonly string[]): ViewEdge[] => {
       ...(fromBranch && { type: "branch" as const, data: { label: wire.from.port } }),
       ...(isSelected && { selected: true }),
     };
-    const points = route(wire);
+    const points = route(wire) ?? routeAround(wire);
     if (points === null) return today;
     return {
       ...today,

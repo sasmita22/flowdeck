@@ -3,6 +3,8 @@ import { padded, type Bounds } from "../../../src/app/renderer/canvas/frames.js"
 import {
   bezierCrosses,
   branchStub,
+  containerWireEnds,
+  routeContainerWire,
   routePath,
   routeWire,
   type ExitSide,
@@ -429,6 +431,58 @@ describe("wire-router", () => {
 
       expect(
         routeWire({ source: outOf(sender), side: "right", target: inOf(target) }, [wall], frame),
+      ).toBeNull();
+    });
+  });
+
+  describe("container wires", () => {
+    const workspace = { left: 500, top: 0, right: 800, bottom: 120 };
+    const session = { left: 0, top: 200, right: 700, bottom: 450 };
+    const rows = [...row(224, [24, 250, 476]), ...row(378, [24, 250, 476])];
+    const start = at(-200, 36, 48, 48);
+    const stop = at(900, 300, 48, 48);
+
+    it("leaves a frame at its right middle and enters a frame at its left middle", () => {
+      expect(
+        containerWireEnds({ bounds: workspace, frame: true }, { bounds: session, frame: true }),
+      ).toEqual({ source: { x: 800, y: 60 }, side: "right", target: { x: 0, y: 325 } });
+    });
+
+    it("ends a node end where a node wire ends, and a frame end on the frame", () => {
+      expect(
+        containerWireEnds({ bounds: start, frame: false }, { bounds: workspace, frame: true }),
+      ).toEqual({ source: { x: -152, y: 60 }, side: "right", target: { x: 500, y: 60 } });
+      expect(
+        containerWireEnds({ bounds: session, frame: true }, { bounds: stop, frame: false }),
+      ).toEqual({ source: { x: 700, y: 325 }, side: "right", target: { x: 900, y: 324 } });
+    });
+
+    const ends = { source: { x: 800, y: 60 }, target: { x: 0, y: 325 } };
+
+    it("routes a frame to the frame below it around the rows and both frames", () => {
+      const points = routeContainerWire({
+        ...ends,
+        sourceFrame: workspace,
+        targetFrame: session,
+        boxes: rows,
+        bounds: { left: -32, top: -32, right: 832, bottom: 482 },
+      });
+
+      if (points === null) throw new Error("no route");
+      expect(points[0]).toEqual(ends.source);
+      expect(points.at(-1)).toEqual(ends.target);
+      expect(pathCrossings(points, [...rows, workspace, session])).toEqual([]);
+    });
+
+    it("finds no route when the bounds leave no lane outside the frames", () => {
+      expect(
+        routeContainerWire({
+          ...ends,
+          sourceFrame: workspace,
+          targetFrame: session,
+          boxes: rows,
+          bounds: { left: 0, top: 0, right: 800, bottom: 450 },
+        }),
       ).toBeNull();
     });
   });
