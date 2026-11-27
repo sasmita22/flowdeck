@@ -10,7 +10,6 @@ import {
   agent,
   fork,
   gate,
-  hardstop,
   inOneSession,
   loop,
   thenWire,
@@ -131,9 +130,14 @@ describe("refused connections", () => {
   });
 });
 
-describe("deleting a hard stop", () => {
-  it("deletes a hard stop added by mistake, and undo brings it back", () => {
-    const store = loaded(inOneSession([agent("P"), hardstop("H")], [thenWire("P", "H")]));
+describe("deleting a Gate", () => {
+  it("deletes a Gate added by mistake, and undo brings it back", () => {
+    const store = loaded(
+      inOneSession(
+        [agent("P"), gate("H", { settings: { stopWhen: "conditional", condition: "tests fail" } })],
+        [thenWire("P", "H")],
+      ),
+    );
     const before = store.getState().flow;
 
     store.getState().deleteNodes(["H"]);
@@ -145,9 +149,19 @@ describe("deleting a hard stop", () => {
     expect(store.getState().flow).toEqual(before);
   });
 
-  it("deletes a Loop together with the hard stop in its body, as one undo step", () => {
+  it("deletes a Loop together with the Gate in its body, as one undo step", () => {
     const store = loaded(
-      inOneSession([loop("L"), agent("P", { parent: "L" }), hardstop("H", { parent: "L" })], []),
+      inOneSession(
+        [
+          loop("L"),
+          agent("P", { parent: "L" }),
+          gate("H", {
+            parent: "L",
+            ...{ settings: { stopWhen: "conditional", condition: "tests fail" } },
+          }),
+        ],
+        [],
+      ),
     );
     const before = store.getState().flow;
 

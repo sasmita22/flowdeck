@@ -60,11 +60,9 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
           : `a branch of NODE ${fork}, dispatched there; wait for it to return.`;
       }
       case "gate":
-        return `ask in the chat: ${quoted(text(settings.shown))}, and wait for the answer before going on${settings.skippable === true ? " (it may be skipped)" : ""}.`;
-      case "ask": {
-        const options = Array.isArray(settings.options) ? settings.options.map(String) : [];
-        return `ask in the chat: ${quoted(text(settings.question))} (options: ${options.join(", ")}), and wait for the answer.`;
-      }
+        return settings.stopWhen === "conditional"
+          ? `hard rule: if ${text(settings.condition)}, stop the run at once: show ${text(settings.instruction)}, ${stopInstruction(node.id)}.`
+          : `ask in the chat: ${quoted(text(settings.instruction))}, and wait for the answer before going on.`;
       case "loop": {
         const atCap =
           settings.onCap === "ask"
@@ -86,8 +84,6 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
         return settings.wait === "first"
           ? `continue with the first branch result that returns (${nodeList(into(node.id))}); the others are ignored.`
           : `continue once every branch has returned (${nodeList(into(node.id))}).`;
-      case "hardstop":
-        return `hard rule: if ${text(settings.condition)}, stop the run at once: show ${text(settings.shown)}, ${stopInstruction(node.id)}.`;
       case "library":
         throw new Error("library nodes are expanded before the build");
       case "output":

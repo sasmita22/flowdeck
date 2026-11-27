@@ -25,7 +25,7 @@ import type { StoredEvent } from "../../src/core/run/store.js";
 import type { PendingWait } from "../../src/core/run/wait.js";
 import {
   agent,
-  ask,
+  gate,
   onWorkspaceMainFlow,
   thenWire,
   withSession,
@@ -124,7 +124,7 @@ function liveEnvironment(
   };
 }
 
-describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the app", () => {
+describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering a Gate from the app", () => {
   useTempClaudeConfig();
   const sessionName = `fd-la-${process.pid}`;
   const savedTmux = { TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE };
@@ -182,12 +182,12 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
   }, 60_000);
 
   it(
-    "carries the answer blue into the next Claude turn",
+    "carries the text blue typed on Continue into the next Claude turn",
     { timeout: runDeadlineMs + 30_000 },
     async () => {
       const built = onWorkspaceMainFlow(
         [
-          ask("q"),
+          gate("q", { settings: { instruction: "Pick a colour: red, blue or green" } }),
           agent("p", {
             settings: { instructions: "Reply with the colour the user answered, one word." },
           }),
@@ -213,7 +213,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
               type: "answer-wait",
               payload: {
                 waitId: push.value.waitId,
-                reply: { decision: "answer", answer: "blue" },
+                reply: { decision: "continue", text: "blue" },
               },
             });
           }
@@ -289,7 +289,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("answering an ask from the ap
         expect.objectContaining({
           nodeId: "q",
           kind: "answered",
-          payload: { nodeId: "q", decision: "answered", answer: "blue" },
+          payload: { nodeId: "q", decision: "continued", text: "blue" },
         }),
       );
       const done = events.find(

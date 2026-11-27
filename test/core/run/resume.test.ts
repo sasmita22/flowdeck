@@ -451,14 +451,25 @@ describe("decideResume", () => {
     expect(actions).toEqual({ p2: { kind: "complete", stopMessage: "B" } });
   });
 
-  it.each(["gate", "ask", "hardstop", "loop"] as const)(
-    "reuses a decision recorded at a %s before the kill and asks only when there is none",
-    (type) => {
-      const decision =
-        type === "gate"
-          ? { nodeId: "h1", decision: "approved" as const }
-          : { nodeId: "h1", decision: "answered" as const, answer: "blue" };
-      const kind = type === "gate" ? "decided" : "answered";
+  it.each([
+    ["a Gate continued", "gate", "decided", { nodeId: "h1", decision: "continued" }],
+    [
+      "a Gate continued with text",
+      "gate",
+      "answered",
+      { nodeId: "h1", decision: "continued", text: "use v2" },
+    ],
+    ["a Gate stopped", "gate", "decided", { nodeId: "h1", decision: "stopped", reason: "red" }],
+    [
+      "a Gate's unreadable verdict",
+      "gate",
+      "answered",
+      { nodeId: "h1", decision: "answered", answer: "continue" },
+    ],
+    ["a loop", "loop", "answered", { nodeId: "h1", decision: "answered", answer: "blue" }],
+  ] as const)(
+    "reuses a decision recorded at %s before the kill and asks only when there is none",
+    (_name, type, kind, decision) => {
       const human = {
         hash,
         prefix,
@@ -485,6 +496,25 @@ describe("decideResume", () => {
     },
   );
 
+  it.each(["ask", "hardstop"])("treats a node of the removed %s type as no human pause", (type) => {
+    const manifest = {
+      hash,
+      prefix,
+      nodes: [node("h1", type as ManifestNode["type"]), node("p1", "agent")],
+    };
+
+    expect(
+      decideResume({
+        manifest,
+        events: stored([
+          ["h1", { kind: "running" }],
+          ["h1", { kind: "needs-you" }],
+        ]),
+        turns: [],
+      }),
+    ).toEqual({});
+  });
+
   it("reuses the answer given at a Branch that asked for its value, and asks again with none", () => {
     const manifest = { hash, prefix, nodes: [node("c1", "agent"), node("b1", "branch")] };
     const asked: [string, RunEvent][] = [
@@ -506,8 +536,8 @@ describe("decideResume", () => {
     });
   });
 
-  it("asks again at a hard stop that was checking its condition when the runner stopped", () => {
-    const manifest = { hash, prefix, nodes: [node("h1", "hardstop"), node("p1", "agent")] };
+  it("asks again at a Conditional Gate that was checking its condition when the runner stopped", () => {
+    const manifest = { hash, prefix, nodes: [node("h1", "gate"), node("p1", "agent")] };
 
     expect(
       decideResume({ manifest, events: stored([["h1", { kind: "running" }]]), turns: [] }),

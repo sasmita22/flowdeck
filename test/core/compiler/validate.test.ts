@@ -63,6 +63,7 @@ describe("validate", () => {
     "variable-names",
     "branch-variable",
     "branch-value",
+    "gate-condition",
     "workspace-count",
     "one-start",
     "stop-required",
@@ -119,11 +120,11 @@ describe("validate", () => {
     ]);
   });
 
-  it("rejects a hard stop edited off outside the app", () => {
-    const parsed = parseFlow(readJson(brokenDir, "hardstop-locked.json"));
-    expect(validate(parsed).map(({ rule, node, field }) => ({ rule, node, field }))).toEqual([
-      { rule: "hardstop-locked", node: "stop", field: "enabled" },
-    ]);
+  it("runs gate-condition and no longer runs hardstop-locked", () => {
+    const ids = rules.map((rule) => rule.id);
+
+    expect(ids).toContain("gate-condition");
+    expect(ids).not.toContain("hardstop-locked");
   });
 
   it.each(["all-types.json", "loop-review.json", "three-agents.json"])(

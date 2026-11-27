@@ -3,16 +3,7 @@ import { lower } from "../../../../src/core/compiler/lower.js";
 import { rule } from "../../../../src/core/compiler/rules/body-nodes.js";
 import { rule as loopBody } from "../../../../src/core/compiler/rules/loop-body.js";
 import { structureProblems } from "../../../../src/core/run/runner.js";
-import {
-  agent,
-  ask,
-  flow,
-  gate,
-  hardstop,
-  loop,
-  output,
-  trigger,
-} from "../../../fixtures/flow-builders.js";
+import { agent, flow, gate, loop, output, trigger } from "../../../fixtures/flow-builders.js";
 import { oneSession } from "../../../fixtures/one-session.js";
 
 const reported = (nodes: unknown[]) =>
@@ -35,13 +26,11 @@ describe("body-nodes", () => {
   });
 
   it.each([
-    ["a Gate", gate],
-    ["an Ask", ask],
-    ["a Hard stop", hardstop],
-  ])("accepts %s inside a body", (_name, make) => {
-    expect(reported([loop("L"), agent("p", { parent: "L" }), make("x", { parent: "L" })])).toEqual(
-      [],
-    );
+    ["an Always Gate", "always"],
+    ["a Conditional Gate", "conditional"],
+  ])("accepts %s inside a body", (_name, stopWhen) => {
+    const inBody = gate("x", { parent: "L", settings: { stopWhen, condition: "tests fail" } });
+    expect(reported([loop("L"), agent("p", { parent: "L" }), inBody])).toEqual([]);
   });
 
   it("accepts a Trigger and an Output outside every body", () => {

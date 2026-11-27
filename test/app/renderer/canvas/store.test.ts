@@ -12,6 +12,7 @@ import {
   selectFieldIssues,
   selectFlowContainerIssues,
   selectNodeIssues,
+  selectNodeWarnings,
   selectSelectedNode,
 } from "../../../../src/app/renderer/canvas/store.js";
 import { flowProblems } from "../../../../src/core/compiler/flow-problems.js";
@@ -43,7 +44,7 @@ import {
   flow,
   flowSettings,
   fork,
-  hardstop,
+  gate,
   join,
   loop,
   onMainFlow,
@@ -56,6 +57,7 @@ import {
 
 const unfinished = new Set([
   "required-settings",
+  "gate-condition",
   "session-settings",
   "outside-container",
   "one-start",
@@ -175,7 +177,7 @@ describe("drop", () => {
         type: "gate",
         label: "Gate",
         position: { x: 40, y: 300 },
-        settings: { shown: "", skippable: false },
+        settings: { stopWhen: "always", condition: "", instruction: "" },
       },
     ]);
     expect(state.selection).toEqual(["gate-1"]);
@@ -325,7 +327,12 @@ const guarded = () => {
     .getState()
     .load(
       flow(
-        [trigger("T"), agent("P"), hardstop("H"), output("O")],
+        [
+          trigger("T"),
+          agent("P"),
+          gate("H", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
+          output("O"),
+        ],
         [thenWire("T", "P"), thenWire("P", "H"), thenWire("H", "O")],
         flowSettings,
         { containers: [sessionContainer(["T", "P", "H", "O"])] },
@@ -337,12 +344,12 @@ const guarded = () => {
 const refuseSelfLoop = (s: ReturnType<Store["getState"]>) =>
   s.connect(end("P", "out"), end("P", "in"));
 
-describe("deleting a hard stop", () => {
+describe("deleting a Gate", () => {
   it("starts with no message", () => {
     expect(emptyCanvas().getState().message).toBeNull();
   });
 
-  it("deletes a hard stop by id with its wires, as one undoable step and no message", () => {
+  it("deletes a Gate by id with its wires, as one undoable step and no message", () => {
     const store = guarded();
     const before = store.getState().flow;
 
@@ -358,7 +365,7 @@ describe("deleting a hard stop", () => {
     expect(store.getState().flow).toEqual(before);
   });
 
-  it("deletes a hard stop with the rest of a mixed selection as one undoable command", () => {
+  it("deletes a Gate with the rest of a mixed selection as one undoable command", () => {
     const store = guarded();
     const before = store.getState().flow;
     act(store, (s) => s.select(["P", "H"]));
@@ -419,7 +426,7 @@ describe("node menu", () => {
 
   it.each([
     ["another node", "P"],
-    ["the hard stop", "H"],
+    ["the Gate", "H"],
   ])("closes when %s is deleted", (_name, id) => {
     const store = guarded();
     store.getState().openNodeMenu(id, { x: 10, y: 20 });
@@ -1408,7 +1415,11 @@ describe("updateNode", () => {
     const edited = {
       ...gateNode,
       label: "Check",
-      settings: { shown: "The plan", skippable: true },
+      settings: {
+        stopWhen: "conditional" as const,
+        condition: "tests fail",
+        instruction: "The plan",
+      },
     };
 
     act(store, (s) => s.updateNode(edited));
@@ -1448,6 +1459,58 @@ describe("selectSelectedNode", () => {
 
   it.each([[[]], [["a", "b"]], [["gone"]]])("is null for selection %j", (selection) => {
     expect(selectSelectedNode({ flow: two(), selection })).toBeNull();
+  });
+});
+
+describe("selectNodeWarnings", () => {
+  const dropGate = () => {
+    const store = emptyCanvas();
+    act(store, (s) => s.drop("gate", { x: 0, y: 0 }));
+    return store;
+  };
+  const gateOf = (store: Store): Extract<Node, { type: "gate" }> => {
+    const node = store.getState().flow.nodes.find(({ id }) => id === "gate-1");
+    if (node?.type !== "gate") throw new Error("expected a gate");
+    return node;
+  };
+  const switchTo = (store: Store, stopWhen: "always" | "conditional") => {
+    const node = gateOf(store);
+    act(store, (s) => s.updateNode({ ...node, settings: { ...node.settings, stopWhen } }));
+  };
+  const warnings = (store: Store) => selectNodeWarnings(store.getState().flow, "gate-1");
+
+  it("warns on an Always Gate, drops the warning for Conditional and brings it back", () => {
+    const store = dropGate();
+    expect(warnings(store)).toHaveLength(1);
+    expect(warnings(store)[0]).toMatch(/skipped in automatic runs and auto mode/);
+
+    switchTo(store, "conditional");
+    expect(warnings(store)).toEqual([]);
+
+    switchTo(store, "always");
+    expect(warnings(store)).toHaveLength(1);
+  });
+
+  it("accepts switching to Conditional while the condition is still empty", () => {
+    const store = dropGate();
+
+    switchTo(store, "conditional");
+
+    expect(gateOf(store).settings).toEqual({
+      stopWhen: "conditional",
+      condition: "",
+      instruction: "",
+    });
+    expect(store.getState().message).toBeNull();
+    expect(store.getState().undoStack).toHaveLength(2);
+  });
+
+  it("gives a node with no warning, or no such node, an empty list", () => {
+    const store = dropGate();
+    act(store, (s) => s.drop("agent", { x: 0, y: 200 }));
+
+    expect(selectNodeWarnings(store.getState().flow, "agent-1")).toEqual([]);
+    expect(selectNodeWarnings(store.getState().flow, "missing")).toEqual([]);
   });
 });
 

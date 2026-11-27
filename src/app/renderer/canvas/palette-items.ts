@@ -43,13 +43,11 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["join", "Control", "Waits for the branches before continuing."],
   ["loop", "Control", "Repeats its body until a condition holds, with a cap."],
   ["branch", "Control", "Takes one path or the other, set by a yes/no variable."],
-  ["gate", "People and safety", "Pauses until you approve. A flag can switch it off."],
   [
-    "hardstop",
+    "gate",
     "People and safety",
-    "Stops the session and asks you when a condition is met. Nothing can switch it off.",
+    "Pauses the run to show you its Instruction: Always in every manual run, Conditional only when an agent finds its condition met.",
   ],
-  ["ask", "People and safety", "Puts a question to you in the app and waits for the answer."],
 ];
 
 const containerItem = (

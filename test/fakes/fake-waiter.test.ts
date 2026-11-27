@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { WaitReply, WaitRequest } from "../../src/ports/waiter.js";
 import { FakeWaiter } from "./fake-waiter.js";
 
-const gate: WaitRequest = { nodeId: "g1", kind: "gate", shown: "Check the plan" };
+const gate: WaitRequest = { nodeId: "g1", kind: "gate", instruction: "Check the plan" };
 const ask: WaitRequest = { nodeId: "q1", kind: "ask", question: "Pick", options: ["a"] };
 
 describe("FakeWaiter", () => {
   it("returns the scripted replies in order and records each request", async () => {
-    const waiter = new FakeWaiter([{ decision: "approve" }, { decision: "answer", answer: "a" }]);
+    const waiter = new FakeWaiter([
+      { decision: "continue", text: "use v2" },
+      { decision: "answer", answer: "a" },
+    ]);
 
-    expect(await waiter.wait(gate)).toEqual({ decision: "approve" });
+    expect(await waiter.wait(gate)).toEqual({ decision: "continue", text: "use v2" });
     expect(await waiter.wait(ask)).toEqual({ decision: "answer", answer: "a" });
     expect(waiter.calls).toEqual([gate, ask]);
   });
@@ -28,12 +31,12 @@ describe("FakeWaiter", () => {
 
     expect(settled).toBe(false);
     expect(waiter.calls).toEqual([gate]);
-    resolve({ decision: "reject", reason: "no" });
-    expect(await pending).toEqual({ decision: "reject", reason: "no" });
+    resolve({ decision: "stop", reason: "no" });
+    expect(await pending).toEqual({ decision: "stop", reason: "no" });
   });
 
   it("rejects a wait beyond the scripted replies, naming the node", async () => {
-    const waiter = new FakeWaiter([{ decision: "approve" }]);
+    const waiter = new FakeWaiter([{ decision: "continue" }]);
     await waiter.wait(gate);
 
     await expect(waiter.wait(ask)).rejects.toThrow("FakeWaiter: no scripted reply for q1");

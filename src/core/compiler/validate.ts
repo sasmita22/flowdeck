@@ -4,8 +4,8 @@ import { rule as bodyNodes } from "./rules/body-nodes.js";
 import { rule as branchValue } from "./rules/branch-value.js";
 import { rule as branchVariable } from "./rules/branch-variable.js";
 import { rule as containerWires } from "./rules/container-wires.js";
+import { rule as gateCondition } from "./rules/gate-condition.js";
 import { rule as handoffs } from "./rules/handoffs.js";
-import { rule as hardstopLocked } from "./rules/hardstop-locked.js";
 import { rule as libraryLabels } from "./rules/library-labels.js";
 import { rule as libraryLoops } from "./rules/library-loops.js";
 import { rule as libraryUse } from "./rules/library-use.js";
@@ -49,7 +49,6 @@ export type Rule = {
 
 export const rules = [
   loopCap,
-  hardstopLocked,
   requiredSettings,
   ports,
   references,
@@ -61,6 +60,7 @@ export const rules = [
   bodyNodes,
   branchVariable,
   branchValue,
+  gateCondition,
   handoffs,
   variableKind,
   variableNames,

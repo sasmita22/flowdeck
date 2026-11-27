@@ -116,7 +116,7 @@ test("A run with no Claude turn has no terminal: the menu's Open terminal stays 
     workspaceFlow(
       [
         trigger("start"),
-        gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
+        gate("g1", { settings: { instruction: "Check the plan" } }),
         output("stop"),
       ],
       [thenWire("start", "g1"), thenWire("g1", "stop")],

@@ -316,7 +316,12 @@ test("Against the stages, the gate banner answers, Stop and Resume work, and the
   seedFlow(
     home,
     laidOut(
-      [named("s1", "Plan"), gate("g1"), named("s2", "Build"), named("s3", "Ship")],
+      [
+        named("s1", "Plan"),
+        gate("g1", { settings: { instruction: "Check the plan" } }),
+        named("s2", "Build"),
+        named("s3", "Ship"),
+      ],
       [thenWire("s1", "g1"), thenWire("g1", "s2"), thenWire("s2", "s3")],
     ),
     repo.path,
@@ -331,7 +336,7 @@ test("Against the stages, the gate banner answers, Stop and Resume work, and the
   await window.getByTestId(controlTestIds.inspectorHide).click();
   const banner = window.getByTestId("wait-banner");
   await expect(banner.getByTestId("wait-text")).toHaveText("Check the plan");
-  await banner.getByTestId("wait-approve").click();
+  await banner.getByTestId("wait-continue").click();
   await expect(stage("g1")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(stage("s2")).toHaveAttribute("data-status", "sent", { timeout: 20_000 });
   await expect.poll(() => fakeClaudeDispatched(home), { timeout: 20_000 }).toContain("s2");
@@ -526,15 +531,11 @@ test("Stop ends a long agent turn and marks the run stopped, and Resume skips th
   ).toEqual([{ n: 1 }]);
 });
 
-test("A skippable Gate is passed in an automatic run and stops in a normal one, chosen in the Run dialog", async () => {
+test("An Always Gate is passed in an automatic run and stops in a normal one, chosen in the Run dialog", async () => {
   seedFlow(
     home,
     laidOut(
-      [
-        agent("s1"),
-        gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
-        agent("s2"),
-      ],
+      [agent("s1"), gate("g1", { settings: { instruction: "Check the plan" } }), agent("s2")],
       [thenWire("s1", "g1"), thenWire("g1", "s2")],
     ),
     repo.path,
@@ -546,7 +547,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
   const dialog = window.getByTestId("run-dialog");
   await expect(dialog).toBeVisible({ timeout: 20_000 });
   await expect(dialog).toContainText(
-    "Skips gates marked ‘skip in automatic runs’. Hard stops still stop.",
+    "Skips Always Gates. Conditional Gates still stop when their condition is met.",
   );
   await window.getByTestId("run-dialog-auto").check();
   await darkShot(window, "run-dialog.png");
@@ -565,7 +566,7 @@ test("A skippable Gate is passed in an automatic run and stops in a normal one, 
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
   await expect(status(window, "g1")).toHaveAttribute("data-status", "needs you");
   expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({});
-  await window.getByTestId("wait-approve").click();
+  await window.getByTestId("wait-continue").click();
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
 });
 
@@ -623,7 +624,10 @@ test("Stopping a run that waits at a Gate makes its stage and the status bar rea
 test("A gate's question shows on the run page while the inspector is hidden", async () => {
   seedFlow(
     home,
-    laidOut([agent("s1"), gate("g1"), agent("s2")], [thenWire("s1", "g1"), thenWire("g1", "s2")]),
+    laidOut(
+      [agent("s1"), gate("g1", { settings: { instruction: "Check the plan" } }), agent("s2")],
+      [thenWire("s1", "g1"), thenWire("g1", "s2")],
+    ),
     repo.path,
   );
   const window = await launch();
@@ -637,7 +641,7 @@ test("A gate's question shows on the run page while the inspector is hidden", as
   await expect(banner).toBeVisible();
   await expect(banner.getByTestId("wait-text")).toHaveText("Check the plan");
   await expect(window.getByTestId("run-status")).toContainText("Needs you");
-  await banner.getByTestId("wait-approve").click();
+  await banner.getByTestId("wait-continue").click();
   await expect(banner).toHaveCount(0, { timeout: 20_000 });
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 20_000,

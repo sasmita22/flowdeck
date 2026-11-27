@@ -78,7 +78,6 @@ import { FakeWaiter } from "../../fakes/fake-waiter.js";
 import { FakeWorktree } from "../../fakes/fake-worktree.js";
 import {
   agent,
-  ask,
   canvasPath,
   fork,
   workspaceContainer,
@@ -1091,12 +1090,18 @@ describe("createEngineHandler", async () => {
       );
     });
 
-    it("lists what each gate and ask asked in a loaded run's digest, from their settings in the stored manifest", async () => {
+    it("lists each Gate's Instruction in a loaded run's digest, from its settings in the stored manifest", async () => {
       const { runs, runId } = seededRun(
         onWorkspaceMainFlow(
           [
-            gate("s1", { settings: { shown: "Approve the release notes", skippable: false } }),
-            ask("s2", { settings: { question: "Which channel ships it?", options: ["a", "b"] } }),
+            gate("s1", { settings: { instruction: "Approve the release notes" } }),
+            gate("s2", {
+              settings: {
+                stopWhen: "conditional",
+                condition: "no channel is set",
+                instruction: "Which channel ships it?",
+              },
+            }),
           ],
           [thenWire("s1", "s2")],
         ),
@@ -1240,8 +1245,14 @@ describe("createEngineHandler", async () => {
         onWorkspaceMainFlow(
           [
             { ...agent("s1"), label: "Plan" },
-            gate("s2", { settings: { shown: "Approve the release notes", skippable: false } }),
-            ask("s3", { settings: { question: "Which channel ships it?", options: ["a", "b"] } }),
+            gate("s2", { settings: { instruction: "Approve the release notes" } }),
+            gate("s3", {
+              settings: {
+                stopWhen: "conditional",
+                condition: "no channel is set",
+                instruction: "Which channel ships it?",
+              },
+            }),
           ],
           [thenWire("s1", "s2"), thenWire("s2", "s3")],
         );
@@ -1318,7 +1329,7 @@ describe("createEngineHandler", async () => {
         expect(after.pipeline).toEqual(before.pipeline);
       });
 
-      it("lists each gate and ask question of a deleted build's run in its digest", async () => {
+      it("lists each Gate's Instruction of a deleted build's run in its digest", async () => {
         const { runs, runId } = finishedRun();
         runs.deleteBuild("b1");
 
@@ -1359,7 +1370,7 @@ describe("createEngineHandler", async () => {
                 { id: "start", type: "trigger" },
                 { id: "s1", type: "agent", label: "Plan" },
                 { id: "s2", type: "gate" },
-                { id: "s3", type: "ask" },
+                { id: "s3", type: "gate" },
                 { id: "stop", type: "output" },
               ],
             },
@@ -7821,9 +7832,7 @@ describe("createEngineHandler", async () => {
 
     it("announces no session for a run with no Claude turn", async () => {
       flows.save(
-        atRepo(
-          onWorkspaceMainFlow([gate("g1", { settings: { shown: "Check", skippable: true } })], []),
-        ),
+        atRepo(onWorkspaceMainFlow([gate("g1", { settings: { instruction: "Check" } })], [])),
       );
 
       const started = await runBuild(await builtId(), { auto: true });
@@ -8106,13 +8115,13 @@ describe("createEngineHandler", async () => {
       });
     };
 
-    it("resumes a run parked at a gate when the open wait is approved", async () => {
+    it("resumes a run parked at a gate when the open wait is continued", async () => {
       handler = withAppWaiter();
       flows.save(gated());
       const runId = await startedRunId();
       const waitId = await openedWaitId(runId, "g1");
 
-      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toEqual({
+      expect(await answerWait({ waitId, reply: { decision: "continue" } })).toEqual({
         id: nextId - 1,
         ok: true,
         value: { accepted: true },
@@ -8136,7 +8145,7 @@ describe("createEngineHandler", async () => {
         expect.objectContaining({
           nodeId: "g1",
           kind: "decided",
-          payload: { nodeId: "g1", decision: "approved" },
+          payload: { nodeId: "g1", decision: "continued" },
         }),
       );
     });
@@ -8158,7 +8167,7 @@ describe("createEngineHandler", async () => {
         waitId,
         request: expect.objectContaining({ nodeId: "g1" }),
       });
-      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toMatchObject({
+      expect(await answerWait({ waitId, reply: { decision: "continue" } })).toMatchObject({
         ok: true,
         value: { accepted: true },
       });
@@ -8191,9 +8200,9 @@ describe("createEngineHandler", async () => {
       const runId = await startedRunId();
       const waitId = await openedWaitId(runId, "g1");
 
-      expect(await answerWait({ waitId: `${waitId}-old`, reply: { decision: "approve" } })).toEqual(
-        { id: nextId - 1, ok: true, value: { accepted: false } },
-      );
+      expect(
+        await answerWait({ waitId: `${waitId}-old`, reply: { decision: "continue" } }),
+      ).toEqual({ id: nextId - 1, ok: true, value: { accepted: false } });
 
       await parkedAtGate(runId);
     });
@@ -8210,7 +8219,7 @@ describe("createEngineHandler", async () => {
       expect(runs.findRun(runId)?.status).toBe("stopped");
       const eventsAtStop = runs.events(runId);
 
-      expect(await answerWait({ waitId, reply: { decision: "approve" } })).toEqual({
+      expect(await answerWait({ waitId, reply: { decision: "continue" } })).toEqual({
         id: nextId - 1,
         ok: true,
         value: { accepted: false },

@@ -1,12 +1,11 @@
 import { z } from "zod";
 
 const waitRequestSchema = z.discriminatedUnion("kind", [
-  z.object({ nodeId: z.string(), kind: z.literal("gate"), shown: z.string() }),
   z.object({
     nodeId: z.string(),
-    kind: z.literal("hardstop"),
-    shown: z.string(),
-    condition: z.string(),
+    kind: z.literal("gate"),
+    instruction: z.string(),
+    condition: z.string().optional(),
   }),
   z.object({
     nodeId: z.string(),
@@ -28,7 +27,7 @@ export type WaitRequest = z.infer<typeof waitRequestSchema>;
 const answerableReplySchemas = [
   z.object({ decision: z.literal("approve") }),
   z.object({ decision: z.literal("reject"), reason: z.string() }),
-  z.object({ decision: z.literal("continue") }),
+  z.object({ decision: z.literal("continue"), text: z.string().optional() }),
   z.object({ decision: z.literal("stop"), reason: z.string() }),
   z.object({ decision: z.literal("answer"), answer: z.string() }),
 ] as const;
@@ -54,10 +53,9 @@ export type WaitAnswer = z.infer<typeof waitAnswerSchema>;
 export function replyFits(request: WaitRequest, reply: WaitReply): boolean {
   switch (request.kind) {
     case "gate":
+      return reply.decision === "continue" || reply.decision === "stop";
     case "permission":
       return reply.decision === "approve" || reply.decision === "reject";
-    case "hardstop":
-      return reply.decision === "continue" || reply.decision === "stop";
     case "ask":
       return (
         reply.decision === "answer" &&
@@ -69,7 +67,8 @@ export function replyFits(request: WaitRequest, reply: WaitReply): boolean {
 export type HumanWaiter = { wait(request: WaitRequest, signal?: AbortSignal): Promise<WaitReply> };
 
 export type HumanDecision =
-  | { nodeId: string; decision: "approved" | "skipped" | "continued" }
+  | { nodeId: string; decision: "approved" | "skipped" }
+  | { nodeId: string; decision: "continued"; text?: string }
   | { nodeId: string; decision: "rejected" | "stopped"; reason: string }
   | { nodeId: string; decision: "answered"; answer: string };
 

@@ -1,10 +1,8 @@
 import { z } from "zod";
 import { settings as agent } from "../nodes/agent/settings.js";
-import { settings as ask } from "../nodes/ask/settings.js";
 import { settings as branch } from "../nodes/branch/settings.js";
 import { settings as fork } from "../nodes/fork/settings.js";
 import { settings as gate } from "../nodes/gate/settings.js";
-import { settings as hardstop } from "../nodes/hardstop/settings.js";
 import { settings as join } from "../nodes/join/settings.js";
 import { settings as library } from "../nodes/library/settings.js";
 import { settings as loop } from "../nodes/loop/settings.js";
@@ -14,8 +12,6 @@ import { settings as trigger } from "../nodes/trigger/settings.js";
 export const NodeType = z.enum([
   "agent",
   "gate",
-  "ask",
-  "hardstop",
   "loop",
   "trigger",
   "output",
@@ -80,8 +76,6 @@ const NodeBase = z.object({
 export const Node = z.discriminatedUnion("type", [
   NodeBase.extend({ type: z.literal("agent"), settings: agent }),
   NodeBase.extend({ type: z.literal("gate"), settings: gate }),
-  NodeBase.extend({ type: z.literal("ask"), settings: ask }),
-  NodeBase.extend({ type: z.literal("hardstop"), settings: hardstop }),
   NodeBase.extend({ type: z.literal("loop"), settings: loop }),
   NodeBase.extend({ type: z.literal("trigger"), settings: trigger }),
   NodeBase.extend({ type: z.literal("output"), settings: output }),

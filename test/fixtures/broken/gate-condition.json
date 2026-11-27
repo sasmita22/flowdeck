@@ -11,18 +11,17 @@
       "settings": {}
     },
     {
-      "id": "stop",
-      "label": "Stop",
-      "type": "hardstop",
+      "id": "check",
+      "label": "Check",
+      "type": "gate",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "condition": "tests fail",
-        "shown": "test report",
-        "locked": true,
-        "enabled": false
+        "stopWhen": "conditional",
+        "condition": "",
+        "instruction": "Look at the test report."
       }
     },
     {
@@ -93,14 +92,14 @@
         "port": "out"
       },
       "to": {
-        "node": "stop",
+        "node": "check",
         "port": "in"
       }
     },
     {
       "kind": "then",
       "from": {
-        "node": "stop",
+        "node": "check",
         "port": "out"
       },
       "to": {
@@ -156,7 +155,7 @@
       "repo": "/work/repo",
       "branch": "main",
       "model": "sonnet",
-      "nodes": ["start", "stop", "done"]
+      "nodes": ["start", "check", "done"]
     }
   ],
   "settings": {

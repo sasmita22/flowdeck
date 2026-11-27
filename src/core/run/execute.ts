@@ -128,8 +128,11 @@ export async function loadBuild(
 
 type NodesView = { nodes: readonly ManifestNode[] };
 
-const checksACondition = (node: ManifestNode) =>
-  node.type === "hardstop" && (node.settings as { condition: string }).condition.trim() !== "";
+const checksACondition = (node: ManifestNode) => {
+  if (node.type !== "gate") return false;
+  const { stopWhen, condition } = node.settings as { stopWhen: string; condition: string };
+  return stopWhen === "conditional" && condition.trim() !== "";
+};
 
 export const needsClaude = (manifest: NodesView) =>
   manifest.nodes.some((node) => node.type === "agent" || checksACondition(node));
@@ -174,10 +177,14 @@ function completeWaitWith(
   );
 }
 
-const turnTypes = new Set(["agent", "fork", "hardstop"]);
+const turnTypes = new Set(["agent", "fork"]);
 
 export const turnNodeIds = (manifest: NodesView): Set<string> =>
-  new Set(manifest.nodes.filter((node) => turnTypes.has(node.type)).map((node) => node.id));
+  new Set(
+    manifest.nodes
+      .filter((node) => turnTypes.has(node.type) || checksACondition(node))
+      .map((node) => node.id),
+  );
 
 export const parentsOf = (manifest: NodesView): Record<string, string> =>
   Object.fromEntries(

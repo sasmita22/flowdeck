@@ -110,7 +110,7 @@ const openRun = async (window: Page, runId: string) => {
 
 const atGate = (last: unknown): Flow =>
   laidOut(
-    [agent("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } }), last],
+    [agent("p1"), gate("g1", { settings: { instruction: "Check the plan" } }), last],
     [thenWire("p1", "g1"), thenWire("g1", (last as { id: string }).id)],
   );
 
@@ -217,7 +217,7 @@ test("Quitting leaves the run and its session going, and a relaunch asks the ope
   await window.getByTestId("run-tab-files").click();
   await expect(window.getByTestId("files-empty")).toHaveText("No node has written a file yet");
   await window.getByTestId("run-tab-activity").click();
-  await window.getByTestId("wait-approve").first().click();
+  await window.getByTestId("wait-continue").first().click();
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 20_000,
   });
@@ -248,7 +248,7 @@ test("A run whose session ended while the app was closed shows interrupted, and 
   await expect(window.getByTestId("wait-text").first()).toHaveText("Check the plan", {
     timeout: 20_000,
   });
-  await window.getByTestId("wait-approve").first().click();
+  await window.getByTestId("wait-continue").first().click();
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 30_000,
   });

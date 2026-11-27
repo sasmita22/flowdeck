@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/required-settings.js";
-import { agent, ask, flow, hardstop, loop, output } from "../../../fixtures/flow-builders.js";
+import { agent, flow, loop, output } from "../../../fixtures/flow-builders.js";
 
 const errorsFor = (node: unknown) =>
   rule.check(flow([node], [])).map(({ rule, node, field }) => ({ rule, node, field }));
@@ -11,7 +11,6 @@ describe("required-settings", () => {
   it.each([
     ["agent", agent, "instructions"],
     ["loop", loop, "condition"],
-    ["ask", ask, "question"],
     ["output", output, "name"],
     ["output", output, "type"],
   ] as const)("reports a %s whose %s is blank", (_type, make, field) => {
@@ -25,7 +24,6 @@ describe("required-settings", () => {
   it.each([
     ["agent", agent, "instructions"],
     ["loop", loop, "condition"],
-    ["ask", ask, "question"],
     ["output", output, "name"],
     ["output", output, "type"],
   ] as const)("accepts a %s whose %s is written", (_type, make, field) => {
@@ -56,18 +54,13 @@ describe("required-settings", () => {
     expect(messageFor(loop("L", { settings: { condition: "" } }))).toBe(
       "Write when the loop is done.",
     );
-    expect(messageFor(ask("Q", { settings: { question: "" } }))).toBe("Write the question to ask.");
     expect(messageFor(output("S", { settings: { name: "" } }))).toBe("Name the run's output.");
     expect(messageFor(output("S", { settings: { type: "" } }))).toBe("Write the output's type.");
   });
 
-  it("names Agents, Loops, Asks and Stops in its rule message", () => {
+  it("names Agents, Loops and Stops in its rule message", () => {
     expect(rule.message).toBe(
-      "Agents need instructions, Loops a condition, Asks a question and Stops an output name and type.",
+      "Agents need instructions, Loops a condition and Stops an output name and type.",
     );
-  });
-
-  it("lets a hard stop with no condition through, because it asks directly", () => {
-    expect(errorsFor(hardstop("H", { settings: { condition: "" } }))).toEqual([]);
   });
 });

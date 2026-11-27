@@ -204,7 +204,7 @@ test("a run's terminal keeps working beside the blueprint terminal", async () =>
   const { flowId } = seedFlow(
     home,
     runnable(
-      [agent("p1"), gate("g1", { settings: { shown: "Check the plan", skippable: false } })],
+      [agent("p1"), gate("g1", { settings: { instruction: "Check the plan" } })],
       [thenWire("p1", "g1")],
     ),
     repo.path,

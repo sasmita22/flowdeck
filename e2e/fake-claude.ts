@@ -103,7 +103,7 @@ const outcomeOf = (nodeId) => {
   writeFileSync(seen, "");
   return planned.slice(0, -"-once".length);
 };
-const directivePattern = /fake: (start|wait|fail|hang|pause|hardstop)(?: ([A-Za-z0-9_-]+))?/g;
+const directivePattern = /fake: (start|wait|fail|hang|pause|met)(?: ([A-Za-z0-9_-]+))?/g;
 const directivesIn = (text) => [...text.matchAll(directivePattern)].map(([, verb, slug]) => ({ verb, slug }));
 const pluginDirs = () => argv.flatMap((arg, at) => (arg === "--plugin-dir" ? [resolve(argv[at + 1] ?? "")] : []));
 const pieceOfType = (agentType) => agentType.slice(agentType.indexOf(":") + 1);
@@ -425,8 +425,8 @@ const sessionTurn = async () => {
   const batches = [...steps.matchAll(stepLine)]
     .map((match) => ({ calls: batchOf(match[0]), at: match.index }))
     .filter(({ calls }) => calls.length > 0);
-  const hardStopLine = /^\\d+\\. NODE \\S+ .*?: hard rule: .*\\x60(STOPPED NODE \\S+)\\x60/gm;
-  const hardStops = [...steps.matchAll(hardStopLine)].map((match) => ({ marker: match[1], at: match.index }));
+  const conditionLine = /^\\d+\\. NODE \\S+ .*?: hard rule: .*\\x60(STOPPED NODE \\S+)\\x60/gm;
+  const conditionStops = [...steps.matchAll(conditionLine)].map((match) => ({ marker: match[1], at: match.index }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
   say("Fake Claude session " + sessionId);
   say("────────");
@@ -470,10 +470,10 @@ const sessionTurn = async () => {
       await post({ hook_event_name: "Stop", last_assistant_message: "ok" });
       return say("Stop");
     }
-    if (calls.some(({ verbs }) => verbs.includes("hardstop"))) {
-      const marker = hardStops.find((hardStop) => hardStop.at > at)?.marker;
+    if (calls.some(({ verbs }) => verbs.includes("met"))) {
+      const marker = conditionStops.find((stop) => stop.at > at)?.marker;
       await pause(50);
-      await post({ hook_event_name: "Stop", last_assistant_message: marker === undefined ? "ok" : "Hard stop.\\n" + marker });
+      await post({ hook_event_name: "Stop", last_assistant_message: marker === undefined ? "ok" : "Condition met.\\n" + marker });
       say(marker ?? "Stop");
       return ended();
     }

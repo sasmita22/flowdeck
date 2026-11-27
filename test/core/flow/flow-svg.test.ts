@@ -11,6 +11,7 @@ import {
   flow,
   flowSettings,
   fork,
+  gate,
   join,
   loop,
   output,
@@ -137,6 +138,20 @@ describe("flowSvg", () => {
       expect(encloses(frame, boxOf(byId(nodes, id)))).toBe(true);
     expect(parse(svg).documentElement?.textContent).toContain("Remember the tests");
     expect(drawn(svg, "background").map((background) => background.localName)).toEqual(["rect"]);
+  });
+
+  it.each([
+    ["an Always Gate", gate("g")],
+    ["a Conditional Gate", gate("g", { settings: { stopWhen: "conditional", condition: "x" } })],
+  ])("draws %s as a 170x48 box tagged GATE", (_name, node) => {
+    const svg = flowSvg(flow([at(node, 0, 0)], []));
+    const box = boxOf(byId(drawn(svg, "node"), "g"));
+
+    expect({ width: box.right - box.left, height: box.bottom - box.top }).toEqual({
+      width: 170,
+      height: 48,
+    });
+    expect(parse(svg).documentElement?.textContent).toContain("GATE g");
   });
 
   it("escapes a label's markup characters", () => {
@@ -536,15 +551,15 @@ describe("flowSvg", () => {
       [
         1600,
         [
-          ["canvas-start", "session-1", "M48,1442 H169 V1442 H290"],
-          ["session-1", "canvas-stop", "M1841,1442 H1916 V1442 H1991"],
+          ["canvas-start", "session-1", "M48,1435 H169 V1435 H290"],
+          ["session-1", "canvas-stop", "M1841,1435 H1916 V1435 H1991"],
         ],
       ],
       [
         960,
         [
-          ["canvas-start", "session-1", "M48,2103 H169 V2104 H290"],
-          ["session-1", "canvas-stop", "M1516,2104 H1591 V2103 H1666"],
+          ["canvas-start", "session-1", "M48,2094 H169 V2095 H290"],
+          ["session-1", "canvas-stop", "M1516,2095 H1591 V2094 H1666"],
         ],
       ],
     ])(

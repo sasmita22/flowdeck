@@ -152,7 +152,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
     "sessions/main/plugin/skills/run/SKILL.md": "9fe96647d379643c86e108c3c501afd8a565fbe1c039767a5d2df608e1d1b9db",
     "sessions/main/settings.json": "f02589aad666d56d676f6c45832f3a56efcad63a5a8c18f86dd79e36acc21d61",
-    "workspace/CLAUDE.md": "af12b117813c8995a5d73c5a98fce5f61dfd84d97644924be8b58faa7bf5cb22",
+    "workspace/CLAUDE.md": "9975a5daf790e6c7752682632d236c409d408223e56404cabd6caf508198a9cd",
     "workspace/plugin/.claude-plugin/plugin.json": "8e0ed1032a519a50555f09a3c50972864cfe372b93977cffffb9b142c2e5baa9",
     "workspace/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "workspace/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
@@ -160,7 +160,7 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "workspace/plugin/skills/run/SKILL.md": "ead61d31e6873ed86119573b5565ae1dfdb0e84a3cafce86136c7959a53df26b",
     "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "1cea39ad512172291349edada7d4b872c367e7c5851661dc8eb80a97e7682359",
+  "hash": "b8d23391da3dd37fd8976014f3df52b38827eb0651643f2e1613acbdf42ae509",
   "layout": "workspace",
   "outputs": [
     {
@@ -449,7 +449,7 @@ tmux -L "$FD_SESSION_MAIN_TMUX" new-session -d -s "$FD_SESSION_MAIN_TMUX" -c '/f
 ## Session states
 
 - \`$FD_SESSION_STATES\` names a file with one line per session container: its tmux name (the value of its \`FD_SESSION_<SLUG>_TMUX\`), then its state. Read it with \`cat "$FD_SESSION_STATES"\`.
-- States: \`not-started\`, \`running\`, \`waiting\` (it waits for a permission answer), \`done\` (it reached its Stop), \`failed\` (it failed, it hit a hard stop, or its tmux ended before its Stop).
+- States: \`not-started\`, \`running\`, \`waiting\` (it waits for a permission answer), \`done\` (it reached its Stop), \`failed\` (it failed, a Gate stopped it on its condition, or its tmux ended before its Stop).
 - A session that sent you a question and ended its turn reads \`running\`; your reply wakes it.
 
 ## Standard rules

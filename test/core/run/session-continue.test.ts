@@ -185,13 +185,13 @@ describe("carryOnNode", () => {
     ],
   };
 
-  const nestedAskSide = {
+  const nestedGateSide = {
     prefix: "p",
     nodes: [
       start,
       node("b1", "branch", "Outer"),
       node("b2", "branch", "Inner"),
-      node("ga", "ask", "Ask"),
+      node("ga", "gate", "Gate"),
       node("q", "agent", "Q"),
       node("z", "agent", "Z"),
       node("m", "agent", "M"),
@@ -353,8 +353,8 @@ describe("carryOnNode", () => {
       expected: "d",
     },
     {
-      name: "a nested branch whose Ask side merges into the outer other side",
-      container: nestedAskSide,
+      name: "a nested branch whose Gate side merges into the outer other side",
+      container: nestedGateSide,
       events: finished("m"),
       expected: "stop",
     },

@@ -61,16 +61,11 @@ const forms: Record<NodeType, Form> = {
     },
   ),
   gate: typeForm(
-    { shown: "What to show you", skippable: "Skip it in automatic runs" },
-    { multiline: ["shown"] },
-  ),
-  ask: typeForm(
-    { question: "Question", options: "Answers to pick from (one per line)" },
-    { multiline: ["question"] },
-  ),
-  hardstop: typeForm(
-    { condition: "Stop when", shown: "What to show you" },
-    { multiline: ["condition", "shown"], hidden: ["locked", "enabled"] },
+    { stopWhen: "Condition to stop", condition: "Stop when", instruction: "Instruction" },
+    {
+      multiline: ["condition", "instruction"],
+      optionLabels: { stopWhen: { always: "Always", conditional: "Conditional" } },
+    },
   ),
   loop: typeForm(
     { condition: "Repeat until", cap: "Round limit", onCap: "At the round limit" },
@@ -107,7 +102,7 @@ const forms: Record<NodeType, Form> = {
   library: typeForm({}, { hidden: ["libraryId", "label", "overrides"] }),
 };
 
-const lockedMessage = "Hard stop is locked";
+const lockedMessage = "This setting is locked";
 
 type SettingsSchema = z.ZodObject<z.ZodRawShape>;
 
@@ -123,13 +118,22 @@ const branchFields = (
   return byValue ? withChoices(shown, "value", producedChoices(flow?.nodes ?? [])) : shown;
 };
 
+const gateFields = (
+  fields: FieldDescription[],
+  settings: Readonly<Record<string, unknown>>,
+): FieldDescription[] =>
+  settings["stopWhen"] === "conditional"
+    ? fields
+    : fields.filter(({ path }) => path[0] !== "condition");
+
 export const describeNodeFields = (
   type: NodeType,
   flow?: Pick<Flow, "nodes">,
   settings: Readonly<Record<string, unknown>> = {},
 ): FieldDescription[] => {
   const fields = describeFields(schemaOf(type), forms[type]);
-  return type === "branch" ? branchFields(fields, flow, settings) : fields;
+  if (type === "branch") return branchFields(fields, flow, settings);
+  return type === "gate" ? gateFields(fields, settings) : fields;
 };
 
 type SettingResult = { node: Node } | { error: string };

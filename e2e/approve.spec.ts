@@ -17,7 +17,7 @@ let launched: LaunchedApp | undefined;
 
 const agentThenGateThenAgent = () => {
   const built = onWorkspaceMainFlow(
-    [agent("s1"), gate("g1"), agent("s2")],
+    [agent("s1"), gate("g1", { settings: { instruction: "Check the plan" } }), agent("s2")],
     [thenWire("s1", "g1"), thenWire("g1", "s2")],
   );
   return {
@@ -45,7 +45,7 @@ test.afterEach(async () => {
   }
 });
 
-test("Approving a gate in the inspector lets the run carry on to the last agent", async () => {
+test("Continuing past a gate in the inspector lets the run carry on to the last agent", async () => {
   seedFlow(home, agentThenGateThenAgent(), repo.path);
   launched = await launchWithFakeClaude({ home, logPath: test.info().outputPath("app.log") });
   const { window } = launched;
@@ -63,7 +63,7 @@ test("Approving a gate in the inspector lets the run carry on to the last agent"
   await expect(panel).toHaveAttribute("data-kind", "gate");
   await expect(window.getByTestId("wait-text")).toContainText("Check the plan");
 
-  await window.getByTestId("wait-approve").click();
+  await window.getByTestId("wait-continue").click();
 
   await expect(window.getByTestId("inspector-node-g1")).toHaveAttribute("data-status", "done", {
     timeout: 20_000,
@@ -89,7 +89,7 @@ test("Approving a gate in the inspector lets the run carry on to the last agent"
         )
         .all(run.id) as { payload: string }[]
     ).map(({ payload }) => JSON.parse(payload) as unknown);
-    expect(decided).toEqual([{ nodeId: "g1", decision: "approved" }]);
+    expect(decided).toEqual([{ nodeId: "g1", decision: "continued" }]);
 
     expect(
       db
@@ -114,6 +114,6 @@ test("A gate's question shows on the run's page even when a node was selected in
   await expect(window.getByTestId("run-page-status")).toBeVisible();
   await expect(window.getByTestId("wait-panel")).toBeVisible({ timeout: 20_000 });
   await expect(window.getByTestId("node-settings")).toHaveCount(0);
-  await window.getByTestId("wait-approve").click();
+  await window.getByTestId("wait-continue").click();
   await expect(window.getByTestId("wait-panel")).toHaveCount(0, { timeout: 20_000 });
 });

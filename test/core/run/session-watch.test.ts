@@ -310,9 +310,13 @@ describe("SessionWatch", () => {
     const inLoop = "android-la";
     const hardStop = {
       id: hard,
-      type: "hardstop" as const,
+      type: "gate" as const,
       label: "Tests fail",
-      settings: { condition: "tests fail", shown: "the failures", locked: false, enabled: true },
+      settings: {
+        stopWhen: "conditional" as const,
+        condition: "tests fail",
+        instruction: "Read the failures",
+      },
     };
     const hardBefore = {
       prefix,
@@ -342,7 +346,7 @@ describe("SessionWatch", () => {
     const statusIn = (nodeIds: readonly string[]) =>
       Object.fromEntries(nodeIds.map((id) => [id, statusOf(id)]));
 
-    it("fails a hard stop before an Agent at once and leaves the rest unrun", () => {
+    it("fails a Conditional Gate before an Agent at once and leaves the rest unrun", () => {
       watch = new SessionWatch({ container: hardBefore, sessionId: ours });
 
       accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
@@ -357,11 +361,14 @@ describe("SessionWatch", () => {
       });
       expect(emitted.at(-1)).toEqual({
         nodeId: hard,
-        event: { kind: "failed", payload: { message: `${hard} failed: stopped by its hard stop` } },
+        event: {
+          kind: "failed",
+          payload: { message: `${hard} failed: stopped by its condition` },
+        },
       });
     });
 
-    it("fails a hard stop after the last Agent instead of finishing the Stop", () => {
+    it("fails a Conditional Gate after the last Agent instead of finishing the Stop", () => {
       watch = new SessionWatch({ container: hardLast, sessionId: ours });
 
       accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
@@ -389,6 +396,23 @@ describe("SessionWatch", () => {
           payload: { message: `${loop} failed: cap reached after 4 rounds` },
         },
       });
+    });
+
+    it("ignores a marker naming an Always Gate", () => {
+      const always = {
+        ...hardBefore,
+        nodes: hardBefore.nodes.map((node) =>
+          node.id === hard
+            ? { ...node, settings: { stopWhen: "always" as const, condition: "", instruction: "" } }
+            : node,
+        ),
+      };
+      watch = new SessionWatch({ container: always, sessionId: ours });
+
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+      accept(stopSaying(`The tests fail.\nSTOPPED NODE ${hard}`, 1300));
+
+      expect(statusOf(hard)).not.toBe("failed");
     });
 
     it("ignores a marker naming a loop that asks at its cap", () => {
@@ -437,7 +461,7 @@ describe("SessionWatch", () => {
       });
     });
 
-    it("records nothing for a Stop with no marker while a hard stop's next Agent is left", () => {
+    it("records nothing for a Stop with no marker while a Conditional Gate's next Agent is left", () => {
       watch = new SessionWatch({ container: hardBefore, sessionId: ours });
 
       accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));

@@ -47,14 +47,14 @@ test.afterEach(async () => {
   }
 });
 
-const startRun = async (env: Record<string, string>, skippable: boolean) => {
+const startRun = async (env: Record<string, string>, automatic: boolean) => {
   seedBlueprint(
     home,
     "Gate check",
     workspaceFlow(
       [
         trigger("start"),
-        gate("g1", { settings: { shown: "Check the plan", skippable } }),
+        gate("g1", { settings: { instruction: "Check the plan" } }),
         output("stop"),
       ],
       [thenWire("start", "g1"), thenWire("g1", "stop")],
@@ -67,7 +67,7 @@ const startRun = async (env: Record<string, string>, skippable: boolean) => {
   await expect(window.getByTestId("canvas-build")).toBeVisible();
 
   const buildId = await buildOnCanvas(window, home, "story-run");
-  if (skippable) {
+  if (automatic) {
     await window.getByTestId(pageTestIds.buildDetailRun).click();
     await window.getByTestId(dialogTestIds.auto).check();
     await window.getByTestId(dialogTestIds.start).click();
@@ -192,7 +192,7 @@ test("When the narrator fails, the Story still shows header and digest, with no 
   await expect(card.getByTestId(pageTestIds.runRowStoryLine)).toHaveCount(0);
 });
 
-test("A run approved at its gate while its page stays open: the digest says running while it waits, then done, with no account when the narrator fails", async () => {
+test("A run continued at its gate while its page stays open: the digest says running while it waits, then done, with no account when the narrator fails", async () => {
   const { window, runId, logPath } = await startRun({ FAKE_CLAUDE_NARRATE_FAIL: "1" }, false);
   const digest = window.getByTestId(pageTestIds.runStoryDigest);
 
@@ -202,7 +202,7 @@ test("A run approved at its gate while its page stays open: the digest says runn
   const branch = branchOf(runId);
   expect(branch).toEqual(expect.any(String));
   await expect(digest).toContainText(`Branch: ${branch ?? ""}`);
-  await window.getByTestId("wait-approve").click();
+  await window.getByTestId("wait-continue").click();
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 20_000,

@@ -50,7 +50,7 @@ const stages: StageSources = {
   nodes: [
     { id: "start", type: "trigger", label: "Start" },
     { id: "fix", type: "agent", label: "Fix the login bug" },
-    { id: "choose", type: "ask", label: "Pick the approach" },
+    { id: "choose", type: "gate", label: "Pick the approach" },
     { id: "verify", type: "agent", label: "Run the test suite" },
     { id: "stop", type: "output", label: "Finish" },
   ],
@@ -102,7 +102,7 @@ const eventsOf = ({
     [
       "choose",
       30,
-      { kind: "answered", payload: { nodeId: "choose", decision: "answered", answer } },
+      { kind: "answered", payload: { nodeId: "choose", decision: "continued", text: answer } },
     ],
     ["choose", 30, { kind: "done" }],
     ["verify", 31, { kind: "sent" }],
@@ -246,8 +246,8 @@ describe("runDigest", () => {
         "     - Write write src/login.ts → not recorded",
         "   Report: not recorded",
         "   Final reply: Patched the cookie check.",
-        "3. Pick the approach (ask): done",
-        "   Decision: answered: Take the smaller fix and keep the old session cookie for one more release",
+        "3. Pick the approach (gate): done",
+        "   Decision: continued: Take the smaller fix and keep the old session cookie for one more release",
         "4. Run the test suite (agent): failed, took 94s",
         "   Instructions: not recorded",
         "   Reason: Tests did not pass in CI",
@@ -435,7 +435,7 @@ describe("runDigest", () => {
     const text = runDigest(digestInput(eventsOf(), { sources: instructed, activity })).text;
     const fix = stageBlock(text, "2. Fix the login bug (agent)");
     const verify = stageBlock(text, "4. Run the test suite (agent)");
-    const choose = stageBlock(text, "3. Pick the approach (ask)");
+    const choose = stageBlock(text, "3. Pick the approach (gate)");
 
     it("gives an Agent stage its instructions, or says they were not recorded", () => {
       expect(fix).toContain("Instructions: Fix the cookie check in src/login.ts.");
@@ -511,12 +511,12 @@ describe("runDigest", () => {
     expect(text).toContain(usd(1.25));
   });
 
-  describe("gate and ask stages", () => {
+  describe("gate stages", () => {
     const sources: StageSources = {
       session: { name: "review-session" },
       nodes: [
         { id: "g", type: "gate", label: "" },
-        { id: "a", type: "ask", label: "Pick the approach" },
+        { id: "a", type: "gate", label: "Pick the approach" },
       ],
       wires: [then("g", "a")],
     };
@@ -529,15 +529,28 @@ describe("runDigest", () => {
     const digestOf = (questions: Record<string, string>) =>
       runDigest(digestInput(events, { sources, activity: [], status: "running", questions })).text;
 
+    it("prints a continued gate's decision alone when no text was typed", () => {
+      const continued = stored([
+        ["g", 1, { kind: "needs-you" }],
+        ["g", 2, { kind: "decided", payload: { nodeId: "g", decision: "continued" } }],
+        ["g", 2, { kind: "done" }],
+      ]);
+      const text = runDigest(
+        digestInput(continued, { sources, activity: [], status: "running" }),
+      ).text;
+
+      expect(text).toContain("1. Gate (gate): done\n   Decision: continued\n");
+    });
+
     it("lists a stage with an empty label by its type's default label", () => {
       expect(digestOf({})).toContain("1. Gate (gate): done");
     });
 
-    it("prints what a gate and an ask asked, under their stages", () => {
+    it("prints what each gate asked, under its stage", () => {
       const text = digestOf({ g: "Check the plan", a: "Which fix?" });
 
       expect(text).toContain("1. Gate (gate): done\n   Asked: Check the plan");
-      expect(text).toContain("2. Pick the approach (ask): needs you\n   Asked: Which fix?");
+      expect(text).toContain("2. Pick the approach (gate): needs you\n   Asked: Which fix?");
     });
 
     it("reads a gate left waiting as stopped once the run is stopped", () => {
@@ -638,6 +651,27 @@ describe("runDigest", () => {
     expect(text).toContain("   Decision: rejected: not wanted");
   });
 
+  it("names the answer a Loop was given at its cap", () => {
+    const sources: StageSources = {
+      session: { name: "loop-session" },
+      nodes: [{ id: "l1", type: "loop", label: "Until green" }],
+      wires: [],
+    };
+    const events = stored([
+      ["l1", 1, { kind: "needs-you" }],
+      [
+        "l1",
+        1,
+        { kind: "answered", payload: { nodeId: "l1", decision: "answered", answer: "continue" } },
+      ],
+      ["l1", 1, { kind: "done" }],
+    ]);
+
+    const { text } = runDigest(digestInput(events, { sources, activity: [] }));
+
+    expect(text).toContain("1. Until green (loop): done\n   Decision: answered: continue");
+  });
+
   it("lists the lanes of a fork and each round of a loop under their own numbers", () => {
     const sources: StageSources = {
       session: { name: "fan-session" },
@@ -734,7 +768,7 @@ describe("runDigest", () => {
       const longAnswer = `Answer start. ${"keep the old cookie for one more release. ".repeat(350)}`;
       const events = eventsOf({ reply: longReply }).map((event) =>
         event.kind === "answered"
-          ? ({ ...event, payload: { ...event.payload, answer: longAnswer } } as StoredEvent)
+          ? ({ ...event, payload: { ...event.payload, text: longAnswer } } as StoredEvent)
           : event,
       );
 
@@ -871,7 +905,7 @@ describe("runDigest", () => {
       const longAnswer = `Answer start. ${"keep the old cookie for one more release. ".repeat(350)}`;
       const events = eventsOf({ reply: longReply }).map((event) =>
         event.kind === "answered"
-          ? ({ ...event, payload: { ...event.payload, answer: longAnswer } } as StoredEvent)
+          ? ({ ...event, payload: { ...event.payload, text: longAnswer } } as StoredEvent)
           : event,
       );
 

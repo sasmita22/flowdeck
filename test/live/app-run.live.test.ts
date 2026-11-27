@@ -57,7 +57,7 @@ import {
 const run = promisify(execFile);
 const hookScriptPath = fileURLToPath(new URL("../../bin/flowdeck-hook.ts", import.meta.url));
 const fixturePath = fileURLToPath(new URL("../fixtures/run-live-flow.json", import.meta.url));
-const askFixturePath = fileURLToPath(new URL("../fixtures/agent-then-ask.json", import.meta.url));
+const gateFixturePath = fileURLToPath(new URL("../fixtures/agent-then-gate.json", import.meta.url));
 const runDeadlineMs = 240_000;
 const promptIds = ["p1", "p2", "p3"];
 const buildName = "live-app-run";
@@ -402,7 +402,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("the app engine running a sav
       });
       terminal = live;
       let announced = false;
-      const runId = await startFlow(askFixturePath, (push) => {
+      const runId = await startFlow(gateFixturePath, (push) => {
         if (push.push === "run-state") snapshots.push(push.value);
         else if (push.push === "session") {
           announced = push.value !== null;

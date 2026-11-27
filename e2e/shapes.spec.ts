@@ -4,12 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agent,
-  ask,
   bareFlow,
   branch,
   fork,
   gate,
-  hardstop,
   join as joinNode,
   loop,
   output,
@@ -32,8 +30,6 @@ const everyShape = () => {
     [
       at(agent("agent"), 10, 80),
       at(gate("gate"), 10, 150),
-      at(hardstop("hardstop"), 190, 150),
-      at(ask("ask"), 10, 220),
       at(output("output"), 190, 220),
       at(loop("loop"), 60, 360),
       at(agent("body", { parent: "loop" }), 60, 450),
@@ -85,7 +81,7 @@ const pointsOf = async (polygon: Locator) =>
 
 const exact = { threshold: 0 };
 
-const nodeShots = ["agent", "gate", "hardstop", "ask"];
+const nodeShots = ["agent", "gate"];
 
 const circleShot = async (window: Page, id: string, name: string) => {
   const node = window.getByTestId(`node-${id}`);

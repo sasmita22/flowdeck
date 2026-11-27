@@ -845,14 +845,22 @@ describe("StartedSessions", () => {
       expect(writes.at(-1)).toBe(states("failed", "not-started"));
     });
 
-    it("writes a session failed at once when it stops at its hard stop, naming the hard stop", () => {
+    it("writes a session failed at once when a Conditional Gate stops it, naming the Gate", () => {
       const android = container("session", "android", "/b/sessions/android/app", ["a1", "h"]);
-      const hardStop = node("android-h", "hardstop", "Tests fail");
+      const conditionalGate: ManifestNode = {
+        ...node("android-h", "gate", "Tests fail"),
+        settings: { stopWhen: "conditional", condition: "tests fail", instruction: "" },
+      };
       const stopping = {
         ...manifest,
         containers: manifest.containers.map((each) =>
           each.slug === "android"
-            ? { ...android, nodes: android.nodes.map((n) => (n.id === hardStop.id ? hardStop : n)) }
+            ? {
+                ...android,
+                nodes: android.nodes.map((n) =>
+                  n.id === conditionalGate.id ? conditionalGate : n,
+                ),
+              }
             : each,
         ),
       } as LoadedBuild;

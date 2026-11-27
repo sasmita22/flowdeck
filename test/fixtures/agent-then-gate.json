@@ -26,15 +26,16 @@
     },
     {
       "id": "q",
-      "label": "Ask",
-      "type": "ask",
+      "label": "Gate",
+      "type": "gate",
       "position": {
         "x": 480,
         "y": 0
       },
       "settings": {
-        "question": "Continue?",
-        "options": ["yes"]
+        "stopWhen": "always",
+        "condition": "",
+        "instruction": "Continue?"
       }
     },
     {

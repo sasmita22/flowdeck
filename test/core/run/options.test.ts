@@ -10,19 +10,27 @@ const manifestOf = (nodes: unknown[]) => ({
 });
 
 describe("runChoices", () => {
-  it("offers only automatic mode for a build with a skippable gate", () => {
-    const manifest = manifestOf([
-      gate("g", { settings: { shown: "Check", skippable: true } }),
-      agent("p"),
-    ]);
+  it("offers automatic mode for a build with an Always Gate", () => {
+    const manifest = manifestOf([gate("g", { settings: { stopWhen: "always" } }), agent("p")]);
 
     expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: true });
   });
 
-  it("offers nothing for a build without a skippable gate", () => {
-    const manifest = manifestOf([agent("s"), gate("g"), agent("p")]);
+  it("offers nothing for a build whose only Gates are Conditional", () => {
+    const manifest = manifestOf([
+      agent("s"),
+      gate("g", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
+      agent("p"),
+    ]);
 
     expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: false });
+  });
+
+  it("offers nothing for a build with no Gate", () => {
+    expect(runChoices(manifestOf([agent("s"), agent("p")]))).toEqual({
+      kind: "choices",
+      automatic: false,
+    });
   });
 });
 

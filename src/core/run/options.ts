@@ -15,12 +15,12 @@ type RunOptions = {
 
 type ManifestPart = Pick<ManifestContainer, "nodes">;
 
-const skippable = (node: ManifestNode) =>
-  node.type === "gate" && (node.settings as { skippable?: unknown }).skippable === true;
+const alwaysGate = (node: ManifestNode) =>
+  node.type === "gate" && (node.settings as { stopWhen?: unknown }).stopWhen === "always";
 
 export const runChoices = (manifest: ManifestPart): RunChoices => ({
   kind: "choices",
-  automatic: manifest.nodes.some(skippable),
+  automatic: manifest.nodes.some(alwaysGate),
 });
 
 export const storedOptions = ({ auto }: RunOptions): Record<string, unknown> => ({

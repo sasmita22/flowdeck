@@ -6,17 +6,7 @@ import {
 } from "../../../src/core/run/finished-path.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 
-type Kind =
-  | "trigger"
-  | "output"
-  | "agent"
-  | "branch"
-  | "fork"
-  | "join"
-  | "loop"
-  | "gate"
-  | "ask"
-  | "hardstop";
+type Kind = "trigger" | "output" | "agent" | "branch" | "fork" | "join" | "loop" | "gate";
 
 const node = (id: string, type: Kind, parent?: string) => ({
   id,
@@ -231,10 +221,10 @@ describe("sessionStatesOf", () => {
     });
   });
 
-  it("shows the taken Branch done and the untaken Ask skipped", () => {
-    expect(sessionStatesOf(branched(node("ask", "ask")), ran("start", "a", "stop"))).toEqual({
+  it("shows the taken Branch done and the untaken Gate skipped", () => {
+    expect(sessionStatesOf(branched(node("g", "gate")), ran("start", "a", "stop"))).toEqual({
       br: "done",
-      ask: "skipped",
+      g: "skipped",
     });
   });
 
@@ -247,20 +237,20 @@ describe("sessionStatesOf", () => {
 
   it("shows both Agent-free sides of a finished Branch done", () => {
     const container = {
-      nodes: [...ends, node("br", "branch"), node("g", "gate"), node("ask", "ask")],
+      nodes: [...ends, node("br", "branch"), node("g", "gate"), node("g2", "gate")],
       wires: [
         then("start", "br"),
         then("br", "g", "yes"),
-        then("br", "ask", "no"),
+        then("br", "g2", "no"),
         then("g", "stop"),
-        then("ask", "stop"),
+        then("g2", "stop"),
       ],
     };
 
     expect(sessionStatesOf(container, ran("start", "stop"))).toEqual({
       br: "done",
       g: "done",
-      ask: "done",
+      g2: "done",
     });
   });
 
@@ -436,7 +426,7 @@ describe("sessionStatesOf", () => {
 
   it("derives nothing for a node with a state of its own", () => {
     const container = {
-      nodes: [...ends, node("a", "agent"), node("hs", "hardstop"), node("b", "agent")],
+      nodes: [...ends, node("a", "agent"), node("hs", "gate"), node("b", "agent")],
       wires: [then("start", "a"), then("a", "hs"), then("hs", "b"), then("b", "stop")],
     };
     const events = [

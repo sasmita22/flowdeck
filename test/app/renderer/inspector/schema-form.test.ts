@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
+  assignField,
   containerFields,
+  describeFields,
   settingsFields,
   sharedFieldFor,
   type FieldDescription,
@@ -130,5 +133,43 @@ describe("sharedFieldFor", () => {
 
   it("routes the blueprint's build model to the shared model field", () => {
     expect(settingsFields().map(({ path }) => sharedFieldFor(path))).toEqual(["model", undefined]);
+  });
+});
+
+describe("generic fields", () => {
+  const schema = z.object({
+    done: z.boolean(),
+    names: z.array(z.string()),
+    sizes: z.array(z.number()),
+  });
+  const form = {
+    prefix: "node-setting",
+    labels: { done: "Done", names: "Names", sizes: "Sizes" },
+    optionLabels: {},
+  };
+
+  it("describes a boolean as a toggle and a list of strings or numbers as a list", () => {
+    expect(describeFields(schema, form)).toEqual([
+      { control: "toggle", path: ["done"], testId: "node-setting-done", label: "Done" },
+      { control: "list", path: ["names"], testId: "node-setting-names", label: "Names" },
+      { control: "list", path: ["sizes"], testId: "node-setting-sizes", label: "Sizes" },
+    ]);
+  });
+
+  it("stores a toggle's value as it is", () => {
+    expect(assignField(schema, { done: false, names: [], sizes: [] }, ["done"], true)).toEqual({
+      done: true,
+      names: [],
+      sizes: [],
+    });
+  });
+
+  it.each([
+    ["names", " plan.md \n\n  code.md\n", ["plan.md", "code.md"]],
+    ["sizes", "1\n  20 \n\n3", [1, 20, 3]],
+  ])("splits a %s list into trimmed, non-empty lines", (key, text, stored) => {
+    const current = { done: false, names: [], sizes: [] };
+
+    expect(assignField(schema, current, [key], text)).toEqual({ ...current, [key]: stored });
   });
 });

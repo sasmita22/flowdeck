@@ -60,7 +60,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("run story, with real claude 
         home,
         repo: repo.path,
         sessionName: `fd-live-run-story-${process.pid}`,
-        waiter: new FakeWaiter([{ decision: "reject", reason: "not wanted" }]),
+        waiter: new FakeWaiter([{ decision: "stop", reason: "not wanted" }]),
         narrator: new ClaudeNarrator({ home }),
       });
       onTestFinished(async () => {

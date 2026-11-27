@@ -176,6 +176,15 @@ describe("blueprintToolDefinitions", () => {
     expect(add.description).not.toMatch(/prompt|script/i);
   });
 
+  it("offers the Gate among the node types add_node takes, and no Ask or Hard stop", () => {
+    const [branch] = inputBranches("add_node");
+    const types = (branch?.properties?.type as { enum?: string[] } | undefined)?.enum ?? [];
+
+    expect(types).toContain("gate");
+    expect(types).not.toContain("ask");
+    expect(types).not.toContain("hardstop");
+  });
+
   it.each(["then", "event"])("lets wire take a %s wire", (kind) => {
     const input = { kind, from: { node: "a1", port: "out" }, to: { node: "p1", port: "in" } };
     expect(toolInputs.wire.safeParse(input).success).toBe(true);

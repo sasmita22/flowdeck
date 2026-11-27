@@ -11,7 +11,7 @@ A node is one step of the user's work. Write it so the build agents can turn it 
 
 Every work step is an `agent`: a subagent with its own role and model, which sees only the files it is given. That holds for a step that runs a command too: the Agent's instructions say which command to run and what to report. The other types are not work:
 
-- The user looking before the work goes on is a `gate`; the user choosing an answer is an `ask`; a stop that must never be skipped is a `hardstop`.
+- The user looking before the work goes on, or the run stopping when something holds, is a `gate`.
 - Repeating, parallel work and picking a path are `loop`, `fork` and `join`, and `branch`, around Agents.
 
 If what the user said fits more than one type, ask which they mean instead of picking.
@@ -29,6 +29,16 @@ If what the user said fits more than one type, ask which they mean instead of pi
 The Agent settings have no expected output field, which is why it is a line in `instructions`. Leave `model` at its default unless the user names one.
 
 A good Agent does one job, with its steps in the user's words. An Agent that is not the first step on the main flow says in its `instructions` what it builds on: the file it reads, listed in `given`, named as the earlier node names it. Every file it leaves for a later node is in `writes`.
+
+## Gate node
+
+| Part              | Where it goes | What it says                                                                                                          |
+| ----------------- | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Condition to stop | `stopWhen`    | "always" when the user wants to look every time; "conditional" when they want the run to stop only if something holds |
+| Condition         | `condition`   | For "conditional" only: what must hold for the run to stop, in the user's words                                       |
+| Instruction       | `instruction` | What the user sees when it pauses and what they decide                                                                |
+
+An "always" Gate is skipped in automatic runs and auto mode; a "conditional" Gate is checked in every run. Text the user types on Continue reaches the Agents after it. A Gate never produces a value.
 
 ## Hand-offs
 

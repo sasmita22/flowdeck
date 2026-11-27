@@ -107,6 +107,10 @@ const decisionLine = (decision: HumanDecision, limit: number) => {
   switch (decision.decision) {
     case "answered":
       return `answered: ${shortened(decision.answer, limit)}`;
+    case "continued":
+      return decision.text === undefined
+        ? "continued"
+        : `continued: ${shortened(decision.text, limit)}`;
     case "rejected":
     case "stopped":
       return `${decision.decision}: ${shortened(decision.reason, limit)}`;

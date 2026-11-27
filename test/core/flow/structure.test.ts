@@ -11,7 +11,6 @@ import {
   flow,
   flowSettings,
   gate,
-  hardstop,
   loop,
   output,
   sessionContainer,
@@ -118,6 +117,13 @@ describe("firstTurnId", () => {
   });
 
   it("is undefined for a body with no agent", () => {
-    expect(firstTurnId(body([hardstop("s1"), gate("g1")]))).toBeUndefined();
+    expect(
+      firstTurnId(
+        body([
+          gate("s1", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
+          gate("g1"),
+        ]),
+      ),
+    ).toBeUndefined();
   });
 });

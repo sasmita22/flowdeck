@@ -193,7 +193,7 @@ const sessionStatesSection = (containers: readonly ManifestContainer[]) =>
         sessionStatesHeading,
         "",
         `- \`$${sessionStatesVariable}\` names a file with one line per session container: its tmux name (the value of its \`FD_SESSION_<SLUG>_TMUX\`), then its state. Read it with \`cat "$${sessionStatesVariable}"\`.`,
-        "- States: `not-started`, `running`, `waiting` (it waits for a permission answer), `done` (it reached its Stop), `failed` (it failed, it hit a hard stop, or its tmux ended before its Stop).",
+        "- States: `not-started`, `running`, `waiting` (it waits for a permission answer), `done` (it reached its Stop), `failed` (it failed, a Gate stopped it on its condition, or its tmux ended before its Stop).",
         "- A session that sent you a question and ended its turn reads `running`; your reply wakes it.",
       ]
     : [];

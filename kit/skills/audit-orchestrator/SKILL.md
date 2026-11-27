@@ -1,6 +1,6 @@
 ---
 name: audit-orchestrator
-description: How to check a build container's orchestrator skill, plugin/skills/run/SKILL.md in its container folder, holds up in plain Claude Code where no runner enforces anything - its Agent and Fork steps only hand off, it waits for each result, and states every gate, hard stop and loop cap as a hard rule. Read in step 4 of a Flowdeck build, before editing the orchestrator skill.
+description: How to check a build container's orchestrator skill, plugin/skills/run/SKILL.md in its container folder, holds up in plain Claude Code where no runner enforces anything - its Agent and Fork steps only hand off, it waits for each result, and states every Gate and loop cap as its line says. Read in step 4 of a Flowdeck build, before editing the orchestrator skill.
 ---
 
 # Audit the Orchestrator
@@ -11,16 +11,16 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 ## Checks
 
-1. **Agent and Fork steps only hand off.** An Agent step dispatches its agent, and a Fork step its branch agents, by full name `<prefix>:<piece>`, a piece of the same container. Neither does that work itself. The other steps (Start, Gate, Ask, Loop, Branch, Join, Hard stop, Stop) are the orchestrator's own: it asks, repeats, picks or stops as the line says.
+1. **Agent and Fork steps only hand off.** An Agent step dispatches its agent, and a Fork step its branch agents, by full name `<prefix>:<piece>`, a piece of the same container. Neither does that work itself. The other steps (Start, Gate, Loop, Branch, Join, Stop) are the orchestrator's own: it asks, repeats, picks or stops as the line says.
 2. **Right inputs, then wait.** Each dispatch carries that node's prompt as code wrote it (`NODE <nodeId>` and its files), and the step says to wait for the result before going on.
-3. **Hard rules.** Every Gate, Ask, Hard stop and Loop cap reads as a rule that cannot be skipped: what to ask or check, and what to do at the cap or the stop. A flow with none of these nodes gets no such rule.
+3. **Hard rules.** Every Conditional Gate and Loop cap reads as a rule that cannot be skipped: what to check, and what to do at the cap or the stop. An Always Gate asks in the chat and waits for the answer; nothing says it may be skipped. A flow with none of these nodes gets no such rule.
 4. **Backed by hooks.** Where a guard hook in the container's `plugin/hooks/` already enforces a rule (no force pushes; rules re-sent after compaction), the wording agrees with it.
 
 ## Hard limits
 
 - Keep every step line starting `<n>. NODE <nodeId> `, in the same order, one per node of the container. Never add, remove, merge or move a step.
-- Never change a branch target, a loop cap, a gate's question, or a dispatch prompt.
-- Keep every `STOPPED NODE <nodeId>` line a Hard stop or Loop step tells the session to end its reply with, exactly as written.
+- Never change a branch target, a loop cap, a Gate's instruction or condition, or a dispatch prompt.
+- Keep every `STOPPED NODE <nodeId>` line a Conditional Gate or Loop step tells the session to end its reply with, exactly as written.
 - Keep the frontmatter and the scope line. Never touch `plugin/hooks/`.
 - Never name a node or piece of another container.
 - A rule the blueprint's nodes do not state is never added and never a question.
@@ -28,5 +28,5 @@ A question is only for a blueprint input: an empty required field or setting, a 
 ## Checklist
 
 - [ ] Every Agent and Fork step hands off and waits; none does that work itself.
-- [ ] Every gate, hard stop and loop cap is stated as a hard rule.
+- [ ] Every Conditional Gate and loop cap is stated as a hard rule, and every Always Gate asks in the chat and waits for the answer.
 - [ ] The `NODE` lines are in the same order, with the same targets and caps, as before your edit.

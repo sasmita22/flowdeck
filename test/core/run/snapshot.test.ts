@@ -126,15 +126,15 @@ describe("runSnapshot with session groups", () => {
       { id: "start", type: "trigger" as const },
       { id: "br", type: "branch" as const },
       { id: "a", type: "agent" as const },
-      { id: "ask", type: "ask" as const },
+      { id: "g", type: "gate" as const },
       { id: "stop", type: "output" as const },
     ],
     wires: [
       then("start", "br"),
       then("br", "a", "yes"),
-      then("br", "ask", "no"),
+      then("br", "g", "no"),
       then("a", "stop"),
-      then("ask", "stop"),
+      then("g", "stop"),
     ],
   };
 
@@ -165,10 +165,10 @@ describe("runSnapshot with session groups", () => {
     });
   });
 
-  it("shows the taken Branch done and the untaken Ask skipped", () => {
+  it("shows the taken Branch done and the untaken Gate skipped", () => {
     expect(snapshotOf(branched, ran("start", "a", "stop"), [branched])).toMatchObject({
       br: "done",
-      ask: "skipped",
+      g: "skipped",
     });
   });
 

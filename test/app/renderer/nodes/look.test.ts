@@ -10,8 +10,6 @@ const groups: Record<NodeType, string> = {
   output: "var(--c-io)",
   agent: "var(--c-work)",
   gate: "var(--c-human)",
-  hardstop: "var(--c-human)",
-  ask: "var(--c-human)",
   loop: "var(--c-ctrl)",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
@@ -24,8 +22,6 @@ const tags: Record<NodeType, string> = {
   output: "",
   agent: "AGT",
   gate: "GATE",
-  hardstop: "STOP",
-  ask: "ASK",
   loop: "LOOP",
   fork: "PARALLEL START",
   join: "PARALLEL END",
@@ -37,8 +33,6 @@ const outlines: Record<NodeType, string> = {
   trigger: "var(--c-io)",
   output: "var(--c-io)",
   agent: "var(--c-work)",
-  ask: "var(--c-human)",
-  hardstop: "var(--c-human)",
   gate: "var(--line)",
   loop: "none",
   fork: "var(--c-ctrl)",
@@ -56,7 +50,7 @@ describe("nodeLook", () => {
     expect(nodeLook("nope" as NodeType)).toBeUndefined();
   });
 
-  it.each(["prompt", "script"])("has no look for %s", (type) => {
+  it.each(["prompt", "script", "ask", "hardstop"])("has no look for %s", (type) => {
     expect(nodeLook(type as NodeType)).toBeUndefined();
   });
 
@@ -76,11 +70,12 @@ describe("nodeLook", () => {
     expect(nodeLook(type).box).toEqual({ width: 48, height: 48 });
   });
 
-  it.each(
-    types.filter((type) => !["ask", "fork", "join", "branch", "trigger", "output"].includes(type)),
-  )("boxes %s at 170x48", (type) => {
-    expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
-  });
+  it.each(types.filter((type) => !["fork", "join", "branch", "trigger", "output"].includes(type)))(
+    "boxes %s at 170x48",
+    (type) => {
+      expect(nodeLook(type).box).toEqual({ width: 170, height: 48 });
+    },
+  );
 
   it.each(["fork", "join"] as const)(
     "boxes a lone %s as a 28-wide bar of the minimum height",
@@ -106,10 +101,6 @@ describe("nodeLook", () => {
 
     expect(names("in")).toEqual(["in"]);
     expect(names("out")).toEqual(["yes", "no"]);
-  });
-
-  it("boxes ask at 170x57 so its tail fits", () => {
-    expect(nodeLook("ask").box).toEqual({ width: 170, height: 57 });
   });
 
   it.each(types)("gives %s the registry's ports", (type) => {

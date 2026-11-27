@@ -45,7 +45,7 @@ function RunForm({
         <span>
           Automatic mode
           <p style={hintStyle}>
-            Skips gates marked &lsquo;skip in automatic runs&rsquo;. Hard stops still stop.
+            Skips Always Gates. Conditional Gates still stop when their condition is met.
           </p>
         </span>
       </label>

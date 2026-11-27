@@ -4,11 +4,9 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { NodeType, Port } from "../../../src/core/flow/schema.js";
 import { settings as agent } from "../../../src/core/nodes/agent/settings.js";
-import { settings as ask } from "../../../src/core/nodes/ask/settings.js";
 import { settings as branch } from "../../../src/core/nodes/branch/settings.js";
 import { settings as fork } from "../../../src/core/nodes/fork/settings.js";
 import { settings as gate } from "../../../src/core/nodes/gate/settings.js";
-import { settings as hardstop } from "../../../src/core/nodes/hardstop/settings.js";
 import { settings as join } from "../../../src/core/nodes/join/settings.js";
 import { settings as library } from "../../../src/core/nodes/library/settings.js";
 import { settings as loop } from "../../../src/core/nodes/loop/settings.js";
@@ -20,8 +18,6 @@ const nodesDir = fileURLToPath(new URL("../../../src/core/nodes/", import.meta.u
 const folderSettings = {
   agent,
   gate,
-  ask,
-  hardstop,
   loop,
   trigger,
   output,
@@ -42,8 +38,16 @@ describe("node registry", () => {
     expect(folders.sort()).toEqual(types);
   });
 
-  it.each(["prompt", "script", "foreach"])("has no %s entry", (type) => {
+  it.each(["prompt", "script", "foreach", "ask", "hardstop"])("has no %s entry", (type) => {
     expect(Object.keys(registry)).not.toContain(type);
+  });
+
+  it("gives the Gate a stop choice, a condition and an instruction, and nothing it produces", () => {
+    expect(Object.keys(registry.gate.settings.shape)).toEqual([
+      "stopWhen",
+      "condition",
+      "instruction",
+    ]);
   });
 
   it.each(NodeType.options)("lists %s with its folder's settings and valid ports", (type) => {

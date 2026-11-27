@@ -95,7 +95,7 @@ const blueprint = (): Flow => {
   const built = onWorkspaceMainFlow(
     [
       agent("p1", { settings: { instructions: "Work on {{ticket}}." } }),
-      gate("g1", { settings: { shown: "Check the plan", skippable: true } }),
+      gate("g1", { settings: { instruction: "Check the plan" } }),
       agent("s2"),
     ],
     [thenWire("p1", "g1"), thenWire("g1", "s2")],

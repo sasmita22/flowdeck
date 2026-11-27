@@ -2,14 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { ports as agentPorts } from "../../../src/core/nodes/agent/ports.js";
 import { settings as agentSettings } from "../../../src/core/nodes/agent/settings.js";
-import { ports as askPorts } from "../../../src/core/nodes/ask/ports.js";
-import { settings as askSettings } from "../../../src/core/nodes/ask/settings.js";
 import { ports as forkPorts } from "../../../src/core/nodes/fork/ports.js";
 import { settings as forkSettings } from "../../../src/core/nodes/fork/settings.js";
 import { ports as gatePorts } from "../../../src/core/nodes/gate/ports.js";
 import { settings as gateSettings } from "../../../src/core/nodes/gate/settings.js";
-import { ports as hardstopPorts } from "../../../src/core/nodes/hardstop/ports.js";
-import { settings as hardstopSettings } from "../../../src/core/nodes/hardstop/settings.js";
 import { ports as joinPorts } from "../../../src/core/nodes/join/ports.js";
 import { settings as joinSettings } from "../../../src/core/nodes/join/settings.js";
 import { ports as loopPorts } from "../../../src/core/nodes/loop/ports.js";
@@ -53,27 +49,9 @@ const cases: Case[] = [
     type: "gate",
     settings: gateSettings,
     ports: gatePorts,
-    valid: { shown: "plan.md", skippable: false },
-    bad: { shown: "plan.md", skippable: "no" },
-    badPath: ["skippable"],
-    expectedPorts: [inPort, outPort],
-  },
-  {
-    type: "ask",
-    settings: askSettings,
-    ports: askPorts,
-    valid: { question: "Ship?", options: ["yes", "no"] },
-    bad: { question: "Ship?", options: "yes" },
-    badPath: ["options"],
-    expectedPorts: [inPort, outPort],
-  },
-  {
-    type: "hardstop",
-    settings: hardstopSettings,
-    ports: hardstopPorts,
-    valid: { condition: "tests fail", shown: "report", locked: true, enabled: true },
-    bad: { condition: "tests fail", shown: "report", locked: true, enabled: "no" },
-    badPath: ["enabled"],
+    valid: { stopWhen: "conditional", condition: "tests fail", instruction: "Report" },
+    bad: { stopWhen: "sometimes", condition: "", instruction: "" },
+    badPath: ["stopWhen"],
     expectedPorts: [inPort, outPort],
   },
   {
@@ -179,17 +157,6 @@ describe("required and lenient settings", () => {
     expect(
       agentSettings.parse({ role: "", instructions: "Go.", model: "haiku", tools: ["Read"] }),
     ).toEqual({ role: "", instructions: "Go.", model: "haiku" });
-  });
-
-  it("keeps a disabled hardstop's enabled flag", () => {
-    const result = hardstopSettings.safeParse({
-      condition: "tests fail",
-      shown: "report",
-      locked: true,
-      enabled: false,
-    });
-    expect(result.success).toBe(true);
-    expect(result.data).toMatchObject({ enabled: false });
   });
 });
 

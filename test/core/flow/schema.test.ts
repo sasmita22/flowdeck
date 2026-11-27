@@ -218,12 +218,44 @@ describe("parseFlow", () => {
     expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
   });
 
-  it("lists the eleven node types", () => {
+  it.each([
+    ["an Always Gate", { stopWhen: "always", condition: "", instruction: "Check the plan" }],
+    ["a Conditional Gate", { stopWhen: "conditional", condition: "tests fail", instruction: "" }],
+    [
+      "a Conditional Gate with no condition yet",
+      { stopWhen: "conditional", condition: "", instruction: "" },
+    ],
+  ])("parses %s", (_, gateSettings) => {
+    const flow = flowWith({
+      nodes: [agentNode, { ...agentNode, id: "g", type: "gate", settings: gateSettings }],
+    });
+
+    expect(parseFlow(flow)).toEqual(flow);
+  });
+
+  it("rejects a Gate with the old settings", () => {
+    const error = parseError(
+      flowWith({
+        nodes: [{ ...agentNode, type: "gate", settings: { shown: "", skippable: true } }],
+      }),
+    );
+
+    expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
+  });
+
+  it.each([
+    ["ask", { question: "Pick a colour", options: ["red"] }],
+    ["hardstop", { condition: "tests fail", shown: "", locked: true, enabled: true }],
+  ])("rejects a removed %s node", (type, settings) => {
+    const error = parseError(flowWith({ nodes: [{ ...agentNode, type, settings }] }));
+
+    expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
+  });
+
+  it("lists the nine node types", () => {
     expect(NodeType.options).toEqual([
       "agent",
       "gate",
-      "ask",
-      "hardstop",
       "loop",
       "trigger",
       "output",

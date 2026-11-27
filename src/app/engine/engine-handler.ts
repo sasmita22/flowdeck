@@ -91,7 +91,6 @@ import { sessionOverlayOf } from "../../core/run/finished-path.js";
 import { candidatePaths } from "../../core/run/other-repos.js";
 import { branchOf, type OtherRepo, type RepoState } from "../../core/run/repo-state.js";
 import { settings as agentSettings } from "../../core/nodes/agent/settings.js";
-import { settings as askSettings } from "../../core/nodes/ask/settings.js";
 import { settings as gateSettings } from "../../core/nodes/gate/settings.js";
 import type {
   BuildRecord,
@@ -1919,11 +1918,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   type StoredNode = ManifestContainer["nodes"][number];
 
-  const questionOf = (node: StoredNode): string | undefined => {
-    if (node.type === "gate") return gateSettings.safeParse(node.settings).data?.shown;
-    if (node.type === "ask") return askSettings.safeParse(node.settings).data?.question;
-    return undefined;
-  };
+  const questionOf = (node: StoredNode): string | undefined =>
+    node.type === "gate" ? gateSettings.safeParse(node.settings).data?.instruction : undefined;
 
   const instructionsOf = (node: StoredNode): string | undefined =>
     node.type === "agent"

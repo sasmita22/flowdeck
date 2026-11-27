@@ -77,11 +77,10 @@ describe("previewOf", () => {
 describe("previewViewBox", () => {
   it.each([
     ...shaped
-      .filter((type) => !["ask", "branch", "trigger", "output"].includes(type))
+      .filter((type) => !["branch", "trigger", "output"].includes(type))
       .map((type) => [type, 178, 56] as const),
     ["trigger", 56, 56],
     ["output", 56, 56],
-    ["ask", 178, 65],
     ["branch", 124, 56],
     ["fork", 58, 68],
     ["join", 58, 68],
@@ -121,6 +120,13 @@ describe("nodeOutline", () => {
     expect(nodeOutline(type, 281).path).not.toContain("170");
   });
 
+  it("fills the gate's two posts with the human-pause colour", () => {
+    expect(nodeOutline("gate").extras.map(({ attributes }) => attributes["fill"])).toEqual([
+      "var(--c-human)",
+      "var(--c-human)",
+    ]);
+  });
+
   it("builds the agent outline from the width it is given", () => {
     expect(nodeOutline("agent", 300).path).toContain("H288 Q300,0 300,12");
     expect(nodeOutline("agent").path).toContain("H158 Q170,0 170,12");
@@ -150,7 +156,7 @@ describe("nodeOutline", () => {
     });
   });
 
-  it.each(["prompt", "script"])("has no outline for %s", (type) => {
+  it.each(["prompt", "script", "ask", "hardstop"])("has no outline for %s", (type) => {
     expect(() => nodeOutline(type as OutlinedType, 170)).toThrow(TypeError);
   });
 });
