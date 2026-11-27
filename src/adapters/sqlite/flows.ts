@@ -149,7 +149,7 @@ export class SqliteFlowStore implements FlowStore {
         `INSERT INTO ports (flow_id, version, node_id, ordinal, name, direction, kind)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
-      flow.nodes.forEach((node, ordinal) => {
+      for (const [ordinal, node] of flow.nodes.entries()) {
         insertNode.run(
           flowId,
           version,
@@ -162,7 +162,7 @@ export class SqliteFlowStore implements FlowStore {
           node.parent ?? null,
           JSON.stringify(node.settings),
         );
-        registry[node.type].ports.forEach((port, portOrdinal) => {
+        for (const [portOrdinal, port] of registry[node.type].ports.entries()) {
           insertPort.run(
             flowId,
             version,
@@ -172,14 +172,14 @@ export class SqliteFlowStore implements FlowStore {
             port.direction,
             port.kind,
           );
-        });
-      });
+        }
+      }
 
       const insertWire = this.db.prepare(
         `INSERT INTO wires (flow_id, version, ordinal, kind, from_node, from_port, to_node, to_port, file)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      flow.wires.forEach((wire, ordinal) => {
+      for (const [ordinal, wire] of flow.wires.entries()) {
         insertWire.run(
           flowId,
           version,
@@ -191,7 +191,7 @@ export class SqliteFlowStore implements FlowStore {
           wire.to.port,
           null,
         );
-      });
+      }
 
       this.db
         .prepare(

@@ -7,7 +7,6 @@ import {
   agent,
   ask,
   flow,
-  forEach,
   gate,
   hardstop,
   loop,
@@ -21,7 +20,7 @@ const reported = (nodes: unknown[]) =>
 
 describe("body-nodes", () => {
   it("names Start and Stop in its rule message", () => {
-    expect(rule.message).toBe("A Start or Stop cannot sit inside a Loop or For each body.");
+    expect(rule.message).toBe("A Start or Stop cannot sit inside a Loop body.");
   });
 
   it.each([
@@ -30,12 +29,6 @@ describe("body-nodes", () => {
       [loop("L"), agent("p", { parent: "L" }), trigger("t", { parent: "L" })],
       "t",
       "t (trigger) cannot be inside loop L.",
-    ],
-    [
-      "an Output in a For each",
-      [forEach("E"), agent("p", { parent: "E" }), output("o", { parent: "E" })],
-      "o",
-      "o (output) cannot be inside foreach E.",
     ],
   ])("reports %s on that node", (_name, nodes, node, message) => {
     expect(reported(nodes)).toEqual([{ rule: "body-nodes", node, message }]);
@@ -62,7 +55,7 @@ describe("body-nodes", () => {
       [
         loop("L"),
         trigger("t", { parent: "L" }),
-        forEach("E"),
+        loop("E"),
         agent("p", { parent: "E" }),
         output("o", { parent: "E" }),
       ],
@@ -76,6 +69,6 @@ describe("body-nodes", () => {
     );
     expect(validator.toSorted()).toEqual(runner.toSorted());
     expect(runner).toContain("t (trigger) cannot be inside loop L");
-    expect(runner).toContain("o (output) cannot be inside foreach E");
+    expect(runner).toContain("o (output) cannot be inside loop E");
   });
 });

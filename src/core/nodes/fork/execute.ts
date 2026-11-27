@@ -28,7 +28,7 @@ export function parallelSections(
     if ((node.type === "fork" || node.type === "join") && node.parent !== undefined) {
       problems.push({
         node: node.id,
-        message: "sits inside a loop or For each; parallel sections cannot.",
+        message: "sits inside a loop; parallel sections cannot.",
       });
     }
   }
@@ -55,7 +55,7 @@ export function parallelSections(
       if (node.parent !== undefined) {
         problems.push({
           node: branch,
-          message: "sits inside a loop or For each; parallel sections cannot.",
+          message: "sits inside a loop; parallel sections cannot.",
         });
         sound = false;
         continue;
@@ -131,7 +131,7 @@ export function forkTurnText(prefix: string, branches: readonly ForkBranch[]): s
         `subagent_type "${agentType(prefix, branch.piece)}" with the prompt ${JSON.stringify(agentPrompt(branch))}`,
     )
     .join("; ");
-  return `Use the Agent tool once for each of these calls: ${calls}. Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next. Then reply DONE.`;
+  return `Use the Agent tool once per call: ${calls}. Make all the Agent calls in one message, and do not wait for one agent to finish before starting the next. Then reply DONE.`;
 }
 
 export function unlaunched(

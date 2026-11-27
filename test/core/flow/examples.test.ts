@@ -33,8 +33,6 @@ describe("examples", () => {
         "stop",
         "retry",
         "attempt",
-        "e1",
-        "e1p1",
         "done",
       ],
     ],

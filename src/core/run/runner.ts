@@ -25,7 +25,7 @@ import {
   type ParallelSection,
 } from "../nodes/fork/execute.js";
 import { bodyProblems } from "../flow/structure.js";
-import { firstTurnId, listItems, listPath } from "../nodes/foreach/execute.js";
+import { listPath } from "./list-path.js";
 import {
   joinComplete,
   notStartedRequest,
@@ -63,7 +63,7 @@ import {
 } from "./permission.js";
 import type { ResumeAction, ResumeActions } from "./resume.js";
 import { rerunsOnRetry } from "./retry.js";
-import { decisionsOf, loopRound, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
+import { decisionsOf, loopRound, nodeStatus, type RunEvent } from "./run-events.js";
 import type { NodeState } from "./state.js";
 import { SectionWatch } from "./section-watch.js";
 import type { EventEntry, Store, StoredEvent } from "./store.js";
@@ -111,7 +111,6 @@ type AskSettings = Parameters<typeof askRequest>[1];
 type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait; onBranchFail?: JoinOnBranchFail };
-type ForEachSettings = { file: string };
 
 type StepOutcome = { status: "done"; line: string } | { status: "failed"; reason: string };
 type Failure = { nodeId: string; reason: string };
@@ -134,7 +133,6 @@ const runnable = new Set<ManifestNode["type"]>([
   "ask",
   "hardstop",
   "loop",
-  "foreach",
   "fork",
   "join",
   "branch",
@@ -436,9 +434,6 @@ export class Runner {
     if (node.type === "loop") {
       const result = await this.runLoop(node, context);
       if (result.failure !== undefined) return result;
-    } else if (node.type === "foreach") {
-      const result = await this.runForEach(node, context);
-      if (result.failure !== undefined) return result;
     } else if (node.type === "fork") {
       const result = await this.runSection(node, context);
       if (result.failure !== undefined) return result;
@@ -457,8 +452,7 @@ export class Runner {
       this.inTurn = node.id;
       let turn: TurnResult;
       try {
-        const item = this.roundItem(node, context.nodes);
-        turn = await this.runAgent(node, context, condition, item);
+        turn = await this.runAgent(node, context, condition);
       } finally {
         this.inTurn = undefined;
       }
@@ -655,46 +649,6 @@ export class Runner {
     }
   }
 
-  private async runForEach(each: ManifestNode, context: RunContext): Promise<StepResult> {
-    const { file } = each.settings as ForEachSettings;
-    const body = context.nodes.filter((node) => node.parent === each.id);
-    if (this.status(each.id) === "waiting") this.record(each.id, { kind: "running" });
-    const events = this.eventsOf(each.id);
-    const recorded = loopRound(events);
-    let items = roundItems(events) ?? [];
-    if (recorded === 0) {
-      try {
-        items = listItems(await this.deps.files.readFile(listPath(this.deps.cwd, file)));
-      } catch (error) {
-        return {
-          failure: { nodeId: each.id, reason: `could not read ${file}: ${messageOf(error)}` },
-        };
-      }
-    }
-    if (items.length === 0) {
-      this.recordAll([
-        ...body.map((node): EventEntry => ({ nodeId: node.id, event: { kind: "skipped" } })),
-        { nodeId: each.id, event: { kind: "done" } },
-      ]);
-      for (const node of body) this.emit(`${node.id} skipped`);
-      return {};
-    }
-    for (let round = Math.max(recorded, 1); round <= items.length; round++) {
-      if (round > recorded)
-        this.startRound(each.id, round, body, [], round === 1 ? items : undefined);
-      for (const node of body) {
-        const result = await this.runStep(node, context);
-        if (result.failure !== undefined) {
-          const message = `${result.failure.nodeId} failed: ${result.failure.reason}`;
-          this.record(each.id, { kind: "failed", payload: { message } });
-          return result;
-        }
-      }
-    }
-    this.record(each.id, { kind: "done" });
-    return {};
-  }
-
   private async holdForFiles(nodeId: string, context: RunContext): Promise<StepResult | undefined> {
     if (this.status(nodeId) !== "waiting") return undefined;
     const { nodes } = context.manifest;
@@ -736,15 +690,6 @@ export class Runner {
       const template = await this.templateOf(file);
       if (template !== undefined) await files.writeFile(target, template);
     }
-  }
-
-  private roundItem(node: ManifestNode, nodes: readonly ManifestNode[]): string | undefined {
-    const parent = nodes.find((candidate) => candidate.id === node.parent);
-    if (parent?.type !== "foreach") return undefined;
-    const body = nodes.filter((child) => child.parent === parent.id);
-    if (firstTurnId(body) !== node.id) return undefined;
-    const events = this.eventsOf(parent.id);
-    return roundItems(events)?.[loopRound(events) - 1];
   }
 
   private async runSection(fork: ManifestNode, context: RunContext): Promise<StepResult> {
@@ -962,7 +907,6 @@ export class Runner {
     round: number,
     body: readonly ManifestNode[],
     reopen: readonly EventEntry[],
-    items?: string[],
   ): void {
     const resets =
       round > 1
@@ -970,10 +914,7 @@ export class Runner {
         : [];
     this.recordAll([
       ...reopen,
-      {
-        nodeId: loopId,
-        event: { kind: "round", payload: items === undefined ? { round } : { round, items } },
-      },
+      { nodeId: loopId, event: { kind: "round", payload: { round } } },
       ...resets,
     ]);
     this.emit(`${loopId} round ${round}`);
@@ -1044,7 +985,6 @@ export class Runner {
     node: ManifestNode,
     context: RunContext,
     condition?: string,
-    item?: string,
   ): Promise<TurnResult> {
     const { prefix, ensureStarted } = context;
     const action = this.takeAction(node.id);
@@ -1069,7 +1009,7 @@ export class Runner {
       const target = agentTurnNode(node);
       const turnText =
         condition === undefined
-          ? agentTurnText(prefix, pieceOf(node), target, item, answers)
+          ? agentTurnText(prefix, pieceOf(node), target, answers)
           : agentVerdictTurnText(prefix, pieceOf(node), target, condition, answers);
       await this.deps.prompts.sendPrompt(turnText);
       end = await turnEnd;

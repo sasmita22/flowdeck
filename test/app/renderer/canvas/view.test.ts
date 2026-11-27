@@ -37,7 +37,6 @@ import {
   flow,
   flowSettings,
   inOneSession,
-  forEach,
   fork,
   gate,
   hardstop,
@@ -185,12 +184,12 @@ describe("toViewNodes and the main flow", () => {
     ]);
   });
 
-  it("marks ignored a loose Loop's frame and its body, and keeps a wired For each", () => {
+  it("marks ignored a loose Loop's frame and its body, and keeps a wired Loop", () => {
     const source = throughSession(
       inOneSession(
         [
           trigger("start"),
-          forEach("E"),
+          loop("E"),
           agent("x", { parent: "E" }),
           output("stop"),
           loop("L"),
@@ -201,8 +200,8 @@ describe("toViewNodes and the main flow", () => {
     );
 
     expect(ignoredOf(source)).toEqual([
+      ["loop-frame-E", false],
       ["loop-frame-L", true],
-      ["foreach-frame-E", false],
       ["start", false],
       ["E", false],
       ["x", false],
@@ -213,13 +212,13 @@ describe("toViewNodes and the main flow", () => {
     ]);
   });
 
-  it("marks ignored a loose For each frame and a loose Fork bar", () => {
+  it("marks ignored a loose Loop frame and a loose Fork bar", () => {
     const source = throughSession(
       inOneSession(
         [
           trigger("start"),
           output("stop"),
-          forEach("E"),
+          loop("E"),
           agent("x", { parent: "E" }),
           fork("F"),
           agent("p"),
@@ -229,7 +228,7 @@ describe("toViewNodes and the main flow", () => {
     );
 
     expect(ignoredOf(source)).toEqual([
-      ["foreach-frame-E", true],
+      ["loop-frame-E", true],
       ["start", false],
       ["stop", false],
       ["E", true],
@@ -807,18 +806,14 @@ describe("toViewNodes for a blank label", () => {
   });
 });
 
-describe("toViewNodes for Loop and For each labels", () => {
-  it("gives a Loop its cap and a For each its list file as a sub-line", () => {
-    const source = inOneSession(
-      [loop("L", { settings: { cap: 5 } }), forEach("E", { file: "plan.md" }), agent("A")],
-      [],
-    );
+describe("toViewNodes for Loop labels", () => {
+  it("gives a Loop its cap as a sub-line", () => {
+    const source = inOneSession([loop("L", { settings: { cap: 5 } }), agent("A")], []);
     const data = Object.fromEntries(
       nodeViews(source, [], {}, null).map((node) => [node.id, node.data]),
     );
 
     expect(data["L"]?.sub).toBe("max 5");
-    expect(data["E"]?.sub).toBe("plan.md");
     expect(data["A"]).not.toHaveProperty("sub");
   });
 
@@ -906,8 +901,6 @@ describe("containerText", () => {
   it.each([
     ["loop", "Loop", "max 3", "LOOP · max 3"],
     ["loop", "review", "max 3", "LOOP · review · max 3"],
-    ["foreach", "For each", "plan.md", "EACH · plan.md"],
-    ["foreach", "each plan unit", "plan.md", "EACH · each plan unit · plan.md"],
   ] as const)("names a %s labelled %s only when renamed", (type, label, sub, text) => {
     expect(containerText(type, label, sub)).toBe(text);
   });
@@ -1167,12 +1160,11 @@ describe("frameOwnerId", () => {
     ["container-frame-session-1", "session-1"],
     ["container-frame-workspace-1", "workspace-1"],
     ["loop-frame-L", "L"],
-    ["foreach-frame-F", "F"],
   ])("maps %s to %s", (viewId, owner) => {
     expect(frameOwnerId(viewId)).toBe(owner);
   });
 
-  it.each(["P", "loop-1", "foreach-1", "agent-1"])("gives nothing for the plain id %s", (id) => {
+  it.each(["P", "loop-1", "agent-1"])("gives nothing for the plain id %s", (id) => {
     expect(frameOwnerId(id)).toBeUndefined();
   });
 
@@ -1184,14 +1176,11 @@ describe("frameOwnerId", () => {
         ...base.nodes,
         placedAt(loop("L"), 1000, 0),
         placedAt(agent("P", { parent: "L" }), 1000, 80),
-        placedAt(forEach("F"), 1400, 0),
-        placedAt(agent("Q", { parent: "F" }), 1400, 80),
       ],
     });
     const ownerKey = {
       "container-frame": "containerId",
       "loop-frame": "loopId",
-      "foreach-frame": "forEachId",
     } as const;
     const checked = new Set<string>();
 
@@ -1202,7 +1191,7 @@ describe("frameOwnerId", () => {
       checked.add(key);
     }
 
-    expect([...checked].sort()).toEqual(["containerId", "forEachId", "loopId"]);
+    expect([...checked].sort()).toEqual(["containerId", "loopId"]);
   });
 });
 
@@ -1275,7 +1264,7 @@ describe("toViewEdges routes wires that leave their row", () => {
 
   const foreignBodies = (current: Flow, source: string, target: string): Bounds[] =>
     current.nodes
-      .filter((node) => node.type === "loop" || node.type === "foreach")
+      .filter((node) => node.type === "loop")
       .filter((scope) => !within(current, source, scope.id) && !within(current, target, scope.id))
       .map((scope) => bodyFrameBounds(current, scope));
 
@@ -1566,7 +1555,7 @@ describe("toViewEdges routes wires that leave their row", () => {
         .filter(([id]) => id !== wire.from.node && id !== wire.to.node)
         .map(([, bounds]) => bounds),
       ...current.nodes
-        .filter((node) => node.type === "loop" || node.type === "foreach")
+        .filter((node) => node.type === "loop")
         .map((scope) => bodyFrameBounds(current, scope)),
     ];
 

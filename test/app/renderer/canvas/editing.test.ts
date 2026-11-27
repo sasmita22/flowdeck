@@ -8,7 +8,6 @@ import { edgeId } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow, Wire } from "../../../../src/core/flow/schema.js";
 import {
   agent,
-  forEach,
   fork,
   gate,
   hardstop,
@@ -344,11 +343,11 @@ describe("frame only", () => {
     expect(after.wires).toEqual(before.wires);
   });
 
-  it("adds an empty For each, leaving out a frame nested in its body", () => {
+  it("adds an empty Loop, leaving out a frame nested in its body", () => {
     const store = loaded(
       inOneSession(
         [
-          at(forEach("F", { file: "units.md" }, "each unit"), 0, 0),
+          at(loop("F", { settings: { cap: 4 } }), 0, 0),
           at(agent("P", { parent: "F" }), 0, 80),
           at(loop("inner", { parent: "F" }), 0, 160),
           at(agent("Q", { parent: "inner" }), 0, 240),
@@ -360,13 +359,13 @@ describe("frame only", () => {
     store.getState().frameOnly("F");
 
     const after = store.getState().flow;
-    expect(ids(after)).toEqual(["F", "P", "inner", "Q", "foreach-1"]);
-    expect(nodeOf(after, "foreach-1")).toMatchObject({
-      type: "foreach",
-      label: "each unit",
-      settings: { file: "units.md" },
+    expect(ids(after)).toEqual(["F", "P", "inner", "Q", "loop-1"]);
+    expect(nodeOf(after, "loop-1")).toMatchObject({
+      type: "loop",
+      label: "F",
+      settings: { cap: 4 },
     });
-    expect(childrenOf(after, "foreach-1")).toEqual([]);
+    expect(childrenOf(after, "loop-1")).toEqual([]);
     expect(ends(after)).toEqual(["P>inner"]);
   });
 

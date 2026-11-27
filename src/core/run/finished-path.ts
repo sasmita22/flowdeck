@@ -10,7 +10,7 @@ export type PathContainer = {
 
 type Edge = { from: string; to: string; port: string };
 
-const isFrame = (type: string | undefined) => type === "loop" || type === "foreach";
+const isFrame = (type: string | undefined) => type === "loop";
 
 function pathGraph(container: PathContainer, finished: ReadonlySet<string>) {
   const { nodes } = container;
@@ -45,7 +45,6 @@ function pathGraph(container: PathContainer, finished: ReadonlySet<string>) {
 
   const passable = (unit: string): boolean => {
     const type = typeOf.get(unit);
-    if (type === "foreach") return true;
     if (type === "loop") return loopPasses(unit);
     return type !== "agent" || finished.has(unit);
   };
@@ -201,11 +200,11 @@ function walkFrom(
     if (passed(unit)) pending.push(unit);
     else frontier.add(unit);
   };
-  entries.forEach(visit);
+  for (const entry of entries) visit(entry);
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (reached.has(at)) continue;
     reached.add(at);
-    onward(at).forEach(visit);
+    for (const unit of onward(at)) visit(unit);
   }
   return { reached, frontier, landsBeyond: (unit: string) => ranBeyond(unit, new Set()) };
 }

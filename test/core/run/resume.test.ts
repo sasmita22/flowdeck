@@ -181,9 +181,7 @@ describe("decideResume", () => {
     const agentManifest = { hash, prefix, nodes: [node("a1", "agent")] };
     const events = stored([["a1", sent]]);
     const turn = (ended: boolean): TranscriptTurn => ({
-      userText: agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] }, undefined, [
-        "blue",
-      ]),
+      userText: agentTurnText(prefix, "a1", { id: "a1", given: [], writes: [] }, ["blue"]),
       ended,
       ...(ended ? { lastAssistantText: "DONE" } : {}),
     });

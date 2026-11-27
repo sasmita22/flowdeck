@@ -129,7 +129,7 @@ const boxOf = async (locator: Locator) => {
 
 const dropOn = async (
   window: Page,
-  type: "agent" | "loop" | "foreach" | "trigger" | "output",
+  type: "agent" | "loop" | "trigger" | "output",
   x: number,
   y: number,
 ) => {
@@ -404,8 +404,8 @@ test("A run holds the reader until the file it is given is written", async () =>
   expect(kindsOf(latestRunId(), "build")).toEqual(["sent", "done"]);
 });
 
-for (const container of ["loop", "foreach"] as const) {
-  test(`A ${container === "loop" ? "Loop" : "For each"} drawn in the app runs to done from its build`, async () => {
+for (const container of ["loop"] as const) {
+  test("A Loop drawn in the app runs to done from its build", async () => {
     const drawn = workspaceFlow([at(trigger("start"), 0, 120), at(output("stop"), 700, 120)], []);
     seed({
       ...drawn,
@@ -434,11 +434,9 @@ for (const container of ["loop", "foreach"] as const) {
       .toEqual(["start", "stop", id]);
     await dropInFrame(window, "agent", window.getByTestId(`${container}-frame-${id}`));
     await expect.poll(() => parentIn(window, "agent-1")).toBe(id);
-    if (container === "loop") {
-      await window.getByTestId(`node-${id}`).click();
-      await window.getByTestId("node-setting-condition").fill("The work is done.");
-      await window.getByTestId("node-setting-condition").blur();
-    }
+    await window.getByTestId(`node-${id}`).click();
+    await window.getByTestId("node-setting-condition").fill("The work is done.");
+    await window.getByTestId("node-setting-condition").blur();
     await window.getByTestId("node-agent-1").click();
     await window.getByTestId("node-setting-instructions").fill("Say done.");
     await window.getByTestId("node-setting-instructions").blur();
@@ -456,8 +454,7 @@ for (const container of ["loop", "foreach"] as const) {
     await expect(window.getByTestId(`node-issue-${id}`)).toHaveCount(0);
     await expect(window.getByTestId("node-issue-agent-1")).toHaveCount(0);
 
-    const buildId = await buildOnCanvas(window, home, container);
-    await writeFile(join(workFolder(buildId), "items.txt"), "- alpha\n- bravo\n");
+    await buildOnCanvas(window, home, container);
     await runFromDetail(window);
 
     await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
@@ -465,7 +462,7 @@ for (const container of ["loop", "foreach"] as const) {
     });
     await expect(status(window, id)).toHaveAttribute("data-status", "done");
     const rounds = kindsOf(latestRunId(), id).filter((kind) => kind === "round");
-    expect(rounds).toHaveLength(container === "loop" ? 1 : 2);
+    expect(rounds).toHaveLength(1);
     const runId = latestRunId() ?? "no-run";
     const shownPerRound: string[][] = [];
     for (const round of rounds.keys()) {

@@ -72,8 +72,6 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
             : `stop the run as failed: ${stopInstruction(node.id)}`;
         return `repeat the steps inside it (${nodeList(inside(node.id))}) until ${text(settings.condition)}, at most ${String(settings.cap)} rounds; at the cap, ${atCap}.`;
       }
-      case "foreach":
-        return `for each item listed in \`${text(settings.file)}\`, run the steps inside it (${nodeList(inside(node.id))}) once, passing the item along.`;
       case "branch": {
         const paths = `if yes, go to ${nodeList(outOf(node.id, "yes"))}; if no, go to ${nodeList(outOf(node.id, "no"))}.`;
         if (!decidedByValue(settings)) {
@@ -117,7 +115,7 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       "---",
       `# Run ${prefix}`,
       "",
-      "Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for each step's result before the next.",
+      "Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for every step's result before the next.",
       "",
       handoffFolderLine(scope.repo, scope.kind),
       "",

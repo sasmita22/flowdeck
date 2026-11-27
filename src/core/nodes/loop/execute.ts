@@ -28,7 +28,7 @@ export function agentVerdictTurnText(
     node.produces === undefined
       ? verdictRequest(condition)
       : verdictAndValueRequest(condition, node.produces);
-  return `${agentCallText(prefix, piece, node, undefined, answers)} ${request}`;
+  return `${agentCallText(prefix, piece, node, answers)} ${request}`;
 }
 
 export function nextStep(round: number, cap: number, done: boolean): LoopStep {

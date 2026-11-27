@@ -7,7 +7,6 @@ import {
   agent,
   branch,
   flow,
-  forEach,
   fork,
   join,
   loop,
@@ -171,10 +170,8 @@ describe("branchSkips", () => {
     ).toEqual(["f", "a1", "a2", "j", "after"]);
   });
 
-  it.each([
-    ["loop", loop("body")],
-    ["for each", forEach("body")],
-  ])("skips a %s and its unwired body on the path not taken", (_, container) => {
+  it("skips a loop and its unwired body on the path not taken", () => {
+    const container = loop("body");
     expect(
       skipsOf(
         [
@@ -190,10 +187,8 @@ describe("branchSkips", () => {
     ).toEqual(["body", "body-1", "body-2", "after"]);
   });
 
-  it.each([
-    ["loop", loop("body")],
-    ["for each", forEach("body")],
-  ])("skips a %s whose body is wired straight from the path not taken", (_, container) => {
+  it("skips a loop whose body is wired straight from the path not taken", () => {
+    const container = loop("body");
     expect(
       skipsOf(
         [

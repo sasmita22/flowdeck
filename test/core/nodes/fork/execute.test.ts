@@ -143,7 +143,7 @@ describe("parallelSections", () => {
     ).toEqual([inLoop]);
   });
 
-  it.each(["f", "a1", "j"])("tells %s it sits inside a loop or For each", (inLoop) => {
+  it.each(["f", "a1", "j"])("tells %s it sits inside a loop", (inLoop) => {
     const inside = (id: string) => (id === inLoop ? { parent: "L" } : {});
     const { problems } = sectionsOf(
       [
@@ -157,7 +157,7 @@ describe("parallelSections", () => {
     );
 
     expect(problems).toEqual([
-      { node: inLoop, message: "sits inside a loop or For each; parallel sections cannot." },
+      { node: inLoop, message: "sits inside a loop; parallel sections cannot." },
     ]);
   });
 

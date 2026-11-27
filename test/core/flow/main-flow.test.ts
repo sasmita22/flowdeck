@@ -4,7 +4,6 @@ import {
   agent,
   flow,
   flowSettings,
-  forEach,
   loop,
   output,
   sessionContainer,
@@ -174,24 +173,6 @@ describe("mainFlow", () => {
       "stop",
     ]);
     expect(found?.ignored.map((node) => node.id)).toEqual(["loose"]);
-  });
-
-  it("keeps the body of a For each frame on the main flow", () => {
-    const found = mainFlow(
-      oneSession(
-        [trigger("start"), forEach("each"), agent("p", { parent: "each" }), output("stop")],
-        [thenWire("start", "each"), thenWire("each", "stop")],
-      ),
-    );
-
-    expect(reachedIds(found)).toEqual([
-      "canvas-start",
-      "canvas-stop",
-      "each",
-      "p",
-      "start",
-      "stop",
-    ]);
   });
 
   it("does not follow event wires", () => {

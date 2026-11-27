@@ -15,14 +15,6 @@ const agent = (
   settings: { role: "", instructions: id, model: "sonnet", ...files },
 });
 
-const forEach = (id: string, file: string): Node => ({
-  id,
-  label: id,
-  position: at,
-  type: "foreach",
-  settings: { file },
-});
-
 const plan = agent("plan", { writes: ["plan.md"] });
 const build = agent("build", { given: ["plan.md"] });
 
@@ -39,7 +31,6 @@ describe("handoffPairs", () => {
       "an Agent given the file it writes itself",
       [agent("edit", { given: ["plan.md"], writes: ["plan.md"] })],
     ],
-    ["a For each reading a file an Agent writes", [plan, forEach("each", "plan.md")]],
   ])("makes no pair for %s", (_case, nodes) => {
     expect(handoffPairs(nodes)).toEqual([]);
   });

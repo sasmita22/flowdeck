@@ -29,7 +29,7 @@ Each container holds exactly one Start and one Stop of its own, and its Start re
 
 The canvas path joins the frames. The canvas has a canvas-level Start and Stop, outside every frame, and each frame has a `flow-in` port on its left and a `flow-out` port on its right. `then` wires run from the canvas Start into a frame's `flow-in`, out of its `flow-out` to the next frame or canvas-level node, and on to the canvas Stop.
 
-A blueprint with a workspace is a workflow: its canvas path runs from the canvas Start through the workspace to the canvas Stop, and every other node sits in the workspace or a session, except session library nodes, which sit outside every frame. A blueprint with no workspace is a library, and a library cannot be built. A library's kind comes from its canvas path: a session library when the path passes a session container or a session library, a node library when it does not, and incomplete when there is no single canvas Start or its path never reaches a canvas Stop. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop or For each body belongs to the container its Loop or For each sits in.
+A blueprint with a workspace is a workflow: its canvas path runs from the canvas Start through the workspace to the canvas Stop, and every other node sits in the workspace or a session, except session library nodes, which sit outside every frame. A blueprint with no workspace is a library, and a library cannot be built. A library's kind comes from its canvas path: a session library when the path passes a session container or a session library, a node library when it does not, and incomplete when there is no single canvas Start or its path never reaches a canvas Stop. `read_blueprint` answers the `containers`, each with its `id`, `kind`, settings and member `nodes`. A Loop body belongs to the container its Loop sits in.
 
 A connection joins two session containers so their sessions may message each other directly. `read_blueprint` answers the `connections`, each with its `id` and the two container ids it is `between`.
 
@@ -37,7 +37,7 @@ The tools cannot add, delete or change a container, and cannot wire a frame's `f
 
 ## Nodes
 
-Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent` (the Loop or For each whose body holds it), and settings for its type. Settings you leave out when adding a node take the type's defaults.
+Every node has an `id` (Flowdeck picks it when you add one), a `label`, a position (Flowdeck places new nodes), an optional `parent` (the Loop whose body holds it), and settings for its type. Settings you leave out when adding a node take the type's defaults.
 
 | Type       | What it does                                                                                                                                                                                                                          | Settings (default)                                                                                                                                 | Ports                               |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
@@ -47,20 +47,19 @@ Every node has an `id` (Flowdeck picks it when you add one), a `label`, a positi
 | `ask`      | Asks the user a question                                                                                                                                                                                                              | `question` (""), `options` ([])                                                                                                                    | in `in`, out `out` (then)           |
 | `hardstop` | A stop that cannot be skipped                                                                                                                                                                                                         | `condition` (""), `shown` (""), `locked` (true), `enabled` (true)                                                                                  | in `in`, out `out` (then)           |
 | `loop`     | Repeats its body until its condition holds                                                                                                                                                                                            | `condition` (""), `cap` (3), `onCap` ("fail"; or "ask")                                                                                            | in `in`, out `out` (then)           |
-| `foreach`  | Runs its body once per item of a list file                                                                                                                                                                                            | `file` ("items.txt"; relative to the session folder, no `..`)                                                                                      | in `in`, out `out` (then)           |
 | `fork`     | Parallel start                                                                                                                                                                                                                        | none                                                                                                                                               | in `in`, out `out` (then)           |
 | `join`     | Parallel end                                                                                                                                                                                                                          | `wait` ("all"; or "first"), `onBranchFail` ("stop"; or "wait", "skip")                                                                             | in `in`, out `out` (then)           |
 | `branch`   | Takes `yes` or `no` from a yes/no variable or a value an earlier Agent produces                                                                                                                                                       | `decidedBy` (optional: "variable" or "value"), `variable` (""), `value` (optional name an Agent `produces`)                                        | in `in`; out `yes`, out `no` (then) |
 | `output`   | Stop: where its container, or outside every frame the canvas path, ends, and what it hands back; its `name` and `type` come from the user, never from you: when the ask does not give them, add it with them empty, then ask for them | `name` (""), `type` ("")                                                                                                                           | in `in` (then)                      |
 | `library`  | Uses another blueprint, a node or session library, as one node; see Libraries                                                                                                                                                         | `libraryId` (""), `label` ("library"), `overrides` ({})                                                                                            | in `in`, out `out` (then)           |
 
-A Loop or For each holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
+A Loop holds a body: the nodes whose `parent` is its id. Wire into and out of the body nodes themselves. A parallel section is a `fork` whose `out` wires go to two or more Agent nodes, each with one wire in and one wire out, all meeting at one `join`.
 
 Start and Stop are drawn as circles, Stop with a heavy ring. Each container has exactly one Start and one Stop, and its Start reaches its Stop. The canvas-level Start and Stop sit outside every frame.
 
 ## Main flow
 
-The main flow is every node reached along `then` wires from the canvas Start, and in a workflow also from each container's own Start and each session library node outside every frame. A wire into a frame's `flow-in` reaches that container and its Start; the frame's `flow-out` wires lead on. A Loop or For each on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
+The main flow is every node reached along `then` wires from the canvas Start, and in a workflow also from each container's own Start and each session library node outside every frame. A wire into a frame's `flow-in` reaches that container and its Start; the frame's `flow-out` wires lead on. A Loop on it counts with its whole body. Every other node is ignored: it is drawn faded, its problems do not block the build, and when the user builds, Flowdeck lists the ignored nodes and leaves them out only after the user confirms. To bring a node into the build, wire it into the main flow.
 
 ## Libraries
 
@@ -107,11 +106,11 @@ A `wire` edit that breaks `ports`, `references` or `container-wires` is refused,
 - `ports`: a wire leaves from an output port and arrives at an input port of its node's type, or a frame's `flow-out` and `flow-in`, and both take its kind.
 - `references`: wires name nodes or containers in the blueprint, and parents name nodes in it.
 - `no-cycle`: then wires and parents do not form a cycle outside a loop.
-- `loop-single-entry`: a Loop or For each body has exactly one entry.
+- `loop-single-entry`: a Loop body has exactly one entry.
 - `node-ids`: node ids are unique, differ from every container id, and use letters, digits, dashes and underscores.
-- `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop or For each.
-- `loop-body`: a Loop or For each needs an Agent in its body, cannot sit inside another, and only they hold a body.
-- `body-nodes`: a Start or Stop cannot sit inside a Loop or For each body.
+- `parallel-section`: a parallel start pairs with one parallel end around two or more single Agent branches, outside any Loop.
+- `loop-body`: a Loop needs an Agent in its body, cannot sit inside another, and only a Loop holds a body.
+- `body-nodes`: a Start or Stop cannot sit inside a Loop body.
 - `branch-variable`: a Branch decided by a variable names it, and no Branch sits inside a body.
 - `branch-value`: a Branch decided by a value reads one an Agent produces, and that Agent runs before it on every path.
 - `handoffs`: a hand-off file is inside the working folder, and an Agent that writes it runs before every Agent given it, on every path and never beside it.
@@ -150,7 +149,7 @@ Only `read_blueprint` takes a `blueprint` (a flow id), to read any saved bluepri
 | `list_builds`       | Lists the builds made from blueprints                                                                                                                                                        | none                                            |
 | `read_build`        | Reads one build                                                                                                                                                                              | `id`                                            |
 
-`add_node`'s `parent` names where the node goes: a Loop or For each id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`; only the canvas Start and Stop and session library nodes go without one.
+`add_node`'s `parent` names where the node goes: a Loop id puts it in that body, and a workspace or session container id puts it in that container. In a workflow, give every node outside a body the container it belongs to, or it raises `outside-container`; only the canvas Start and Stop and session library nodes go without one.
 
 The build tools only read. There is no tool to build, run or delete; tell the user where to do that in the app.
 

@@ -139,25 +139,6 @@ describe("carryOnNode", () => {
     wires: [then("start", "l"), then("l", "la"), then("la", "lb"), then("l", "stop")],
   };
 
-  const forEach = {
-    prefix: "p",
-    nodes: [
-      start,
-      node("f", "foreach", "For each"),
-      node("fa", "agent", "FA", "f"),
-      node("fb", "agent", "FB", "f"),
-      node("x", "agent", "X"),
-      stop,
-    ],
-    wires: [
-      then("start", "f"),
-      then("f", "fa", "body"),
-      then("fa", "fb"),
-      then("f", "x"),
-      then("x", "stop"),
-    ],
-  };
-
   const mergingBranch = {
     prefix: "p",
     nodes: [
@@ -229,7 +210,7 @@ describe("carryOnNode", () => {
     ],
   };
 
-  const bodyBranch = (frame: "loop" | "foreach") => ({
+  const bodyBranch = (frame: "loop") => ({
     prefix: "p",
     nodes: [
       start,
@@ -252,7 +233,7 @@ describe("carryOnNode", () => {
     ],
   });
 
-  const frameSide = (frame: "loop" | "foreach", merged: boolean) => ({
+  const frameSide = (frame: "loop", merged: boolean) => ({
     prefix: "p",
     nodes: [
       start,
@@ -268,7 +249,7 @@ describe("carryOnNode", () => {
       then("start", "br"),
       then("br", "l", "yes"),
       then("br", "b", "no"),
-      then("l", "la", frame === "foreach" ? "body" : "out"),
+      then("l", "la", "out"),
       then("la", "lb"),
       ...(merged
         ? [then("l", "m"), then("b", "m"), then("m", "stop")]
@@ -360,18 +341,6 @@ describe("carryOnNode", () => {
     },
     { name: "a loop with no body Agent done", container: loop, events: finished(), expected: "l" },
     {
-      name: "a For each with no body Agent done",
-      container: forEach,
-      events: finished(),
-      expected: "f",
-    },
-    {
-      name: "a For each with its first body Agent done",
-      container: forEach,
-      events: finished("fa"),
-      expected: "fb",
-    },
-    {
       name: "a branch whose sides meet again, taken on the side without a gate",
       container: mergingBranch,
       events: finished("b", "c"),
@@ -390,12 +359,6 @@ describe("carryOnNode", () => {
       expected: "stop",
     },
     {
-      name: "a For each whose body branch took the side that is done",
-      container: bodyBranch("foreach"),
-      events: finished("lb"),
-      expected: "lc",
-    },
-    {
       name: "a loop whose body branch took the side that is done",
       container: bodyBranch("loop"),
       events: finished("lb"),
@@ -410,18 +373,6 @@ describe("carryOnNode", () => {
     {
       name: "a branch taken on the side of a loop whose first body Agent is done, the sides meeting again",
       container: frameSide("loop", true),
-      events: finished("la"),
-      expected: "lb",
-    },
-    {
-      name: "a branch taken on the side of a For each whose first body Agent is done",
-      container: frameSide("foreach", false),
-      events: finished("la"),
-      expected: "lb",
-    },
-    {
-      name: "a branch taken on the side of a For each whose first body Agent is done, the sides meeting again",
-      container: frameSide("foreach", true),
       events: finished("la"),
       expected: "lb",
     },

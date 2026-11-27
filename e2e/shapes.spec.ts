@@ -7,7 +7,6 @@ import {
   ask,
   bareFlow,
   branch,
-  forEach,
   fork,
   gate,
   hardstop,
@@ -61,16 +60,6 @@ const parallelShapes = () =>
       thenWire("b2", "join"),
       thenWire("b3", "join"),
     ],
-  );
-
-const forEachShapes = () =>
-  bareFlow(
-    [
-      at(forEach("each"), 40, 40),
-      at(agent("first", { parent: "each" }), 40, 130),
-      at(agent("second", { parent: "each" }), 40, 200),
-    ],
-    [thenWire("first", "second")],
   );
 
 const branchShapes = () =>
@@ -196,30 +185,6 @@ for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
       const box = await window.getByTestId(`node-${id}`).boundingBox();
       expect(box?.height).toBeGreaterThanOrEqual(200);
     }
-  });
-}
-
-for (const colorScheme of ["light", "dark"] satisfies ColorScheme[]) {
-  test(`For each draws as a dashed EACH frame in the ${colorScheme} theme`, async () => {
-    seedFlow(home, forEachShapes());
-    launched = await launchOnCanvas({
-      home,
-      logPath: test.info().outputPath("app.log"),
-      colorScheme,
-    });
-    const { window } = launched;
-    await expect(window.getByTestId("foreach-frame-each")).toBeVisible();
-    await expect(window.getByText("EACH · each plan unit")).toBeVisible();
-    await window.evaluate(() => document.fonts.ready);
-
-    await expect
-      .soft(window.getByTestId("foreach-frame-each"))
-      .toHaveScreenshot(`${colorScheme}-foreach.png`, exact);
-
-    await window.getByTestId("node-each").click();
-    await expect
-      .soft(window.getByTestId("foreach-frame-each"))
-      .toHaveScreenshot(`${colorScheme}-foreach-selected.png`, exact);
   });
 }
 

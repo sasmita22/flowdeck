@@ -6,7 +6,7 @@ import {
   Wire,
   WireKind,
 } from "../../../src/core/flow/schema.js";
-import { agent, fileWire, forEach, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, fileWire, thenWire } from "../../fixtures/flow-builders.js";
 
 const workspace = { id: "workspace-1", kind: "workspace", model: "sonnet", nodes: [] };
 
@@ -195,20 +195,13 @@ describe("parseFlow", () => {
     expect(parseFlow(flow)).toEqual(flow);
   });
 
-  it("parses a for each with an agent in its body", () => {
-    const flow = flowWith({ nodes: [forEach("e1"), { ...agentNode, parent: "e1" }] });
+  it("rejects a foreach node with an error at its type that offers no foreach", () => {
+    const error = parseError(
+      flowWith({ nodes: [{ ...agentNode, type: "foreach", settings: { file: "items.txt" } }] }),
+    );
 
-    expect(parseFlow(flow)).toEqual(flow);
-  });
-
-  it("names the field path of an absolute for each file", () => {
-    const error = parseError(flowWith({ nodes: [agentNode, forEach("e1", { file: "/abs.md" })] }));
-    expect(error.issues.map((issue) => issue.path)).toContainEqual([
-      "nodes",
-      1,
-      "settings",
-      "file",
-    ]);
+    expect(error.message).toContain("nodes[0].type");
+    expect(error.message).not.toContain("foreach");
   });
 
   it("parses a branch on a variable", () => {
@@ -225,7 +218,7 @@ describe("parseFlow", () => {
     expect(error.issues.map((issue) => issue.path.slice(0, 2))).toContainEqual(["nodes", 0]);
   });
 
-  it("lists the twelve node types", () => {
+  it("lists the eleven node types", () => {
     expect(NodeType.options).toEqual([
       "agent",
       "gate",
@@ -236,7 +229,6 @@ describe("parseFlow", () => {
       "output",
       "fork",
       "join",
-      "foreach",
       "branch",
       "library",
     ]);

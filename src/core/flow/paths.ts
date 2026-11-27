@@ -1,7 +1,7 @@
 import type { Flow } from "./schema.js";
 import { flowContainerMembers, flowContainerOf } from "./structure.js";
 
-const frameTypes = new Set(["loop", "foreach"]);
+const frameTypes = new Set(["loop"]);
 
 const successorsIn = (flow: Flow) => {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));

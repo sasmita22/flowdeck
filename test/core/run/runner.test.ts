@@ -39,8 +39,6 @@ const cwd = "/repo";
 
 const node = (id: string, type: ManifestNode["type"], settings: Record<string, unknown> = {}) =>
   ({ id, type, label: id, settings }) as ManifestNode;
-const forEach = (id: string) => node(id, "foreach", { file: "plan.md" });
-const inEach = (child: ManifestNode, parent = "e1"): ManifestNode => ({ ...child, parent });
 const manifest = (...nodes: ManifestNode[]): RunnableManifest => ({ hash, prefix, nodes });
 
 type TestDeps = Omit<RunnerDeps, "runId"> & { store: FakeStore };
@@ -162,14 +160,11 @@ const agentDonePayload = (
   };
 };
 const bare = (id: string) => ({ id, given: [], writes: [] });
-const turnOf = (
-  id: string,
-  extra: { answers?: string[]; condition?: string; item?: string } = {},
-) => {
+const turnOf = (id: string, extra: { answers?: string[]; condition?: string } = {}) => {
   const answers = extra.answers ?? [];
   const text =
     extra.condition === undefined
-      ? agentTurnText(prefix, id, bare(id), extra.item, answers)
+      ? agentTurnText(prefix, id, bare(id), answers)
       : agentVerdictTurnText(prefix, id, bare(id), extra.condition, answers);
   return `send ${text}`;
 };
@@ -1184,9 +1179,7 @@ describe("Runner", () => {
       it("refuses a node whose parent is not a loop", async () => {
         const error = await refuses([agent("s1"), inLoop(agent("p1"), "s1")]);
 
-        expect(error.problems).toEqual([
-          "p1 (agent) has parent s1, which is not a loop or foreach",
-        ]);
+        expect(error.problems).toEqual(["p1 (agent) has parent s1, which is not a loop"]);
       });
 
       it("lists every problem in one error, in manifest order", async () => {
@@ -1194,255 +1187,13 @@ describe("Runner", () => {
 
         expect(error.problems).toEqual([
           "l1 (loop) has no agent in its body",
-          "p1 (agent) has parent s1, which is not a loop or foreach",
+          "p1 (agent) has parent s1, which is not a loop",
         ]);
         expect(error.message).toBe(`cannot run this build: ${error.problems.join("; ")}`);
       });
 
       it("finds no problem in a loop with an Agent in its body", () => {
         expect(structureProblems(reviewFix().nodes)).toEqual([]);
-      });
-
-      it("finds no problem in a For each with a Gate before the Agent in its body", () => {
-        const nodes = [forEach("e1"), inEach(node("g1", "gate")), inEach(agent("p1")), agent("p9")];
-
-        expect(structureProblems(nodes)).toEqual([]);
-      });
-
-      it.each([
-        [
-          "a For each inside a loop",
-          [loop("l1"), inLoop(agent("p0")), inLoop(forEach("e1")), inEach(agent("p1"))],
-          "e1 (foreach) is inside loop l1",
-        ],
-        [
-          "a For each inside a For each",
-          [forEach("e1"), inEach(agent("p1")), inEach(forEach("e2")), inEach(agent("p2"), "e2")],
-          "e2 (foreach) is inside foreach e1",
-        ],
-        [
-          "a loop inside a For each",
-          [forEach("e1"), inEach(agent("p1")), inEach(loop("l1")), inLoop(agent("p2"))],
-          "l1 (loop) is inside foreach e1",
-        ],
-      ])("refuses %s", async (_name, nodes, problem) => {
-        const error = await refuses(nodes);
-
-        expect(error.problems).toContain(problem);
-      });
-
-      it("finds no problem in a For each whose body starts with an Agent", () => {
-        const nodes = [forEach("e1"), inEach(agent("a1")), inEach(agent("p1"))];
-
-        expect(structureProblems(nodes)).toEqual([]);
-      });
-
-      it.each([
-        ["no body", [forEach("e1"), agent("p9")]],
-        ["a Gate-only body", [forEach("e1"), inEach(node("g1", "gate")), agent("p9")]],
-      ])("refuses a For each with %s", async (_name, nodes) => {
-        const error = await refuses(nodes);
-
-        expect(error.problems).toEqual(["e1 (foreach) has no agent in its body"]);
-      });
-    });
-  });
-
-  describe("for each nodes", () => {
-    const plan = `${cwd}/plan.md`;
-    const units = "# Plan\n\nThe units to build.\n\n- alpha\n- bravo\n- charlie\n";
-    const eachUnit = manifest(
-      forEach("e1"),
-      inEach(agent("p1")),
-      inEach(agent("p2")),
-      agent("after"),
-    );
-    const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
-    const sendP1 = (item: string) => turnOf("p1", { item });
-    const sendP2 = turnOf("p2");
-    const sendAfter = turnOf("after");
-    const allRounds = [
-      sendP1("alpha"),
-      sendP2,
-      sendP1("bravo"),
-      sendP2,
-      sendP1("charlie"),
-      sendP2,
-      sendAfter,
-    ];
-    const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
-    const eventsOf = (store: FakeStore, nodeId: string) =>
-      store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
-    const kindsOf = (store: FakeStore, nodeId: string) =>
-      eventsOf(store, nodeId).map((event) => event.kind);
-    const reads = (files: FakeFileSystem) => files.calls.filter((c) => c.method === "readFile");
-    const withPlan = (content = units) => new FakeFileSystem({ [plan]: content });
-
-    it("runs the body once per unit, in file order, then goes on", async () => {
-      const { deps, calls } = harness({ files: withPlan() });
-
-      const result = await runOn(deps, eachUnit);
-
-      expect(sends(calls)).toEqual(allRounds);
-      expect(result.outcome).toBe("done");
-      expect(result.states).toEqual({ e1: "done", p1: "done", p2: "done", after: "done" });
-    });
-
-    it("skips the body and goes on when the file holds no list", async () => {
-      const { deps, calls } = harness({ files: withPlan("# Plan\n") });
-
-      const result = await runOn(deps, eachUnit);
-
-      expect(sends(calls)).toEqual([sendAfter]);
-      expect(result.outcome).toBe("done");
-      expect(result.states).toEqual({ e1: "done", p1: "skipped", p2: "skipped", after: "done" });
-    });
-
-    it("fails the For each, naming the file, when the file is missing", async () => {
-      const { deps, calls, lines } = harness();
-      const message = `e1 failed: could not read plan.md: No such file: ${plan}`;
-
-      const result = await runOn(deps, eachUnit);
-
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "e1" });
-      expect(result.states).toMatchObject({ e1: "failed", p1: "waiting", after: "waiting" });
-      const failed = eventsOf(deps.store, "e1").filter((event) => event.kind === "failed");
-      expect(failed).toEqual([expect.objectContaining({ payload: { message } })]);
-      expect(lines.filter((line) => line.startsWith("e1 failed"))).toEqual([message]);
-      expect(sends(calls)).toEqual([]);
-    });
-
-    it("reads the file once, so a change during round 1 leaves later rounds as listed", async () => {
-      const files = withPlan();
-      const { deps, calls } = harness({ files });
-      const rewriting: TestDeps = {
-        ...deps,
-        prompts: {
-          ...deps.prompts,
-          sendPrompt: async (text) => {
-            await files.writeFile(plan, "- zulu\n");
-            await deps.prompts.sendPrompt(text);
-          },
-        },
-      };
-
-      await runOn(rewriting, eachUnit);
-
-      expect(sends(calls)).toEqual(allRounds);
-      expect(reads(files)).toEqual([{ method: "readFile", path: plan }]);
-    });
-
-    it("fails the For each at a failing body turn and runs nothing after it", async () => {
-      const { deps, calls } = turnHarness(
-        [[agentDone("p1"), stopped], [agentDone("p2"), stopped], [stopped]],
-        20,
-        undefined,
-        withPlan(),
-      );
-
-      const result = await runOn(deps, eachUnit);
-
-      expect(sends(calls)).toEqual([sendP1("alpha"), sendP2, sendP1("bravo")]);
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "p1" });
-      expect(result.states).toMatchObject({ e1: "failed", p1: "failed", after: "waiting" });
-    });
-
-    it("records the items on round 1 only and resets the body from round 2", async () => {
-      const { deps } = harness({ files: withPlan() });
-
-      await runOn(deps, eachUnit);
-
-      const rounds = eventsOf(deps.store, "e1").flatMap((event) =>
-        event.kind === "round" ? [event.payload] : [],
-      );
-      expect(rounds).toEqual([
-        { round: 1, items: ["alpha", "bravo", "charlie"] },
-        { round: 2 },
-        { round: 3 },
-      ]);
-      const perRound = ["sent", "done", "reset", "sent", "done", "reset", "sent", "done"];
-      expect(kindsOf(deps.store, "p1")).toEqual(perRound);
-      expect(kindsOf(deps.store, "p2")).toEqual(perRound);
-    });
-
-    describe("a body that starts with an Agent", () => {
-      const agentFirst = manifest(forEach("e1"), inEach(agent("a1")), inEach(agent("p2")));
-      const agentRound = [agentDone("a1"), stopped];
-      const agentSend = (item: string) =>
-        `send Use the Agent tool with subagent_type "${prefix}:a1" and the prompt ${JSON.stringify(`NODE a1\nGo. This round's item: ${item}`)}. Then reply DONE.`;
-
-      it("hands each round's item to the agent and runs every round to done", async () => {
-        const { deps, calls } = turnHarness(
-          [agentRound, [agentDone("p2"), stopped], agentRound, [agentDone("p2"), stopped]],
-          1000,
-          undefined,
-          withPlan("- alpha\n- bravo\n"),
-        );
-
-        const result = await runOn(deps, agentFirst);
-
-        expect(sends(calls)).toEqual([agentSend("alpha"), sendP2, agentSend("bravo"), sendP2]);
-        expect(result).toMatchObject({ outcome: "done" });
-        expect(result.states).toEqual({ e1: "done", a1: "done", p2: "done" });
-      });
-
-      it("keeps an item with quotes in one quoted prompt", async () => {
-        const { deps, calls } = turnHarness(
-          [agentRound, [stopped]],
-          1000,
-          undefined,
-          withPlan('- say "hi"\n'),
-        );
-
-        await runOn(deps, agentFirst);
-
-        expect(sends(calls)[0]).toBe(
-          `send Use the Agent tool with subagent_type "${prefix}:a1" and the prompt "NODE a1\\nGo. This round's item: say \\"hi\\"". Then reply DONE.`,
-        );
-      });
-    });
-
-    describe("resuming", () => {
-      const throughRound2: [string, RunEvent][] = [
-        ["e1", { kind: "running" }],
-        ["e1", { kind: "round", payload: { round: 1, items: ["alpha", "bravo", "charlie"] } }],
-        ["p1", { kind: "sent" }],
-        ["p1", { kind: "done" }],
-        ["p2", { kind: "sent" }],
-        ["p2", { kind: "done" }],
-        ["e1", { kind: "round", payload: { round: 2 } }],
-        ["p1", { kind: "reset" }],
-        ["p2", { kind: "reset" }],
-      ];
-      const resumeAfter = (
-        deps: TestDeps,
-        entries: [string, RunEvent][],
-        actions: ResumeActions,
-      ) => {
-        const { id } = deps.store.createRun(newRun(eachUnit));
-        for (const [nodeId, event] of entries) deps.store.append(id, nodeId, event);
-        return new Runner({ ...deps, runId: id }).run(eachUnit, { actions });
-      };
-
-      it("goes on from round 2 with the recorded items, without reading the file", async () => {
-        const { deps, calls, files } = harness();
-
-        const result = await resumeAfter(deps, throughRound2, {});
-
-        expect(sends(calls)).toEqual(allRounds.slice(2));
-        expect(reads(files)).toEqual([]);
-        expect(kindsOf(deps.store, "e1").filter((kind) => kind === "running")).toHaveLength(1);
-        expect(result.outcome).toBe("done");
-      });
-
-      it("resends round 2's first agent with round 2's item", async () => {
-        const { deps, calls } = harness();
-
-        await resumeAfter(deps, [...throughRound2, ["p1", { kind: "sent" }]], {
-          p1: { kind: "send" },
-        });
-
-        expect(sends(calls)[0]).toBe(sendP1("bravo"));
       });
     });
   });
@@ -2311,7 +2062,7 @@ describe("Runner parallel section", () => {
       prompts: {
         sendPrompt: async (text) => {
           calls.push(`send ${text}`);
-          if (text.startsWith("Use the Agent tool once for each")) onFork(session);
+          if (text.startsWith("Use the Agent tool once per call")) onFork(session);
           else if (text === agentTurnText(prefix, "after", bare("after"))) {
             session.subagentStop("after", "OK");
             session.stop("OK");
@@ -3612,7 +3363,6 @@ describe("Runner branch on a yes/no variable", () => {
 
   it.each([
     ["loop", builders.loop("body", { settings: { condition: "done", cap: 3, onCap: "fail" } })],
-    ["for each", builders.forEach("body")],
   ])(
     "skips a %s and its body on the path not taken, and the run finishes",
     async (_, container) => {
@@ -3648,7 +3398,6 @@ describe("Runner branch on a yes/no variable", () => {
 
   it.each([
     ["loop", builders.loop("body", { settings: { condition: "done", cap: 3, onCap: "fail" } })],
-    ["for each", builders.forEach("body")],
   ])(
     "skips a %s whose body is wired straight from the path not taken, and the run finishes",
     async (_, container) => {
@@ -4082,47 +3831,6 @@ describe("Runner hand-off pairs", () => {
     expect(sends(calls)).toHaveLength(1);
   });
 
-  it("does not hold a For each, which is no reader, on the file it reads", async () => {
-    const { deps, lines } = harness();
-
-    const result = await runOn(deps, handoff(forEach("e1"), inEach(agent("p1"))));
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "e1" });
-    expect(lines.at(-1)).not.toContain("wasn't written by");
-  });
-
-  it("checks again in every round of a For each body", async () => {
-    const files = new FakeFileSystem({ [plan]: "- one\n- two\n" });
-    const { deps, calls } = harness({ files });
-    let round = 0;
-    const deleting: TestDeps = {
-      ...deps,
-      prompts: {
-        ...deps.prompts,
-        sendPrompt: async (text) => {
-          round++;
-          if (round === 1) await files.remove(`${cwd}/notes.md`);
-          await deps.prompts.sendPrompt(text);
-        },
-      },
-    };
-    await files.writeFile(`${cwd}/notes.md`, "x");
-    const m: RunnableManifest = {
-      hash,
-      prefix,
-      nodes: [
-        forEach("e1"),
-        inEach(node("p1", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] })),
-        inEach(builder("s1", ["notes.md"])),
-      ],
-    };
-
-    const result = await runOn(deleting, m);
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "s1" });
-    expect(sends(calls)).toHaveLength(1);
-  });
-
   it("does not check a node that already finished before a resume", async () => {
     const { deps, calls } = harness();
     const m = handoff(builder("build"));
@@ -4541,7 +4249,7 @@ describe("Runner by node", () => {
         prompts: {
           sendPrompt: async (text) => {
             calls.push(`send ${text}`);
-            if (text.startsWith("Use the Agent tool once for each")) {
+            if (text.startsWith("Use the Agent tool once per call")) {
               for (const id of launched) {
                 publish("PreToolUse", {
                   tool_name: "Agent",

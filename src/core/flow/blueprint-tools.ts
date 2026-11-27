@@ -22,7 +22,7 @@ export const toolInputs = {
       .string()
       .optional()
       .describe(
-        "Where the node goes: a Loop or For each id puts it in that body; a workspace or session container id puts it in that container. Leave it out for neither.",
+        "Where the node goes: a Loop id puts it in that body; a workspace or session container id puts it in that container. Leave it out for neither.",
       ),
     settings: partialSettings.default({}),
   }),
@@ -49,7 +49,7 @@ const descriptions: Record<ToolName, string> = {
   read_blueprint:
     "Read a blueprint's nodes, wires, containers (the workspace and session containers with their settings), connections and current problems. Reading a deleted blueprint answers that it was deleted.",
   add_node:
-    "Add a node to a blueprint, inside a Loop or For each body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults. A library node takes its libraryId in settings; its label is ignored and derived from the library's name, as the canvas derives it.",
+    "Add a node to a blueprint, inside a Loop body or a workspace or session container when parent names one. The settings given are merged over the node type's defaults. A library node takes its libraryId in settings; its label is ignored and derived from the library's name, as the canvas derives it.",
   change_node:
     "Change a node's label or some of its settings. A new libraryId re-derives a library node's label and clears the overrides carried over from the old library.",
   wire: "Connect an output port of one node to an input port of another.",

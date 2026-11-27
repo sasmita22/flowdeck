@@ -48,6 +48,12 @@ describe("paletteItems", () => {
     );
   });
 
+  it("offers Loop and nothing that runs a body once per item", () => {
+    const types: string[] = paletteItems.map((item) => item.type);
+    expect(types).toContain("loop");
+    expect(types).not.toContain("foreach");
+  });
+
   it("offers no bare library entry; libraries come from saved blueprints", () => {
     expect(paletteItems.map((item) => item.type)).not.toContain("library");
   });

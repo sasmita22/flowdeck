@@ -740,7 +740,7 @@ describe("emit per container", () => {
       [
         "## Connected sessions",
         "",
-        "- You may message these sessions directly with SendMessage, addressed to the name in the environment variable given for each",
+        "- You may message these sessions directly with SendMessage, addressed to the name in the environment variable given per session",
         line,
         "",
         "",

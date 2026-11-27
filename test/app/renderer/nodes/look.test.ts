@@ -15,7 +15,6 @@ const groups: Record<NodeType, string> = {
   loop: "var(--c-ctrl)",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
-  foreach: "var(--c-ctrl)",
   branch: "var(--c-ctrl)",
   library: "var(--c-work)",
 };
@@ -30,7 +29,6 @@ const tags: Record<NodeType, string> = {
   loop: "LOOP",
   fork: "PARALLEL START",
   join: "PARALLEL END",
-  foreach: "EACH",
   branch: "IF",
   library: "LIB",
 };
@@ -45,7 +43,6 @@ const outlines: Record<NodeType, string> = {
   loop: "none",
   fork: "var(--c-ctrl)",
   join: "var(--c-ctrl)",
-  foreach: "none",
   branch: "var(--c-ctrl)",
   library: "var(--c-work)",
 };
@@ -95,15 +92,6 @@ describe("nodeLook", () => {
   it("keeps a bar tall enough for the longest parallel tag", () => {
     expect(BAR_MIN_HEIGHT).toBeGreaterThan(tagWidth("PARALLEL START"));
     expect(BAR_MIN_HEIGHT).toBeLessThanOrEqual(tagWidth("PARALLEL START") + 8);
-  });
-
-  it("draws foreach as a control frame tagged EACH with no outline, boxed at 170x48", () => {
-    expect(nodeLook("foreach")).toMatchObject({
-      group: "var(--c-ctrl)",
-      tag: "EACH",
-      outline: "none",
-      box: { width: 170, height: 48 },
-    });
   });
 
   it("boxes branch at 116x48 for its hexagon", () => {

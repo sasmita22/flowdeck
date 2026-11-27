@@ -863,6 +863,7 @@ describe("SqliteFlowStore", () => {
       { name: "024_build_worktrees_clean_start.sql" },
       { name: "025_connections.sql" },
       { name: "026_build_snapshot_flow.sql" },
+      { name: "027_drop_unknown_node_types.sql" },
     ]);
   });
 });

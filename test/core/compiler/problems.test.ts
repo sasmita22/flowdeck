@@ -4,8 +4,8 @@ import { validate } from "../../../src/core/compiler/validate.js";
 import {
   agent,
   flow,
-  forEach,
   fork,
+  loop,
   onMainFlow,
   output,
   thenWire,
@@ -14,7 +14,7 @@ import {
 
 describe("plainReason", () => {
   it("drops the node id it starts with and the type tags, and starts with a capital", () => {
-    expect(plainReason("foreach-1", "foreach-1 (foreach) has no agent in its body.")).toBe(
+    expect(plainReason("loop-1", "loop-1 (loop) has no agent in its body.")).toBe(
       "Has no agent in its body.",
     );
   });
@@ -41,7 +41,7 @@ describe("plainProblems", () => {
         trigger("start"),
         fork("fork-1"),
         agent("agent-1", { settings: { instructions: "" } }),
-        forEach("each"),
+        loop("each"),
         output("stop"),
       ],
       [

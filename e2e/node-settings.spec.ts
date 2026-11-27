@@ -394,37 +394,35 @@ test("Undo reverts a settings edit, and a field shows the validator's reason", a
   await expect(instructions).toHaveValue("Review the plan.");
 });
 
+const verdictNameReason = `"done" is the name a Loop's verdict uses; give the value another name`;
+
 test("A value the node can't take is refused with a reason", async () => {
   const { window } = await launch();
-  await drop(window, "foreach", 200);
-  await window.getByTestId("node-foreach-1").click();
-  const file = window.getByTestId("node-setting-file");
+  await drop(window, "agent", 200);
+  await window.getByTestId("node-agent-1").click();
+  const produces = window.getByTestId("node-setting-produces");
 
-  await setText(file, "/etc/items.txt");
+  await setText(produces, "done");
 
-  await expect(window.getByTestId("node-setting-file-issue")).toHaveText(
-    "must be relative to the session folder",
-  );
-  await expect(file).toHaveValue("items.txt");
+  await expect(window.getByTestId("node-setting-produces-issue")).toHaveText(verdictNameReason);
+  await expect(produces).toHaveValue("");
   await expect
-    .poll(() => nodeIn(window, "foreach-1"))
-    .toMatchObject({
-      settings: { file: "items.txt" },
-    });
+    .poll(async () => (await nodeIn(window, "agent-1"))?.settings)
+    .not.toHaveProperty("produces");
 });
 
 test("A refused value's reason goes once Undo changes the field", async () => {
   const { window } = await launch();
-  await drop(window, "foreach", 200);
-  await window.getByTestId("node-foreach-1").click();
-  const file = window.getByTestId("node-setting-file");
-  const reason = window.getByTestId("node-setting-file-issue");
-  await setText(file, "lists/items.txt");
-  await setText(file, "/etc/items.txt");
-  await expect(reason).toHaveText("must be relative to the session folder");
+  await drop(window, "agent", 200);
+  await window.getByTestId("node-agent-1").click();
+  const produces = window.getByTestId("node-setting-produces");
+  const reason = window.getByTestId("node-setting-produces-issue");
+  await setText(produces, "tests-passed");
+  await setText(produces, "done");
+  await expect(reason).toHaveText(verdictNameReason);
 
   await window.getByTestId(controlTestIds.undo).click();
 
-  await expect(file).toHaveValue("items.txt");
+  await expect(produces).toHaveValue("");
   await expect(reason).toHaveCount(0);
 });

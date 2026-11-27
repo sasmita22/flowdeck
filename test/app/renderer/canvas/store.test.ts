@@ -42,7 +42,6 @@ import {
   canvasPath,
   flow,
   flowSettings,
-  forEach,
   fork,
   hardstop,
   join,
@@ -1354,11 +1353,11 @@ describe("selectNodeIssues", () => {
     });
   });
 
-  it("drops the node id and its type from a For each reason", () => {
-    const current = flow([forEach("foreach-1")], []);
+  it("drops the node id and its type from a Loop reason", () => {
+    const current = flow([loop("loop-1")], []);
 
     expect(selectNodeIssues(current)).toEqual({
-      "foreach-1": ["Has no agent in its body."],
+      "loop-1": ["Has no agent in its body."],
     });
   });
 
@@ -2529,10 +2528,8 @@ describe("deleting from a frame's menu", () => {
     expect(store.getState().flow).toEqual(before);
   });
 
-  it.each([
-    ["loop", loop("L"), "L", "loop-frame-L"],
-    ["for-each", forEach("F"), "F", "foreach-frame-F"],
-  ])("deletes a %s as the toolbar Delete does, in one undo step", (_name, owner, id, viewId) => {
+  it("deletes a loop as the toolbar Delete does, in one undo step", () => {
+    const [owner, id, viewId] = [loop("L"), "L", "loop-frame-L"] as const;
     const source = flow(
       [
         placedAt(owner, 0, 0),

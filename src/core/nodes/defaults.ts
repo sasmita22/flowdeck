@@ -2,7 +2,6 @@ import type { Node, NodeType } from "../flow/schema.js";
 import * as agentDefaults from "./agent/defaults.js";
 import * as askDefaults from "./ask/defaults.js";
 import * as branchDefaults from "./branch/defaults.js";
-import * as foreachDefaults from "./foreach/defaults.js";
 import * as forkDefaults from "./fork/defaults.js";
 import * as gateDefaults from "./gate/defaults.js";
 import * as hardstopDefaults from "./hardstop/defaults.js";
@@ -24,7 +23,6 @@ export const nodeDefaults: { [T in NodeType]: { label: string; settings: Setting
   output: { label: outputDefaults.defaultLabel, settings: outputDefaults.defaultSettings },
   fork: { label: forkDefaults.defaultLabel, settings: forkDefaults.defaultSettings },
   join: { label: joinDefaults.defaultLabel, settings: joinDefaults.defaultSettings },
-  foreach: { label: foreachDefaults.defaultLabel, settings: foreachDefaults.defaultSettings },
   branch: { label: branchDefaults.defaultLabel, settings: branchDefaults.defaultSettings },
   library: { label: libraryDefaults.defaultLabel, settings: libraryDefaults.defaultSettings },
 };

@@ -27,14 +27,16 @@
     {
       "id": "each",
       "label": "Each unit",
-      "type": "foreach",
+      "type": "loop",
       "position": {
         "x": 240,
         "y": 160
       },
       "parent": "retry",
       "settings": {
-        "file": "plan.md"
+        "condition": "unit done",
+        "cap": 2,
+        "onCap": "fail"
       }
     },
     {

@@ -11,7 +11,7 @@ type CanvasReach = { reached: ReadonlySet<string>; containers: ReadonlySet<strin
 
 type MainFlow = CanvasReach & { ignored: readonly Node[] };
 
-const frameTypes = new Set(["loop", "foreach"]);
+const frameTypes = new Set(["loop"]);
 
 const soleStart = (flow: Flow, container: FlowContainer): string | undefined => {
   const [start, ...otherStarts] = flowContainerNodesOfType(flow, container, "trigger");

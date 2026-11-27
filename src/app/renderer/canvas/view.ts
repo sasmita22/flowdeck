@@ -53,7 +53,6 @@ export interface ViewNode {
     sub?: string;
     name?: string;
     loopId?: string;
-    forEachId?: string;
     containerId?: string;
     session?: boolean;
     text?: string;
@@ -157,23 +156,11 @@ const toLoopFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
       }),
     );
 
-const toForEachFrameViewNodes = (flow: Flow, isIgnored: IsIgnored): ViewNode[] =>
-  flow.nodes
-    .filter((node) => node.type === "foreach")
-    .map((each) =>
-      frameView(`${forEachFramePrefix}${each.id}`, "foreach-frame", bodyFrameBounds(flow, each), {
-        forEachId: each.id,
-        ignored: isIgnored(each.id),
-      }),
-    );
-
 const behindSelectedNodes = -1000;
 
 const framePrefix = "container-frame-";
 
 const loopFramePrefix = "loop-frame-";
-
-const forEachFramePrefix = "foreach-frame-";
 
 const containerFrameId = (id: string) => `${framePrefix}${id}`;
 
@@ -181,9 +168,7 @@ export const containerOfFrameId = (nodeId: string): string | undefined =>
   nodeId.startsWith(framePrefix) ? nodeId.slice(framePrefix.length) : undefined;
 
 export const frameOwnerId = (viewId: string): string | undefined => {
-  const prefix = [framePrefix, loopFramePrefix, forEachFramePrefix].find((each) =>
-    viewId.startsWith(each),
-  );
+  const prefix = [framePrefix, loopFramePrefix].find((each) => viewId.startsWith(each));
   return prefix === undefined ? undefined : viewId.slice(prefix.length);
 };
 
@@ -300,7 +285,6 @@ export const toViewNodes = (
   return [
     ...toFlowContainerFrameViewNodes(framing, selection, ignoring.container),
     ...toLoopFrameViewNodes(framing, isIgnored),
-    ...toForEachFrameViewNodes(framing, isIgnored),
     ...(flow.notes ?? []).map((note) =>
       toNoteViewNode(note, selection, dragPositions[note.id], noteBoxes[note.id]),
     ),

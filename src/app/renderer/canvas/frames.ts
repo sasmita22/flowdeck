@@ -1,5 +1,4 @@
 import type { Flow, Node, NodeType } from "../../../core/flow/schema.js";
-import { defaultLabel as foreachLabel } from "../../../core/nodes/foreach/defaults.js";
 import { defaultLabel as loopLabel } from "../../../core/nodes/loop/defaults.js";
 import { nodeLook, tagWidth } from "../nodes/look.js";
 import { nodeOutline, type OutlinedType } from "../nodes/outlines.js";
@@ -25,25 +24,17 @@ type LabelFont = keyof typeof labelFonts;
 
 const charWidths: Record<LabelFont, number> = { body: 7 };
 
-export const isContainer = (node: Pick<Node, "type">): boolean =>
-  node.type === "loop" || node.type === "foreach";
+export const isContainer = (node: Pick<Node, "type">): boolean => node.type === "loop";
 
 const containerSub = (node: Node): string | undefined => {
   if (node.type === "loop") return `max ${node.settings.cap}`;
-  if (node.type === "foreach") return node.settings.file;
   return undefined;
 };
 
-const defaultLabels = { loop: loopLabel, foreach: foreachLabel };
-
-export const containerText = (
-  type: "loop" | "foreach",
-  label: string,
-  sub: string | undefined,
-): string =>
+export const containerText = (type: "loop", label: string, sub: string | undefined): string =>
   [
     nodeLook(type).tag,
-    ...(label.trim() === "" || label === defaultLabels[type] ? [] : [label]),
+    ...(label.trim() === "" || label === loopLabel ? [] : [label]),
     ...(sub === undefined ? [] : [sub]),
   ].join(" · ");
 
@@ -54,7 +45,7 @@ const containerTitleWidth = (text: string): number => {
     : measured + text.length * containerTitleTracking;
 };
 
-export const containerLabelWidth = (type: "loop" | "foreach", text: string): number =>
+export const containerLabelWidth = (type: "loop", text: string): number =>
   Math.max(nodeLook(type).box.width, containerTitleWidth(text) + 2 * nodeOutline(type).padL);
 
 export const labelTextWidth = (text: string, font: LabelFont): number =>
@@ -82,8 +73,7 @@ export const nodeWidth = ({
   label: string;
   sub?: string | undefined;
 }): number => {
-  if (type === "loop" || type === "foreach")
-    return containerLabelWidth(type, containerText(type, label, sub));
+  if (type === "loop") return containerLabelWidth(type, containerText(type, label, sub));
   if (type === "fork" || type === "join" || type === "trigger" || type === "output")
     return nodeLook(type).box.width;
   return Math.max(nodeLook(type).box.width, textWidth(type, label), textWidth(type, sub ?? ""));

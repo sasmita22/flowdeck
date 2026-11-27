@@ -177,7 +177,7 @@ export const createBuildProgressStore = (
         const listed = z
           .array(buildProgressEntrySchema)
           .safeParse(await bridge.listBuildProgress());
-        if (listed.success) listed.data.forEach(put);
+        if (listed.success) for (const entry of listed.data) put(entry);
       },
 
       viewActivity: async (pendingId) => {
@@ -186,9 +186,9 @@ export const createBuildProgressStore = (
           .safeParse(await bridge.getBuildActivity({ pendingId }));
         if (!fetched.success) return;
         const pushed = new Set((get().activity[pendingId] ?? []).map((entry) => entry.id));
-        fetched.data
-          .filter((entry) => !pushed.has(entry.id))
-          .forEach((entry) => putActivity(pendingId, entry));
+        for (const entry of fetched.data.filter(({ id }) => !pushed.has(id))) {
+          putActivity(pendingId, entry);
+        }
       },
 
       activityFor: (pendingId) => get().activity[pendingId] ?? noActivity,

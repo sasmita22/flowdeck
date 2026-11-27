@@ -731,7 +731,7 @@ export class SqliteStore implements Store {
       const insertNode = this.db.prepare(
         "INSERT INTO build_nodes (build_id, ordinal, node_id, type, config, file) VALUES (?, ?, ?, ?, ?, ?)",
       );
-      build.nodes.forEach((node, ordinal) => {
+      for (const [ordinal, node] of build.nodes.entries()) {
         insertNode.run(
           build.id,
           ordinal,
@@ -740,7 +740,7 @@ export class SqliteStore implements Store {
           JSON.stringify(node.config),
           node.file ?? null,
         );
-      });
+      }
       this.db
         .prepare(
           'INSERT INTO builds (id, hash, name, repo, base, branch, branch_created, "values", dir, created_at, flow_id, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

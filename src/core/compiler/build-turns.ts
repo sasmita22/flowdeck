@@ -84,7 +84,7 @@ export const writeTurn = (
     ].join("\n"),
   );
   return [
-    `Round ${round}. Dispatch ${kit("piece-auditor")} once for each piece below, all calls in one message.`,
+    `Round ${round}. Dispatch ${kit("piece-auditor")} once per piece below, all calls in one message.`,
     "Each call's prompt is that piece's block, exactly as written.",
     ...(loose.length > 0
       ? [
