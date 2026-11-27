@@ -546,10 +546,14 @@ test("An Always Gate is passed in an automatic run and stops in a normal one, ch
   await window.getByTestId(pageTestIds.buildDetailRun).click();
   const dialog = window.getByTestId("run-dialog");
   await expect(dialog).toBeVisible({ timeout: 20_000 });
+  const auto = window.getByTestId("run-dialog-auto");
+  await expect(auto).toBeVisible();
+  await expect(auto).not.toBeChecked();
+  await expect(auto).toHaveAccessibleName(/^Run in auto-mode/);
   await expect(dialog).toContainText(
-    "Skips Always Gates. Conditional Gates still stop when their condition is met.",
+    '"Always" Gates are skipped; Conditional Gates still stop when their condition is met.',
   );
-  await window.getByTestId("run-dialog-auto").check();
+  await auto.check();
   await darkShot(window, "run-dialog.png");
   await window.getByTestId("run-dialog-start").click();
   await runIdOf(home, buildId);

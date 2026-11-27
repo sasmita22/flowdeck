@@ -252,7 +252,7 @@ export type RunState = {
   setValue(name: string, value: string | boolean): void;
   confirmBuild(): Promise<string | null>;
   cancelBuild(): void;
-  runBuild(buildId: string): Promise<string | null>;
+  runBuild(buildId: string): Promise<null>;
   start(choice: RunChoice): Promise<string | null>;
   cancelDialog(): void;
   dismissProblems(): void;
@@ -590,15 +590,12 @@ export const createRunStore = ({
         : { ok: true, value: result.data.runId };
     };
 
-    const launch = async (buildId: string): Promise<Step<string | null>> => {
+    const launch = async (buildId: string): Promise<Step<null>> => {
       const choices = runChoicesSchema.safeParse(await bridge.runOptions({ buildId }));
       if (!choices.success) return { ok: false, error: "unexpected run options" };
       if (choices.data.kind === "error") return { ok: false, error: choices.data.message };
-      if (choices.data.automatic) {
-        set({ dialog: { buildId } });
-        return { ok: true, value: null };
-      }
-      return started(await bridge.runBuild({ buildId }));
+      set({ dialog: { buildId } });
+      return { ok: true, value: null };
     };
 
     const busy = async <T>(work: () => Promise<Step<T>>): Promise<T | null> => {

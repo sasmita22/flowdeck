@@ -30,7 +30,7 @@ const setup = (
     rename: vi.fn(async () => undefined),
   }));
   const run = createStore(() => ({
-    runBuild: vi.fn<(buildId: string) => Promise<string | null>>(async () => options.runId ?? null),
+    runBuild: vi.fn<(buildId: string) => Promise<null>>(async () => null),
     start: vi.fn<(choice: { auto: boolean }) => Promise<string | null>>(
       async () => options.runId ?? null,
     ),
@@ -116,15 +116,15 @@ describe("createActions", () => {
     expect(assistant.getState().end).toHaveBeenCalledTimes(1);
   });
 
-  it("runs a build by its id, opens the run page of the run that started, and refreshes the lists", async () => {
-    const { actions, nav, library, run } = setup({ runId: "run-7" });
+  it("asks the run store to run a build by its id, leaving the page and the lists as they are", async () => {
+    const { actions, nav, library, run } = setup();
     nav.getState().go({ name: "builds" });
 
     await actions.runBuild("b-0f3a9c2e");
 
     expect(run.getState().runBuild).toHaveBeenCalledWith("b-0f3a9c2e");
-    expect(nav.getState().page).toEqual({ name: "run", runId: "run-7" });
-    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
+    expect(nav.getState().page).toEqual({ name: "builds" });
+    expect(library.getState().refresh).not.toHaveBeenCalled();
   });
 
   it("opens the run page once the run dialog starts a run with its auto choice", async () => {
@@ -136,12 +136,13 @@ describe("createActions", () => {
     expect(nav.getState().page).toEqual({ name: "run", runId: "run-8" });
   });
 
-  it("stays put when the run did not start", async () => {
-    const { actions, nav } = setup({ runId: null });
+  it("stays put and still refreshes the lists when Start does not start a run", async () => {
+    const { actions, nav, library } = setup({ runId: null });
 
-    await actions.runBuild("b-0f3a9c2e");
+    await actions.startRun({ auto: false });
 
     expect(nav.getState().page).toEqual({ name: "blueprints" });
+    expect(library.getState().refresh).toHaveBeenCalledTimes(1);
   });
 
   it("deletes a build by its id and refreshes the lists, staying on the page", async () => {

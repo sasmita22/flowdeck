@@ -11,7 +11,7 @@ import { seedBlueprint } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
-import { buildAndRun, runFromDetail, runIdOf } from "./build-run.js";
+import { buildAndRun, runFromDetail, runIdOf, startInRunDialog } from "./build-run.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 
 const run = promisify(execFile);
@@ -97,6 +97,7 @@ test("A Runs row has a ⋯ and no Delete button; deleting a done run from Runs r
   await finished(window);
   for (const count of [2, 3]) {
     await window.getByTestId(pageTestIds.runAgain).click();
+    await startInRunDialog(window);
     await expect.poll(() => runsOfBuild(buildId).length, { timeout: watchMs }).toBe(count);
     await finished(window);
   }

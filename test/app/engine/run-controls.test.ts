@@ -209,14 +209,12 @@ describe("run controls", () => {
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
 
-    it("lets a run choose only automatic mode, and only for a build with an Always Gate", async () => {
+    it("offers the same Run choices whether or not the build has an Always Gate", async () => {
       expect(await call("run-options", { buildId: await builtId(alwaysGate()) })).toEqual({
         kind: "choices",
-        automatic: true,
       });
       expect(await call("run-options", { buildId: await builtId(branchOn("deep")) })).toEqual({
         kind: "choices",
-        automatic: false,
       });
     });
 
