@@ -74,9 +74,6 @@ const settings: Record<Lowered, Record<string, [unknown, Landing]>> = {
     wait: ["first", atRunTime("first")],
     onBranchFail: ["skip", atRunTime("skip")],
   },
-  foreach: {
-    file: ["M-foreach-file.md", atRunTime("M-foreach-file.md")],
-  },
   branch: {
     decidedBy: ["variable", atRunTime("variable")],
     variable: ["M-variable", atRunTime("M-variable")],
@@ -113,7 +110,6 @@ const idOf: Record<Lowered, string> = {
   output: "o",
   fork: "f",
   join: "j",
-  foreach: "e",
   branch: "b",
 };
 

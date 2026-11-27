@@ -1,7 +1,10 @@
-import { firstTurnId } from "../nodes/foreach/execute.js";
 import type { BuildConfig, Flow, FlowContainer, Node } from "./schema.js";
 
 type StructureNode = Pick<Node, "id" | "type" | "parent">;
+
+export function firstTurnId(body: readonly Pick<Node, "id" | "type">[]): string | undefined {
+  return body.find((node) => node.type === "agent")?.id;
+}
 
 type BodyProblem = {
   node: string;
@@ -11,7 +14,7 @@ type BodyProblem = {
   nested?: true;
 };
 
-const isContainer = (node: StructureNode) => node.type === "loop" || node.type === "foreach";
+const isContainer = (node: StructureNode) => node.type === "loop";
 
 const flowEnd = (node: StructureNode) => node.type === "trigger" || node.type === "output";
 
@@ -45,7 +48,7 @@ export function bodyProblems(nodes: readonly StructureNode[]): BodyProblem[] {
     if (node.parent !== undefined && parentType === undefined) {
       problems.push({
         node: node.id,
-        message: `${named} has parent ${node.parent}, which is not a loop or foreach`,
+        message: `${named} has parent ${node.parent}, which is not a loop`,
         ...(ids.has(node.parent) ? {} : { parentMissing: true as const }),
       });
     }

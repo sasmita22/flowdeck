@@ -107,7 +107,6 @@ const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
     ),
   library: (w) => outline(roundedRect(w, h, 6), 10, { strokeWidth: 1.6 }),
   loop: container,
-  foreach: container,
   branch: (w) =>
     outline(`M${hexagon(w).replaceAll(" ", " L")} Z`, 14, {
       extras: [
@@ -132,13 +131,13 @@ export const frameLook = {
 export type Preview =
   | { kind: "node"; type: OutlinedType; outline: NodeOutline }
   | { kind: "bar"; type: "fork" | "join"; bar: typeof barLook }
-  | { kind: "frame"; type: "loop" | "foreach"; frame: typeof frameLook }
+  | { kind: "frame"; type: "loop"; frame: typeof frameLook }
   | { kind: "note"; type: "note"; note: typeof noteLook };
 
 export const previewOf = (type: NodeType | "note"): Preview => {
   if (type === "note") return { kind: "note", type, note: noteLook };
   if (type === "fork" || type === "join") return { kind: "bar", type, bar: barLook };
-  if (type === "loop" || type === "foreach") return { kind: "frame", type, frame: frameLook };
+  if (type === "loop") return { kind: "frame", type, frame: frameLook };
   return { kind: "node", type, outline: nodeOutline(type) };
 };
 

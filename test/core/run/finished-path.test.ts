@@ -14,7 +14,6 @@ type Kind =
   | "fork"
   | "join"
   | "loop"
-  | "foreach"
   | "gate"
   | "ask"
   | "hardstop";
@@ -167,13 +166,6 @@ describe("hasFinishedPath", () => {
     });
   });
 
-  it("passes a For each whose body Agent never ran", () => {
-    const nodes = [node("f", "foreach"), node("fa", "agent", "f")];
-    const wires = [then("start", "f"), then("f", "fa"), then("f", "stop")];
-
-    expect(passes(nodes, wires)).toBe(true);
-  });
-
   it("passes a fork once one of its joined Agents is finished", () => {
     const nodes = [
       node("split", "fork"),
@@ -321,7 +313,7 @@ describe("sessionStatesOf", () => {
     });
   });
 
-  describe.each(["loop", "foreach"] as const)("a %s body ending in a Gate", (frame) => {
+  describe.each(["loop"] as const)("a %s body ending in a Gate", (frame) => {
     const container = {
       nodes: [...ends, node("l", frame), node("la", "agent", "l"), node("lg", "gate", "l")],
       wires: [then("start", "l"), then("la", "lg"), then("l", "stop")],
@@ -347,7 +339,7 @@ describe("sessionStatesOf", () => {
     });
   });
 
-  it.each(["loop", "foreach"] as const)(
+  it.each(["loop"] as const)(
     "shows a Branch done in a %s body when its taken side has no wire",
     (frame) => {
       const container = {

@@ -5,8 +5,7 @@ const id = "branch-variable";
 
 export const rule: Rule = {
   id,
-  message:
-    "A Branch decided by a variable must name it, and cannot sit inside a Loop or For each body.",
+  message: "A Branch decided by a variable must name it, and cannot sit inside a Loop body.",
   check: (flow) =>
     flow.nodes.flatMap((node): ValidationError[] => {
       if (node.type !== "branch") return [];
@@ -25,7 +24,7 @@ export const rule: Rule = {
         errors.push({
           rule: id,
           node: node.id,
-          message: `${node.id} is inside ${node.parent}; a Branch cannot sit inside a Loop or For each body.`,
+          message: `${node.id} is inside ${node.parent}; a Branch cannot sit inside a Loop body.`,
         });
       }
       return errors;

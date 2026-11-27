@@ -217,7 +217,7 @@ function itemLines(
     return [
       ...stageLines(item, number, limits, run),
       ...(item.rounds ?? []).flatMap((round) => [
-        `${number}. Round ${round.round}${round.item === undefined ? "" : ` (${round.item})`}:`,
+        `${number}. Round ${round.round}:`,
         ...itemLines(round.items, `${number}.${round.round}.`, limits, run),
       ]),
     ];

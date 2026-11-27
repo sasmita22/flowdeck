@@ -5,7 +5,6 @@ import {
   branch,
   flow,
   flowSettings,
-  forEach,
   loop,
   onMainFlow,
   output,
@@ -54,12 +53,6 @@ describe("reachableFrom", () => {
   it("enters a Loop body and leaves through the frame, not back to an earlier body node", () => {
     expect(after(loopBody, "start")).toEqual(["L", "r", "stop", "w"]);
     expect(after(loopBody, "r")).toEqual(["stop"]);
-  });
-
-  it("enters a For each body", () => {
-    const flow = onMainFlow([forEach("each"), agent("p", { parent: "each" })], []);
-
-    expect(after(flow, "start")).toEqual(["each", "p", "stop"]);
   });
 });
 

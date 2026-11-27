@@ -42,7 +42,6 @@ const catalog: [NodeType, PaletteGroup, string][] = [
   ["fork", "Control", "Splits into branches that run at the same time."],
   ["join", "Control", "Waits for the branches before continuing."],
   ["loop", "Control", "Repeats its body until a condition holds, with a cap."],
-  ["foreach", "Control", "Runs its body once per item in a list."],
   ["branch", "Control", "Takes one path or the other, set by a yes/no variable."],
   ["gate", "People and safety", "Pauses until you approve. A flag can switch it off."],
   [

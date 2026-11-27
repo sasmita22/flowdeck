@@ -7,7 +7,7 @@ import { plainReason } from "./failure.js";
 import type { DisplayStatus } from "./display.js";
 import { sessionOverlayOf } from "./finished-path.js";
 import type { StageGroup, StageNode } from "./manifest.js";
-import { decisionsOf, donePayload, nodeStatus, roundItems, type RunEvent } from "./run-events.js";
+import { decisionsOf, donePayload, nodeStatus, type RunEvent } from "./run-events.js";
 import { nodeStateSchema, type SnapshotStatus } from "./snapshot.js";
 import type { NodeState } from "./state.js";
 import type { StoredEvent } from "./store.js";
@@ -46,7 +46,6 @@ export type PipelineStage = {
 
 type PipelineRound = {
   round: number;
-  item?: string | undefined;
   tokens?: number | undefined;
   cost?: number | undefined;
   items: PipelineItem[];
@@ -120,7 +119,6 @@ const stageSchema = z.object({
 
 const roundSchema = z.object({
   round: z.number().int(),
-  item: z.string().optional(),
   tokens: z.number().optional(),
   cost: z.number().optional(),
   get items() {
@@ -257,8 +255,7 @@ function itemsOfGroup(
       done?.kind === "done"
         ? donePayload.safeParse(done.payload ?? {}).data?.stopMessage
         : undefined;
-    const rounds =
-      node.type === "loop" || node.type === "foreach" ? roundsOf(node.id, window) : undefined;
+    const rounds = node.type === "loop" ? roundsOf(node.id, window) : undefined;
     const edges = {
       ...(Number.isFinite(window.fromAt) ? { activityFrom: window.fromAt } : {}),
       ...(Number.isFinite(window.toAt) ? { activityTo: window.toAt } : {}),
@@ -305,11 +302,9 @@ function itemsOfGroup(
     }
     if (marks.length === 0) marks.push({ round: 1, seq: window.fromSeq, at: window.fromAt });
     const children = ids.filter((id) => scopeOf(id) === loopId);
-    const labels = roundItems(loopEvents);
     return marks.map((mark, index) => {
       const next = marks[index + 1];
       const first = index === 0;
-      const item = labels?.[mark.round - 1];
       const items = itemsOf(children, {
         fromSeq: first ? window.fromSeq : mark.seq,
         toSeq: next?.seq ?? window.toSeq,
@@ -321,7 +316,6 @@ function itemsOfGroup(
       const priced = stagesIn(items).filter((stage) => stage.cost !== undefined);
       return {
         round: mark.round,
-        ...(item === undefined ? {} : { item }),
         ...(priced.length === 0
           ? {}
           : {

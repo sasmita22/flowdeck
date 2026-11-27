@@ -13,7 +13,7 @@ export type RunEvent =
   | { kind: "done"; payload?: z.infer<typeof donePayload> }
   | { kind: "failed"; payload: { message: string } }
   | { kind: "decided" | "answered"; payload: HumanDecision }
-  | { kind: "round"; payload: { round: number; items?: string[] } }
+  | { kind: "round"; payload: { round: number } }
   | { kind: "usage"; payload: { messages: string[]; round?: number }; tokens: number; cost: number }
   | { kind: "compacted"; payload: { tokens: number } };
 
@@ -40,11 +40,6 @@ export function nodeStatus(events: readonly RunEvent[]): NodeState {
 export function loopRound(events: readonly RunEvent[]): number {
   const last = events.findLast((event) => event.kind === "round");
   return last?.kind === "round" ? last.payload.round : 0;
-}
-
-export function roundItems(events: readonly RunEvent[]): string[] | undefined {
-  const first = events.find((event) => event.kind === "round" && event.payload.items !== undefined);
-  return first?.kind === "round" ? first.payload.items : undefined;
 }
 
 export function decisionsOf(events: readonly RunEvent[]): HumanDecision[] {

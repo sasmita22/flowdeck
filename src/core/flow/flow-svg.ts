@@ -40,7 +40,6 @@ const looks: Record<NodeType, { tag: string; width: number; height: number }> = 
   loop: { tag: "LOOP", width: 170, height: 48 },
   fork: { tag: "PARALLEL START", width: 28, height: 112 },
   join: { tag: "PARALLEL END", width: 28, height: 112 },
-  foreach: { tag: "EACH", width: 170, height: 48 },
   branch: { tag: "IF", width: 116, height: 48 },
   library: { tag: "LIB", width: 170, height: 48 },
 };
@@ -61,7 +60,7 @@ const escape = (text: string): string =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 
-const isContainer = (node: Node): boolean => node.type === "loop" || node.type === "foreach";
+const isContainer = (node: Node): boolean => node.type === "loop";
 
 const widthOf = (node: Node): number => {
   const { tag, width } = looks[node.type];

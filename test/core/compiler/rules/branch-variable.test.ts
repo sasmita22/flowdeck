@@ -7,7 +7,6 @@ import {
   agent,
   branch,
   flow,
-  forEach,
   loop,
   output,
   thenWire,
@@ -30,16 +29,17 @@ describe("branch-variable", () => {
     expect(check([trigger("start"), branch("ife2e", "proceed-e2e")])).toEqual([]);
   });
 
-  it.each([
-    ["a loop", loop("body")],
-    ["a for each", forEach("body")],
-  ])("reports a branch inside %s", (_, parent) => {
-    const errors = check([trigger("start"), parent, branch("ife2e", "e2e", { parent: "body" })]);
+  it("reports a branch inside a loop", () => {
+    const errors = check([
+      trigger("start"),
+      loop("body"),
+      branch("ife2e", "e2e", { parent: "body" }),
+    ]);
 
     expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
       { rule: "branch-variable", node: "ife2e" },
     ]);
-    expect(errors[0]?.message).toMatch(/loop or for each/i);
+    expect(errors[0]?.message).toMatch(/cannot sit inside a loop body\./i);
   });
 
   it.each(["yes", "no"])("accepts a branch wired only on %s", (port) => {

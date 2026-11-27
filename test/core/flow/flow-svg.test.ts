@@ -10,7 +10,6 @@ import {
   agent,
   flow,
   flowSettings,
-  forEach,
   fork,
   join,
   loop,
@@ -152,10 +151,8 @@ describe("flowSvg", () => {
     expect(encloses(frame, boxOf(byId(drawn(svg, "node"), "rounds")))).toBe(true);
   });
 
-  it("frames a For each inside a Loop inside the Loop's frame", () => {
-    const svg = flowSvg(
-      flow([at(loop("rounds"), 0, 0), at(forEach("units"), 0, 140, "rounds")], []),
-    );
+  it("frames a Loop inside a Loop inside the outer Loop's frame", () => {
+    const svg = flowSvg(flow([at(loop("units"), 0, 140, "rounds"), at(loop("rounds"), 0, 0)], []));
     const frames = drawn(svg, "frame");
     expect(frames).toHaveLength(2);
     const [outer, inner] = frames.map(boxOf) as [Box, Box];

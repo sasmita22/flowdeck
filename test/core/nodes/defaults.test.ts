@@ -4,7 +4,6 @@ import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import * as agent from "../../../src/core/nodes/agent/defaults.js";
 import * as ask from "../../../src/core/nodes/ask/defaults.js";
 import * as branch from "../../../src/core/nodes/branch/defaults.js";
-import * as foreach from "../../../src/core/nodes/foreach/defaults.js";
 import * as fork from "../../../src/core/nodes/fork/defaults.js";
 import * as gate from "../../../src/core/nodes/gate/defaults.js";
 import * as hardstop from "../../../src/core/nodes/hardstop/defaults.js";
@@ -42,7 +41,6 @@ const cases: [type: string, defaults: Defaults, label: string, rules: string[]][
   ["output", output, "Stop", ["required-settings", "required-settings"]],
   ["fork", fork, "Fork", ["parallel-section"]],
   ["join", join, "Join", ["parallel-section"]],
-  ["foreach", foreach, "For each", ["loop-body"]],
   ["branch", branch, "Branch", ["branch-variable"]],
   ["library", library, "Library", ["library-use"]],
 ];
@@ -80,7 +78,6 @@ describe("a node's shown label", () => {
     ["agent", "", "Agent"],
     ["agent", "   ", "Agent"],
     ["hardstop", "", "Hard stop"],
-    ["foreach", "", "For each"],
   ] as const)("labelFor names a %s labelled %j by its type, %j", (type, label, shown) => {
     expect(labelFor({ type, label })).toBe(shown);
   });

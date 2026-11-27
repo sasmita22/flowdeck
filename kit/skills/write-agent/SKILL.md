@@ -5,7 +5,7 @@ description: How to write a build's subagent that another step can hand work to 
 
 # Write an Agent
 
-A build agent is dispatched by its full name, `<prefix>:<piece>`, where `<prefix>` is its container's plugin name, `<build>-<slug>`. It lives in its container's `plugin/agents/` (under `workspace/` or `sessions/<slug>/`) and is dispatched only by that container's orchestrator. Its file is all it knows. The prompt it gets starts with `NODE <nodeId>`, may list `You are given: <files>` and `Write: <files>` for that node, and ends with `Go` (or `Go.` and one item inside a For each). A merged agent serves several nodes, each passing its own files this way.
+A build agent is dispatched by its full name, `<prefix>:<piece>`, where `<prefix>` is its container's plugin name, `<build>-<slug>`. It lives in its container's `plugin/agents/` (under `workspace/` or `sessions/<slug>/`) and is dispatched only by that container's orchestrator. Its file is all it knows. The prompt it gets starts with `NODE <nodeId>`, may list `You are given: <files>` and `Write: <files>` for that node, and ends with `Go`. A merged agent serves several nodes, each passing its own files this way.
 
 Write the agent from its node's `needs` entry in `build-report.json`, which `analyze-job` wrote: every `Input:` item goes in Inputs, every `Output:` item in Output, every `Tool:` item is used in Steps, and every `Procedure:` item in Steps.
 

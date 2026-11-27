@@ -37,20 +37,11 @@ describe("agentTurnText", () => {
     expect(promptOf(text)).toBe("NODE a1\nYou are given: plan.md\nWrite: notes.md\nGo");
   });
 
-  it("ends with the For each item in place of Go", () => {
-    expect(promptOf(agentTurnText("h1", "review", bare("a1"), "alpha"))).toBe(
-      "NODE a1\nGo. This round's item: alpha",
-    );
-  });
-
   it("puts the Ask answers inside the prompt, before Go", () => {
-    const text = agentTurnText(
-      "h1",
-      "review",
-      { id: "a1", given: ["plan.md"], writes: [] },
-      undefined,
-      ["red", "blue"],
-    );
+    const text = agentTurnText("h1", "review", { id: "a1", given: ["plan.md"], writes: [] }, [
+      "red",
+      "blue",
+    ]);
 
     expect(promptOf(text)).toBe(
       "NODE a1\nYou are given: plan.md\nThe user answered: red. The user answered: blue.\nGo",

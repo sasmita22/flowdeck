@@ -57,8 +57,8 @@ describe("nodeWidth", () => {
     expect(textWidth("branch", long)).toBeGreaterThan(textWidth("branch", "E2E?"));
   });
 
-  it.each(["loop", "foreach"] as const)("sizes a %s as its container label does today", (type) => {
-    const sub = type === "loop" ? "max 3" : "plan.md";
+  it.each(["loop"] as const)("sizes a %s as its container label does today", (type) => {
+    const sub = "max 3";
     expect(nodeWidth({ type, label: long, sub })).toBe(
       containerLabelWidth(type, containerText(type, long, sub)),
     );

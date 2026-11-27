@@ -18,7 +18,7 @@ const rightmostX = (path: string): number =>
     ...[...path.matchAll(/(-?[\d.]+),-?[\d.]+/g)].map(([, x]) => Number(x)),
     ...[...path.matchAll(/H(-?[\d.]+)/g)].map(([, x]) => Number(x)),
   );
-const frames = ["loop", "foreach"] as const;
+const frames = ["loop"] as const;
 const circles = ["trigger", "output"] as const;
 const isCircle = (path: string, radius: number, centre = 24): boolean => {
   if (!/^[MAZ\d\s,.-]+$/.test(path)) return false;
@@ -86,7 +86,6 @@ describe("previewViewBox", () => {
     ["fork", 58, 68],
     ["join", 58, 68],
     ["loop", 178, 64],
-    ["foreach", 178, 64],
     ["note", 178, 64],
   ] as const)("crops %s to its own shape plus padding", (type, width, height) => {
     expect(previewViewBox(type)).toBe(`-4 -4 ${width} ${height}`);
@@ -116,7 +115,7 @@ describe("nodeOutline", () => {
     expect(nodeOutline("branch").extras.map(({ element }) => element)).toEqual(["polygon"]);
   });
 
-  it.each(["loop", "foreach"] as const)("draws a widened %s label as wide as its box", (type) => {
+  it.each(["loop"] as const)("draws a widened %s label as wide as its box", (type) => {
     expect(nodeOutline(type).path).toContain("H166 Q170,0 170,4");
     expect(nodeOutline(type, 281).path).toContain("H277 Q281,0 281,4");
     expect(nodeOutline(type, 281).path).not.toContain("170");

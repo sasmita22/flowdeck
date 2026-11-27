@@ -638,7 +638,7 @@ describe("runDigest", () => {
     expect(text).toContain("   Decision: rejected: not wanted");
   });
 
-  it("lists the lanes of a fork and each round of a for each under their own numbers", () => {
+  it("lists the lanes of a fork and each round of a loop under their own numbers", () => {
     const sources: StageSources = {
       session: { name: "fan-session" },
       nodes: [
@@ -646,7 +646,7 @@ describe("runDigest", () => {
         { id: "left", type: "agent", label: "Left lane work" },
         { id: "right", type: "agent", label: "Right lane work" },
         { id: "meet", type: "join", label: "Meet" },
-        { id: "each", type: "foreach", label: "Each unit" },
+        { id: "each", type: "loop", label: "Each unit" },
         { id: "work", type: "agent", label: "Unit work", parent: "each" },
       ],
       wires: [
@@ -658,7 +658,7 @@ describe("runDigest", () => {
       ],
     };
     const events = stored([
-      ["each", 1, { kind: "round", payload: { round: 1, items: ["unit one", "unit two"] } }],
+      ["each", 1, { kind: "round", payload: { round: 1 } }],
       ["work", 2, { kind: "sent" }],
       ["work", 3, { kind: "done" }],
       ["each", 4, { kind: "round", payload: { round: 2 } }],
@@ -670,8 +670,8 @@ describe("runDigest", () => {
 
     expect(text).toContain("2. In parallel:\n2.1.1. Left lane work (agent)");
     expect(text).toContain("2.2.1. Right lane work (agent)");
-    expect(text).toContain("4. Round 1 (unit one):\n4.1.1. Unit work (agent): done");
-    expect(text).toContain("4. Round 2 (unit two):\n4.2.1. Unit work (agent)");
+    expect(text).toContain("4. Round 1:\n4.1.1. Unit work (agent): done");
+    expect(text).toContain("4. Round 2:\n4.2.1. Unit work (agent)");
   });
 
   describe("variablesText", () => {
@@ -992,7 +992,7 @@ describe("runDigest with sessions", () => {
     name: "ios",
     nodes: [
       { id: "i-start", type: "trigger", label: "Start" },
-      { id: "i-each", type: "foreach", label: "Each screen" },
+      { id: "i-each", type: "loop", label: "Each screen" },
       { id: "i-work", type: "agent", label: "Port the screen", parent: "i-each" },
       { id: "i-stop", type: "output", label: "Finish" },
     ],
@@ -1011,7 +1011,7 @@ describe("runDigest with sessions", () => {
     ...finished("a-left", 3),
     ...finished("a-right", 4),
     ...finished("i-start", 5),
-    ["i-each", 6, { kind: "round", payload: { round: 1, items: ["login", "cart"] } }],
+    ["i-each", 6, { kind: "round", payload: { round: 1 } }],
     ...finished("i-work", 7),
     ["i-each", 8, { kind: "round", payload: { round: 2 } }],
     ["i-work", 8, { kind: "reset" }],
@@ -1053,7 +1053,7 @@ describe("runDigest with sessions", () => {
     ]);
   });
 
-  it("nests a session's fork lanes and for-each rounds under that session", () => {
+  it("nests a session's fork lanes and loop rounds under that session", () => {
     const text = digestOf([workspace, android, ios]);
     const androidBlock = text.slice(
       text.indexOf("\nSession android:\n"),
@@ -1063,8 +1063,8 @@ describe("runDigest with sessions", () => {
 
     expect(androidBlock).toContain("3. In parallel:\n3.1.1. Build the list screen (agent)");
     expect(androidBlock).toContain("3.2.1. Build the detail screen (agent)");
-    expect(iosBlock).toContain("2. Round 1 (login):\n2.1.1. Port the screen (agent)");
-    expect(iosBlock).toContain("2. Round 2 (cart):\n2.2.1. Port the screen (agent)");
+    expect(iosBlock).toContain("2. Round 1:\n2.1.1. Port the screen (agent)");
+    expect(iosBlock).toContain("2. Round 2:\n2.2.1. Port the screen (agent)");
   });
 
   it("keeps the Session: fact on the first group", () => {

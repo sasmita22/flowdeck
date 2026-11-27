@@ -9,7 +9,7 @@ import {
   stageSourcesOf,
   workspaceOf,
 } from "../../../src/core/run/manifest.js";
-import { agent, forEach, gate, loop, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
+import { agent, gate, loop, onMainFlow, thenWire } from "../../fixtures/flow-builders.js";
 
 const hash = "a".repeat(64);
 
@@ -59,7 +59,7 @@ describe("parseManifest", () => {
 describe("stageSourcesOf", () => {
   it("keeps each node's id, type, label and parent, and the Then wires in order, under its container", () => {
     const flow = onMainFlow(
-      [agent("plan"), loop("review"), agent("fix", { parent: "review" }), forEach("each")],
+      [agent("plan"), loop("review"), agent("fix", { parent: "review" }), gate("each")],
       [thenWire("plan", "review"), thenWire("review", "each")],
     );
     const manifest = parseManifest(manifestText(flow));
@@ -77,7 +77,7 @@ describe("stageSourcesOf", () => {
       { id: "plan", type: "agent", label: "plan" },
       { id: "review", type: "loop", label: "review" },
       { id: "fix", type: "agent", label: "fix", parent: "review" },
-      { id: "each", type: "foreach", label: "each plan unit" },
+      { id: "each", type: "gate", label: "each" },
       { id: "stop", type: "output", label: "stop" },
     ]);
     expect(main?.wires.map((wire) => [wire.from.node, wire.to.node])).toEqual([

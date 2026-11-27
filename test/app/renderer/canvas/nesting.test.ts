@@ -5,7 +5,6 @@ import {
   agent,
   flow,
   flowSettings,
-  forEach,
   gate,
   loop,
   output,
@@ -37,11 +36,8 @@ const drag = (
 };
 
 describe("dropping a new node onto a frame", () => {
-  it.each([
-    ["Loop", at(loop("C"), 0, 0)],
-    ["For each", at(forEach("C"), 0, 0)],
-  ])("puts an Agent dropped on a %s frame in its body, as one undoable step", (_name, frame) => {
-    const store = loaded(flow([frame], []));
+  it("puts an Agent dropped on a Loop frame in its body, as one undoable step", () => {
+    const store = loaded(flow([at(loop("C"), 0, 0)], []));
 
     store.getState().drop("agent", { x: 100, y: 60 });
 
@@ -66,7 +62,7 @@ describe("dropping a new node onto a frame", () => {
     expect(nodeOf(store.getState().flow, "agent-1")).not.toHaveProperty("parent");
   });
 
-  it.each(["loop", "foreach"] as const)("never puts a dropped %s inside a frame", (type) => {
+  it.each(["loop"] as const)("never puts a dropped %s inside a frame", (type) => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
 
     store.getState().drop(type, { x: 100, y: 60 });

@@ -323,37 +323,6 @@ describe("chargeUsage per round", () => {
     expect(report.total.tokens).toBe(everyRound.reduce((sum, entry) => sum + tokensOf(entry), 0));
   });
 
-  it("charges a For each body node per round the same way", () => {
-    const events = stored([
-      [0, "E", { kind: "running" }],
-      [0, "E", { kind: "round", payload: { round: 1, items: ["one", "two"] } }],
-      [1, "w", { kind: "sent" }],
-      [9, "w", { kind: "done" }],
-      [10, "E", { kind: "round", payload: { round: 2 } }],
-      [10, "w", { kind: "reset" }],
-      [11, "w", { kind: "sent" }],
-      [19, "w", { kind: "done" }],
-      [20, "E", { kind: "done" }],
-    ]);
-    const one = spend("one", 5, 10);
-    const two = spend("two", 15, 900);
-
-    const charges = chargeUsage({
-      events,
-      entries: [one, two],
-      turnNodes: new Set(["w"]),
-      parents: { w: "E" },
-    });
-
-    expect(byRound(charges, "w").map((event) => event.payload)).toEqual([
-      { messages: ["one"], round: 1 },
-      { messages: ["two"], round: 2 },
-    ]);
-    const report = costReport({ nodeIds: ["E", "w"], events, pending: charges, now: 0 });
-    expect(roundsIn(report.nodes[1]).map(({ round }) => round)).toEqual([1, 2]);
-    expect(roundsIn(report.nodes[1])[1]?.cost).toBeCloseTo(costOf([two]), 12);
-  });
-
   it("gives a round without usage no line, never another round's cost", () => {
     const events = stored(loopRows());
     const charges = chargeUsage({

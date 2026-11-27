@@ -87,9 +87,7 @@ export function branchSkips(input: {
     const decided = decisions.get(wire.from.node);
     return decided === undefined || wire.from.port === decided;
   });
-  const containers = new Set(
-    nodes.filter((node) => node.type === "loop" || node.type === "foreach").map((node) => node.id),
-  );
+  const containers = new Set(nodes.filter((node) => node.type === "loop").map((node) => node.id));
   const parentOf = new Map(nodes.map((node) => [node.id, node.parent]));
   const bodyOf = (id: string) =>
     containers.has(id) ? nodes.filter((node) => node.parent === id).map((node) => node.id) : [];

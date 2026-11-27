@@ -95,7 +95,6 @@ const forms: Record<NodeType, Form> = {
       },
     },
   ),
-  foreach: typeForm({ file: "List file, one item per line" }),
   branch: typeForm(
     { decidedBy: "Decided by", variable: "Yes/no variable", value: "Value it reads" },
     {

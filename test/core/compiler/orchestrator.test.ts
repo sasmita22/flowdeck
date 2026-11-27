@@ -10,7 +10,6 @@ import {
   ask,
   branch,
   flow,
-  forEach,
   fork,
   gate,
   hardstop,
@@ -38,8 +37,6 @@ const sample = (): Flow =>
       ask("k", { settings: { question: "Pick a colour", options: ["red", "blue"] } }),
       loop("l", { settings: { condition: "tests pass", cap: 4, onCap: "ask" } }),
       labelled(agent("la", { parent: "l" }), "Fix"),
-      forEach("fe", { file: "units.md" }),
-      labelled(agent("fp", { parent: "fe" }), "Unit"),
       branch("b", "proceed"),
       fork("f"),
       labelled(agent("x"), "Check"),
@@ -55,9 +52,7 @@ const sample = (): Flow =>
       thenWire("g", "k"),
       thenWire("k", "l"),
       thenWire("l", "la"),
-      thenWire("l", "fe"),
-      thenWire("fe", "fp"),
-      thenWire("fe", "b"),
+      thenWire("l", "b"),
       wire("b", "yes", "f", "in"),
       wire("b", "no", "h", "in"),
       thenWire("f", "x"),
@@ -177,11 +172,10 @@ describe("orchestratorSkill", () => {
     expect(lineOf(skill().content, "k")).toMatch(/ask in the chat.*Pick a colour.*red, blue/i);
   });
 
-  it("repeats a Loop up to its cap and a For each once per item", () => {
+  it("repeats a Loop up to its cap", () => {
     const content = skill().content;
 
     expect(lineOf(content, "l")).toMatch(/repeat.*NODE la.*tests pass.*at most 4 rounds/);
-    expect(lineOf(content, "fe")).toMatch(/units\.md.*NODE fp/);
   });
 
   it("reads a Branch's variable from the build summary and names both ways", () => {

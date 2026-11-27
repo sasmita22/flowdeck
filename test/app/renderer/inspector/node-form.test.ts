@@ -89,7 +89,6 @@ describe("describeNodeFields", () => {
         ["select", "onBranchFail", "node-setting-on-branch-fail"],
       ],
     ],
-    ["foreach", [["text", "file", "node-setting-file"]]],
     ["library", []],
     [
       "branch",
@@ -251,7 +250,6 @@ describe("applyNodeSetting", () => {
     ["output", ["name"], "result", { name: "result", type: "" }],
     ["join", ["wait"], "first", { wait: "first" }],
     ["join", ["onBranchFail"], "skip", { wait: "all", onBranchFail: "skip" }],
-    ["foreach", ["file"], "plan/units.txt", { file: "plan/units.txt" }],
     ["branch", ["variable"], "deep", { variable: "deep" }],
     ["branch", ["decidedBy"], "value", { decidedBy: "value" }],
     ["agent", ["produces"], "tests-passed", { produces: "tests-passed" }],
@@ -267,9 +265,6 @@ describe("applyNodeSetting", () => {
   });
 
   it.each<[NodeType, string[], string, string]>([
-    ["foreach", ["file"], "", "Name the list file"],
-    ["foreach", ["file"], "/etc/items.txt", "must be relative to the session folder"],
-    ["foreach", ["file"], "../items.txt", "must not contain .."],
     ["loop", ["onCap"], "retry", "Choose what happens at the round limit"],
     ["join", ["wait"], "any", "Choose when to continue"],
     ["join", ["onBranchFail"], "retry", "Choose what happens when a branch fails"],

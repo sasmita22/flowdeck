@@ -58,7 +58,7 @@ const objectBranches = (schema: JsonSchema): JsonSchema[] => {
 const inputBranches = (name: string) => objectBranches(definition(name).inputSchema as JsonSchema);
 
 describe("blueprintToolDefinitions", () => {
-  it("tells the model add_node's parent can be a Loop, a For each or a container", () => {
+  it("tells the model add_node's parent can be a Loop or a container, and nothing else", () => {
     const tool = definition("add_node");
     const [input] = inputBranches("add_node");
     const parent = input?.properties?.["parent"] as { description?: string } | undefined;
@@ -66,6 +66,8 @@ describe("blueprintToolDefinitions", () => {
     expect(tool.description).toMatch(/container/i);
     expect(parent?.description).toMatch(/container/i);
     expect(parent?.description).toMatch(/loop/i);
+    expect(tool.description).not.toMatch(/for each/i);
+    expect(parent?.description).not.toMatch(/for each/i);
   });
 
   it("offers exactly the twelve blueprint tools and nothing that builds, runs or deletes a build", () => {

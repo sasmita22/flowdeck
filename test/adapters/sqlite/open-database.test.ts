@@ -62,6 +62,7 @@ const allMigrations = [
   { name: "024_build_worktrees_clean_start.sql" },
   { name: "025_connections.sql" },
   { name: "026_build_snapshot_flow.sql" },
+  { name: "027_drop_unknown_node_types.sql" },
 ];
 
 const migrationsTo021 = allMigrations.filter(({ name }) => name < "022");

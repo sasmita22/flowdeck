@@ -16,7 +16,6 @@ import {
   bareFlow,
   flow,
   flowSettings,
-  forEach,
   fork,
   inOneSession,
   join,
@@ -111,7 +110,7 @@ const isInside = (current: Flow, id: string, scope: string): boolean => {
 
 const frameIntruders = (current: Flow): string[] => {
   const boxes = drawnBoxes(current);
-  const frames = current.nodes.filter((node) => node.type === "loop" || node.type === "foreach");
+  const frames = current.nodes.filter((node) => node.type === "loop");
   return frames.flatMap((frame) => {
     const bounds = bodyFrameBounds(current, frame);
     return current.nodes
@@ -159,7 +158,7 @@ const packedRows = (current: Flow, containerId: string) => {
     .map((id) => {
       const node = nodeOf(current, id);
       const drawn = box(boxes, id);
-      const isFrame = node.type === "loop" || node.type === "foreach";
+      const isFrame = node.type === "loop";
       return { id, bounds: isFrame ? union(drawn, bodyFrameBounds(current, node)) : drawn };
     })
     .sort((a, b) => a.bounds.top - b.bounds.top);
@@ -304,7 +303,7 @@ const nestedFrames = () =>
   onMainFlow(
     [
       agent("a"),
-      forEach("E"),
+      loop("E"),
       agent("e1", { parent: "E" }),
       { ...loop("L"), parent: "E" },
       agent("l1", { parent: "L" }),
@@ -405,10 +404,8 @@ describe("tidyMoves", () => {
     expectSpaced(after, ["F", "b2", "J"]);
   });
 
-  it.each([
-    { frame: "Loop", container: loop("L") },
-    { frame: "For each", container: forEach("L") },
-  ])("spaces the body of a $frame frame at least LAYER_GAP apart", async ({ container }) => {
+  it("spaces the body of a Loop frame at least LAYER_GAP apart", async () => {
+    const container = loop("L");
     const after = await tidied(
       onMainFlow(
         [agent("a"), container, agent("x", { parent: "L" }), agent("y", { parent: "L" })],

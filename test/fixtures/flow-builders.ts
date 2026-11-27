@@ -30,11 +30,6 @@ export const hardstop = node("hardstop", {
   enabled: true,
 });
 export const output = node("output", { name: "result", type: "text" });
-export const forEach = (
-  id: string,
-  settings: Record<string, unknown> = { file: "plan.md" },
-  label = "each plan unit",
-) => ({ id, label, position: at, type: "foreach", settings });
 export const branch = (id: string, variable: string, options: { parent?: string } = {}) =>
   node("branch", { variable })(id, options);
 export const fork = node("fork", {});

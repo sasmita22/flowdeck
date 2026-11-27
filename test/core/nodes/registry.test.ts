@@ -6,7 +6,6 @@ import { NodeType, Port } from "../../../src/core/flow/schema.js";
 import { settings as agent } from "../../../src/core/nodes/agent/settings.js";
 import { settings as ask } from "../../../src/core/nodes/ask/settings.js";
 import { settings as branch } from "../../../src/core/nodes/branch/settings.js";
-import { settings as foreach } from "../../../src/core/nodes/foreach/settings.js";
 import { settings as fork } from "../../../src/core/nodes/fork/settings.js";
 import { settings as gate } from "../../../src/core/nodes/gate/settings.js";
 import { settings as hardstop } from "../../../src/core/nodes/hardstop/settings.js";
@@ -28,7 +27,6 @@ const folderSettings = {
   output,
   fork,
   join,
-  foreach,
   branch,
   library,
 };
@@ -44,7 +42,7 @@ describe("node registry", () => {
     expect(folders.sort()).toEqual(types);
   });
 
-  it.each(["prompt", "script"])("has no %s entry", (type) => {
+  it.each(["prompt", "script", "foreach"])("has no %s entry", (type) => {
     expect(Object.keys(registry)).not.toContain(type);
   });
 

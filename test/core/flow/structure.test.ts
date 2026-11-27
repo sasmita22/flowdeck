@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  firstTurnId,
   flowContainerMembers,
   flowContainerOf,
   isWorkflow,
@@ -9,6 +10,8 @@ import {
   agent,
   flow,
   flowSettings,
+  gate,
+  hardstop,
   loop,
   output,
   sessionContainer,
@@ -104,5 +107,17 @@ describe("sessionBuildConfig", () => {
 
   it("is undefined with no session", () => {
     expect(sessionBuildConfig(libraryOf([]))).toBeUndefined();
+  });
+});
+
+describe("firstTurnId", () => {
+  const body = (nodes: unknown[]) => flow(nodes, []).nodes;
+
+  it("skips non-turn nodes to the first agent", () => {
+    expect(firstTurnId(body([gate("s1"), agent("p1"), agent("a1")]))).toBe("p1");
+  });
+
+  it("is undefined for a body with no agent", () => {
+    expect(firstTurnId(body([hardstop("s1"), gate("g1")]))).toBeUndefined();
   });
 });

@@ -12,7 +12,7 @@ A node is one step of the user's work. Write it so the build agents can turn it 
 Every work step is an `agent`: a subagent with its own role and model, which sees only the files it is given. That holds for a step that runs a command too: the Agent's instructions say which command to run and what to report. The other types are not work:
 
 - The user looking before the work goes on is a `gate`; the user choosing an answer is an `ask`; a stop that must never be skipped is a `hardstop`.
-- Repeating, parallel work and picking a path are `loop`, `foreach`, `fork` and `join`, and `branch`, around Agents.
+- Repeating, parallel work and picking a path are `loop`, `fork` and `join`, and `branch`, around Agents.
 
 If what the user said fits more than one type, ask which they mean instead of picking.
 

@@ -48,7 +48,6 @@ const looks: Record<NodeType, NodeLook> = {
   loop: look("loop", "LOOP", ctrl, "none"),
   fork: look("fork", "PARALLEL START", ctrl, ctrl, BAR_MIN_HEIGHT, 28),
   join: look("join", "PARALLEL END", ctrl, ctrl, BAR_MIN_HEIGHT, 28),
-  foreach: look("foreach", "EACH", ctrl, "none"),
   branch: look("branch", "IF", ctrl, ctrl, box.height, 116),
   library: look("library", "LIB", work, work),
 };

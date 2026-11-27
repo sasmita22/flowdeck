@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/loop-single-entry.js";
-import { agent, flow, forEach, loop, thenWire } from "../../../fixtures/flow-builders.js";
+import { agent, flow, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const nodes = [
   agent("A"),
@@ -31,29 +31,5 @@ describe("loop-single-entry", () => {
     expect(
       rule.check(flow(nodes, [thenWire("A", "X"), thenWire("X", "Y"), thenWire("Y", "X")])),
     ).toEqual([]);
-  });
-
-  describe("for each bodies", () => {
-    const eachNodes = [
-      agent("A"),
-      agent("B"),
-      forEach("E"),
-      agent("X", { parent: "E" }),
-      agent("Y", { parent: "E" }),
-    ];
-
-    it("reports a for each body entered at two nodes, naming it as a for each", () => {
-      const errors = rule.check(flow(eachNodes, [thenWire("A", "X"), thenWire("B", "Y")]));
-      expect(errors.map(({ rule, node }) => ({ rule, node }))).toEqual([
-        { rule: "loop-single-entry", node: "E" },
-      ]);
-      expect(errors[0]?.message).toContain("E (foreach)");
-      expect(errors[0]?.message).toContain("X");
-      expect(errors[0]?.message).toContain("Y");
-    });
-
-    it("accepts a for each body with one entry", () => {
-      expect(rule.check(flow(eachNodes, [thenWire("A", "X"), thenWire("X", "Y")]))).toEqual([]);
-    });
   });
 });

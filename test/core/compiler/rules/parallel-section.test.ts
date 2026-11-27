@@ -2,16 +2,7 @@ import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/parallel-section.js";
 import { validate } from "../../../../src/core/compiler/validate.js";
 import { parallelSections } from "../../../../src/core/nodes/fork/execute.js";
-import {
-  agent,
-  flow,
-  forEach,
-  fork,
-  gate,
-  join,
-  loop,
-  thenWire,
-} from "../../../fixtures/flow-builders.js";
+import { agent, flow, fork, gate, join, loop, thenWire } from "../../../fixtures/flow-builders.js";
 
 const around = (branches: string[]) =>
   branches.flatMap((branch) => [thenWire("f", branch), thenWire(branch, "j")]);
@@ -97,13 +88,10 @@ describe("parallel-section", () => {
     expect(errors.map((error) => error.node)).toContain(named);
   });
 
-  it.each([
-    ["a loop", loop("S")],
-    ["a for each", forEach("S")],
-  ])("says a fork inside %s sits inside a loop or For each", (_, scope) => {
+  it("says a fork inside a loop sits inside a loop", () => {
     const errors = rule.check(
       flow(
-        [scope, fork("f", { parent: "S" }), agent("a1"), agent("a2"), join("j")],
+        [loop("S"), fork("f", { parent: "S" }), agent("a1"), agent("a2"), join("j")],
         around(["a1", "a2"]),
       ),
     );
@@ -111,7 +99,7 @@ describe("parallel-section", () => {
     expect(errors).toContainEqual({
       rule: "parallel-section",
       node: "f",
-      message: "f sits inside a loop or For each; parallel sections cannot.",
+      message: "f sits inside a loop; parallel sections cannot.",
     });
   });
 

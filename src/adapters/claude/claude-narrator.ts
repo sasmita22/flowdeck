@@ -12,8 +12,8 @@ export const narratorPrompt = [
   "Goal: one or two sentences on what the job was meant to accomplish, from the Instructions lines, or from the stage labels when there are none.",
   "Result: what was done and how things stand after, from the After: line and the Report, Steps, Files written and Final reply lines, the Run status line and each stage's status; for a failed or stopped run, where it stopped and what was left undone.",
   "Use only facts from the digest and name stages by their labels. Name any other repo only when an Other repos: line shows it.",
-  "When the stages are listed under Workspace: and Session <name>: lines, say for each stage you name whether it ran in the workspace or in which session.",
-  "For each other repo, Context and Result take how it stood before and after from the before and after the Other repos: line gives it.",
+  "When the stages are listed under Workspace: and Session <name>: lines, say for every stage you name whether it ran in the workspace or in which session.",
+  "For every other repo, Context and Result take how it stood before and after from the before and after the Other repos: line gives it.",
   'When the Before: or After: line says "not recorded", or the digest does not show how things stood, write "not recorded" instead of guessing.',
   "Plain text: no headings, lists or markdown.",
 ].join("\n");

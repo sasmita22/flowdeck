@@ -83,9 +83,9 @@ const pipeline = (
     costReport({ nodeIds: nodes.map((source) => source.id), events, pending: [], now }),
   );
 
-type Round = { round: number; item?: string; items: unknown[] };
+type Round = { round: number; items: unknown[] };
 type Shape = string | { id: string; rounds: ShapeRound[] } | { lanes: Shape[][] };
-type ShapeRound = { round: number; item?: string; items: Shape[] };
+type ShapeRound = { round: number; items: Shape[] };
 type Seen = { nodeId?: string; lanes?: unknown[][]; rounds?: Round[] };
 
 const shapeOf = (items: readonly unknown[]): Shape[] =>
@@ -97,7 +97,6 @@ const shapeOf = (items: readonly unknown[]): Shape[] =>
         id: item.nodeId ?? "",
         rounds: item.rounds.map((round) => ({
           round: round.round,
-          ...(round.item === undefined ? {} : { item: round.item }),
           items: shapeOf(round.items),
         })),
       };
@@ -203,41 +202,6 @@ describe("pipelineOf", () => {
       const [first, second] = roundsOf(items, "review");
       expect(stageIn(first?.items ?? [], "check").status).toBe("done");
       expect(stageIn(second?.items ?? [], "check").status).toBe("sent");
-    });
-
-    it("lists a For each's children once per round, labelled with that round's item", () => {
-      const events = stored([
-        ["each", 0, { kind: "running" }],
-        ["each", 0, { kind: "round", payload: { round: 1, items: ["unit one", "unit two"] } }],
-        ["work", 1, { kind: "sent" }],
-        ["work", 2, { kind: "done" }],
-        ["each", 3, { kind: "round", payload: { round: 2 } }],
-        ["work", 3, { kind: "reset" }],
-        ["work", 4, { kind: "sent" }],
-      ]);
-
-      const items = pipeline(
-        [
-          node("start", "trigger"),
-          node("each", "foreach"),
-          node("work", "agent", "each"),
-          node("stop", "output"),
-        ],
-        [then("start", "each"), then("each", "stop")],
-        events,
-      );
-
-      expect(shapeOf(items)).toEqual([
-        "start",
-        {
-          id: "each",
-          rounds: [
-            { round: 1, item: "unit one", items: ["work"] },
-            { round: 2, item: "unit two", items: ["work"] },
-          ],
-        },
-        "stop",
-      ]);
     });
 
     it("nests a Loop inside a Fork lane", () => {
@@ -615,42 +579,6 @@ describe("pipelineOf", () => {
         expect(stageIn(items, "review")).toMatchObject({ tokens: 0, cost: 0 });
       });
 
-      it("gives each For each round its total and its stage's cost for the round", () => {
-        const items = itemsOf(
-          [
-            node("start", "trigger"),
-            node("each", "foreach"),
-            node("work", "agent", "each"),
-          ] as Source[],
-          [then("start", "each")] as Link[],
-          stored([
-            ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two"] } }],
-            ["work", 1, { kind: "sent" }],
-            ["work", 2, { kind: "done" }],
-            ["each", 3, { kind: "round", payload: { round: 2 } }],
-            ["work", 3, { kind: "reset" }],
-            ["work", 4, { kind: "sent" }],
-            ["work", 5, { kind: "done" }],
-          ]),
-          [],
-          report([
-            line("start"),
-            line("each"),
-            line("work", [
-              [1, 10, 0.001],
-              [2, 20, 0.002],
-            ]),
-          ]),
-        );
-
-        const rounds = roundsOf(items, "each") as (Round & { tokens?: number; cost?: number })[];
-        expect(rounds.map(({ round, tokens, cost }) => ({ round, tokens, cost }))).toEqual([
-          { round: 1, tokens: 10, cost: 0.001 },
-          { round: 2, tokens: 20, cost: 0.002 },
-        ]);
-        expect(rounds.map((round) => stageIn(round.items, "work").cost)).toEqual([0.001, 0.002]);
-      });
-
       it("adds the stages of a round's parallel lanes into the round total", () => {
         const items = itemsOf(
           [
@@ -700,13 +628,13 @@ describe("pipelineOf", () => {
       const items = pipeline(
         [
           node("start", "trigger"),
-          node("each", "foreach"),
+          node("each", "loop"),
           node("work", "agent", "each"),
           node("stop", "output"),
         ],
         [then("start", "each"), then("each", "stop")],
         stored([
-          ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two"] } }],
+          ["each", 0, { kind: "round", payload: { round: 1 } }],
           ["work", 1, { kind: "sent" }],
           ["work", 2, { kind: "done" }],
           ["each", 2, { kind: "round", payload: { round: 2 } }],
@@ -728,17 +656,17 @@ describe("stage activity windows", () => {
   type Windowed = { activityFrom?: number; activityTo?: number };
   type StageLike = { nodeId: string } & Windowed;
 
-  const foreachItems = () =>
+  const loopItems = () =>
     pipeline(
       [
         node("start", "trigger"),
-        node("each", "foreach"),
+        node("each", "loop"),
         node("work", "agent", "each"),
         node("stop", "output"),
       ],
       [then("start", "each"), then("each", "stop")],
       stored([
-        ["each", 0, { kind: "round", payload: { round: 1, items: ["one", "two", "three"] } }],
+        ["each", 0, { kind: "round", payload: { round: 1 } }],
         ["work", 1, { kind: "sent" }],
         ["work", 2, { kind: "done" }],
         ["each", 2, { kind: "round", payload: { round: 2 } }],
@@ -777,7 +705,7 @@ describe("stage activity windows", () => {
   });
 
   it("gives a round stage the finite edges of its round's window and a whole-run stage none", () => {
-    const items = foreachItems();
+    const items = loopItems();
     const [first, second, third] = roundsOf(items, "each");
     const work = (round: Round | undefined) =>
       stageIn(round?.items ?? [], "work") as unknown as Windowed;
@@ -792,7 +720,7 @@ describe("stage activity windows", () => {
   });
 
   it("selects the same activity from a whole feed as the pipeline gives each round", () => {
-    const items = foreachItems();
+    const items = loopItems();
     const feed = [tool(5, "work"), tool(4, "work"), tool(2, "work")];
     const rounds = roundsOf(items, "each");
 
@@ -804,7 +732,7 @@ describe("stage activity windows", () => {
   });
 
   it("parses stages with and without window edges through the pipeline schema", () => {
-    const parsed = pipelineSchema.parse(JSON.parse(JSON.stringify(foreachItems())));
+    const parsed = pipelineSchema.parse(JSON.parse(JSON.stringify(loopItems())));
     const [first, second] = roundsOf(parsed, "each");
 
     expect(stageIn(second?.items ?? [], "work")).toMatchObject({
