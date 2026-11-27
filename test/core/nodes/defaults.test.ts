@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 import { validate } from "../../../src/core/compiler/validate.js";
 import { NodeType, parseFlow } from "../../../src/core/flow/schema.js";
 import * as agent from "../../../src/core/nodes/agent/defaults.js";
-import * as ask from "../../../src/core/nodes/ask/defaults.js";
 import * as branch from "../../../src/core/nodes/branch/defaults.js";
 import * as fork from "../../../src/core/nodes/fork/defaults.js";
 import * as gate from "../../../src/core/nodes/gate/defaults.js";
-import * as hardstop from "../../../src/core/nodes/hardstop/defaults.js";
 import * as join from "../../../src/core/nodes/join/defaults.js";
 import * as library from "../../../src/core/nodes/library/defaults.js";
 import * as loop from "../../../src/core/nodes/loop/defaults.js";
@@ -34,8 +32,6 @@ const onTheMainFlow = (node: { id: string; type: string }) => {
 const cases: [type: string, defaults: Defaults, label: string, rules: string[]][] = [
   ["agent", agent, "Agent", ["required-settings"]],
   ["gate", gate, "Gate", []],
-  ["ask", ask, "Ask", ["required-settings"]],
-  ["hardstop", hardstop, "Hard stop", []],
   ["loop", loop, "Loop", ["required-settings", "loop-body"]],
   ["trigger", trigger, "Start", []],
   ["output", output, "Stop", ["required-settings", "required-settings"]],
@@ -71,13 +67,25 @@ describe("node defaults", () => {
     expect(Object.keys(nodeDefaults)).not.toContain("prompt");
     expect(Object.keys(nodeDefaults)).not.toContain("script");
   });
+
+  it.each(["ask", "hardstop"])("has no entry for the removed %s type", (type) => {
+    expect(Object.keys(nodeDefaults)).not.toContain(type);
+  });
+
+  it("starts a new Gate as Always, with no condition and no instruction", () => {
+    expect(nodeDefaults.gate.settings).toEqual({
+      stopWhen: "always",
+      condition: "",
+      instruction: "",
+    });
+  });
 });
 
 describe("a node's shown label", () => {
   it.each([
     ["agent", "", "Agent"],
     ["agent", "   ", "Agent"],
-    ["hardstop", "", "Hard stop"],
+    ["gate", "", "Gate"],
   ] as const)("labelFor names a %s labelled %j by its type, %j", (type, label, shown) => {
     expect(labelFor({ type, label })).toBe(shown);
   });

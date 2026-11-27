@@ -1,11 +1,11 @@
 import type { PendingWait, WaitRequest } from "../../src/core/run/wait.js";
 
-export const gate: WaitRequest = { nodeId: "g1", kind: "gate", shown: "Check the plan" };
+export const gate: WaitRequest = { nodeId: "g1", kind: "gate", instruction: "Check the plan" };
 
-export const hardstop: WaitRequest = {
+export const conditionalGate: WaitRequest = {
   nodeId: "h1",
-  kind: "hardstop",
-  shown: "test report",
+  kind: "gate",
+  instruction: "Read the test report",
   condition: "tests fail",
 };
 
@@ -27,7 +27,7 @@ export const free: WaitRequest = { nodeId: "q2", kind: "ask", question: "Name it
 
 export const gateWait: PendingWait = {
   waitId: "wait-1",
-  request: { nodeId: "gate", kind: "gate", shown: "Ship it?" },
+  request: { nodeId: "gate", kind: "gate", instruction: "Ship it?" },
 };
 
 export const askWait: PendingWait = {

@@ -189,6 +189,24 @@ describe("the Branch entry", () => {
   });
 });
 
+describe("the Gate entry", () => {
+  it("says it pauses to show its Instruction, always or only when its condition is met", () => {
+    const { description } = itemOf("gate");
+
+    expect(description).toMatch(/Instruction/);
+    expect(description).toMatch(/Always/);
+    expect(description).toMatch(/Conditional/);
+    expect(description).not.toMatch(/approve|flag/i);
+  });
+
+  it.each(["hardstop", "ask"])("is the only People and safety row: no %s row", (type) => {
+    expect(paletteItems.map((item) => item.type as string)).not.toContain(type);
+    expect(
+      paletteItems.filter((item) => item.group === "People and safety").map((item) => item.type),
+    ).toEqual(["gate"]);
+  });
+});
+
 describe("the Start entry", () => {
   it("says it is where the blueprint starts and what the main flow is", () => {
     expect(itemOf("trigger").description).toBe(
@@ -220,8 +238,8 @@ describe("Start and Stop on top", () => {
     );
   });
 
-  it("keeps Stop ahead of Hard stop when searching for stop", () => {
-    expect(typesOf("stop")).toEqual(["output", "hardstop"]);
+  it("finds only Stop when searching for stop", () => {
+    expect(typesOf("stop")).toEqual(["output"]);
     expect(groupPalette(filterPalette(paletteItems, "stop"))[0]).toEqual({
       group: "",
       items: [itemOf("output")],

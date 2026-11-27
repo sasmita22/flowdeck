@@ -317,9 +317,10 @@ describe("SqliteStore", () => {
       { name: "025_connections.sql" },
       { name: "026_build_snapshot_flow.sql" },
       { name: "027_drop_unknown_node_types.sql" },
+      { name: "028_drop_removed_gate_nodes.sql" },
     ]);
     expect(counts()).toEqual(before);
-    expect(before).toEqual([1, 1, 3, 1, 27]);
+    expect(before).toEqual([1, 1, 3, 1, 28]);
   });
 
   it("writes one run, one session and one row per node", () => {

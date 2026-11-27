@@ -46,18 +46,9 @@ const settings: Record<Lowered, Record<string, [unknown, Landing]>> = {
     produces: ["M-agent-produces", atRunTime("M-agent-produces")],
   },
   gate: {
-    shown: ["M-gate-shown", atRunTime("M-gate-shown")],
-    skippable: [true, atRunTime(true)],
-  },
-  ask: {
-    question: ["M-ask-question", atRunTime("M-ask-question")],
-    options: [["M-ask-option"], atRunTime(["M-ask-option"])],
-  },
-  hardstop: {
-    condition: ["M-hardstop-condition", atRunTime("M-hardstop-condition")],
-    shown: ["M-hardstop-shown", atRunTime("M-hardstop-shown")],
-    locked: [true, atRunTime(true)],
-    enabled: [true, atRunTime(true)],
+    stopWhen: ["conditional", atRunTime("conditional")],
+    condition: ["M-gate-condition", atRunTime("M-gate-condition")],
+    instruction: ["M-gate-instruction", atRunTime("M-gate-instruction")],
   },
   loop: {
     condition: ["M-loop-condition", atRunTime("M-loop-condition")],
@@ -103,8 +94,6 @@ const blueprintSettings: Record<string, [unknown, Landing]> = {
 const idOf: Record<Lowered, string> = {
   agent: "a",
   gate: "g",
-  ask: "k",
-  hardstop: "h",
   loop: "l",
   trigger: "t",
   output: "o",

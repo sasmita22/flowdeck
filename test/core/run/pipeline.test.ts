@@ -440,6 +440,26 @@ describe("pipelineOf", () => {
       expect(approve.activity).toEqual([tool(2, "approve")]);
     });
 
+    it.each([
+      { nodeId: "approve", decision: "approved" },
+      { nodeId: "approve", decision: "skipped" },
+      { nodeId: "approve", decision: "continued" },
+      { nodeId: "approve", decision: "continued", text: "use the v2 API" },
+      { nodeId: "approve", decision: "rejected", reason: "wrong scope" },
+      { nodeId: "approve", decision: "stopped", reason: "tests fail" },
+      { nodeId: "approve", decision: "answered", answer: "continue" },
+    ] as const)("keeps the gate decision %j through the pipeline schema", (decision) => {
+      const decided = stored([
+        ["approve", 10, { kind: "needs-you" }],
+        ["approve", 12, { kind: "decided", payload: decision }],
+      ]);
+      const parsed = pipelineSchema.parse(
+        JSON.parse(JSON.stringify(pipeline(nodes, links, decided))),
+      );
+
+      expect(stageIn(parsed, "approve").decisions).toEqual([decision]);
+    });
+
     it("gives no round of a Loop child tokens or cost in a run whose usage was charged with no round", () => {
       const looped = [
         node("start", "trigger"),

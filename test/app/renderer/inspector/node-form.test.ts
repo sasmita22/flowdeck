@@ -47,22 +47,8 @@ describe("describeNodeFields", () => {
     [
       "gate",
       [
-        ["multiline", "shown", "node-setting-shown"],
-        ["toggle", "skippable", "node-setting-skippable"],
-      ],
-    ],
-    [
-      "ask",
-      [
-        ["multiline", "question", "node-setting-question"],
-        ["list", "options", "node-setting-options"],
-      ],
-    ],
-    [
-      "hardstop",
-      [
-        ["multiline", "condition", "node-setting-condition"],
-        ["multiline", "shown", "node-setting-shown"],
+        ["select", "stopWhen", "node-setting-stop-when"],
+        ["multiline", "instruction", "node-setting-instruction"],
       ],
     ],
     [
@@ -230,21 +216,63 @@ describe("describeNodeFields", () => {
     });
   });
 
-  it("gives a hard stop no switch to turn it off or unlock it", () => {
-    const paths = describeNodeFields("hardstop").map((field) => field.path.join("."));
+  describe("a Gate's Condition to stop", () => {
+    it("offers Always and Conditional, labelled in plain words", () => {
+      const [stopWhen] = describeNodeFields("gate");
 
-    expect(paths).not.toContain("enabled");
-    expect(paths).not.toContain("locked");
+      expect(stopWhen).toMatchObject({
+        control: "select",
+        path: ["stopWhen"],
+        testId: "node-setting-stop-when",
+        label: "Condition to stop",
+        options: ["always", "conditional"],
+        optionLabels: { always: "Always", conditional: "Conditional" },
+      });
+    });
+
+    it("shows Condition to stop and Instruction for an Always Gate, with no condition, Shown or Skippable field", () => {
+      const paths = describeNodeFields("gate", undefined, nodeDefaults.gate.settings).map((field) =>
+        field.path.join("."),
+      );
+
+      expect(paths).toEqual(["stopWhen", "instruction"]);
+      expect(paths).not.toContain("condition");
+      expect(paths).not.toContain("shown");
+      expect(paths).not.toContain("skippable");
+    });
+
+    it("shows the condition field between them for a Conditional Gate", () => {
+      expect(
+        describeNodeFields("gate", undefined, {
+          stopWhen: "conditional",
+          condition: "",
+          instruction: "",
+        }).map(summary),
+      ).toEqual([
+        ["select", "stopWhen", "node-setting-stop-when"],
+        ["multiline", "condition", "node-setting-condition"],
+        ["multiline", "instruction", "node-setting-instruction"],
+      ]);
+    });
   });
 });
 
 describe("applyNodeSetting", () => {
   it.each<[NodeType, string[], Parameters<typeof applyNodeSetting>[2], Record<string, unknown>]>([
     ["agent", ["instructions"], "Line one\nLine two", { instructions: "Line one\nLine two" }],
-    ["gate", ["shown"], "Check the plan", { shown: "Check the plan", skippable: false }],
-    ["gate", ["skippable"], true, { shown: "", skippable: true }],
-    ["ask", ["options"], "yes\nno", { question: "", options: ["yes", "no"] }],
-    ["hardstop", ["condition"], "tests fail", { condition: "tests fail", locked: true }],
+    [
+      "gate",
+      ["instruction"],
+      "Check the plan",
+      { stopWhen: "always", condition: "", instruction: "Check the plan" },
+    ],
+    [
+      "gate",
+      ["stopWhen"],
+      "conditional",
+      { stopWhen: "conditional", condition: "", instruction: "" },
+    ],
+    ["gate", ["condition"], "tests fail", { condition: "tests fail" }],
     ["loop", ["cap"], "5", { cap: 5, onCap: "fail" }],
     ["loop", ["onCap"], "ask", { cap: 3, onCap: "ask" }],
     ["output", ["name"], "result", { name: "result", type: "" }],
@@ -293,11 +321,14 @@ describe("applyNodeSetting", () => {
     expect(applied(nodeOf("loop"), ["cap"], "lots").settings).toEqual(nodeDefaults.loop.settings);
   });
 
-  it.each([["enabled"], ["locked"]])("refuses to change a hard stop's %s", (key) => {
-    const result = applyNodeSetting(nodeOf("hardstop"), [key], false);
+  it.each([["libraryId"], ["label"], ["overrides"]])(
+    "refuses to change a library node's hidden %s",
+    (key) => {
+      const result = applyNodeSetting(nodeOf("library"), [key], "x");
 
-    expect(result).toEqual({ error: "Hard stop is locked" });
-  });
+      expect(result).toEqual({ error: "This setting is locked" });
+    },
+  );
 });
 
 describe("the Branch no-variables hint", () => {

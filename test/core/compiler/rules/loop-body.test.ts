@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { rule } from "../../../../src/core/compiler/rules/loop-body.js";
 import { structureProblems } from "../../../../src/core/run/runner.js";
 import { lower } from "../../../../src/core/compiler/lower.js";
-import { agent, ask, flow, gate, loop } from "../../../fixtures/flow-builders.js";
+import { agent, flow, gate, loop } from "../../../fixtures/flow-builders.js";
 import { oneSession } from "../../../fixtures/one-session.js";
 
 const check = (nodes: unknown[], wires: unknown[] = []) => rule.check(flow(nodes, wires));
@@ -19,8 +19,12 @@ describe("loop-body", () => {
   it.each([
     ["a fresh Loop", [loop("L")], "L", "L (loop) has no agent in its body."],
     [
-      "a Loop whose body is an ask and a gate",
-      [loop("L"), ask("s1", { parent: "L" }), gate("s2", { parent: "L" })],
+      "a Loop whose body is a Conditional Gate and an Always Gate",
+      [
+        loop("L"),
+        gate("s1", { parent: "L", settings: { stopWhen: "conditional", condition: "tests fail" } }),
+        gate("s2", { parent: "L" }),
+      ],
       "L",
       "L (loop) has no agent in its body.",
     ],

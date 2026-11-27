@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stopMarker, stoppedNodeOf } from "../../../src/core/run/stop-marker.js";
+import { stopMarker, stoppedNodeOf, stopsTheRun } from "../../../src/core/run/stop-marker.js";
 
 describe("stopMarker", () => {
   it("names the node the session stopped at", () => {
@@ -34,5 +34,26 @@ describe("stoppedNodeOf", () => {
     { name: "a marker with no id", message: "STOPPED NODE " },
   ])("reads nothing from $name", ({ message }) => {
     expect(stoppedNodeOf(message)).toBeUndefined();
+  });
+});
+
+describe("stopsTheRun", () => {
+  it.each([
+    [
+      "a Conditional Gate",
+      true,
+      { type: "gate", settings: { stopWhen: "conditional", condition: "x", instruction: "" } },
+    ],
+    [
+      "an Always Gate",
+      false,
+      { type: "gate", settings: { stopWhen: "always", condition: "", instruction: "" } },
+    ],
+    ["a Loop that fails at its cap", true, { type: "loop", settings: { onCap: "fail" } }],
+    ["a Loop that asks at its cap", false, { type: "loop", settings: { onCap: "ask" } }],
+    ["an Agent", false, { type: "agent", settings: {} }],
+    ["a node of the removed hardstop type", false, { type: "hardstop", settings: {} }],
+  ])("%s stops the run: %s", (_name, expected, node) => {
+    expect(stopsTheRun(node)).toBe(expected);
   });
 });

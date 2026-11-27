@@ -32,14 +32,12 @@ import { flowContainerOf, flowIn, flowOut } from "../../../../src/core/flow/stru
 import { featureLibrary, wrappedFeatureLibrary } from "../../../fixtures/feature-library.js";
 import {
   agent,
-  ask,
   branch,
   flow,
   flowSettings,
   inOneSession,
   fork,
   gate,
-  hardstop,
   join,
   loop,
   output,
@@ -398,8 +396,16 @@ describe("toViewNodes and flow containers", () => {
 });
 
 describe("toViewNodes delete lock", () => {
-  it("lets a hard stop be deleted like any node", () => {
-    const [node] = nodeViews(inOneSession([hardstop("H")], []), [], {}, null);
+  it("lets a Conditional Gate be deleted like any node", () => {
+    const [node] = nodeViews(
+      inOneSession(
+        [gate("H", { settings: { stopWhen: "conditional", condition: "tests fail" } })],
+        [],
+      ),
+      [],
+      {},
+      null,
+    );
 
     expect(node).not.toHaveProperty("deletable");
   });
@@ -412,7 +418,7 @@ describe("toViewNodes delete lock", () => {
         agent("S"),
         agent("G"),
         gate("K"),
-        ask("Q"),
+        gate("Q", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
         loop("L"),
         output("O"),
       ],
@@ -452,8 +458,8 @@ describe("toViewNodes with a branch", () => {
         agent("S"),
         agent("G"),
         gate("K"),
-        ask("Q"),
-        hardstop("H"),
+        gate("Q", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
+        gate("H", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
         output("O"),
         { ...branch("B", "e2e"), settings: { variable: "e2e" } },
       ],

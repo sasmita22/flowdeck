@@ -86,12 +86,12 @@ describe("dropping a new node onto a frame", () => {
     );
   });
 
-  it.each(["gate", "ask", "hardstop"] as const)("puts a dropped %s in the body", (type) => {
+  it("puts a dropped gate in the body", () => {
     const store = loaded(flow([at(loop("L"), 0, 0)], []));
 
-    store.getState().drop(type, { x: 100, y: 60 });
+    store.getState().drop("gate", { x: 100, y: 60 });
 
-    expect(parentOf(store.getState().flow, `${type}-1`)).toBe("L");
+    expect(parentOf(store.getState().flow, "gate-1")).toBe("L");
   });
 
   it("keeps a dropped body node clear of the frame's label", () => {

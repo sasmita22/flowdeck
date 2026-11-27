@@ -7,9 +7,6 @@ const roundedRect = (width: number, height: number, r: number, inset = 0): strin
   return `M${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x + r} Q${x},${y + h} ${x},${y + h - r} V${y + r} Q${x},${y} ${x + r},${y} Z`;
 };
 
-const octagon = (w: number, h: number, c: number): string =>
-  `M${c},0 H${w - c} L${w},${c} V${h - c} L${w - c},${h} H${c} L0,${h - c} V${c} Z`;
-
 export interface ShapeExtra {
   element: "path" | "rect" | "polygon";
   attributes: Readonly<Record<string, string | number>>;
@@ -40,7 +37,7 @@ const outline = (path: string, padL: number, more: Partial<NodeOutline> = {}): N
 
 const container = (width: number) => outline(roundedRect(width, h, 4), 8, { fill: "none" });
 
-const human = nodeLook("hardstop").group;
+const human = nodeLook("gate").group;
 const work = nodeLook("agent").group;
 const ctrl = nodeLook("branch").group;
 
@@ -93,18 +90,6 @@ const outlines: Record<OutlinedType, (w: number) => NodeOutline> = {
         },
       ],
     }),
-  hardstop: (w) => {
-    const stop = octagon(w, h, 13);
-    return outline(stop, 12, {
-      strokeWidth: 2,
-      extras: [{ element: "path", attributes: { d: stop, fill: human, fillOpacity: 0.14 } }],
-    });
-  },
-  ask: (w) =>
-    outline(
-      `M8,0 H${w - 8} Q${w},0 ${w},8 V${h - 8} Q${w},${h} ${w - 8},${h} H28 L16,${h + 9} L18,${h} H8 Q0,${h} 0,${h - 8} V8 Q0,0 8,0 Z`,
-      8,
-    ),
   library: (w) => outline(roundedRect(w, h, 6), 10, { strokeWidth: 1.6 }),
   loop: container,
   branch: (w) =>

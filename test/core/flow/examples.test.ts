@@ -109,7 +109,7 @@ describe("stored flows", () => {
     expect(storedFlows.map(({ file }) => file)).toEqual(
       expect.arrayContaining([
         "examples/all-types.json",
-        "test/fixtures/agent-then-ask.json",
+        "test/fixtures/agent-then-gate.json",
         "test/fixtures/broken/no-cycle.json",
         "e2e/fixtures/copy-flow/expected-blueprint.json",
       ]),

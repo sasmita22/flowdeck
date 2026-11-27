@@ -125,36 +125,37 @@
         "y": 0
       },
       "settings": {
-        "shown": "plan.md",
-        "skippable": false
+        "stopWhen": "always",
+        "condition": "",
+        "instruction": "Read plan.md before the build goes on."
       }
     },
     {
       "id": "choose",
       "label": "Choose",
-      "type": "ask",
+      "type": "gate",
       "position": {
         "x": 1920,
         "y": 0
       },
       "settings": {
-        "question": "Ship it?",
-        "options": ["yes", "no"]
+        "stopWhen": "always",
+        "condition": "",
+        "instruction": "Ship it?"
       }
     },
     {
       "id": "stop",
       "label": "Stop on failure",
-      "type": "hardstop",
+      "type": "gate",
       "position": {
         "x": 2160,
         "y": 0
       },
       "settings": {
+        "stopWhen": "conditional",
         "condition": "tests fail",
-        "shown": "test report",
-        "locked": true,
-        "enabled": true
+        "instruction": "Read the test report."
       }
     },
     {

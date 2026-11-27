@@ -16,7 +16,7 @@ import {
   agent,
   flow,
   fork,
-  hardstop,
+  gate,
   join as joinNode,
   output,
   thenWire,
@@ -54,12 +54,15 @@ const forkFlow = (): Flow =>
     ],
   );
 
-const hardStopFlow = (): Flow =>
+const conditionalGateFlow = (): Flow =>
   flow(
     [
       labelled(trigger("t"), "Start"),
       labelled(agent("a"), "A"),
-      labelled(hardstop("h"), "Guard"),
+      labelled(
+        gate("h", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
+        "Guard",
+      ),
       labelled(agent("b"), "B"),
       labelled(output("o"), "Stop"),
     ],
@@ -191,8 +194,8 @@ describe("the fake Claude session", () => {
     ]);
   });
 
-  it("stops at the hard stop after a node holding the hardstop verb", async () => {
-    const events = await runFake(hardStopFlow(), { a: "fake: hardstop" });
+  it("stops at a Conditional Gate after a node holding the met verb", async () => {
+    const events = await runFake(conditionalGateFlow(), { a: "fake: met" });
 
     expect(
       events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),

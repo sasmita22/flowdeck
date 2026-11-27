@@ -155,8 +155,8 @@ export class SessionWatch {
     const nodeId = stoppedNodeOf(typeof message === "string" ? message : undefined);
     const node = this.deps.container.nodes.find(({ id }) => id === nodeId);
     if (node === undefined || !stopsTheRun(node)) return undefined;
-    if (node.type === "hardstop") {
-      return { nodeId: node.id, message: `${node.id} failed: stopped by its hard stop` };
+    if (node.type === "gate") {
+      return { nodeId: node.id, message: `${node.id} failed: stopped by its condition` };
     }
     if (node.type === "loop") {
       const cap = (node.settings as { cap?: number } | undefined)?.cap;

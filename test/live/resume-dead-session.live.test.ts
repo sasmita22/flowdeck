@@ -268,7 +268,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("a run whose Claude session e
         pushes.findLast((push) => push.push === "wait")?.value as PendingWait | null | undefined;
       await vi.waitFor(() => expect(gateWait()?.request.nodeId).toBe("g1"));
       expect(
-        second.waiter.answer({ waitId: gateWait()?.waitId ?? "", reply: { decision: "approve" } }),
+        second.waiter.answer({ waitId: gateWait()?.waitId ?? "", reply: { decision: "continue" } }),
       ).toBe(true);
       await vi.waitFor(
         async () =>

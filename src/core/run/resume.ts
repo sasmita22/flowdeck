@@ -33,7 +33,7 @@ type ResumeInput = {
   sessionRestarted?: boolean;
 };
 
-const humanTypes = new Set<ManifestNode["type"]>(["gate", "ask", "hardstop", "loop", "branch"]);
+const humanTypes = new Set<ManifestNode["type"]>(["gate", "loop", "branch"]);
 
 function turnMarker(node: ManifestNode, prefix: string): string {
   return `subagent_type "${agentType(prefix, pieceOf(node))}"`;
@@ -131,7 +131,7 @@ export function decideResume({
       actions[node.id] = sessionRestarted && settled.kind === "wait" ? cutOff(node.id) : settled;
     }
     if (status === "needs-you" && humanTypes.has(node.type)) actions[node.id] = settleHuman(own);
-    if (status === "running" && node.type === "hardstop") actions[node.id] = { kind: "ask" };
+    if (status === "running" && node.type === "gate") actions[node.id] = { kind: "ask" };
   }
   return actions;
 }

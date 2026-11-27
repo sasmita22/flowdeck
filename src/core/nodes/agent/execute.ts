@@ -1,7 +1,7 @@
 import { declaredHandoff, handoffText, type Handoff } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
 import { nodeMarker, type AgentCall } from "../../run/agent-calls.js";
-import { answerContext } from "../ask/execute.js";
+import { answerContext } from "../gate/execute.js";
 import { producedName } from "./settings.js";
 
 type AgentOutcome = "done" | "failed";

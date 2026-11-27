@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { forkTurnText } from "../../../src/core/nodes/fork/execute.js";
-import { hardstopCheckTurn } from "../../../src/core/nodes/hardstop/execute.js";
+import { gateCheckTurn, noVerdictRequest } from "../../../src/core/nodes/gate/execute.js";
 import {
   agentVerdictTurnText,
   capRequest,
@@ -493,23 +493,15 @@ describe("Runner", () => {
   });
 
   describe("human nodes", () => {
-    const gate = (id: string, skippable = false) =>
-      node(id, "gate", { shown: "Check the plan", skippable });
-    const hardstopSettings = {
-      condition: "",
-      shown: "Check tests",
-      locked: true,
-      enabled: true,
-    };
-    const hardstop = (id: string, settings: Record<string, unknown> = {}) =>
-      node(id, "hardstop", { ...hardstopSettings, ...settings });
-    const ask = (id: string, options = ["red", "blue", "green"]) =>
-      node(id, "ask", { question: "Pick a colour", options });
-    const approve: WaitReply = { decision: "approve" };
-    const answer = (text: string): WaitReply => ({ decision: "answer", answer: text });
+    const gate = (id: string, instruction = "Check the plan") =>
+      node(id, "gate", { stopWhen: "always", condition: "", instruction });
+    const conditional = (id: string, condition = "tests fail") =>
+      node(id, "gate", { stopWhen: "conditional", condition, instruction: "Check tests" });
+    const proceed: WaitReply = { decision: "continue" };
+    const proceedWith = (text: string): WaitReply => ({ decision: "continue", text });
     const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
 
-    it("blocks at a Gate until the waiter answers, then continues on approve", async () => {
+    it("blocks at an Always Gate until the waiter answers, then goes on at continue", async () => {
       let resolve: (reply: WaitReply) => void = () => undefined;
       const waiter = new FakeWaiter([new Promise<WaitReply>((r) => (resolve = r))]);
       const { deps, calls, lines } = harness({ waiter });
@@ -518,47 +510,47 @@ describe("Runner", () => {
       await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
 
       expect(sends(calls)).toEqual([turnOf("p1")]);
-      expect(waiter.calls).toEqual([{ nodeId: "g1", kind: "gate", shown: "Check the plan" }]);
-      resolve(approve);
+      expect(waiter.calls).toEqual([{ nodeId: "g1", kind: "gate", instruction: "Check the plan" }]);
+      resolve(proceed);
       const result = await running;
 
       expect(result.outcome).toBe("done");
       expect(sends(calls)).toEqual([turnOf("p1"), turnOf("p2")]);
-      expect(lines).toEqual(["p1 started", "p1 done", "g1 approved", "p2 started", "p2 done"]);
-      expect(result.decisions).toEqual([{ nodeId: "g1", decision: "approved" }]);
+      expect(lines).toEqual(["p1 started", "p1 done", "g1 continued", "p2 started", "p2 done"]);
+      expect(result.decisions).toEqual([{ nodeId: "g1", decision: "continued" }]);
       expect(result.states).toEqual({ p1: "done", g1: "done", p2: "done" });
     });
 
-    it("stops the run at a Gate rejected with a reason", async () => {
-      const waiter = new FakeWaiter([{ decision: "reject", reason: "wrong scope" }]);
+    it("stops the run at a Gate stopped with a reason", async () => {
+      const waiter = new FakeWaiter([{ decision: "stop", reason: "wrong scope" }]);
       const { deps, calls, lines } = harness({ waiter });
 
       const result = await runOn(deps, manifest(agent("p1"), gate("g1"), agent("p2")));
 
       expect(result).toMatchObject({ outcome: "failed", failedNode: "g1" });
       expect(result.states).toEqual({ p1: "done", g1: "failed", p2: "waiting" });
-      expect(lines.at(-1)).toBe("g1 failed: rejected: wrong scope");
+      expect(lines.at(-1)).toBe("g1 failed: stopped: wrong scope");
       expect(sends(calls)).toEqual([turnOf("p1")]);
       expect(result.decisions).toEqual([
-        { nodeId: "g1", decision: "rejected", reason: "wrong scope" },
+        { nodeId: "g1", decision: "stopped", reason: "wrong scope" },
       ]);
     });
 
-    it("prints rejected alone for a reject with an empty reason", async () => {
-      const waiter = new FakeWaiter([{ decision: "reject", reason: "" }]);
+    it("prints stopped alone for a stop with an empty reason", async () => {
+      const waiter = new FakeWaiter([{ decision: "stop", reason: "" }]);
       const { deps, lines } = harness({ waiter });
 
       const result = await runOn(deps, manifest(agent("p1"), gate("g1"), agent("p2")));
 
-      expect(lines.at(-1)).toBe("g1 failed: rejected");
-      expect(result.decisions).toEqual([{ nodeId: "g1", decision: "rejected", reason: "" }]);
+      expect(lines.at(-1)).toBe("g1 failed: stopped");
+      expect(result.decisions).toEqual([{ nodeId: "g1", decision: "stopped", reason: "" }]);
     });
 
-    it("skips a skippable Gate under auto without asking", async () => {
+    it("skips an Always Gate under auto without asking", async () => {
       const waiter = new FakeWaiter([]);
       const { deps, calls, lines } = harness({ waiter, auto: true });
 
-      const result = await runOn(deps, manifest(agent("p1"), gate("g1", true), agent("p2")));
+      const result = await runOn(deps, manifest(agent("p1"), gate("g1"), agent("p2")));
 
       expect(result.outcome).toBe("done");
       expect(waiter.calls).toEqual([]);
@@ -568,66 +560,44 @@ describe("Runner", () => {
       expect(result.decisions).toEqual([{ nodeId: "g1", decision: "skipped" }]);
     });
 
-    it("asks at a skippable Gate when auto is off", async () => {
-      const waiter = new FakeWaiter([approve]);
-      const { deps } = harness({ waiter });
+    it("asks at an Always Gate when auto is off", async () => {
+      const waiter = new FakeWaiter([proceed]);
+      const { deps } = harness({ waiter, auto: false });
 
-      const result = await runOn(deps, manifest(agent("p1"), gate("g1", true), agent("p2")));
+      const result = await runOn(deps, manifest(agent("p1"), gate("g1"), agent("p2")));
 
       expect(result.outcome).toBe("done");
       expect(waiter.calls).toHaveLength(1);
     });
 
-    it("asks at a Gate that is not skippable even under auto", async () => {
-      const waiter = new FakeWaiter([approve]);
-      const { deps, lines } = harness({ waiter, auto: true });
+    it("asks at a Conditional Gate with no condition under auto, and goes on at continue", async () => {
+      const waiter = new FakeWaiter([proceed]);
+      const { deps, calls, lines } = harness({ waiter, auto: true });
 
-      await runOn(deps, manifest(agent("p1"), gate("g1"), agent("p2")));
-
-      expect(waiter.calls).toHaveLength(1);
-      expect(lines).toContain("g1 approved");
-    });
-
-    it("asks at a Hard stop under auto and continues on continue", async () => {
-      const waiter = new FakeWaiter([{ decision: "continue" }]);
-      const { deps, lines } = harness({ waiter, auto: true });
-
-      const result = await runOn(deps, manifest(agent("p1"), hardstop("h1"), agent("p2")));
+      const result = await runOn(deps, manifest(agent("p1"), conditional("h1", ""), agent("p2")));
 
       expect(waiter.calls).toEqual([
-        { nodeId: "h1", kind: "hardstop", shown: "Check tests", condition: "" },
+        { nodeId: "h1", kind: "gate", instruction: "Check tests", condition: "" },
       ]);
+      expect(sends(calls)).toEqual([turnOf("p1"), turnOf("p2")]);
       expect(lines).toContain("h1 continued");
       expect(result.outcome).toBe("done");
       expect(result.decisions).toEqual([{ nodeId: "h1", decision: "continued" }]);
     });
 
-    it.each([{ locked: false }, { enabled: false }, { locked: false, enabled: false }])(
-      "asks at a Hard stop with %o under auto",
-      async (settings) => {
-        const waiter = new FakeWaiter([{ decision: "continue" }]);
-        const { deps } = harness({ waiter, auto: true });
-
-        await runOn(deps, manifest(agent("p1"), hardstop("h1", settings), agent("p2")));
-
-        expect(waiter.calls).toHaveLength(1);
-      },
-    );
-
-    describe("a Hard stop with a condition", () => {
-      const checking = (id: string) => hardstop(id, { condition: "tests fail" });
+    describe("a Conditional Gate", () => {
       const verdict = (holds: boolean) => `Checked.\n\`\`\`json\n{"done": ${holds}}\n\`\`\``;
 
       it("asks the model whether the condition holds, and stops to ask you when it does", async () => {
         const waiter = new FakeWaiter([{ decision: "stop", reason: "red" }]);
         const { deps, calls, lines } = harness({ waiter, replies: ["P1", verdict(true)] });
 
-        const result = await runOn(deps, manifest(agent("p1"), checking("h1"), agent("p2")));
+        const result = await runOn(deps, manifest(agent("p1"), conditional("h1"), agent("p2")));
 
-        expect(sends(calls)).toEqual([turnOf("p1"), `send ${hardstopCheckTurn("tests fail")}`]);
-        expect(hardstopCheckTurn("tests fail")).toContain(verdictRequest("tests fail"));
+        expect(sends(calls)).toEqual([turnOf("p1"), `send ${gateCheckTurn("tests fail")}`]);
+        expect(gateCheckTurn("tests fail")).toContain(verdictRequest("tests fail"));
         expect(waiter.calls).toEqual([
-          { nodeId: "h1", kind: "hardstop", shown: "Check tests", condition: "tests fail" },
+          { nodeId: "h1", kind: "gate", instruction: "Check tests", condition: "tests fail" },
         ]);
         expect(result).toMatchObject({ outcome: "failed", failedNode: "h1" });
         expect(lines.at(-1)).toBe("h1 failed: stopped: red");
@@ -637,7 +607,7 @@ describe("Runner", () => {
         const waiter = new FakeWaiter([]);
         const { deps, calls, lines } = harness({ waiter, replies: ["P1", verdict(false), "P2"] });
 
-        const result = await runOn(deps, manifest(agent("p1"), checking("h1"), agent("p2")));
+        const result = await runOn(deps, manifest(agent("p1"), conditional("h1"), agent("p2")));
 
         expect(result.outcome).toBe("done");
         expect(waiter.calls).toEqual([]);
@@ -647,13 +617,30 @@ describe("Runner", () => {
       });
 
       it("checks and stops under auto too", async () => {
-        const waiter = new FakeWaiter([{ decision: "continue" }]);
-        const { deps } = harness({ waiter, auto: true, replies: [verdict(true), "P2"] });
+        const waiter = new FakeWaiter([proceed]);
+        const { deps, calls } = harness({ waiter, auto: true, replies: [verdict(true), "P2"] });
 
-        const result = await runOn(deps, manifest(checking("h1"), agent("p2")));
+        const result = await runOn(deps, manifest(conditional("h1"), agent("p2")));
 
+        expect(sends(calls)[0]).toBe(`send ${gateCheckTurn("tests fail")}`);
         expect(waiter.calls).toHaveLength(1);
         expect(result.decisions).toEqual([{ nodeId: "h1", decision: "continued" }]);
+      });
+
+      it("checks under auto and goes on without asking when the condition does not hold", async () => {
+        const waiter = new FakeWaiter([]);
+        const { deps, calls, lines } = harness({
+          waiter,
+          auto: true,
+          replies: [verdict(false), "P2"],
+        });
+
+        const result = await runOn(deps, manifest(conditional("h1"), agent("p2")));
+
+        expect(sends(calls)).toEqual([`send ${gateCheckTurn("tests fail")}`, turnOf("p2")]);
+        expect(waiter.calls).toEqual([]);
+        expect(lines).toContain("h1 condition not met");
+        expect(result.outcome).toBe("done");
       });
 
       it.each([
@@ -665,26 +652,28 @@ describe("Runner", () => {
           const waiter = new FakeWaiter([{ decision: "answer", answer }]);
           const { deps, lines } = harness({ waiter, replies: ["no idea", "P2"] });
 
-          const result = await runOn(deps, manifest(checking("h1"), agent("p2")));
+          const result = await runOn(deps, manifest(conditional("h1"), agent("p2")));
 
-          expect(waiter.calls).toEqual([
-            {
-              nodeId: "h1",
-              kind: "ask",
-              question: "The hard stop got no readable verdict (no json block). Stop the run here?",
-              options: ["stop", "continue"],
-            },
-          ]);
+          expect(waiter.calls).toEqual([noVerdictRequest("h1", "no json block")]);
           expect(result.states["h1"]).toBe(state);
           expect(lines).toContain(line);
           expect(result.decisions).toEqual([{ nodeId: "h1", decision: "answered", answer }]);
         },
       );
 
+      it("hands no text to the next Agent after continue is the answer to an unreadable verdict", async () => {
+        const waiter = new FakeWaiter([{ decision: "answer", answer: "continue" }]);
+        const { deps, calls } = harness({ waiter, replies: ["no idea", "P2"] });
+
+        await runOn(deps, manifest(conditional("h1"), agent("p2")));
+
+        expect(sends(calls).at(-1)).toBe(turnOf("p2"));
+      });
+
       it("reuses an answer to an unreadable verdict on resume, without checking again", async () => {
         const waiter = new FakeWaiter([]);
         const { deps, calls } = harness({ waiter, replies: ["P2"] });
-        const m = manifest(checking("h1"), agent("p2"));
+        const m = manifest(conditional("h1"), agent("p2"));
         const { id } = deps.store.createRun(newRun(m));
         const decision = { nodeId: "h1", decision: "answered", answer: "continue" } as const;
         for (const event of [
@@ -704,36 +693,21 @@ describe("Runner", () => {
         expect(sends(calls)).toEqual([turnOf("p2")]);
       });
 
-      it("sends no check for a Hard stop with no condition, and asks you", async () => {
-        const waiter = new FakeWaiter([{ decision: "continue" }]);
+      it("sends no check for a Conditional Gate with no condition, and asks you", async () => {
+        const waiter = new FakeWaiter([proceed]);
         const { deps, calls } = harness({ waiter });
 
-        await runOn(deps, manifest(hardstop("h1"), agent("p2")));
+        await runOn(deps, manifest(conditional("h1", ""), agent("p2")));
 
         expect(sends(calls)).toEqual([turnOf("p2")]);
         expect(waiter.calls).toHaveLength(1);
       });
     });
 
-    it("stops the run at a Hard stop stopped with a reason", async () => {
-      const waiter = new FakeWaiter([{ decision: "stop", reason: "tests fail" }]);
-      const { deps, calls, lines } = harness({ waiter });
-
-      const result = await runOn(deps, manifest(agent("p1"), hardstop("h1"), agent("p2")));
-
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "h1" });
-      expect(lines.at(-1)).toBe("h1 failed: stopped: tests fail");
-      expect(sends(calls)).toEqual([turnOf("p1")]);
-      expect(result.decisions).toEqual([
-        { nodeId: "h1", decision: "stopped", reason: "tests fail" },
-      ]);
-    });
-
     it.each([
-      ["gate", gate("x")],
-      ["hardstop", hardstop("x")],
-      ["ask", ask("x")],
-    ] as const)("fails a %s whose input closed", async (_type, human) => {
+      ["an Always Gate", gate("x")],
+      ["a Conditional Gate with no condition", conditional("x", "")],
+    ] as const)("fails %s whose input closed", async (_type, human) => {
       const waiter = new FakeWaiter([{ decision: "closed" }]);
       const { deps, lines } = harness({ waiter });
 
@@ -753,56 +727,53 @@ describe("Runner", () => {
       expect(lines.at(-1)).toBe("g1 failed: FakeWaiter: no scripted reply for g1");
     });
 
-    it("attaches an Ask's answer to the next Agent", async () => {
-      const waiter = new FakeWaiter([answer("blue")]);
+    it("attaches the text typed on Continue to the next Agent", async () => {
+      const waiter = new FakeWaiter([proceedWith("blue")]);
       const { deps, calls, lines } = harness({ waiter });
 
-      const result = await runOn(deps, manifest(ask("q1"), agent("p1")));
+      const result = await runOn(deps, manifest(gate("q1", "Pick a colour"), agent("p1")));
 
-      expect(lines).toEqual(["q1 answered: blue", "p1 started", "p1 done"]);
+      expect(lines).toEqual(["q1 continued", "p1 started", "p1 done"]);
       expect(sends(calls)).toEqual([turnOf("p1", { answers: ["blue"] })]);
-      expect(result.decisions).toEqual([{ nodeId: "q1", decision: "answered", answer: "blue" }]);
-      expect(waiter.calls).toEqual([
-        { nodeId: "q1", kind: "ask", question: "Pick a colour", options: ["red", "blue", "green"] },
-      ]);
+      expect(result.decisions).toEqual([{ nodeId: "q1", decision: "continued", text: "blue" }]);
+      expect(waiter.calls).toEqual([{ nodeId: "q1", kind: "gate", instruction: "Pick a colour" }]);
     });
 
-    it("keeps an answer past a Hard stop's check turn and a Gate for the next Agent", async () => {
-      const waiter = new FakeWaiter([answer("blue"), approve]);
+    it("keeps Continue text past a Conditional Gate's check turn and a Gate for the next Agent", async () => {
+      const waiter = new FakeWaiter([proceedWith("blue"), proceed]);
       const notMet = 'Checked.\n```json\n{"done": false}\n```';
       const { deps, calls } = harness({ waiter, replies: [notMet] });
-      const checking = hardstop("h1", { condition: "tests fail" });
 
-      await runOn(deps, manifest(ask("q1"), checking, gate("g1"), agent("p1")));
+      await runOn(deps, manifest(gate("q1"), conditional("h1"), gate("g1"), agent("p1")));
 
       expect(sends(calls)).toEqual([
-        `send ${hardstopCheckTurn("tests fail")}`,
+        `send ${gateCheckTurn("tests fail")}`,
         turnOf("p1", { answers: ["blue"] }),
       ]);
     });
 
-    it("uses an answer once", async () => {
-      const { deps, calls } = harness({ waiter: new FakeWaiter([answer("blue")]) });
+    it("uses Continue text once", async () => {
+      const { deps, calls } = harness({ waiter: new FakeWaiter([proceedWith("blue")]) });
 
-      await runOn(deps, manifest(ask("q1"), agent("p1"), agent("p2")));
+      await runOn(deps, manifest(gate("q1"), agent("p1"), agent("p2")));
 
       expect(sends(calls)).toEqual([turnOf("p1", { answers: ["blue"] }), turnOf("p2")]);
     });
 
-    it("joins two answers in order on the next Agent", async () => {
-      const waiter = new FakeWaiter([answer("red"), answer("blue")]);
+    it("joins two Continue texts in order on the next Agent", async () => {
+      const waiter = new FakeWaiter([proceedWith("red"), proceedWith("blue")]);
       const { deps, calls } = harness({ waiter });
 
-      await runOn(deps, manifest(ask("q1"), ask("q2"), agent("p1")));
+      await runOn(deps, manifest(gate("q1"), gate("q2"), agent("p1")));
 
       expect(sends(calls)).toEqual([turnOf("p1", { answers: ["red", "blue"] })]);
     });
 
-    it("puts an answer inside the prompt the next Agent's subagent receives", async () => {
-      const waiter = new FakeWaiter([answer("blue")]);
+    it("puts Continue text inside the prompt the next Agent's subagent receives", async () => {
+      const waiter = new FakeWaiter([proceedWith("blue")]);
       const { deps, calls, lines } = turnHarness([[agentDone("a1"), stopped]], 1000, waiter);
 
-      await runOn(deps, manifest(ask("q1"), agent("a1")));
+      await runOn(deps, manifest(gate("q1"), agent("a1")));
 
       expect(sends(calls)).toEqual([
         `send Use the Agent tool with subagent_type "${prefix}:a1" and the prompt "NODE a1\\nThe user answered: blue.\\nGo". Then reply DONE.`,
@@ -810,14 +781,14 @@ describe("Runner", () => {
       expect(lines).toContain("a1 done");
     });
 
-    it("sends nothing and starts nothing for an Ask with nothing after it", async () => {
-      const { deps, calls, lines } = harness({ waiter: new FakeWaiter([answer("blue")]) });
+    it("sends nothing and starts nothing for a Gate with nothing after it", async () => {
+      const { deps, calls, lines } = harness({ waiter: new FakeWaiter([proceedWith("blue")]) });
 
-      const result = await runOn(deps, manifest(ask("q1")));
+      const result = await runOn(deps, manifest(gate("q1")));
 
       expect(result.outcome).toBe("done");
       expect(calls).toEqual([]);
-      expect(lines).toEqual(["q1 answered: blue"]);
+      expect(lines).toEqual(["q1 continued"]);
     });
   });
 
@@ -1063,12 +1034,12 @@ describe("Runner", () => {
       expect(sends(calls)[1]).toContain(`Condition: ${condition}`);
     });
 
-    it("puts the verdict request after an Ask's answer on the verdict turn", async () => {
-      const waiter = new FakeWaiter([answer("blue")]);
+    it("puts the verdict request after a Gate's Continue text on the verdict turn", async () => {
+      const waiter = new FakeWaiter([{ decision: "continue", text: "blue" }]);
       const { deps, calls } = harness({ waiter, replies: [verdict(true)] });
-      const ask = node("q1", "ask", { question: "Pick a colour", options: ["red", "blue"] });
+      const gate = node("q1", "gate", { stopWhen: "always", condition: "", instruction: "Pick" });
 
-      await runOn(deps, manifest(loop("l1"), inLoop(ask), inLoop(agent("f1")), agent("p9")));
+      await runOn(deps, manifest(loop("l1"), inLoop(gate), inLoop(agent("f1")), agent("p9")));
 
       expect(sends(calls)[0]).toBe(turnOf("f1", { answers: ["blue"], condition }));
     });
@@ -1078,7 +1049,11 @@ describe("Runner", () => {
         auto: true,
         replies: [verdict(false), verdict(true)],
       });
-      const gate = node("g1", "gate", { shown: "Check the plan", skippable: true });
+      const gate = node("g1", "gate", {
+        stopWhen: "always",
+        condition: "",
+        instruction: "Check the plan",
+      });
 
       const result = await runOn(
         deps,
@@ -1121,7 +1096,11 @@ describe("Runner", () => {
         auto: true,
         replies: [verdict(false), verdict(true)],
       });
-      const gate = node("g1", "gate", { shown: "Check the plan", skippable: true });
+      const gate = node("g1", "gate", {
+        stopWhen: "always",
+        condition: "",
+        instruction: "Check the plan",
+      });
 
       const result = await runOn(
         deps,
@@ -1275,9 +1254,11 @@ describe("Runner run state", () => {
   const condition = "no issues left";
   const loop = (id: string) => node(id, "loop", { condition, cap: 3, onCap: "fail" });
   const inLoop = (child: ManifestNode, parent = "l1"): ManifestNode => ({ ...child, parent });
-  const gate = (id: string) => node(id, "gate", { shown: "Check the plan", skippable: false });
-  const ask = (id: string) => node(id, "ask", { question: "Pick a colour", options: ["blue"] });
-  const approve: WaitReply = { decision: "approve" };
+  const gate = (id: string) =>
+    node(id, "gate", { stopWhen: "always", condition: "", instruction: "Check the plan" });
+  const proceed: WaitReply = { decision: "continue" };
+  const continuedWith = (nodeId: string, text: string) =>
+    ({ nodeId, decision: "continued", text }) as const;
   const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
   const runIdOf = (store: FakeStore) => store.runs[0]?.id ?? "";
   const eventsOf = (store: FakeStore, nodeId: string) =>
@@ -1341,11 +1322,11 @@ describe("Runner run state", () => {
     });
   });
 
-  it("stores a Gate decision and an Ask answer as events and projects the decisions from them", async () => {
-    const waiter = new FakeWaiter([approve, { decision: "answer", answer: "blue" }]);
+  it("stores a Gate decision and Continue text as events and projects the decisions from them", async () => {
+    const waiter = new FakeWaiter([proceed, { decision: "continue", text: "blue" }]);
     const { deps } = harness({ waiter });
 
-    const result = await runOn(deps, manifest(gate("g1"), ask("q1"), agent("p1")));
+    const result = await runOn(deps, manifest(gate("g1"), gate("q1"), agent("p1")));
 
     expect(kindsOf(deps.store, "g1")).toEqual(["needs-you", "decided", "done"]);
     expect(kindsOf(deps.store, "q1")).toEqual(["needs-you", "answered", "done"]);
@@ -1400,7 +1381,7 @@ describe("Runner run state", () => {
       const { deps } = harness({ auto: true });
       const batches = batchesOf(deps.store);
 
-      await runOn(deps, manifest(node("g1", "gate", { shown: "Check", skippable: true })));
+      await runOn(deps, manifest(gate("g1")));
 
       expect(batches()).toContainEqual(["g1 decided", "g1 skipped"]);
     });
@@ -1519,15 +1500,12 @@ describe("Runner run state", () => {
       },
     );
 
-    it("resends node 2 with the answer it was sent with", async () => {
+    it("resends node 2 with the Continue text it was sent with", async () => {
       const { deps, calls } = harness();
-      const m = manifest(ask("q1"), agent("p1"));
+      const m = manifest(gate("q1"), agent("p1"));
       const runId = seeded(deps, m, [
         ["q1", { kind: "needs-you" }],
-        [
-          "q1",
-          { kind: "answered", payload: { nodeId: "q1", decision: "answered", answer: "blue" } },
-        ],
+        ["q1", { kind: "answered", payload: continuedWith("q1", "blue") }],
         ["q1", { kind: "done" }],
         ["p1", { kind: "sent" }],
       ]);
@@ -1537,15 +1515,12 @@ describe("Runner run state", () => {
       expect(sends(calls)).toEqual([turnOf("p1", { answers: ["blue"] })]);
     });
 
-    it("keeps an answer given before the kill for the next Agent", async () => {
+    it("keeps Continue text given before the kill for the next Agent", async () => {
       const { deps, calls } = harness();
-      const m = manifest(ask("q1"), agent("p1"));
+      const m = manifest(gate("q1"), agent("p1"));
       const runId = seeded(deps, m, [
         ["q1", { kind: "needs-you" }],
-        [
-          "q1",
-          { kind: "answered", payload: { nodeId: "q1", decision: "answered", answer: "blue" } },
-        ],
+        ["q1", { kind: "answered", payload: continuedWith("q1", "blue") }],
         ["q1", { kind: "done" }],
       ]);
 
@@ -1565,7 +1540,7 @@ describe("Runner run state", () => {
       it("reuses the decision recorded before the kill without asking", async () => {
         const waiter = new FakeWaiter([]);
         const { deps, calls } = harness({ waiter });
-        const decision = { nodeId: "g1", decision: "approved" } as const;
+        const decision = { nodeId: "g1", decision: "continued" } as const;
         const runId = seeded(deps, m, [...asking, ["g1", { kind: "decided", payload: decision }]]);
 
         const result = await resume(deps, m, runId, { g1: { kind: "reuse", decision } });
@@ -1577,7 +1552,7 @@ describe("Runner run state", () => {
       });
 
       it("asks once when no decision was recorded", async () => {
-        const waiter = new FakeWaiter([approve]);
+        const waiter = new FakeWaiter([proceed]);
         const { deps } = harness({ waiter });
         const runId = seeded(deps, m, asking);
 
@@ -1591,29 +1566,41 @@ describe("Runner run state", () => {
 
     it.each([
       [
-        "gate",
-        { nodeId: "h1", decision: "rejected", reason: "wrong scope" },
-        { shown: "Check the plan", skippable: false },
-        "h1 failed: rejected: wrong scope",
+        "Always",
+        { nodeId: "h1", decision: "stopped", reason: "wrong scope" },
+        { stopWhen: "always", condition: "", instruction: "Check the plan" },
+        "h1 failed: stopped: wrong scope",
       ],
       [
-        "hardstop",
+        "Conditional",
         { nodeId: "h1", decision: "stopped", reason: "tests fail" },
-        { condition: "tests fail", shown: "Check tests", locked: true, enabled: true },
+        { stopWhen: "conditional", condition: "tests fail", instruction: "Check tests" },
         "h1 failed: stopped: tests fail",
       ],
       [
-        "hardstop",
+        "Conditional",
         { nodeId: "h1", decision: "continued" },
-        { condition: "tests fail", shown: "Check tests", locked: true, enabled: true },
+        { stopWhen: "conditional", condition: "tests fail", instruction: "Check tests" },
         "h1 continued",
       ],
+      [
+        "Always",
+        { nodeId: "h1", decision: "approved" },
+        { stopWhen: "always", condition: "", instruction: "Check the plan" },
+        "h1 failed: unexpected reply: approve",
+      ],
+      [
+        "Always",
+        { nodeId: "h1", decision: "rejected", reason: "wrong scope" },
+        { stopWhen: "always", condition: "", instruction: "Check the plan" },
+        "h1 failed: unexpected reply: reject",
+      ],
     ] as const)(
-      "reuses a recorded %s decision %o with the outcome it had",
-      async (type, decision, settings, line) => {
+      "reuses a recorded %s Gate decision %o with the outcome it had",
+      async (_stopWhen, decision, settings, line) => {
         const waiter = new FakeWaiter([]);
         const { deps, lines } = harness({ waiter });
-        const m = manifest(node("h1", type, settings));
+        const m = manifest(node("h1", "gate", settings));
         const runId = seeded(deps, m, [
           ["h1", { kind: "needs-you" }],
           ["h1", { kind: "decided", payload: decision }],
@@ -1626,11 +1613,11 @@ describe("Runner run state", () => {
       },
     );
 
-    it("reuses an Ask answer recorded before the kill for the next Agent", async () => {
+    it("reuses Continue text recorded before the kill for the next Agent", async () => {
       const waiter = new FakeWaiter([]);
       const { deps, calls } = harness({ waiter });
-      const m = manifest(ask("q1"), agent("p1"));
-      const decision = { nodeId: "q1", decision: "answered", answer: "blue" } as const;
+      const m = manifest(gate("q1"), agent("p1"));
+      const decision = continuedWith("q1", "blue");
       const runId = seeded(deps, m, [
         ["q1", { kind: "needs-you" }],
         ["q1", { kind: "answered", payload: decision }],
@@ -1830,12 +1817,16 @@ describe("Runner permission requests", () => {
     const waiter = new FakeWaiter([new Promise<WaitReply>((r) => (resolve = r))]);
     const permissions = new FakePermissionSource();
     const { deps } = harness({ waiter, permissions });
-    const gate = node("g1", "gate", { shown: "Check the plan", skippable: false });
+    const gate = node("g1", "gate", {
+      stopWhen: "always",
+      condition: "",
+      instruction: "Check the plan",
+    });
 
     const running = runOn(deps, manifest(...around(gate)));
     await vi.waitFor(() => expect(waiter.calls).toHaveLength(1));
     const decision = await permissions.ask(sessionId, bash("echo hi"));
-    resolve({ decision: "approve" });
+    resolve({ decision: "continue" });
     await running;
 
     expect(decision).toEqual({ behavior: "deny", message: "No node is running" });

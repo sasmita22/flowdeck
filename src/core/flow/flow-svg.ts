@@ -35,8 +35,6 @@ const looks: Record<NodeType, { tag: string; width: number; height: number }> = 
   output: { tag: "", width: 48, height: 48 },
   agent: { tag: "AGT", width: 170, height: 48 },
   gate: { tag: "GATE", width: 170, height: 48 },
-  hardstop: { tag: "STOP", width: 170, height: 48 },
-  ask: { tag: "ASK", width: 170, height: 57 },
   loop: { tag: "LOOP", width: 170, height: 48 },
   fork: { tag: "PARALLEL START", width: 28, height: 112 },
   join: { tag: "PARALLEL END", width: 28, height: 112 },

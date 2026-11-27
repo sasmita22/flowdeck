@@ -89,7 +89,12 @@ const timelineEventSchema = z.object({
 });
 
 const humanDecisionSchema = z.union([
-  z.object({ nodeId: z.string(), decision: z.enum(["approved", "skipped", "continued"]) }),
+  z.object({ nodeId: z.string(), decision: z.enum(["approved", "skipped"]) }),
+  z.object({
+    nodeId: z.string(),
+    decision: z.literal("continued"),
+    text: z.string().exactOptional(),
+  }),
   z.object({ nodeId: z.string(), decision: z.enum(["rejected", "stopped"]), reason: z.string() }),
   z.object({ nodeId: z.string(), decision: z.literal("answered"), answer: z.string() }),
 ]);

@@ -1,11 +1,9 @@
 import { parseFlow, type Flow } from "../../src/core/flow/schema.js";
 import {
   agent,
-  ask,
   branch,
   fork,
   gate,
-  hardstop,
   join,
   loop,
   output,
@@ -43,7 +41,7 @@ const nodes = [
   trigger("start"),
   ...agents(head),
   gate("g1"),
-  ask("q1"),
+  gate("q1"),
   branch("b1", "approved"),
   ...agents(yes),
   agent("r1"),
@@ -64,10 +62,10 @@ const nodes = [
   ...agents(loop3, "L3"),
   gate("g3"),
   ...agents(tail),
-  ask("q2"),
+  gate("q2"),
   gate("g4"),
   branch("b2", "shipped"),
-  hardstop("h1"),
+  gate("h1", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
 ];
 
 const wires = [

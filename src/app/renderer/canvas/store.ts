@@ -15,6 +15,7 @@ import {
   type LibraryLookup,
 } from "../../../core/flow/libraries.js";
 import { flowsEqual } from "../../../core/flow/equal.js";
+import { nodeWarnings } from "../../../core/flow/node-warnings.js";
 import { defaultPermissionMode } from "../../../core/flow/choices.js";
 import {
   bodyProblems,
@@ -477,6 +478,19 @@ export const selectFieldIssues = (
   nodeId: string,
   libraries: LibraryLookup = unknownLibraries,
 ): Record<string, string> => fieldIssues(flow, libraries)[nodeId] ?? {};
+
+const warningsByNode = new WeakMap<Flow, Record<string, string[]>>();
+
+const noWarnings: string[] = [];
+
+export const selectNodeWarnings = (flow: Flow, nodeId: string): string[] => {
+  let byNode = warningsByNode.get(flow);
+  if (byNode === undefined) {
+    byNode = Object.fromEntries(flow.nodes.map((node) => [node.id, nodeWarnings(node)]));
+    warningsByNode.set(flow, byNode);
+  }
+  return byNode[nodeId] ?? noWarnings;
+};
 
 const containerIssues = byLibrariesAndFlow((flow, libraries) => {
   const byContainer: Record<string, Record<string, string>> = {};

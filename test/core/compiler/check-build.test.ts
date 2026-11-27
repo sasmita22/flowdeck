@@ -22,7 +22,7 @@ import { standardRules } from "../../../src/core/compiler/standard-rules.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import {
   agent,
-  hardstop,
+  gate,
   loop,
   onMainFlow,
   thenWire,
@@ -493,7 +493,7 @@ describe("checkBuild", () => {
       onMainFlow(
         [
           labelled(agent("p"), "Draft the spec"),
-          hardstop("h"),
+          gate("h", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
           loop("l"),
           labelled(agent("la", { parent: "l" }), "Fix the tests"),
           labelled(agent("s"), "Ship it"),
@@ -504,7 +504,7 @@ describe("checkBuild", () => {
     const unmarked = (nodeId: string) => (content: string) =>
       content.replace(`\`STOPPED NODE ${nodeId}\``, "a stop line");
 
-    it("passes an orchestrator whose hard stop and failing Loop keep their stop markers", async () => {
+    it("passes an orchestrator whose Conditional Gate and failing Loop keep their stop markers", async () => {
       expect(checkBuild(await workspace(stopping()))).toEqual([]);
     });
 

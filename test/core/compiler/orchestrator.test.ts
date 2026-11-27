@@ -7,12 +7,10 @@ import { order } from "../../../src/core/flow/order.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import {
   agent,
-  ask,
   branch,
   flow,
   fork,
   gate,
-  hardstop,
   join,
   loop,
   output,
@@ -33,8 +31,8 @@ const sample = (): Flow =>
       trigger("t"),
       labelled(agent("p", { settings: { instructions: "Plan it." } }), "Plan"),
       labelled(agent("a", { settings: { given: ["plan.md"], writes: ["code.md"] } }), "Code"),
-      gate("g", { settings: { shown: "Check the plan", skippable: false } }),
-      ask("k", { settings: { question: "Pick a colour", options: ["red", "blue"] } }),
+      gate("g", { settings: { instruction: "Check the plan" } }),
+      gate("k", { settings: { instruction: "Pick a colour" } }),
       loop("l", { settings: { condition: "tests pass", cap: 4, onCap: "ask" } }),
       labelled(agent("la", { parent: "l" }), "Fix"),
       branch("b", "proceed"),
@@ -42,7 +40,9 @@ const sample = (): Flow =>
       labelled(agent("x"), "Check"),
       labelled(agent("y"), "Check"),
       join("j", { settings: { wait: "first" } }),
-      hardstop("h", { settings: { condition: "tests fail", shown: "report" } }),
+      gate("h", {
+        settings: { stopWhen: "conditional", condition: "tests fail", instruction: "report" },
+      }),
       output("o"),
     ],
     [
@@ -167,9 +167,21 @@ describe("orchestratorSkill", () => {
     );
   });
 
-  it("asks in the chat for a Gate and an Ask", () => {
-    expect(lineOf(skill().content, "g")).toMatch(/ask in the chat.*Check the plan/i);
-    expect(lineOf(skill().content, "k")).toMatch(/ask in the chat.*Pick a colour.*red, blue/i);
+  it("asks in the chat for an Always Gate, showing its Instruction, and waits for the answer", () => {
+    expect(lineOf(skill().content, "g")).toBe(
+      '4. NODE g (g): ask in the chat: "Check the plan", and wait for the answer before going on. Then go on to NODE k.',
+    );
+    expect(lineOf(skill().content, "k")).toMatch(
+      /ask in the chat: "Pick a colour", and wait for the answer before going on\./,
+    );
+    expect(skill().content).not.toContain("may be skipped");
+  });
+
+  it("writes no Ask or Hard stop line: no answer options, and a Conditional Gate never asks in the chat", () => {
+    const content = skill().content;
+
+    expect(content).not.toContain("options:");
+    expect(lineOf(content, "h")).not.toMatch(/ask in the chat/i);
   });
 
   it("repeats a Loop up to its cap", () => {
@@ -263,11 +275,11 @@ describe("orchestratorSkill", () => {
     expect(allJoin).toMatch(/every branch has returned/i);
   });
 
-  it("states a hard stop as a hard rule", () => {
+  it("states a Conditional Gate as a hard rule on its condition", () => {
     expect(lineOf(skill().content, "h")).toMatch(/hard rule.*tests fail/i);
   });
 
-  it("tells a hard stop to end its reply with the line naming its node", () => {
+  it("tells a Conditional Gate to show its Instruction and end its reply with the line naming its node", () => {
     expect(lineOf(skill().content, "h")).toContain(
       "show report, end your reply with the line `STOPPED NODE h` and end your turn.",
     );

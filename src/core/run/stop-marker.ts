@@ -1,7 +1,8 @@
 type StopNode = { type: string; settings?: Record<string, unknown> };
 
 export const stopsTheRun = (node: StopNode): boolean =>
-  node.type === "hardstop" || (node.type === "loop" && node.settings?.["onCap"] !== "ask");
+  (node.type === "gate" && node.settings?.["stopWhen"] === "conditional") ||
+  (node.type === "loop" && node.settings?.["onCap"] !== "ask");
 
 const stopLead = "STOPPED NODE ";
 

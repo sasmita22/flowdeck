@@ -51,9 +51,14 @@ describe("createAppWaiter", () => {
   it("resolves the wait with a fitting reply to its id, then pushes it cleared", async () => {
     const reply = run.wait(gate);
 
-    expect(waiter.answer({ waitId: opened().waitId, reply: { decision: "approve" } })).toBe(true);
+    expect(
+      waiter.answer({
+        waitId: opened().waitId,
+        reply: { decision: "continue", text: "use the v2 API" },
+      }),
+    ).toBe(true);
 
-    expect(await settled(reply)).toEqual({ decision: "approve" });
+    expect(await settled(reply)).toEqual({ decision: "continue", text: "use the v2 API" });
     expect(waitPushes().at(-1)).toBeNull();
   });
 
@@ -61,7 +66,7 @@ describe("createAppWaiter", () => {
     const reply = run.wait(gate);
 
     expect(
-      waiter.answer({ waitId: `${opened().waitId}-old`, reply: { decision: "approve" } }),
+      waiter.answer({ waitId: `${opened().waitId}-old`, reply: { decision: "continue" } }),
     ).toBe(false);
 
     expect(await settled(reply)).toBe(pending);
@@ -71,11 +76,11 @@ describe("createAppWaiter", () => {
   it("refuses a second answer to a wait already resolved", async () => {
     const first = run.wait(gate);
     const { waitId } = opened();
-    waiter.answer({ waitId, reply: { decision: "approve" } });
+    waiter.answer({ waitId, reply: { decision: "continue" } });
     await first;
     const second = run.wait(gate);
 
-    expect(waiter.answer({ waitId, reply: { decision: "reject", reason: "" } })).toBe(false);
+    expect(waiter.answer({ waitId, reply: { decision: "stop", reason: "" } })).toBe(false);
 
     expect(await settled(second)).toBe(pending);
   });
@@ -83,7 +88,7 @@ describe("createAppWaiter", () => {
   it("refuses a decision of another kind and keeps the wait pending", async () => {
     const reply = run.wait(gate);
 
-    expect(waiter.answer({ waitId: opened().waitId, reply: { decision: "continue" } })).toBe(false);
+    expect(waiter.answer({ waitId: opened().waitId, reply: { decision: "approve" } })).toBe(false);
 
     expect(await settled(reply)).toBe(pending);
   });
@@ -98,7 +103,7 @@ describe("createAppWaiter", () => {
     expect(await settled(reply)).toBe(pending);
   });
 
-  it.each([{ request: gate, fitting: { decision: "approve" } as WaitAnswer["reply"] }])(
+  it.each([{ request: gate, fitting: { decision: "continue" } as WaitAnswer["reply"] }])(
     "drops a $request.kind wait without resolving it, pushes it cleared, and refuses a later answer",
     async ({ request, fitting }) => {
       const reply = run.wait(request);
@@ -162,9 +167,9 @@ describe("createAppWaiter", () => {
     });
 
     it("pushes the second once the first is answered, then null once none is left", async () => {
-      waiter.answer({ waitId: opened().waitId, reply: { decision: "approve" } });
+      waiter.answer({ waitId: opened().waitId, reply: { decision: "continue" } });
 
-      expect(await settled(first)).toEqual({ decision: "approve" });
+      expect(await settled(first)).toEqual({ decision: "continue" });
       expect(waitPushes().at(-1)).toEqual({ waitId: secondId, request: pick });
 
       waiter.answer({ waitId: secondId, reply: { decision: "answer", answer: "blue" } });
@@ -234,9 +239,9 @@ describe("createAppWaiter", () => {
       const mine = run.wait(gate);
       other.wait(pick);
 
-      waiter.answer({ waitId: "w1", reply: { decision: "approve" } });
+      waiter.answer({ waitId: "w1", reply: { decision: "continue" } });
 
-      expect(await settled(mine)).toEqual({ decision: "approve" });
+      expect(await settled(mine)).toEqual({ decision: "continue" });
       expect(waitPushes(runId).at(-1)).toBeNull();
       expect(waitPushes(otherRun)).toEqual([{ waitId: "w2", request: pick }]);
     });
@@ -267,8 +272,8 @@ describe("createAppWaiter", () => {
       expect(waitPushes(otherRun)).toEqual(otherPushesBefore);
       expect(await settled(theirs)).toBe(pending);
       expect(await settled(theirPermission)).toBe(pending);
-      expect(waiter.answer({ waitId: "w2", reply: { decision: "approve" } })).toBe(true);
-      expect(await settled(theirs)).toEqual({ decision: "approve" });
+      expect(waiter.answer({ waitId: "w2", reply: { decision: "continue" } })).toBe(true);
+      expect(await settled(theirs)).toEqual({ decision: "continue" });
       expect(waitPushes(otherRun).at(-1)).toEqual({ waitId: "w3", request: permission });
     });
 

@@ -138,19 +138,26 @@ test("Clicking a Gate shows what it is and its settings, and edits are saved", a
   await expect(window.getByTestId("node-type-tag")).toHaveText("GATE");
   await expect(window.getByTestId("node-type-name")).toHaveText("Gate");
   await expect(window.getByTestId("node-type-description")).toHaveText(
-    "Pauses until you approve. A flag can switch it off.",
+    "Pauses the run to show you its Instruction: Always in every manual run, Conditional only when an agent finds its condition met.",
   );
   await expect(window.getByTestId("node-label")).toHaveValue("Gate");
-  await expect(window.getByLabel("What to show you")).toHaveAttribute(
+  await expect(window.getByLabel("Condition to stop")).toHaveAttribute(
     "data-testid",
-    "node-setting-shown",
+    "node-setting-stop-when",
   );
-  await expect(window.getByLabel("Skip it in automatic runs")).not.toBeChecked();
+  await expect(window.getByTestId("node-setting-stop-when")).toHaveValue("always");
+  await expect(window.getByLabel("Instruction", { exact: true })).toHaveAttribute(
+    "data-testid",
+    "node-setting-instruction",
+  );
+  await expect(window.getByTestId("node-setting-condition")).toHaveCount(0);
+  await expect(window.getByTestId("node-settings-warning")).toBeVisible();
+  await expect(window.getByTestId("node-gate-1").getByTestId("node-warning")).toBeVisible();
   expect(await top(window.getByTestId("node-type-name"))).toBeLessThan(
     await top(window.getByTestId("node-label")),
   );
   expect(await top(window.getByTestId("node-label"))).toBeLessThan(
-    await top(window.getByTestId("node-setting-shown")),
+    await top(window.getByTestId("node-setting-stop-when")),
   );
   expect(
     await window.evaluate(() => ({
@@ -160,15 +167,18 @@ test("Clicking a Gate shows what it is and its settings, and edits are saved", a
   ).toEqual({ inCanvas: true, inInspector: false });
 
   await setText(window.getByTestId("node-label"), "Review gate");
-  await setText(window.getByTestId("node-setting-shown"), "Check the plan");
-  await window.getByTestId("node-setting-skippable").check();
+  await setText(window.getByTestId("node-setting-instruction"), "Check the plan");
+  await window.getByTestId("node-setting-stop-when").selectOption("conditional");
+  await expect(window.getByTestId("node-settings-warning")).toHaveCount(0);
+  await expect(window.getByTestId("node-gate-1").getByTestId("node-warning")).toHaveCount(0);
+  await setText(window.getByTestId("node-setting-condition"), "tests fail");
 
   await expect(window.getByTestId("node-gate-1")).toContainText("Review gate");
   await expect
     .poll(() => nodeIn(window, "gate-1"))
     .toMatchObject({
       label: "Review gate",
-      settings: { shown: "Check the plan", skippable: true },
+      settings: { stopWhen: "conditional", condition: "tests fail", instruction: "Check the plan" },
     });
 
   await showAt1280(target);
@@ -182,13 +192,14 @@ test("Clicking a Gate shows what it is and its settings, and edits are saved", a
     .poll(() => nodeIn(reopened, "gate-1"))
     .toMatchObject({
       label: "Review gate",
-      settings: { shown: "Check the plan", skippable: true },
+      settings: { stopWhen: "conditional", condition: "tests fail", instruction: "Check the plan" },
     });
   await expect(reopened.getByTestId("inspector")).toHaveCount(0);
 
   await reopened.getByTestId("node-gate-1").click();
-  await expect(reopened.getByTestId("node-setting-shown")).toHaveValue("Check the plan");
-  await expect(reopened.getByTestId("node-setting-skippable")).toBeChecked();
+  await expect(reopened.getByTestId("node-setting-stop-when")).toHaveValue("conditional");
+  await expect(reopened.getByTestId("node-setting-condition")).toHaveValue("tests fail");
+  await expect(reopened.getByTestId("node-setting-instruction")).toHaveValue("Check the plan");
   await reopened.getByTestId(controlTestIds.inspectorHide).click();
   await expect(reopened.getByTestId("inspector")).toHaveCount(0);
 });
@@ -209,7 +220,7 @@ test("The sidebar, inspector and status bar draw text at the type scale's body s
     description: await fontSize(
       window.getByTestId(paletteTestId("gate")).locator(".fd-palette-description"),
     ),
-    label: await fontSize(window.locator("label", { hasText: "What to show you" })),
+    label: await fontSize(window.locator("label", { hasText: "Instruction" })),
     status: await fontSize(window.getByTestId("run-status")),
   }).toEqual({ description: body, label: body, status: body });
 });
@@ -250,7 +261,7 @@ test("Blueprint settings open from the gear and never mix with a node's or a con
   await expect(window.getByTestId("inspector")).toHaveCount(0);
 
   await window.getByTestId("node-gate-1").click();
-  await expect(window.getByTestId("node-setting-shown")).toBeVisible();
+  await expect(window.getByTestId("node-setting-instruction")).toBeVisible();
   await expect(blueprintFields).toHaveCount(0);
   await expect(window.getByTestId(sessionRepo)).toHaveCount(0);
   await expect(window.getByTestId("settings-build-model")).toHaveCount(0);
@@ -279,7 +290,7 @@ test("Blueprint settings open from the gear and never mix with a node's or a con
     .toBe("claude-haiku-4-5");
 
   await window.getByTestId("node-gate-1").click();
-  await expect(window.getByTestId("node-setting-shown")).toBeVisible();
+  await expect(window.getByTestId("node-setting-instruction")).toBeVisible();
   await expect(blueprintFields).toHaveCount(0);
   await expect(gear).toHaveAttribute("aria-pressed", "false");
 
@@ -330,39 +341,25 @@ test("Cmd+Z in a settings field undoes the typing and leaves the canvas alone", 
   const { window } = await launch();
   await drop(window, "gate", 200);
   await window.getByTestId("node-gate-1").click();
-  const shown = window.getByLabel("What to show you");
+  const instruction = window.getByLabel("Instruction", { exact: true });
   const before = await nodeIn(window, "gate-1");
 
-  await shown.click();
+  await instruction.click();
   await window.keyboard.type("Check the plan");
-  await expect(shown).toHaveValue("Check the plan");
+  await expect(instruction).toHaveValue("Check the plan");
   await window.keyboard.press("ControlOrMeta+z");
 
-  await expect(shown).toHaveValue("");
-  await expect(shown).toBeFocused();
+  await expect(instruction).toHaveValue("");
+  await expect(instruction).toBeFocused();
   await expect(window.getByTestId("node-gate-1")).toBeVisible();
   await expect(window.getByTestId(controlTestIds.redo)).toBeDisabled();
   expect(await nodeIn(window, "gate-1")).toEqual(before);
 
   await window.keyboard.type("ab");
   await window.keyboard.press("Backspace");
-  await expect(shown).toHaveValue("a");
+  await expect(instruction).toHaveValue("a");
   await expect(window.getByTestId("node-gate-1")).toBeVisible();
   await expect(window.getByTestId(controlTestIds.redo)).toBeDisabled();
-});
-
-test("A Hard stop has no switch to turn it off", async () => {
-  const { window } = await launch();
-  await drop(window, "hardstop", 200);
-
-  await window.getByTestId("node-hardstop-1").click();
-
-  const panel = window.getByTestId("node-settings");
-  await expect(window.getByTestId("node-setting-condition")).toBeVisible();
-  await expect(window.getByTestId("node-setting-shown")).toBeVisible();
-  await expect(panel.locator('input[type="checkbox"]')).toHaveCount(0);
-  await expect(window.getByTestId("node-setting-enabled")).toHaveCount(0);
-  await expect(window.getByTestId("node-setting-locked")).toHaveCount(0);
 });
 
 test("Undo reverts a settings edit, and a field shows the validator's reason", async () => {

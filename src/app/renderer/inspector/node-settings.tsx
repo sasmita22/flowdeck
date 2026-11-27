@@ -5,6 +5,7 @@ import { paletteItems } from "../canvas/palette-items.js";
 import {
   selectFieldIssues,
   selectNodeIssues,
+  selectNodeWarnings,
   selectSelectedNode,
   type CanvasState,
 } from "../canvas/store.js";
@@ -15,6 +16,15 @@ const headingStyle: CSSProperties = { fontSize: "var(--fs-md)", margin: "12px 0 
 
 const labelStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 2 };
 
+const warningStyle: CSSProperties = {
+  margin: 0,
+  padding: "4px 8px",
+  borderLeft: "2px dashed var(--warn)",
+  color: "var(--muted)",
+  fontSize: "var(--fs-xs)",
+  lineHeight: 1.4,
+};
+
 export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> }) {
   const node = useStore(canvas, selectSelectedNode);
   const flow = useStore(canvas, (state) => state.flow);
@@ -24,6 +34,7 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const fields = describeNodeFields(node.type, flow, node.settings);
   const issues = selectFieldIssues(flow, node.id, libraries);
   const problems = selectNodeIssues(flow, libraries)[node.id] ?? [];
+  const warnings = selectNodeWarnings(flow, node.id);
 
   const current = () => selectSelectedNode(canvas.getState());
   const commit: Commit = (path, value) => {
@@ -82,6 +93,11 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
           ))}
         </ul>
       )}
+      {warnings.map((warning) => (
+        <p key={warning} role="note" data-testid="node-settings-warning" style={warningStyle}>
+          {warning}
+        </p>
+      ))}
       <label style={labelStyle}>
         Label
         <input

@@ -20,15 +20,8 @@ export const agent = node("agent", {
   instructions: "Implement the plan.",
   model: "sonnet",
 });
-export const gate = node("gate", { shown: "Check the plan", skippable: false });
-export const ask = node("ask", { question: "Pick a colour", options: ["red", "blue", "green"] });
+export const gate = node("gate", { stopWhen: "always", condition: "", instruction: "" });
 export const loop = node("loop", { condition: "done", cap: 3, onCap: "fail" });
-export const hardstop = node("hardstop", {
-  condition: "tests fail",
-  shown: "test report",
-  locked: true,
-  enabled: true,
-});
 export const output = node("output", { name: "result", type: "text" });
 export const branch = (id: string, variable: string, options: { parent?: string } = {}) =>
   node("branch", { variable })(id, options);

@@ -33,14 +33,13 @@ import {
   type JoinOnBranchFail,
   type JoinWait,
 } from "../nodes/join/execute.js";
-import { askOutcome, askRequest } from "../nodes/ask/execute.js";
-import { gateOutcome, gateRequest, gateSkips } from "../nodes/gate/execute.js";
 import {
-  hardstopCheckTurn,
-  hardstopOutcome,
-  hardstopRequest,
+  gateCheckOutcome,
+  gateCheckTurn,
+  gateRequest,
+  gateSkips,
   noVerdictRequest,
-} from "../nodes/hardstop/execute.js";
+} from "../nodes/gate/execute.js";
 import {
   agentVerdictTurnText,
   capAnswer,
@@ -107,8 +106,6 @@ type RunResult = {
 };
 
 type GateSettings = Parameters<typeof gateRequest>[1];
-type AskSettings = Parameters<typeof askRequest>[1];
-type HardstopSettings = Parameters<typeof hardstopRequest>[1];
 type LoopSettings = { condition: string; cap: number; onCap: "ask" | "fail" };
 type JoinSettings = { wait: JoinWait; onBranchFail?: JoinOnBranchFail };
 
@@ -130,8 +127,6 @@ const compactPollMs = 250;
 const runnable = new Set<ManifestNode["type"]>([
   "agent",
   "gate",
-  "ask",
-  "hardstop",
   "loop",
   "fork",
   "join",
@@ -182,14 +177,20 @@ function replyFor(decision: HumanDecision): WaitReply {
     case "stopped":
       return { decision: "stop", reason: decision.reason };
     case "continued":
-      return { decision: "continue" };
+      return decision.text === undefined
+        ? { decision: "continue" }
+        : { decision: "continue", text: decision.text };
     default:
       return { decision: "approve" };
   }
 }
 
+const typedText = (decision: HumanDecision): string | undefined =>
+  decision.decision === "continued" ? decision.text : undefined;
+
 const decisionEvent = (decision: HumanDecision): RunEvent => ({
-  kind: decision.decision === "answered" ? "answered" : "decided",
+  kind:
+    decision.decision === "answered" || typedText(decision) !== undefined ? "answered" : "decided",
   payload: decision,
 });
 
@@ -348,13 +349,14 @@ export class Runner {
   }
 
   private replayAnswers(nodes: readonly ManifestNode[]): void {
-    const asks = new Set(nodes.filter((node) => node.type === "ask").map((node) => node.id));
+    const gates = new Set(nodes.filter((node) => node.type === "gate").map((node) => node.id));
     const answered = new Map<string, string>();
     let pending: string[] = [];
     this.answersSentWith = new Map();
     for (const event of this.allEvents()) {
-      if (event.kind === "answered" && asks.has(event.nodeId)) {
-        if (event.payload.decision === "answered") answered.set(event.nodeId, event.payload.answer);
+      if (event.kind === "answered" && gates.has(event.nodeId)) {
+        const text = typedText(event.payload);
+        if (text !== undefined) answered.set(event.nodeId, text);
       }
       const answer = answered.get(event.nodeId);
       if (event.kind === "done" && answer !== undefined) {
@@ -459,7 +461,7 @@ export class Runner {
       if (turn.failure === undefined) reply = turn.reply;
       else failure = turn.failure;
     } else {
-      const outcome = await this.runHuman(node, context);
+      const outcome = await this.runGate(node, context);
       if (outcome.status === "failed") failure = outcome.reason;
       else doneLine = outcome.line;
     }
@@ -1030,17 +1032,11 @@ export class Runner {
     return answers;
   }
 
-  private runHuman(node: ManifestNode, context: RunContext): Promise<StepOutcome> {
-    if (node.type === "gate") return this.runGate(node);
-    if (node.type === "ask") return this.runAsk(node);
-    return this.runHardstop(node, context);
-  }
-
   private recordDecision(nodeId: string, decision: HumanDecision): void {
     this.record(nodeId, decisionEvent(decision));
   }
 
-  private async runGate(node: ManifestNode): Promise<HumanOutcome> {
+  private async runGate(node: ManifestNode, context: RunContext): Promise<StepOutcome> {
     const settings = node.settings as GateSettings;
     if (gateSkips(settings, this.deps.auto ?? false)) {
       const decision: HumanDecision = { nodeId: node.id, decision: "skipped" };
@@ -1048,36 +1044,27 @@ export class Runner {
         { nodeId: node.id, event: decisionEvent(decision) },
         { nodeId: node.id, event: { kind: "skipped" } },
       ]);
-      return { status: "done", line: "skipped", decision };
+      return { status: "done", line: "skipped" };
     }
-    return this.waitFor(node, gateRequest(node.id, settings), (reply) =>
-      gateOutcome(node.id, reply),
-    );
-  }
-
-  private async runAsk(node: ManifestNode): Promise<HumanOutcome> {
-    const outcome = await this.waitFor(
-      node,
-      askRequest(node.id, node.settings as AskSettings),
-      (reply) => askOutcome(node.id, reply),
-    );
-    if (outcome.status === "done" && outcome.decision.decision === "answered") {
-      this.pendingAnswers.push(outcome.decision.answer);
-    }
-    return outcome;
-  }
-
-  private async runHardstop(node: ManifestNode, context: RunContext): Promise<StepOutcome> {
-    const settings = node.settings as HardstopSettings;
     const action = this.takeAction(node.id);
-    const ask = (request: WaitRequest) =>
-      this.waitFor(node, request, (reply) => hardstopOutcome(node.id, reply), action);
+    const pause = async (request: WaitRequest) => {
+      const outcome = await this.waitFor(
+        node,
+        request,
+        (reply) => gateCheckOutcome(node.id, reply),
+        action,
+      );
+      const text = outcome.status === "done" ? typedText(outcome.decision) : undefined;
+      if (text !== undefined) this.pendingAnswers.push(text);
+      return outcome;
+    };
     if (
+      settings.stopWhen === "always" ||
       settings.condition.trim() === "" ||
       action !== undefined ||
       this.status(node.id) === "needs-you"
     ) {
-      return ask(hardstopRequest(node.id, settings));
+      return pause(gateRequest(node.id, settings));
     }
     await this.compactIfFull(node.id, context.ensureStarted);
     if (this.status(node.id) === "waiting") this.record(node.id, { kind: "running" });
@@ -1087,7 +1074,7 @@ export class Runner {
     try {
       await context.ensureStarted();
       const turnEnd = this.armTurnEnd(this.deps.now?.());
-      await this.deps.prompts.sendPrompt(hardstopCheckTurn(settings.condition));
+      await this.deps.prompts.sendPrompt(gateCheckTurn(settings.condition));
       reply = lastMessage(await turnEnd);
     } catch (error) {
       return { status: "failed", reason: messageOf(error) };
@@ -1095,8 +1082,8 @@ export class Runner {
       this.inTurn = undefined;
     }
     const verdict = parseVerdict(reply);
-    if (verdict.kind === "malformed") return ask(noVerdictRequest(node.id, verdict.reason));
-    if (verdict.done) return ask(hardstopRequest(node.id, settings));
+    if (verdict.kind === "malformed") return pause(noVerdictRequest(node.id, verdict.reason));
+    if (verdict.done) return pause(gateRequest(node.id, settings));
     this.record(
       node.id,
       reply === undefined ? { kind: "done" } : { kind: "done", payload: { stopMessage: reply } },

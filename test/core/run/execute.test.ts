@@ -23,6 +23,7 @@ import {
   noClaude,
   runSocketPath,
   type StartedSessionsView,
+  turnNodeIds,
 } from "../../../src/core/run/execute.js";
 import { sessionContainersOf, workspaceOf } from "../../../src/core/run/manifest.js";
 import { workspaceFolder } from "../../../src/core/run/workspace.js";
@@ -88,7 +89,7 @@ const workspaceBuild = (manifest: { hash: string; prefix: string; nodes: unknown
     ],
   }) as unknown as LoadedBuild;
 
-const approve: WaitReply = { decision: "approve" };
+const proceed: WaitReply = { decision: "continue" };
 
 const manifestWith = (types: string[]) =>
   ({
@@ -351,7 +352,7 @@ describe("the core run path", () => {
       const code = await execute(
         {
           fs,
-          waiter: new FakeWaiter([approve, approve]),
+          waiter: new FakeWaiter([proceed, proceed]),
           startEvents: events.startEvents,
           openSession: async () => {
             throw new Error("Claude must not start for a flow with no Claude turn");
@@ -371,7 +372,7 @@ describe("the core run path", () => {
       );
 
       expect(code).toBe(0);
-      expect(lines).toEqual(["write approved", "check approved", "stop done"]);
+      expect(lines).toEqual(["write continued", "check continued", "stop done"]);
       expect(events.stops()).toBe(1);
       expect(store.runs[0]?.status).toBe("done");
     });
@@ -421,7 +422,7 @@ describe("the core run path", () => {
           open: async () => noClaude,
         },
       );
-      release(approve);
+      release(proceed);
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       expect(code).toBe(130);
@@ -634,22 +635,46 @@ describe("the core run path", () => {
   });
 
   describe("needsClaude", () => {
+    const gateWith = (stopWhen: string, condition: string) =>
+      ({
+        nodes: [{ id: "g", type: "gate", settings: { stopWhen, condition, instruction: "" } }],
+      }) as unknown as Pick<ManifestContainer, "nodes">;
+
     it("is true for a manifest with an agent node", () => {
-      expect(needsClaude(manifestWith(["gate", "agent"]))).toBe(true);
+      expect(needsClaude(manifestWith(["agent"]))).toBe(true);
     });
 
-    it("is false for gates and asks only", () => {
-      expect(needsClaude(manifestWith(["gate", "ask"]))).toBe(false);
+    it("is false for an Always Gate only", () => {
+      expect(needsClaude(gateWith("always", ""))).toBe(false);
     });
 
-    it("is true for a hard stop with a condition to check, and false for one without", () => {
-      const withCondition = (condition: string) =>
-        ({
-          nodes: [{ id: "h", type: "hardstop", settings: { condition } }],
-        }) as unknown as Pick<ManifestContainer, "nodes">;
+    it("is true for a Conditional Gate with a condition to check, and false for one without", () => {
+      expect(needsClaude(gateWith("conditional", "tests fail"))).toBe(true);
+      expect(needsClaude(gateWith("conditional", " "))).toBe(false);
+    });
+  });
 
-      expect(needsClaude(withCondition("tests fail"))).toBe(true);
-      expect(needsClaude(withCondition(" "))).toBe(false);
+  describe("turnNodeIds", () => {
+    const nodes = [
+      { id: "a", type: "agent", settings: {} },
+      { id: "f", type: "fork", settings: {} },
+      {
+        id: "always",
+        type: "gate",
+        settings: { stopWhen: "always", condition: "x", instruction: "" },
+      },
+      {
+        id: "checks",
+        type: "gate",
+        settings: { stopWhen: "conditional", condition: "tests fail", instruction: "" },
+      },
+      { id: "o", type: "output", settings: {} },
+    ];
+
+    it("names Agents, Forks and a Gate that runs a check turn, and not an Always Gate", () => {
+      expect(turnNodeIds({ nodes } as unknown as Pick<ManifestContainer, "nodes">)).toEqual(
+        new Set(["a", "f", "checks"]),
+      );
     });
   });
 

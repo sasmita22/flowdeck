@@ -90,13 +90,11 @@ const eventText = (event: TimelineEvent) =>
 
 const decisionText = (decision: HumanDecision) => {
   if (decision.decision === "answered") return `Answered: ${decision.answer}`;
+  if (decision.decision === "continued")
+    return decision.text === undefined ? "Continued" : `Continued: ${decision.text}`;
   if (decision.decision === "rejected" || decision.decision === "stopped")
     return `${decision.decision === "rejected" ? "Rejected" : "Stopped"}: ${decision.reason}`;
-  return decision.decision === "approved"
-    ? "Approved"
-    : decision.decision === "skipped"
-      ? "Skipped"
-      : "Continued";
+  return decision.decision === "approved" ? "Approved" : "Skipped";
 };
 
 const stageName = (stage: PipelineStage, round: number | undefined) =>

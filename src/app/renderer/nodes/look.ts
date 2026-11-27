@@ -43,8 +43,6 @@ const looks: Record<NodeType, NodeLook> = {
   output: look("output", "", io, io, circle.height, circle.width),
   agent: look("agent", "AGT", work, work),
   gate: look("gate", "GATE", human, line),
-  hardstop: look("hardstop", "STOP", human, human),
-  ask: look("ask", "ASK", human, human, 57),
   loop: look("loop", "LOOP", ctrl, "none"),
   fork: look("fork", "PARALLEL START", ctrl, ctrl, BAR_MIN_HEIGHT, 28),
   join: look("join", "PARALLEL END", ctrl, ctrl, BAR_MIN_HEIGHT, 28),

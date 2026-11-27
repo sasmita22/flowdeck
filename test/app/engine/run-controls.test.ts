@@ -193,9 +193,13 @@ describe("run controls", () => {
   });
 
   describe("run options", () => {
-    const skippableGate = () =>
+    const alwaysGate = () =>
       onWorkspaceMainFlow(
-        [agent("s1"), gate("g1", { settings: { shown: "Check", skippable: true } }), agent("s2")],
+        [
+          agent("s1"),
+          gate("g1", { settings: { stopWhen: "always", instruction: "Check" } }),
+          agent("s2"),
+        ],
         [thenWire("s1", "g1"), thenWire("g1", "s2")],
       );
 
@@ -205,8 +209,8 @@ describe("run controls", () => {
         [wire("b", "yes", "yes", "in"), wire("b", "no", "no", "in")],
       );
 
-    it("lets a run choose only automatic mode, and only for a build with a skippable gate", async () => {
-      expect(await call("run-options", { buildId: await builtId(skippableGate()) })).toEqual({
+    it("lets a run choose only automatic mode, and only for a build with an Always Gate", async () => {
+      expect(await call("run-options", { buildId: await builtId(alwaysGate()) })).toEqual({
         kind: "choices",
         automatic: true,
       });
@@ -216,18 +220,18 @@ describe("run controls", () => {
       });
     });
 
-    it("passes a skippable gate in an automatic run, and stores the choice with the run", async () => {
-      const runId = await start(skippableGate(), { auto: true });
+    it("passes an Always Gate in an automatic run, and stores the choice with the run", async () => {
+      const runId = await start(alwaysGate(), { auto: true });
 
       expect(await finished(runId)).toBe("done");
       expect(statusOf(runId, "g1")).toBe("skipped");
       expect(runs.findRun(runId)?.inputs).toEqual({ auto: true });
     });
 
-    it("stops at a skippable gate in a normal run", async () => {
+    it("stops at an Always Gate in a normal run", async () => {
       handler = handlerWith({ waits: createAppWaiter({ push: (push) => pushes.push(push) }) });
 
-      const runId = await start(skippableGate());
+      const runId = await start(alwaysGate());
 
       await vi.waitFor(() => expect(statusOf(runId, "g1")).toBe("needs-you"));
       expect(runs.findRun(runId)?.inputs).toEqual({});

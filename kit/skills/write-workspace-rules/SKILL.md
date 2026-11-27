@@ -14,7 +14,7 @@ A session works in the session's own folder, `sessions/<slug>/`, with its worktr
 1. Read the container's `nodes` and `wires` in `manifest.json`, every piece in the container's folder, and, for a session container, the `CLAUDE.md` of the repo at its `REPO <path>`.
 2. Below the summary, add:
    - `## What this flow does`: two or three sentences, from the container's first node to its outputs.
-   - `## Flow rules`: the rules this container's flow needs beyond the standard ones, each with the node or nodes of this container it governs. Take them from the node settings: gates, hard stops, loop caps, branch variables, what may and may not be skipped.
+   - `## Flow rules`: the rules this container's flow needs beyond the standard ones, each with the node or nodes of this container it governs. Take them from the node settings: Gates (in the workspace container an Always Gate is skipped in automatic runs, in a session container it asks and waits; a Conditional Gate stops when its condition is met), loop caps, branch variables, what may and may not be skipped.
    - `## Target repo`: for a session container, the path to the repo's `CLAUDE.md` in its worktree, `<repo folder>/CLAUDE.md` in the session's own folder, saying its rules come first. Leave this out for the workspace container, or if the repo has none.
 3. As the hand-off auditor only: repeat each flow rule in the pieces of the same container that must follow it, in the words of that piece's step.
 

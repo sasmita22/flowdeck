@@ -506,7 +506,7 @@ test("The status bar takes you from the editor to the live run that needs you", 
   await status.click();
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("needs you");
-  await window.getByTestId("wait-approve").click();
+  await window.getByTestId("wait-continue").click();
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveText("done", {
     timeout: 20_000,
   });

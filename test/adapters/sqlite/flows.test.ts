@@ -864,6 +864,7 @@ describe("SqliteFlowStore", () => {
       { name: "025_connections.sql" },
       { name: "026_build_snapshot_flow.sql" },
       { name: "027_drop_unknown_node_types.sql" },
+      { name: "028_drop_removed_gate_nodes.sql" },
     ]);
   });
 });

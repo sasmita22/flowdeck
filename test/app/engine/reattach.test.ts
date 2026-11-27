@@ -237,7 +237,7 @@ describe("an app restart", () => {
       ],
       { workspace: ["Plan"] },
     );
-    const check = gate("workspace-1-check", { settings: { shown: "Check android" } });
+    const check = gate("workspace-1-check", { settings: { instruction: "Check android" } });
     return parseFlow({
       ...built,
       nodes: [...built.nodes, check],
@@ -287,7 +287,7 @@ describe("an app restart", () => {
 
   const askedAtGate = () =>
     onWorkspaceMainFlow(
-      [agent("p1"), gate("g1", { settings: { shown: "Check the plan" } }), agent("s2")],
+      [agent("p1"), gate("g1", { settings: { instruction: "Check the plan" } }), agent("s2")],
       [thenWire("p1", "g1"), thenWire("g1", "s2")],
     );
 
@@ -440,7 +440,7 @@ describe("an app restart", () => {
       expect(runsListed.find((run) => run.id === runId)?.status).toBe("running");
 
       expect(
-        waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } }),
+        waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "continue" } }),
       ).toBe(true);
 
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
@@ -484,7 +484,7 @@ describe("an app restart", () => {
       await vi.waitFor(() =>
         expect(lastWait(runId)?.request).toMatchObject({ nodeId: "workspace-1-check" }),
       );
-      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } });
+      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "continue" } });
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
       expect(ended).not.toContain(ios.tmuxName);
       expect(statusOf(runId, "session-2-start")).toBe("waiting");
@@ -528,7 +528,7 @@ describe("an app restart", () => {
 
       expect(await call(second, "resume-run", { runId })).toEqual({ kind: "started", runId });
       await vi.waitFor(() => expect(lastWait(runId)?.request).toMatchObject({ nodeId: "g1" }));
-      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } });
+      waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "continue" } });
 
       await vi.waitFor(() => expect(runs.findRun(runId)?.status).toBe("done"));
       expect(opened.at(-1)).toMatchObject({ resume: true, sessionName: sessionName(runId) });
@@ -566,7 +566,7 @@ describe("an app restart", () => {
 
       for (const runId of [one, two]) {
         expect(
-          waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "approve" } }),
+          waiter.answer({ waitId: lastWait(runId)?.waitId ?? "", reply: { decision: "continue" } }),
         ).toBe(true);
       }
 

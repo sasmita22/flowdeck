@@ -9,7 +9,7 @@ import { liveEngine, type LiveEngine } from "../fixtures/live-engine.js";
 import { createTmpRepo, type TmpRepo } from "../fixtures/tmp-repo.js";
 import { useTempClaudeConfig } from "../fixtures/claude-config.js";
 
-const buildName = "live-ask";
+const buildName = "live-gate-text";
 const runTimeoutMs = 300_000;
 const colourWord = /\b(red|blue|green)\b/i;
 const promptText =
@@ -39,9 +39,13 @@ function liveFlow() {
         {
           id: "q1",
           label: "Pick",
-          type: "ask",
+          type: "gate",
           position: at(1),
-          settings: { question: "Pick a colour", options: ["red", "blue", "green"] },
+          settings: {
+            stopWhen: "always",
+            condition: "",
+            instruction: "Pick a colour: red, blue or green",
+          },
         },
         {
           id: "p1",
@@ -74,9 +78,9 @@ async function readOrMissing(path: string): Promise<string | undefined> {
   }
 }
 
-describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude", () => {
+describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("Gate Continue text with real claude", () => {
   useTempClaudeConfig();
-  const sessionName = `fd-live-ask-${process.pid}`;
+  const sessionName = `fd-live-gate-text-${process.pid}`;
   let home: string;
   let repo: TmpRepo;
   let engine: LiveEngine | undefined;
@@ -94,14 +98,14 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
   }, 60_000);
 
   it(
-    "attaches the Ask's answer to the next Agent, which writes it to colour.md",
+    "attaches the text typed on a Gate's Continue to the next Agent, which writes it to colour.md",
     { timeout: runTimeoutMs },
     async () => {
       engine = liveEngine({
         home,
         repo: repo.path,
         sessionName,
-        waiter: new FakeWaiter([{ decision: "answer", answer: "blue" }]),
+        waiter: new FakeWaiter([{ decision: "continue", text: "blue" }]),
       });
 
       const flow = liveFlow();
@@ -123,7 +127,7 @@ describe.skipIf(process.env.FLOWDECK_LIVE !== "1")("ask nodes with real claude",
       const progress = events.flatMap((event) => {
         if (event.nodeId === "q1" && event.kind === "answered") {
           return [
-            `q1 answered: ${event.payload.decision === "answered" ? event.payload.answer : event.payload.decision}`,
+            `q1 answered: ${event.payload.decision === "continued" ? event.payload.text : event.payload.decision}`,
           ];
         }
         if (event.nodeId === "p1" && event.kind === "sent") return ["p1 started"];

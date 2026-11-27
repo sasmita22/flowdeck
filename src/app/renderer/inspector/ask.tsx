@@ -36,40 +36,39 @@ function ReasonInput({ value, onChange }: { value: string; onChange(value: strin
 
 function WaitControls({ pending, answer }: { pending: PendingWait; answer(reply: Reply): void }) {
   const [text, setText] = useState("");
+  const [continueText, setContinueText] = useState("");
   const { request } = pending;
   switch (request.kind) {
     case "gate":
       return (
         <>
           <p data-testid="wait-text" style={textStyle}>
-            {request.shown}
+            {request.instruction}
           </p>
+          {request.condition !== undefined && (
+            <p data-testid="wait-condition" style={textStyle}>
+              {request.condition}
+            </p>
+          )}
+          <input
+            data-testid="wait-continue-text"
+            type="text"
+            placeholder="Text for the next agents (optional)"
+            value={continueText}
+            onChange={(event) => setContinueText(event.target.value)}
+          />
           <ReasonInput value={text} onChange={setText} />
           <div style={rowStyle}>
-            <button data-testid="wait-approve" onClick={() => answer({ decision: "approve" })}>
-              Approve
-            </button>
             <button
-              data-testid="wait-reject"
-              onClick={() => answer({ decision: "reject", reason: text })}
+              data-testid="wait-continue"
+              onClick={() =>
+                answer(
+                  continueText === ""
+                    ? { decision: "continue" }
+                    : { decision: "continue", text: continueText },
+                )
+              }
             >
-              Reject
-            </button>
-          </div>
-        </>
-      );
-    case "hardstop":
-      return (
-        <>
-          <p data-testid="wait-text" style={textStyle}>
-            {request.shown}
-          </p>
-          <p data-testid="wait-condition" style={textStyle}>
-            {request.condition}
-          </p>
-          <ReasonInput value={text} onChange={setText} />
-          <div style={rowStyle}>
-            <button data-testid="wait-continue" onClick={() => answer({ decision: "continue" })}>
               Continue
             </button>
             <button
