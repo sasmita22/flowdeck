@@ -216,7 +216,7 @@ test.afterEach(async () => {
   }
 });
 
-test("The canvas offers Build and no Run, and Run on a build card asks only for auto mode", async () => {
+test("The canvas offers Build and no Run, and Run on a build card always opens the Run dialog, which asks only for auto mode", async () => {
   const { flowId } = seedBlueprint(home, "Fixer", blueprint(), repo.path);
   const window = await launch();
 

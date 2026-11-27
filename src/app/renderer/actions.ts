@@ -87,7 +87,9 @@ export const createActions = ({
       await assistant.getState().end();
       save.getState().startNew();
     },
-    runBuild: (buildId) => showRun(run.getState().runBuild(buildId)),
+    runBuild: async (buildId) => {
+      await run.getState().runBuild(buildId);
+    },
     startRun: (choice) => showRun(run.getState().start(choice)),
     deleteBuild: async (buildId) => {
       await run.getState().deleteBuild(buildId);

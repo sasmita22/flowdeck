@@ -5543,9 +5543,31 @@ describe("createEngineHandler", async () => {
           flows.save(workspaceFirst());
           const buildId = await builtId();
 
-          expect(await answer("run-options", { buildId })).toEqual({
-            kind: "choices",
-            automatic: false,
+          expect(await answer("run-options", { buildId })).toEqual({ kind: "choices" });
+        });
+
+        it("offers the same Run choices for a build with an Always Gate", async () => {
+          flows.save(
+            workspaceFlow(
+              [
+                trigger("start"),
+                gate("g1", { settings: { stopWhen: "always", instruction: "Check" } }),
+                output("stop"),
+              ],
+              [thenWire("start", "g1"), thenWire("g1", "stop")],
+              undefined,
+              { session: { repo: repo.path, branch: "main" } },
+            ),
+          );
+          const buildId = await builtId();
+
+          expect(await answer("run-options", { buildId })).toEqual({ kind: "choices" });
+        });
+
+        it("answers with an error for a build it cannot load", async () => {
+          expect(await answer("run-options", { buildId: "no-such-build" })).toEqual({
+            kind: "error",
+            message: expect.any(String),
           });
         });
 

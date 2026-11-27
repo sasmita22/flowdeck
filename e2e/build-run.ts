@@ -94,14 +94,16 @@ export async function waitForBuilt(window: Page, home: string, name: string): Pr
   return buildId;
 }
 
+export async function startInRunDialog(window: Page): Promise<void> {
+  const dialog = window.getByTestId(dialogTestIds.dialog);
+  await expect(dialog).toBeVisible();
+  await window.getByTestId(dialogTestIds.start).click();
+  await expect(dialog).toBeHidden();
+}
+
 export async function runFromDetail(window: Page): Promise<void> {
   await window.getByTestId(pageTestIds.buildDetailRun).click();
-  const dialog = window.getByTestId(dialogTestIds.dialog);
-  await expect(dialog.or(window.getByTestId(pageTestIds.runPageStatus))).toBeVisible();
-  if (await dialog.isVisible()) {
-    await window.getByTestId(dialogTestIds.start).click();
-    await expect(dialog).toBeHidden();
-  }
+  await startInRunDialog(window);
 }
 
 export async function buildAndRun(

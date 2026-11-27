@@ -1,35 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { lower } from "../../../src/core/compiler/lower.js";
-import { runChoices, storedAuto, storedOptions } from "../../../src/core/run/options.js";
-import { agent, flow, gate } from "../../fixtures/flow-builders.js";
+import { runChoicesSchema, storedAuto, storedOptions } from "../../../src/core/run/options.js";
 
-const manifestOf = (nodes: unknown[]) => ({
-  nodes: lower(flow(nodes, []), { name: "fix-login", values: {} }).manifest.containers.flatMap(
-    (container) => container.nodes,
-  ),
-});
-
-describe("runChoices", () => {
-  it("offers automatic mode for a build with an Always Gate", () => {
-    const manifest = manifestOf([gate("g", { settings: { stopWhen: "always" } }), agent("p")]);
-
-    expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: true });
+describe("runChoicesSchema", () => {
+  it("accepts choices that carry nothing but their kind", () => {
+    expect(runChoicesSchema.parse({ kind: "choices" })).toEqual({ kind: "choices" });
   });
 
-  it("offers nothing for a build whose only Gates are Conditional", () => {
-    const manifest = manifestOf([
-      agent("s"),
-      gate("g", { settings: { stopWhen: "conditional", condition: "tests fail" } }),
-      agent("p"),
-    ]);
-
-    expect(runChoices(manifest)).toEqual({ kind: "choices", automatic: false });
-  });
-
-  it("offers nothing for a build with no Gate", () => {
-    expect(runChoices(manifestOf([agent("s"), agent("p")]))).toEqual({
-      kind: "choices",
-      automatic: false,
+  it("accepts an error with its message", () => {
+    expect(runChoicesSchema.parse({ kind: "error", message: "x" })).toEqual({
+      kind: "error",
+      message: "x",
     });
   });
 });

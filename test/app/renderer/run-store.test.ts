@@ -132,7 +132,6 @@ const built = { kind: "built", id: "b-0f3a9c2e", hash: "h1", dir: "/fd/workspace
 const setup = async (
   options: {
     latest?: Flow | null;
-    automatic?: boolean;
     defaultBranch?: string;
     runState?: Promise<unknown>;
     built?: Flow;
@@ -182,10 +181,7 @@ const setup = async (
       pushListener = listener;
       return () => {};
     }),
-    runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({
-      kind: "choices",
-      automatic: options.automatic ?? false,
-    })),
+    runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({ kind: "choices" })),
     stopRun: vi.fn<FlowdeckBridge["stopRun"]>(async () => ({ stopped: true })),
     retryNode: vi.fn<FlowdeckBridge["retryNode"]>(async ({ runId }) => ({
       kind: "started",
@@ -1199,40 +1195,66 @@ describe("needsSessionSetup", () => {
 });
 
 describe("runBuild", () => {
-  it("runs the build by its id without saving or building, when it offers no auto mode", async () => {
+  it("opens the run dialog without saving, building or starting a run", async () => {
     const { bridge, canvas, run, calls } = await setup();
     makeDirty(canvas);
 
-    await expect(run.getState().runBuild("b-1")).resolves.toBe("run-1");
-
-    expect(bridge.runOptions).toHaveBeenCalledWith({ buildId: "b-1" });
-    expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1" });
-    expect(calls).toEqual(["runBuild"]);
-    expect(run.getState().dialog).toBeNull();
-  });
-
-  it("asks only for auto mode when the build offers it, then starts with that choice", async () => {
-    const { bridge, run } = await setup({ automatic: true });
-
     await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
 
+    expect(bridge.runOptions).toHaveBeenCalledWith({ buildId: "b-1" });
     expect(bridge.runBuild).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
     expect(run.getState().dialog).toEqual({ buildId: "b-1" });
-
-    await expect(run.getState().start({ auto: true })).resolves.toBe("run-1");
-
-    expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1", auto: true });
-    expect(run.getState().dialog).toBeNull();
   });
 
+  it.each([true, false])(
+    "opens the run dialog for every new run, then starts with auto %s",
+    async (auto) => {
+      const { bridge, run } = await setup();
+      await run.getState().runBuild("b-1");
+
+      await expect(run.getState().start({ auto })).resolves.toBe("run-1");
+
+      expect(bridge.runBuild).toHaveBeenCalledTimes(1);
+      expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1", auto });
+      expect(run.getState().dialog).toBeNull();
+    },
+  );
+
   it("cancel closes the run dialog without a run", async () => {
-    const { bridge, run } = await setup({ automatic: true });
+    const { bridge, run } = await setup();
     await run.getState().runBuild("b-1");
 
     run.getState().cancelDialog();
 
     expect(run.getState().dialog).toBeNull();
     expect(bridge.runBuild).not.toHaveBeenCalled();
+  });
+
+  it("opens the run dialog again after a cancel", async () => {
+    const { run } = await setup();
+    await run.getState().runBuild("b-1");
+    run.getState().cancelDialog();
+
+    await run.getState().runBuild("b-1");
+
+    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+  });
+
+  it("opens the run dialog again for Run again, and starts nothing until Start", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().runBuild("b-1");
+    await run.getState().start({ auto: false });
+
+    await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
+
+    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+    expect(bridge.runBuild).toHaveBeenCalledTimes(1);
+
+    await run.getState().start({ auto: true });
+
+    expect(bridge.runBuild).toHaveBeenCalledTimes(2);
+    expect(bridge.runBuild).toHaveBeenLastCalledWith({ buildId: "b-1", auto: true });
   });
 
   it("holds the reason the run options refuse a build, without asking for options or starting it", async () => {
@@ -1256,10 +1278,11 @@ describe("runBuild", () => {
       message: "A run of this build is already in progress",
     });
 
-    await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
+    await run.getState().runBuild("b-1");
+    await expect(run.getState().start({ auto: false })).resolves.toBeNull();
     expect(run.getState().error).toBe("A run of this build is already in progress");
 
-    await run.getState().runBuild("b-1");
+    await run.getState().start({ auto: false });
     expect(run.getState().error).toBeNull();
   });
 
@@ -1268,6 +1291,7 @@ describe("runBuild", () => {
     bridge.runBuild.mockResolvedValueOnce({ kind: "begun" });
 
     await run.getState().runBuild("b-1");
+    await run.getState().start({ auto: false });
 
     expect(run.getState().error).toEqual(expect.any(String));
     expect(run.getState().error).not.toBe("");
@@ -1279,7 +1303,9 @@ describe("runBuild", () => {
     push(snapshot("running", {}, "run-1"));
     bridge.runBuild.mockResolvedValueOnce({ kind: "started", runId: "run-2" });
 
-    await expect(run.getState().runBuild("b-2")).resolves.toBe("run-2");
+    await run.getState().runBuild("b-2");
+
+    await expect(run.getState().start({ auto: false })).resolves.toBe("run-2");
   });
 
   it("does nothing while a run is starting", async () => {
@@ -1287,7 +1313,8 @@ describe("runBuild", () => {
     const answer = deferred<unknown>();
     bridge.runBuild.mockReturnValueOnce(answer.promise);
 
-    const first = run.getState().runBuild("b-1");
+    await run.getState().runBuild("b-1");
+    const first = run.getState().start({ auto: false });
     await vi.waitFor(() => expect(bridge.runBuild).toHaveBeenCalledTimes(1));
 
     expect(run.getState().starting).toBe(true);
@@ -1334,7 +1361,8 @@ describe("selectRunDisabled", () => {
     const { bridge, run } = await setup();
     const answer = deferred<unknown>();
     bridge.runBuild.mockReturnValueOnce(answer.promise);
-    const first = run.getState().runBuild("b-1");
+    await run.getState().runBuild("b-1");
+    const first = run.getState().start({ auto: false });
     await vi.waitFor(() => expect(bridge.runBuild).toHaveBeenCalledTimes(1));
 
     expect(selectRunDisabled(run.getState(), card())).toBe(true);

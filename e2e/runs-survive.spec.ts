@@ -16,7 +16,7 @@ import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
 import { clickToQuit } from "./quit.js";
-import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runFromDetail, startInRunDialog } from "./build-run.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 
 const run = promisify(execFile);
@@ -315,6 +315,7 @@ test("Runs lists every run numbered within its build, filters by build, and keep
   const alpha = await buildAndRun(window, home, "alpha");
   await finished(window);
   await window.getByTestId(pageTestIds.runAgain).click();
+  await startInRunDialog(window);
   await expect.poll(() => runsOfBuild(alpha).length, { timeout: 20_000 }).toBe(2);
   await finished(window);
   await window.getByTestId(pageTestIds.runBack).click();

@@ -43,9 +43,10 @@ function RunForm({
           onChange={(event) => setAuto(event.target.checked)}
         />
         <span>
-          Automatic mode
+          Run in auto-mode
           <p style={hintStyle}>
-            Skips Always Gates. Conditional Gates still stop when their condition is met.
+            &quot;Always&quot; Gates are skipped; Conditional Gates still stop when their condition
+            is met.
           </p>
         </span>
       </label>

@@ -61,7 +61,7 @@ import {
   type RunEnvironment,
   type StartedSessionsView,
 } from "../../core/run/execute.js";
-import { runChoices, storedAuto, storedOptions, type RunChoices } from "../../core/run/options.js";
+import { storedAuto, storedOptions, type RunChoices } from "../../core/run/options.js";
 import {
   deleteBuild,
   deletePreview,
@@ -1911,7 +1911,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return { kind: "error", message: loaded.message };
-    return runChoices(workspaceOf(loaded.build));
+    return { kind: "choices" };
   };
 
   const manifestOf = (run: RunRecord): ParsedManifest => parseManifest(run.manifestJson);

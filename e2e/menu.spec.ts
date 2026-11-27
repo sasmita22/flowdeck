@@ -23,7 +23,7 @@ import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildIdNamed, runIdOf, waitForBuilt } from "./build-run.js";
+import { buildAndRun, buildIdNamed, runIdOf, startInRunDialog, waitForBuilt } from "./build-run.js";
 import { manifestOf } from "./stale-manifest.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
@@ -297,6 +297,7 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(agentsCard).toContainText("run-agents Agents v1");
   await shot(target, testInfo, "builds");
   await window.getByTestId(pageTestIds.buildRun(agentsBuild)).click();
+  await startInRunDialog(window);
   const agentsRun = await runIdOf(home, agentsBuild);
 
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toHaveAttribute(
@@ -343,6 +344,7 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(window.getByTestId(controlTestIds.save)).toHaveCount(0);
 
   await window.getByTestId(pageTestIds.runAgain).click();
+  await startInRunDialog(window);
   await window.getByTestId(pageTestIds.runBack).click();
   await window.getByTestId("menu-runs").click();
   await expect(byPrefix(window, "run-result-")).toHaveText(["done", "done"], { timeout: 20_000 });
@@ -369,6 +371,7 @@ test("Run again on a finished run runs the same build, so Builds keeps one card 
     { timeout: 20_000 },
   );
   await window.getByTestId(pageTestIds.runAgain).click();
+  await startInRunDialog(window);
   await expect(window.getByTestId(pageTestIds.runPageStatus)).toBeVisible();
 
   await window.getByTestId(pageTestIds.runBack).click();

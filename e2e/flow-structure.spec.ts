@@ -27,7 +27,7 @@ import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { launchWithFakeClaude } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas, runFromDetail } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runFromDetail, startInRunDialog } from "./build-run.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 import { workspaceFolder } from "../src/core/run/workspace.js";
 
@@ -396,6 +396,7 @@ test("A run holds the reader until the file it is given is written", async () =>
 
   await writeFile(join(folder, "plan.md"), "- one\n");
   await window.getByTestId(pageTestIds.runAgain).click();
+  await startInRunDialog(window);
 
   await expect.poll(() => latestRunId(), { timeout: 20_000 }).not.toBe(failedRun);
   await expect(status(window, "build")).toHaveAttribute("data-status", "done", {
