@@ -1085,6 +1085,102 @@ describe("connect beside an invalid node", () => {
   });
 });
 
+describe("connect onto an unfinished parallel section", () => {
+  const oneBranch = "Has 1 branches; a parallel start needs two or more.";
+
+  const withStart = () => {
+    const store = emptyCanvas();
+    store.getState().drop("trigger", { x: 0, y: 0 });
+    return store;
+  };
+
+  it("accepts Start to a Fork with one branch and shows the issue on the Fork", () => {
+    const store = withStart();
+    store.getState().drop("fork", { x: 200, y: 0 });
+    store.getState().drop("agent", { x: 400, y: 0 });
+    store.getState().connect(end("fork-1", "out"), end("agent-1", "in"));
+
+    expect(store.getState().connect(end("trigger-1", "out"), end("fork-1", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(store.getState().flow.wires).toContainEqual(then("trigger-1", "fork-1"));
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toContain(oneBranch);
+  });
+
+  it("accepts an Agent on the main flow to a Fork with one branch", () => {
+    const store = withStart();
+    store.getState().drop("agent", { x: 200, y: 0 });
+    store.getState().connect(end("trigger-1", "out"), end("agent-1", "in"));
+    store.getState().drop("fork", { x: 400, y: 200 });
+    store.getState().drop("agent", { x: 600, y: 200 });
+    store.getState().connect(end("fork-1", "out"), end("agent-2", "in"));
+
+    expect(store.getState().connect(end("agent-1", "out"), end("fork-1", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(store.getState().flow.wires).toContainEqual(then("agent-1", "fork-1"));
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toContain(oneBranch);
+  });
+
+  it("accepts a wire that brings a one-branch Fork onto the main flow without touching it", () => {
+    const store = withStart();
+    store.getState().drop("agent", { x: 200, y: 0 });
+    store.getState().drop("fork", { x: 400, y: 0 });
+    store.getState().drop("agent", { x: 600, y: 0 });
+    store.getState().connect(end("agent-1", "out"), end("fork-1", "in"));
+    store.getState().connect(end("fork-1", "out"), end("agent-2", "in"));
+
+    expect(store.getState().connect(end("trigger-1", "out"), end("agent-1", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(store.getState().flow.wires).toContainEqual(then("trigger-1", "agent-1"));
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toContain(oneBranch);
+  });
+
+  it("finishes the section one wire at a time while the Fork's issue changes and then clears", () => {
+    const store = withStart();
+    store.getState().drop("fork", { x: 200, y: 0 });
+    store.getState().drop("agent", { x: 400, y: 0 });
+    store.getState().drop("join", { x: 600, y: 0 });
+    store.getState().connect(end("fork-1", "out"), end("agent-1", "in"));
+    store.getState().connect(end("agent-1", "out"), end("join-1", "in"));
+
+    expect(store.getState().connect(end("trigger-1", "out"), end("fork-1", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toEqual([oneBranch]);
+
+    store.getState().drop("agent", { x: 400, y: 200 });
+    expect(store.getState().connect(end("fork-1", "out"), end("agent-2", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toEqual([
+      "Has a branch that leads into no parallel end.",
+    ]);
+
+    expect(store.getState().connect(end("agent-2", "out"), end("join-1", "in"))).toBe(true);
+    expect(store.getState().message).toBeNull();
+    expect(selectNodeIssues(store.getState().flow)["fork-1"]).toBeUndefined();
+  });
+
+  it("still refuses a second wire out of a branch of a finished section", () => {
+    const store = withStart();
+    store.getState().drop("fork", { x: 200, y: 0 });
+    store.getState().drop("agent", { x: 400, y: 0 });
+    store.getState().drop("agent", { x: 400, y: 200 });
+    store.getState().drop("join", { x: 600, y: 0 });
+    store.getState().drop("agent", { x: 600, y: 400 });
+    store.getState().connect(end("fork-1", "out"), end("agent-1", "in"));
+    store.getState().connect(end("fork-1", "out"), end("agent-2", "in"));
+    store.getState().connect(end("agent-1", "out"), end("join-1", "in"));
+    store.getState().connect(end("agent-2", "out"), end("join-1", "in"));
+    store.getState().connect(end("trigger-1", "out"), end("fork-1", "in"));
+    const before = store.getState().flow;
+    expect(before.wires).toHaveLength(5);
+
+    expect(store.getState().connect(end("agent-1", "out"), end("agent-3", "in"))).toBe(false);
+    expect(store.getState().message).toContain(
+      "is a parallel branch with more than one wire in or out",
+    );
+    expect(store.getState().flow).toEqual(before);
+  });
+});
+
 describe("selectCanvasEmpty", () => {
   it("is true for a new store and false after one drop", () => {
     const store = emptyCanvas();

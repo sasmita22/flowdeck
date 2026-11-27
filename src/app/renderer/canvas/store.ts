@@ -661,7 +661,14 @@ export function createCanvasStore(
       if (others.some((existing) => sameWire(existing, wire))) {
         return cannotConnect(flow, wire.from, wire.to, alreadyJoined);
       }
-      const [error] = newProblems(flow, command.do(flow), get().libraries);
+      const after = command.do(flow);
+      const ownsSection = (id: string | undefined) => {
+        const type = after.nodes.find((node) => node.id === id)?.type;
+        return type === "fork" || type === "join";
+      };
+      const [error] = newProblems(flow, after, get().libraries).filter(
+        (candidate) => !(candidate.rule === "parallel-section" && ownsSection(candidate.node)),
+      );
       return error === undefined
         ? null
         : cannotConnect(flow, wire.from, wire.to, reasonOf(flow, error));
