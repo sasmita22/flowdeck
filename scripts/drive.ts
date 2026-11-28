@@ -385,18 +385,27 @@ export async function forceExit(app: DriveApp, options: { timeoutMs?: number } =
   if (pids === undefined) return;
   const survivors = () => pids.filter(isRunning);
   await waitUntil(() => survivors().length === 0, timeoutMs);
+  const outlived = survivors();
   if (!appExited()) {
-    const asked = await evaluateUnlessGone(() =>
-      app.evaluate(({ app: electronApp }) => {
-        setImmediate(() => electronApp.exit(0));
+    const { pid } = proc;
+    if (pid === undefined) throw new Error("the app has no pid");
+    const flushed = await evaluateUnlessGone(() =>
+      app.evaluate(({ session }) => {
+        session.defaultSession.flushStorageData();
         return true;
       }),
     );
-    if (asked !== undefined && !(await waitUntil(appExited, timeoutMs))) {
-      throw new Error(`the app did not exit within ${timeoutMs} ms`);
+    if (flushed !== undefined) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      if (!(await waitUntil(appExited, timeoutMs))) {
+        throw new Error(`the app did not exit within ${timeoutMs} ms`);
+      }
     }
   }
-  const outlived = survivors();
   if (outlived.length > 0) {
     throw new Error(`engine process ${outlived.join(", ")} outlived the app`);
   }

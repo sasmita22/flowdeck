@@ -1,6 +1,6 @@
 import { _electron, type Page } from "@playwright/test";
 import type * as Electron from "electron";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -110,16 +110,58 @@ function windowOf(app: FakeApp): Page {
   } as unknown as Page;
 }
 
+const standIns: ChildProcess[] = [];
+
+const isAlive = (target: number) => {
+  try {
+    process.kill(target, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+};
+
+afterEach(async () => {
+  await Promise.all(
+    standIns.splice(0).map(async (child) => {
+      const exited = child.exitCode !== null || child.signalCode !== null;
+      const exit = exited ? undefined : once(child, "exit");
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      await exit;
+    }),
+  );
+});
+
 class FakeProcess extends EventEmitter {
-  readonly pid = 4242;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
+  private child: ChildProcess | undefined;
 
   constructor(
     readonly stdout: PassThrough,
     readonly stderr: PassThrough,
   ) {
     super();
+  }
+
+  get pid(): number | undefined {
+    return this.standIn().pid;
+  }
+
+  standIn(script = "setTimeout(() => {}, 60_000);"): ChildProcess {
+    if (!this.child) {
+      this.child = spawn(process.execPath, ["-e", script], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      standIns.push(this.child);
+    }
+    return this.child;
   }
 }
 
@@ -907,11 +949,17 @@ describe("playwrightPage", () => {
 });
 
 describe("forceExit", () => {
-  it("exits the app through evaluate, never close(), and waits for the exit event", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("flushes through evaluate, kills the app's process group, never close(), and waits for the exit event", async () => {
     const app = new FakeApp();
+    const kill = vi.spyOn(process, "kill");
 
     await forceExit(app);
 
+    expect(kill).toHaveBeenCalledWith(-(app.proc.pid ?? 0), "SIGKILL");
     expect(app.evaluateCalls).toBe(2);
     expect(app.closeCalls).toBe(0);
     expect(app.proc.exitCode).toBe(0);
@@ -961,6 +1009,35 @@ describe("forceExit", () => {
     );
   });
 
+  it("throws before flushing when the app has no pid", async () => {
+    const app = new FakeApp();
+    Object.defineProperty(app.proc, "pid", { value: undefined });
+
+    await expect(forceExit(app)).rejects.toThrow("the app has no pid");
+    expect(app.evaluateCalls).toBe(1);
+  });
+
+  it("resolves when the app's process group is already gone by the time it is killed", async () => {
+    class ExitsDuringFlushApp extends FakeApp {
+      override async evaluate<R>(): Promise<R> {
+        if (this.evaluateCalls === 1) {
+          const child = this.proc.standIn();
+          const exited = once(child, "exit");
+          child.kill("SIGKILL");
+          await exited;
+        }
+        return super.evaluate<R>();
+      }
+    }
+    const app = new ExitsDuringFlushApp();
+    const pid = app.proc.pid ?? -1;
+    const kill = vi.spyOn(process, "kill");
+
+    await expect(forceExit(app)).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledWith(-pid, "SIGKILL");
+  });
+
   it("returns quietly when evaluate fails because the app exited meanwhile", async () => {
     const app = new FakeApp();
     app.evaluateError = new Error("target closed");
@@ -974,8 +1051,23 @@ describe("forceExit", () => {
 
   describe("the snippet evaluated in main", () => {
     class ElectronFakeApp extends FakeApp {
-      exitCalls = 0;
       exitedAt: number | undefined;
+      readonly calls: string[] = [];
+      private readonly electronProcess: ChildProcess;
+
+      constructor(
+        private readonly shutdownMs = 0,
+        script = "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60_000);",
+      ) {
+        super();
+        this.electronProcess = this.proc.standIn(script);
+        this.electronProcess.once("exit", (code, signal) => {
+          this.exitedAt = Date.now();
+          this.proc.exitCode = code;
+          this.proc.signalCode = signal;
+          this.proc.emit("exit", code, signal);
+        });
+      }
 
       override evaluate<R, Arg>(
         fn?: (electron: typeof Electron, arg: Arg) => R | Promise<R>,
@@ -991,10 +1083,14 @@ describe("forceExit", () => {
                 pid,
               })),
             exit: () => {
-              this.exitCalls += 1;
-              this.exitedAt = Date.now();
-              this.proc.exitCode = 0;
-              this.proc.emit("exit", 0, null);
+              setTimeout(() => this.electronProcess.kill("SIGINT"), this.shutdownMs).unref();
+            },
+          },
+          session: {
+            defaultSession: {
+              flushStorageData: () => {
+                this.calls.push("flushStorageData");
+              },
             },
           },
         } as unknown as typeof Electron;
@@ -1015,6 +1111,27 @@ describe("forceExit", () => {
       vi.restoreAllMocks();
     });
 
+    it("ends an app whose shutdown is slow by flushing storage, then killing its process group", async () => {
+      const app = new ElectronFakeApp(30_000);
+      const pid = app.proc.pid ?? -1;
+      const kill = process.kill.bind(process);
+      vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        if (signal === "SIGKILL") app.calls.push(`kill ${target} ${signal}`);
+        return kill(target, signal);
+      });
+
+      await expect(forceExit(app, { timeoutMs: 1000 })).resolves.toBeUndefined();
+
+      expect(app.calls).toEqual(["flushStorageData", `kill ${-pid} SIGKILL`]);
+      let probe: unknown;
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        probe = error;
+      }
+      expect(probe).toMatchObject({ code: "ESRCH" });
+    });
+
     it("still exits the app when an engine pid is already gone", async () => {
       const child = spawn(process.execPath, ["-e", ""]);
       await once(child, "exit");
@@ -1022,7 +1139,8 @@ describe("forceExit", () => {
       app.enginePids = [child.pid ?? -1];
 
       await expect(forceExit(app, { timeoutMs: 200 })).resolves.toBeUndefined();
-      expect(app.exitCalls).toBe(1);
+      expect(app.calls).toEqual(["flushStorageData"]);
+      expect(app.proc.signalCode).toBe("SIGKILL");
       expect(uncaught).toEqual([]);
     });
 
@@ -1056,7 +1174,8 @@ describe("forceExit", () => {
 
       await expect(forceExit(app, { timeoutMs: 5000 })).resolves.toBeUndefined();
 
-      expect(app.exitCalls).toBe(1);
+      expect(app.calls).toEqual(["flushStorageData"]);
+      expect(app.proc.signalCode).toBe("SIGKILL");
       expect(engine.exitedAt()).toBeDefined();
       expect(app.exitedAt).toBeGreaterThanOrEqual(engine.exitedAt() ?? Infinity);
     });
@@ -1071,8 +1190,36 @@ describe("forceExit", () => {
         `engine process ${engine.pid} outlived the app`,
       );
 
-      expect(app.exitCalls).toBe(1);
+      expect(app.calls).toEqual(["flushStorageData"]);
+      expect(app.proc.signalCode).toBe("SIGKILL");
       expect((app.exitedAt ?? 0) - started).toBeGreaterThanOrEqual(300);
+    });
+
+    it("reports an engine that ignores SIGTERM even when it shares the app's process group", async () => {
+      const engineScript =
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); console.log('ready');";
+      const app = new ElectronFakeApp(
+        0,
+        `const engine = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(engineScript)}], { stdio: ['ignore', 'pipe', 'ignore'] });
+        engine.stdout.once('data', () => console.log(engine.pid));
+        setInterval(() => {}, 1000);`,
+      );
+      const appPid = app.proc.pid ?? -1;
+      const stdout = app.proc.standIn().stdout;
+      if (!stdout) throw new Error("the stand-in app has no stdout");
+      const [line] = (await once(stdout, "data")) as [Buffer];
+      const enginePid = Number(line.toString().trim());
+      expect(Number.isInteger(enginePid) && enginePid > 0).toBe(true);
+      app.enginePids = [enginePid];
+
+      await expect(forceExit(app, { timeoutMs: 300 })).rejects.toThrow(
+        `engine process ${enginePid} outlived the app`,
+      );
+
+      await vi.waitFor(() => {
+        expect(isAlive(appPid)).toBe(false);
+        expect(isAlive(enginePid)).toBe(false);
+      });
     });
 
     it("lets no kill error escape and still exits, leaving the engine to the survivor check", async () => {
@@ -1089,7 +1236,8 @@ describe("forceExit", () => {
       await expect(forceExit(app, { timeoutMs: 50 })).rejects.toThrow(
         `engine process ${enginePid} outlived the app`,
       );
-      expect(app.exitCalls).toBe(1);
+      expect(app.calls).toEqual(["flushStorageData"]);
+      expect(app.proc.signalCode).toBe("SIGKILL");
       expect(uncaught).toEqual([]);
     });
   });
