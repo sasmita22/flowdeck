@@ -2,9 +2,11 @@ import { moveNodes } from "../../../../src/app/renderer/canvas/commands.js";
 import {
   boundsOf,
   FRAME_PADDING,
+  labelledBounds,
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
 import { tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
+import { selectNodeIssues } from "../../../../src/app/renderer/canvas/store.js";
 import { toViewNodes } from "../../../../src/app/renderer/canvas/view.js";
 import type { Flow } from "../../../../src/core/flow/schema.js";
 
@@ -31,6 +33,48 @@ export const drawnBoxes = (current: Flow): Map<string, Bounds> => {
 
 export const overlaps = (a: Bounds, b: Bounds) =>
   a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+const barCaptionWidth = 170;
+
+const captionHeight = 4 + 14.85;
+
+type Clearance = { owner: string; name: string; bounds: Bounds };
+
+const clearanceBoxes = (current: Flow, scope: string): Clearance[] => {
+  const members = new Set(current.containers.find(({ id }) => id === scope)?.nodes ?? []);
+  const drawn = drawnBoxes(current);
+  const issues = selectNodeIssues(current);
+  return current.nodes
+    .filter((node) => members.has(node.id))
+    .flatMap((node) => {
+      const isBar = node.type === "fork" || node.type === "join";
+      const own = isBar ? box(drawn, node.id) : labelledBounds(node);
+      const found = issues[node.id];
+      if (found === undefined) return [{ owner: node.id, name: node.id, bounds: own }];
+      const { left, right } = boundsOf(node);
+      const width = isBar ? barCaptionWidth : right - left;
+      const caption = {
+        left: own.left,
+        top: own.bottom,
+        right: own.left + width,
+        bottom: own.bottom + captionHeight,
+      };
+      return [
+        { owner: node.id, name: node.id, bounds: own },
+        { owner: node.id, name: `${node.id} caption`, bounds: caption },
+      ];
+    });
+};
+
+export const clearancePairs = (current: Flow, scope: string): string[] => {
+  const all = clearanceBoxes(current, scope);
+  return all.flatMap((one, index) =>
+    all
+      .slice(index + 1)
+      .filter((other) => other.owner !== one.owner && overlaps(one.bounds, other.bounds))
+      .map((other) => `${one.name}/${other.name}`),
+  );
+};
 
 export const box = (boxes: Map<string, Bounds>, id: string): Bounds => {
   const found = boxes.get(id);

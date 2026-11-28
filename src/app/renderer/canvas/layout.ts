@@ -104,6 +104,43 @@ const connectedGroups = (
   });
 };
 
+const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";
+
+const branchesOf = (flow: Flow, bar: Node): Node[] => {
+  const branches = new Set(
+    flow.wires.flatMap(({ kind, from, to }) => {
+      if (kind !== "then") return [];
+      if (bar.type === "fork" && from.node === bar.id) return [to.node];
+      if (bar.type === "join" && to.node === bar.id) return [from.node];
+      return [];
+    }),
+  );
+  return flow.nodes.filter((node) => branches.has(node.id) && !isBar(node));
+};
+
+type BarGroup = { bar: Node; branches: Node[] };
+
+const unfinishedBarsOf = (flow: Flow, grouped: ReadonlySet<string>): BarGroup[] => {
+  const taken = new Set(grouped);
+  return flow.nodes.flatMap((bar) => {
+    if (!isBar(bar) || taken.has(bar.id)) return [];
+    const branches = branchesOf(flow, bar);
+    const members = [bar, ...branches].map(({ id }) => id);
+    if (members.some((id) => taken.has(id))) return [];
+    for (const id of members) taken.add(id);
+    return [{ bar, branches }];
+  });
+};
+
+const sectionMembersOf = (flow: Flow): Set<string> =>
+  new Set(
+    parallelSections(flow.nodes, flow.wires).sections.flatMap(({ fork, branches, join }) => [
+      fork,
+      ...branches,
+      join,
+    ]),
+  );
+
 const layoutWidthOf = (node: Node): number =>
   hasSideLabel(node) ? widthOf(node) + sideLabelSpan(node.label) : widthOf(node);
 
@@ -129,12 +166,20 @@ const graphOf = (
     };
   };
   const sectionOf = new Map<string, ElkNode>();
-  for (const [index, { fork, branches, join }] of parallelSections(
-    flow.nodes,
-    flow.wires,
-  ).sections.entries()) {
-    const section: ElkNode = { id: `g${index}`, layoutOptions: sectionOptions, children: [] };
+  const { sections } = parallelSections(flow.nodes, flow.wires);
+  const groupOf = (index: number): ElkNode => ({
+    id: `g${index}`,
+    layoutOptions: sectionOptions,
+    children: [],
+  });
+  for (const [index, { fork, branches, join }] of sections.entries()) {
+    const section = groupOf(index);
     for (const member of [fork, ...branches, join]) sectionOf.set(member, section);
+  }
+  const unfinished = unfinishedBarsOf(flow, new Set(sectionOf.keys()));
+  for (const [index, { bar, branches }] of unfinished.entries()) {
+    const group = groupOf(sections.length + index);
+    for (const { id } of [bar, ...branches]) sectionOf.set(id, group);
   }
   const frames: ElkNode[] = flow.containers.map((_, index) => ({
     id: `c${index}`,
@@ -421,21 +466,28 @@ const wrapped = (flow: Flow, canvas: Size, unwrapped: Laid): Promise<Laid> => {
   });
 };
 
-const isBar = (node: Node): boolean => node.type === "fork" || node.type === "join";
+const alignedBranches = (flow: Flow, laid: Laid): Laid => {
+  const boxes = new Map(laid.boxes);
+  for (const { bar, branches } of unfinishedBarsOf(flow, sectionMembersOf(flow))) {
+    if ([bar, ...branches].some(({ parent }) => parent !== undefined)) continue;
+    const barBox = boxes.get(bar.id);
+    const tops = branches.flatMap(({ id }) => boxes.get(id)?.y ?? []);
+    if (barBox === undefined || tops.length === 0) continue;
+    const rise = Math.min(...tops) - barBox.y;
+    if (rise <= 0) continue;
+    for (const { id } of branches) {
+      const found = boxes.get(id);
+      if (found !== undefined) boxes.set(id, { ...found, y: found.y - rise });
+    }
+  }
+  return { ...laid, boxes };
+};
 
 const barTop = (flow: Flow, bar: Node, laid: Laid): number | undefined => {
-  const branches = flow.wires.flatMap(({ kind, from, to }) => {
-    if (kind !== "then") return [];
-    if (bar.type === "fork" && from.node === bar.id) return [to.node];
-    if (bar.type === "join" && to.node === bar.id) return [from.node];
-    return [];
+  const tops = branchesOf(flow, bar).flatMap((node) => {
+    const found = laid.boxes.get(node.id);
+    return found === undefined ? [] : [found.y];
   });
-  const tops = flow.nodes
-    .filter((node) => branches.includes(node.id) && !isBar(node))
-    .flatMap((node) => {
-      const found = laid.boxes.get(node.id);
-      return found === undefined ? [] : [found.y];
-    });
   return tops.length === 0 ? undefined : Math.min(...tops);
 };
 
@@ -450,8 +502,10 @@ const placeOf = (flow: Flow, node: Node, laid: Laid): Position | undefined => {
 export async function tidyMoves(flow: Flow, canvasSize: Size): Promise<Move[]> {
   if (flow.nodes.length === 0) return [];
   const unwrapped = await layOut(flow, canvasSize);
-  const laid =
-    unwrapped.width <= canvasSize.width ? unwrapped : await wrapped(flow, canvasSize, unwrapped);
+  const laid = alignedBranches(
+    flow,
+    unwrapped.width <= canvasSize.width ? unwrapped : await wrapped(flow, canvasSize, unwrapped),
+  );
   return flow.nodes.flatMap((node) => {
     const to = placeOf(flow, node, laid);
     if (to === undefined || (to.x === node.position.x && to.y === node.position.y)) return [];
