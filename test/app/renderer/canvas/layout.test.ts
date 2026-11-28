@@ -8,6 +8,11 @@ import {
   type Bounds,
 } from "../../../../src/app/renderer/canvas/frames.js";
 import { LAYER_GAP, tidyMoves } from "../../../../src/app/renderer/canvas/layout.js";
+import {
+  createCanvasStore,
+  selectNodeIssues,
+  type CanvasState,
+} from "../../../../src/app/renderer/canvas/store.js";
 import type { Flow, Node } from "../../../../src/core/flow/schema.js";
 import { flowContainerOf } from "../../../../src/core/flow/structure.js";
 import { featureLibrary } from "../../../fixtures/feature-library.js";
@@ -21,6 +26,7 @@ import {
   join,
   loop,
   onMainFlow,
+  onWorkspaceMainFlow,
   output,
   sessionContainer,
   sessionLibrary,
@@ -29,7 +35,7 @@ import {
   wire,
   workspaceContainer,
 } from "../../../fixtures/flow-builders.js";
-import { box, canvas, drawnBoxes, overlaps, tidied } from "./canvas-geometry.js";
+import { box, canvas, clearancePairs, drawnBoxes, overlaps, tidied } from "./canvas-geometry.js";
 
 const canvasWidths = [860, 1000, 1200, 1400, 1600];
 
@@ -274,6 +280,21 @@ const withStartLabel = (source: Flow, label: string): Flow => ({
   nodes: source.nodes.map((node) => (node.id === "start" ? { ...node, label } : node)),
 });
 
+const wideCanvas = { width: 4000, height: 1000 };
+
+const parallelSection = () =>
+  onMainFlow(
+    [agent("a"), fork("F"), agent("b1"), agent("b2"), join("J"), agent("c")],
+    [
+      thenWire("a", "F"),
+      thenWire("F", "b1"),
+      thenWire("F", "b2"),
+      thenWire("b1", "J"),
+      thenWire("b2", "J"),
+      thenWire("J", "c"),
+    ],
+  );
+
 const parallelAndLoop = () =>
   onMainFlow(
     [
@@ -354,6 +375,108 @@ const sectioned = (forkAfter: readonly number[], branchCount: number) => {
   return sessionOnly(onMainFlow(nodes, wires));
 };
 
+type Dropped = Parameters<CanvasState["drop"]>[0];
+
+const droppedInSession = (
+  types: readonly Dropped[],
+  wires: readonly (readonly [string, string])[],
+): Flow => {
+  const store = createCanvasStore();
+  const { left, bottom } = flowContainerBounds(store.getState().flow, "session-1");
+  for (const [index, type] of types.entries())
+    store.getState().drop(type, { x: left + 40 + index * 5, y: bottom - 20 });
+  for (const [from, to] of wires)
+    if (!store.getState().connect({ node: from, port: "out" }, { node: to, port: "in" }))
+      throw new Error(`refused ${from} -> ${to}: ${store.getState().message ?? ""}`);
+  return store.getState().flow;
+};
+
+const startToAgent = ["trigger-2", "agent-1"] as const;
+
+const forkToAgent = ["fork-1", "agent-2"] as const;
+
+const inSession = (
+  shape: string,
+  types: readonly Dropped[],
+  wires: readonly (readonly [string, string])[],
+) => ({ shape, scope: "session-1", flow: () => droppedInSession(types, wires) });
+
+const unfinishedBars: { shape: string; scope: string; flow: () => Flow }[] = [
+  inSession(
+    "an unfinished Fork beside an Agent wired from the session Start",
+    ["fork", "agent", "agent"],
+    [startToAgent, forkToAgent],
+  ),
+  inSession(
+    "an unfinished Fork wired after the Agent the session Start sends to",
+    ["fork", "agent", "agent"],
+    [startToAgent, forkToAgent, ["agent-1", "fork-1"]],
+  ),
+  inSession(
+    "an unfinished Fork and a spare Agent",
+    ["fork", "agent", "agent", "agent"],
+    [startToAgent, forkToAgent],
+  ),
+  inSession(
+    "an unfinished Fork and a Gate",
+    ["fork", "agent", "agent", "gate"],
+    [startToAgent, forkToAgent, ["gate-1", "agent-1"]],
+  ),
+  inSession(
+    "two unfinished Forks",
+    ["fork", "agent", "agent", "fork", "agent"],
+    [startToAgent, forkToAgent, ["fork-2", "agent-3"]],
+  ),
+  inSession(
+    "an unfinished Join fed by two Agents",
+    ["join", "agent", "agent", "agent"],
+    [startToAgent, ["agent-2", "join-1"], ["agent-3", "join-1"]],
+  ),
+  inSession(
+    "an unfinished Fork the session Start also sends to",
+    ["agent", "fork", "agent"],
+    [startToAgent, ["trigger-2", "fork-1"], ["fork-1", "agent-2"]],
+  ),
+  inSession(
+    "a Fork sending to an unfinished Fork",
+    ["agent", "fork", "fork", "agent"],
+    [startToAgent, ["fork-1", "fork-2"], ["fork-2", "agent-2"]],
+  ),
+  inSession(
+    "an unfinished Join fed by one Agent off the main flow",
+    ["agent", "join", "agent"],
+    [startToAgent, ["agent-2", "join-1"]],
+  ),
+  {
+    shape: "an unfinished Fork beside the main flow",
+    scope: "workspace-1",
+    flow: () => onWorkspaceMainFlow([agent("a"), fork("F"), agent("x")], [thenWire("F", "x")]),
+  },
+];
+
+const clearWidths = [...canvasWidths, 400];
+
+const noInstructions = { settings: { instructions: "" } };
+
+const captionedColumn = () =>
+  onMainFlow(
+    [
+      fork("F"),
+      agent("b1", noInstructions),
+      agent("b2", noInstructions),
+      agent("b3", noInstructions),
+      join("J"),
+    ],
+    [
+      thenWire("F", "b1"),
+      thenWire("F", "b2"),
+      thenWire("F", "b3"),
+      thenWire("b1", "J"),
+      thenWire("b2", "J"),
+      thenWire("b3", "J"),
+    ],
+  );
+
 describe("tidyMoves", () => {
   it("leaves no two drawn nodes overlapping and no node inside a frame it is not in", async () => {
     const source = parallelAndLoop();
@@ -385,23 +508,32 @@ describe("tidyMoves", () => {
   });
 
   it("spaces the nodes of a Parallel section at least LAYER_GAP apart", async () => {
-    const after = await tidied(
-      onMainFlow(
-        [agent("a"), fork("F"), agent("b1"), agent("b2"), join("J"), agent("c")],
-        [
-          thenWire("a", "F"),
-          thenWire("F", "b1"),
-          thenWire("F", "b2"),
-          thenWire("b1", "J"),
-          thenWire("b2", "J"),
-          thenWire("J", "c"),
-        ],
-      ),
-      { width: 4000, height: 1000 },
-    );
+    const after = await tidied(parallelSection(), wideCanvas);
 
     expectSpaced(after, ["start", "a", "F", "b1", "J", "c", "stop"]);
     expectSpaced(after, ["F", "b2", "J"]);
+  });
+
+  it("lays a complete Parallel section whose nodes show no caption out where it always has", async () => {
+    const source = parallelSection();
+    expect(selectNodeIssues(source)).toEqual({});
+
+    const moves = await tidyMoves(source, wideCanvas);
+
+    expect(Object.fromEntries(moves.map(({ id, to }) => [id, to]))).toEqual({
+      start: { x: 24, y: 172 },
+      a: { x: 265, y: 172 },
+      F: { x: 590, y: 153 },
+      b1: { x: 768, y: 221 },
+      b2: { x: 768, y: 153 },
+      J: { x: 1088, y: 153 },
+      c: { x: 1271, y: 172 },
+      stop: { x: 1591, y: 172 },
+      "workspace-1-start": { x: 607, y: 24 },
+      "workspace-1-stop": { x: 932, y: 24 },
+      "canvas-start": { x: 293, y: 24 },
+      "canvas-stop": { x: 1274, y: 24 },
+    });
   });
 
   it("spaces the body of a Loop frame at least LAYER_GAP apart", async () => {
@@ -759,6 +891,54 @@ describe("tidyMoves", () => {
   it("returns no moves for an empty flow", async () => {
     expect(await tidyMoves(inOneSession([], []), canvas)).toEqual([]);
   });
+
+  it.each(clearWidths.flatMap((width) => unfinishedBars.map((bars) => ({ ...bars, width }))))(
+    "leaves every node, side label and caption clear in a frame with $shape in a $width px canvas",
+    async ({ scope, flow: shape, width }) => {
+      const after = await tidied(shape(), { ...canvas, width });
+
+      expect(clearancePairs(after, scope)).toEqual([]);
+    },
+  );
+
+  it.each(canvasWidths)(
+    "leaves a session clear when an unfinished Fork shares a branch with a complete Parallel section in a %i px canvas",
+    async (width) => {
+      const source = droppedInSession(
+        ["fork", "agent", "agent", "join", "fork", "agent"],
+        [
+          ["trigger-2", "fork-1"],
+          ["fork-1", "agent-1"],
+          ["fork-1", "agent-2"],
+          ["agent-1", "join-1"],
+          ["agent-2", "join-1"],
+          ["fork-2", "agent-1"],
+          ["fork-2", "agent-3"],
+        ],
+      );
+
+      const after = await tidied(source, { ...canvas, width });
+
+      expect(clearancePairs(after, "session-1")).toEqual([]);
+    },
+  );
+
+  it.each(canvasWidths)(
+    "leaves the one-line caption of each Agent in a column clear of the Agent below in a %i px canvas",
+    async (width) => {
+      const source = captionedColumn();
+      const caption = ["Write what the agent should do."];
+      expect(selectNodeIssues(source)).toEqual({ b1: caption, b2: caption, b3: caption });
+
+      const after = await tidied(source, { ...canvas, width });
+
+      const columns = new Set(
+        after.nodes.filter(({ id }) => id.startsWith("b")).map(({ position }) => position.x),
+      );
+      expect(columns.size).toBe(1);
+      expect(clearancePairs(after, "session-1")).toEqual([]);
+    },
+  );
 
   it("lays out 300 nodes in under 500 ms", async () => {
     await tidyMoves(chain(steps(3)), canvas);
