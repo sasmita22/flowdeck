@@ -13,14 +13,14 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 1. **Agent and Fork steps only hand off.** An Agent step dispatches its agent, and a Fork step its branch agents, by full name `<prefix>:<piece>`, a piece of the same container. Neither does that work itself. The other steps (Start, Gate, Loop, Branch, Join, Stop) are the orchestrator's own: it asks, repeats, picks or stops as the line says.
 2. **Right inputs, then wait.** Each dispatch carries that node's prompt as code wrote it (`NODE <nodeId>` and its files), and the step says to wait for the result before going on.
-3. **Hard rules.** Every Conditional Gate and Loop cap reads as a rule that cannot be skipped: what to check, and what to do at the cap or the stop. An Always Gate asks in the chat and waits for the answer; nothing says it may be skipped. A flow with none of these nodes gets no such rule.
+3. **Hard rules.** Every Conditional Gate and Loop cap reads as a rule that cannot be skipped: what to check, and what to do at the cap or the stop. An Always Gate goes on without asking when the run's choices say auto mode, and otherwise asks in the chat and waits for the answer. A Branch takes its value from the latest producing Agent's json answer, then the run's choices, then the build summary, and never asks in the chat. An Agent that produces variables stops the run when its json answer does not set them all. A flow with none of these nodes gets no such rule.
 4. **Backed by hooks.** Where a guard hook in the container's `plugin/hooks/` already enforces a rule (no force pushes; rules re-sent after compaction), the wording agrees with it.
 
 ## Hard limits
 
 - Keep every step line starting `<n>. NODE <nodeId> `, in the same order, one per node of the container. Never add, remove, merge or move a step.
 - Never change a branch target, a loop cap, a Gate's instruction or condition, or a dispatch prompt.
-- Keep every `STOPPED NODE <nodeId>` line a Conditional Gate or Loop step tells the session to end its reply with, exactly as written.
+- Keep every `STOPPED NODE <nodeId>` line a Conditional Gate, Loop or producing Agent step tells the session to end its reply with, exactly as written.
 - Keep the frontmatter and the scope line. Never touch `plugin/hooks/`.
 - Never name a node or piece of another container.
 - A rule the blueprint's nodes do not state is never added and never a question.
@@ -28,5 +28,5 @@ A question is only for a blueprint input: an empty required field or setting, a 
 ## Checklist
 
 - [ ] Every Agent and Fork step hands off and waits; none does that work itself.
-- [ ] Every Conditional Gate and loop cap is stated as a hard rule, and every Always Gate asks in the chat and waits for the answer.
+- [ ] Every Conditional Gate and loop cap is stated as a hard rule; every Always Gate goes on in auto mode and otherwise asks in the chat and waits; every Branch reads json answer, then run's choices, then build summary, with no chat ask; every producing Agent stops the run when a produced variable is missing.
 - [ ] The `NODE` lines are in the same order, with the same targets and caps, as before your edit.

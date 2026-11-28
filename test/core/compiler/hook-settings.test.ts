@@ -12,6 +12,7 @@ import {
   hookSettings,
   PARENT_SESSION_VARS,
   permissionHookTimeoutSeconds,
+  runChoicesVariable,
   sessionEnvNames,
   shellQuote,
   workspaceTmuxVariable,
@@ -286,6 +287,10 @@ describe("containerStartCommand", () => {
     expect(workspaceTmuxVariable).toBe("FD_WORKSPACE_TMUX");
   });
 
+  it("names the variable carrying the run's choices", () => {
+    expect(runChoicesVariable).toBe("FD_RUN_CHOICES");
+  });
+
   it("names the session by the container's tmux variable", () => {
     expect(command()).toContain(
       ' --session-id "$FD_SESSION_ANDROID_ID" --name "$FD_SESSION_ANDROID_TMUX" ',
@@ -320,13 +325,13 @@ describe("containerStartCommand", () => {
     expect(command()).toContain(` ${flag} `);
   });
 
-  it("clears every parent session variable, then starts Claude on the container's id, model, settings and plugin, with the workspace added, running its orchestrator", () => {
+  it("clears every parent session variable, then starts Claude on the container's id, model, settings and plugin, with the workspace added, running its orchestrator with the run's choices", () => {
     const unset = PARENT_SESSION_VARS.map((name) => `-u ${name}`).join(" ");
 
     expect(PARENT_SESSION_VARS).toContain("CLAUDECODE");
     expect(
       command().endsWith(
-        ` env ${unset} claude --session-id "$FD_SESSION_ANDROID_ID" --name "$FD_SESSION_ANDROID_TMUX" --model ${shellQuote("sonnet")} --settings ${shellQuote(settingsPath)} --plugin-dir ${shellQuote(pluginPath)} --add-dir ${shellQuote(workspaceDir)} ${shellQuote("/fix-login-android:run")}`,
+        ` env ${unset} claude --session-id "$FD_SESSION_ANDROID_ID" --name "$FD_SESSION_ANDROID_TMUX" --model ${shellQuote("sonnet")} --settings ${shellQuote(settingsPath)} --plugin-dir ${shellQuote(pluginPath)} --add-dir ${shellQuote(workspaceDir)} '/fix-login-android:run'"\${FD_RUN_CHOICES:+ $FD_RUN_CHOICES}"`,
       ),
     ).toBe(true);
   });
@@ -394,7 +399,7 @@ describe("containerStartCommand", () => {
     });
   });
 
-  it("passes tmux the run's names and values and Claude its arguments intact when a shell runs it, spaces and all", () => {
+  const shellArgv = (env: Record<string, string>) => {
     const bin = mkdtempSync(join(tmpdir(), "fd tmux "));
     try {
       writeFileSync(
@@ -404,64 +409,81 @@ describe("containerStartCommand", () => {
           mode: 0o755,
         },
       );
-      const env = {
-        PATH: bin,
-        FD_SESSION_ANDROID_TMUX: "fd-run-0a1b2c3d",
-        FD_SESSION_ANDROID_ID: "11111111-2222-4333-8444-555555555555",
-        FLOWDECK_SOCK: "/fd home/sockets/fd-run-9f8e7d6c.sock",
-        FLOWDECK_HOOK_NODE: "/my node/bin/node",
-        FLOWDECK_HOOK_SCRIPT: "/flow deck/bin/flowdeck-hook.cjs",
-        FD_WORKSPACE_TMUX: "fd-run-9f8e7d6c",
-        CLAUDE_CONFIG_DIR: "/fd home/claude config",
-      };
-
-      const argv = execFileSync("/bin/sh", ["-c", command()], { env, encoding: "utf8" })
+      return execFileSync("/bin/sh", ["-c", command()], {
+        env: { PATH: bin, ...env },
+        encoding: "utf8",
+      })
         .split("\n")
         .slice(0, -1);
-
-      const head = [
-        "-L",
-        "fd-run-0a1b2c3d",
-        "new-session",
-        "-d",
-        "-s",
-        "fd-run-0a1b2c3d",
-        "-c",
-        worktree,
-      ];
-      const tail = [
-        "env",
-        ...PARENT_SESSION_VARS.flatMap((name) => ["-u", name]),
-        "claude",
-        "--session-id",
-        env.FD_SESSION_ANDROID_ID,
-        "--name",
-        env.FD_SESSION_ANDROID_TMUX,
-        "--model",
-        "sonnet",
-        "--settings",
-        settingsPath,
-        "--plugin-dir",
-        pluginPath,
-        "--add-dir",
-        workspaceDir,
-        "/fix-login-android:run",
-      ];
-      const forwarded = [
-        `FLOWDECK_SOCK=${env.FLOWDECK_SOCK}`,
-        `FLOWDECK_HOOK_NODE=${env.FLOWDECK_HOOK_NODE}`,
-        `FLOWDECK_HOOK_SCRIPT=${env.FLOWDECK_HOOK_SCRIPT}`,
-        `FD_WORKSPACE_TMUX=${env.FD_WORKSPACE_TMUX}`,
-        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
-      ];
-      const middle = argv.slice(head.length, argv.length - tail.length);
-
-      expect(argv.slice(0, head.length)).toEqual(head);
-      expect(argv.slice(argv.length - tail.length)).toEqual(tail);
-      expect(middle.filter((_, i) => i % 2 === 0)).toEqual(forwarded.map(() => "-e"));
-      expect(middle.filter((_, i) => i % 2 === 1).sort()).toEqual([...forwarded].sort());
     } finally {
       rmSync(bin, { recursive: true, force: true });
     }
+  };
+
+  it.each([
+    ["empty", { FD_RUN_CHOICES: "" }],
+    ["unset", {}],
+  ])(
+    "passes Claude its orchestrator alone, with no trailing space, when the run's choices are %s",
+    (_, choices) => {
+      expect(shellArgv(choices).at(-1)).toBe("/fix-login-android:run");
+    },
+  );
+
+  it("passes tmux the run's names and values and Claude its arguments intact when a shell runs it, spaces and all", () => {
+    const env = {
+      FD_SESSION_ANDROID_TMUX: "fd-run-0a1b2c3d",
+      FD_SESSION_ANDROID_ID: "11111111-2222-4333-8444-555555555555",
+      FLOWDECK_SOCK: "/fd home/sockets/fd-run-9f8e7d6c.sock",
+      FLOWDECK_HOOK_NODE: "/my node/bin/node",
+      FLOWDECK_HOOK_SCRIPT: "/flow deck/bin/flowdeck-hook.cjs",
+      FD_WORKSPACE_TMUX: "fd-run-9f8e7d6c",
+      CLAUDE_CONFIG_DIR: "/fd home/claude config",
+      FD_RUN_CHOICES: "Run choices: auto mode, go=yes",
+    };
+
+    const argv = shellArgv(env);
+
+    const head = [
+      "-L",
+      "fd-run-0a1b2c3d",
+      "new-session",
+      "-d",
+      "-s",
+      "fd-run-0a1b2c3d",
+      "-c",
+      worktree,
+    ];
+    const tail = [
+      "env",
+      ...PARENT_SESSION_VARS.flatMap((name) => ["-u", name]),
+      "claude",
+      "--session-id",
+      env.FD_SESSION_ANDROID_ID,
+      "--name",
+      env.FD_SESSION_ANDROID_TMUX,
+      "--model",
+      "sonnet",
+      "--settings",
+      settingsPath,
+      "--plugin-dir",
+      pluginPath,
+      "--add-dir",
+      workspaceDir,
+      "/fix-login-android:run Run choices: auto mode, go=yes",
+    ];
+    const forwarded = [
+      `FLOWDECK_SOCK=${env.FLOWDECK_SOCK}`,
+      `FLOWDECK_HOOK_NODE=${env.FLOWDECK_HOOK_NODE}`,
+      `FLOWDECK_HOOK_SCRIPT=${env.FLOWDECK_HOOK_SCRIPT}`,
+      `FD_WORKSPACE_TMUX=${env.FD_WORKSPACE_TMUX}`,
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+    ];
+    const middle = argv.slice(head.length, argv.length - tail.length);
+
+    expect(argv.slice(0, head.length)).toEqual(head);
+    expect(argv.slice(argv.length - tail.length)).toEqual(tail);
+    expect(middle.filter((_, i) => i % 2 === 0)).toEqual(forwarded.map(() => "-e"));
+    expect(middle.filter((_, i) => i % 2 === 1).sort()).toEqual([...forwarded].sort());
   });
 });

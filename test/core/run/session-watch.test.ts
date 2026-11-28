@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ManifestNode } from "../../../src/core/compiler/lower.js";
 import { nodeStatus } from "../../../src/core/run/run-events.js";
 import { SessionWatch, sessionFailureOf } from "../../../src/core/run/session-watch.js";
 import type { NodeState } from "../../../src/core/run/state.js";
@@ -13,6 +14,9 @@ const a1 = "android-a1";
 const a2 = "android-a2";
 const stopNode = "android-stop";
 const iosAgent = "ios-a1";
+
+type ExtraNode = Pick<ManifestNode, "id" | "type" | "label"> &
+  Partial<Pick<ManifestNode, "settings">>;
 
 const then = (from: string, to: string, port = "out") => ({
   kind: "then" as const,
@@ -56,7 +60,7 @@ const agentCall = (nodeId: string, at: number, sessionId = ours) =>
     sessionId,
   );
 
-const agentDone = (nodeId: string, at: number, sessionId = ours) =>
+const agentDone = (nodeId: string, at: number, sessionId = ours, reply = `${nodeId} finished`) =>
   hookEvent(
     "PostToolUse",
     at,
@@ -68,7 +72,7 @@ const agentDone = (nodeId: string, at: number, sessionId = ours) =>
         status: "completed",
         agentId: `agent-${nodeId}`,
         agentType: `${prefix}:${nodeId}`,
-        content: [{ type: "text", text: `${nodeId} finished` }],
+        content: [{ type: "text", text: reply }],
       },
     },
     sessionId,
@@ -470,6 +474,155 @@ describe("SessionWatch", () => {
     });
   });
 
+  describe("an Agent that produces a variable", () => {
+    const produces = {
+      role: "",
+      instructions: "",
+      model: "sonnet",
+      produces: [{ variable: "x", yesIf: "it works", noIf: "it does not" }],
+    };
+    const producing = {
+      ...container,
+      nodes: [
+        { id: start, type: "trigger" as const, label: "Start" },
+        { id: a1, type: "agent" as const, label: "Plan", settings: produces },
+        { id: a2, type: "agent" as const, label: "Build" },
+        { id: stopNode, type: "output" as const, label: "Stop" },
+      ],
+    };
+    const setting = (answer: boolean) => `Done.\n\`\`\`json\n{"x": ${answer}}\n\`\`\``;
+
+    beforeEach(() => {
+      watch = new SessionWatch({ container: producing, sessionId: ours });
+    });
+
+    it("fails the Agent, naming the variable, when its reply does not set it", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+
+      expect(statusOf(a1)).toBe("failed");
+      expect(emitted.filter((entry) => entry.nodeId === a1).at(-1)).toEqual({
+        nodeId: a1,
+        event: { kind: "failed", payload: { message: `${a1} failed: ended without setting "x"` } },
+      });
+      expect(emitted.some((entry) => entry.nodeId === a1 && entry.event.kind === "done")).toBe(
+        false,
+      );
+    });
+
+    it("records nothing after the failure, even the Stop that names the failed Agent", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200));
+      const before = emitted.length;
+
+      accept(agentCall(a2, 1300), agentDone(a2, 1400));
+      accept(stopSaying(`x is missing.\nSTOPPED NODE ${a1}`, 1500));
+
+      expect(emitted).toHaveLength(before);
+    });
+
+    it("finishes the Agent with the values its reply set", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200, ours, setting(false)));
+
+      expect(emitted.filter((entry) => entry.nodeId === a1).at(-1)).toEqual({
+        nodeId: a1,
+        event: { kind: "done", payload: { variables: { x: false } } },
+      });
+    });
+
+    it("finishes an Agent that produces nothing as before", () => {
+      accept(bash(1000), agentCall(a1, 1100), agentDone(a1, 1200, ours, setting(true)));
+      accept(agentCall(a2, 1300), agentDone(a2, 1400));
+
+      expect(emitted.filter((entry) => entry.nodeId === a2).at(-1)).toEqual({
+        nodeId: a2,
+        event: { kind: "done" },
+      });
+    });
+
+    const forkWatch = (siblingSettings?: typeof produces, unwired: readonly ExtraNode[] = []) => {
+      const fork = "android-fork";
+      const join = "android-join";
+      return new SessionWatch({
+        container: {
+          prefix,
+          nodes: [
+            { id: start, type: "trigger" as const, label: "Start" },
+            { id: fork, type: "fork" as const, label: "Fork" },
+            { id: a1, type: "agent" as const, label: "Plan", settings: produces },
+            {
+              id: a2,
+              type: "agent" as const,
+              label: "Build",
+              ...(siblingSettings === undefined ? {} : { settings: siblingSettings }),
+            },
+            { id: join, type: "join" as const, label: "Join" },
+            { id: stopNode, type: "output" as const, label: "Stop" },
+            ...unwired,
+          ],
+          wires: [
+            then(start, fork),
+            then(fork, a1),
+            then(fork, a2),
+            then(a1, join),
+            then(a2, join),
+            then(join, stopNode),
+          ],
+        },
+        sessionId: ours,
+      });
+    };
+
+    it("fails a Fork branch Agent that does not set what it produces", () => {
+      watch = forkWatch();
+
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200));
+      accept(agentDone(a2, 1300), stopSaying(`x is missing.\nSTOPPED NODE ${a1}`, 1400));
+
+      expect(emitted.filter((entry) => entry.nodeId === a1).at(-1)).toEqual({
+        nodeId: a1,
+        event: { kind: "failed", payload: { message: `${a1} failed: ended without setting "x"` } },
+      });
+      expect(emitted.filter((entry) => entry.nodeId === a2).at(-1)).toEqual({
+        nodeId: a2,
+        event: { kind: "done" },
+      });
+      expect(emitted.some((entry) => entry.nodeId === stopNode)).toBe(false);
+    });
+
+    it("fails an open Fork sibling for its own missing value after a branch failed", () => {
+      watch = forkWatch(produces);
+
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200), agentDone(a2, 1300));
+
+      expect(emitted.filter((entry) => entry.nodeId === a2).at(-1)).toEqual({
+        nodeId: a2,
+        event: { kind: "failed", payload: { message: `${a2} failed: ended without setting "x"` } },
+      });
+    });
+
+    it("records only the open sibling's result while it finishes after a branch failed", () => {
+      const a3 = "android-a3";
+      const gate = "android-gate";
+      watch = forkWatch(undefined, [
+        { id: a3, type: "agent", label: "Review" },
+        {
+          id: gate,
+          type: "gate",
+          label: "Tests fail",
+          settings: { stopWhen: "conditional", condition: "tests fail", instruction: "" },
+        },
+      ]);
+      accept(agentCall(a1, 1100), agentCall(a2, 1110), agentDone(a1, 1200));
+      const before = emitted.length;
+
+      accept(agentCall(a3, 1300), agentDone(a3, 1310));
+      accept(stopSaying(`The tests fail.\nSTOPPED NODE ${gate}`, 1400), stop(1410));
+      expect(emitted).toHaveLength(before);
+
+      accept(agentDone(a2, 1500));
+      expect(emitted.slice(before)).toEqual([{ nodeId: a2, event: { kind: "done" } }]);
+    });
+  });
+
   describe("parallel Agent nodes dispatched in one message", () => {
     const fork = "android-fork";
     const join = "android-join";
@@ -547,6 +700,61 @@ describe("SessionWatch", () => {
       watch.seed(history);
 
       expect(watch.accept(agentDone(a1, 2000))).toEqual([{ nodeId: a1, event: { kind: "done" } }]);
+    });
+
+    describe("a session resumed after one branch failed while its sibling still runs", () => {
+      beforeEach(() => {
+        watch.seed([
+          { nodeId: start, seq: 1, time: "t1", kind: "running" },
+          { nodeId: start, seq: 2, time: "t2", kind: "done" },
+          { nodeId: a1, seq: 3, time: "t3", kind: "running" },
+          { nodeId: a2, seq: 4, time: "t4", kind: "running" },
+          {
+            nodeId: a1,
+            seq: 5,
+            time: "t5",
+            kind: "failed",
+            payload: { message: `${a1} failed: ended without setting "x"` },
+          },
+        ]);
+      });
+
+      it("records the sibling's result", () => {
+        expect(watch.accept(agentDone(a2, 2000))).toEqual([
+          { nodeId: a2, event: { kind: "done" } },
+        ]);
+      });
+
+      it("fails the sibling when its tmux session is gone", () => {
+        expect(watch.died()).toEqual([
+          {
+            nodeId: a2,
+            event: {
+              kind: "failed",
+              payload: { message: `session ${ours} ended before its Stop` },
+            },
+          },
+        ]);
+      });
+    });
+
+    it("records nothing for a session resumed after a failure with nothing left running", () => {
+      watch.seed([
+        { nodeId: start, seq: 1, time: "t1", kind: "running" },
+        { nodeId: start, seq: 2, time: "t2", kind: "done" },
+        { nodeId: a1, seq: 3, time: "t3", kind: "running" },
+        {
+          nodeId: a1,
+          seq: 4,
+          time: "t4",
+          kind: "failed",
+          payload: { message: `${a1} failed: ended without setting "x"` },
+        },
+      ]);
+
+      expect(watch.died()).toEqual([]);
+      expect(watch.accept(agentDone(a2, 2000))).toEqual([]);
+      expect(watch.accept(stop(2100))).toEqual([]);
     });
 
     describe("the node a permission ask comes from", () => {

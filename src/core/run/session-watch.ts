@@ -2,6 +2,7 @@ import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import { agentCallOf, type AgentCallEvent } from "./agent-calls.js";
 import { hasFinishedPath } from "./finished-path.js";
 import type { PipelineItem, PipelineStage } from "./pipeline.js";
+import { missingReason, producedBy, replyOf } from "./produced-values.js";
 import { nodeStatus, type RunEvent } from "./run-events.js";
 import { stoppedNodeOf, stopsTheRun } from "./stop-marker.js";
 import type { EventEntry, StoredEvent } from "./store.js";
@@ -27,6 +28,7 @@ export type AskingNode = { node: string } | { candidates: string[] };
 export class SessionWatch {
   started = false;
   private stopped = false;
+  private failing = false;
   private readonly open = new Set<string>();
   private readonly finished = new Set<string>();
   private readonly calls = new Map<string, Omit<OpenCall, "nodeId">>();
@@ -56,9 +58,11 @@ export class SessionWatch {
       if (status === "waiting") continue;
       this.started = true;
       if (status === "done") this.finished.add(node.id);
-      if (status === "failed" || (status === "done" && node.type === "output")) this.stopped = true;
+      if (status === "failed") this.failing = true;
+      if (status === "done" && node.type === "output") this.stopped = true;
       if (status === "running" || status === "needs-you") this.open.add(node.id);
     }
+    if (this.failing && this.open.size === 0) this.stopped = true;
   }
 
   get openCalls(): OpenCall[] {
@@ -123,7 +127,7 @@ export class SessionWatch {
 
   private onCall(event: SessionHookEvent): EventEntry[] {
     const call = this.ownCall(event);
-    if (call === undefined) return [];
+    if (call === undefined || this.failing) return [];
     const { nodeId, ...details } = call;
     if (this.finished.has(nodeId) || this.open.has(nodeId)) return [];
     this.open.add(nodeId);
@@ -134,13 +138,25 @@ export class SessionWatch {
   private onResult(event: SessionHookEvent): EventEntry[] {
     const nodeId = this.ownNode(event);
     if (nodeId === undefined || this.finished.has(nodeId)) return [];
+    if (this.failing && !this.open.has(nodeId)) return [];
+    const node = this.deps.container.nodes.find(({ id }) => id === nodeId);
+    const { values, missing } = producedBy(node?.settings ?? {}, replyOf(event));
     const opening = this.opening(nodeId);
     this.open.delete(nodeId);
-    this.finished.add(nodeId);
-    return [...opening, { nodeId, event: { kind: "done" } }];
+    const result: RunEvent =
+      missing.length > 0
+        ? { kind: "failed", payload: { message: `${nodeId} failed: ${missingReason(missing)}` } }
+        : Object.keys(values).length === 0
+          ? { kind: "done" }
+          : { kind: "done", payload: { variables: values } };
+    if (result.kind === "failed") this.failing = true;
+    else this.finished.add(nodeId);
+    if (this.failing && this.open.size === 0) this.stopped = true;
+    return [...opening, { nodeId, event: result }];
   }
 
   private onStop(event: SessionHookEvent): EventEntry[] {
+    if (this.failing) return [];
     const stoppedAt = this.stoppedAt(event);
     if (stoppedAt !== undefined) return this.failAt(stoppedAt.nodeId, stoppedAt.message);
     const stop = this.stopNode;

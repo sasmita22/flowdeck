@@ -1,11 +1,6 @@
 import type { Manifest, ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import { pieceOf } from "../compiler/pieces.js";
-import {
-  agentOutcome,
-  agentTurnNode,
-  agentTurnText,
-  producedRows,
-} from "../nodes/agent/execute.js";
+import { agentOutcome, agentTurnNode, agentTurnText } from "../nodes/agent/execute.js";
 import { branchDecision, branchSkips, type BranchPort } from "../nodes/branch/execute.js";
 import type { BranchSettings } from "../nodes/branch/settings.js";
 import type { VariableValues } from "../flow/variables.js";
@@ -58,7 +53,8 @@ import type { NodeState } from "./state.js";
 import { SectionWatch } from "./section-watch.js";
 import type { EventEntry, Store, StoredEvent } from "./store.js";
 import { stampedBefore, waitForTurnEnd, type TurnEndEvent, type TurnEvents } from "./turns.js";
-import { parseProducedValues, parseVerdict } from "./verdict.js";
+import { missingReason, producedBy } from "./produced-values.js";
+import { parseVerdict } from "./verdict.js";
 import type { HumanDecision, HumanOutcome, HumanWaiter, WaitReply, WaitRequest } from "./wait.js";
 
 export type RunnableManifest = Pick<ManifestContainer, "prefix" | "nodes"> &
@@ -203,17 +199,8 @@ function recordAgentCallsUntilStop(
   };
 }
 
-const producedBy = (settings: object, message: string | undefined) =>
-  parseProducedValues(
-    message,
-    producedRows(settings).map((row) => row.variable),
-  );
-
 const variablesPayload = (values: Record<string, boolean>) =>
   Object.keys(values).length === 0 ? {} : { variables: values };
-
-const missingReason = (missing: readonly string[]) =>
-  `ended without setting ${missing.map((name) => JSON.stringify(name)).join(", ")}`;
 
 const finishedIds = (calls: readonly AgentCall[], nodeId: string): string[] =>
   calls.flatMap((call) =>

@@ -16,6 +16,7 @@ import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
 import { parseProducedValues } from "../../src/core/run/verdict.js";
 import {
   agent,
+  branch,
   flow,
   fork,
   gate,
@@ -23,12 +24,14 @@ import {
   output,
   thenWire,
   trigger,
+  wire,
 } from "../fixtures/flow-builders.js";
 import { killTmuxServer } from "../fixtures/live-claude.js";
 
 type HookEvent = {
   hook_event_name: string;
   tool_input?: { prompt?: string };
+  tool_response?: { content?: { text?: string }[] };
   last_assistant_message?: string;
 };
 
@@ -69,6 +72,50 @@ const conditionalGateFlow = (): Flow =>
       labelled(output("o"), "Stop"),
     ],
     [thenWire("t", "a"), thenWire("a", "h"), thenWire("h", "b"), thenWire("b", "o")],
+  );
+
+const producingFlow = (): Flow =>
+  flow(
+    [
+      labelled(trigger("t"), "Start"),
+      labelled(
+        agent("c", {
+          settings: { produces: [{ variable: "x", yesIf: "it holds", noIf: "it does not" }] },
+        }),
+        "Check",
+      ),
+      labelled(output("o"), "Stop"),
+    ],
+    [thenWire("t", "c"), thenWire("c", "o")],
+  );
+
+const branchFlow = (): Flow =>
+  flow(
+    [
+      labelled(trigger("t"), "Start"),
+      labelled(branch("b", "go"), "Go?"),
+      labelled(agent("y"), "Ship"),
+      labelled(agent("n"), "Hold"),
+      labelled(output("o"), "Stop"),
+    ],
+    [
+      thenWire("t", "b"),
+      wire("b", "yes", "y", "in"),
+      wire("b", "no", "n", "in"),
+      thenWire("y", "o"),
+      thenWire("n", "o"),
+    ],
+  );
+
+const alwaysGateFlow = (): Flow =>
+  flow(
+    [
+      labelled(trigger("t"), "Start"),
+      labelled(gate("g", { settings: { stopWhen: "always", instruction: "Check it" } }), "Ask"),
+      labelled(agent("a"), "A"),
+      labelled(output("o"), "Stop"),
+    ],
+    [thenWire("t", "g"), thenWire("g", "a"), thenWire("a", "o")],
   );
 
 const runSkillOf = (input: Flow) => {
@@ -156,10 +203,15 @@ describe("the fake Claude session", () => {
     await expect(cli.waitUntilReady(name)).resolves.toBeUndefined();
   });
 
-  const runFake = async (input: Flow, agentFiles: Record<string, string> = {}) => {
+  const runFake = async (
+    input: Flow,
+    agentFiles: Record<string, string> = {},
+    { prompt = "/fork:run", claudeMd }: { prompt?: string; claudeMd?: string } = {},
+  ) => {
     dir = await mkdtemp(join(tmpdir(), "fd-fake-session-"));
     const bin = join(dir, "bin");
     await writeFakeClaude(bin);
+    if (claudeMd !== undefined) await writeFile(join(dir, "CLAUDE.md"), claudeMd);
     const skill = runSkillOf(input);
     await mkdir(dirname(join(dir, skill.path)), { recursive: true });
     await writeFile(join(dir, skill.path), skill.content);
@@ -178,7 +230,7 @@ describe("the fake Claude session", () => {
       randomUUID(),
       "--plugin-dir",
       join(dir, "plugin"),
-      "/fork:run",
+      prompt,
     ]
       .map(shellQuote)
       .join(" ");
@@ -218,6 +270,75 @@ describe("the fake Claude session", () => {
       events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
     ).toEqual(["PreToolUse a", "PostToolUse a", "Stop"]);
     expect(events.at(-1)?.last_assistant_message?.split("\n").at(-1)).toBe("STOPPED NODE h");
+  });
+
+  describe("a session Agent that produces a variable", () => {
+    const replyOf = (events: HookEvent[]) =>
+      events.find(
+        (event) => event.hook_event_name === "PostToolUse" && labelOf(event) === "PostToolUse c",
+      )?.tool_response?.content?.[0]?.text;
+
+    it("returns the fenced json setting it when the Agent holds a set line", async () => {
+      const events = await runFake(producingFlow(), { c: "Check it.\nfake: set x yes\n" });
+
+      expect(parseProducedValues(replyOf(events), ["x"])).toEqual({
+        values: { x: true },
+        missing: [],
+      });
+    });
+
+    it("returns a reply setting nothing when the Agent holds no set line", async () => {
+      const events = await runFake(producingFlow(), { c: "Check it.\n" });
+
+      expect(parseProducedValues(replyOf(events), ["x"])).toEqual({ values: {}, missing: ["x"] });
+    });
+  });
+
+  describe("a session Branch", () => {
+    const summary = "# Build fork\n\n- Variable go: false\n";
+    const dispatched = (events: HookEvent[]) =>
+      events.filter((event) => event.hook_event_name === "PreToolUse").map(labelOf);
+
+    it("takes the path the run's choices pick over the build summary", async () => {
+      const events = await runFake(
+        branchFlow(),
+        {},
+        { prompt: "/fork:run Run choices: auto mode, go=yes", claudeMd: summary },
+      );
+
+      expect(dispatched(events)).toEqual(["PreToolUse y"]);
+    });
+
+    it("takes the build summary's path when the run has no choices", async () => {
+      const events = await runFake(branchFlow(), {}, { claudeMd: summary });
+
+      expect(dispatched(events)).toEqual(["PreToolUse n"]);
+    });
+  });
+
+  describe("a session Always Gate", () => {
+    const settled = () => new Promise((done) => setTimeout(done, 500));
+
+    it("stops and pauses without auto mode in the run's choices", async () => {
+      const events = await runFake(alwaysGateFlow());
+      await settled();
+
+      expect(
+        events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
+      ).toEqual(["Stop"]);
+    });
+
+    it("goes on in auto mode", async () => {
+      const events = await runFake(
+        alwaysGateFlow(),
+        {},
+        { prompt: "/fork:run Run choices: auto mode" },
+      );
+
+      expect(
+        events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
+      ).toEqual(["PreToolUse a", "PostToolUse a", "Stop"]);
+    });
   });
 
   describe("a workspace turn whose Agent sets variables", () => {

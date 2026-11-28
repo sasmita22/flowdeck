@@ -1,6 +1,6 @@
 import { handoffFolderLine } from "../flow/handoff.js";
 import type { Wire } from "../flow/schema.js";
-import { agentPrompt, agentTurnNode, agentType } from "../nodes/agent/execute.js";
+import { agentPrompt, agentTurnNode, agentType, producedRows } from "../nodes/agent/execute.js";
 import { producersOf } from "../nodes/branch/execute.js";
 import { stopMarker } from "../run/stop-marker.js";
 import type { BuildFile, ManifestNode } from "./lower.js";
@@ -54,14 +54,19 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
         return "the run starts here.";
       case "agent": {
         const fork = forkOf(node.id);
-        return fork === undefined
-          ? `dispatch ${dispatch(node)}, and wait for it to return.`
-          : `a branch of NODE ${fork}, dispatched there; wait for it to return.`;
+        const dispatched =
+          fork === undefined
+            ? `dispatch ${dispatch(node)}, and wait for it to return.`
+            : `a branch of NODE ${fork}, dispatched there; wait for it to return.`;
+        const produced = producedRows(node.settings).map((row) => `\`${row.variable}\``);
+        return produced.length === 0
+          ? dispatched
+          : `${dispatched} If its json answer does not set ${produced.join(", ")}, ${stopInstruction(node.id)}.`;
       }
       case "gate":
         return settings.stopWhen === "conditional"
           ? `hard rule: if ${text(settings.condition)}, stop the run at once: show ${text(settings.instruction)}, ${stopInstruction(node.id)}.`
-          : `ask in the chat: ${quoted(text(settings.instruction))}, and wait for the answer before going on.`;
+          : `if the run's choices say auto mode, go on without asking; otherwise ask in the chat: ${quoted(text(settings.instruction))}, and wait for the answer before going on.`;
       case "loop": {
         const atCap =
           settings.onCap === "ask"
@@ -73,10 +78,11 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
         const paths = `if yes, go to ${nodeList(outOf(node.id, "yes"))}; if no, go to ${nodeList(outOf(node.id, "no"))}.`;
         const name = text(settings.variable);
         const producers = [...producersOf(nodes, name)];
+        const fallback = `read it from the run's choices; if they do not set it, read it from the build summary in CLAUDE.md`;
         if (producers.length === 0) {
-          return `read the value of \`${name}\` from the build summary in CLAUDE.md; ${paths}`;
+          return `to get the value of \`${name}\`, ${fallback}; ${paths}`;
         }
-        return `read \`${name}\` from the json answer the latest of ${nodeList(producers)} that ran before this step returned (true is yes, false is no); if none of them ran, read it from the build summary in CLAUDE.md; if it is missing or malformed, ask in the chat for yes or no and never guess; ${paths}`;
+        return `read \`${name}\` from the json answer the latest of ${nodeList(producers)} that ran before this step returned (true is yes, false is no); if none of them ran, ${fallback}; ${paths}`;
       }
       case "fork":
         return `dispatch every branch in one message, in parallel: ${outOf(node.id).map(branchCall).join("; ")}.`;
@@ -112,6 +118,8 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       `# Run ${prefix}`,
       "",
       "Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for every step's result before the next.",
+      "",
+      `The run's choices, if any, are the \`Run choices:\` text after \`/${prefix}:run\`, for example \`Run choices: auto mode, go=yes\`. With none, ask at every Always Gate and use the build summary in CLAUDE.md.`,
       "",
       handoffFolderLine(scope.repo, scope.kind),
       "",

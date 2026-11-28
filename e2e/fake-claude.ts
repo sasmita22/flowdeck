@@ -433,9 +433,50 @@ const sessionTurn = async () => {
     const match = dispatchLine.exec(line);
     return match === null ? [] : [{ nodeId: match[1], agentType: match[2] }];
   };
-  const batches = [...steps.matchAll(stepLine)]
-    .map((match) => ({ calls: batchOf(match[0]), at: match.index }))
-    .filter(({ calls }) => calls.length > 0);
+  const lines = [...steps.matchAll(stepLine)].map((match) => ({ line: match[0], at: match.index }));
+  const nodeOf = (line) => /^\\d+\\. NODE (\\S+) /.exec(line)?.[1];
+  const nodesIn = (text) => [...text.matchAll(/NODE ([A-Za-z0-9_-]+)/g)].map(([, id]) => id);
+  const branchLine = /: (?:to get the value of|read) \\x60([^\\x60]+)\\x60.*if yes, go to (.*?); if no, go to (.*?)\\.$/;
+  const alwaysGateLine = /: if the run's choices say auto mode, go on without asking; otherwise ask in the chat: (".*?"), and wait/;
+  const goOn = " Then go on to ";
+  const nextOf = (line) => {
+    const decision = branchLine.exec(line);
+    if (decision !== null) return [...nodesIn(decision[2]), ...nodesIn(decision[3])];
+    const forked = forkLine.test(line) ? [...line.matchAll(branchCall)].map(([, , id]) => id) : [];
+    const inside = /: repeat the steps inside it \\(([^)]*)\\)/.exec(line);
+    const after = line.includes(goOn) ? nodesIn(line.slice(line.lastIndexOf(goOn))) : [];
+    return [...forked, ...(inside === null ? [] : nodesIn(inside[1])), ...after];
+  };
+  const successors = new Map(lines.map(({ line }) => [nodeOf(line), nextOf(line)]));
+  const reach = (starts) => {
+    const seen = new Set();
+    const todo = [...starts];
+    while (todo.length > 0) {
+      const id = todo.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      todo.push(...(successors.get(id) ?? []));
+    }
+    return seen;
+  };
+  const prompt = argv.at(-1) ?? "";
+  const choicesLabel = "Run choices: ";
+  const choices = prompt.includes(choicesLabel) ? prompt.slice(prompt.indexOf(choicesLabel) + choicesLabel.length).split(", ") : [];
+  const auto = choices.includes("auto mode");
+  const chosen = (name) => {
+    const hit = choices.find((choice) => choice === name + "=yes" || choice === name + "=no");
+    return hit === undefined ? undefined : hit.endsWith("=yes");
+  };
+  const summaryValue = (name) => {
+    for (let at = process.cwd(); ; at = resolve(at, "..")) {
+      const file = resolve(at, "CLAUDE.md");
+      const found = existsSync(file) ? readFileSync(file, "utf8").split("\\n").find((line) => line === "- Variable " + name + ": true" || line === "- Variable " + name + ": false") : undefined;
+      if (found !== undefined) return found.endsWith(": true");
+      if (resolve(at, "..") === at) return undefined;
+    }
+  };
+  const produced = new Map();
+  const skipped = new Set();
   const conditionLine = /^\\d+\\. NODE \\S+ .*?: hard rule: .*\\x60(STOPPED NODE \\S+)\\x60/gm;
   const conditionStops = [...steps.matchAll(conditionLine)].map((match) => ({ marker: match[1], at: match.index }));
   const ended = () => writeFileSync(endedMarker(sessionId), "");
@@ -445,7 +486,27 @@ const sessionTurn = async () => {
   say("────────");
   writeUsage();
   await post({ hook_event_name: "UserPromptSubmit", prompt: argv.at(-1) ?? "" });
-  for (const { calls: batch, at } of batches) {
+  for (const { line, at } of lines) {
+    const nodeId = nodeOf(line);
+    if (skipped.has(nodeId)) continue;
+    const decision = branchLine.exec(line);
+    if (decision !== null) {
+      const [, name, yes, no] = decision;
+      const value = produced.get(name) ?? chosen(name) ?? summaryValue(name) ?? false;
+      const taken = reach(nodesIn(value ? yes : no));
+      for (const id of reach(nodesIn(value ? no : yes))) if (!taken.has(id)) skipped.add(id);
+      say("NODE " + nodeId + " " + name + " " + (value ? "yes" : "no"));
+      continue;
+    }
+    const asking = alwaysGateLine.exec(line);
+    if (asking !== null && !auto) {
+      const question = JSON.parse(asking[1]);
+      await pause(50);
+      await post({ hook_event_name: "Stop", last_assistant_message: question });
+      return say(question);
+    }
+    const batch = batchOf(line).filter((call) => !skipped.has(call.nodeId));
+    if (batch.length === 0) continue;
     const calls = batch.map(({ nodeId, agentType }) => ({
       nodeId,
       agentType,
@@ -469,10 +530,13 @@ const sessionTurn = async () => {
         say("NODE " + nodeId + " failed");
         return ended();
       }
+      const sets = setsIn(agentFileText(agentType));
+      for (const [name, value] of sets) produced.set(name, value);
+      const text = sets.length === 0 ? "Fake report from " + nodeId + "." : replyWith(sets);
       await post({
         hook_event_name: "PostToolUse",
         ...call,
-        tool_response: { agentType, status: "completed", content: [{ type: "text", text: "Fake report from " + nodeId + "." }] },
+        tool_response: { agentType, status: "completed", content: [{ type: "text", text }] },
       });
       say("NODE " + nodeId + " done");
     }

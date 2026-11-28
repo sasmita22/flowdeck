@@ -150,17 +150,17 @@ exports[`build > writes the same bytes as the recorded build 1`] = `
     "sessions/main/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "sessions/main/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "sessions/main/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
-    "sessions/main/plugin/skills/run/SKILL.md": "9fe96647d379643c86e108c3c501afd8a565fbe1c039767a5d2df608e1d1b9db",
+    "sessions/main/plugin/skills/run/SKILL.md": "41ce112008a1c5fbff4723662a5d3b8593e2db497a00facbad36d98f3d2b020a",
     "sessions/main/settings.json": "f02589aad666d56d676f6c45832f3a56efcad63a5a8c18f86dd79e36acc21d61",
-    "workspace/CLAUDE.md": "9975a5daf790e6c7752682632d236c409d408223e56404cabd6caf508198a9cd",
+    "workspace/CLAUDE.md": "68e840b2b76a16f88708f5adc5bdc3a6acd8873352c267d81f264ceb76905eeb",
     "workspace/plugin/.claude-plugin/plugin.json": "8e0ed1032a519a50555f09a3c50972864cfe372b93977cffffb9b142c2e5baa9",
     "workspace/plugin/hooks/hooks.json": "0b6668db51a29aed2069452af8a4c3ad439201d1eceaa71745f77769f33e3d76",
     "workspace/plugin/hooks/no-force-push.sh": "eb7a0c70479abf06c8ff5ea6966ed3fb3e465a9799d4fcd6dc13b2a34ee44625",
     "workspace/plugin/hooks/rules-after-compact.sh": "be6ec85c23c48ecbc8219e52c0fc49b9fbece67d29767c92c2c961e80f6444e1",
-    "workspace/plugin/skills/run/SKILL.md": "ead61d31e6873ed86119573b5565ae1dfdb0e84a3cafce86136c7959a53df26b",
+    "workspace/plugin/skills/run/SKILL.md": "a3b9c11e20634d8c334689ddf02d39ed7c442864b476f3ae75dc84c8293eee9e",
     "workspace/settings.json": "1ecefb7457ec56704f34c6e34f0bca16b14e7d2e94b4b47326595d50743d77fd"
   },
-  "hash": "edcb9194e31c4ccaeba88bc3315f4b64ab2f378e0d00877595b9b4b65b979de0",
+  "hash": "773874171894762b40a3b2faa5cbe7590db95c88282b3a2a8c760077d09c7c6e",
   "layout": "workspace",
   "outputs": [
     {
@@ -391,6 +391,8 @@ description: "Part of build fix-login-main (repo repo, build folder /fd-home/wor
 
 Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for every step's result before the next.
 
+The run's choices, if any, are the \`Run choices:\` text after \`/fix-login-main:run\`, for example \`Run choices: auto mode, go=yes\`. With none, ask at every Always Gate and use the build summary in CLAUDE.md.
+
 Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\`) in the run's working folder. A run starts there; in this session's own folder that folder is \`repo/\`.
 
 1. NODE start (start): the run starts here. Then go on to NODE p.
@@ -435,7 +437,7 @@ Hand-off files are read and written by bare name (\`<file>\`, not \`repo/<file>\
 - Variables: FD_SESSION_MAIN_TMUX holds its tmux name, FD_SESSION_MAIN_ID its Claude session id
 
 \`\`\`sh
-tmux -L "$FD_SESSION_MAIN_TMUX" new-session -d -s "$FD_SESSION_MAIN_TMUX" -c '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo' -e FLOWDECK_SOCK="$FLOWDECK_SOCK" -e FLOWDECK_HOOK_NODE="$FLOWDECK_HOOK_NODE" -e FLOWDECK_HOOK_SCRIPT="$FLOWDECK_HOOK_SCRIPT" -e FD_WORKSPACE_TMUX="$FD_WORKSPACE_TMUX" -e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID -u CLAUDE_EFFORT claude --session-id "$FD_SESSION_MAIN_ID" --name "$FD_SESSION_MAIN_TMUX" --model 'sonnet' --settings '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/settings.json' --plugin-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/plugin' --add-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace' '/fix-login-main:run'
+tmux -L "$FD_SESSION_MAIN_TMUX" new-session -d -s "$FD_SESSION_MAIN_TMUX" -c '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/repo' -e FLOWDECK_SOCK="$FLOWDECK_SOCK" -e FLOWDECK_HOOK_NODE="$FLOWDECK_HOOK_NODE" -e FLOWDECK_HOOK_SCRIPT="$FLOWDECK_HOOK_SCRIPT" -e FD_WORKSPACE_TMUX="$FD_WORKSPACE_TMUX" -e CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_PID -u CLAUDE_EFFORT claude --session-id "$FD_SESSION_MAIN_ID" --name "$FD_SESSION_MAIN_TMUX" --model 'sonnet' --settings '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/settings.json' --plugin-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/sessions/main/plugin' --add-dir '/fd-home/workspaces/b1111111-0000-4000-8000-000000000001/workspace' '/fix-login-main:run'"\${FD_RUN_CHOICES:+ $FD_RUN_CHOICES}"
 \`\`\`
 
 ## Session states
@@ -587,6 +589,8 @@ description: "Part of build fix-login-workspace (repo workspace, build folder /f
 # Run fix-login-workspace
 
 Run these steps in order. Agent and Fork steps only hand off: each goes to its agents; never do that work yourself. Do every other step as its line says. Wait for every step's result before the next.
+
+The run's choices, if any, are the \`Run choices:\` text after \`/fix-login-workspace:run\`, for example \`Run choices: auto mode, go=yes\`. With none, ask at every Always Gate and use the build summary in CLAUDE.md.
 
 Hand-off files are read and written by bare name (\`<file>\`, not \`workspace/<file>\`) in the run's working folder. A run starts there; for the workspace session that folder is \`workspace/\`.
 

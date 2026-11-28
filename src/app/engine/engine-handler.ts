@@ -24,7 +24,12 @@ import {
   type BuildRequest,
   type BuildResume,
 } from "../../core/compiler/build-version.js";
-import { hookCommand, sessionEnvNames, shellQuote } from "../../core/compiler/hook-settings.js";
+import {
+  hookCommand,
+  runChoicesVariable,
+  sessionEnvNames,
+  shellQuote,
+} from "../../core/compiler/hook-settings.js";
 import type { ManifestContainer } from "../../core/compiler/lower.js";
 import { plainProblems, type Problem } from "../../core/compiler/problems.js";
 import { diagnoseConnectors, type DoctorReport } from "../../core/doctor/connectors.js";
@@ -62,6 +67,7 @@ import {
   type StartedSessionsView,
 } from "../../core/run/execute.js";
 import {
+  runChoicesText,
   runValues,
   runVariables,
   storedAuto,
@@ -451,22 +457,31 @@ const containerSessions = (
     return session === undefined ? [] : [{ container, session }];
   });
 
+const choicesEnv = (
+  manifest: Pick<ParsedManifest, "values">,
+  stored: Record<string, unknown>,
+): Record<string, string> => ({ [runChoicesVariable]: runChoicesText(stored, manifest.values) });
+
 const sessionEnv = (
-  manifest: Pick<ParsedManifest, "containers">,
+  manifest: Pick<ParsedManifest, "containers" | "values">,
   sessions: readonly RunSession[],
+  stored: Record<string, unknown>,
 ): Record<string, string> => {
   const names = sessionEnvNames(manifest.containers);
-  return Object.fromEntries(
-    containerSessions(manifest, sessions).flatMap(({ container, session }) => {
-      const name = names.get(container.slug);
-      return name === undefined
-        ? []
-        : [
-            [name.tmux, session.tmuxName],
-            [name.id, session.claudeSessionId],
-          ];
-    }),
-  );
+  return {
+    ...Object.fromEntries(
+      containerSessions(manifest, sessions).flatMap(({ container, session }) => {
+        const name = names.get(container.slug);
+        return name === undefined
+          ? []
+          : [
+              [name.tmux, session.tmuxName],
+              [name.id, session.claudeSessionId],
+            ];
+      }),
+    ),
+    ...choicesEnv(manifest, stored),
+  };
 };
 
 const startedIn = (
@@ -1370,7 +1385,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         return needsClaude(workspace)
           ? options.run.openSession({
               ...sessionOptions(manifest, built.dir, session, hooks),
-              env: sessionEnv(manifest, sessions),
+              env: sessionEnv(manifest, sessions, stored),
               ...(sessions.length === 0
                 ? {}
                 : { sessionStatesPath: sessionStatesPath(options.home, runId) }),
@@ -1478,7 +1493,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
             { sessionName, socketPath: socket.path, cwd, claudeSessionId },
             hooks,
           ),
-          env: sessionEnv(manifest, sessions),
+          env: sessionEnv(manifest, sessions, record.inputs),
           ...(sessions.length === 0
             ? {}
             : { sessionStatesPath: sessionStatesPath(options.home, runId) }),
@@ -1507,10 +1522,17 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
               hooks,
               container.model,
             ),
+            env: choicesEnv(manifest, record.inputs),
             resume: true,
           });
           await resumed.session.ensureStarted();
-          await resumed.prompts.sendPrompt(sessionContinuePrompt(container, events));
+          await resumed.prompts.sendPrompt(
+            sessionContinuePrompt(
+              container,
+              events,
+              runChoicesText(record.inputs, manifest.values),
+            ),
+          );
         } catch (error) {
           const carryOn = carryOnNode(container, events);
           if (carryOn !== undefined)

@@ -5427,10 +5427,24 @@ describe("createEngineHandler", async () => {
           claudeSessionId: env[`FD_SESSION_${slug}_ID`] ?? "",
         });
 
-        const startWorkspaceFirst = async () => {
+        const envOf = (opening: OpenSessionOptions | undefined) =>
+          (opening as (OpenSessionOptions & { env?: Record<string, string> }) | undefined)?.env ??
+          {};
+
+        const autoGoYes = {
+          values: { go: false },
+          choices: { auto: true, variables: { go: true } },
+        };
+
+        const startWorkspaceFirst = async ({
+          values = {},
+          choices = {},
+        }: { values?: Record<string, boolean>; choices?: Record<string, unknown> } = {}) => {
           flows.save(workspaceFirst());
-          const buildId = await builtId();
-          const runId = await startedOn(buildId);
+          const buildId = await builtId({ values });
+          const started = await runBuild(buildId, choices);
+          if (started.kind !== "started") throw new Error(`run did not start: ${started.message}`);
+          const { runId } = started;
           await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
           const workspace = claude.opened[0];
           if (workspace === undefined) throw new Error("no workspace session opened");
@@ -5637,6 +5651,20 @@ describe("createEngineHandler", async () => {
             "session-2-plan": ios.claudeSessionId,
             "session-2-stop": ios.claudeSessionId,
           });
+        });
+
+        it("gives the workspace session the run's choices, from what the run stored and the build's yes/no values", async () => {
+          const { env } = await startWorkspaceFirst(autoGoYes);
+
+          expect(env["FD_RUN_CHOICES"]).toBe("Run choices: auto mode, go=yes");
+          release();
+        });
+
+        it("gives the workspace session empty run choices for a manual run with no overrides", async () => {
+          const { env } = await startWorkspaceFirst({ values: { go: false } });
+
+          expect(env["FD_RUN_CHOICES"]).toBe("");
+          release();
         });
 
         it("ends done when the workspace reaches its Stop without starting a session, showing both containers not started", async () => {
@@ -5852,6 +5880,42 @@ describe("createEngineHandler", async () => {
           release();
         });
 
+        it("gives the resumed workspace and the reopened session the choices the run stored, and tells the reopened session them", async () => {
+          runHandler();
+          const { runId, workspace, android } = await startWorkspaceFirst(autoGoYes);
+          alive.add(android.tmuxName);
+          hook(android.claudeSessionId, "PreToolUse", agentCall("session-1-plan"));
+          hook(android.claudeSessionId, "PostToolUse", agentDone("session-1-plan"));
+          await vi.waitFor(() => expect(statusOf(runId, "session-1-plan")).toBe("done"));
+          expect(await answer("stop-run", { runId })).toEqual({ stopped: true });
+          const openedBefore = claude.opened.length;
+          const sentBefore = claude.sent.length;
+
+          expect(await answer("resume-run", { runId })).toMatchObject({ kind: "started" });
+
+          await vi.waitFor(() => expect(claude.opened.length).toBe(openedBefore + 2));
+          const reopened = claude.opened.slice(openedBefore);
+          const choices = "Run choices: auto mode, go=yes";
+          expect(
+            envOf(reopened.find((opening) => opening.sessionName === workspace.sessionName))[
+              "FD_RUN_CHOICES"
+            ],
+          ).toBe(choices);
+          expect(
+            envOf(reopened.find((opening) => opening.sessionName === android.tmuxName))[
+              "FD_RUN_CHOICES"
+            ],
+          ).toBe(choices);
+          await vi.waitFor(() =>
+            expect(
+              claude.sent.slice(sentBefore).filter((text) => text.includes("Already done:")),
+            ).toEqual([
+              expect.stringMatching(/do not redo the done steps\. Run choices: auto mode, go=yes$/),
+            ]),
+          );
+          release();
+        });
+
         describe("session states", () => {
           const statesPath = (runId: string) => join(home, "runs", runId, "session-states");
 
@@ -5935,7 +5999,15 @@ describe("createEngineHandler", async () => {
 
           const pickedUpAgain = async (
             beforeClosing: (androidId: string, runId: string) => Promise<void>,
-            { refusal }: { refusal?: string } = {},
+            {
+              refusal,
+              values = {},
+              choices = {},
+            }: {
+              refusal?: string;
+              values?: Record<string, boolean>;
+              choices?: Record<string, unknown>;
+            } = {},
           ) => {
             const held = fakeClaudeSession(() => "hold");
             runHandler({
@@ -5947,8 +6019,11 @@ describe("createEngineHandler", async () => {
             });
             claude = held;
             flows.save(androidPlansAndBuilds());
-            const buildId = await builtId();
-            const runId = await startedOn(buildId);
+            const buildId = await builtId({ values });
+            const started = await runBuild(buildId, choices);
+            if (started.kind !== "started")
+              throw new Error(`run did not start: ${started.message}`);
+            const { runId } = started;
             await vi.waitFor(() => expect(claude.sentTo("workspace-1-wait")).toHaveLength(1));
             const workspace = claude.opened[0];
             if (workspace === undefined) throw new Error("no workspace session opened");
@@ -6021,6 +6096,22 @@ describe("createEngineHandler", async () => {
             expect(await endOf(runId)).toBe("done");
             expect(toAndroid()).toEqual([carryOn]);
             expect(failedNodes(runId)).toEqual([]);
+          });
+
+          it("tells a session reopened after Flowdeck picks the run up again the choices the run stored", async () => {
+            const { prefix, named, toAndroid, reopened } = await pickedUpAgain(
+              finishes("session-1-plan"),
+              autoGoYes,
+            );
+            const choices = "Run choices: auto mode, go=yes";
+
+            await vi.waitFor(() =>
+              expect(toAndroid()).toEqual([
+                `/${prefix}:run Already done: ${named("session-1-start")}, ${named("session-1-plan")}. Carry on from ${named("session-1-build")}; do not redo the done steps. ${choices}`,
+              ]),
+            );
+            expect(envOf(reopened()[0])["FD_RUN_CHOICES"]).toBe(choices);
+            release();
           });
 
           it("fails a node cut off mid-step with the workspace's cut-off message, reopens nothing, and ends the run failed naming it", async () => {
