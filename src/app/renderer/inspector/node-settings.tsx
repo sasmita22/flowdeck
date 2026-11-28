@@ -31,7 +31,7 @@ export function NodeSettingsSection({ canvas }: { canvas: StoreApi<CanvasState> 
   const libraries = useStore(canvas, (state) => state.libraries);
   if (node === null) return null;
   const item = paletteItems.find((entry) => entry.type === node.type);
-  const fields = describeNodeFields(node.type, flow, node.settings);
+  const fields = describeNodeFields(node.type, flow, node.settings, { nodeId: node.id, libraries });
   const issues = selectFieldIssues(flow, node.id, libraries);
   const problems = selectNodeIssues(flow, libraries)[node.id] ?? [];
   const warnings = selectNodeWarnings(flow, node.id);

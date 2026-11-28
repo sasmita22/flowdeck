@@ -57,7 +57,6 @@ const manifest = (): Manifest => {
 const allPieces = [
   "sessions/main/plugin/agents/draft-spec.md",
   "sessions/main/plugin/agents/review.md",
-  "sessions/main/plugin/templates/spec.md",
   "sessions/main/CLAUDE.md",
 ];
 
@@ -94,7 +93,6 @@ describe("writeTurn", () => {
   it.each([
     ["sessions/main/plugin/agents/review.md", "agent"],
     ["sessions/main/plugin/agents/draft-spec.md", "agent"],
-    ["sessions/main/plugin/templates/spec.md", "template"],
     ["sessions/main/CLAUDE.md", "workspace"],
   ])("starts the prompt for %s with its PIECE line, then KIND %s", (path, kind) => {
     const text = writeTurn(manifest(), allPieces, 1);
@@ -127,7 +125,6 @@ describe("writeTurn", () => {
     for (const path of [
       "sessions/main/plugin/agents/ship.md",
       sharedPath,
-      "sessions/main/plugin/templates/spec.md",
       "sessions/main/CLAUDE.md",
     ]) {
       expect(blockOf(text, path), path).not.toContain("SHARED");
@@ -183,9 +180,7 @@ describe("writeTurn", () => {
         .find((line) => line.includes(failure.file) && line.includes(failure.rule));
       expect(failureLine, `${failure.file} ${failure.rule}`).toBeDefined();
     }
-    expect(blockOf(text, "sessions/main/plugin/templates/spec.md")).not.toMatch(
-      /unfilled|description/,
-    );
+    expect(blockOf(text, "sessions/main/CLAUDE.md")).not.toMatch(/unfilled|description/);
   });
 
   it("carries a failure on a file that is not a piece, with its rule", () => {

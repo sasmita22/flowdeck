@@ -11,7 +11,7 @@ import { NodeFileSystem } from "../src/adapters/node-fs/node-file-system.js";
 import { SqliteFlowStore } from "../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../src/adapters/sqlite/open-database.js";
 import { SqliteStore } from "../src/adapters/sqlite/sqlite-store.js";
-import { controlTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
+import { controlTestIds, dialogTestIds, pageTestIds } from "../src/app/renderer/test-ids.js";
 import { buildVersion } from "../test/fixtures/build-version.js";
 import type { Flow } from "../src/core/flow/schema.js";
 import { fakeBuildDeps } from "../test/fixtures/fake-build-deps.js";
@@ -32,7 +32,7 @@ import { seedBlueprint, seedFlow } from "../test/fixtures/seed-flow.js";
 import { createTmpRepo, type TmpRepo } from "../test/fixtures/tmp-repo.js";
 import { type LaunchedApp } from "../scripts/drive.js";
 import { fakeClaudeDispatched, launchWithFakeClaude, type FakeAgentTurn } from "./fake-claude.js";
-import { buildAndRun, buildOnCanvas, runIdOf } from "./build-run.js";
+import { buildAndRun, buildOnCanvas, runIdOf, startInRunDialog } from "./build-run.js";
 import { endSessionsOfHome } from "./own-sessions.js";
 import { sessionWorktree } from "../src/core/run/workspace.js";
 
@@ -574,7 +574,7 @@ test("An Always Gate is passed in an automatic run and stops in a normal one, ch
   await expect(status(window, "s2")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
 });
 
-test("A build whose yes/no value is no takes Branch's no path", async () => {
+test("A build whose yes/no value is no takes Branch's no path, the Run dialog asking it again pre-filled", async () => {
   const branched = placed(
     workspaceFlow(
       [trigger("t"), branch("b", "deep"), agent("yes"), agent("no"), output("stop")],
@@ -590,7 +590,10 @@ test("A build whose yes/no value is no takes Branch's no path", async () => {
   seedFlow(home, branched, repo.path);
   const window = await launch();
 
-  const buildId = await buildAndRun(window, home, "quick", { deep: false });
+  const buildId = await buildOnCanvas(window, home, "quick", { deep: false });
+  await window.getByTestId(pageTestIds.buildDetailRun).click();
+  await expect(window.getByTestId(dialogTestIds.variable("deep"))).not.toBeChecked();
+  await startInRunDialog(window);
 
   await expect(status(window, "no")).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   await expect(status(window, "yes")).toHaveAttribute("data-status", "skipped");
@@ -598,7 +601,7 @@ test("A build whose yes/no value is no takes Branch's no path", async () => {
   expect(rows<{ values: string }>('SELECT "values" FROM builds WHERE id = ?', buildId)).toEqual([
     { values: JSON.stringify({ deep: false }) },
   ]);
-  expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({});
+  expect(JSON.parse(latestRun()?.inputs ?? "{}")).toEqual({ variables: { deep: false } });
 });
 
 test("Stopping a run that waits at a Gate makes its stage and the status bar read stopped, not needs you", async () => {

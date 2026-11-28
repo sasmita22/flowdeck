@@ -1,9 +1,13 @@
 import type { FlowSummary } from "./flow-store.js";
-import { decidedByValue } from "../nodes/branch/settings.js";
 import { canvasStart, mainFlow, mainFlowOnly } from "./main-flow.js";
 import type { Connection, Flow, FlowContainer, Node, SessionContainer, Wire } from "./schema.js";
 import { flowContainerOf, isWorkflow } from "./structure.js";
-import { fillVariables, referencedVariables, type LibraryUse } from "./variables.js";
+import {
+  blueprintVariables,
+  fillVariables,
+  referencedVariables,
+  type LibraryUse,
+} from "./variables.js";
 
 export type BlueprintKind = "workflow" | "node-library" | "session-library" | "incomplete";
 
@@ -11,10 +15,14 @@ export type LibraryResolver = (flowId: string) => { name: string; flow: Flow } |
 
 export type LibrarySession = Pick<SessionContainer, "id" | "name" | "repo" | "branch" | "model">;
 
-export type LibraryLookup = (
-  flowId: string,
-) =>
-  | { name: string; kind: BlueprintKind; sessions: LibrarySession[]; uses: readonly string[] }
+export type LibraryLookup = (flowId: string) =>
+  | {
+      name: string;
+      kind: BlueprintKind;
+      sessions: LibrarySession[];
+      uses: readonly string[];
+      sends: readonly string[];
+    }
   | undefined;
 
 export const libraryUses = (flow: Flow): string[] => [
@@ -169,11 +177,16 @@ export function libraryLookup(resolve: LibraryResolver): LibraryLookup {
     const library = resolve(flowId);
     const kind = kindOf(flowId);
     if (library === undefined || kind === undefined) return undefined;
+    const expanded = expandedOrAsIs(library.flow, resolve).flow;
     const sessions =
-      kind === "node-library" || kind === "session-library"
-        ? reachedSessions(expandedOrAsIs(library.flow, resolve).flow)
-        : [];
-    return { name: library.name, kind, sessions, uses: libraryUses(library.flow) };
+      kind === "node-library" || kind === "session-library" ? reachedSessions(expanded) : [];
+    return {
+      name: library.name,
+      kind,
+      sessions,
+      uses: libraryUses(library.flow),
+      sends: blueprintVariables(expanded, unknownLibraries).sends,
+    };
   };
 }
 
@@ -187,21 +200,30 @@ const prefixedText = (text: string, prefix: string): string =>
     ),
   );
 
-const withPrefixedVariables = (node: Node, prefix: string): Node => {
+const definedWithin = (library: Flow): ReadonlySet<string> =>
+  new Set(
+    blueprintVariables(library, unknownLibraries)
+      .owned.filter(({ definedBy }) => definedBy !== undefined)
+      .map(({ name }) => name),
+  );
+
+const withPrefixedVariables = (node: Node, prefix: string, defined: ReadonlySet<string>): Node => {
+  const qualified = (name: string) => (defined.has(name) ? `${prefix}.${name}` : name);
   if (node.type === "agent") {
+    const { produces } = node.settings;
     return {
       ...node,
       settings: {
         ...node.settings,
         instructions: prefixedText(node.settings.instructions, prefix),
+        ...(produces === undefined
+          ? {}
+          : { produces: produces.map((row) => ({ ...row, variable: qualified(row.variable) })) }),
       },
     };
   }
-  if (node.type === "branch" && !decidedByValue(node.settings) && node.settings.variable !== "") {
-    return {
-      ...node,
-      settings: { ...node.settings, variable: `${prefix}.${node.settings.variable}` },
-    };
+  if (node.type === "branch" && node.settings.variable !== "") {
+    return { ...node, settings: { ...node.settings, variable: qualified(node.settings.variable) } };
   }
   return node;
 };
@@ -253,10 +275,11 @@ function splice(host: Flow, use: LibraryNode, library: Flow, prefix: string): Fl
       return { id, between: [rename(first), rename(second)] };
     });
   const end = ({ node, port }: Wire["from"]) => ({ node: rename(node), port });
+  const defined = definedWithin(library);
 
   const placed = members.map((node): Node => {
     const parent = node.parent === undefined ? use.parent : rename(node.parent);
-    const moved = withPrefixedVariables({ ...node, id: rename(node.id) }, prefix);
+    const moved = withPrefixedVariables({ ...node, id: rename(node.id) }, prefix, defined);
     return parent === undefined ? moved : { ...moved, parent };
   });
   const topLevel = members

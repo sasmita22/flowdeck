@@ -2,11 +2,13 @@ import { z } from "zod";
 import { move, type NodeState } from "./state.js";
 import type { HumanDecision } from "./wait.js";
 
-export const donePayload = z.object({
-  stopMessage: z.string().optional(),
-  toolUseIds: z.array(z.string()).optional(),
-  produced: z.object({ name: z.string(), answer: z.boolean() }).optional(),
-});
+export const donePayload = z
+  .object({
+    stopMessage: z.string().optional(),
+    toolUseIds: z.array(z.string()).optional(),
+    variables: z.record(z.string(), z.boolean()).optional(),
+  })
+  .strict();
 
 export type RunEvent =
   | { kind: "sent" | "running" | "retry" | "needs-you" | "skipped" | "reset" }

@@ -5,13 +5,14 @@ import {
   SessionContainer,
   WorkspaceContainer,
   type FlowContainer,
-  type Node,
 } from "../../../core/flow/schema.js";
-import { producedName } from "../../../core/nodes/agent/settings.js";
 
 type Path = readonly string[];
 
-export type FieldValue = string | boolean;
+export type FieldValue =
+  string | boolean | { readonly pick: string } | { readonly row: "add" | "remove" };
+
+export type FieldRow = { removeTestId: string; fields: FieldDescription[] };
 
 export type FieldDescription =
   | {
@@ -20,6 +21,23 @@ export type FieldDescription =
       testId: string;
       label: string;
       placeholder?: string;
+    }
+  | {
+      control: "combo";
+      path: Path;
+      testId: string;
+      existingTestId: string;
+      label: string;
+      options: string[];
+    }
+  | {
+      control: "rows";
+      path: Path;
+      testId: string;
+      label: string;
+      addLabel: string;
+      addTestId: string;
+      rows: FieldRow[];
     }
   | {
       control: "select";
@@ -43,6 +61,8 @@ export type Form = {
   choices?: Readonly<Record<string, readonly Choice[]>>;
   placeholders?: Readonly<Record<string, string>>;
   fallbacks?: Readonly<Record<string, string>>;
+  combos?: Readonly<Record<string, string>>;
+  addLabels?: Readonly<Record<string, string>>;
 };
 
 const containerForm = (container: FlowContainer): Form => ({
@@ -69,15 +89,23 @@ const settingsForm: Form = {
   choices: { buildModel: modelChoices, permissionMode: permissionModes },
 };
 
+const keyOf = (path: Path): string => path.filter((part) => !/^\d+$/.test(part)).join(".");
+
 const labelOf = (form: Form, path: Path): string => {
-  const label = form.labels[path.join(".")];
-  if (label === undefined) throw new Error(`No label for ${path.join(".")}`);
+  const label = form.labels[keyOf(path)];
+  if (label === undefined) throw new Error(`No label for ${keyOf(path)}`);
+  return label;
+};
+
+const addLabelOf = (form: Form, path: Path): string => {
+  const label = form.addLabels?.[keyOf(path)];
+  if (label === undefined) throw new Error(`No add label for ${keyOf(path)}`);
   return label;
 };
 
 const optionLabelsOf = (form: Form, path: Path, options: string[]): Record<string, string> =>
   Object.fromEntries(
-    options.map((option) => [option, form.optionLabels[path.join(".")]?.[option] ?? option]),
+    options.map((option) => [option, form.optionLabels[keyOf(path)]?.[option] ?? option]),
   );
 
 const testIdOf = (form: Form, path: Path) =>
@@ -106,17 +134,51 @@ const variantFor = (union: z.ZodDiscriminatedUnion, kind: unknown): AnyObject =>
   return variant;
 };
 
+const valueAt = (root: unknown, path: Path): unknown =>
+  path.reduce<unknown>((value, key) => (value as Record<string, unknown> | undefined)?.[key], root);
+
 const objectFields = (
   form: Form,
   path: Path,
   schema: AnyObject,
+  values: unknown,
   skip?: string,
 ): FieldDescription[] =>
   Object.entries(schema.shape)
-    .filter(([key]) => key !== skip && !form.hidden?.has([...path, key].join(".")))
-    .flatMap(([key, child]) => fieldsOf(form, [...path, key], child as z.ZodType));
+    .filter(([key]) => key !== skip && !form.hidden?.has(keyOf([...path, key])))
+    .flatMap(([key, child]) => fieldsOf(form, [...path, key], child as z.ZodType, values));
 
-const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[] => {
+const rowsField = (
+  form: Form,
+  path: Path,
+  element: AnyObject,
+  values: unknown,
+): FieldDescription => {
+  const stored = valueAt(values, path);
+  const testId = testIdOf(form, path);
+  return {
+    control: "rows",
+    path,
+    testId,
+    label: labelOf(form, path),
+    addLabel: addLabelOf(form, path),
+    addTestId: `${testId}-add`,
+    rows: (Array.isArray(stored) ? stored : []).map((_, index) => {
+      const rowPath = [...path, String(index)];
+      return {
+        removeTestId: `${testIdOf(form, rowPath)}-remove`,
+        fields: objectFields(form, rowPath, element, values),
+      };
+    }),
+  };
+};
+
+const fieldsOf = (
+  form: Form,
+  path: Path,
+  schema: z.ZodType,
+  values: unknown,
+): FieldDescription[] => {
   const inner = unwrap(schema);
   const testId = testIdOf(form, path);
   const label = () => labelOf(form, path);
@@ -125,7 +187,7 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
     const variants = Object.fromEntries(
       variantsOf(inner).map((variant) => [
         kindOf(variant, discriminator),
-        objectFields(form, path, variant, discriminator),
+        objectFields(form, path, variant, values, discriminator),
       ]),
     );
     const kindPath = [...path, discriminator];
@@ -144,7 +206,7 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   }
   if (inner instanceof z.ZodEnum) {
     const options = inner.options.map(String);
-    const fallback = form.fallbacks?.[path.join(".")];
+    const fallback = form.fallbacks?.[keyOf(path)];
     return [
       {
         control: "select",
@@ -164,8 +226,23 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   ) {
     return [{ control: "list", path, testId, label: label() }];
   }
+  if (inner instanceof z.ZodArray && inner.element instanceof z.ZodObject) {
+    return [rowsField(form, path, inner.element as AnyObject, values)];
+  }
   if (inner instanceof z.ZodString) {
-    const key = path.join(".");
+    const key = keyOf(path);
+    if (form.combos?.[key] !== undefined) {
+      return [
+        {
+          control: "combo",
+          path,
+          testId,
+          existingTestId: `${testId}-existing`,
+          label: label(),
+          options: [],
+        },
+      ];
+    }
     const choices = form.choices?.[key];
     if (choices !== undefined)
       return [picked({ control: "text", path, testId, label: label() }, choices)];
@@ -183,12 +260,15 @@ const fieldsOf = (form: Form, path: Path, schema: z.ZodType): FieldDescription[]
   }
   if (inner instanceof z.ZodNumber) return [{ control: "number", path, testId, label: label() }];
   if (inner instanceof z.ZodBoolean) return [{ control: "toggle", path, testId, label: label() }];
-  if (inner instanceof z.ZodObject) return objectFields(form, path, inner as AnyObject);
+  if (inner instanceof z.ZodObject) return objectFields(form, path, inner as AnyObject, values);
   return [];
 };
 
-export const describeFields = (schema: AnyObject, form: Form): FieldDescription[] =>
-  objectFields(form, [], schema);
+export const describeFields = (
+  schema: AnyObject,
+  form: Form,
+  values: unknown = {},
+): FieldDescription[] => objectFields(form, [], schema, values);
 
 const picked = (field: FieldDescription, choices: readonly Choice[]): FieldDescription => ({
   control: "select",
@@ -206,7 +286,13 @@ export const withChoices = (
   choices: readonly Choice[],
 ): FieldDescription[] =>
   fields.map((field) => {
-    if (field.path.join(".") === path) return picked(field, choices);
+    if (keyOf(field.path) === path) return picked(field, choices);
+    if (field.control === "rows") {
+      return {
+        ...field,
+        rows: field.rows.map((row) => ({ ...row, fields: withChoices(row.fields, path, choices) })),
+      };
+    }
     if (field.control !== "select") return field;
     return {
       ...field,
@@ -219,11 +305,19 @@ export const withChoices = (
     };
   });
 
-const asChoices = (values: readonly string[]): Choice[] =>
+export const asChoices = (values: readonly string[]): Choice[] =>
   values.map((value) => ({ value, label: value }));
 
-export const producedChoices = (nodes: readonly Pick<Node, "settings">[]): Choice[] =>
-  asChoices([...new Set(nodes.flatMap(({ settings }) => producedName(settings) ?? []))]);
+export const withComboOptions = (
+  fields: readonly FieldDescription[],
+  path: string,
+  options: readonly string[],
+): FieldDescription[] =>
+  fields.map((field) =>
+    field.control === "combo" && keyOf(field.path) === path
+      ? { ...field, options: [...options] }
+      : field,
+  );
 
 export const containerFields = (container: FlowContainer): FieldDescription[] =>
   describeFields(containerSettings[container.kind], containerForm(container));
@@ -241,14 +335,18 @@ export const sharedFieldFor = (path: Path): SharedField | undefined => sharedFie
 
 export const settingsFields = (): FieldDescription[] => describeFields(FlowSettings, settingsForm);
 
-const emptyVariant = (variant: AnyObject, discriminator: string, kind: string) =>
+const emptyObject = (schema: AnyObject, fixed: Readonly<Record<string, string>> = {}) =>
   Object.fromEntries(
-    Object.entries(variant.shape).flatMap(([key, child]): [string, unknown][] => {
-      if (key === discriminator) return [[key, kind]];
+    Object.entries(schema.shape).flatMap(([key, child]): [string, unknown][] => {
+      const value = fixed[key];
+      if (value !== undefined) return [[key, value]];
       if (child instanceof z.ZodOptional) return [];
       return [[key, child instanceof z.ZodArray ? [] : ""]];
     }),
   );
+
+const isRowEdit = (value: FieldValue, row: "add" | "remove"): boolean =>
+  typeof value === "object" && "row" in value && value.row === row;
 
 const lines = (text: string) =>
   text
@@ -265,16 +363,34 @@ export const assignField = (
   const inner = unwrap(schema);
   const [key, ...rest] = path;
   if (key === undefined) {
+    if (
+      inner instanceof z.ZodArray &&
+      inner.element instanceof z.ZodObject &&
+      isRowEdit(value, "add")
+    ) {
+      return [...(Array.isArray(current) ? current : []), emptyObject(inner.element as AnyObject)];
+    }
+    if (typeof value === "object") throw new Error("No field takes this edit");
     if (typeof value !== "string") return value;
     if (inner instanceof z.ZodNumber) return Number(value);
     if (!(inner instanceof z.ZodArray)) return value;
     return inner.element instanceof z.ZodNumber ? lines(value).map(Number) : lines(value);
   }
+  if (inner instanceof z.ZodArray && /^\d+$/.test(key)) {
+    const index = Number(key);
+    const list: unknown[] = Array.isArray(current) ? current : [];
+    if (rest.length === 0 && isRowEdit(value, "remove")) {
+      return list.filter((_, at) => at !== index);
+    }
+    return list.map((item, at) =>
+      at === index ? assignField(inner.element as z.ZodType, item, rest, value) : item,
+    );
+  }
   const record = current as Record<string, unknown>;
   if (inner instanceof z.ZodDiscriminatedUnion) {
     const discriminator = inner.def.discriminator;
     if (key === discriminator && typeof value === "string") {
-      return emptyVariant(variantFor(inner, value), discriminator, value);
+      return emptyObject(variantFor(inner, value), { [discriminator]: value });
     }
     const variant = variantFor(inner, record[discriminator]);
     return { ...record, [key]: assignField(childOf(variant, key), record[key], rest, value) };

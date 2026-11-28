@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { scopeLine } from "../../../../src/core/compiler/scope-line.js";
 import { compileAgent } from "../../../../src/core/nodes/agent/compile.js";
 import { bodyOf, frontmatter, sectionOf } from "../../../fixtures/frontmatter.js";
-import { expectBareHandoffRule, nestedHandoffPaths } from "../../../fixtures/handoff.js";
+import { handoffFolderLine } from "../../../../src/core/flow/handoff.js";
+import { expectBareHandoffRule } from "../../../fixtures/handoff.js";
 
 const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
 const piece = "review-the-diff";
@@ -12,8 +13,6 @@ const agentNode = (
     role: string;
     instructions: string;
     model: string;
-    given: string[];
-    writes: string[];
   }> = {},
 ) => ({
   id: "reviewer",
@@ -105,40 +104,15 @@ describe("compileAgent", () => {
     expect(body).not.toContain("{{");
   });
 
-  it("carries the node's hand-off: the files it is given and the files it writes", () => {
-    const body = bodyOf(
-      compiled(agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] })).content,
-    );
-
-    expect(body).toContain("You are given: plan.md, notes.md\n");
-    expect(body).toContain("Write: review.md\n");
-  });
-
-  it("names each file once", () => {
-    const body = bodyOf(
-      compiled(agentNode({ given: ["plan.md", "plan.md"], writes: ["review.md", "review.md"] }))
-        .content,
-    );
-
-    expect(body).toContain("You are given: plan.md\n");
-    expect(body).toContain("Write: review.md\n");
-  });
-
   it("says under Inputs that hand-off files are named bare in the run's working folder, which sits at the repo folder in this session's own folder", () => {
-    const content = compiled(
-      agentNode({ given: ["plan.md", "notes.md"], writes: ["review.md"] }),
-    ).content;
-
-    expectBareHandoffRule(sectionOf(content, /inputs/i), "carousell-web");
-    expect(
-      nestedHandoffPaths(content, "carousell-web", ["plan.md", "notes.md", "review.md"]),
-    ).toEqual([]);
+    expectBareHandoffRule(sectionOf(compiled().content, /inputs/i), "carousell-web");
   });
 
-  it("names no hand-off side that has no files", () => {
-    const body = bodyOf(compiled(agentNode({ given: [], writes: [] })).content);
+  it("writes no given or written file lines: Inputs holds only the folder line, Output nothing", () => {
+    const content = compiled().content;
 
-    expect(body).not.toContain("You are given:");
-    expect(body).not.toContain("Write:");
+    expect(sectionOf(content, /inputs/i).trim()).toBe(handoffFolderLine("carousell-web"));
+    expect(sectionOf(content, /output/i).trim()).toBe("");
+    expect(bodyOf(content)).not.toMatch(/You are given|Write:|None\./);
   });
 });

@@ -35,8 +35,8 @@ const labelled = <T extends { label: string }>(node: T, label: string): T => ({ 
 const sample = (): Flow =>
   onMainFlow(
     [
-      labelled(agent("p", { settings: { writes: ["spec.md"] } }), "Draft the spec"),
-      labelled(agent("a", { settings: { given: ["spec.md"] } }), "Review the draft"),
+      labelled(agent("p"), "Draft the spec"),
+      labelled(agent("a"), "Review the draft"),
       labelled(agent("s"), "Ship it"),
     ],
     [thenWire("p", "a"), thenWire("a", "s")],
@@ -100,7 +100,6 @@ const check = async (state: Laid) =>
     laidDown: state.laidDown,
     readBack: await readBack(state),
     manifest: state.manifest,
-    flow: state.source,
     shared: [],
   });
 

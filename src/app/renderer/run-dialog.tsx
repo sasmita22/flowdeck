@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { Actions } from "./actions.js";
+import { VariableField } from "./fields/variable-field.js";
 import type { RunChoice, RunState } from "./run-store.js";
 import { dialogTestIds } from "./test-ids.js";
 
@@ -16,10 +17,16 @@ const hintStyle: CSSProperties = { margin: 0, color: "var(--muted)", fontSize: "
 
 function RunForm({
   starting,
+  variables,
+  values,
+  onValue,
   onStart,
   onCancel,
 }: {
   starting: boolean;
+  variables: readonly { name: string }[];
+  values: Readonly<Record<string, boolean>>;
+  onValue(name: string, value: boolean): void;
   onStart(choice: RunChoice): void;
   onCancel(): void;
 }) {
@@ -50,6 +57,15 @@ function RunForm({
           </p>
         </span>
       </label>
+      {variables.map(({ name }) => (
+        <VariableField
+          key={name}
+          variable={{ name, kind: "yes-no" }}
+          value={values[name]}
+          testId={dialogTestIds.variable(name)}
+          onChange={(value) => onValue(name, value === true)}
+        />
+      ))}
       <div className="fd-dialog-actions" style={{ justifyContent: "flex-end" }}>
         <button
           type="button"
@@ -88,6 +104,9 @@ export function RunDialog({ run, actions }: { run: StoreApi<RunState>; actions: 
         <RunForm
           key={dialog.buildId}
           starting={starting}
+          variables={dialog.variables}
+          values={dialog.values}
+          onValue={(name, value) => run.getState().setRunValue(name, value)}
           onStart={(choice) => void actions.startRun(choice)}
           onCancel={() => run.getState().cancelDialog()}
         />

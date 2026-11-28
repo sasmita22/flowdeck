@@ -5,6 +5,7 @@ export const defaultSettings: z.infer<typeof settings> = {
   role: "",
   instructions: "",
   model: "sonnet",
+  produces: [],
 };
 
 export const defaultLabel = "Agent";

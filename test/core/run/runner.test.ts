@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { lower, type ManifestNode } from "../../../src/core/compiler/lower.js";
+import { expandLibraries } from "../../../src/core/flow/libraries.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 import { agentTurnText } from "../../../src/core/nodes/agent/execute.js";
 import { forkTurnText } from "../../../src/core/nodes/fork/execute.js";
 import { gateCheckTurn, noVerdictRequest } from "../../../src/core/nodes/gate/execute.js";
@@ -23,7 +25,6 @@ import { decisionsOf, nodeStatus, type RunEvent } from "../../../src/core/run/ru
 import type { UsageEntry } from "../../../src/ports/usage-source.js";
 import type { WaitReply, WaitRequest } from "../../../src/ports/waiter.js";
 import { FakeEventSource } from "../../fakes/fake-event-source.js";
-import { FakeFileSystem } from "../../fakes/fake-file-system.js";
 import { FakePermissionSource } from "../../fakes/fake-permission-source.js";
 import { FakeStore } from "../../fakes/fake-store.js";
 import { FakeUsageSource } from "../../fakes/fake-usage-source.js";
@@ -64,28 +65,28 @@ function harness(
     waiter?: FakeWaiter;
     auto?: boolean;
     replies?: (string | undefined)[];
+    replyFor?: Record<string, string>;
     permissions?: FakePermissionSource;
     usage?: FakeUsageSource;
-    files?: FakeFileSystem;
   } = {},
 ) {
   const events = new FakeEventSource();
-  const files = options.files ?? new FakeFileSystem();
   const calls: string[] = [];
   const lines: string[] = [];
   const stop = options.stop ?? "after-send";
   let stops = 0;
   const publishStop = (text: string) => {
     const dispatched = /subagent_type "([^"]+)" and the prompt "NODE ([^\\"]+)/.exec(text);
+    const [, agentType = "", nodeId = ""] = dispatched ?? [];
     if (dispatched !== null) {
-      const [, agentType = "", nodeId = ""] = dispatched;
       events.publish({
         kind: "PostToolUse",
         sessionId,
         payload: agentDonePayload(nodeId, agentType),
       });
     }
-    const reply = options.replies?.[stops++];
+    const reply =
+      options.replyFor === undefined ? options.replies?.[stops++] : options.replyFor[nodeId];
     events.publish({
       kind: "Stop",
       sessionId,
@@ -112,13 +113,11 @@ function harness(
     ...(options.auto === undefined ? {} : { auto: options.auto }),
     ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
     ...(options.usage === undefined ? {} : { usage: options.usage }),
-    files,
     onChange: (line) => lines.push(line),
-    cwd,
     sessionId,
     turnTimeoutMs: 1000,
   };
-  return { deps, events, calls, lines, files };
+  return { deps, events, calls, lines };
 }
 
 type Emitted =
@@ -159,7 +158,7 @@ const agentDonePayload = (
     },
   };
 };
-const bare = (id: string) => ({ id, given: [], writes: [] });
+const bare = (id: string) => ({ id });
 const turnOf = (id: string, extra: { answers?: string[]; condition?: string } = {}) => {
   const answers = extra.answers ?? [];
   const text =
@@ -170,12 +169,7 @@ const turnOf = (id: string, extra: { answers?: string[]; condition?: string } = 
 };
 const agent = (id: string) => node(id, "agent", { instructions: "Write notes.md." });
 
-function turnHarness(
-  turns: Emitted[][],
-  turnTimeoutMs = 1000,
-  waiter = new FakeWaiter([]),
-  files = new FakeFileSystem(),
-) {
+function turnHarness(turns: Emitted[][], turnTimeoutMs = 1000, waiter = new FakeWaiter([])) {
   const events = new FakeEventSource();
   const calls: string[] = [];
   const lines: string[] = [];
@@ -213,9 +207,7 @@ function turnHarness(
     },
     events,
     waiter,
-    files,
     onChange: (line) => lines.push(line),
-    cwd,
     sessionId,
     turnTimeoutMs,
   };
@@ -327,26 +319,6 @@ describe("Runner", () => {
       expect(result).toEqual({ outcome: "done", states: { a1: "done" }, decisions: [] });
       expect(calls).toEqual(["start", `send ${agentTurnText(prefix, "a1", bare("a1"))}`]);
       expect(lines).toEqual(["a1 started", "a1 done"]);
-    });
-
-    it("names a file once in the turn of a writer another node is given it by", async () => {
-      const { deps, calls } = turnHarness([[agentDone("a1"), stopped]]);
-      const writer = node("a1", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] });
-      const reader = node("p2", "agent", { instructions: "Read notes.md.", given: ["notes.md"] });
-      const handoff: RunnableManifest = {
-        hash,
-        prefix,
-        nodes: [writer, reader],
-        wires: [
-          { kind: "then", from: { node: "a1", port: "out" }, to: { node: "p2", port: "in" } },
-        ],
-      };
-
-      await runOn(deps, handoff);
-
-      expect(calls[1]).toBe(
-        `send ${agentTurnText(prefix, "a1", { id: "a1", given: [], writes: ["notes.md"] })}`,
-      );
     });
 
     it("fails when the turn ends with no finished Agent call and sends nothing after it", async () => {
@@ -2067,11 +2039,9 @@ describe("Runner parallel section", () => {
       session: { ensureStarted: async () => undefined },
       events,
       waiter: options.waiter ?? new FakeWaiter([]),
-      files: new FakeFileSystem(),
       ...(options.permissions === undefined ? {} : { permissions: options.permissions }),
       ...(options.usage === undefined ? {} : { usage: options.usage }),
       onChange: (line) => lines.push(line),
-      cwd,
       sessionId,
       turnTimeoutMs: options.turnTimeoutMs ?? 500,
       now: () => clock,
@@ -2151,18 +2121,16 @@ describe("Runner parallel section", () => {
     expect(waiter.calls).toEqual([]);
   });
 
-  it("stores the value a branch produces, for a Branch after the join to read", async () => {
-    const fence = "```";
+  const producingSection = () => {
     const flow = builders.flow(
       [
         builders.fork("f"),
-        builders.agent("a1", { settings: { produces: "a" } }),
+        builders.agent("a1", {
+          settings: { produces: [{ variable: "a", yesIf: "it holds", noIf: "it does not" }] },
+        }),
         builders.agent("a2"),
         builders.join("j", { settings: { wait: "all", onBranchFail: "stop" } }),
-        {
-          ...builders.branch("b", ""),
-          settings: { variable: "", decidedBy: "value", value: "a" },
-        },
+        builders.branch("b", "a"),
         builders.agent("after"),
         builders.agent("other"),
       ],
@@ -2177,6 +2145,11 @@ describe("Runner parallel section", () => {
       ],
     );
     const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
+    return { hash, prefix, nodes, wires };
+  };
+
+  it("stores the variables a branch sets, for a Branch after the join to read", async () => {
+    const fence = "```";
     const h = sectionHarness({
       onFork: (s) => {
         s.launch("a1");
@@ -2184,7 +2157,7 @@ describe("Runner parallel section", () => {
         s.stop("Launched.");
       },
     });
-    const running = runOn(h.deps, { hash, prefix, nodes, wires });
+    const running = runOn(h.deps, producingSection());
     await forkSent(h.calls);
 
     h.session.subagentStop("a1", `Checked.\n${fence}json\n{"a": true}\n${fence}`);
@@ -2194,10 +2167,44 @@ describe("Runner parallel section", () => {
 
     expect(eventsOf(h.deps.store, "a1").at(-1)).toMatchObject({
       kind: "done",
-      payload: { produced: { name: "a", answer: true } },
+      payload: { variables: { a: true } },
     });
     expect(result.outcome).toBe("done");
     expect(result.states).toMatchObject({ b: "done", after: "done", other: "skipped" });
+  });
+
+  it("fails a branch that stops without setting its variable, naming it, and never asks", async () => {
+    const waiter = new FakeWaiter([]);
+    const h = sectionHarness({
+      waiter,
+      onFork: (s) => {
+        s.launch("a1");
+        s.launch("a2");
+        s.stop("Launched.");
+      },
+    });
+    const running = runOn(h.deps, producingSection());
+    await forkSent(h.calls);
+
+    h.session.subagentStop("a1", "Checked, all good.");
+    h.session.subagentStop("a2", "a2 reply");
+    h.session.stop("All done.");
+    const result = await running;
+
+    expect(result.outcome).toBe("failed");
+    expect(eventsOf(h.deps.store, "a1").at(-1)).toMatchObject({
+      kind: "failed",
+      payload: { message: expect.stringContaining('"a"') as string },
+    });
+    expect(result.states).toMatchObject({
+      a1: "failed",
+      j: "failed",
+      f: "failed",
+      b: "waiting",
+      after: "waiting",
+    });
+    expect(waiter.calls).toEqual([]);
+    expect(timeline(h.deps.store).filter((line) => line.endsWith("needs-you"))).toEqual([]);
   });
 
   it("does not complete a three-branch join on a duplicate finished call", async () => {
@@ -2861,46 +2868,6 @@ describe("Runner parallel section", () => {
       expect(kindsOf(h.deps.store, "after")).toEqual(["compacted", "sent", "done"]);
     });
 
-    it("waits for first: a kept done branch completes the join even when a rerun branch's input file is missing", async () => {
-      const h = sectionHarness();
-      const flow = builders.flow(
-        [
-          builders.agent("plan", { settings: { writes: ["plan.md"] } }),
-          builders.fork("f"),
-          builders.agent("a1"),
-          builders.agent("a2", { settings: { given: ["plan.md"] } }),
-          builders.join("j", { settings: { wait: "first", onBranchFail: "stop" } }),
-        ],
-        [
-          builders.thenWire("plan", "f"),
-          builders.thenWire("f", "a1"),
-          builders.thenWire("f", "a2"),
-          builders.thenWire("a1", "j"),
-          builders.thenWire("a2", "j"),
-        ],
-      );
-      const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
-      const history: History = [
-        ["plan", { kind: "sent" }],
-        ["plan", { kind: "done" }],
-        ["f", { kind: "sent" }],
-        ["a1", { kind: "sent" }],
-        ["a2", { kind: "sent" }],
-        ["j", { kind: "running" }],
-        ["a1", { kind: "done" }],
-        failedWith("a2"),
-        failedWith("j"),
-        failedWith("f"),
-      ];
-
-      const result = await retried(h.deps, { hash, prefix, nodes, wires }, history, "f");
-
-      expect(h.lines).not.toContain("a2 failed: plan.md wasn't written by plan");
-      expect(result.outcome).toBe("done");
-      expect(sends(h.calls)).toEqual([]);
-      expect(result.states).toMatchObject({ a1: "done", a2: "skipped", j: "done", f: "done" });
-    });
-
     it("waits for first: a kept done branch completes the join, sending nothing and skipping the unfinished branches", async () => {
       const h = sectionHarness();
 
@@ -3041,39 +3008,13 @@ describe("Runner branch on a yes/no variable", () => {
     });
   });
 
-  it("follows the build value for a Branch on proceed-e2e that names variable mode", async () => {
-    const { deps, calls } = harness();
-    const m = toManifest(
-      [
-        start(),
-        {
-          ...builders.branch("b", ""),
-          settings: { decidedBy: "variable", variable: "proceed-e2e" },
-        },
-        step("e2e"),
-        step("quick"),
-      ],
-      [builders.thenWire("start", "b"), yes("e2e"), no("quick")],
-      { "proceed-e2e": false },
-    );
-
-    const result = await runOn(deps, m);
-
-    expect(result.outcome).toBe("done");
-    expect(ran(calls)).toEqual(["quick"]);
-    expect(result.states).toMatchObject({ b: "done", e2e: "skipped", quick: "done" });
-  });
-
-  describe("decided by a value an earlier Agent produces", () => {
+  describe("reading a variable an Agent produced", () => {
     const fence = "```";
-    const answering = (answer: boolean, name = "a") =>
-      `Checked.\n${fence}json\n{"${name}": ${answer}}\n${fence}`;
-    const producer = (id: string, name = "a") =>
-      builders.agent(id, { settings: { produces: name } });
-    const valueBranch = (name = "a") => ({
-      ...builders.branch("b", ""),
-      settings: { variable: "", decidedBy: "value", value: name },
-    });
+    const setting = (values: Record<string, boolean>) =>
+      `Checked.\n${fence}json\n${JSON.stringify(values)}\n${fence}`;
+    const row = (variable: string) => ({ variable, yesIf: "it holds", noIf: "it does not" });
+    const producer = (id: string, ...names: string[]) =>
+      builders.agent(id, { settings: { produces: (names.length > 0 ? names : ["a"]).map(row) } });
     const eventsOf = (store: FakeStore, nodeId: string) =>
       store.events(runIdOf(store)).filter((event) => event.nodeId === nodeId);
     const seeded = (deps: TestDeps, m: RunnableManifest, entries: [string, RunEvent][]) => {
@@ -3081,34 +3022,31 @@ describe("Runner branch on a yes/no variable", () => {
       for (const [nodeId, event] of entries) deps.store.append(id, nodeId, event);
       return id;
     };
-    const checkThenBranch = () =>
+    const checkThenBranch = (chosen: Record<string, boolean> = {}, names: string[] = []) =>
       toManifest(
-        [builders.trigger("start"), producer("check"), valueBranch(), step("ship"), step("fix")],
+        [
+          builders.trigger("start"),
+          producer("check", ...names),
+          builders.branch("b", "a"),
+          step("ship"),
+          step("fix"),
+        ],
         [
           builders.thenWire("start", "check"),
           builders.thenWire("check", "b"),
           yes("ship"),
           no("fix"),
         ],
+        chosen,
       );
-    const checkDone = (payload: DonePayload): [string, RunEvent][] => [
-      ["check", { kind: "sent" }],
-      ["check", { kind: "done", payload }],
-    ];
-    type DonePayload = NonNullable<Extract<RunEvent, { kind: "done" }>["payload"]>;
-    const answered = (answer: string) => ({
-      nodeId: "b",
-      decision: "answered" as const,
-      answer,
-    });
 
-    it("takes yes at step 8 when the Agent at step 3 answers yes, skipping no", async () => {
+    it("takes yes at step 8 when the Agent at step 3 sets it true, skipping no", async () => {
       const steps = ["s1", "s2", "check", "s4", "s5", "s6", "s7"];
       const m = toManifest(
         [
           builders.trigger("start"),
           ...steps.map((id) => (id === "check" ? producer(id) : step(id))),
-          valueBranch(),
+          builders.branch("b", "a"),
           step("ship"),
           step("fix"),
         ],
@@ -3120,17 +3058,7 @@ describe("Runner branch on a yes/no variable", () => {
           no("fix"),
         ],
       );
-      const { deps, calls } = harness({
-        replies: [
-          undefined,
-          undefined,
-          answering(true),
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-        ],
-      });
+      const { deps, calls } = harness({ replyFor: { check: setting({ a: true }) } });
 
       const result = await runOn(deps, m);
 
@@ -3138,28 +3066,41 @@ describe("Runner branch on a yes/no variable", () => {
       expect(ran(calls)).toEqual([...steps, "ship"]);
       expect(eventsOf(deps.store, "check").at(-1)).toMatchObject({
         kind: "done",
-        payload: { produced: { name: "a", answer: true } },
+        payload: { variables: { a: true } },
       });
       expect(kindsOf(deps.store, "fix")).toEqual(["skipped"]);
       expect(result.states).toMatchObject({ b: "done", ship: "done", fix: "skipped" });
     });
 
-    it("takes no when the producer answers no", async () => {
-      const { deps, calls } = harness({ replies: [answering(false)] });
+    it("takes no when the producer sets it false, the yes side skipped and the no side done", async () => {
+      const { deps, calls } = harness({ replyFor: { check: setting({ a: false }) } });
 
       const result = await runOn(deps, checkThenBranch());
 
       expect(ran(calls)).toEqual(["check", "fix"]);
+      expect(kindsOf(deps.store, "ship")).toEqual(["skipped"]);
+      expect(kindsOf(deps.store, "fix")).toEqual(["sent", "done"]);
       expect(result.states).toMatchObject({ b: "done", ship: "skipped", fix: "done" });
     });
 
-    it("reads the latest answer when several Agents produce the value", async () => {
+    it("stores every variable a producer sets on its done event", async () => {
+      const { deps } = harness({ replyFor: { check: setting({ a: true, docs: false }) } });
+
+      await runOn(deps, checkThenBranch({}, ["a", "docs"]));
+
+      expect(eventsOf(deps.store, "check").at(-1)).toMatchObject({
+        kind: "done",
+        payload: { variables: { a: true, docs: false } },
+      });
+    });
+
+    it("follows the later of two producers that set opposite values", async () => {
       const m = toManifest(
         [
           builders.trigger("start"),
           producer("first"),
           producer("second"),
-          valueBranch(),
+          builders.branch("b", "a"),
           step("ship"),
           step("fix"),
         ],
@@ -3171,159 +3112,298 @@ describe("Runner branch on a yes/no variable", () => {
           no("fix"),
         ],
       );
-      const { deps, calls } = harness({ replies: [answering(false), answering(true)] });
+      const { deps, calls } = harness({
+        replyFor: { first: setting({ a: false }), second: setting({ a: true }) },
+      });
 
       await runOn(deps, m);
 
       expect(ran(calls)).toEqual(["first", "second", "ship"]);
     });
 
+    it("reads the produced value over the run's value", async () => {
+      const { deps, calls } = harness({ replyFor: { check: setting({ a: true }) } });
+
+      const result = await runOn(deps, checkThenBranch({ a: false }));
+
+      expect(ran(calls)).toEqual(["check", "ship"]);
+      expect(result.states).toMatchObject({ ship: "done", fix: "skipped" });
+    });
+
+    it("takes the run's value when no producer ran, leaving the build's value unchanged", async () => {
+      const { deps, calls } = harness();
+      const m = twoPaths({ e2e: false });
+
+      const result = await runOn(deps, m, { values: { e2e: true } });
+
+      expect(ran(calls)).toEqual(["e2e", "finish"]);
+      expect(result.states).toMatchObject({ b: "done", e2e: "done", quick: "skipped" });
+      expect(m.values).toEqual({ e2e: false });
+    });
+
+    it("fails the run at the Branch, naming the variable, when no producer and no run value set it", async () => {
+      const { deps, calls, lines } = harness();
+
+      const result = await runOn(deps, twoPaths());
+
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "b" });
+      expect(ran(calls)).toEqual([]);
+      expect(kindsOf(deps.store, "b")).toEqual(["running", "failed"]);
+      expect(lines.at(-1)).toMatch(/^b failed: .*"e2e"/);
+      expect(result.states).toMatchObject({ e2e: "waiting", quick: "waiting", finish: "waiting" });
+    });
+
     it.each([
       ["no json block", "Checked, all good."],
       ["only a Loop's done", `${fence}json\n{"done": true}\n${fence}`],
+      ["another variable", setting({ other: true })],
       ["no reply", undefined],
     ])(
-      "asks on the Branch, never picking a path, when the producer's reply has %s",
+      "fails the producing Agent, naming the variable, when its reply has %s, and never asks",
       async (_, reply) => {
-        const waiter = new FakeWaiter([{ decision: "answer", answer: "no" }]);
-        const { deps, calls } = harness({ replies: [reply], waiter });
+        const waiter = new FakeWaiter([]);
+        const { deps, calls } = harness({
+          waiter,
+          ...(reply === undefined ? {} : { replyFor: { check: reply } }),
+        });
 
         const result = await runOn(deps, checkThenBranch());
 
-        expect(waiter.calls).toEqual([
-          expect.objectContaining({ nodeId: "b", kind: "ask", options: ["yes", "no", "fail"] }),
-        ]);
-        expect(ran(calls)).toEqual(["check", "fix"]);
-        expect(eventsOf(deps.store, "b").map((event) => event.kind)).toEqual(
-          expect.arrayContaining(["needs-you", "answered", "done"]),
-        );
-        expect(result.states).toMatchObject({ b: "done", ship: "skipped", fix: "done" });
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "check" });
+        expect(eventsOf(deps.store, "check").at(-1)).toMatchObject({
+          kind: "failed",
+          payload: { message: expect.stringContaining('"a"') as string },
+        });
+        expect(ran(calls)).toEqual(["check"]);
+        expect(waiter.calls).toEqual([]);
+        expect(
+          deps.store.events(runIdOf(deps.store)).filter((event) => event.kind === "needs-you"),
+        ).toEqual([]);
+        expect(result.states).toMatchObject({ b: "waiting", ship: "waiting", fix: "waiting" });
       },
     );
 
-    it("fails the run at the Branch when the answer to its question is fail", async () => {
-      const waiter = new FakeWaiter([{ decision: "answer", answer: "fail" }]);
-      const { deps, calls } = harness({ replies: ["Checked."], waiter });
+    it("names only the variables a producer left out", async () => {
+      const { deps, lines } = harness({ replyFor: { check: setting({ a: true }) } });
 
-      const result = await runOn(deps, checkThenBranch());
+      const result = await runOn(deps, checkThenBranch({}, ["a", "docs"]));
 
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "b" });
-      expect(ran(calls)).toEqual(["check"]);
-      expect(result.states).toMatchObject({ ship: "waiting", fix: "waiting" });
+      expect(result).toMatchObject({ outcome: "failed", failedNode: "check" });
+      expect(lines.at(-1)).toContain('"docs"');
+      expect(lines.at(-1)).not.toContain('"a"');
     });
 
-    it.each<[string, DonePayload]>([
-      ["the producer's stored answer", { produced: { name: "a", answer: true } }],
-      [
-        "a producer done event stored without one, read again from its reply",
-        { stopMessage: answering(true) },
-      ],
-    ])(
-      "takes the same path on resume from %s, sending the producer no new turn",
-      async (_, payload) => {
-        const { deps, calls } = harness();
-        const m = checkThenBranch();
-        const runId = seeded(deps, m, checkDone(payload));
+    describe("on a Loop's last step", () => {
+      const loopThenBranch = () =>
+        toManifest(
+          [
+            builders.trigger("start"),
+            builders.loop("l", { settings: { condition: "tests pass", cap: 3, onCap: "fail" } }),
+            builders.agent("fix", { parent: "l", settings: { produces: [row("a")] } }),
+            builders.branch("b", "a"),
+            step("ship"),
+            step("rework"),
+          ],
+          [builders.thenWire("start", "l"), builders.thenWire("l", "b"), yes("ship"), no("rework")],
+        );
 
-        const result = await new Runner({ ...deps, runId }).run(m, { actions: {} });
+      it("reads the verdict and the variable from one block", async () => {
+        const { deps, calls } = harness({ replyFor: { fix: setting({ done: true, a: false }) } });
+
+        const result = await runOn(deps, loopThenBranch());
 
         expect(result.outcome).toBe("done");
-        expect(ran(calls)).toEqual(["ship"]);
-        expect(result.states).toMatchObject({ check: "done", ship: "done", fix: "skipped" });
-      },
-    );
+        expect(eventsOf(deps.store, "fix").at(-1)).toMatchObject({
+          kind: "done",
+          payload: { variables: { a: false } },
+        });
+        expect(ran(calls)).toEqual(["fix", "rework"]);
+      });
 
-    it("reuses the answer given at the Branch on resume, without asking again", async () => {
-      const { deps, calls } = harness({ waiter: new FakeWaiter([]) });
+      it("fails the step and the Loop, naming the variable, when the block holds only the verdict", async () => {
+        const waiter = new FakeWaiter([]);
+        const { deps } = harness({ waiter, replyFor: { fix: setting({ done: true }) } });
+
+        const result = await runOn(deps, loopThenBranch());
+
+        expect(result).toMatchObject({ outcome: "failed", failedNode: "fix" });
+        expect(eventsOf(deps.store, "fix").at(-1)).toMatchObject({
+          kind: "failed",
+          payload: { message: expect.stringContaining('"a"') as string },
+        });
+        expect(kindsOf(deps.store, "l").at(-1)).toBe("failed");
+        expect(waiter.calls).toEqual([]);
+      });
+    });
+
+    it("takes the same path on resume from the producer's stored variables, sending the producer no new turn", async () => {
+      const { deps, calls } = harness();
       const m = checkThenBranch();
       const runId = seeded(deps, m, [
-        ...checkDone({ stopMessage: "Checked." }),
-        ["b", { kind: "needs-you" }],
-        ["b", { kind: "answered", payload: answered("yes") }],
+        ["check", { kind: "sent" }],
+        ["check", { kind: "done", payload: { variables: { a: true } } }],
       ]);
 
-      const result = await new Runner({ ...deps, runId }).run(m, {
-        actions: { b: { kind: "reuse", decision: answered("yes") } },
-      });
+      const result = await new Runner({ ...deps, runId }).run(m, { actions: {} });
 
       expect(result.outcome).toBe("done");
       expect(ran(calls)).toEqual(["ship"]);
-      expect(result.states).toMatchObject({ b: "done", ship: "done", fix: "skipped" });
+      expect(result.states).toMatchObject({ check: "done", ship: "done", fix: "skipped" });
     });
-  });
 
-  describe("a file two writers write", () => {
-    const writer = (id: string, label: string) => ({
-      ...builders.agent(id, { settings: { writes: ["plan.md"] } }),
-      label,
-    });
-    const writtenOnOneArm = (e2e: boolean) =>
-      toManifest(
-        [
-          start(),
-          builders.branch("b", "e2e"),
-          writer("w1", "First"),
-          writer("w2", "Second"),
-          builders.agent("build", { settings: { given: ["plan.md"] } }),
-        ],
-        [
-          builders.thenWire("start", "b"),
-          yes("w1"),
-          no("build"),
-          builders.thenWire("w1", "w2"),
-          builders.thenWire("w2", "build"),
-        ],
-        { e2e },
+    describe("through expanded libraries", () => {
+      const library = (members: unknown[], wires: unknown[]) =>
+        parseFlow({
+          nodes: [builders.trigger("canvas-start"), ...members, builders.output("canvas-stop")],
+          wires,
+          containers: [],
+          settings: builders.flowSettings,
+        });
+      const libraryNode = (id: string, libraryId: string, label: string) => ({
+        id,
+        label: "Library",
+        position: { x: 0, y: 0 },
+        type: "library",
+        settings: { libraryId, label, overrides: {} },
+      });
+      const decideWires = (from: string, after = "canvas-stop") => [
+        builders.thenWire(from, "decide"),
+        builders.wire("decide", "yes", "ship", "in"),
+        builders.wire("decide", "no", "fix", "in"),
+        builders.thenWire("ship", after),
+        builders.thenWire("fix", after),
+      ];
+      const asking = library(
+        [builders.branch("decide", "up"), step("ship"), step("fix")],
+        decideWires("canvas-start"),
       );
-    const writtenOnEachArm = (e2e: boolean) =>
-      toManifest(
+      const reviewing = library(
         [
-          start(),
-          builders.branch("b", "e2e"),
-          writer("w1", "First"),
-          writer("w2", "Second"),
-          builders.agent("build", { settings: { given: ["plan.md"] } }),
+          producer("review", "approved"),
+          builders.branch("decide", "approved"),
+          step("ship"),
+          step("fix"),
         ],
-        [
-          builders.thenWire("start", "b"),
-          yes("w1"),
-          no("w2"),
-          builders.thenWire("w1", "build"),
-          builders.thenWire("w2", "build"),
-        ],
-        { e2e },
+        [builders.thenWire("canvas-start", "review"), ...decideWires("review")],
       );
+      const outer = library(
+        [
+          producer("review", "approved"),
+          builders.branch("decide", "approved"),
+          step("ship"),
+          step("fix"),
+          libraryNode("use-inner", "reviewing", "inner"),
+        ],
+        [
+          builders.thenWire("canvas-start", "review"),
+          ...decideWires("review", "use-inner"),
+          builders.thenWire("use-inner", "canvas-stop"),
+        ],
+      );
+      const libraries: Record<string, Flow> = { asking, reviewing, outer };
+      const expanded = (host: Flow): RunnableManifest => {
+        const { flow } = expandLibraries(host, (flowId) => {
+          const found = libraries[flowId];
+          return found === undefined ? undefined : { name: flowId, flow: found };
+        });
+        const lowered = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
+        return {
+          hash,
+          prefix: lowered.prefix,
+          values: lowered.values,
+          nodes: lowered.nodes,
+          wires: lowered.wires,
+        };
+      };
 
-    it("names both writers when neither ran on the path taken", async () => {
-      const { deps, calls, lines } = harness();
+      it("lets a parent Agent before the Library set the variable its inner Branch reads", async () => {
+        const { deps } = harness({ replyFor: { setter: setting({ up: false }) } });
 
-      const result = await runOn(deps, writtenOnOneArm(false));
+        const result = await runOn(
+          deps,
+          expanded(
+            builders.onMainFlow(
+              [producer("setter", "up"), libraryNode("use", "asking", "ask")],
+              [builders.thenWire("setter", "use")],
+            ),
+          ),
+        );
 
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
-      expect(ran(calls)).toEqual([]);
-      const failure = lines.at(-1) ?? "";
-      expect(failure.startsWith("build failed: plan.md wasn't written by ")).toBe(true);
-      expect(failure).toContain("First");
-      expect(failure).toContain("Second");
-    });
+        expect(result.outcome).toBe("done");
+        expect(result.states).toMatchObject({ "ask-ship": "skipped", "ask-fix": "done" });
+      });
 
-    it("names only the writer that ran on the path taken", async () => {
-      const { deps, lines } = harness();
+      it("keeps two copies of one Library apart, each Branch following its own Agent", async () => {
+        const { deps } = harness({
+          replyFor: {
+            "review-review": setting({ "review.approved": true }),
+            "review-2-review": setting({ "review-2.approved": false }),
+          },
+        });
 
-      const result = await runOn(deps, writtenOnEachArm(true));
+        const result = await runOn(
+          deps,
+          expanded(
+            builders.onMainFlow(
+              [
+                libraryNode("one", "reviewing", "review"),
+                libraryNode("two", "reviewing", "review-2"),
+              ],
+              [builders.thenWire("one", "two")],
+            ),
+          ),
+        );
 
-      expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
-      expect(lines.at(-1)).toBe("build failed: plan.md wasn't written by First");
-    });
+        expect(result.outcome).toBe("done");
+        expect(result.states).toMatchObject({
+          "review-ship": "done",
+          "review-fix": "skipped",
+          "review-2-ship": "skipped",
+          "review-2-fix": "done",
+        });
+      });
 
-    it("runs the reader once a writer has written the file", async () => {
-      const files = new FakeFileSystem({ [`${cwd}/plan.md`]: "- one\n" });
-      const { deps, calls } = harness({ files });
+      it("lets each of three levels using the same name follow its own level", async () => {
+        const { deps } = harness({
+          replyFor: {
+            review: setting({ approved: true }),
+            "outer-review": setting({ "outer.approved": false }),
+            "outer-inner-review": setting({ "outer.inner.approved": true }),
+          },
+        });
 
-      const result = await runOn(deps, writtenOnEachArm(false));
+        const result = await runOn(
+          deps,
+          expanded(
+            builders.onMainFlow(
+              [
+                producer("review", "approved"),
+                builders.branch("decide", "approved"),
+                step("ship"),
+                step("fix"),
+                libraryNode("use-outer", "outer", "outer"),
+              ],
+              [
+                builders.thenWire("review", "decide"),
+                builders.wire("decide", "yes", "ship", "in"),
+                builders.wire("decide", "no", "fix", "in"),
+                builders.thenWire("ship", "use-outer"),
+                builders.thenWire("fix", "use-outer"),
+              ],
+            ),
+          ),
+        );
 
-      expect(result.outcome).toBe("done");
-      expect(ran(calls)).toEqual(["w2", "build"]);
+        expect(result.outcome).toBe("done");
+        expect(result.states).toMatchObject({
+          ship: "done",
+          fix: "skipped",
+          "outer-ship": "skipped",
+          "outer-fix": "done",
+          "outer-inner-ship": "done",
+          "outer-inner-fix": "skipped",
+        });
+      });
     });
   });
 
@@ -3752,283 +3832,6 @@ describe("Runner compaction", () => {
   });
 });
 
-describe("Runner hand-off pairs", () => {
-  const plan = `${cwd}/plan.md`;
-  const sends = (calls: string[]) => calls.filter((call) => call.startsWith("send"));
-  const planner = node("plan", "agent", { instructions: "Write plan.md.", writes: ["plan.md"] });
-  const labelled = { ...planner, label: "Planner" };
-  const builder = (id: string, given = ["plan.md"]) =>
-    node(id, "agent", { instructions: "Build it.", given });
-  const afterPlanner = (calls: string[]) =>
-    sends(calls).filter((call) => !call.includes('the prompt "NODE plan'));
-  const consumerTurn = (id: string) =>
-    `send ${agentTurnText(prefix, id, { id, given: ["plan.md"], writes: [] })}`;
-  const handoff = (consumer: ManifestNode, ...rest: ManifestNode[]): RunnableManifest => ({
-    hash,
-    prefix,
-    nodes: [labelled, consumer, ...rest],
-    wires: [
-      { kind: "then", from: { node: "plan", port: "out" }, to: { node: consumer.id, port: "in" } },
-    ],
-  });
-
-  it("starts the reader once the file its writer writes is in the working folder", async () => {
-    const { deps, calls } = harness({ files: new FakeFileSystem({ [plan]: "- one\n" }) });
-
-    const result = await runOn(deps, handoff(builder("build")));
-
-    expect(result.outcome).toBe("done");
-    expect(afterPlanner(calls)).toEqual([consumerTurn("build")]);
-  });
-
-  it("sees a file the producer wrote during its own step", async () => {
-    const files = new FakeFileSystem();
-    const { deps, calls } = harness({ files });
-    const writing: TestDeps = {
-      ...deps,
-      prompts: {
-        ...deps.prompts,
-        sendPrompt: async (text) => {
-          if (text.includes('the prompt "NODE plan')) await files.writeFile(plan, "- one\n");
-          await deps.prompts.sendPrompt(text);
-        },
-      },
-    };
-
-    const result = await runOn(writing, handoff(builder("build")));
-
-    expect(result.outcome).toBe("done");
-    expect(afterPlanner(calls)).toEqual([consumerTurn("build")]);
-  });
-
-  it("fails the reader, naming the file and its writer, when the file was not written", async () => {
-    const { deps, calls, lines } = harness();
-
-    const result = await runOn(deps, handoff(builder("build"), agent("after")));
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "build" });
-    expect(result.states).toEqual({ plan: "done", build: "failed", after: "waiting" });
-    expect(lines.at(-1)).toBe("build failed: plan.md wasn't written by Planner");
-    expect(afterPlanner(calls)).toEqual([]);
-  });
-
-  it("runs a reader given a file no other node writes, without holding it", async () => {
-    const { deps, calls } = harness();
-    const m: RunnableManifest = { hash, prefix, nodes: [builder("build", ["README.md"])] };
-
-    const result = await runOn(deps, m);
-
-    expect(result.outcome).toBe("done");
-    expect(sends(calls)).toHaveLength(1);
-  });
-
-  it("does not check a node that already finished before a resume", async () => {
-    const { deps, calls } = harness();
-    const m = handoff(builder("build"));
-    const { id } = deps.store.createRun(newRun(m));
-    deps.store.append(id, "plan", { kind: "sent" });
-    deps.store.append(id, "plan", { kind: "done" });
-    deps.store.append(id, "build", { kind: "sent" });
-    deps.store.append(id, "build", { kind: "done" });
-
-    const result = await new Runner({ ...deps, runId: id }).run(m);
-
-    expect(result.outcome).toBe("done");
-    expect(sends(calls)).toEqual([]);
-  });
-
-  it("fails a parallel section before sending it when a branch's file is missing", async () => {
-    const { deps, calls, lines } = harness();
-    const flow = builders.flow(
-      [
-        { ...builders.agent("plan", { settings: { writes: ["plan.md"] } }), label: "Planner" },
-        builders.fork("f"),
-        builders.agent("a1"),
-        builders.agent("a2", { settings: { given: ["plan.md"] } }),
-        builders.join("j"),
-      ],
-      [
-        builders.thenWire("plan", "f"),
-        builders.thenWire("f", "a1"),
-        builders.thenWire("f", "a2"),
-        builders.thenWire("a1", "j"),
-        builders.thenWire("a2", "j"),
-      ],
-    );
-    const { nodes, wires } = oneSession(lower(flow, { name: prefix, values: {} }).manifest);
-
-    const result = await runOn(deps, { hash, prefix, nodes, wires });
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "a2" });
-    expect(lines.at(-1)).toBe("a2 failed: plan.md wasn't written by Planner");
-    expect(afterPlanner(calls)).toEqual([]);
-  });
-});
-
-describe("Runner hand-off templates", () => {
-  const workspace = "/fd/workspaces/w1";
-  const worktree = `${workspace}/repo`;
-  const template = `${workspace}/plugin/templates/notes.md`;
-  const notes = `${worktree}/notes.md`;
-  const templateText = "@template notes.md: the writing node replaces this template.\n";
-  const handoff: RunnableManifest = {
-    hash,
-    prefix,
-    nodes: [
-      node("write", "agent", { instructions: "Write notes.md.", writes: ["notes.md"] }),
-      node("read", "agent", { instructions: "Read notes.md.", given: ["notes.md"] }),
-    ],
-    wires: [
-      { kind: "then", from: { node: "write", port: "out" }, to: { node: "read", port: "in" } },
-    ],
-  };
-  const contentOf = async (files: FakeFileSystem, path: string) =>
-    files.readFile(path).catch(() => undefined);
-  const writerTurn = agentTurnText(prefix, "write", {
-    id: "write",
-    given: [],
-    writes: ["notes.md"],
-  });
-  const writes = (files: FakeFileSystem) => files.calls.filter((c) => c.method === "writeFile");
-  const inWorktree = (files: FakeFileSystem, written?: string) => {
-    const { deps, lines } = harness({ files });
-    const atSend: Record<string, string | undefined> = {};
-    const copied: unknown[] = [];
-    const tracked: TestDeps = {
-      ...deps,
-      cwd: worktree,
-      prompts: {
-        ...deps.prompts,
-        sendPrompt: async (text) => {
-          atSend[text] = await contentOf(files, notes);
-          if (text === writerTurn) {
-            copied.push(...writes(files));
-            if (written !== undefined) await files.writeFile(notes, written);
-          }
-          await deps.prompts.sendPrompt(text);
-        },
-      },
-    };
-    return { deps: tracked, atSend, copied, lines };
-  };
-
-  it("writes the template into the worktree before the writing node runs, when the file is absent", async () => {
-    const files = new FakeFileSystem({ [template]: templateText });
-    const { deps, atSend, copied } = inWorktree(files, "filled");
-
-    const result = await runOn(deps, handoff);
-
-    expect(atSend[writerTurn]).toBe(templateText);
-    expect(copied).toEqual([{ method: "writeFile", path: notes }]);
-    expect(result.outcome).toBe("done");
-  });
-
-  it("fails the reading node when the writer leaves the template untouched", async () => {
-    const files = new FakeFileSystem({ [template]: templateText });
-    const { deps, lines } = inWorktree(files);
-
-    const result = await runOn(deps, handoff);
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "read" });
-    expect(lines.at(-1)).toBe("read failed: notes.md wasn't written by write");
-  });
-
-  it("passes on to the reading node when a build with no templates has the file written", async () => {
-    const files = new FakeFileSystem();
-    const { deps, copied } = inWorktree(files, "filled");
-
-    const result = await runOn(deps, handoff);
-
-    expect(copied).toEqual([]);
-    expect(result.outcome).toBe("done");
-  });
-
-  it("leaves a file already in the worktree untouched", async () => {
-    const files = new FakeFileSystem({ [template]: templateText, [notes]: "mine" });
-    const { deps, atSend } = inWorktree(files);
-
-    await runOn(deps, handoff);
-
-    expect(atSend[writerTurn]).toBe("mine");
-    expect(await contentOf(files, notes)).toBe("mine");
-    expect(writes(files)).toEqual([]);
-  });
-
-  it("copies nothing for a build with no templates", async () => {
-    const files = new FakeFileSystem();
-    const { deps, atSend } = inWorktree(files);
-
-    await runOn(deps, handoff);
-
-    expect(atSend[writerTurn]).toBeUndefined();
-    expect(writes(files)).toEqual([]);
-  });
-});
-
-describe("Runner non-markdown hand-off files", () => {
-  const workspace = "/fd/workspaces/w1";
-  const worktree = `${workspace}/repo`;
-  const template = `${workspace}/plugin/templates/greeting.txt`;
-  const greeting = `${worktree}/greeting.txt`;
-  const strayText = "@template greeting.txt: the writing node replaces this template.\n";
-  const handoff: RunnableManifest = {
-    hash,
-    prefix,
-    nodes: [
-      node("write", "agent", { instructions: "Write greeting.txt.", writes: ["greeting.txt"] }),
-      node("read", "agent", { instructions: "Read greeting.txt.", given: ["greeting.txt"] }),
-    ],
-    wires: [
-      { kind: "then", from: { node: "write", port: "out" }, to: { node: "read", port: "in" } },
-    ],
-  };
-  const writerTurn = agentTurnText(prefix, "write", {
-    id: "write",
-    given: [],
-    writes: ["greeting.txt"],
-  });
-  const inWorktree = (files: FakeFileSystem, written?: string) => {
-    const { deps } = harness({ files });
-    const tracked: TestDeps = {
-      ...deps,
-      cwd: worktree,
-      prompts: {
-        ...deps.prompts,
-        sendPrompt: async (text) => {
-          if (text === writerTurn && written !== undefined)
-            await files.writeFile(greeting, written);
-          await deps.prompts.sendPrompt(text);
-        },
-      },
-    };
-    return tracked;
-  };
-
-  it("copies no template into the worktree for a file that is not markdown", async () => {
-    const files = new FakeFileSystem({ [template]: strayText });
-
-    await runOn(inWorktree(files), handoff);
-
-    expect(await files.readFile(greeting).catch(() => undefined)).toBeUndefined();
-  });
-
-  it("takes a non-markdown file as written even when it matches a template file", async () => {
-    const files = new FakeFileSystem({ [template]: strayText });
-
-    const result = await runOn(inWorktree(files, strayText), handoff);
-
-    expect(result.outcome).toBe("done");
-  });
-
-  it("still fails the reading node when the non-markdown file was never written", async () => {
-    const files = new FakeFileSystem();
-
-    const result = await runOn(inWorktree(files), handoff);
-
-    expect(result).toMatchObject({ outcome: "failed", failedNode: "read" });
-  });
-});
-
 describe("Runner turn names", () => {
   it("sends agents under the build's prefix, not its hash", async () => {
     const { deps, calls } = turnHarness([
@@ -4072,8 +3875,7 @@ describe("Runner by node", () => {
     piece: string,
     settings: Record<string, unknown> = {},
   ): ManifestNode => ({ ...node(id, type, settings), piece });
-  const reviewer = (id: string, given: string[], writes: string[] = []) =>
-    pieceNode(id, "agent", "review", { instructions: "Review it.", given, writes });
+  const reviewer = (id: string) => pieceNode(id, "agent", "review", { instructions: "Review it." });
   const thenWire = (from: string, to: string) => ({
     kind: "then" as const,
     from: { node: from, port: "out" },
@@ -4082,22 +3884,13 @@ describe("Runner by node", () => {
   const sharedManifest: RunnableManifest = {
     hash,
     prefix,
-    nodes: [
-      pieceNode("p1", "agent", "plan"),
-      reviewer("a1", ["spec.md"], ["notes.md"]),
-      reviewer("a2", ["notes.md"]),
-    ],
+    nodes: [pieceNode("p1", "agent", "plan"), reviewer("a1"), reviewer("a2")],
   };
-  const a1Turn = agentTurnText(prefix, "review", {
-    id: "a1",
-    given: ["spec.md"],
-    writes: ["notes.md"],
-  });
-  const a2Turn = agentTurnText(prefix, "review", { id: "a2", given: ["notes.md"], writes: [] });
+  const a1Turn = agentTurnText(prefix, "review", bare("a1"));
+  const a2Turn = agentTurnText(prefix, "review", bare("a2"));
   const runEvents = (store: FakeStore) => store.events(store.runs[0]?.id ?? "");
-  const notesWritten = () => new FakeFileSystem({ [`${cwd}/notes.md`]: "notes" });
   const sharedHarness = (turns: Emitted[][], turnTimeoutMs = 1000) =>
-    turnHarness(turns, turnTimeoutMs, undefined, notesWritten());
+    turnHarness(turns, turnTimeoutMs);
 
   describe("AT-10: two Agent nodes on one piece, in sequence", () => {
     it("sends each node's own marker and details, and marks each done on its own call", async () => {
@@ -4215,8 +4008,8 @@ describe("Runner by node", () => {
       prefix,
       nodes: [
         node("f", "fork"),
-        reviewer("b1", ["a.md"]),
-        reviewer("b2", ["b.md"]),
+        reviewer("b1"),
+        reviewer("b2"),
         node("j", "join", { wait: "all", onBranchFail: "stop" }),
         agent("after"),
       ],
@@ -4263,8 +4056,6 @@ describe("Runner by node", () => {
         session: { ensureStarted: async () => undefined },
         events,
         waiter: new FakeWaiter([]),
-        files: new FakeFileSystem(),
-        cwd,
         sessionId,
         turnTimeoutMs: 500,
         now: () => clock,
@@ -4284,8 +4075,8 @@ describe("Runner by node", () => {
         expect(result.states).toMatchObject({ b1: "done", b2: "done", j: "done", after: "done" });
         expect(calls[0]).toBe(
           `send ${forkTurnText(prefix, [
-            { id: "b1", piece: "review", given: ["a.md"], writes: [] },
-            { id: "b2", piece: "review", given: ["b.md"], writes: [] },
+            { id: "b1", piece: "review" },
+            { id: "b2", piece: "review" },
           ])}`,
         );
         const events = runEvents(deps.store);
@@ -4331,9 +4122,7 @@ describe("Runner by node", () => {
       const result = await new Runner({ ...deps, runId: id }).run(sectionManifest);
 
       expect(result.outcome).toBe("done");
-      expect(calls[0]).toBe(
-        `send ${forkTurnText(prefix, [{ id: "b2", piece: "review", given: ["b.md"], writes: [] }])}`,
-      );
+      expect(calls[0]).toBe(`send ${forkTurnText(prefix, [{ id: "b2", piece: "review" }])}`);
       expect(
         runEvents(deps.store)
           .filter((event) => event.nodeId === "b1")

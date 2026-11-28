@@ -8,13 +8,3 @@ export function expectBareHandoffRule(text: string, folder: string): void {
   expect(text).not.toMatch(/in this build's workspace/i);
   expect(text).not.toMatch(/never use the workspace folder itself/i);
 }
-
-export function nestedHandoffPaths(
-  text: string,
-  folder: string,
-  files: readonly string[],
-): string[] {
-  return files
-    .map((file) => `${folder}/${file}`)
-    .filter((path) => text.replaceAll(`not \`${path}\``, "").includes(path));
-}

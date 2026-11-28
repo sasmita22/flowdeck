@@ -2,11 +2,11 @@ import { useEffect, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import { modelChoices } from "../../core/flow/choices.js";
-import type { FoundVariable } from "../../core/flow/variables.js";
 import type { BranchState } from "./branch-store.js";
 import { BranchField } from "./fields/branch-field.js";
 import { ModelField } from "./fields/model-field.js";
 import { RepoField } from "./fields/repo-field.js";
+import { VariableField } from "./fields/variable-field.js";
 import type { LibraryState } from "./library-store.js";
 import type { NavState } from "./nav-store.js";
 import {
@@ -29,46 +29,6 @@ const fieldStyle: CSSProperties = {
 };
 
 const errorStyle: CSSProperties = { margin: 0, color: "var(--warn)", fontSize: "var(--fs-sm)" };
-
-const switchStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  fontSize: "var(--fs-sm)",
-};
-
-function VariableField({
-  variable,
-  value,
-  onChange,
-}: {
-  variable: FoundVariable;
-  value: string | boolean | undefined;
-  onChange(value: string | boolean): void;
-}) {
-  const testId = buildDialogTestIds.variable(variable.name);
-  return variable.kind === "yes-no" ? (
-    <label style={switchStyle}>
-      <input
-        type="checkbox"
-        role="switch"
-        data-testid={testId}
-        checked={value === true}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      {variable.name}
-    </label>
-  ) : (
-    <label style={fieldStyle}>
-      {variable.name}
-      <input
-        data-testid={testId}
-        value={typeof value === "string" ? value : ""}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
 
 const choiceRowStyle: CSSProperties = { display: "flex", gap: 8 };
 
@@ -303,6 +263,7 @@ function BuildForm({
               key={variable.name}
               variable={variable}
               value={dialog.values[variable.name]}
+              testId={buildDialogTestIds.variable(variable.name)}
               onChange={(value) => run.getState().setValue(variable.name, value)}
             />
           ))}

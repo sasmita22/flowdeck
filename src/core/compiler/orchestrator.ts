@@ -2,7 +2,6 @@ import { handoffFolderLine } from "../flow/handoff.js";
 import type { Wire } from "../flow/schema.js";
 import { agentPrompt, agentTurnNode, agentType } from "../nodes/agent/execute.js";
 import { producersOf } from "../nodes/branch/execute.js";
-import { decidedByValue } from "../nodes/branch/settings.js";
 import { stopMarker } from "../run/stop-marker.js";
 import type { BuildFile, ManifestNode } from "./lower.js";
 import { pieceOf } from "./pieces.js";
@@ -72,11 +71,12 @@ export function orchestratorSkill(manifest: OrchestratorManifest, scope: ScopePa
       }
       case "branch": {
         const paths = `if yes, go to ${nodeList(outOf(node.id, "yes"))}; if no, go to ${nodeList(outOf(node.id, "no"))}.`;
-        if (!decidedByValue(settings)) {
-          return `read the value of \`${text(settings.variable)}\` from the build summary in CLAUDE.md; ${paths}`;
+        const name = text(settings.variable);
+        const producers = [...producersOf(nodes, name)];
+        if (producers.length === 0) {
+          return `read the value of \`${name}\` from the build summary in CLAUDE.md; ${paths}`;
         }
-        const name = text(settings.value);
-        return `read \`${name}\` from the json answer the latest of ${nodeList([...producersOf(nodes, name)])} returned (true is yes, false is no); if it is missing or malformed, ask in the chat for yes or no and never guess; ${paths}`;
+        return `read \`${name}\` from the json answer the latest of ${nodeList(producers)} that ran before this step returned (true is yes, false is no); if none of them ran, read it from the build summary in CLAUDE.md; if it is missing or malformed, ask in the chat for yes or no and never guess; ${paths}`;
       }
       case "fork":
         return `dispatch every branch in one message, in parallel: ${outOf(node.id).map(branchCall).join("; ")}.`;

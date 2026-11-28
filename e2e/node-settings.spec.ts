@@ -3,13 +3,16 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  agentProducesAddTestId,
+  branchVariableExistingTestId,
   branchVariableTestId,
   containerTestIds,
   controlTestIds,
   paletteTestId,
+  produceRowTestIds,
   readoutTestIds,
 } from "../src/app/renderer/test-ids.js";
-import { bareFlow } from "../test/fixtures/flow-builders.js";
+import { bareFlow, branch, thenWire, trigger, wire } from "../test/fixtures/flow-builders.js";
 import { seedFlow } from "../test/fixtures/seed-flow.js";
 import { launchOnCanvas, type LaunchedApp } from "../scripts/drive.js";
 import { endSessionsOfHome } from "./own-sessions.js";
@@ -312,7 +315,7 @@ test("Blueprint settings open from the gear and never mix with a node's or a con
   await expect(reopened.getByTestId("settings-build-model")).toHaveValue("claude-haiku-4-5");
 });
 
-test("A Branch's variable is the name typed into it, with no list to pick from", async () => {
+test("A Branch's variable is a name typed into it, with no use existing list while no other Branch has one", async () => {
   seedFlow(home, bareFlow());
   const { window } = await launch();
   await drop(window, "trigger", 120);
@@ -335,6 +338,46 @@ test("A Branch's variable is the name typed into it, with no list to pick from",
   await expect
     .poll(() => nodeIn(window, "branch-1"))
     .toMatchObject({ settings: { variable: "deep" } });
+  await expect(window.getByTestId(branchVariableExistingTestId)).toHaveCount(0);
+});
+
+const placed = <T extends { position: { x: number; y: number } }>(node: T, x: number): T => ({
+  ...node,
+  position: { x, y: 150 },
+});
+
+test("A second Branch typing a used variable is refused, and picking it from use existing shares it", async () => {
+  seedFlow(
+    home,
+    bareFlow(
+      [
+        placed(trigger("t"), 80),
+        placed(branch("first", "approved"), 320),
+        placed(branch("second", ""), 600),
+      ],
+      [
+        thenWire("t", "first"),
+        wire("first", "yes", "second", "in"),
+        wire("first", "no", "second", "in"),
+      ],
+    ),
+  );
+  const { window } = await launch();
+  await window.getByTestId("node-second").click();
+  const variable = window.getByTestId(branchVariableTestId);
+
+  await setText(variable, "approved");
+
+  await expect(window.getByTestId(`${branchVariableTestId}-issue`)).toBeVisible();
+  await expect(window.getByTestId("node-issue-second")).toBeVisible();
+  await expect(window.getByTestId("node-issue-first")).toHaveCount(0);
+
+  await window.getByTestId(branchVariableExistingTestId).selectOption("approved");
+
+  await expect(window.getByTestId("node-issue-second")).toHaveCount(0);
+  await expect
+    .poll(() => nodeIn(window, "second"))
+    .toMatchObject({ settings: { variable: "approved", shared: true } });
 });
 
 test("Cmd+Z in a settings field undoes the typing and leaves the canvas alone", async () => {
@@ -393,33 +436,59 @@ test("Undo reverts a settings edit, and a field shows the validator's reason", a
 
 const verdictNameReason = `"done" is the name a Loop's verdict uses; give the value another name`;
 
-test("A value the node can't take is refused with a reason", async () => {
-  const { window } = await launch();
-  await drop(window, "agent", 200);
+const branchesNamed = (...variables: string[]) =>
+  bareFlow(
+    [
+      placed(trigger("t"), 80),
+      ...variables.map((variable, index) =>
+        placed(branch(`b${index}`, variable), 500 + index * 200),
+      ),
+    ],
+    [
+      thenWire("t", "b0"),
+      ...variables
+        .slice(1)
+        .flatMap((_, index) => [
+          wire(`b${index}`, "yes", `b${index + 1}`, "in"),
+          wire(`b${index}`, "no", `b${index + 1}`, "in"),
+        ]),
+    ],
+  );
+
+const withProduceRow = async (window: Page) => {
+  await drop(window, "agent", 250);
   await window.getByTestId("node-agent-1").click();
-  const produces = window.getByTestId("node-setting-produces");
+  await window.getByTestId(agentProducesAddTestId).click();
+  return window.getByTestId(produceRowTestIds.variable(0));
+};
 
-  await setText(produces, "done");
+test("A value the node can't take is refused with a reason", async () => {
+  seedFlow(home, branchesNamed("done"));
+  const { window } = await launch();
+  const variable = await withProduceRow(window);
 
-  await expect(window.getByTestId("node-setting-produces-issue")).toHaveText(verdictNameReason);
-  await expect(produces).toHaveValue("");
+  await variable.selectOption("done");
+
+  await expect(window.getByTestId(`${produceRowTestIds.variable(0)}-issue`)).toHaveText(
+    verdictNameReason,
+  );
+  await expect(variable).toHaveValue("");
   await expect
     .poll(async () => (await nodeIn(window, "agent-1"))?.settings)
-    .not.toHaveProperty("produces");
+    .toMatchObject({ produces: [{ variable: "", yesIf: "", noIf: "" }] });
 });
 
 test("A refused value's reason goes once Undo changes the field", async () => {
+  seedFlow(home, branchesNamed("tests-passed", "done"));
   const { window } = await launch();
-  await drop(window, "agent", 200);
-  await window.getByTestId("node-agent-1").click();
-  const produces = window.getByTestId("node-setting-produces");
-  const reason = window.getByTestId("node-setting-produces-issue");
-  await setText(produces, "tests-passed");
-  await setText(produces, "done");
+  const variable = await withProduceRow(window);
+  const reason = window.getByTestId(`${produceRowTestIds.variable(0)}-issue`);
+  await variable.selectOption("tests-passed");
+  await variable.selectOption("done");
   await expect(reason).toHaveText(verdictNameReason);
 
   await window.getByTestId(controlTestIds.undo).click();
 
-  await expect(produces).toHaveValue("");
+  await expect(variable).toHaveValue("");
   await expect(reason).toHaveCount(0);
 });

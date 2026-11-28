@@ -41,14 +41,7 @@ const twoAgents = () =>
     readFileSync(new URL("../test/fixtures/app-run-two-agents.json", import.meta.url), "utf8"),
   ) as unknown;
 
-const handingOff = () =>
-  onMainFlow(
-    [
-      agent("p1", { settings: { writes: ["plan.md"] } }),
-      agent("p2", { settings: { given: ["plan.md"] } }),
-    ],
-    [thenWire("p1", "p2")],
-  );
+const planAndBuild = () => onMainFlow([agent("p1"), agent("p2")], [thenWire("p1", "p2")]);
 
 const launch = async () => {
   launched = await launchWithFakeClaude({
@@ -227,7 +220,7 @@ const confirmBuild = async (window: Page, name: string) => {
 
 test("Build a saved version, read its files, run it from Builds, then reopen and rerun the run", async () => {
   const testInfo = test.info();
-  const planner = seedBlueprint(home, "Planner", handingOff(), repo.path);
+  const planner = seedBlueprint(home, "Planner", planAndBuild(), repo.path);
   seedBlueprint(home, "Agents", twoAgents(), repo.path);
   const target = await launch();
   const { window } = target;
@@ -242,11 +235,11 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
     await window.getByTestId(pageTestIds.buildFolder(folder)).click();
   }
   const agents = window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/agents"));
-  const templates = window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/templates"));
+  const skills = window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/skills"));
   await expect(agents).toHaveText("Agents");
   await expect(agents).toHaveAttribute("aria-expanded", "false");
-  await expect(templates).toHaveText("Hand-off templates");
-  await expect(templates).toHaveAttribute("aria-expanded", "false");
+  await expect(skills).toHaveText("Skills");
+  await expect(skills).toHaveAttribute("aria-expanded", "false");
   await expect(
     window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/agents/p1.md")),
   ).toHaveCount(0);
@@ -258,10 +251,10 @@ test("Build a saved version, read its files, run it from Builds, then reopen and
   await expect(project).toContainText(basename(repo.path));
   await expect(project).toContainText(branch ?? "");
   await expect(project).toContainText(/\bclean\b/);
-  await templates.click();
-  await expect(templates).toHaveAttribute("aria-expanded", "true");
+  await skills.click();
+  await expect(skills).toHaveAttribute("aria-expanded", "true");
   await expect(
-    window.getByTestId(pageTestIds.buildFile("sessions/main/plugin/templates/plan.md")),
+    window.getByTestId(pageTestIds.buildFolder("sessions/main/plugin/skills/run")),
   ).toBeVisible();
   await agents.click();
   await expect(agents).toHaveAttribute("aria-expanded", "true");

@@ -52,7 +52,7 @@ async function build(flow: Flow, name: string): Promise<Built> {
   try {
     const built = await engine.saveAndEndBuild(flow, { name, buildModel: "haiku" });
     const report = buildReportSchema.parse(built.outcome.report);
-    const checked = checkRecorded(workspace, report, flow);
+    const checked = checkRecorded(workspace, report);
     const files = new Map(checked.readBack.map((file) => [file.path, file.content]));
     console.log(
       `build ${name}: ${JSON.stringify(

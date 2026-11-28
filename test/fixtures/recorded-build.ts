@@ -6,7 +6,6 @@ import type { BuildFile, Manifest } from "../../src/core/compiler/lower.js";
 import { applyMerges } from "../../src/core/compiler/merge.js";
 import { applyShared } from "../../src/core/compiler/shared.js";
 import { workspaceListing, workspaceRootFiles } from "../../src/core/compiler/verify.js";
-import type { Flow } from "../../src/core/flow/schema.js";
 import type { BuildAgents } from "../../src/ports/build-agents.js";
 
 export type Workspace = { laidDown: BuildFile[] | undefined; readBack: BuildFile[] | undefined };
@@ -46,7 +45,7 @@ export function recording(agents: BuildAgents, workspace: Workspace): BuildAgent
 const manifestOf = (files: readonly BuildFile[]): Manifest =>
   JSON.parse(files.find((file) => file.path === "manifest.json")?.content ?? "{}") as Manifest;
 
-export function checkRecorded(workspace: Workspace, report: BuildReport, flow: Flow): CheckedBuild {
+export function checkRecorded(workspace: Workspace, report: BuildReport): CheckedBuild {
   const { laidDown, readBack } = workspace;
   if (laidDown === undefined || readBack === undefined) {
     throw new Error("the workspace was not read at open and close");
@@ -57,7 +56,6 @@ export function checkRecorded(workspace: Workspace, report: BuildReport, flow: F
     laidDown: shared.files,
     readBack,
     manifest: shared.manifest,
-    flow,
     shared: shared.accepted,
   });
   return { failures, readBack };

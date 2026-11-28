@@ -11,33 +11,15 @@
       "settings": {}
     },
     {
-      "id": "work",
-      "label": "Work",
-      "type": "agent",
+      "id": "ife2e",
+      "label": "E2E?",
+      "type": "branch",
       "position": {
         "x": 240,
         "y": 0
       },
       "settings": {
-        "role": "",
-        "instructions": "Do the work.",
-        "model": "sonnet",
-        "given": ["plan.md"]
-      }
-    },
-    {
-      "id": "plan",
-      "label": "Plan",
-      "type": "agent",
-      "position": {
-        "x": 480,
-        "y": 0
-      },
-      "settings": {
-        "role": "",
-        "instructions": "Write the plan.",
-        "model": "sonnet",
-        "writes": ["plan.md"]
+        "variable": "a.b"
       }
     },
     {
@@ -45,7 +27,7 @@
       "label": "Done",
       "type": "output",
       "position": {
-        "x": 720,
+        "x": 480,
         "y": 0
       },
       "settings": {
@@ -108,26 +90,15 @@
         "port": "out"
       },
       "to": {
-        "node": "work",
+        "node": "ife2e",
         "port": "in"
       }
     },
     {
       "kind": "then",
       "from": {
-        "node": "work",
-        "port": "out"
-      },
-      "to": {
-        "node": "plan",
-        "port": "in"
-      }
-    },
-    {
-      "kind": "then",
-      "from": {
-        "node": "plan",
-        "port": "out"
+        "node": "ife2e",
+        "port": "yes"
       },
       "to": {
         "node": "done",
@@ -182,7 +153,7 @@
       "repo": "/work/repo",
       "branch": "main",
       "model": "sonnet",
-      "nodes": ["start", "work", "plan", "done"]
+      "nodes": ["start", "ife2e", "done"]
     }
   ],
   "settings": {

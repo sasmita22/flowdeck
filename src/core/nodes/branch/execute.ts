@@ -1,71 +1,35 @@
 import type { Node, Wire } from "../../flow/schema.js";
 import type { VariableValues } from "../../flow/variables.js";
 import type { StoredEvent } from "../../run/store.js";
-import { parseProducedValue, type ProducedValue } from "../../run/verdict.js";
-import type { HumanOutcome, WaitReply, WaitRequest } from "../../run/wait.js";
-import { producedName } from "../agent/settings.js";
+import { producedRows } from "../agent/execute.js";
 import type { SectionNode } from "../fork/execute.js";
 
 export type BranchPort = "yes" | "no";
 
+export const portOf = (answer: boolean): BranchPort => (answer ? "yes" : "no");
+
 export function branchDecision(
-  manifest: { nodes: readonly Pick<Node, "type" | "settings">[]; values?: VariableValues },
+  events: readonly StoredEvent[],
+  values: VariableValues | undefined,
   settings: { variable: string },
-): BranchPort {
+): BranchPort | undefined {
   const name = settings.variable;
-  const value = manifest.values?.[name];
-  if (typeof value !== "boolean") {
-    throw new Error(`Branch variable "${name}" has no yes/no value in this build.`);
-  }
-  return value ? "yes" : "no";
+  const produced = events.findLast(
+    (event) => event.kind === "done" && typeof event.payload?.variables?.[name] === "boolean",
+  );
+  const value = produced?.kind === "done" ? produced.payload?.variables?.[name] : values?.[name];
+  return typeof value === "boolean" ? portOf(value) : undefined;
 }
 
 export const producersOf = (
   nodes: readonly { id: string; settings: Node["settings"] }[],
   name: string,
 ): ReadonlySet<string> =>
-  new Set(nodes.filter((node) => producedName(node.settings) === name).map((node) => node.id));
-
-export function producedAnswer(
-  events: readonly StoredEvent[],
-  producers: ReadonlySet<string>,
-  name: string,
-): ProducedValue {
-  const done = events.findLast((event) => event.kind === "done" && producers.has(event.nodeId));
-  if (done?.kind !== "done") return { kind: "malformed", reason: "no Agent produced it" };
-  const stored = done.payload?.produced;
-  if (stored?.name === name) return { kind: "value", answer: stored.answer };
-  return parseProducedValue(done.payload?.stopMessage, name);
-}
-
-export const portOf = (answer: boolean): BranchPort => (answer ? "yes" : "no");
-
-export const isBranchPort = (answer: string): answer is BranchPort =>
-  answer === "yes" || answer === "no";
-
-export function valueRequest(branchId: string, name: string, reason: string): WaitRequest {
-  return {
-    nodeId: branchId,
-    kind: "ask",
-    question: `no readable yes/no answer for "${name}" (${reason}). Which path does the run take?`,
-    options: ["yes", "no", "fail"],
-  };
-}
-
-export function valueAnswer(branchId: string, name: string, reply: WaitReply): HumanOutcome {
-  if (reply.decision === "closed") return { status: "failed", reason: "no answer: input closed" };
-  if (reply.decision !== "answer") {
-    return { status: "failed", reason: `unexpected reply: ${reply.decision}` };
-  }
-  const decision = { nodeId: branchId, decision: "answered", answer: reply.answer } as const;
-  if (reply.answer === "fail") {
-    return { status: "failed", reason: `no yes/no answer for "${name}"`, decision };
-  }
-  if (!isBranchPort(reply.answer)) {
-    return { status: "failed", reason: `unexpected answer: ${reply.answer}` };
-  }
-  return { status: "done", line: `answered: ${reply.answer}`, decision };
-}
+  new Set(
+    nodes
+      .filter((node) => producedRows(node.settings).some((row) => row.variable === name))
+      .map((node) => node.id),
+  );
 
 export function branchSkips(input: {
   branchId: string;

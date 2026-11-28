@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentType } from "../../../../src/core/nodes/agent/execute.js";
+import { agentPrompt, agentType } from "../../../../src/core/nodes/agent/execute.js";
 import {
   forkTurnText,
   parallelSections,
@@ -171,12 +171,7 @@ describe("parallelSections", () => {
 });
 
 describe("forkTurnText", () => {
-  const branch = (id: string, piece = id, given: string[] = []) => ({
-    id,
-    piece,
-    given,
-    writes: [],
-  });
+  const branch = (id: string, piece = id) => ({ id, piece });
   const text = forkTurnText("h1", [branch("a1"), branch("a2")]);
   const prompts = (turn: string) =>
     [...turn.matchAll(/the prompt ("(?:[^"\\]|\\.)*")/g)].map(
@@ -208,37 +203,38 @@ describe("forkTurnText", () => {
     expect(forkTurnText("h1", [branch("a1")])).not.toContain(agentType("h1", "a2"));
   });
 
-  it("asks for two calls when two branches share one piece, each with its own details", () => {
-    const shared = forkTurnText("h1", [
-      branch("b1", "review", ["a.md"]),
-      branch("b2", "review", ["b.md"]),
-    ]);
+  it("asks for two calls when two branches share one piece, each with its own marker", () => {
+    const shared = forkTurnText("h1", [branch("b1", "review"), branch("b2", "review")]);
 
     expect(shared.split(`"${agentType("h1", "review")}"`)).toHaveLength(3);
-    expect(prompts(shared)).toEqual([
-      "NODE b1\nYou are given: a.md\nGo",
-      "NODE b2\nYou are given: b.md\nGo",
-    ]);
+    expect(prompts(shared)).toEqual(["NODE b1\nGo", "NODE b2\nGo"]);
   });
 });
 
-describe("forkTurnText for a branch that produces a value", () => {
+describe("forkTurnText for a branch that produces variables", () => {
   const prompts = (turn: string) =>
     [...turn.matchAll(/the prompt ("(?:[^"\\]|\\.)*")/g)].map(
       (match) => JSON.parse(match[1] ?? '""') as string,
     );
 
-  it("asks only the producing branch's agent for its json answer under the value's key", () => {
+  it("gives only the producing branch's agent the produce lines of agentPrompt", () => {
+    const producer = {
+      id: "a1",
+      produces: [
+        { variable: "approved", yesIf: "tests pass", noIf: "tests fail" },
+        { variable: "docs", yesIf: "docs changed", noIf: "no docs changed" },
+      ],
+    };
     const [producing, plain] = prompts(
       forkTurnText("h1", [
-        { id: "a1", piece: "a1", given: [], writes: [], produces: "tests-passed" },
-        { id: "a2", piece: "a2", given: [], writes: [] },
+        { ...producer, piece: "a1" },
+        { id: "a2", piece: "a2" },
       ]),
     );
 
-    expect(producing).toMatch(/fenced code block tagged json/);
-    expect(producing).toContain('"tests-passed": true');
-    expect(producing).toContain('"tests-passed": false');
+    expect(producing).toBe(agentPrompt(producer));
+    expect(producing).toContain('"approved": true if tests pass, false if tests fail');
+    expect(producing).toContain('{"approved": true, "docs": true}');
     expect(plain).toBe("NODE a2\nGo");
   });
 });

@@ -52,7 +52,7 @@ describe("examples", () => {
   });
 });
 
-type ExampleNode = { id: string; type: string; settings: { given?: string[]; writes?: string[] } };
+type ExampleNode = { id: string; type: string; settings: { instructions?: string } };
 type ExampleFlow = { nodes: ExampleNode[]; wires: { kind: string }[] };
 
 describe("example hand-offs", () => {
@@ -65,18 +65,14 @@ describe("example hand-offs", () => {
   );
 
   it.each(["plan.md", "changes.md"])(
-    "three-agents.json hands %s from one Agent's writes to another Agent's given",
+    "three-agents.json names %s in the instructions of the Agent that writes it and of the one that reads it",
     (file) => {
       const agents = (readExample("three-agents.json") as ExampleFlow).nodes.filter(
         (node) => node.type === "agent",
       );
-      const writers = agents.filter((node) => node.settings.writes?.includes(file));
-      const readers = agents.filter((node) => node.settings.given?.includes(file));
+      const naming = agents.filter((node) => node.settings.instructions?.includes(file));
 
-      expect(writers).not.toEqual([]);
-      expect(readers.some((reader) => writers.some((writer) => writer.id !== reader.id))).toBe(
-        true,
-      );
+      expect(naming.map(({ id }) => id)).toHaveLength(2);
     },
   );
 });

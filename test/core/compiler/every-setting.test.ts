@@ -35,15 +35,10 @@ const settings: Record<Lowered, Record<string, [unknown, Landing]>> = {
       "M-agent-model",
       inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-model"),
     ],
-    given: [
-      ["M-agent-given.md"],
-      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-given.md"),
+    produces: [
+      [{ variable: "M-variable", yesIf: "M-agent-yes-if", noIf: "M-agent-no-if" }],
+      inFile(`${sessionRoot}/plugin/skills/run/SKILL.md`, "M-agent-yes-if, false if M-agent-no-if"),
     ],
-    writes: [
-      ["M-agent-writes.md"],
-      inFile(`${sessionRoot}/plugin/agents/label-agent.md`, "M-agent-writes.md"),
-    ],
-    produces: ["M-agent-produces", atRunTime("M-agent-produces")],
   },
   gate: {
     stopWhen: ["conditional", atRunTime("conditional")],
@@ -66,9 +61,8 @@ const settings: Record<Lowered, Record<string, [unknown, Landing]>> = {
     onBranchFail: ["skip", atRunTime("skip")],
   },
   branch: {
-    decidedBy: ["variable", atRunTime("variable")],
     variable: ["M-variable", atRunTime("M-variable")],
-    value: ["M-branch-value", atRunTime("M-branch-value")],
+    shared: [true, atRunTime(true)],
   },
 };
 
@@ -238,7 +232,7 @@ describe("every setting lands in the build", () => {
       .map(([, content]) => content)
       .join("\n");
 
-    for (const marker of ["M-agent-instructions", "M-agent-given.md", "M-agent-writes.md"]) {
+    for (const marker of ["M-agent-instructions", "M-agent-yes-if", "M-agent-no-if"]) {
       expect(claudeFiles).toContain(marker);
     }
   });

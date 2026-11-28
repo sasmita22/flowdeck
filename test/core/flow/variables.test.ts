@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  libraryLookup,
+  unknownLibraries,
+  type LibraryLookup,
+} from "../../../src/core/flow/libraries.js";
+import {
+  blueprintVariables,
   fillVariables,
   foundVariables,
   groupVariables,
@@ -11,13 +17,17 @@ import {
   branch,
   flow,
   flowSettings,
+  fork,
+  join,
   onMainFlow,
   output,
   thenWire,
   trigger,
   sessionContainer,
+  wire,
   workspaceContainer,
 } from "../../fixtures/flow-builders.js";
+import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
 
 const instructed = (id: string, instructions: string) => agent(id, { settings: { instructions } });
 
@@ -65,15 +75,6 @@ describe("foundVariables", () => {
     expect(found[0]?.name).toBe("ticket");
     expect(found[0]?.kind).toBe("text");
     expect([...(found[0]?.nodeIds ?? [])].sort()).toEqual(["build", "plan"]);
-  });
-
-  it("finds no variable in a Branch decided by a value", () => {
-    const byValue = {
-      ...branch("decide", "ship"),
-      settings: { variable: "ship", decidedBy: "value", value: "tests-passed" },
-    };
-
-    expect(foundVariables(onMainFlow([byValue], []))).toEqual([]);
   });
 
   it("ignores nodes off the main flow", () => {
@@ -231,5 +232,304 @@ describe("groupVariables", () => {
       text("ticket"),
       text("android-apple.x"),
     ]);
+  });
+});
+
+const producing = (id: string, ...names: string[]) =>
+  agent(id, {
+    settings: {
+      produces: names.map((variable) => ({ variable, yesIf: "it holds", noIf: "it does not" })),
+    },
+  });
+
+const analysed = (flow: Flow) => blueprintVariables(flow, unknownLibraries);
+
+const ownedOf = (flow: Flow) => analysed(flow).owned;
+
+describe("blueprintVariables", () => {
+  it("lists each Branch variable once, even when two Branches share it", () => {
+    const flow = onMainFlow(
+      [branch("first", "approved"), branch("second", "approved"), branch("third", "docs")],
+      [wire("first", "yes", "second", "in"), wire("second", "yes", "third", "in")],
+    );
+
+    expect(ownedOf(flow).map(({ name }) => name)).toEqual(["approved", "docs"]);
+  });
+
+  it("calls a variable defined by the Agent wired before its Branch, naming that Agent", () => {
+    const reviewer = { ...producing("review", "approved"), label: "Reviewer" };
+    const flow = onMainFlow(
+      [reviewer, branch("decide", "approved")],
+      [thenWire("review", "decide")],
+    );
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved", definedBy: ["Reviewer"] }]);
+  });
+
+  it("names only the producers that run before the Branch", () => {
+    const flow = onMainFlow(
+      [
+        producing("review", "approved"),
+        branch("decide", "approved"),
+        producing("recheck", "approved"),
+      ],
+      [thenWire("review", "decide"), wire("decide", "yes", "recheck", "in")],
+    );
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved", definedBy: ["review"] }]);
+  });
+
+  it("calls a variable not defined when its only producer runs after the Branch", () => {
+    const flow = onMainFlow(
+      [branch("decide", "approved"), producing("review", "approved")],
+      [wire("decide", "yes", "review", "in")],
+    );
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved" }]);
+  });
+
+  it.each<[string, () => Flow]>([
+    [
+      "an earlier Branch",
+      () =>
+        onMainFlow(
+          [branch("first", "ready"), producing("review", "approved"), branch("decide", "approved")],
+          [
+            wire("first", "yes", "review", "in"),
+            thenWire("review", "decide"),
+            wire("first", "no", "decide", "in"),
+          ],
+        ),
+    ],
+    [
+      "a Fork",
+      () =>
+        onMainFlow(
+          [
+            fork("split"),
+            producing("review", "approved"),
+            agent("lint"),
+            join("meet"),
+            branch("decide", "approved"),
+          ],
+          [
+            thenWire("split", "review"),
+            thenWire("split", "lint"),
+            thenWire("review", "meet"),
+            thenWire("lint", "meet"),
+            thenWire("meet", "decide"),
+          ],
+        ),
+    ],
+  ])("calls a variable not defined when its producer is on only one side of %s", (_, built) => {
+    expect(ownedOf(built()).find(({ name }) => name === "approved")).toEqual({ name: "approved" });
+  });
+
+  it("calls the variable not defined once its produce row is removed", () => {
+    const flow = onMainFlow(
+      [agent("review"), branch("decide", "approved")],
+      [thenWire("review", "decide")],
+    );
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved" }]);
+  });
+
+  it("calls the variable not defined once the wire from its producer to the Branch is removed", () => {
+    const flow = onMainFlow([producing("review", "approved"), branch("decide", "approved")], []);
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved" }]);
+  });
+
+  it("calls a shared variable not defined when its producer runs before only one of its Branches", () => {
+    const flow = onMainFlow(
+      [branch("first", "approved"), producing("review", "approved"), branch("second", "approved")],
+      [wire("first", "yes", "review", "in"), thenWire("review", "second")],
+    );
+
+    expect(ownedOf(flow)).toEqual([{ name: "approved" }]);
+  });
+
+  it("counts the Start inside the Branch's container as where its paths begin", () => {
+    const inside = flow(
+      [
+        trigger("canvas-start"),
+        trigger("ws-start"),
+        producing("review", "approved"),
+        branch("decide", "approved"),
+        output("ws-stop"),
+        output("canvas-stop"),
+      ],
+      [
+        wire("canvas-start", "out", "workspace-1", "flow-in"),
+        thenWire("ws-start", "review"),
+        thenWire("review", "decide"),
+        wire("decide", "yes", "ws-stop", "in"),
+        wire("decide", "no", "ws-stop", "in"),
+        wire("workspace-1", "flow-out", "canvas-stop", "in"),
+      ],
+      flowSettings,
+      { containers: [workspaceContainer(["ws-start", "review", "decide", "ws-stop"])] },
+    );
+
+    expect(ownedOf(inside)).toEqual([{ name: "approved", definedBy: ["review"] }]);
+  });
+
+  it("does not count a producer in an earlier container as running before the Branch", () => {
+    const apart = flow(
+      [
+        trigger("canvas-start"),
+        trigger("ws-start"),
+        producing("review", "approved"),
+        output("ws-stop"),
+        trigger("s1-start"),
+        branch("decide", "approved"),
+        output("s1-stop"),
+        output("canvas-stop"),
+      ],
+      [
+        wire("canvas-start", "out", "workspace-1", "flow-in"),
+        thenWire("ws-start", "review"),
+        thenWire("review", "ws-stop"),
+        wire("workspace-1", "flow-out", "session-1", "flow-in"),
+        thenWire("s1-start", "decide"),
+        wire("decide", "yes", "s1-stop", "in"),
+        wire("decide", "no", "s1-stop", "in"),
+        wire("session-1", "flow-out", "canvas-stop", "in"),
+      ],
+      flowSettings,
+      {
+        containers: [
+          workspaceContainer(["ws-start", "review", "ws-stop"]),
+          sessionContainer(["s1-start", "decide", "s1-stop"]),
+        ],
+      },
+    );
+
+    expect(ownedOf(apart)).toEqual([{ name: "approved" }]);
+  });
+
+  it("sends up exactly the variables it does not define", () => {
+    const flow = onMainFlow(
+      [producing("review", "approved"), branch("decide", "approved"), branch("docs", "docs")],
+      [thenWire("review", "decide"), wire("decide", "yes", "docs", "in")],
+    );
+
+    expect(analysed(flow).sends).toEqual(["docs"]);
+  });
+
+  it("asks for the variables it does not define and every text variable, never a defined one", () => {
+    const flow = onMainFlow(
+      [
+        agent("review", {
+          settings: {
+            instructions: "Review {{ticket}}.",
+            produces: [{ variable: "approved", yesIf: "ok", noIf: "not ok" }],
+          },
+        }),
+        branch("decide", "approved"),
+        branch("docs", "docs"),
+      ],
+      [thenWire("review", "decide"), wire("decide", "yes", "docs", "in")],
+    );
+
+    expect(analysed(flow).toAsk).toEqual([
+      { name: "docs", kind: "yes-no", nodeIds: ["docs"] },
+      { name: "ticket", kind: "text", nodeIds: ["review"] },
+    ]);
+  });
+});
+
+const usesLibrary = (id: string, libraryId: string) => ({
+  id,
+  label: id,
+  position: { x: 0, y: 0 },
+  type: "library",
+  settings: { libraryId, label: id, overrides: {} },
+});
+
+const sending =
+  (sends: Record<string, string[]>): LibraryLookup =>
+  (flowId) =>
+    sends[flowId] === undefined
+      ? undefined
+      : { name: flowId, kind: "node-library", sessions: [], uses: [], sends: sends[flowId] };
+
+const plainLibrary = (members: { id: string }[], wires: unknown[]): Flow =>
+  parseFlow({
+    nodes: [trigger("canvas-start"), ...members, output("canvas-stop")],
+    wires,
+    containers: [],
+    settings: flowSettings,
+  });
+
+describe("blueprintVariables with libraries", () => {
+  const lookup = sending({ asks: ["up"], keeps: [] });
+
+  it("owns its own Branch variables and what its libraries send up, never a library's own", () => {
+    const host = onMainFlow(
+      [branch("decide", "own"), usesLibrary("ask", "asks"), usesLibrary("keep", "keeps")],
+      [wire("decide", "yes", "ask", "in"), thenWire("ask", "keep")],
+    );
+
+    const { owned, sends } = blueprintVariables(host, lookup);
+
+    expect(owned.map(({ name }) => name)).toEqual(["own", "up"]);
+    expect(sends).toEqual(["own", "up"]);
+  });
+
+  it("calls a sent-up variable defined by an Agent before the Library node", () => {
+    const host = onMainFlow(
+      [producing("review", "up"), usesLibrary("ask", "asks")],
+      [thenWire("review", "ask")],
+    );
+
+    const { owned, sends } = blueprintVariables(host, lookup);
+
+    expect(owned).toEqual([{ name: "up", definedBy: ["review"] }]);
+    expect(sends).toEqual([]);
+  });
+
+  it("sends a library's variable up again when nothing before the Library node defines it", () => {
+    const host = onMainFlow([agent("plan"), usesLibrary("ask", "asks")], [thenWire("plan", "ask")]);
+
+    const { owned, sends, toAsk } = blueprintVariables(host, lookup);
+
+    expect(owned).toEqual([{ name: "up" }]);
+    expect(sends).toEqual(["up"]);
+    expect(toAsk).toEqual([{ name: "up", kind: "yes-no", nodeIds: ["ask"] }]);
+  });
+
+  it("sends a variable up through every level nobody defines it on, and keeps one a level defines", () => {
+    const libraries: Record<string, Flow> = {
+      leaf: plainLibrary(
+        [branch("decide", "approved"), producing("check", "inner"), branch("judge", "inner")],
+        [
+          thenWire("canvas-start", "decide"),
+          wire("decide", "yes", "check", "in"),
+          wire("decide", "no", "check", "in"),
+          thenWire("check", "judge"),
+          wire("judge", "yes", "canvas-stop", "in"),
+          wire("judge", "no", "canvas-stop", "in"),
+        ],
+      ),
+      middle: plainLibrary(
+        [agent("plan"), usesLibrary("use-leaf", "leaf")],
+        [
+          thenWire("canvas-start", "plan"),
+          thenWire("plan", "use-leaf"),
+          thenWire("use-leaf", "canvas-stop"),
+        ],
+      ),
+    };
+    const resolve = (flowId: string) => {
+      const flow = libraries[flowId];
+      return flow === undefined ? undefined : { name: flowId, flow };
+    };
+    const host = onMainFlow([usesLibrary("use-middle", "middle")], []);
+
+    const { owned, sends } = blueprintVariables(host, libraryLookup(resolve));
+
+    expect(owned).toEqual([{ name: "approved" }]);
+    expect(sends).toEqual(["approved"]);
   });
 });

@@ -1,5 +1,5 @@
 import { scopeLine, type ScopeParts } from "../../compiler/scope-line.js";
-import { declaredHandoff, handoffFolderLine, handoffText } from "../../flow/handoff.js";
+import { handoffFolderLine } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
 import { fillVariables, type VariableValues } from "../../flow/variables.js";
 
@@ -8,8 +8,6 @@ type AgentCompileInputs = {
   scope: ScopeParts;
   values?: VariableValues;
 };
-
-const orNone = (text: string) => (text.trim() === "" ? "None." : text.trim());
 
 export function compileAgent(
   node: Extract<Node, { type: "agent" }>,
@@ -20,7 +18,6 @@ export function compileAgent(
 } {
   const { piece, scope, values = {} } = inputs;
   const { role, instructions, model } = node.settings;
-  const { given, writes } = declaredHandoff(node.settings);
   const draft = role === "" ? node.label : role;
   const fields: [string, string | undefined][] = [
     ["name", piece],
@@ -37,11 +34,9 @@ export function compileAgent(
     draft,
     "## Inputs",
     handoffFolderLine(scope.repo, scope.kind),
-    orNone(handoffText({ given, writes: [] })),
     "## Steps",
     fillVariables(instructions, values),
     "## Output",
-    orNone(handoffText({ given: [], writes })),
     "## When to stop",
     "Stop once the output is written.",
   ].join("\n\n");

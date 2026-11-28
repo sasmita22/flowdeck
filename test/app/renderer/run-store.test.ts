@@ -24,7 +24,8 @@ import {
 } from "../../../src/app/renderer/run-store.js";
 import { createSaveStore, type SaveBridge } from "../../../src/app/renderer/save-store.js";
 import type { BuildConfig, Flow, NodeType } from "../../../src/core/flow/schema.js";
-import type { FoundVariable } from "../../../src/core/flow/variables.js";
+import { blueprintVariables, type FoundVariable } from "../../../src/core/flow/variables.js";
+import { unknownLibraries } from "../../../src/core/flow/libraries.js";
 import { recommendedBranch } from "../../../src/core/run/branch-name.js";
 import type { RunEvent } from "../../../src/core/run/run-events.js";
 import { runSnapshot } from "../../../src/core/run/snapshot.js";
@@ -181,7 +182,10 @@ const setup = async (
       pushListener = listener;
       return () => {};
     }),
-    runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({ kind: "choices" })),
+    runOptions: vi.fn<FlowdeckBridge["runOptions"]>(async () => ({
+      kind: "choices",
+      variables: [],
+    })),
     stopRun: vi.fn<FlowdeckBridge["stopRun"]>(async () => ({ stopped: true })),
     retryNode: vi.fn<FlowdeckBridge["retryNode"]>(async ({ runId }) => ({
       kind: "started",
@@ -1204,7 +1208,7 @@ describe("runBuild", () => {
     expect(bridge.runOptions).toHaveBeenCalledWith({ buildId: "b-1" });
     expect(bridge.runBuild).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
-    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+    expect(run.getState().dialog).toEqual({ buildId: "b-1", variables: [], values: {} });
   });
 
   it.each([true, false])(
@@ -1220,6 +1224,54 @@ describe("runBuild", () => {
       expect(run.getState().dialog).toBeNull();
     },
   );
+
+  it("pre-fills each yes/no variable the build offers with the build's value", async () => {
+    const { bridge, run } = await setup();
+    const variables = [
+      { name: "approved", value: true },
+      { name: "docs", value: false },
+    ];
+    bridge.runOptions.mockResolvedValueOnce({ kind: "choices", variables });
+
+    await run.getState().runBuild("b-1");
+
+    expect(run.getState().dialog).toEqual({
+      buildId: "b-1",
+      variables,
+      values: { approved: true, docs: false },
+    });
+  });
+
+  it("sends a changed value with the run, beside the values left as built", async () => {
+    const { bridge, run } = await setup();
+    bridge.runOptions.mockResolvedValueOnce({
+      kind: "choices",
+      variables: [
+        { name: "approved", value: true },
+        { name: "docs", value: false },
+      ],
+    });
+    await run.getState().runBuild("b-1");
+
+    run.getState().setRunValue("approved", false);
+    await run.getState().start({ auto: false });
+
+    expect(bridge.runBuild).toHaveBeenCalledWith({
+      buildId: "b-1",
+      auto: false,
+      variables: { approved: false, docs: false },
+    });
+  });
+
+  it("sends no variables for a build that offers none", async () => {
+    const { bridge, run } = await setup();
+    await run.getState().runBuild("b-1");
+    run.getState().setRunValue("approved", true);
+
+    await run.getState().start({ auto: true });
+
+    expect(bridge.runBuild).toHaveBeenCalledWith({ buildId: "b-1", auto: true });
+  });
 
   it("cancel closes the run dialog without a run", async () => {
     const { bridge, run } = await setup();
@@ -1238,7 +1290,7 @@ describe("runBuild", () => {
 
     await run.getState().runBuild("b-1");
 
-    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+    expect(run.getState().dialog).toEqual({ buildId: "b-1", variables: [], values: {} });
   });
 
   it("opens the run dialog again for Run again, and starts nothing until Start", async () => {
@@ -1248,7 +1300,7 @@ describe("runBuild", () => {
 
     await expect(run.getState().runBuild("b-1")).resolves.toBeNull();
 
-    expect(run.getState().dialog).toEqual({ buildId: "b-1" });
+    expect(run.getState().dialog).toEqual({ buildId: "b-1", variables: [], values: {} });
     expect(bridge.runBuild).toHaveBeenCalledTimes(1);
 
     await run.getState().start({ auto: true });
@@ -2264,6 +2316,60 @@ describe("the Build dialog for a host that uses libraries", () => {
     ]);
     expect(run.getState().buildDialog?.values).toEqual({ "android-app.isFullScan": false });
     expect(run.getState().buildDialog?.problem).toBeNull();
+  });
+
+  it("lists a yes/no variable a library sends up in the unheaded group, beside the host's own", async () => {
+    const { run } = await setup({
+      latest: host(),
+      expanded: () => ({
+        flow: onMainFlow(
+          [
+            agent("plan", { settings: { instructions: "Say {{ticket}}." } }),
+            branch("android-app.decide", "approved"),
+          ],
+          [thenWire("plan", "android-app.decide")],
+        ),
+        uses: [{ path: "android-app", name: "Android library", kind: "node-library" }],
+      }),
+    });
+
+    await run.getState().openBuild();
+
+    const groups = variableGroups(run.getState().buildDialog?.variables ?? []);
+    expect(
+      groups.map(({ heading, variables }) => [heading, variables.map(({ name }) => name)]),
+    ).toEqual([[null, ["approved", "ticket"]]]);
+    expect(run.getState().buildDialog?.values).toEqual({ approved: false });
+  });
+
+  it("does not ask a variable an Agent defines before its Branch", async () => {
+    const expanded = onMainFlow(
+      [
+        agent("android-app.review", {
+          settings: {
+            produces: [{ variable: "android-app.approved", yesIf: "green", noIf: "red" }],
+          },
+        }),
+        branch("android-app.decide", "android-app.approved"),
+        branch("own", "ship"),
+      ],
+      [thenWire("android-app.review", "android-app.decide"), thenWire("android-app.decide", "own")],
+    );
+    const { run } = await setup({
+      latest: host(),
+      expanded: () => ({
+        flow: expanded,
+        uses: [{ path: "android-app", name: "Android library", kind: "node-library" }],
+      }),
+    });
+
+    await run.getState().openBuild();
+
+    expect(run.getState().buildDialog?.variables.map(({ name }) => name)).toEqual(["ship"]);
+    expect(run.getState().buildDialog?.variables).toEqual(
+      blueprintVariables(expanded, unknownLibraries).toAsk,
+    );
+    expect(run.getState().buildDialog?.values).toEqual({ ship: false });
   });
 
   it("refuses to build, naming the problem, when the expansion fails", async () => {

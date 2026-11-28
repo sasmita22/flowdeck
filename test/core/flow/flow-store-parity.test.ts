@@ -2,7 +2,9 @@ import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteFlowStore } from "../../../src/adapters/sqlite/flows.js";
 import { openDatabase } from "../../../src/adapters/sqlite/open-database.js";
+import { unknownLibraries } from "../../../src/core/flow/libraries.js";
 import { parseFlow, type Flow } from "../../../src/core/flow/schema.js";
+import { blueprintVariables } from "../../../src/core/flow/variables.js";
 import type { FlowStore } from "../../../src/ports/flow-store.js";
 import { FakeFlowStore } from "../../fakes/fake-flow-store.js";
 import {
@@ -249,13 +251,30 @@ describe.each(kinds)("%s summary", (_name, kind) => {
     );
 
     expect(summaryOf(store, "flow-c")?.variables).toEqual([
-      {
-        name: "android-app.e2e-tests.isFullScan",
-        kind: "yes-no",
-        nodeIds: ["android-app-e2e-tests-scan"],
-        group: { path: "android-app.e2e-tests", name: "E2E" },
-      },
+      { name: "isFullScan", kind: "yes-no", nodeIds: ["android-app-e2e-tests-scan"] },
       { name: "ticket", kind: "text", nodeIds: ["say"] },
+    ]);
+  });
+
+  it("lists a not-defined Branch variable and leaves out one an earlier Agent defines", () => {
+    const store = open();
+    const flow = onMainFlow(
+      [
+        agent("review", {
+          settings: { produces: [{ variable: "approved", yesIf: "ok", noIf: "not ok" }] },
+        }),
+        branch("decide", "approved"),
+        branch("docs", "docs"),
+      ],
+      [thenWire("review", "decide"), wire("decide", "yes", "docs", "in")],
+    );
+    store.save(flow, { name: "Review" });
+
+    expect(summaryOf(store, "flow-a")?.variables).toEqual(
+      blueprintVariables(flow, unknownLibraries).toAsk,
+    );
+    expect(summaryOf(store, "flow-a")?.variables).toEqual([
+      { name: "docs", kind: "yes-no", nodeIds: ["docs"] },
     ]);
   });
 

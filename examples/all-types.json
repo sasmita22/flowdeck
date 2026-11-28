@@ -35,9 +35,7 @@
       "settings": {
         "role": "implementer",
         "instructions": "Implement the plan.",
-        "model": "sonnet",
-        "given": ["plan.md"],
-        "writes": ["implementation.md"]
+        "model": "sonnet"
       }
     },
     {

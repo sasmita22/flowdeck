@@ -13,14 +13,19 @@ const base = (settings: Record<string, unknown> = flowSettings): Flow =>
   flow(
     [
       agent("p1"),
-      agent("a1", { parent: "p1", settings: { given: ["plan.md"] } }),
+      agent("a1", {
+        parent: "p1",
+        settings: {
+          produces: [{ variable: "approved", yesIf: "it reads well", noIf: "it does not" }],
+        },
+      }),
       agent("s1", { settings: { tools: ["Bash"] } }),
     ],
     [thenWire("p1", "a1"), thenWire("a1", "s1")],
     settings,
   );
 
-const agentSettings = (extra: { instructions?: string; tools?: string[]; writes?: string[] }) => ({
+const agentSettings = (extra: { instructions?: string; tools?: string[] }) => ({
   role: "implementer",
   instructions: "Implement the plan.",
   model: "sonnet",
@@ -132,14 +137,12 @@ describe("flowsEqual", () => {
 
   it("tells an absent optional key from a present one", () => {
     const withoutParent = edited((f) => delete nth(f.nodes, 1).parent);
-    const withExpectedOutput = edited(
-      (f) => (nth(f.nodes, 0).settings = agentSettings({ writes: ["notes.md"] })),
-    );
+    const withProduces = edited((f) => Object.assign(nth(f.nodes, 0).settings, { produces: [] }));
 
     expect(flowsEqual(base(), withoutParent)).toBe(false);
     expect(flowsEqual(withoutParent, base())).toBe(false);
-    expect(flowsEqual(base(), withExpectedOutput)).toBe(false);
-    expect(flowsEqual(withExpectedOutput, base())).toBe(false);
+    expect(flowsEqual(base(), withProduces)).toBe(false);
+    expect(flowsEqual(withProduces, base())).toBe(false);
   });
 
   it("tells flows apart by their connections", () => {

@@ -11,7 +11,6 @@ const hiddenFolder = "plugin";
 const labels: Record<string, string> = {
   "plugin/agents": "Agents",
   "plugin/skills": "Skills",
-  "plugin/templates": "Hand-off templates",
   "plugin/hooks": "Hooks",
 };
 

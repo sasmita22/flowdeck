@@ -4,7 +4,6 @@ import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { validate } from "../../../src/core/compiler/validate.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import { compileAgent } from "../../../src/core/nodes/agent/compile.js";
-import { sectionOf } from "../../fixtures/frontmatter.js";
 import { oneSession } from "../../fixtures/one-session.js";
 import {
   agent,
@@ -305,40 +304,16 @@ describe("lower", () => {
     );
   });
 
-  describe("hand-off files", () => {
-    const handoff = () =>
-      flow(
-        [
-          agent("plan", { settings: { writes: ["plan.md"] } }),
-          agent("build", { settings: { given: ["plan.md"], writes: ["diff.md"] } }),
-          agent("check", { settings: { given: ["plan.md", "diff.md"] } }),
-        ],
-        [thenWire("plan", "build"), thenWire("build", "check")],
-      );
+  it("carries only the flow's Then wires in the manifest", () => {
+    const input = flow(
+      [agent("plan"), agent("build"), agent("check")],
+      [thenWire("plan", "build"), thenWire("build", "check")],
+    );
 
-    it("carries only the flow's Then wires in the manifest", () => {
-      const input = handoff();
-
-      expect(oneSession(lower(input, workspace).manifest).wires).toStrictEqual([
-        thenWire("plan", "build"),
-        thenWire("build", "check"),
-      ]);
-    });
-
-    it("tells each producer what to write and each consumer what it is given", () => {
-      const files = Object.fromEntries(
-        lower(handoff(), workspace).nodeFiles.map(({ path, content }) => [path, content]),
-      );
-
-      const plan = files["sessions/main/plugin/agents/plan.md"] ?? "";
-      const check = files["sessions/main/plugin/agents/check.md"] ?? "";
-      expect(sectionOf(plan, /^## Output$/)).toContain("plan.md");
-      expect(sectionOf(plan, /^## Inputs$/)).not.toContain("plan.md");
-      expect(files["sessions/main/plugin/agents/build.md"]).toContain("You are given: plan.md\n");
-      expect(files["sessions/main/plugin/agents/build.md"]).toContain("Write: diff.md\n");
-      expect(sectionOf(check, /^## Inputs$/)).toMatch(/plan\.md[\s\S]*diff\.md/);
-      expect(sectionOf(check, /^## Output$/)).not.toMatch(/plan\.md|diff\.md/);
-    });
+    expect(oneSession(lower(input, workspace).manifest).wires).toStrictEqual([
+      thenWire("plan", "build"),
+      thenWire("build", "check"),
+    ]);
   });
 
   it("ignores node positions", () => {

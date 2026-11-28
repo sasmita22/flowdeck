@@ -33,7 +33,7 @@ type ResumeInput = {
   sessionRestarted?: boolean;
 };
 
-const humanTypes = new Set<ManifestNode["type"]>(["gate", "loop", "branch"]);
+const humanTypes = new Set<ManifestNode["type"]>(["gate", "loop"]);
 
 function turnMarker(node: ManifestNode, prefix: string): string {
   return `subagent_type "${agentType(prefix, pieceOf(node))}"`;

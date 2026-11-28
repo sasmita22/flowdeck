@@ -173,3 +173,119 @@ describe("generic fields", () => {
     expect(assignField(schema, current, [key], text)).toEqual({ ...current, [key]: stored });
   });
 });
+
+describe("rows of objects", () => {
+  const schema = z.object({
+    items: z.array(z.object({ name: z.string(), note: z.string() })).optional(),
+  });
+  const form = {
+    prefix: "node-setting",
+    labels: { items: "Items", "items.name": "Name", "items.note": "Note" },
+    optionLabels: {},
+    addLabels: { items: "+ Item" },
+  };
+
+  it("describes a list of objects as rows, one per stored item, each with its own fields and ids", () => {
+    const values = {
+      items: [
+        { name: "a", note: "" },
+        { name: "b", note: "" },
+      ],
+    };
+
+    expect(describeFields(schema, form, values)).toEqual([
+      {
+        control: "rows",
+        path: ["items"],
+        testId: "node-setting-items",
+        label: "Items",
+        addLabel: "+ Item",
+        addTestId: "node-setting-items-add",
+        rows: [0, 1].map((index) => ({
+          removeTestId: `node-setting-items-${index}-remove`,
+          fields: [
+            {
+              control: "text",
+              path: ["items", String(index), "name"],
+              testId: `node-setting-items-${index}-name`,
+              label: "Name",
+            },
+            {
+              control: "text",
+              path: ["items", String(index), "note"],
+              testId: `node-setting-items-${index}-note`,
+              label: "Note",
+            },
+          ],
+        })),
+      },
+    ]);
+  });
+
+  it("describes no rows when nothing is stored", () => {
+    expect(describeFields(schema, form)).toMatchObject([{ control: "rows", rows: [] }]);
+  });
+
+  it("appends an empty row, starting the list when there is none", () => {
+    expect(assignField(schema, {}, ["items"], { row: "add" })).toEqual({
+      items: [{ name: "", note: "" }],
+    });
+  });
+
+  it("sets one field of one row", () => {
+    const current = {
+      items: [
+        { name: "a", note: "" },
+        { name: "b", note: "" },
+      ],
+    };
+
+    expect(assignField(schema, current, ["items", "1", "note"], "later")).toEqual({
+      items: [
+        { name: "a", note: "" },
+        { name: "b", note: "later" },
+      ],
+    });
+  });
+
+  it("removes one row and keeps the rest in order", () => {
+    const current = {
+      items: [
+        { name: "a", note: "" },
+        { name: "b", note: "" },
+        { name: "c", note: "" },
+      ],
+    };
+
+    expect(assignField(schema, current, ["items", "1"], { row: "remove" })).toEqual({
+      items: [
+        { name: "a", note: "" },
+        { name: "c", note: "" },
+      ],
+    });
+  });
+});
+
+describe("a combo field", () => {
+  const schema = z.object({ name: z.string(), picked: z.boolean().optional() });
+  const form = {
+    prefix: "node-setting",
+    labels: { name: "Name" },
+    optionLabels: {},
+    hidden: new Set(["picked"]),
+    combos: { name: "picked" },
+  };
+
+  it("describes a string named as a combo as free text with a pick list beside it", () => {
+    expect(describeFields(schema, form)).toEqual([
+      {
+        control: "combo",
+        path: ["name"],
+        testId: "node-setting-name",
+        existingTestId: "node-setting-name-existing",
+        label: "Name",
+        options: [],
+      },
+    ]);
+  });
+});

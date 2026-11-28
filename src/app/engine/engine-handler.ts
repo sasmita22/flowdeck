@@ -61,7 +61,13 @@ import {
   type RunEnvironment,
   type StartedSessionsView,
 } from "../../core/run/execute.js";
-import { storedAuto, storedOptions, type RunChoices } from "../../core/run/options.js";
+import {
+  runValues,
+  runVariables,
+  storedAuto,
+  storedOptions,
+  type RunChoices,
+} from "../../core/run/options.js";
 import {
   deleteBuild,
   deletePreview,
@@ -277,7 +283,11 @@ const expandFlowPayload = z.object({ flow: z.unknown() });
 
 const loadRunPayload = z.object({ runId: z.string() });
 
-const runBuildPayload = z.object({ buildId: z.string(), auto: z.boolean().optional() });
+const runBuildPayload = z.object({
+  buildId: z.string(),
+  auto: z.boolean().optional(),
+  variables: z.record(z.string(), z.boolean()).optional(),
+});
 
 const runIdPayload = z.object({ runId: z.string() });
 
@@ -1205,8 +1215,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
         store,
         runId,
         manifest,
-        cwd: launch.cwd,
         auto: storedAuto(launch.stored),
+        values: runValues(manifest.values, launch.stored),
         socketPath: launch.socketPath,
         startedSessions,
         open: async () => {
@@ -1326,7 +1336,10 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
     const nodeIds = [workspace, ...sessionContainersOf(manifest)].flatMap((container) =>
       container.nodes.map((node) => node.id),
     );
-    const stored = storedOptions({ auto: choices.auto ?? false });
+    const stored = storedOptions({
+      auto: choices.auto ?? false,
+      ...(choices.variables === undefined ? {} : { variables: choices.variables }),
+    });
     const { id: runId } = runs.createRun({
       buildDir: built.dir,
       inputs: stored,
@@ -1911,7 +1924,7 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
   const choicesOf = async ({ runs }: EngineStores, buildId: string): Promise<RunChoices> => {
     const loaded = await loadBuild(buildId, { fs: options.fs, store: runs });
     if (loaded.kind === "error") return { kind: "error", message: loaded.message };
-    return { kind: "choices" };
+    return { kind: "choices", variables: runVariables(loaded.build.values) };
   };
 
   const manifestOf = (run: RunRecord): ParsedManifest => parseManifest(run.manifestJson);
@@ -1923,7 +1936,8 @@ export function createEngineHandler(options: EngineHandlerOptions): EngineHandle
 
   const instructionsOf = (node: StoredNode): string | undefined =>
     node.type === "agent"
-      ? agentSettings.pick({ instructions: true }).safeParse(node.settings).data?.instructions
+      ? z.object({ instructions: agentSettings.shape.instructions }).safeParse(node.settings).data
+          ?.instructions
       : undefined;
 
   const digestStagesOf = (manifest: ParsedManifest) => {

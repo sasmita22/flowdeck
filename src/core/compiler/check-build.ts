@@ -1,5 +1,3 @@
-import { handoffPairs } from "../flow/handoff.js";
-import type { Flow } from "../flow/schema.js";
 import { stopMarker } from "../run/stop-marker.js";
 import type { BuildReport } from "./build-report.js";
 import {
@@ -9,7 +7,6 @@ import {
   sessionEntryHeading,
   sessionStatesHeading,
 } from "./emit.js";
-import { hasTemplate, templatePath } from "./handoff-templates.js";
 import type { BuildFile, Manifest, ManifestContainer, ManifestNode } from "./lower.js";
 import { stopsTheRun } from "../run/stop-marker.js";
 import { containerRoot, pieceOf } from "./pieces.js";
@@ -26,7 +23,6 @@ export type BuildCheckInputs = {
   laidDown: readonly BuildFile[];
   readBack: readonly BuildFile[];
   manifest: Manifest;
-  flow: Flow;
   shared: BuildReport["shared"];
 };
 
@@ -85,7 +81,6 @@ const piecesOf = (nodes: readonly ManifestNode[]): Piece[] => {
 type Check = {
   back: ReadonlyMap<string, string>;
   laid: ReadonlyMap<string, string>;
-  flow: Flow;
   fail: (file: string, rule: string, detail: string) => void;
 };
 
@@ -164,7 +159,7 @@ const checkContainer = (
   shared: BuildReport["shared"],
   check: Check,
 ) => {
-  const { back, laid, flow, fail } = check;
+  const { back, laid, fail } = check;
   const root = containerRoot(container);
   const plugin = `${root}/plugin/`;
   const pieces = piecesOf(container.nodes);
@@ -199,17 +194,6 @@ const checkContainer = (
   const claudeMd = `${root}/CLAUDE.md`;
   if (!(back.get(claudeMd) ?? "").includes(standardRules.text))
     fail(claudeMd, "standard-rules", "the standard rules are missing or altered");
-
-  const members = new Set(container.nodes.map((node) => node.id));
-  const handedOn = new Set(
-    handoffPairs(flow.nodes.filter((node) => members.has(node.id))).flatMap((pair) =>
-      hasTemplate(pair.file) ? [pair.file] : [],
-    ),
-  );
-  for (const file of handedOn) {
-    const path = `${root}/${templatePath(file)}`;
-    if (!back.has(path)) fail(path, "template", `hand-off file ${file} has no template`);
-  }
 
   const orchestratorPath = container.orchestrator;
   const orchestrator = back.get(orchestratorPath);
@@ -316,7 +300,7 @@ const checkNamedSend = (container: ManifestContainer, check: Check) =>
   });
 
 export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
-  const { laidDown, readBack, manifest, flow, shared } = inputs;
+  const { laidDown, readBack, manifest, shared } = inputs;
   const laid = new Map(laidDown.map((file) => [file.path, file.content]));
   const back = new Map(readBack.map((file) => [file.path, file.content]));
   const failures: BuildCheckFailure[] = [];
@@ -327,13 +311,13 @@ export function checkBuild(inputs: BuildCheckInputs): BuildCheckFailure[] {
       failures.push({ file, rule, detail, container: container.slug });
     };
     const own = shared.filter((entry) => sharedContainer(containers, entry) === container);
-    checkContainer(container, own, { back, laid, flow, fail });
+    checkContainer(container, own, { back, laid, fail });
     if (container.kind === "session") {
-      checkSessionList(container, { back, laid, flow, fail });
-      checkReplyFallback(container, { back, laid, flow, fail });
-    } else checkSessionStates({ back, laid, flow, fail });
-    checkConnected(container, { back, laid, flow, fail });
-    checkNamedSend(container, { back, laid, flow, fail });
+      checkSessionList(container, { back, laid, fail });
+      checkReplyFallback(container, { back, laid, fail });
+    } else checkSessionStates({ back, laid, fail });
+    checkConnected(container, { back, laid, fail });
+    checkNamedSend(container, { back, laid, fail });
   }
 
   for (const [path, content] of back) {

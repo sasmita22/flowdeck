@@ -47,8 +47,16 @@ describe("validate", () => {
         "library-use",
         "library-labels",
         "library-loops",
+        "variable-unique",
+        "variable-clash",
+        "variable-dot",
+        "produce-rows",
       ]),
     );
+    expect(ids).not.toContain("branch-value");
+    expect(brokenFixtures).not.toContain("branch-value.json");
+    expect(ids).not.toContain("handoffs");
+    expect(brokenFixtures).not.toContain("handoffs.json");
     expect(ids).not.toContain("repo-required");
     expect(brokenFixtures).not.toContain("repo-required.json");
     expect(ids).not.toContain("agent-tools");
@@ -62,7 +70,10 @@ describe("validate", () => {
   it.each([
     "variable-names",
     "branch-variable",
-    "branch-value",
+    "variable-unique",
+    "variable-clash",
+    "variable-dot",
+    "produce-rows",
     "gate-condition",
     "workspace-count",
     "one-start",

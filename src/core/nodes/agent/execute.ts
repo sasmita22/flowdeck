@@ -1,21 +1,21 @@
-import { declaredHandoff, handoffText, type Handoff } from "../../flow/handoff.js";
 import type { Node } from "../../flow/schema.js";
 import { nodeMarker, type AgentCall } from "../../run/agent-calls.js";
 import { answerContext } from "../gate/execute.js";
-import { producedName } from "./settings.js";
+import type { ProduceRow } from "./settings.js";
 
 type AgentOutcome = "done" | "failed";
 
-export type AgentTurnNode = { id: string; produces?: string } & Handoff;
+export type AgentTurnNode = { id: string; produces?: readonly ProduceRow[] };
 
 export const agentTurnNode = (node: { id: string; settings: Node["settings"] }): AgentTurnNode => {
-  const produces = producedName(node.settings);
-  return {
-    id: node.id,
-    ...declaredHandoff(node.settings),
-    ...(produces === undefined ? {} : { produces }),
-  };
+  const produces = producedRows(node.settings);
+  return { id: node.id, ...(produces.length === 0 ? {} : { produces }) };
 };
+
+export const producedRows = (settings: object): readonly ProduceRow[] =>
+  "produces" in settings && Array.isArray(settings.produces)
+    ? (settings.produces as ProduceRow[])
+    : [];
 
 export function agentType(prefix: string, piece: string): string {
   return `${prefix}:${piece}`;
@@ -24,13 +24,31 @@ export function agentType(prefix: string, piece: string): string {
 export const yesNoEntry = (name: string, answer: boolean): string =>
   `${JSON.stringify(name)}: ${String(answer)}`;
 
-function answerRequest(name: string): string {
-  return `End your reply with a fenced code block tagged json that holds your yes/no answer for ${JSON.stringify(name)}: {${yesNoEntry(name, true)}} for yes, else {${yesNoEntry(name, false)}}.`;
+const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ");
+
+export const producedObject = (names: readonly string[]): string =>
+  `{${names.map((name) => yesNoEntry(name, true)).join(", ")}}`;
+
+const namesOf = (rows: readonly ProduceRow[]) => rows.map((row) => row.variable);
+
+function produceLines(rows: readonly ProduceRow[]): string {
+  if (rows.length === 0) return "";
+  const criteria = rows.map(
+    (row) =>
+      `- ${JSON.stringify(row.variable)}: true if ${oneLine(row.yesIf)}, false if ${oneLine(row.noIf)}`,
+  );
+  return [
+    "Acceptance criteria: set each of these to true or false.",
+    ...criteria,
+    `End your reply with a fenced code block tagged json that holds one object with every one of them, for example ${producedObject(namesOf(rows))}.`,
+  ].join("\n");
 }
 
+const relayRequest = (rows: readonly ProduceRow[]) =>
+  `End your reply with a fenced code block tagged json that holds the object the agent ended with, every variable in it, for example ${producedObject(namesOf(rows))}.`;
+
 export function agentPrompt(node: AgentTurnNode, answers: readonly string[] = []): string {
-  const answer = node.produces === undefined ? "" : answerRequest(node.produces);
-  return [nodeMarker(node.id), handoffText(node).trim(), answerContext(answers), "Go", answer]
+  return [nodeMarker(node.id), answerContext(answers), "Go", produceLines(node.produces ?? [])]
     .filter((line) => line !== "")
     .join("\n");
 }
@@ -41,8 +59,7 @@ export function agentCallText(
   node: AgentTurnNode,
   answers: readonly string[] = [],
 ): string {
-  const dispatched = { id: node.id, given: node.given, writes: node.writes };
-  return `Use the Agent tool with subagent_type "${agentType(prefix, piece)}" and the prompt ${JSON.stringify(agentPrompt(dispatched, answers))}.`;
+  return `Use the Agent tool with subagent_type "${agentType(prefix, piece)}" and the prompt ${JSON.stringify(agentPrompt(node, answers))}.`;
 }
 
 export function agentTurnText(
@@ -51,7 +68,8 @@ export function agentTurnText(
   node: AgentTurnNode,
   answers: readonly string[] = [],
 ): string {
-  const ending = node.produces === undefined ? "Then reply DONE." : answerRequest(node.produces);
+  const rows = node.produces ?? [];
+  const ending = rows.length === 0 ? "Then reply DONE." : relayRequest(rows);
   return `${agentCallText(prefix, piece, node, answers)} ${ending}`;
 }
 

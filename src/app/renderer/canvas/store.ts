@@ -34,6 +34,7 @@ import {
   type Node,
   type Wire,
 } from "../../../core/flow/schema.js";
+import type { BranchSettings } from "../../../core/nodes/branch/settings.js";
 import { labelFor, nodeDefaults } from "../../../core/nodes/defaults.js";
 import { nodeLook } from "../nodes/look.js";
 import { noteLook } from "../nodes/note-look.js";
@@ -416,6 +417,7 @@ const summaryLookup =
         kind: summary.kind,
         sessions: summary.sessions,
         uses: summary.uses,
+        sends: summary.sends,
       }
     );
   };
@@ -486,7 +488,7 @@ const noWarnings: string[] = [];
 export const selectNodeWarnings = (flow: Flow, nodeId: string): string[] => {
   let byNode = warningsByNode.get(flow);
   if (byNode === undefined) {
-    byNode = Object.fromEntries(flow.nodes.map((node) => [node.id, nodeWarnings(node)]));
+    byNode = nodeWarnings(flow);
     warningsByNode.set(flow, byNode);
   }
   return byNode[nodeId] ?? noWarnings;
@@ -560,6 +562,12 @@ const both = (first: Command, second: Command): Command => ({
 });
 
 const pasteGap = 32;
+
+const unshared = (settings: BranchSettings): BranchSettings => {
+  const copy = { ...settings };
+  delete copy.shared;
+  return copy;
+};
 
 const shifted = (position: Position, by: Position): Position => ({
   x: position.x + by.x,
@@ -747,6 +755,7 @@ export function createCanvasStore(
         const parent = parentOf(node);
         return {
           ...rest,
+          ...(node.type === "branch" ? { settings: unshared(node.settings) } : {}),
           id: renamed.get(node.id) ?? node.id,
           position: shifted(node.position, offset),
           ...(parent === undefined ? {} : { parent }),

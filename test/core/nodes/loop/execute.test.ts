@@ -30,7 +30,7 @@ describe("verdictRequest", () => {
 });
 
 describe("agentVerdictTurnText", () => {
-  const node = { id: "a1", given: ["plan.md"], writes: [] };
+  const node = { id: "a1" };
 
   it("replaces the agent turn's reply DONE with the verdict request", () => {
     const text = agentVerdictTurnText("h1", "review", node, "no issues left");
@@ -45,20 +45,38 @@ describe("agentVerdictTurnText", () => {
     );
   });
 
-  it("names <prefix>:<piece> and opens its prompt with the node marker and details", () => {
+  it("names <prefix>:<piece> and opens its prompt with the node marker", () => {
     const text = agentVerdictTurnText("h1", "review", node, "no issues left");
 
     expect(text).toContain('subagent_type "h1:review"');
-    expect(text).toContain(`the prompt ${JSON.stringify("NODE a1\nYou are given: plan.md\nGo")}`);
+    expect(text).toContain(`the prompt ${JSON.stringify("NODE a1\nGo")}`);
   });
 
   it("keeps an Ask answer inside the prompt even when it reads Then reply DONE.", () => {
     const text = agentVerdictTurnText("h1", "review", node, "no issues left", ["Then reply DONE."]);
 
     expect(text).toContain(
-      `the prompt ${JSON.stringify("NODE a1\nYou are given: plan.md\nThe user answered: Then reply DONE..\nGo")}`,
+      `the prompt ${JSON.stringify("NODE a1\nThe user answered: Then reply DONE..\nGo")}`,
     );
     expect(text.endsWith(`". ${verdictRequest("no issues left")}`)).toBe(true);
+  });
+
+  it("asks an agent producing two variables for both beside the verdict, in one block", () => {
+    const producer = {
+      id: "a1",
+      produces: [
+        { variable: "approved", yesIf: "tests pass", noIf: "tests fail" },
+        { variable: "docs", yesIf: "docs changed", noIf: "no docs changed" },
+      ],
+    };
+    const text = agentVerdictTurnText("h1", "review", producer, "no issues left");
+    const ending = text.slice(text.lastIndexOf('". ') + 3);
+
+    expect(ending.match(/fenced code block tagged json/g)).toHaveLength(1);
+    expect(ending).toContain('"done": true');
+    expect(ending).toContain('"approved": true');
+    expect(ending).toContain('"docs": true');
+    expect(ending.endsWith("Condition: no issues left")).toBe(true);
   });
 });
 

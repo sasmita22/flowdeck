@@ -13,10 +13,10 @@ A question is only for a blueprint input: an empty required field or setting, a 
 
 ## Checks
 
-1. **Every read has a writer.** For each file a piece reads (its node's `given` setting and the files its text says it reads), find the node of the same container that writes it, by its `writes` setting, earlier in the flow on every path to the reader. A file that already exists in the container's repo needs no writer (check with Glob). A Stop's output, in `outputs` and on the orchestrator's Stop line, is not a file a piece reads, so check 1 never applies to it.
-2. **Shapes match.** The writer's `Output` and the file's template, when it has one, give the sections the reader's `Inputs` and steps use, with the same names. A template is a starting point, not a contract: where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question, and the writer replaces the template's content.
+1. **Every read has a writer.** For each file a piece reads (the files its node's instructions and its text say it reads), find the node of the same container whose instructions say it writes that file, earlier in the flow on every path to the reader. A file that already exists in the container's repo needs no writer (check with Glob). A Stop's output, in `outputs` and on the orchestrator's Stop line, is not a file a piece reads, so check 1 never applies to it.
+2. **Shapes match.** The writer's `Output` gives the sections the reader's `Inputs` and steps use, with the same names. Where the node's own instructions narrow the file's form (for example "one line"), the node's own instructions win; that is fine, never a question.
 3. **Every loop has a cap.** A Loop node has its cap in `manifest.json`. A retry cap or a stop-and-report applies only to a retry the node's own text states, as that text states it; never add one.
-4. **Nothing waits forever.** No step waits on a file, an answer or a branch that never comes on some path: a Join waiting on a branch that may be skipped, a reader that runs before its writer on one Branch path. A Branch decided by a value reads the latest answer any earlier producing Agent recorded; Agents in between don't pass it on.
+4. **Nothing waits forever.** No step waits on a file, an answer or a branch that never comes on some path: a Join waiting on a branch that may be skipped, a reader that runs before its writer on one Branch path. A Branch reads the value of its variable that the latest producing Agent before it set; Agents in between don't pass it on.
 5. **No two pieces claim the same job.** Leave the call to `audit-duplicates`; note the pair for it.
 
 ## What to do with a finding

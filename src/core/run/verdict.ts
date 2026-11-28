@@ -2,8 +2,7 @@ import { verdictKey } from "../nodes/agent/settings.js";
 
 type Verdict = { kind: "verdict"; done: boolean } | { kind: "malformed"; reason: string };
 
-export type ProducedValue =
-  { kind: "value"; answer: boolean } | { kind: "malformed"; reason: string };
+export type ProducedValues = { values: Record<string, boolean>; missing: string[] };
 
 type Malformed = { kind: "malformed"; reason: string };
 
@@ -37,7 +36,16 @@ export function parseVerdict(reply: string | undefined): Verdict {
   return typeof done === "boolean" ? { kind: "verdict", done } : done;
 }
 
-export function parseProducedValue(reply: string | undefined, name: string): ProducedValue {
-  const answer = yesNoUnder(name, reply);
-  return typeof answer === "boolean" ? { kind: "value", answer } : answer;
+export function parseProducedValues(
+  reply: string | undefined,
+  names: readonly string[],
+): ProducedValues {
+  const values: Record<string, boolean> = {};
+  const missing: string[] = [];
+  for (const name of names) {
+    const answer = yesNoUnder(name, reply);
+    if (typeof answer === "boolean") values[name] = answer;
+    else missing.push(name);
+  }
+  return { values, missing };
 }

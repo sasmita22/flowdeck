@@ -73,6 +73,7 @@ const summary = ({ flowId, name }: Saved) => ({
   kind: "workflow",
   sessions: [],
   uses: [],
+  sends: [],
 });
 
 const openBlueprint = (): Saved => ({
@@ -931,6 +932,7 @@ describe("tool handler and library nodes", () => {
     kind: "node-library" as const,
     sessions: [],
     uses: [],
+    sends: [],
   };
 
   const use = {

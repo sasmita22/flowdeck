@@ -32,6 +32,16 @@ const parsed = <T>(schema: z.ZodType<T>, input: unknown): T | string => {
 const settingsFor = (type: NodeType, settings: Settings): Settings | string =>
   parsed(registry[type].settings as z.ZodType<Settings>, settings);
 
+const keptSettings = (node: Flow["nodes"][number], change: Settings): Settings => {
+  const renamed =
+    node.type === "branch" &&
+    "variable" in change &&
+    change.variable !== node.settings.variable &&
+    !("shared" in change);
+  if (!renamed) return node.settings;
+  return Object.fromEntries(Object.entries(node.settings).filter(([key]) => key !== "shared"));
+};
+
 const isEditTool = (name: string): name is ToolName & BlueprintEdit["tool"] =>
   [
     "add_node",
@@ -123,7 +133,7 @@ export function checkEdit(
       const settings =
         data.settings === undefined
           ? undefined
-          : settingsFor(node.type, { ...node.settings, ...data.settings });
+          : settingsFor(node.type, { ...keptSettings(node, data.settings), ...data.settings });
       if (typeof settings === "string") return refuse(settings);
       if (
         node.type === "library" &&

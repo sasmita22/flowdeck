@@ -1,3 +1,4 @@
+import type { VariableValues } from "../flow/variables.js";
 import type { HookPaths } from "../compiler/hook-settings.js";
 import type { ManifestContainer, ManifestNode } from "../compiler/lower.js";
 import { verify, type VerifyFileSystem } from "../compiler/verify.js";
@@ -41,7 +42,7 @@ export type OpenedSession = {
 };
 
 type ExecuteDeps = {
-  fs: VerifyFileSystem & Pick<RunnerDeps["files"], "writeFile">;
+  fs: VerifyFileSystem;
   waiter: HumanWaiter;
   startEvents(socketPath: string): Promise<{
     events: TurnEvents;
@@ -74,8 +75,8 @@ type Execution = {
   store: Store;
   runId: string;
   manifest: LoadedBuild;
-  cwd: string;
   auto: boolean;
+  values?: VariableValues;
   socketPath: string;
   open(): Promise<OpenedSession>;
   actions?(): Promise<ResumeActions>;
@@ -296,7 +297,7 @@ function writesUntil(store: Store, stopped: () => boolean): Store {
 }
 
 export async function execute(deps: ExecuteDeps, execution: Execution): Promise<number> {
-  const { store, runId, manifest, cwd, auto, socketPath, startedSessions } = execution;
+  const { store, runId, manifest, auto, socketPath, startedSessions } = execution;
   const workspace = workspaceOf(manifest);
   const events = await deps.startEvents(socketPath);
   let opened: OpenedSession | undefined;
@@ -351,10 +352,8 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
       },
       events: events.events,
       waiter: deps.waiter,
-      files: deps.fs,
       auto,
       onChange: (line) => deps.onChange(line),
-      cwd,
       sessionId: opened.sessionId,
       store: writesUntil(store, () => wasInterrupted),
       runId,
@@ -369,7 +368,7 @@ export async function execute(deps: ExecuteDeps, execution: Execution): Promise<
           hash: manifest.hash,
           ...(manifest.values === undefined ? {} : { values: manifest.values }),
         },
-        { actions },
+        { actions, ...(execution.values === undefined ? {} : { values: execution.values }) },
       )
       .then((result) => (result.outcome === "done" ? 0 : 1));
     const code = await Promise.race([finished, interrupted]);

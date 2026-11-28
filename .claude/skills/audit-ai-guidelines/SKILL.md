@@ -56,7 +56,7 @@ rule: every matched file listed once, every listed path real.
 Beyond the rule, search by concept so nothing that does not look like a prompt is missed:
 
 - text passed to `sendPrompt`;
-- files written into builds (`CLAUDE.md`, skills, agents, hand-off templates, hooks);
+- files written into builds (`CLAUDE.md`, skills, agents, hooks);
 - MCP tool descriptions and the `.describe()` texts of their input schemas;
 - deny and refusal reasons;
 - tool results and validator rule messages;

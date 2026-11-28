@@ -16,4 +16,5 @@ export const flowSummary = (
   kind,
   sessions: [],
   uses,
+  sends: [],
 });

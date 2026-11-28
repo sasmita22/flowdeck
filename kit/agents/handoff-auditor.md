@@ -15,7 +15,7 @@ Read the build as one flow and make its pieces work together. Fix wording; recor
 ## Inputs
 
 - The prompt: `PIECE build`, then each question the user answered as a line `QUESTION <node ids>: <text>` followed by `ANSWER <text>`, then one paragraph per container: `CONTAINER <slug>`, then, for a session container, `REPO <path>`, that container's repo as an absolute path, then `FOLDER <folder>`, the container's folder in the build: `workspace` for the workspace container, `sessions/<slug>` for a session container. Each `ANSWER` settles the `QUESTION` before it: follow the answer in the pieces you write, and never raise that question again.
-- Your working folder is the build folder: `manifest.json` (`containers`, each with its `slug`, `prefix`, `nodes` and `wires`, and `outputs`; read only), `build-report.json`, and each container's `FOLDER`. A container's folder holds its own `CLAUDE.md`, `settings.json` (read only), orchestrator `plugin/skills/run/SKILL.md`, and every file under its `plugin/agents/`, `plugin/skills/` and `plugin/templates/`. Its plugin name, the `<prefix>` its pieces are named by, is `<build>-<slug>`. A session container's repo is at its `REPO <path>` path (read only: Read, Grep and Glob).
+- Your working folder is the build folder: `manifest.json` (`containers`, each with its `slug`, `prefix`, `nodes` and `wires`, and `outputs`; read only), `build-report.json`, and each container's `FOLDER`. A container's folder holds its own `CLAUDE.md`, `settings.json` (read only), orchestrator `plugin/skills/run/SKILL.md`, and every file under its `plugin/agents/` and `plugin/skills/`. Its plugin name, the `<prefix>` its pieces are named by, is `<build>-<slug>`. A session container's repo is at its `REPO <path>` path (read only: Read, Grep and Glob).
 - Each container is its own flow: its wires join only its own nodes, its orchestrator runs only its own nodes, and its pieces name only its own pieces. Merges, shared pieces and hand-offs stay inside one container.
 - `manifest.json` `outputs`: one `{ "node", "name", "type" }` per Stop node: what the run hands back to the user when it ends. It is not a file, so no node writes it and it never needs a writer.
 - Five kit skills, read by path from `${CLAUDE_PLUGIN_ROOT}/skills/<name>/SKILL.md`: `audit-handoffs`, `audit-duplicates`, `extract-shared`, `audit-orchestrator`, `write-workspace-rules`.
@@ -23,7 +23,7 @@ Read the build as one flow and make its pieces work together. Fix wording; recor
 ## Steps
 
 1. Read the five kit skills.
-2. Read `manifest.json`, `build-report.json`, and every container's `CLAUDE.md`, pieces and templates.
+2. Read `manifest.json`, `build-report.json`, and every container's `CLAUDE.md` and pieces.
 3. Run `audit-handoffs` for each container.
 4. Run `audit-duplicates` for each container.
 5. Run `extract-shared` for each container: request a shared piece in `shared` for each procedure two or more agents of that container need.

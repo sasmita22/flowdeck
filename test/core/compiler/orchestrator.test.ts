@@ -3,6 +3,7 @@ import { lower } from "../../../src/core/compiler/lower.js";
 import { orchestratorPath, orchestratorSkill } from "../../../src/core/compiler/orchestrator.js";
 import { pieceNames } from "../../../src/core/compiler/pieces.js";
 import { scopeLine } from "../../../src/core/compiler/scope-line.js";
+import { agentPrompt } from "../../../src/core/nodes/agent/execute.js";
 import { order } from "../../../src/core/flow/order.js";
 import type { Flow } from "../../../src/core/flow/schema.js";
 import {
@@ -19,9 +20,15 @@ import {
   twoSessionWorkflow,
   wire,
 } from "../../fixtures/flow-builders.js";
-import { expectBareHandoffRule, nestedHandoffPaths } from "../../fixtures/handoff.js";
+import { expectBareHandoffRule } from "../../fixtures/handoff.js";
 
 const scope = { build: "fix-login", repo: "carousell-web", workspace: "/fd/workspaces/b1" };
+
+const testsPassed = {
+  variable: "tests-passed",
+  yesIf: "all tests pass",
+  noIf: "a test fails",
+};
 
 const labelled = <T extends { label: string }>(node: T, label: string): T => ({ ...node, label });
 
@@ -30,7 +37,7 @@ const sample = (): Flow =>
     [
       trigger("t"),
       labelled(agent("p", { settings: { instructions: "Plan it." } }), "Plan"),
-      labelled(agent("a", { settings: { given: ["plan.md"], writes: ["code.md"] } }), "Code"),
+      labelled(agent("a"), "Code"),
       gate("g", { settings: { instruction: "Check the plan" } }),
       gate("k", { settings: { instruction: "Pick a colour" } }),
       loop("l", { settings: { condition: "tests pass", cap: 4, onCap: "ask" } }),
@@ -127,9 +134,6 @@ describe("orchestratorSkill", () => {
     const body = content.slice(content.indexOf("\n---\n") + 5);
 
     expectBareHandoffRule(body, "carousell-web");
-    expect(
-      nestedHandoffPaths(content, "carousell-web", ["plan.md", "code.md", "units.md"]),
-    ).toEqual([]);
   });
 
   it("hands work only to agents: no step reads a skill or runs a command, and no line names a Prompt", () => {
@@ -139,32 +143,12 @@ describe("orchestratorSkill", () => {
     expect(content).not.toMatch(/by path and follow it|check its exit code|Prompt/);
   });
 
-  it("dispatches an Agent node by its full name with its node marker and details, and waits", () => {
+  it("dispatches an Agent node by its full name with its node marker, and waits", () => {
     const line = lineOf(skill().content, "a");
 
     expect(line).toContain("dispatch `fix-login-main:code`");
-    expect(line).toContain(JSON.stringify("NODE a\nYou are given: plan.md\nWrite: code.md\nGo"));
+    expect(line).toContain(JSON.stringify("NODE a\nGo"));
     expect(line).toContain("wait");
-  });
-
-  it("dispatches a writer and its reader each with the files they hand on, each file once", () => {
-    const paired = flow(
-      [
-        labelled(
-          agent("a", { settings: { given: ["plan.md"], writes: ["code.md", "code.md"] } }),
-          "Code",
-        ),
-        labelled(agent("p", { settings: { given: ["code.md"] } }), "Ship"),
-      ],
-      [thenWire("a", "p")],
-    );
-
-    expect(lineOf(skill(paired).content, "a")).toContain(
-      JSON.stringify("NODE a\nYou are given: plan.md\nWrite: code.md\nGo"),
-    );
-    expect(lineOf(skill(paired).content, "p")).toContain(
-      JSON.stringify("NODE p\nYou are given: code.md\nGo"),
-    );
   });
 
   it("asks in the chat for an Always Gate, showing its Instruction, and waits for the answer", () => {
@@ -190,23 +174,22 @@ describe("orchestratorSkill", () => {
     expect(lineOf(content, "l")).toMatch(/repeat.*NODE la.*tests pass.*at most 4 rounds/);
   });
 
-  it("reads a Branch's variable from the build summary and names both ways", () => {
-    expect(lineOf(skill().content, "b")).toMatch(
-      /proceed.*build summary.*yes.*NODE f.*no.*NODE h/i,
-    );
+  it("reads a Branch's variable that no Agent produces from the build summary and names both ways", () => {
+    const line = lineOf(skill().content, "b");
+
+    expect(line).toMatch(/proceed.*build summary.*yes.*NODE f.*no.*NODE h/i);
+    expect(line).not.toMatch(/json answer/);
+    expect(line).not.toMatch(/decided/i);
   });
 
-  it("reads a value-decided Branch's answer from the Agent that produced it, asking rather than guessing", () => {
+  it("reads a Branch's variable from the latest Agent producing it, else the build summary, asking rather than guessing", () => {
     const line = lineOf(
       skill(
         flow(
           [
             trigger("t"),
-            labelled(agent("c", { settings: { produces: "tests-passed" } }), "Check"),
-            {
-              ...branch("b", ""),
-              settings: { variable: "", decidedBy: "value", value: "tests-passed" },
-            },
+            labelled(agent("c", { settings: { produces: [testsPassed] } }), "Check"),
+            branch("b", "tests-passed"),
             labelled(agent("y"), "Ship"),
             labelled(agent("n"), "Fix"),
             output("o"),
@@ -224,28 +207,28 @@ describe("orchestratorSkill", () => {
       "b",
     );
 
-    expect(line).toMatch(/tests-passed.*NODE c/);
-    expect(line).not.toMatch(/build summary/i);
+    expect(line).toMatch(/tests-passed.*json answer.*NODE c/);
+    expect(line).toMatch(/NODE c.*build summary/i);
     expect(line).toMatch(/missing|malformed|unreadable/i);
     expect(line).toMatch(/ask/i);
     expect(line).toMatch(/guess/i);
     expect(line).toMatch(/yes.*NODE y.*no.*NODE n/);
   });
 
-  it("asks an Agent that produces a value for its json answer in its dispatch prompt", () => {
+  it("dispatches an Agent that produces variables with the produce lines of agentPrompt", () => {
     const line = lineOf(
       skill(
         flow(
-          [trigger("t"), labelled(agent("c", { settings: { produces: "tests-passed" } }), "Check")],
+          [trigger("t"), labelled(agent("c", { settings: { produces: [testsPassed] } }), "Check")],
           [thenWire("t", "c")],
         ),
       ).content,
       "c",
     );
 
+    expect(line).toContain(JSON.stringify(agentPrompt({ id: "c", produces: [testsPassed] })));
     expect(line).toMatch(/fenced code block tagged json/);
-    expect(line).toContain('\\"tests-passed\\": true');
-    expect(line).toContain('\\"tests-passed\\": false');
+    expect(line).toContain('\\"tests-passed\\": true if all tests pass, false if a test fails');
   });
 
   it("dispatches every Fork branch agent by full name in one message", () => {

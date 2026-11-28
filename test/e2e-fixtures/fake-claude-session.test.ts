@@ -12,6 +12,8 @@ import { lower } from "../../src/core/compiler/lower.js";
 import { orchestratorSkill } from "../../src/core/compiler/orchestrator.js";
 import { pieceNames } from "../../src/core/compiler/pieces.js";
 import type { Flow } from "../../src/core/flow/schema.js";
+import { agentTurnText } from "../../src/core/nodes/agent/execute.js";
+import { parseProducedValues } from "../../src/core/run/verdict.js";
 import {
   agent,
   flow,
@@ -98,6 +100,21 @@ const recordingSocket = (events: HookEvent[]) =>
     socket.on("end", () => {
       for (const line of text.split("\n")) {
         if (line.trim() !== "") events.push(JSON.parse(line) as HookEvent);
+      }
+    });
+  });
+
+const answeringSocket = (events: HookEvent[]) =>
+  createServer((socket) => {
+    let text = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      text += chunk;
+      const lines = text.split("\n");
+      text = lines.pop() ?? "";
+      for (const line of lines.filter((entry) => entry.trim() !== "")) {
+        events.push(JSON.parse(line) as HookEvent);
+        socket.write("{}\n");
       }
     });
   });
@@ -201,5 +218,83 @@ describe("the fake Claude session", () => {
       events.filter((event) => event.hook_event_name !== "UserPromptSubmit").map(labelOf),
     ).toEqual(["PreToolUse a", "PostToolUse a", "Stop"]);
     expect(events.at(-1)?.last_assistant_message?.split("\n").at(-1)).toBe("STOPPED NODE h");
+  });
+
+  describe("a workspace turn whose Agent sets variables", () => {
+    const row = (variable: string) => ({ variable, yesIf: "it holds", noIf: "it does not" });
+
+    const replyTo = async (variables: string[], agentFile: string) => {
+      dir = await mkdtemp(join(tmpdir(), "fd-fake-session-"));
+      const bin = join(dir, "bin");
+      await writeFakeClaude(bin);
+      const agents = join(dir, "plugin", "agents");
+      await mkdir(agents, { recursive: true });
+      await writeFile(join(agents, "check.md"), agentFile);
+      const sessions = new TmuxSessionHost({ socketName: name });
+      const command = [
+        process.execPath,
+        join(bin, "fake-claude.cjs"),
+        "--session-id",
+        randomUUID(),
+        "--plugin-dir",
+        join(dir, "plugin"),
+      ]
+        .map(shellQuote)
+        .join(" ");
+      const sock = join(dir, "hooks.sock");
+      const events: HookEvent[] = [];
+      hooks = answeringSocket(events);
+      await new Promise<void>((listening) => hooks?.listen(sock, listening));
+      await sessions.start(name, dir, command, { FLOWDECK_SOCK: sock });
+      const cli = new ClaudeCli({ sessions, readyTimeoutMs: 5000 });
+      await cli.waitUntilReady(name);
+
+      await cli.sendPrompt(
+        name,
+        agentTurnText("fork", "check", { id: "check", produces: variables.map(row) }),
+      );
+
+      await expect
+        .poll(() => events.some((event) => event.hook_event_name === "Stop"), { timeout: 10_000 })
+        .toBe(true);
+      return events.find((event) => event.hook_event_name === "Stop")?.last_assistant_message;
+    };
+
+    it.each([
+      ["yes", true],
+      ["no", false],
+    ])(
+      "ends the turn with the fenced json the runner reads for set approved %s",
+      async (word, value) => {
+        const reply = await replyTo(["approved"], `Check it.\nfake: set approved ${word}\n`);
+
+        expect(reply).toContain(`\`\`\`json\n{"approved": ${String(value)}}\n\`\`\``);
+        expect(parseProducedValues(reply, ["approved"])).toEqual({
+          values: { approved: value },
+          missing: [],
+        });
+      },
+    );
+
+    it("combines several set lines into one object", async () => {
+      const reply = await replyTo(
+        ["approved", "docs"],
+        "Check it.\nfake: set approved yes\nfake: set docs no\n",
+      );
+
+      expect(parseProducedValues(reply, ["approved", "docs"])).toEqual({
+        values: { approved: true, docs: false },
+        missing: [],
+      });
+    });
+
+    it("sets nothing when the Agent holds no set line", async () => {
+      const reply = await replyTo(["approved"], "Check it.\n");
+
+      expect(parseProducedValues(reply, ["approved"])).toEqual({
+        values: {},
+        missing: ["approved"],
+      });
+    });
   });
 });
